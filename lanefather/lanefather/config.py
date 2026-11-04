@@ -1,0 +1,232 @@
+"""A project's seams: `.lanefather.toml` at the repository top, and the environment settings.
+
+lanefather keeps the lane workflow; a project names what is its own in `.lanefather.toml`: the verify command and
+the plan module that the check contract runs, the stamp tool of the full gate, the install and deploy steps after a
+promotion, the rule snippets and coding standards a lane brief and a review read. Every key is optional; a
+repository without the file gets the defaults below, which suit a project with a `verify.sh` and nothing else.
+
+The environment overrides a setting as LANEFATHER_<NAME>. A project that ran an older lane tool under another
+prefix names it as `legacy_env_prefix` (Straylight: STRAYLIGHT_LANE_), and `[env]` maps single variables
+(LANEFATHER_LOAD_WAIT = "STRAYLIGHT_LOAD_WAIT"), so the lanes of an older branch keep their settings.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+import os
+from pathlib import Path
+import subprocess
+import tomllib
+from typing import Any
+
+from .errors import LaneError
+
+CONFIG_NAME = ".lanefather.toml"
+
+
+@dataclass(frozen=True)
+class Step:
+    """One install or deploy step: argv run in the gate worktree, with extra environment. `{sha}`, `{host}` and
+    `{package}` in either are replaced."""
+    name: str
+    argv: tuple[str, ...]
+    env: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class Config:
+    path: Path | None = None
+    project: str = "this project"
+    # How messages name the command: Straylight's shim keeps `tools/lane`.
+    command: str = "lanefather"
+    state_dir: str = "~/.local/state/lanefather/lanes"
+    legacy_env_prefix: str = ""
+    env_aliases: tuple[tuple[str, str], ...] = ()
+    report_doc: str = "the implementer brief's report block"
+    # Where the overall review's ticket goes, in its body ("the #347 queue").
+    queue_name: str = "the queue"
+    coding_standards: str = "CODING_STANDARDS.md"
+    rules_dir: str = ""
+    # What steers agents and the reviewer is reviewed even when it is Markdown.
+    steering: tuple[str, ...] = (".agents/**", ".claude/**", "CODING_STANDARDS.md", "**/AGENTS.md", "**/CLAUDE.md")
+    # Paths every lane may change, never claimed (release notes that merge by union).
+    unclaimed: tuple[str, ...] = ()
+    # `git -c` settings for land's merge (a union merge driver).
+    merge_config: tuple[str, ...] = ()
+    # The check contract (#649): verify --changed --base B --plan --json, --checks, --suites, --keep-going, --jobs.
+    verify: str = "verify.sh"
+    plan_module: str = ""
+    triage: tuple[str, ...] = ()
+    toolchain: tuple[str, ...] = ()
+    toolchain_pin: str = ""
+    # The variables a verify run that queues itself reads: <slot_env>_LABEL, _CLASS, _META, _YIELDABLE.
+    slot_env: str = "LANEFATHER_SLOT"
+    cache_name: str = "lanefather"
+    lane_targets: tuple[str, ...] = ()
+    cache_partitions: str = ""
+    stamp_tool: str = ""
+    stamp_file: str = "verified-trees"
+    pre_push_hook: str = ".githooks/pre-push"
+    ship_refuses: str = ""
+    ship_refusal: str = "fold it into a release first"
+    install: tuple[Step, ...] = ()
+    deploy: tuple[Step, ...] = ()
+    install_env_drop: tuple[str, ...] = ("LANDING_TOKEN",)
+    after_promote: tuple[str, ...] = ()
+    process_scan: str = ""
+    extra: dict[str, Any] = field(default_factory=lambda: {})
+
+    def names(self, name: str) -> list[str]:
+        """The variables of setting `name`, first wins: LANEFATHER_<name>, an [env] alias, the legacy prefix's."""
+        found = [f"LANEFATHER_{name}"]
+        found += [legacy for key, legacy in self.env_aliases if key == f"LANEFATHER_{name}"]
+        if self.legacy_env_prefix:
+            found.append(self.legacy_env_prefix + name)
+        return list(dict.fromkeys(found))
+
+    def lookup(self, name: str) -> tuple[str, str] | None:
+        """The first set variable of setting `name` and its value, or None."""
+        return next(((key, os.environ[key]) for key in self.names(name) if key in os.environ), None)
+
+    def env(self, name: str) -> str | None:
+        """The value of setting `name` in the environment, or None."""
+        found = self.lookup(name)
+        return found[1] if found else None
+
+    def env_names(self, name: str) -> str:
+        """The variable names of a setting, for messages."""
+        return " or ".join(self.names(name))
+
+
+def _strings(data: dict[str, Any], key: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    value = data.get(key, default)
+    if isinstance(value, str):
+        return (value,)
+    if not isinstance(value, (list, tuple)) or not all(isinstance(v, str) for v in value):  # pyright: ignore[reportUnknownVariableType]
+        raise LaneError(f"{CONFIG_NAME}: {key} must be a string or a list of strings")
+    return tuple(value)  # pyright: ignore[reportUnknownArgumentType]
+
+
+def _string(data: dict[str, Any], key: str, default: str) -> str:
+    value = data.get(key, default)
+    if not isinstance(value, str):
+        raise LaneError(f"{CONFIG_NAME}: {key} must be a string")
+    return value
+
+
+def _steps(data: dict[str, Any], key: str) -> tuple[Step, ...]:
+    raw = data.get(key, [])
+    if not isinstance(raw, list):
+        raise LaneError(f"{CONFIG_NAME}: {key} must be an array of tables, [[promote.{key}]]")
+    steps: list[Step] = []
+    for item in raw:  # pyright: ignore[reportUnknownVariableType]
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str):  # pyright: ignore[reportUnknownMemberType]
+            raise LaneError(f"{CONFIG_NAME}: each {key} step needs a name and an argv")
+        table: dict[str, Any] = item  # pyright: ignore[reportUnknownVariableType]
+        env = table.get("env", {})
+        if not isinstance(env, dict) or not all(isinstance(v, str) for v in env.values()):  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]
+            raise LaneError(f"{CONFIG_NAME}: {key} step {table['name']}: env must map names to strings")
+        env_items: dict[str, str] = env  # pyright: ignore[reportUnknownVariableType]
+        steps.append(Step(table["name"], _strings(table, "argv", ()), tuple(sorted(env_items.items()))))
+    return tuple(steps)
+
+
+def parse(data: dict[str, Any], path: Path | None = None) -> Config:
+    """The config of a parsed `.lanefather.toml`."""
+    checks: dict[str, Any] = data.get("checks", {})
+    lane: dict[str, Any] = data.get("lane", {})
+    gate: dict[str, Any] = data.get("gate", {})
+    promote: dict[str, Any] = data.get("promote", {})
+    hooks: dict[str, Any] = data.get("hooks", {})
+    env: dict[str, Any] = data.get("env", {})
+    for name, table in (("checks", checks), ("lane", lane), ("gate", gate), ("promote", promote), ("hooks", hooks),
+                        ("env", env)):
+        if not isinstance(table, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
+            raise LaneError(f"{CONFIG_NAME}: [{name}] must be a table")
+    if not all(isinstance(v, str) for v in env.values()):
+        raise LaneError(f"{CONFIG_NAME}: [env] maps LANEFATHER_<NAME> to the project's variable name")
+    default = Config()
+    return Config(
+        path=path,
+        project=_string(data, "project", default.project),
+        command=_string(data, "command", default.command),
+        state_dir=_string(data, "state_dir", default.state_dir),
+        legacy_env_prefix=_string(data, "legacy_env_prefix", default.legacy_env_prefix),
+        env_aliases=tuple(sorted((k, str(v)) for k, v in env.items())),
+        report_doc=_string(data, "report_doc", default.report_doc),
+        queue_name=_string(data, "queue_name", default.queue_name),
+        coding_standards=_string(data, "coding_standards", default.coding_standards),
+        rules_dir=_string(data, "rules_dir", default.rules_dir),
+        steering=_strings(data, "steering", default.steering),
+        unclaimed=_strings(data, "unclaimed", default.unclaimed),
+        merge_config=_strings(data, "merge_config", default.merge_config),
+        verify=_string(checks, "verify", default.verify),
+        plan_module=_string(checks, "plan_module", default.plan_module),
+        triage=_strings(checks, "triage", default.triage),
+        toolchain=_strings(checks, "toolchain", default.toolchain),
+        toolchain_pin=_string(checks, "toolchain_pin", default.toolchain_pin),
+        slot_env=_string(checks, "slot_env", default.slot_env),
+        cache_name=_string(lane, "cache_name", default.cache_name),
+        lane_targets=_strings(lane, "targets", default.lane_targets),
+        cache_partitions=_string(lane, "cache_partitions", default.cache_partitions),
+        stamp_tool=_string(gate, "stamp_tool", default.stamp_tool),
+        stamp_file=_string(gate, "stamp_file", default.stamp_file),
+        pre_push_hook=_string(gate, "pre_push_hook", default.pre_push_hook),
+        ship_refuses=_string(promote, "ship_refuses", default.ship_refuses),
+        ship_refusal=_string(promote, "ship_refusal", default.ship_refusal),
+        install=_steps(promote, "install"),
+        deploy=_steps(promote, "deploy"),
+        install_env_drop=_strings(promote, "install_env_drop", default.install_env_drop),
+        after_promote=_strings(promote, "after", default.after_promote),
+        process_scan=_string(hooks, "process_scan", default.process_scan),
+        extra={k: v for k, v in data.items()
+               if k not in {"project", "command", "state_dir", "legacy_env_prefix", "report_doc", "queue_name",
+                            "coding_standards",
+                            "rules_dir", "steering", "unclaimed", "merge_config", "checks", "lane", "gate",
+                            "promote", "hooks", "env"}},
+    )
+
+
+def find(cwd: str | os.PathLike[str]) -> Path | None:
+    """LANEFATHER_CONFIG, else `.lanefather.toml` at the top of the repository `cwd` is in."""
+    configured = os.environ.get("LANEFATHER_CONFIG")
+    if configured:
+        return Path(os.path.expanduser(configured))
+    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=cwd, capture_output=True, text=True)
+    if top.returncode:
+        return None
+    path = Path(top.stdout.strip()) / CONFIG_NAME
+    return path if path.is_file() else None
+
+
+def load(path: Path | None) -> Config:
+    if path is None:
+        return Config()
+    try:
+        data = tomllib.loads(path.read_text())
+    except FileNotFoundError:
+        raise LaneError(f"no config at {path}") from None
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise LaneError(f"{path}: {error}") from None
+    return parse(data, path.resolve())
+
+
+_current: Config | None = None
+
+
+def current() -> Config:
+    """The config of this run: the one `use` set, else the one found from the working directory."""
+    global _current
+    if _current is None:
+        _current = load(find(os.getcwd()))
+    return _current
+
+
+def use(config: Config | None) -> None:
+    """Set the config of this run (the command line's --config); None finds it again on the next use."""
+    global _current
+    _current = config
+
+
+def prog() -> str:
+    """How messages name the command."""
+    return current().command
