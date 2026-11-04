@@ -48,7 +48,7 @@ class ConfigTests(ConfigCase):
         self.assertEqual(current.plan_module, "tools/verification_plan.py")
         self.assertEqual([step.name for step in current.install], ["install", "check-installed"])
         self.assertEqual(current.deploy[1].env, (("STRAYLIGHT_LINK_PACKAGE", "{package}"),))
-        self.assertEqual(current.after_promote, ("python3", "tools/after-promote.py", "{sha}"))
+        self.assertEqual(current.after_promote, ("python3", "tools/after-promote.py", "{sha}", "--source", "promote {short}"))
         self.assertEqual(current.queue_name, "the #347 queue")
 
     def test_a_setting_reads_lanefather_first_then_the_alias_then_the_legacy_prefix(self):
@@ -60,11 +60,32 @@ class ConfigTests(ConfigCase):
         os.environ.update(STRAYLIGHT_LANE_CAP="5", STRAYLIGHT_LOAD_WAIT="1")
         self.assertEqual(current.lookup("CAP"), ("STRAYLIGHT_LANE_CAP", "5"))
         self.assertEqual(current.env("LOAD_THROTTLE"), "1")
-        os.environ["LANEFATHER_CAP"] = "7"
-        self.assertEqual(current.lookup("CAP"), ("LANEFATHER_CAP", "7"))
+        os.environ["LANEFATHER_CAP"] = "5"
+        self.assertEqual(current.lookup("CAP"), ("LANEFATHER_CAP", "5"))
         self.assertEqual(current.env_names("LOAD_THROTTLE"), "LANEFATHER_LOAD_THROTTLE or STRAYLIGHT_LOAD_WAIT "
                                                              "or STRAYLIGHT_LANE_LOAD_THROTTLE")
         self.assertIsNone(current.env("RERUNS"))
+
+    def test_two_names_of_one_setting_never_split(self):
+        # Review of #648, finding 3: lanefather and the tools that read only the legacy names must not read two state
+        # directories or queues.
+        current = self.use("""\
+            legacy_env_prefix = "STRAYLIGHT_LANE_"
+            shared_env = ["STATE"]
+            """)
+        os.environ.update(LANEFATHER_STATE="/a", STRAYLIGHT_LANE_STATE="/b")
+        with self.assertRaises(LaneError) as raised:
+            current.env("STATE")
+        self.assertIn("LANEFATHER_STATE='/a' and STRAYLIGHT_LANE_STATE='/b' differ", str(raised.exception))
+        os.environ["STRAYLIGHT_LANE_STATE"] = "/a"
+        self.assertEqual(current.env("STATE"), "/a")
+        del os.environ["STRAYLIGHT_LANE_STATE"]
+        with self.assertRaises(LaneError) as raised:
+            current.env("STATE")
+        self.assertIn("LANEFATHER_STATE is set, but STRAYLIGHT_LANE_STATE is not", str(raised.exception))
+        # A setting no other tool reads may go by the new name alone.
+        os.environ["LANEFATHER_MODELS"] = "/m.toml"
+        self.assertEqual(current.env("MODELS"), "/m.toml")
 
     def test_a_malformed_config_is_refused_with_its_key(self):
         for text, words in (('[checks]\nverify = 3\n', "verify must be a string"),
@@ -72,7 +93,12 @@ class ConfigTests(ConfigCase):
                             ('[[promote.install]]\nargv = ["x"]\n', "needs a name and an argv"),
                             ('checks = "x"\n', "[checks] must be a table"),
                             ('[env]\nLANEFATHER_X = 1\n', "[env] maps"),
-                            ('verify = [\n', "Invalid value")):
+                            ('verify = [\n', "Invalid value"),
+                            # Review of #648, finding 4: a typo drops a seam without a word unless refused.
+                            ('[promote]\nafer = ["x"]\n', "[promote] has unknown keys afer"),
+                            ('projcet = "x"\n', "has unknown keys projcet"),
+                            ('[[promote.install]]\nname = "i"\nargv = ["x"]\nenvv = {}\n',
+                             "[promote.install] has unknown keys envv")):
             with self.subTest(text), self.assertRaises(LaneError) as raised:
                 self.use(text)
             self.assertIn(words, str(raised.exception))

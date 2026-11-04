@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import time
+from typing import Any
 import unittest
 
 from support import FAKE_PLAN, FIXTURES, LaneCase
@@ -64,7 +65,7 @@ class PromoteGateTests(LaneCase):
         output = self.lane("promote", tip, "--no-push", "--wait", "0")
         self.assertEqual(self.git(self.repo, "rev-parse", "dev"), tip)
         self.assertGreater(output.index(f"after-promote: checked {tip[:10]}"), output.index(f"Promoted {tip[:10]}"))
-        self.assertEqual(log.read_text().split(), [tip])
+        self.assertEqual(log.read_text().split(), [tip, "--source", "promote", tip[:10]])
         self.env.update(FIXTURE_AFTER_PROMOTE_EXIT="3")
         output = self.lane("promote", tip, "--no-push", "--wait", "0")
         self.assertIn("lane: warning: the after-promote command failed (exit 3)", output)
@@ -392,14 +393,14 @@ class SyncTests(LaneCase):
         self.owner(self.other, "config", "user.name", "Elsewhere")
         self.owner(self.other, "config", "user.email", "elsewhere@example.com")
 
-    def owner(self, cwd, *args):
+    def owner(self, cwd: Any, *args: str) -> str:
         """git as the owner in a terminal: no agent session, so the guard lets it through."""
         environment = {k: v for k, v in os.environ.items()
                        if k != "CLAUDECODE" and not k.startswith(("CODEX_", "LANDING_", "GIT_"))}
         return subprocess.run(["git", *args], cwd=cwd, env=environment, check=True, capture_output=True,
                               text=True).stdout.strip()
 
-    def published(self, name, *branches):
+    def published(self, name: str, *branches: str) -> str:
         """A commit pushed to origin's branches from another clone; returns its SHA."""
         self.owner(self.other, "fetch", "-q", "origin")
         self.owner(self.other, "checkout", "-q", "-B", "work", f"origin/{branches[0]}")
@@ -409,7 +410,7 @@ class SyncTests(LaneCase):
         self.owner(self.other, "push", "-q", "origin", *[f"HEAD:refs/heads/{b}" for b in branches])
         return self.owner(self.other, "rev-parse", "HEAD")
 
-    def stale(self, subject, branch="dev"):
+    def stale(self, subject: str, branch: str = "dev") -> str:
         """A commit on local `branch` that origin never got, as promote --no-push left them (#666)."""
         parent = self.git(self.repo, "rev-parse", branch)
         tree = self.git(self.repo, "rev-parse", parent + "^{tree}")
@@ -417,10 +418,10 @@ class SyncTests(LaneCase):
         self.owner(self.repo, "update-ref", f"refs/heads/{branch}", commit)
         return commit
 
-    def rev(self, ref):
+    def rev(self, ref: str) -> str:
         return self.git(self.repo, "rev-parse", ref)
 
-    def branches(self, pattern):
+    def branches(self, pattern: str) -> list[str]:
         return self.git(self.repo, "for-each-ref", "--format=%(refname:short)", f"refs/heads/{pattern}").split()
 
     def test_sync_fast_forwards_local_dev_and_main_to_origin_under_the_landing_lock(self):
@@ -539,6 +540,67 @@ class SyncTests(LaneCase):
         self.stale("two")
         self.assertIn("local dev is 2 commits ahead of origin; `lanefather sync --drop-local` drops them with a "
                       "backup", self.lane("list", cwd=self.repo))
+
+    def test_drop_local_reads_dev_under_the_lock_so_a_land_during_the_wait_is_kept(self):
+        # Review of #666, finding 1: sync read dev before it waited for the lock, and reset --keep compared nothing,
+        # so a merge a land made onto the checked-out dev meanwhile left dev without reaching the backup.
+        worktree = self.repo / ".claude" / "worktrees" / "dev"
+        self.owner(self.repo, "worktree", "add", "-q", str(worktree), "dev")
+        self.stale("stale dev work")
+        tip = self.published("dev-change", "dev")
+        self.landing.write_text(f"token theirs\nholder tools/lane land other (pid 4242)\nacquired {int(time.time())}\n")
+        process = subprocess.Popen([sys.executable, "-m", "lanefather", "sync", "--drop-local", "--wait", "60"], cwd=self.repo,
+                                   env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.addCleanup(lambda: process.poll() is None and (process.kill(), process.wait()))
+        guard = self.repo / ".git" / "landing.lock.guard"
+        deadline = time.monotonic() + 60
+        while not guard.exists():
+            self.assertLess(time.monotonic(), deadline, "sync never reached the landing lock")
+            assert process.stdout is not None
+            self.assertIsNone(process.poll(), process.stdout.read() if process.poll() is not None else "")
+            time.sleep(0.05)
+        # The land holding the lock merges M onto the checked-out dev, then lets go.
+        self.write(worktree, "landed.txt", "M\n")
+        self.owner(worktree, "add", "-A")
+        self.owner(worktree, "commit", "-qm", "landed M")
+        landed = self.owner(worktree, "rev-parse", "HEAD")
+        self.landing.unlink()
+        output = process.communicate(timeout=60)[0]
+        self.assertEqual(process.returncode, 0, output)
+        today = datetime.date.today().isoformat()
+        self.assertEqual(self.rev(f"backup/dev-{today}"), landed, "the backup lost the commit landed during the wait")
+        self.assertIn("landed M", output)
+        self.assertEqual(self.rev("dev"), tip)
+
+    def test_a_failed_drop_reports_the_failure_and_leaves_no_backup(self):
+        # Review of #666, finding 5: an untracked file where origin's tree has one passes the dirty check, and
+        # reset --keep refuses it; the backup and the "dropped" lines came before the reset.
+        worktree = self.repo / ".claude" / "worktrees" / "dev"
+        self.owner(self.repo, "worktree", "add", "-q", str(worktree), "dev")
+        stale = self.stale("stale dev work")
+        self.published("dev-change", "dev")
+        self.write(worktree, "dev-change.txt", "mine, untracked\n")
+        output = self.lane("sync", "--drop-local", cwd=self.repo, ok=False)
+        self.assertIn("did not move", output)
+        self.assertIn("dev-change.txt", output)
+        self.assertNotIn("keeps the", output)
+        self.assertEqual(self.rev("dev"), stale)
+        self.assertEqual(self.branches("backup/*"), [])
+        self.assertEqual((worktree / "dev-change.txt").read_text(), "mine, untracked\n")
+
+    def test_promote_names_a_merge_of_origin_when_the_missing_commits_are_on_origin(self):
+        # Review of #666, finding 3: sync --drop-local cannot help when local dev only holds what origin has.
+        published = self.published("dev-change", "dev")
+        self.git(self.repo, "fetch", "-q", "origin")
+        self.owner(self.repo, "update-ref", "refs/heads/dev", published)
+        tip = self.commit(self.integration, {"lib/extra.txt": "batch\n"}, "the batch")
+        output = self.lane("promote", tip, "--wait", "0", ok=False)
+        refusal = output.split("local dev has commits that are not in")[1]
+        self.assertIn("published dev-change", refusal)
+        self.assertIn("They are on origin/dev: merge origin/dev into the lane or integration branch and promote "
+                      "the new tip", refusal)
+        self.assertNotIn("--drop-local", refusal)
+        self.assertEqual(self.rev("dev"), published)
 
     def test_sync_needs_the_remote(self):
         self.git(self.repo, "remote", "remove", "origin")

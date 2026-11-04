@@ -30,22 +30,21 @@
   },
   "tests/support.py": {
     "reportDeprecated": 1,
-    "reportMissingParameterType": 28,
-    "reportUnknownArgumentType": 23,
-    "reportUnknownMemberType": 27,
-    "reportUnknownParameterType": 23,
-    "reportUnknownVariableType": 5,
-    "reportUnnecessaryComparison": 1,
+    "reportMissingParameterType": 15,
+    "reportUnknownArgumentType": 11,
+    "reportUnknownMemberType": 7,
+    "reportUnknownParameterType": 12,
+    "reportUnknownVariableType": 1,
     "reportUnusedImport": 1
   },
   "tests/test_checks.py": {
     "reportMissingParameterType": 10,
     "reportUnknownArgumentType": 3,
-    "reportUnknownMemberType": 182,
+    "reportUnknownMemberType": 87,
     "reportUnknownParameterType": 9
   },
   "tests/test_compat.py": {
-    "reportUnknownMemberType": 31
+    "reportUnknownMemberType": 6
   },
   "tests/test_config.py": {
     "reportDeprecated": 1,
@@ -54,36 +53,35 @@
   "tests/test_done.py": {
     "reportMissingParameterType": 4,
     "reportUnknownArgumentType": 6,
-    "reportUnknownMemberType": 72,
+    "reportUnknownMemberType": 17,
     "reportUnknownParameterType": 4,
     "reportUnknownVariableType": 1
   },
   "tests/test_land.py": {
     "reportMissingParameterType": 5,
     "reportUnknownArgumentType": 3,
-    "reportUnknownMemberType": 197,
+    "reportUnknownMemberType": 62,
     "reportUnknownParameterType": 5
   },
   "tests/test_landing.py": {
-    "reportUnknownMemberType": 20
+    "reportUnknownMemberType": 2
   },
   "tests/test_lanes.py": {
     "reportMissingParameterType": 3,
     "reportUnknownArgumentType": 2,
-    "reportUnknownMemberType": 94,
+    "reportUnknownMemberType": 41,
     "reportUnknownParameterType": 3
   },
   "tests/test_promote.py": {
-    "reportMissingParameterType": 15,
-    "reportUnknownArgumentType": 24,
-    "reportUnknownMemberType": 200,
-    "reportUnknownParameterType": 14,
-    "reportUnknownVariableType": 1
+    "reportMissingParameterType": 7,
+    "reportUnknownArgumentType": 19,
+    "reportUnknownMemberType": 24,
+    "reportUnknownParameterType": 7
   },
   "tests/test_review.py": {
     "reportMissingParameterType": 9,
     "reportUnknownArgumentType": 9,
-    "reportUnknownMemberType": 142,
+    "reportUnknownMemberType": 50,
     "reportUnknownParameterType": 6
   }
 }

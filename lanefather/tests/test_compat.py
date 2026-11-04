@@ -3,7 +3,8 @@ tool and lanefather share one state directory for a while. Lanes started, checke
 finished by the other, through the same records, receipts, queue and landing lock.
 
 The old tool is Straylight's tools/lane from before the move (tests/fixtures/legacy-lane, PROVENANCE.json), run with
-its STRAYLIGHT_LANE_* settings beside lanefather's LANEFATHER_* ones.
+its STRAYLIGHT_LANE_* settings beside lanefather's LANEFATHER_* ones. With LANEFATHER_LEGACY_TOOLS=<project>/tools the
+tests run that project's current tools/lane instead, as Straylight's tooling suite does.
 """
 from __future__ import annotations
 
@@ -27,9 +28,14 @@ class LegacyCase(LaneCase):
         super().setUp()
         tools = self.tmp / "legacy" / "tools"
         (tools / "agent-hooks").mkdir(parents=True)
-        shutil.copy2(FIXTURES / "legacy-lane", tools / "lane")
-        shutil.copy2(FIXTURES / "legacy-heavy.py", tools / "heavy.py")
-        shutil.copy2(FIXTURES / "process_scan.py", tools / "agent-hooks" / "process_scan.py")
+        # LANEFATHER_LEGACY_TOOLS names a project's live tools/ directory: Straylight's tooling suite runs these tests
+        # against its current tools/lane, so a change to its state format fails there (review of #648, finding 1).
+        live = os.environ.get("LANEFATHER_LEGACY_TOOLS")
+        sources = ((pathlib.Path(live) / "lane", pathlib.Path(live) / "heavy.py",
+                    pathlib.Path(live) / "agent-hooks" / "process_scan.py") if live
+                   else (FIXTURES / "legacy-lane", FIXTURES / "legacy-heavy.py", FIXTURES / "process_scan.py"))
+        for source, target in zip(sources, ("lane", "heavy.py", "agent-hooks/process_scan.py"), strict=True):
+            shutil.copy2(source, tools / target)
         self.legacy_tool = tools / "lane"
 
     def legacy_env(self) -> dict[str, str]:

@@ -63,7 +63,7 @@ FIXTURE_CONFIG = textwrap.dedent("""\
     ship_refuses = "release-notes/unreleased"
     ship_refusal = "run node tools/release-notes.mjs release, commit, and ship that commit"
     install_env_drop = ["STRAYLIGHT_UNPROMOTED", "LANDING_TOKEN"]
-    after = ["python3", "tools/after-promote.py", "{sha}"]
+    after = ["python3", "tools/after-promote.py", "{sha}", "--source", "promote {short}"]
 
     [[promote.install]]
     name = "install"
@@ -486,16 +486,16 @@ class LaneCase(unittest.TestCase):
 
     # Helpers
 
-    def git(self, cwd, *args):
+    def git(self, cwd: Any, *args: str) -> str:
         return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
-    def write(self, base, name, text):
+    def write(self, base: Any, name: str, text: str) -> pathlib.Path:
         path = pathlib.Path(base) / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
         return path
 
-    def lane(self, *args, cwd=None, ok=True, timeout=120):
+    def lane(self, *args: str, cwd: Any = None, ok: bool | None = True, timeout: float = 120) -> str:
         proc = subprocess.run([sys.executable, "-m", "lanefather", *args], cwd=cwd or self.integration, env=self.env,
                               capture_output=True, text=True, timeout=timeout)
         output = proc.stdout + proc.stderr
@@ -510,17 +510,17 @@ class LaneCase(unittest.TestCase):
         self.start(lane_id, *claims, extra=("--create",))
         return self.record(lane_id)["worktree"]
 
-    def commit(self, worktree, changes, message="lane change"):
+    def commit(self, worktree: Any, changes: dict[str, str], message: str = "lane change") -> str:
         for name, text in changes.items():
             self.write(worktree, name, text)
         self.git(worktree, "add", "-A")
         self.git(worktree, "commit", "-qm", message)
         return self.git(worktree, "rev-parse", "HEAD")
 
-    def record(self, lane_id):
+    def record(self, lane_id: str) -> dict[str, Any]:
         return json.loads((self.state / f"{lane_id}.json").read_text())
 
-    def tip(self):
+    def tip(self) -> str:
         return self.git(self.integration, "rev-parse", "HEAD")
 
     def integration_moves(self):

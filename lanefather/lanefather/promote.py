@@ -257,7 +257,7 @@ def install_and_deploy(common: str, sha: str, deploy: str | None) -> None:
     (the landing token, a project's unpromoted marker), so each guard sees the promoted tree. The gate worktree is
     promote's, so the promote lock holds it at the SHA throughout."""
     cfg = config.current()
-    values = {"sha": sha, "host": deploy or "", "package": str(state.state_dir() / "link-package")}
+    values = {"sha": sha, "short": sha[:10], "host": deploy or "", "package": str(state.state_dir() / "link-package")}
     steps = [*cfg.install, *(cfg.deploy if deploy else ())]
     if not cfg.install:
         raise LaneError("promote --install: the project names no install steps ([[promote.install]] in "
@@ -296,8 +296,9 @@ def promote(args: Any) -> int:
 # Local dev and main follow origin (#666): promote --no-push once left them ahead of it, and only the owner could
 # drop the commits. sync catches them up under the landing lock; every refusal names the command that does it right.
 
-def publish_hint(sha: str) -> str:
-    return f"unpushed work lives on its own branch (agent/<name>); to publish it: {config.prog()} promote {sha}"
+def publish_hint(sha: str, ship: bool = False) -> str:
+    return (f"unpushed work lives on its own branch (agent/<name>); to publish it: {config.prog()} promote {sha}"
+            + (" --ship" if ship else ""))
 
 
 def commits(count: int) -> str:
@@ -345,7 +346,8 @@ def no_push_refusal(cwd: str, sha: str, branches: list[str], remote: str) -> Non
         _, upstream = tracking(cwd, remote, branch)
         if not upstream or not git_ok(cwd, "merge-base", "--is-ancestor", sha, upstream):
             raise LaneError(f"promote --no-push refused: {sha[:10]} is not on {remote}/{branch}, and --no-push moves "
-                            f"local {branch} only to what {remote} has; {publish_hint(sha[:10])}")
+                            f"local {branch} only to what {remote} has; "
+                            + publish_hint(sha[:10], ship="main" in branches))
 
 
 def backup_name(cwd: str, branch: str) -> str:
@@ -358,20 +360,19 @@ def backup_name(cwd: str, branch: str) -> str:
     return name
 
 
-def sync(args: Any) -> int:
-    """Fetch, then fast-forward local dev and main to <remote> under the landing lock; with --drop-local reset them to
-    it, keeping the commits <remote> lacks on a backup branch first. A refusal moves neither branch."""
+Move = tuple[str, str, str, list[str] | None]
+
+
+def sync_plan(cwd: str, args: Any, verb: str) -> tuple[list[Move], list[str], dict[str, str]]:
+    """The moves, notes and checked-out worktrees of a sync, read after the fetch; raises the refusal that moves
+    nothing. sync calls it under the landing lock, so no land or promote moves dev or main between this read and the
+    moves (review of #666: a land during the lock wait was lost by a reset to an older read)."""
     prog = config.prog()
-    cwd = os.getcwd()
-    common = common_dir(cwd)
-    verb = "sync --drop-local" if args.drop_local else "sync"
-    if not has_remote(cwd, args.remote):
-        raise LaneError(f"{verb} refused: no remote {args.remote} here; nothing moved")
     fetch(cwd, args.remote, verb)
     checked_out = {w["branch"]: w["path"] for w in worktree_list(cwd) if w.get("branch")}
-    moves: list[tuple[str, str, str, list[str] | None]] = []
+    moves: list[Move] = []
     notes: list[str] = []
-    diverged: list[tuple[str, str, str, list[str] | None]] = []
+    diverged: list[Move] = []
     for branch in ("dev", "main"):
         local, upstream = tracking(cwd, args.remote, branch)
         if not local or not upstream:
@@ -402,23 +403,30 @@ def sync(args: Any) -> int:
                 raise LaneError(f"{verb} refused: {checked_out[branch]} has {branch} checked out with uncommitted "
                                 f"changes:\n{changed}\nCommit them on their own branch or move them away; "
                                 "nothing moved")
-    moves += diverged
-    if not moves:
-        print(f"lane: local dev and main are up to date with {args.remote} ({'; '.join(notes)})")
-        return 0
+    return moves + diverged, notes, checked_out
+
+
+def sync(args: Any) -> int:
+    """Under the landing lock: fetch, then fast-forward local dev and main to <remote>; with --drop-local reset them
+    to it, keeping the commits <remote> lacks on a backup branch first. A refusal moves neither branch."""
+    prog = config.prog()
+    cwd = os.getcwd()
+    common = common_dir(cwd)
+    verb = "sync --drop-local" if args.drop_local else "sync"
+    if not has_remote(cwd, args.remote):
+        raise LaneError(f"{verb} refused: no remote {args.remote} here; nothing moved")
     holder = f"{prog} {verb} (pid {os.getpid()}, {cwd})"
     finished: list[str] = []
     failed: list[str] = []
+    kept: list[str] = []
     with landing(common, holder, args.wait) as env:
+        moves, notes, checked_out = sync_plan(cwd, args, verb)
         for branch, old, new, dropped in moves:
             where = checked_out.get(branch)
             backup = None
             if dropped is not None:
                 backup = backup_name(cwd, branch)
                 git(cwd, "branch", backup, old)
-                print(f"lane: {backup} keeps the {commits(len(dropped))} dropped from local {branch}:")
-                for line in dropped:
-                    print(f"  {line}")
                 # reset --keep refuses to overwrite local changes, as a checked-out branch's worktree may have.
                 argv = (["git", "reset", "-q", "--keep", new] if where else
                         ["git", "update-ref", "-m", f"lane sync --drop-local ({backup})", f"refs/heads/{branch}", new,
@@ -429,12 +437,22 @@ def sync(args: Any) -> int:
             moved = subprocess.run(argv, cwd=where or cwd, env=env, capture_output=True, text=True)
             if moved.returncode:
                 failed.append(f"local {branch} in {where or cwd}: {(moved.stdout + moved.stderr).strip()}")
+                if backup:
+                    # Nothing was dropped, so nothing needs keeping: a rerun takes the same name.
+                    git(cwd, "branch", "-D", backup, check=False)
             elif backup and dropped is not None:
                 finished.append(f"{branch} {old[:10]}->{new[:10]}, {commits(len(dropped))} dropped, kept on {backup}")
+                kept.append(f"{backup} keeps the {commits(len(dropped))} dropped from local {branch}:")
+                kept += [f"  {line}" for line in dropped]
             else:
                 finished.append(f"{branch} {old[:10]}->{new[:10]} fast-forwarded")
+    if not moves:
+        print(f"lane: local dev and main are up to date with {args.remote} ({'; '.join(notes)})")
+        return 0
     journal.ledger(f"sync {args.remote}: {'; '.join(finished) or '-'}" + (f" failed: {'; '.join(failed)}" if failed
                                                                             else ""))
+    for line in kept:
+        print(line if line.startswith("  ") else f"lane: {line}")
     for line in finished + notes:
         print(f"lane: {line}")
     if failed:
@@ -445,8 +463,8 @@ def sync(args: Any) -> int:
 
 def after_promote(cwd: str, sha: str) -> None:
     """After dev moved: the project's after-promote command (Straylight's Sid-Kit and Data Grid adoption check,
-    #588), with `{sha}` replaced. It never fails the promote: a failure only warns."""
-    argv = [sys.executable if part == "python3" else substitute(part, {"sha": sha})
+    #588), with `{sha}` and `{short}` (its first 10) replaced. It never fails the promote: a failure only warns."""
+    argv = [sys.executable if part == "python3" else substitute(part, {"sha": sha, "short": sha[:10]})
             for part in config.current().after_promote]
     if not argv:
         return
@@ -515,10 +533,15 @@ def promote_sha(args: Any) -> int:
             old = git(cwd, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}", check=False)
             if old and not git_ok(cwd, "merge-base", "--is-ancestor", old, sha):
                 foreign = git(cwd, "log", "--oneline", "--no-decorate", "-10", f"{sha}..{old}")
+                upstream = f"{args.remote}/{branch}"
+                on_remote = git_ok(cwd, "rev-parse", "--verify", "--quiet", f"refs/remotes/{upstream}") and not git(
+                    cwd, "rev-list", "-1", old, f"^{sha}", f"^refs/remotes/{upstream}", check=False)
+                way_out = (f"they are on {upstream}: merge {upstream} into the lane or integration branch and promote "
+                           "the new tip" if on_remote else
+                           f"land them through a lane into the integration branch; if they are stale, {prog} sync "
+                           "--drop-local drops them and keeps them on a backup branch")
                 raise LaneError(f"promote refused: local {branch} has commits that are not in {sha[:10]}:\n{foreign}\n"
-                                f"Land them through a lane into the integration branch; if they are stale, "
-                                f"{prog} sync --drop-local drops them and keeps them on a backup branch. "
-                                f"Nothing was pushed")
+                                f"{way_out[0].upper() + way_out[1:]}. Nothing was pushed")
             moves.append((branch, old))
         if not args.no_push:
             refspecs = [f"{sha}:refs/heads/{branch}" for branch in branches]

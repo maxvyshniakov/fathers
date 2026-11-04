@@ -11,7 +11,7 @@ prefix names it as `legacy_env_prefix` (Straylight: STRAYLIGHT_LANE_), and `[env
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import os
 from pathlib import Path
 import subprocess
@@ -25,8 +25,8 @@ CONFIG_NAME = ".lanefather.toml"
 
 @dataclass(frozen=True)
 class Step:
-    """One install or deploy step: argv run in the gate worktree, with extra environment. `{sha}`, `{host}` and
-    `{package}` in either are replaced."""
+    """One install or deploy step: argv run in the gate worktree, with extra environment. `{sha}`, `{short}` (its
+    first 10 characters), `{host}` and `{package}` in either are replaced."""
     name: str
     argv: tuple[str, ...]
     env: tuple[tuple[str, str], ...] = ()
@@ -40,6 +40,10 @@ class Config:
     command: str = "lanefather"
     state_dir: str = "~/.local/state/lanefather/lanes"
     legacy_env_prefix: str = ""
+    # Settings the project's other tools read by their legacy names only (Straylight's janitor, idle watchdog and
+    # hooks read STRAYLIGHT_LANE_STATE): a LANEFATHER_ value the legacy name does not carry is refused, so the tools
+    # never read two state directories (review of #648, finding 3).
+    shared_env: tuple[str, ...] = ()
     env_aliases: tuple[tuple[str, str], ...] = ()
     report_doc: str = "the implementer brief's report block"
     # Where the overall review's ticket goes, in its body ("the #347 queue").
@@ -73,7 +77,6 @@ class Config:
     install_env_drop: tuple[str, ...] = ("LANDING_TOKEN",)
     after_promote: tuple[str, ...] = ()
     process_scan: str = ""
-    extra: dict[str, Any] = field(default_factory=lambda: {})
 
     def names(self, name: str) -> list[str]:
         """The variables of setting `name`, first wins: LANEFATHER_<name>, an [env] alias, the legacy prefix's."""
@@ -84,8 +87,19 @@ class Config:
         return list(dict.fromkeys(found))
 
     def lookup(self, name: str) -> tuple[str, str] | None:
-        """The first set variable of setting `name` and its value, or None."""
-        return next(((key, os.environ[key]) for key in self.names(name) if key in os.environ), None)
+        """The first set variable of setting `name` and its value, or None. Two names of one setting with different
+        values are refused, as is a shared setting (`shared_env`) set only as LANEFATHER_<name>."""
+        names = self.names(name)
+        found = [(key, os.environ[key]) for key in names if key in os.environ]
+        if not found:
+            return None
+        if len({value for _, value in found}) > 1:
+            raise LaneError(" and ".join(f"{key}={value!r}" for key, value in found)
+                            + f" differ: give setting {name} one value")
+        if name in self.shared_env and len(names) > 1 and [key for key, _ in found] == [names[0]]:
+            raise LaneError(f"{names[0]} is set, but {' or '.join(names[1:])} is not: the project's other tools read "
+                            f"only the latter, so set it there (or both, equal)")
+        return found[0]
 
     def env(self, name: str) -> str | None:
         """The value of setting `name` in the environment, or None."""
@@ -130,6 +144,26 @@ def _steps(data: dict[str, Any], key: str) -> tuple[Step, ...]:
     return tuple(steps)
 
 
+TOP_KEYS = ("project", "command", "state_dir", "legacy_env_prefix", "shared_env", "report_doc", "queue_name",
+            "coding_standards", "rules_dir", "steering", "unclaimed", "merge_config", "checks", "lane", "gate",
+            "promote", "hooks", "env")
+TABLE_KEYS = {
+    "checks": ("verify", "plan_module", "triage", "toolchain", "toolchain_pin", "slot_env"),
+    "lane": ("cache_name", "targets", "cache_partitions"),
+    "gate": ("stamp_tool", "stamp_file", "pre_push_hook"),
+    "promote": ("ship_refuses", "ship_refusal", "install", "deploy", "install_env_drop", "after"),
+    "hooks": ("process_scan",),
+}
+
+
+def _known(table: dict[str, Any], name: str, keys: tuple[str, ...]) -> None:
+    """Refuse a key lanefather does not read: a typo (`afer`) would otherwise drop a seam without a word."""
+    unknown = sorted(set(table) - set(keys))
+    if unknown:
+        where = f"[{name}] " if name else ""
+        raise LaneError(f"{CONFIG_NAME}: {where}has unknown keys {', '.join(unknown)}; known: {', '.join(keys)}")
+
+
 def parse(data: dict[str, Any], path: Path | None = None) -> Config:
     """The config of a parsed `.lanefather.toml`."""
     checks: dict[str, Any] = data.get("checks", {})
@@ -144,6 +178,14 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
             raise LaneError(f"{CONFIG_NAME}: [{name}] must be a table")
     if not all(isinstance(v, str) for v in env.values()):
         raise LaneError(f"{CONFIG_NAME}: [env] maps LANEFATHER_<NAME> to the project's variable name")
+    _known(data, "", TOP_KEYS)
+    for name, table in (("checks", checks), ("lane", lane), ("gate", gate), ("promote", promote), ("hooks", hooks)):
+        _known(table, name, TABLE_KEYS[name])
+    for key in ("install", "deploy"):
+        steps: list[Any] = promote.get(key, []) if isinstance(promote.get(key), list) else []
+        for step in steps:
+            if isinstance(step, dict):
+                _known(step, f"promote.{key}", ("name", "argv", "env"))  # pyright: ignore[reportUnknownArgumentType]
     default = Config()
     return Config(
         path=path,
@@ -151,6 +193,7 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         command=_string(data, "command", default.command),
         state_dir=_string(data, "state_dir", default.state_dir),
         legacy_env_prefix=_string(data, "legacy_env_prefix", default.legacy_env_prefix),
+        shared_env=_strings(data, "shared_env", default.shared_env),
         env_aliases=tuple(sorted((k, str(v)) for k, v in env.items())),
         report_doc=_string(data, "report_doc", default.report_doc),
         queue_name=_string(data, "queue_name", default.queue_name),
@@ -178,11 +221,6 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         install_env_drop=_strings(promote, "install_env_drop", default.install_env_drop),
         after_promote=_strings(promote, "after", default.after_promote),
         process_scan=_string(hooks, "process_scan", default.process_scan),
-        extra={k: v for k, v in data.items()
-               if k not in {"project", "command", "state_dir", "legacy_env_prefix", "report_doc", "queue_name",
-                            "coding_standards",
-                            "rules_dir", "steering", "unclaimed", "merge_config", "checks", "lane", "gate",
-                            "promote", "hooks", "env"}},
     )
 
 

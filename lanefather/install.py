@@ -42,7 +42,9 @@ def interpreter(python: str | None) -> str:
                             capture_output=True, text=True)
     if result.returncode or result.stdout.strip() != "True":
         raise InstallError(f"{chosen} is not Python {'.'.join(map(str, MIN_PYTHON))} or newer")
-    return os.path.realpath(shutil.which(chosen) or chosen)
+    # The path as found, not resolved: /opt/homebrew/bin/python3 and ~/.local/bin/python3 are links that survive a
+    # Python upgrade, while the versioned file they point at goes with it (review of #648, finding 6).
+    return os.path.abspath(shutil.which(chosen) or chosen)
 
 
 def commit() -> str:

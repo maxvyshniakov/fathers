@@ -25,7 +25,9 @@ class InstallTests(unittest.TestCase):
         result = self.install()
         self.assertEqual(result.returncode, 0, result.stderr)
         command = self.tmp / "bin" / "lanefather"
-        self.assertTrue(command.read_text().startswith("#!" + os.path.realpath(sys.executable)))
+        # The interpreter as found, not its resolved versioned file, which a Python upgrade removes.
+        found = os.path.abspath(shutil.which(sys.executable) or sys.executable)
+        self.assertTrue(command.read_text().startswith(f"#!{found}\n"))
         env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "LANEFATHER_CONFIG")}
         shown = subprocess.run([str(command), "--version"], capture_output=True, text=True, env=env, cwd=self.tmp)
         head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
