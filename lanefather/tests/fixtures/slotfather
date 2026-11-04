@@ -13,6 +13,12 @@ reaches the machine's queue. It keeps no queue: it records each call and answers
                                                          the held slots, total - held unless --exclusive), at least 1
   slots | status | available                             the capacity, an empty queue, the free slots
   status --json [--pid PID]                              an empty queue as JSON; with --pid, PID's start time
+  sweep --json [--live] [--no-log] --pid PID...          slotfather sweep's verdict on those pids (#661): a pid
+                                                         whose command matches FAKE_SLOTFATHER_SWEEP_STOP is an
+                                                         orphan it would stop (with --live: SIGTERM, "stopped" once
+                                                         it is gone within 3 s, else "failed" and exit 1); one
+                                                         matching FAKE_SLOTFATHER_SWEEP_SPARE is spared as inside a
+                                                         live lease; others are no item
 
 FAKE_SLOTFATHER_LOG    file that gets one JSON line per call: {"command", "args", "lease"}
 FAKE_SLOTFATHER_TOTAL  the capacity (default 4)
@@ -20,6 +26,8 @@ FAKE_SLOTFATHER_HELD   slots others hold, for advise and available (default 0)
 FAKE_SLOTFATHER_BUSY   set: a run with --wait gives up as slotfather does, exit 75, without running COMMAND
 FAKE_SLOTFATHER_FAIL   set: advise fails with exit 2 and this message
 FAKE_SLOTFATHER_SLOTS_FAIL  set: slots fails with exit 2, so the capacity is unknown
+FAKE_SLOTFATHER_SWEEP_FAIL  set: sweep fails with exit 2 and this message
+FAKE_SLOTFATHER_SWEEP_STOP, FAKE_SLOTFATHER_SWEEP_SPARE  regular expressions on a process's command (see sweep)
 FAKE_SLOTFATHER_BYPASS set: a run hands COMMAND no lease, as SLOTFATHER_POLICY=bypass does
 FAKE_SLOTFATHER_YIELD  the yield request path a yieldable run hands COMMAND (default: beside the log)
 FAKE_SLOTFATHER_YIELD_EXIT  the exit status of yield (default 0; non-zero: the lease is gone)
@@ -29,8 +37,11 @@ SLOTFATHER_LOADAVG     the load averages advise sizes for, as slotfather reads t
 import json
 import math
 import os
+import re
+import signal
 import subprocess
 import sys
+import time
 
 
 def setting(name, default):
@@ -124,11 +135,51 @@ def main(argv):
             return 0
         print(f"{held} of {total} slots held")
         return 0
+    if command == "sweep":
+        return sweep(rest)
     if command == "available":
         print(total - held)
         return 0
     print("usage: fake slotfather run|yield|advise|slots|status|available", file=sys.stderr)
     return 2
+
+
+def command_of(pid):
+    """(command, running) as ps shows the pid; a zombie is not running."""
+    out = subprocess.run(["ps", "-o", "stat=,command=", "-p", str(pid)], capture_output=True, text=True,
+                         env={**os.environ, "LC_ALL": "C"}).stdout.strip()
+    stat, _, command = out.partition(" ")
+    return command.strip(), bool(stat) and not stat.startswith("Z")
+
+
+def sweep(rest):
+    if os.environ.get("FAKE_SLOTFATHER_SWEEP_FAIL"):
+        print("slotfather sweep: " + os.environ["FAKE_SLOTFATHER_SWEEP_FAIL"], file=sys.stderr)
+        return 2
+    live = "--live" in rest
+    pids = [int(rest[i + 1]) for i, word in enumerate(rest[:-1]) if word == "--pid" and rest[i + 1].isdigit()]
+    stop, spare = os.environ.get("FAKE_SLOTFATHER_SWEEP_STOP"), os.environ.get("FAKE_SLOTFATHER_SWEEP_SPARE")
+    items = []
+    for pid in pids:
+        command, running = command_of(pid)
+        if not running:
+            continue
+        item = {"pid": pid, "class": "orphan", "kind": "runner", "tree": [pid], "cmd": command,
+                "reason": "runner adopted by pid 1"}
+        if spare and re.search(spare, command):
+            items.append(dict(item, action="spared", reason=item["reason"] + "; inside the live lease lane-641-other"))
+        elif stop and re.search(stop, command):
+            item["action"] = "would-stop"
+            if live:
+                os.kill(pid, signal.SIGTERM)
+                deadline = time.monotonic() + 3
+                while command_of(pid)[1] and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                item["action"] = "failed" if command_of(pid)[1] else "stopped"
+            items.append(item)
+    print(json.dumps({"v": 1, "live": live, "only": pids, "items": items, "live_refused": False,
+                      "failed": sum(i["action"] == "failed" for i in items)}))
+    return 1 if any(i["action"] == "failed" for i in items) else 0
 
 
 if __name__ == "__main__":

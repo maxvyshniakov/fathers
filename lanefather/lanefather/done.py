@@ -103,7 +103,8 @@ def finish(lane_id: str, force_reason: str | None) -> None:
             if lock is not None:
                 refusals.append(f"an agent still holds {worktree} (locked: {lock}); run {prog} done {lane_id} "
                                 "once it exits")
-            # #661: what the lane left running there stops first; a session, a terminal or a lease holds it.
+            # #661: what the process source takes for left behind there stops first; any other process, or no
+            # answer, holds the worktree.
             leftover, held = scanner.sort_for_removal(worktree)
             refusals += [f"{reason}; it works in {worktree}" for reason in held]
         if record["ticket"] != "none" and not refusals:
@@ -116,11 +117,16 @@ def finish(lane_id: str, force_reason: str | None) -> None:
             journal.ledger(f"override done {lane_id}: {force_reason} ({'; '.join(refusals)})")
         freed, removed = 0, list[str]()
         if leftover:
-            survivors = {p.pid for p in scanner.stop(leftover)}
+            # The source stops only what it took for left behind, then reads the worktree again: whatever still works
+            # there keeps the worktree, as tools/lane done and the janitor do since #661's review (fail closed).
+            left = scanner.stop(leftover, worktree)
             for process in leftover:
-                what = "did not stop" if process.pid in survivors else "stopped"
-                journal.ledger(f"done {lane_id}: {what} {process.describe()} in {worktree}")
-                removed.append(f"{what} {process.describe()}")
+                journal.ledger(f"done {lane_id}: {procs.source_name(scanner)} stopped {process.describe()} in "
+                               f"{worktree}")
+                removed.append(f"stopped {process.describe()}")
+            if left and not force_reason:
+                raise LaneError(f"done refused: {procs.source_name(scanner)} stopped what it took for left behind in "
+                                f"{worktree}, but it is still in use:\n- " + "\n- ".join(p.describe() for p in left))
         if worktree and os.path.isdir(worktree):
             freed += worktrees.size(worktree)
             # A second --force removes a locked worktree, which only an override reaches.

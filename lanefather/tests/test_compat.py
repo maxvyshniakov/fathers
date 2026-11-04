@@ -33,7 +33,7 @@ class LegacyCase(LaneCase):
         live = os.environ.get("LANEFATHER_LEGACY_TOOLS")
         sources = ((pathlib.Path(live) / "lane", pathlib.Path(live) / "heavy.py",
                     pathlib.Path(live) / "agent-hooks" / "process_scan.py") if live
-                   else (FIXTURES / "legacy-lane", FIXTURES / "legacy-heavy.py", FIXTURES / "process_scan.py"))
+                   else (FIXTURES / "legacy-lane", FIXTURES / "legacy-heavy.py", FIXTURES / "legacy-process_scan.py"))
         for source, target in zip(sources, ("lane", "heavy.py", "agent-hooks/process_scan.py"), strict=True):
             shutil.copy2(source, tools / target)
         self.legacy_tool = tools / "lane"

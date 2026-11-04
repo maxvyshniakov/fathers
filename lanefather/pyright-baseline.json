@@ -51,11 +51,10 @@
     "reportUnusedImport": 1
   },
   "tests/test_done.py": {
-    "reportMissingParameterType": 4,
-    "reportUnknownArgumentType": 6,
-    "reportUnknownMemberType": 17,
-    "reportUnknownParameterType": 4,
-    "reportUnknownVariableType": 1
+    "reportMissingParameterType": 2,
+    "reportUnknownArgumentType": 4,
+    "reportUnknownMemberType": 11,
+    "reportUnknownParameterType": 2
   },
   "tests/test_land.py": {
     "reportMissingParameterType": 5,

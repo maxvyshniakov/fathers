@@ -146,7 +146,7 @@ class SeamTests(ConfigCase):
         (self.tmp / "tools").mkdir()
         (self.tmp / "tools" / "scan.py").write_text(
             "def sort_for_removal(root):\n    return [], ['held by the hook']\n\n"
-            "def stop(processes):\n    return []\n")
+            "def stop(processes, root):\n    return []\n")
         self.use('[hooks]\nprocess_scan = "tools/scan.py"\n')
         self.assertEqual(procs.source().sort_for_removal("/x"), ([], ["held by the hook"]))
 

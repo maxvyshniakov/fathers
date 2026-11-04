@@ -8,7 +8,12 @@
     "slotfather": "tools/fixtures/slotfather/slotfather",
     "verified-tree.sh": "tools/verified-tree.sh",
     "verified-tree-ledger.py": "tools/verified-tree-ledger.py",
-    "reference-transaction": ".githooks/reference-transaction"
+    "reference-transaction": ".githooks/reference-transaction",
+    "legacy-process_scan.py": "tools/agent-hooks/process_scan.py"
   },
-  "note": "Straylight's lane tool before the move (#648) and the project files its tests drove. legacy-lane, with legacy-heavy.py as tools/heavy.py beside it, is the older tools/lane that live lanes on older branches still run: tests/test_compat.py proves both read each other's state. The rest are the project seams the command tests exercise: the verified-tree stamp, the reference-transaction hook that needs the landing token, the process scan behind [hooks] process_scan, and slotfather's stand-in."
+  "refreshed": {
+    "process_scan.py": "d9a7a037 (#661 review fixes)",
+    "slotfather": "d9a7a037 (#661 review fixes)"
+  },
+  "note": "Straylight's lane tool before the move (#648) and the project files its tests drove. legacy-lane, with legacy-heavy.py as tools/heavy.py beside it, is the older tools/lane that live lanes on older branches still run: tests/test_compat.py proves both read each other's state. The rest are the project seams the command tests exercise: the verified-tree stamp, the reference-transaction hook that needs the landing token, the process scan behind [hooks] process_scan, and slotfather's stand-in. legacy-process_scan.py is the process scan the frozen legacy-lane ran with; process_scan.py and slotfather follow Straylight's current ones."
 }

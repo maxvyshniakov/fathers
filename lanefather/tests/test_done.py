@@ -5,6 +5,9 @@ import json
 import pathlib
 import signal
 import subprocess
+import sys
+import time
+from typing import Any
 import unittest
 
 from support import LaneCase
@@ -54,34 +57,60 @@ class DoneTests(LaneCase):
         self.assertIn("issue view 404", (self.tmp / "gh.log").read_text())
         self.start("next", "lib/**")
 
-    def process_in(self, cwd, name):
+    def process_in(self, cwd: Any, name: str, ignore_term: bool = False) -> subprocess.Popen[bytes]:
         """A process of this test's own whose command line shows `name`; it runs until stopped."""
-        program = self.tmp / "processes" / name  # not bin/: the reviewers' stand-in claude lives there
-        program.parent.mkdir(exist_ok=True)
-        if not program.exists():
-            program.symlink_to("/bin/sleep")
-        child = subprocess.Popen([str(program), "300"], cwd=cwd, start_new_session=True)
+        handler = "import signal; signal.signal(signal.SIGTERM, signal.SIG_IGN); " if ignore_term else ""
+        child = subprocess.Popen([sys.executable, "-c", handler + "import time; time.sleep(300)", name], cwd=cwd,
+                                 start_new_session=True)
         self.addCleanup(lambda: (child.kill(), child.wait()))
+        deadline = time.monotonic() + 30
+        while name not in subprocess.run(["ps", "-o", "command=", "-p", str(child.pid)], capture_output=True,
+                                         text=True).stdout:
+            self.assertLess(time.monotonic(), deadline, "the process did not start")
+            time.sleep(0.05)
         return child
 
-    def test_done_stops_the_processes_left_in_the_worktree_before_removing_it(self):
-        # #661: a dev server and a verify outlived the lane that started them, holding memory for a day.
+    def test_done_stops_through_slotfather_sweep_what_the_lane_left_in_its_worktree(self):
+        # #661: a verify outlived the lane that started it, holding memory for a day.
         worktree, *_ = self.landed_agent_lane()
-        server = self.process_in(worktree / "desktop", "storybook-dev")
+        left = self.process_in(worktree / "desktop", "orphan-661")
+        self.env["FAKE_SLOTFATHER_SWEEP_STOP"] = "orphan-661"
         output = self.lane("done", "d")
-        self.assertIn(f"stopped pid {server.pid} ", output)
-        self.assertEqual(server.wait(timeout=10), -signal.SIGTERM)
+        self.assertIn(f"stopped pid {left.pid} ", output)
+        self.assertEqual(left.wait(timeout=10), -signal.SIGTERM)
         self.assertFalse(worktree.exists())
-        self.assertIn(f"stopped pid {server.pid}", (self.state / "ledger.log").read_text())
+        self.assertIn(f"slotfather sweep stopped pid {left.pid}", (self.state / "ledger.log").read_text())
+        sweeps = [json.loads(line) for line in (self.tmp / "slotfather.log").read_text().splitlines()]
+        self.assertIn(["--json", "--live", "--pid", str(left.pid)],
+                      [call["args"] for call in sweeps if call["command"] == "sweep"])
 
-    def test_done_refuses_while_a_claude_session_works_in_the_worktree(self):
+    def test_done_refuses_while_a_process_slotfather_sweep_does_not_stop_works_in_the_worktree(self):
+        # Review of #661: a session, a terminal, a lease or a process of no known kind holds the worktree.
         worktree, *_ = self.landed_agent_lane()
-        session = self.process_in(worktree, "claude")
+        held = self.process_in(worktree, "held-661")
+        self.env["FAKE_SLOTFATHER_SWEEP_SPARE"] = "held-661"
         output = self.lane("done", "d", ok=False)
-        self.assertIn(f"pid {session.pid}", output)
-        self.assertIn("Claude Code session", output)
+        self.assertIn(f"pid {held.pid}", output)
+        self.assertIn("inside the live lease lane-641-other", output)
+        del self.env["FAKE_SLOTFATHER_SWEEP_SPARE"]
+        self.assertIn("slotfather sweep does not take it for left behind", self.lane("done", "d", ok=False))
         self.assertTrue(worktree.exists())
-        self.assertIsNone(session.poll())
+        self.assertIsNone(held.poll())
+        self.assertEqual(self.record("d")["status"], "landed")
+
+    def test_done_refuses_without_a_verdict_or_when_the_stop_fails(self):
+        # Review of #661: a sweep that fails, or a stop it cannot confirm, keeps the worktree.
+        worktree, *_ = self.landed_agent_lane()
+        stubborn = self.process_in(worktree, "orphan-661", ignore_term=True)
+        self.env.update(FAKE_SLOTFATHER_SWEEP_STOP="orphan-661", FAKE_SLOTFATHER_SWEEP_FAIL="queue unreadable")
+        self.assertIn("may be stopped is unknown", self.lane("done", "d", ok=False))
+        del self.env["FAKE_SLOTFATHER_SWEEP_FAIL"]
+        output = self.lane("done", "d", ok=False)
+        self.assertIn("it is still in use", output)
+        self.assertIn(f"pid {stubborn.pid} (", output)
+        self.assertIn("; sweep: failed)", output)
+        self.assertTrue(worktree.exists())
+        self.assertIsNone(stubborn.poll())
         self.assertEqual(self.record("d")["status"], "landed")
 
     def test_done_without_a_ticket_comment_is_refused_and_keeps_everything(self):
