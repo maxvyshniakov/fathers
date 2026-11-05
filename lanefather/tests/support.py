@@ -138,6 +138,13 @@ else:
     line = ("FULL " if full else "") + ",".join(suites)
 with open(os.environ["FIXTURE_VERIFY_LOG"], "a") as log:
     log.write(line + "\n")
+with open(os.environ["FIXTURE_VERIFY_LOG"] + ".meta", "a") as log:
+    log.write(os.environ.get("LANEFATHER_SLOT_META", "{}") + "\n")
+with open(os.environ["FIXTURE_VERIFY_LOG"] + ".requests", "a") as log:
+    log.write(json.dumps({"label": os.environ.get("LANEFATHER_SLOT_LABEL"),
+                          "priority": os.environ.get("LANEFATHER_SLOT_PRIORITY"),
+                          "ticket": os.environ.get("LANEFATHER_SLOT_TICKET"),
+                          "meta": json.loads(os.environ.get("LANEFATHER_SLOT_META", "{}"))}) + "\n")
 # Like verify.py, only the full gate stamps, through tools/verified-tree.sh start before and finish after.
 start = subprocess.check_output([str(root / "tools/verified-tree.sh"), "start"], cwd=root, text=True).strip() if full else None
 # verify.py takes its own slot lease (B10): record the label and --jobs the lane hands it.
@@ -503,10 +510,10 @@ class LaneCase(unittest.TestCase):
             self.assertEqual(proc.returncode == 0, ok, f"lane {' '.join(args)} exit {proc.returncode}:\n{output}")
         return output
 
-    def start(self, lane_id, *claims, extra=(), ok=True):
+    def start(self, lane_id: str, *claims: str, extra: tuple[str, ...] = (), ok: bool = True) -> str:
         return self.lane("start", lane_id, "--ticket", "404", "--base", "integrate/q", "--claims", *claims, *extra, ok=ok)
 
-    def created(self, lane_id, *claims):
+    def created(self, lane_id: str, *claims: str) -> str:
         self.start(lane_id, *claims, extra=("--create",))
         return self.record(lane_id)["worktree"]
 

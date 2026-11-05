@@ -43,9 +43,9 @@ DEFAULT_RERUN_WAIT = 3300.0
 # A check is red alone when it failed, or its producer failed alone (blocked). On the base only a failure of the
 # check itself is pre-existing.
 RED_ALONE = ("failed", "blocked")
-# Each run's lease class (#650). The orchestrator waits on a post-merge smoke, a batch gate and a rerun alone; a
+# Each run's lease priority (#650). The orchestrator waits on a post-merge smoke, a batch gate and a rerun alone; a
 # lane check is ordinary work; the perf suite measures, which slotfather ranks batch.
-SLOT_CLASSES = {"check": "normal", "post-merge": "interactive", "gate": "interactive", "rerun": "interactive",
+SLOT_PRIORITIES = {"check": "normal", "post-merge": "interactive", "gate": "interactive", "rerun": "interactive",
                 "perf": "batch"}
 
 
@@ -66,20 +66,25 @@ def report_of(text: str) -> tuple[list[str], dict[str, Any] | None]:
     return reports, state.read_json(Path(reports[-1].strip())) if reports else None
 
 
-def verify_env(label: str, phase: str, **meta: Any) -> dict[str, str]:
-    """The environment of a verify run lanefather starts: its lease's label, the phase's class, and metadata naming
-    the phase and what the caller adds (lane, ticket, check, sha)."""
-    return dict(os.environ, **slots.queue_environment(label, SLOT_CLASSES[phase], phase=phase, **meta))
+def verify_env(label: str, phase: str, *, ticket: str | None = None, **meta: Any) -> dict[str, str]:
+    """The environment of a verify run lanefather starts: its lease's label, the phase's priority, and metadata naming
+    the phase and what the caller adds (lane, check, sha)."""
+    return dict(os.environ, **slots.queue_environment(label, SLOT_PRIORITIES[phase], ticket=ticket,
+                                                      phase=phase, **meta))
 
 
 def lane_meta(record: Record) -> dict[str, str]:
-    """The lane and ticket a lease of `record`'s runs names."""
-    return {"lane": record["id"], "ticket": str(record.get("ticket") or "").lstrip("#")}
+    """Caller tags for the lane; ticket is passed as a separate request field."""
+    return {"lane": record["id"], "lanefather.state": str(state.state_dir().resolve())}
+
+
+def lane_ticket(record: Record) -> str | None:
+    return slots.ticket_value(str(record.get("ticket") or ""))
 
 
 def run_suites(root: Any, suites: list[str], label: str, jobs: int, full: bool = False,
                selected: dict[str, list[str]] | None = None, phase: str = "check",
-               meta: dict[str, Any] | None = None,
+               meta: dict[str, Any] | None = None, ticket: str | None = None,
                ) -> tuple[Rows, dict[str, dict[str, Any]], str | None, dict[str, Any]]:
     """Each suite's result, each selected check's result, the gate triage when the run is red, and the verified-tree
     stamp.
@@ -97,8 +102,8 @@ def run_suites(root: Any, suites: list[str], label: str, jobs: int, full: bool =
     ids = None if full or selected is None else [c for s in suites for c in selected[s]]
     selection = () if full else ("--checks", ",".join(ids)) if ids is not None else ("--suites", ",".join(suites))
     argv = [plan.verify_path(root), *selection, "--keep-going", "--jobs", str(jobs)]
-    # verify queues for its own lease of --jobs slots (B10); the label, class and metadata name the run (#650).
-    env = verify_env(label, phase, **(meta or {}))
+    # verify queues for its own --jobs-slot lease; label, priority, ticket and tags name the run (#650).
+    env = verify_env(label, phase, ticket=ticket, **(meta or {}))
     what = "the full gate" if full else ", ".join(suites) + (f" ({len(ids)} checks)" if ids is not None else "")
     print(f"lane: running {what} in {root} (log {log}); queue: slotfather status", flush=True)
     started, load = time.monotonic(), {"start": host.load_averages()}
@@ -254,7 +259,7 @@ def rerun_wait() -> float:
     return seconds if seconds > 0 else DEFAULT_RERUN_WAIT
 
 
-def alone(argv: list[str], label: str, meta: dict[str, Any] | None = None) -> list[str]:
+def alone(argv: list[str], label: str, meta: dict[str, Any] | None = None, *, ticket: str | None = None) -> list[str]:
     """argv under a lease of every machine slot, so no other verification runs beside a rerun: `slotfather run -n
     all --wait <rerun wait>`, which exits 75 without running argv when the lease does not come in time. verify then
     takes no lease of its own. Raises RerunUnavailable when lanefather already runs under a smaller lease, and
@@ -273,23 +278,25 @@ def alone(argv: list[str], label: str, meta: dict[str, Any] | None = None) -> li
             raise RerunUnavailable(f"{config.prog()} runs under a lease of {count} slot(s); a rerun alone needs all "
                                    f"{total}")
     return slots.wrap("all", label, argv, wait=rerun_wait(),
-                      meta={"phase": "rerun", "kind": "rerun-alone", **(meta or {})}, klass=SLOT_CLASSES["rerun"],
+                      meta={"phase": "rerun", "kind": "rerun-alone", **(meta or {})},
+                      priority=SLOT_PRIORITIES["rerun"], ticket=ticket,
                       yieldable=False)
 
 
 def rerun_checks(root: Any, ids: list[str], label: str, whole: bool = True,
-                 meta: dict[str, Any] | None = None) -> tuple[dict[str, Any] | None, Path, Path | None]:
+                 meta: dict[str, Any] | None = None, *, ticket: str | None = None,
+                 ) -> tuple[dict[str, Any] | None, Path, Path | None]:
     """Run the checks in `root` one after another (verify --checks --jobs 1) while holding every verification
     slot: the report (None when there is none), the run's log and its run directory. `whole=False` runs them as
     verify queues them: cheap checks (#639), which on a clean checkout run before the queue and need no slot."""
     log = journal.log_path(label)
     verify = [plan.verify_path(root), "--checks", ",".join(ids), "--keep-going", "--jobs", "1"]
     meta = {"check": ",".join(ids), **(meta or {})}
-    argv = alone(verify, label, meta) if whole else verify
+    argv = alone(verify, label, meta, ticket=ticket) if whole else verify
     print(f"lane: rerunning {', '.join(ids)} {'alone ' if whole else ''}in {root} (log {log})"
           + ("; waiting for every slot" if whole else ""), flush=True)
     with open(log, "w") as handle:
-        status = run_child(argv, root, verify_env(label, "rerun", **meta), handle)
+        status = run_child(argv, root, verify_env(label, "rerun", ticket=ticket, **meta), handle)
     reports = REPORT.findall(log.read_text(errors="replace"))
     if argv != verify and status == slots.TIMED_OUT and not reports:
         raise RerunUnavailable(f"no lease of every machine slot within {rerun_wait():g} s (slotfather status)")
@@ -358,7 +365,8 @@ def classify(record: Record, worktree: str, base: str, fresh: Rows,
     elif rerun:
         log: Path | None
         try:
-            alone_report, log, _ = rerun_checks(worktree, rerun, f"lane-{record['id']}-alone", meta=lane_meta(record))
+            alone_report, log, _ = rerun_checks(worktree, rerun, f"lane-{record['id']}-alone",
+                                                        meta=lane_meta(record), ticket=lane_ticket(record))
             problem = rerun_problem(alone_report, log)
         except RerunUnavailable as error:
             alone_report, log, problem = None, None, str(error)
@@ -391,7 +399,8 @@ def classify(record: Record, worktree: str, base: str, fresh: Rows,
                 base_log: Path | None
                 try:
                     report_base, base_log, run = rerun_checks(path, present, label, whole=not first,
-                                                              meta={**lane_meta(record), "on": "base"})
+                                                              meta={**lane_meta(record), "on": "base"},
+                                                              ticket=lane_ticket(record))
                     problem = rerun_problem(report_base, base_log)
                 except RerunUnavailable as error:
                     report_base, base_log, run, problem = None, None, None, str(error)
@@ -602,7 +611,7 @@ def lane_run(record: Record, worktree: str, base: str, suites: list[str], remain
                                                                  dict[str, Any] | None, Any]:
         fresh, ran, triaged, _ = run_suites(worktree, [s for s in suites if selection is None or selection.get(s)],
                                             f"lane-{record['id']}", jobs, selected=selection,
-                                            meta=lane_meta(record))
+                                            meta=lane_meta(record), ticket=lane_ticket(record))
         classification, report = None, None
         if any(r["status"] != "passed" for r in fresh):
             run = next((Path(r["report"]).parent for r in fresh if r.get("report")), None)

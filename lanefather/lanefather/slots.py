@@ -2,13 +2,13 @@
 
 lanefather only calls the installed command:
 
-  slotfather run -n K|all --label L [--meta K=V]... --class C [--wait S] -- COMMAND...
+  slotfather run -n K|all --label L [--meta K=V]... --priority P [--ticket ID] [--wait S] -- COMMAND...
   slotfather advise [--max N] [--exclusive]      JSON advice on the verification worker budget
   slotfather slots                               the shared capacity
 
-A verify run queues itself: lanefather hands it the label, class and metadata of its slot request as
-<slot_env>_LABEL, _CLASS, _META (a JSON object) and _YIELDABLE, slot_env from `.lanefather.toml`. Without slotfather on
-PATH a command runs directly, under no lease.
+A verify run queues itself: lanefather hands it the label, priority, optional ticket and metadata of its slot request as
+<slot_env>_LABEL, _PRIORITY, _TICKET, _META (a JSON object) and _YIELDABLE, slot_env from `.lanefather.toml`.
+Without slotfather on PATH a command runs directly, under no lease.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from typing import Any
 from . import config
 
 TIMED_OUT = 75  # slotfather run --wait gave up; the command did not run
-CLASSES = ("interactive", "normal", "batch")
+PRIORITIES = ("interactive", "normal", "batch")
 META_KEY = re.compile(r"[a-z0-9_.-]{1,32}")
 META_VALUE_LIMIT, META_KEYS_LIMIT = 200, 16  # slotfather's limits
 
@@ -52,6 +52,8 @@ def clean_meta(meta: dict[str, Any]) -> dict[str, str]:
     at most 16 keys; empty values are left out."""
     result: dict[str, str] = {}
     for key, value in meta.items():
+        if key in ("class", "priority", "ticket"):
+            raise ValueError(f"{key} is a request field, not metadata")
         if value is None or value == "" or not META_KEY.fullmatch(str(key)):
             continue
         result[str(key)] = "".join(c if c.isprintable() else " " for c in str(value))[:META_VALUE_LIMIT]
@@ -59,7 +61,7 @@ def clean_meta(meta: dict[str, Any]) -> dict[str, str]:
 
 
 def lease_meta(meta: dict[str, Any] | None = None) -> dict[str, str]:
-    """Who asks and why: the session, then `meta` (lane, ticket, phase, kind, check)."""
+    """Who asks and why: the session, then `meta` (lane, phase, kind, check)."""
     found: dict[str, Any] = {}
     session = os.environ.get("CLAUDE_CODE_SESSION_ID")
     if session:
@@ -68,27 +70,41 @@ def lease_meta(meta: dict[str, Any] | None = None) -> dict[str, str]:
     return clean_meta(found)
 
 
+def ticket_value(ticket: str | None) -> str | None:
+    if not ticket or ticket == "none":
+        return None
+    if len(ticket) > META_VALUE_LIMIT or not ticket.isprintable():
+        raise ValueError("ticket must be a short printable identifier")
+    return ticket.lstrip("#") if ticket.lstrip("#").isdigit() else ticket
+
+
 def wrap(count: int | str, label: str, argv: list[str], wait: float | None = None,
-         meta: dict[str, Any] | None = None, klass: str = "normal", yieldable: bool = False) -> list[str]:
+         meta: dict[str, Any] | None = None, priority: str = "normal", yieldable: bool = False,
+         ticket: str | None = None) -> list[str]:
     """argv run under a lease of `count` slots (a number or "all"); argv itself under a lease or without
     slotfather."""
+    if priority not in PRIORITIES:
+        raise ValueError(f"request priority {priority!r} is not one of {', '.join(PRIORITIES)}")
+    ticket = ticket_value(ticket)
+    tags = lease_meta(meta)
     found = command()
     if leased() or found is None:
         return list(argv)
-    if klass not in CLASSES:
-        raise ValueError(f"request priority class {klass!r} is not one of {', '.join(CLASSES)}")
-    flags = [part for key, value in lease_meta(meta).items() for part in ("--meta", f"{key}={value}")]
-    return [found, "run", "-n", str(count), "--label", label, *flags, "--class", klass,
+    flags = [part for key, value in tags.items() for part in ("--meta", f"{key}={value}")]
+    return [found, "run", "-n", str(count), "--label", label, *flags, "--priority", priority,
+            *(("--ticket", ticket) if ticket else ()),
             *(("--yieldable",) if yieldable else ()), *(("--wait", f"{wait:g}") if wait is not None else ()),
             "--", *argv]
 
 
-def queue_environment(label: str, klass: str = "normal", yieldable: bool = False, **meta: Any) -> dict[str, str]:
-    """The variables that make a verify run which queues itself take this label, class and metadata."""
-    if klass not in CLASSES:
-        raise ValueError(f"request priority class {klass!r} is not one of {', '.join(CLASSES)}")
+def queue_environment(label: str, priority: str = "normal", yieldable: bool = False, *,
+                      ticket: str | None = None, **meta: Any) -> dict[str, str]:
+    """The label, priority, optional ticket and tags for a verify run that queues itself."""
+    if priority not in PRIORITIES:
+        raise ValueError(f"request priority {priority!r} is not one of {', '.join(PRIORITIES)}")
     prefix = config.current().slot_env
-    return {f"{prefix}_LABEL": label, f"{prefix}_CLASS": klass,
+    return {f"{prefix}_LABEL": label, f"{prefix}_PRIORITY": priority,
+            f"{prefix}_TICKET": ticket_value(ticket) or "",
             f"{prefix}_META": json.dumps(clean_meta(meta), sort_keys=True),
             f"{prefix}_YIELDABLE": "1" if yieldable else ""}
 

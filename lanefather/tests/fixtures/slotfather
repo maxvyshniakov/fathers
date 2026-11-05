@@ -2,7 +2,7 @@
 """A stand-in for the installed `slotfather` command (#619), first on PATH in Straylight's tests, so that no test
 reaches the machine's queue. It keeps no queue: it records each call and answers the documented commands.
 
-  run [-n N|all] [--label L] [--meta K=V]... [--class C] [--yieldable] [--wait S] [--] COMMAND...
+  run [-n N|all] [--label L] [--meta K=V]... [--priority P] [--ticket ID] [--yieldable] [--wait S] [--] COMMAND...
                                                          exec COMMAND with SLOTFATHER_LEASE and SLOTFATHER_COUNT,
                                                          and SLOTFATHER_YIELD when yieldable; under a lease
                                                          (SLOTFATHER_LEASE set) without a second one
@@ -126,7 +126,7 @@ def main(argv):
     if command == "status":
         if rest[:1] == ["--json"]:
             # An empty queue: no process is in a lease; --pid echoes the start time as slotfather reads it.
-            answer = {"v": 1, "slots": total, "held": held, "free": total - held, "legacy": [], "entries": []}
+            answer = {"v": 2, "slots": total, "held": held, "free": total - held, "legacy": [], "entries": []}
             if rest[1:2] == ["--pid"] and rest[2:3]:
                 start = subprocess.run(["ps", "-o", "lstart=", "-p", rest[2]], capture_output=True, text=True,
                                        env={**os.environ, "LC_ALL": "C"}).stdout.strip()

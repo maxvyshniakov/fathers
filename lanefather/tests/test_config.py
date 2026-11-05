@@ -118,8 +118,8 @@ class ConfigTests(ConfigCase):
 class SeamTests(ConfigCase):
     def test_verify_queues_itself_with_the_projects_slot_variables(self):
         self.use('[checks]\nslot_env = "STRAYLIGHT_SLOT"\n')
-        environment = slots.queue_environment("lane-a", "interactive", lane="a", phase="check", empty="")
-        self.assertEqual(environment, {"STRAYLIGHT_SLOT_LABEL": "lane-a", "STRAYLIGHT_SLOT_CLASS": "interactive",
+        environment = slots.queue_environment("lane-a", "interactive", ticket="42", lane="a", phase="check", empty="")
+        self.assertEqual(environment, {"STRAYLIGHT_SLOT_LABEL": "lane-a", "STRAYLIGHT_SLOT_PRIORITY": "interactive", "STRAYLIGHT_SLOT_TICKET": "42",
                                        "STRAYLIGHT_SLOT_META": '{"lane": "a", "phase": "check"}',
                                        "STRAYLIGHT_SLOT_YIELDABLE": ""})
         with self.assertRaises(ValueError):
@@ -128,12 +128,18 @@ class SeamTests(ConfigCase):
     def test_a_lease_wraps_the_command_once(self):
         self.use("")
         with unittest.mock.patch.object(slots, "command", return_value="/bin/slotfather"):
-            argv = slots.wrap("all", "rerun", ["verify.sh"], wait=30, meta={"lane": "a"}, klass="interactive")
+            argv = slots.wrap("all", "rerun", ["verify.sh"], wait=30, meta={"lane": "a"}, priority="interactive", ticket="42")
             self.assertEqual(argv, ["/bin/slotfather", "run", "-n", "all", "--label", "rerun", "--meta", "lane=a",
-                                    "--class", "interactive", "--wait", "30", "--", "verify.sh"])
+                                    "--priority", "interactive", "--ticket", "42", "--wait", "30", "--", "verify.sh"])
             os.environ.update(SLOTFATHER_LEASE="/lease", SLOTFATHER_COUNT="2")
             self.assertEqual(slots.wrap("all", "rerun", ["verify.sh"]), ["verify.sh"])
             self.assertEqual(slots.lease_count(), 2)
+
+    def test_priority_and_ticket_cannot_be_serialized_as_metadata(self):
+        self.use("")
+        for key in ("class", "priority", "ticket"):
+            with self.assertRaisesRegex(ValueError, "request field"):
+                slots.clean_meta({key: "normal"})
 
     def test_without_a_process_source_nothing_is_scanned(self):
         # With neither a project hook nor the machine-wide CLI, legacy done keeps its original behavior.
