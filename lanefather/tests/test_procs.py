@@ -29,7 +29,7 @@ if args[0] == "procs":
                       "lease_unknown": data.get("lease_unknown",[]), "processes": rows}))
 else:
     if "--live" in args: raise SystemExit("fixture forbids PID-only live stopping")
-    print(json.dumps({"v": 1, "items": [dict(p, action="would-stop")
+    print(json.dumps({"v": data.get("sweep_v", data.get("v", 1)), "items": [dict(p, action="would-stop")
                                        for p in data.get("offers", [])]}))
 '''
 
@@ -64,7 +64,7 @@ class ProcessSourceTests(unittest.TestCase):
         self.assertFalse(any("--live" in call for call in calls))
 
     def test_unknown_schema_unknown_membership_and_spared_processes_hold_the_worktree(self) -> None:
-        values_list: list[dict[str, Any]] = [{"v": 2}, {"cwd_unknown": [333]},
+        values_list: list[dict[str, Any]] = [{"v": 99}, {"v": True}, {"v": "2"}, {"cwd_unknown": [333]},
                                             {"lease_unknown": [1234]}, {"offers": []}]
         for values in values_list:
             with self.subTest(values=values):
@@ -72,6 +72,19 @@ class ProcessSourceTests(unittest.TestCase):
                 stopping, held = self.source.sort_for_removal("/work/lane")
                 self.assertEqual(stopping, [])
                 self.assertTrue(held)
+
+    def test_committed_slotfather_v2_queries_are_recognized_without_enabling_pid_only_stops(self) -> None:
+        # Slotfather 08ede50: procs.query + sweep report are v2; process identity fields are unchanged.
+        self.answer(v=2, initial=[{**self.process, "leases": [{"pid": 1234, "start": "one",
+            "priority": "interactive", "ticket": "648", "meta": {"lane": "candidate"}}]}])
+        stopping, held = self.source.sort_for_removal("/work/lane")
+        self.assertEqual(held, [])
+        self.assertEqual([item.pid for item in stopping], [1234])
+        retained = self.source.stop(stopping, "/work/lane")
+        self.assertEqual([item.pid for item in retained], [1234])
+        self.assertIn("identity-bound", retained[0].describe())
+        calls = [json.loads(line) for line in (self.root / "calls.jsonl").read_text().splitlines()]
+        self.assertFalse(any("--live" in call for call in calls))
 
     def test_an_older_slotfather_without_procs_keeps_legacy_done_behavior(self) -> None:
         program = self.root / "old-slotfather"

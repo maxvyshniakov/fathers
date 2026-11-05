@@ -106,9 +106,12 @@ class SlotfatherSource:
                     or ("usage:" in message and "procs" not in message)))
                 raise error
             data: Any = json.loads(run.stdout)
-            if not isinstance(data, dict) or data.get("v") != 1:  # pyright: ignore[reportUnknownMemberType]
+            if not isinstance(data, dict):
                 raise QueryError("unknown slotfather JSON schema")
-            return cast(dict[str, Any], data)
+            payload = cast(dict[str, Any], data)
+            if type(payload.get("v")) is not int or payload.get("v") not in (1, 2):
+                raise QueryError("unknown slotfather JSON schema")
+            return payload
         except (OSError, ValueError, subprocess.TimeoutExpired) as error:
             raise QueryError(str(error)) from None
 

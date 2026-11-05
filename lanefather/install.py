@@ -50,10 +50,22 @@ def interpreter(python: str | None) -> str:
 
 
 def commit() -> str:
-    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=SOURCE, capture_output=True, text=True).stdout.strip()
-    dirty = subprocess.run(["git", "status", "--porcelain", "--", "lanefather"], cwd=SOURCE, capture_output=True,
-                           text=True).stdout.strip()
-    return (head or "unknown") + ("-dirty" if dirty else "")
+    # A publisher can invoke this from a Git hook. Its repository bindings must not select
+    # that hook's checkout while the shipping bytes come from SOURCE.
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    head = subprocess.run(["git", "rev-parse", "--verify", "HEAD"], cwd=SOURCE,
+                          capture_output=True, text=True, env=environment)
+    if head.returncode:
+        raise InstallError("install from a committed Git checkout, not an unversioned source directory")
+    changed = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all", "--",
+                              "lanefather", "hooks", "install.py"], cwd=SOURCE,
+                          capture_output=True, text=True, env=environment)
+    if changed.returncode:
+        raise InstallError("cannot inspect shipping inputs; the installed release was not changed")
+    if changed.stdout.strip():
+        raise InstallError("uncommitted shipping inputs: commit and verify them before installing; "
+                           "the installed release was not changed")
+    return head.stdout.strip()
 
 
 def version() -> str:

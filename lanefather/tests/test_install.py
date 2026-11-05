@@ -46,6 +46,47 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in releases.iterdir())[:2], ["0.0.2-old", "0.0.3-old"])
         self.assertEqual(len(list(releases.iterdir())), 3)
 
+    def test_uncommitted_shipping_inputs_are_refused_before_current_or_launcher_changes(self):
+        source = self.tmp / "source"
+        shutil.copytree(ROOT / "lanefather", source / "lanefather",
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        shutil.copytree(ROOT / "hooks", source / "hooks")
+        shutil.copy2(ROOT / "install.py", source / "install.py")
+        clean_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        def git(*args: str):
+            result = subprocess.run(["git", "-C", str(source), *args], text=True, capture_output=True, env=clean_env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        git("init", "-q", "-b", "codex/source")
+        git("config", "user.email", "install@example.invalid")
+        git("config", "user.name", "Install test")
+        git("add", ".")
+        git("commit", "-qm", "source")
+        command = [sys.executable, str(source / "install.py"), "--bin", str(self.tmp / "bin"),
+                   "--share", str(self.tmp / "share")]
+        installed = subprocess.run(command, capture_output=True, text=True, env=clean_env)
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        current = self.tmp / "share" / "current"
+        launcher = self.tmp / "bin" / "lanefather"
+        before = (current.readlink(), launcher.read_bytes(), sorted((self.tmp / "share" / "releases").iterdir()))
+        decoy = self.tmp / "decoy"
+        shutil.copytree(source, decoy)
+        hook_env = {**clean_env, "GIT_DIR": str(decoy / ".git"), "GIT_WORK_TREE": str(decoy)}
+        for relative in ["lanefather/__init__.py", "hooks/reference-transaction", "install.py", "lanefather/untracked.py"]:
+            with self.subTest(relative=relative):
+                path = source / relative
+                original = path.read_bytes() if path.exists() else None
+                path.write_bytes((original or b"") + b"\n# uncommitted input\n")
+                for environment in (clean_env, hook_env):
+                    refused = subprocess.run(command, capture_output=True, text=True, env=environment)
+                    self.assertEqual(refused.returncode, 1, refused.stdout + refused.stderr)
+                    self.assertIn("uncommitted", refused.stderr)
+                self.assertEqual((current.readlink(), launcher.read_bytes(),
+                                  sorted((self.tmp / "share" / "releases").iterdir())), before)
+                if original is None:
+                    path.unlink()
+                else:
+                    path.write_bytes(original)
+
     def test_an_old_interpreter_is_refused(self):
         result = self.install("--python", "/usr/bin/false")
         self.assertEqual(result.returncode, 1)
