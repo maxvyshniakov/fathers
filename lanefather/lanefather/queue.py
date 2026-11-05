@@ -16,19 +16,29 @@ from .errors import LaneError
 from .state import Record
 
 
-def queue_path() -> Path:
-    configured = config.current().env("QUEUE")
-    return Path(os.path.expanduser(configured)) if configured else state.state_dir().parent / "queue" / "queue.toml"
+def queue_path(project: config.Config | None = None) -> Path:
+    configured = (project or config.current()).env("QUEUE")
+    directory = state.Store(project).directory if project else state.state_dir()
+    return Path(os.path.expanduser(configured)) if configured else directory.parent / "queue" / "queue.toml"
 
 
 def read_queue() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """The queue's top-level settings and its [[lane]] entries in rank order, each checked."""
     path = queue_path()
     try:
-        data = tomllib.loads(path.read_text())
+        text = path.read_text()
     except FileNotFoundError:
         raise LaneError(f"no queue at {path}: rank the next tickets there as [[lane]] entries") from None
     except (OSError, tomllib.TOMLDecodeError) as error:
+        raise LaneError(f"{path}: {error}") from None
+    return parse_queue(text, path)
+
+
+def parse_queue(text: str, path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Validate queue text before a caller can replace the configured queue atomically."""
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as error:
         raise LaneError(f"{path}: {error}") from None
     entries = data.get("lane", [])
     if not isinstance(entries, list):

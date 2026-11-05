@@ -34,16 +34,16 @@ DEFAULT_LOAD_WAIT = 3600.0
 DEFAULT_LOAD_POLL = 30.0
 
 
-def machine_cores() -> int:
+def machine_cores(project: config.Config | None = None) -> int:
     """The core count; LANEFATHER_CORES stands in for it in tests."""
-    stub = config.current().env("CORES")
+    stub = (project or config.current()).env("CORES")
     return int(stub) if stub and stub.isdigit() and int(stub) > 0 else os.cpu_count() or 1
 
 
-def machine_memory_gb() -> float:
+def machine_memory_gb(project: config.Config | None = None) -> float:
     """Physical memory in GB; LANEFATHER_MEMORY_GB stands in for it in tests. macOS keeps its free page count near
     zero (the page cache holds the rest), so the cap counts the physical memory less a reserve."""
-    stub = config.current().env("MEMORY_GB")
+    stub = (project or config.current()).env("MEMORY_GB")
     if stub:
         with contextlib.suppress(ValueError):
             return float(stub)
@@ -57,13 +57,13 @@ def derived_cap(cores: int, memory_gb: float) -> int:
     return max(1, min(cores // CORES_PER_LANE, int((memory_gb - MEMORY_RESERVE_GB) // LANE_MEMORY_GB)))
 
 
-def lane_cap() -> tuple[int, str]:
+def lane_cap(project: config.Config | None = None) -> tuple[int, str]:
     """The lane cap and where it comes from: LANEFATHER_CAP, which the owner may raise for a stretch and every start
     logs, else the machine's derived cap. A bad value warns and keeps the derived cap, so a typo does not stop every
     run (#454)."""
-    cores, memory = machine_cores(), machine_memory_gb()
+    cores, memory = machine_cores(project), machine_memory_gb(project)
     derived = derived_cap(cores, memory)
-    found = config.current().lookup("CAP")
+    found = (project or config.current()).lookup("CAP")
     if found and found[1].strip().isdigit() and int(found[1]) > 0:
         return int(found[1]), f"{found[0]} override; derived: {derived}"
     if found and found[1]:
@@ -72,16 +72,16 @@ def lane_cap() -> tuple[int, str]:
     return derived, f"derived from {cores} cores and {memory:.0f} GB of memory"
 
 
-def load15() -> float:
+def load15(project: config.Config | None = None) -> float:
     """The 15-minute load average; LANEFATHER_LOAD15 stands in for it in tests."""
-    stub = config.current().env("LOAD15")
+    stub = (project or config.current()).env("LOAD15")
     return float(stub) if stub else os.getloadavg()[2]
 
 
-def host() -> dict[str, Any]:
-    disk = config.current().env("DISK_FREE_GB")
+def host(project: config.Config | None = None) -> dict[str, Any]:
+    disk = (project or config.current()).env("DISK_FREE_GB")
     return {"disk_free_gb": float(disk) if disk else shutil.disk_usage(Path.home()).free / 1e9,
-            "load15": load15(), "cores": machine_cores()}
+            "load15": load15(project), "cores": machine_cores(project)}
 
 
 def load_limit(cores: int) -> float:
