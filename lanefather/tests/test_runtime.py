@@ -113,3 +113,21 @@ class RuntimeTests(unittest.TestCase):
         refused = subprocess.run([*command, str(script)], cwd=self.tmp, env=self.env, capture_output=True, text=True)
         self.assertEqual(refused.returncode, 1)
         self.assertIn('configured project hook', refused.stderr)
+
+    def test_project_hook_restores_the_callers_working_directory_argv_and_import_path(self):
+        import argparse
+        from unittest.mock import patch
+
+        from lanefather import config, runtime
+        project = self.tmp / 'restoration'
+        project.mkdir()
+        (project / 'policy.py').write_text("import sys,os\nassert sys.path[0] == os.getcwd()\nraise SystemExit(7)\n")
+        configuration = project / '.lanefather.toml'
+        configuration.write_text('[hooks.project]\npolicy="policy.py"\n')
+        previous = (Path.cwd(), sys.argv, sys.path[:])
+        with patch('lanefather.config.current', return_value=config.load(configuration)):
+            result = runtime.project_hook(argparse.Namespace(name='policy', arguments=['--', 'value']))
+        self.assertEqual(result, 7)
+        self.assertEqual(Path.cwd(), previous[0])
+        self.assertIs(sys.argv, previous[1])
+        self.assertEqual(sys.path, previous[2])

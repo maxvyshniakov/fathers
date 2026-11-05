@@ -16,7 +16,7 @@ class StartTests(LaneCase):
     def test_header_names_ticket_branch_claims_and_report_contract(self):
         header = self.start("tool", "tools/lane", "tools/test-lane.py")
         for text in ("#404", "Branch: lane/tool", "integrate/q", "tools/lane", "tools/test-lane.py",
-                     "lanefather check tool", "Receipt: " + str(self.state / "tool.receipt.json"), "IMPLEMENTER.md"):
+                     "lanefather check tool", "Receipt: " + str(self.state / "tool.receipt.json"), "docs/agents/orchestration.md#implementer-brief"):
             self.assertIn(text, header)
         record = self.record("tool")
         self.assertEqual((record["status"], record["ticket"], record["base"]), ("planned", "404", "integrate/q"))

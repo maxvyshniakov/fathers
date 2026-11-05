@@ -38,7 +38,7 @@ if str(ROOT) not in sys.path:
 FIXTURE_CONFIG = textwrap.dedent("""\
     project = "Fixture"
     queue_name = "the #347 queue"
-    report_doc = ".agents/skills/orchestrate/IMPLEMENTER.md#report"
+    report_doc = "docs/agents/orchestration.md#implementer-brief"
     rules_dir = "tools/agent-hooks/rules"
     unclaimed = ["release-notes/"]
     merge_config = ["merge.release-notes.name=Union of release notes entries",

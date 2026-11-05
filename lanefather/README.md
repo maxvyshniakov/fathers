@@ -52,7 +52,7 @@ complete example.
 | `command` | how messages name the command (`tools/lane` in Straylight) |
 | `state_dir` | the lane records, receipts and ledger |
 | `legacy_env_prefix`, `[env]` | the variables older tools set, read after `LANEFATHER_*` |
-| `rules_dir`, `coding_standards`, `steering`, `report_doc` | what a brief and a review read |
+| `rules_dir`, `coding_standards`, `steering`, `report_doc` | rule/standards inputs and the report-link text |
 | `unclaimed`, `merge_config` | paths no lane claims; `git -c` settings for land's merge |
 | `[checks]` `verify`, `plan_module`, `triage`, `toolchain`, `slot_env` | the check contract below |
 | `[lane]` `targets`, `cache_partitions` | build directories `done` removes |
@@ -156,7 +156,8 @@ release without replacing its bytes.
 a named script from `[hooks.project]`, with the project's directory as its working
 directory. The script receives `LANEFATHER_PROJECT`, an explicit
 `lanefather.project.Project`; `readiness()` supplies one configured queue/state
-snapshot and `update_queue(policy)` validates and atomically writes policy under
+snapshot including active records; `Project.paths` resolves state/queue locations
+without creating them. `update_queue(policy)` validates and atomically writes policy under
 the shared queue lock. The script owns project selection and presentation; the
 installed package owns the lane workflow and persistence. A script's exit status
 is returned unchanged. Project code needs no source-checkout import path.

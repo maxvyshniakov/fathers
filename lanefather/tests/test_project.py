@@ -44,9 +44,20 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(second.ready['id'], 'beta')
         self.assertEqual((first.cap, second.cap), (4, 2))
         self.assertEqual(first.records, ())
+        self.assertEqual(first.active, ())
         self.assertFalse(first.state_dir.exists())
         self.assertFalse(second.state_dir.exists())
         self.assertIs(config.current(), beta.config)
+
+    def test_configured_paths_are_available_before_a_queue_or_state_exists(self) -> None:
+        directory = self.root / 'new-project'
+        project = Project(config.Config(state_dir=str(directory / 'lanes')))
+        self.assertEqual(project.paths.state_dir, directory / 'lanes')
+        self.assertEqual(project.paths.queue_path, directory / 'queue' / 'queue.toml')
+        self.assertFalse(directory.exists())
+        with self.assertRaises(LaneError):
+            project.readiness()
+        self.assertFalse(directory.exists())
 
     def test_queue_policy_returns_a_proposal_while_the_project_owns_the_atomic_write_and_ledger(self) -> None:
         project = self.project('alpha')

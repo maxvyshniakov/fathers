@@ -14,6 +14,12 @@ from .errors import LaneError
 
 
 @dataclass(frozen=True)
+class ProjectPaths:
+    state_dir: Path
+    queue_path: Path
+
+
+@dataclass(frozen=True)
 class Readiness:
     state_dir: Path
     queue_path: Path
@@ -28,6 +34,10 @@ class Readiness:
     host: dict[str, Any]
     blocked: str | None
     timestamp: str
+
+    @property
+    def active(self) -> tuple[state.Record, ...]:
+        return tuple(state.occupying(list(self.records)))
 
     @property
     def can_start(self) -> bool:
@@ -47,6 +57,7 @@ class Project:
         self.config = project
         self._store = state.Store(project)
         self._queue_path = queue.queue_path(project)
+        self.paths = ProjectPaths(self._store.directory, self._queue_path)
 
     def readiness(self) -> Readiness:
         try:
