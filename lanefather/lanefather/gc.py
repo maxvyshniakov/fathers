@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 import subprocess
 import time
-from typing import Any
+from typing import Any, cast
 
 from . import config, procs, state, worktrees
 from .errors import LaneError
@@ -165,8 +165,11 @@ class Project:
                 result.errors.append(f"after_remove {path}: exit {run.returncode}: {run.stderr.strip()}")
             elif run.stdout.strip():
                 try:
-                    report = json.loads(run.stdout)
-                    if (not isinstance(report, dict) or type(report.get("v")) is not int or report["v"] != 1
+                    decoded: Any = json.loads(run.stdout)
+                    if not isinstance(decoded, dict):
+                        raise ValueError("expected an object")
+                    report = cast(dict[str, Any], decoded)
+                    if (type(report.get("v")) is not int or report["v"] != 1
                             or type(report.get("freed")) is not int or report["freed"] < 0):
                         raise ValueError("expected {v: 1, freed: non-negative integer}")
                     result.freed += report["freed"]
