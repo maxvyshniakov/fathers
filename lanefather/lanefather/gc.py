@@ -163,6 +163,15 @@ class Project:
             run = subprocess.run(argv, cwd=self._root, capture_output=True, text=True)
             if run.returncode:
                 result.errors.append(f"after_remove {path}: exit {run.returncode}: {run.stderr.strip()}")
+            elif run.stdout.strip():
+                try:
+                    report = json.loads(run.stdout)
+                    if (not isinstance(report, dict) or type(report.get("v")) is not int or report["v"] != 1
+                            or type(report.get("freed")) is not int or report["freed"] < 0):
+                        raise ValueError("expected {v: 1, freed: non-negative integer}")
+                    result.freed += report["freed"]
+                except ValueError as error:
+                    result.errors.append(f"after_remove {path}: invalid cleanup report: {error}")
 
 
 def _last_activity(path: str) -> float:

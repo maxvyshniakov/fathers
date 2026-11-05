@@ -146,3 +146,37 @@ class GcTests(LaneCase):
         self.assertFalse(old.exists())
         self.assertEqual(marker.read_text(), str(old.resolve()))
         self.assertTrue(any("exit 3" in e for e in report["errors"]))
+
+    def test_gc_includes_only_successfully_reported_project_cleanup_bytes(self):
+        old = self.candidate()
+        hook = self.write(self.repo, "cleanup-bytes.py", "import json\n"
+                          "print(json.dumps({'v': 1, 'freed': 12345}))\n")
+        cfg = self.integration / ".lanefather.toml"
+        cfg.write_text(cfg.read_text() + f'\n[gc]\nafter_remove = ["python3", "{hook}", "{{worktree}}"]\n')
+        preview = self.collect("--dry-run")
+        worktree_bytes = next(a["bytes"] for a in preview["removed"] if a["kind"] == "worktree")
+        self.assertEqual(preview["freed"], worktree_bytes)
+        report = self.collect()
+        self.assertFalse(old.exists())
+        self.assertEqual(report["freed"], worktree_bytes + 12345)
+        self.assertEqual(report["errors"], [])
+
+    def test_gc_never_counts_failed_or_invalid_project_cleanup_reports(self):
+        cases = [("failed", {"v": 1, "freed": 12345}, 3),
+                 ("negative", {"v": 1, "freed": -1}, 0),
+                 ("boolean", {"v": 1, "freed": True}, 0),
+                 ("version", {"v": 2, "freed": 12345}, 0)]
+        for name, payload, status in cases:
+            with self.subTest(name=name):
+                old = self.candidate(name)
+                hook = self.write(self.repo, "cleanup-invalid.py",
+                                  f"print({json.dumps(payload)!r})\nraise SystemExit({status})\n")
+                cfg = self.integration / ".lanefather.toml"
+                text = cfg.read_text().split("\n[gc]", 1)[0]
+                cfg.write_text(text + f'\n[gc]\nafter_remove = ["python3", "{hook}", "{{worktree}}"]\n')
+                preview = self.collect("--dry-run")
+                report = self.collect()
+                self.assertFalse(old.exists())
+                self.assertEqual(report["freed"], preview["freed"])
+                self.assertEqual(len(report["errors"]), 1)
+                self.assertIn("exit 3" if status else "invalid cleanup report", report["errors"][0])
