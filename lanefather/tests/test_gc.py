@@ -68,6 +68,55 @@ class GcTests(LaneCase):
         self.assertIn("lane state", output)
         self.assertTrue(old.exists())
 
+    def test_gc_keeps_the_worktree_it_is_invoked_from(self):
+        old = self.candidate()
+        self.lane("gc", "--json", cwd=old)
+        self.assertTrue(old.exists(), "a collector must not remove its own working directory")
+
+    def test_gc_keeps_an_ancestor_using_the_candidate_even_when_the_child_runs_elsewhere(self):
+        old = self.candidate()
+        script = ("import os,subprocess,sys; "
+                  "raise SystemExit(subprocess.call([sys.executable,'-m','lanefather','gc','--json'], "
+                  "cwd=os.environ['GC_RUN_FROM']))")
+        env = dict(self.env, GC_RUN_FROM=str(self.integration))
+        run = subprocess.run([sys.executable, "-c", script], cwd=old, env=env, capture_output=True, text=True)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertTrue(old.exists(), "the querying tool's ancestor still uses this worktree")
+
+    def mutation_hook(self, old: Path, mutation: str) -> None:
+        marker = self.tmp / "stopped"
+        text = ("import os,pathlib,subprocess,time\n"
+                "class Item:\n    pid=1\n    def describe(self): return 'controlled stop adapter'\n"
+                f"ROOT={str(old.resolve())!r}\nMARK=pathlib.Path({str(marker)!r})\n"
+                "def sort_for_removal(root):\n    return ([Item()],[]) if root==ROOT and not MARK.exists() else ([],[])\n"
+                "def stop(processes,root):\n" + mutation + "\n    MARK.touch()\n    return []\n")
+        hook = self.write(self.repo, "gc-mutation.py", text)
+        cfg = self.integration / ".lanefather.toml"
+        cfg.write_text(cfg.read_text().replace('process_scan = "tools/process_scan.py"',
+                                               f'process_scan = "{hook}"'))
+
+    def test_gc_keeps_a_new_manual_lock_created_during_process_cleanup(self):
+        old = self.candidate()
+        self.git(self.repo, "worktree", "lock", "--reason", "claude agent test (pid 99999)", str(old))
+        self.mutation_hook(old, "    subprocess.run(['git','worktree','unlock',root],check=True)\n"
+                               "    subprocess.run(['git','worktree','lock','--reason','owner retention',root],check=True)")
+        self.collect()
+        self.assertTrue(old.exists())
+        self.assertIn("owner retention", self.git(self.repo, "worktree", "list", "--porcelain"))
+
+    def test_gc_keeps_a_clean_unmerged_detached_head_created_during_process_cleanup(self):
+        old, unmerged = self.candidate(), self.candidate("unmerged-stop")
+        sha = self.commit(unmerged, {"lib/new.txt": "unmerged"})
+        mutation = (f"    subprocess.run(['git','-C',root,'checkout','--detach','-q',{sha!r}],check=True)\n"
+                    "    gitdir=subprocess.check_output(['git','-C',root,'rev-parse','--absolute-git-dir'],text=True).strip()\n"
+                    "    past=time.time()-3*3600\n"
+                    "    for path in [root,*[os.path.join(gitdir,n) for n in ['HEAD','index','logs/HEAD']]]:\n"
+                    "        os.utime(path,(past,past))")
+        self.mutation_hook(old, mutation)
+        self.collect()
+        self.assertTrue(old.exists())
+        self.assertEqual(self.git(old, "rev-parse", "HEAD"), sha)
+
     def test_gc_refuses_when_process_source_is_missing(self):
         old = self.candidate()
         (self.integration / "tools/process_scan.py").unlink()

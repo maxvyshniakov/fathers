@@ -54,7 +54,7 @@ complete example.
 | `[gate]` `stamp_tool`, `stamp_file`, `pre_push_hook` | the verified-tree stamp of the full gate |
 | `[promote]` `install`, `deploy`, `after`, `ship_refuses` | what promote runs after it moved dev |
 | `[gc]` `after_remove` | project cache cleanup after a worktree was removed (`{worktree}`, `{name}`, `{project}`) |
-| `[hooks]` `process_scan` | what a lane left running in its worktree, until `slotfather procs` answers |
+| `[hooks]` `process_scan` | legacy process adapter for live lanes; without it `procs` supplies read-only inspection |
 
 ### The check contract
 
@@ -85,6 +85,10 @@ suite. A project without one gets whole suites.
 | `lanes`, `cli` | start, next, adopt, list; the command line |
 
 The [architecture pass](docs/architecture-667.md) records the survey, alternative interfaces and deployment order.
+
+The standalone process adapter refuses PID-only live stopping until slotfather accepts an expected `(pid, start)`
+identity at the actual signal boundary. Existing configured hooks keep their supported cleanup contract. A missing
+`procs` on an older CLI preserves legacy `done` behavior; failed/unknown inspection retains worktrees.
 
 ### State and its versions
 

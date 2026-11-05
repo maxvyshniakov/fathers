@@ -69,8 +69,17 @@ its explicit request/result interface and failure evidence. This is a responsibi
 
 Both tools keep standard-library packages, immutable source installations, CLI-only integration, versioned JSON,
 and PID plus start-time identity. `SlotfatherSource` uses `procs --json --cwd`, checks unknown cwd/lease membership,
-keeps command-line-only references, and delegates all stopping to `sweep`. It rechecks process start identity before
-live sweep and queries use again afterwards. No slotfather source or installed command is modified by this pass.
+keeps command-line-only references, and preserves legacy behavior only when the CLI explicitly declines `procs`.
+An inspection failure or unknown response schema retains the worktree. The standalone adapter deliberately refuses
+PID-only live stopping: the installed receiving CLI cannot carry an earlier `(pid, start)` identity through its
+actual signal boundary. A preflight identity query cannot close that race. This is an external API blocker on
+Straylight #667, not a claim that a new stop flag exists. The existing configured process hook remains compatible,
+including `stopped`, `killed` and `gone` results. No slotfather source or installed command is modified by this pass.
+
+Collection re-reads the worktree entry and runs the complete retention policy after process cleanup. A termination
+handler changing a manual lock or switching to a clean unmerged detached HEAD therefore retains the worktree. The
+collector also retains its invoking cwd and process-hook ancestors using a candidate, even though the lower-level
+query intentionally omits query ancestry. These cases have real-CLI scratch Git regressions.
 
 ## Deployment order
 

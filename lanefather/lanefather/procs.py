@@ -20,6 +20,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 from typing import Any, Protocol, cast
 
@@ -76,17 +77,18 @@ class Item:
     pid: int
     start: str
     command: str
+    reason: str = ""
 
     def describe(self) -> str:
-        return f"pid {self.pid} ({self.command[:100]})"
+        return f"pid {self.pid} ({self.command[:100]})" + (f"; {self.reason}" if self.reason else "")
 
 
 class QueryError(Exception):
-    pass
+    unsupported = False
 
 
 class SlotfatherSource:
-    """Process and stop observations through versioned CLI contracts; never inspect the machine ourselves."""
+    """Read-only process observations through versioned CLI contracts; identity-bound stopping is unavailable."""
 
     NAME = "slotfather sweep"
 
@@ -96,8 +98,13 @@ class SlotfatherSource:
     def _ask(self, *args: str) -> dict[str, Any]:
         try:
             run = subprocess.run([self.command, *args], capture_output=True, text=True, timeout=120)
-            if run.returncode not in ((0, 1) if "--live" in args else (0,)):
-                raise QueryError(f"exit {run.returncode}: {run.stderr.strip()[:200]}")
+            if run.returncode:
+                error = QueryError(f"exit {run.returncode}: {run.stderr.strip()[:200]}")
+                message = (run.stderr + run.stdout).lower()
+                error.unsupported = bool(args[:1] == ("procs",) and (
+                    re.search(r"unknown(?: or incomplete)?(?: command| option)?[: ]+['\"]?procs\b", message)
+                    or ("usage:" in message and "procs" not in message)))
+                raise error
             data: Any = json.loads(run.stdout)
             if not isinstance(data, dict) or data.get("v") != 1:  # pyright: ignore[reportUnknownMemberType]
                 raise QueryError("unknown slotfather JSON schema")
@@ -139,32 +146,22 @@ class SlotfatherSource:
         except (QueryError, KeyError, TypeError) as error:
             return [], [f"process source query failed: {error}"]
 
-    def stop(self, processes: list[Item], root: str) -> list[Any]:
+    def supported(self) -> bool:
+        """Negotiate the actual read-only procs contract, without probing a mutating command."""
         try:
-            # A sweep's offered PID is never a timeless permission to signal that PID.
-            live: list[Item] = []
-            for item in processes:
-                identity = self._query("--pid", str(item.pid))
-                current = identity["processes"]
-                if identity["cwd_unknown"] or identity["lease_unknown"]:
-                    raise QueryError(f"pid {item.pid} membership is unknown")
-                if not current:
-                    continue
-                if len(current) != 1 or current[0].get("start") != item.start:
-                    raise QueryError(f"pid {item.pid} changed identity")
-                live.append(item)
-            if live:
-                answer = self._ask("sweep", "--json", "--live",
-                                   *(word for p in live for word in ("--pid", str(p.pid))))
-                if answer.get("live_refused"):
-                    raise QueryError("live sweep refused")
-                stopped = {p["pid"] for p in answer["items"] if p.get("action") in ("stopped", "gone")}
-                if any(p.pid not in stopped for p in live):
-                    return list(processes)
-            left, held = self.sort_for_removal(root)
-            return [*left, *([Item(0, "", "; ".join(held))] if held else [])]
-        except (QueryError, KeyError, TypeError):
-            return list(processes)
+            self._query("--pid", str(os.getpid()))
+        except QueryError as error:
+            # Only an explicit older command surface gets legacy behavior. Failed inspection and unknown schemas
+            # remain an unavailable source, which retains a worktree rather than silently skipping inspection.
+            return not error.unsupported
+        return True
+
+    def stop(self, processes: list[Item], root: str) -> list[Item]:
+        """The receiver has no identity-bound stop contract yet. A later PID-only sweep is not permission to
+        stop a PID from an earlier observation: it could be reused before sweep builds its own snapshot."""
+        del root
+        reason = "slotfather has no identity-bound stop contract; retained instead of a PID-only live sweep"
+        return [Item(p.pid, p.start, p.command, reason) for p in processes]
 
 
 class HookSource:
@@ -181,9 +178,12 @@ class HookSource:
         try:
             table = self.module.table()
             stopping, held = self.module.sort_for_removal(root, table)
-            held += [f"pid {p.pid} ({p.command[:100]}) names the worktree"
+            selected = ({p.pid for p in self.module.in_worktree(root, table)}
+                        if hasattr(self.module, "in_worktree") else {p.pid for p in table.values()})
+            held += [f"pid {p.pid} ({p.command[:100]}) uses the worktree"
                      for p in table.values() if p.pid != os.getpid()
-                     and root in p.command and not self.module.inside(p.cwd, root)]
+                     and ((self.module.inside(p.cwd, root) and p.pid not in selected)
+                          or (root in p.command and not self.module.inside(p.cwd, root)))]
             return stopping, held
         except self.module.ScanError as error:
             return [], [f"which processes in {root} may be stopped is unknown: {error}"]
@@ -200,4 +200,5 @@ def source(project: config.Config | None = None) -> Any:
     if hook and root is not None and (root / hook).is_file():
         return HookSource(_load(str(root / hook)))
     command = slots.command()
-    return SlotfatherSource(command) if command else NoSource()
+    adapter = SlotfatherSource(command) if command else None
+    return adapter if adapter is not None and adapter.supported() else NoSource()

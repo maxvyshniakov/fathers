@@ -40,38 +40,40 @@ class Project:
     """Collect one repository under one explicit configuration; run is the caller's only operation."""
 
     def __init__(self, root: str, settings: config.Config):
-        self.root = main_checkout(common_dir(root))
-        self.settings = settings
-        self.store = state.Store(settings)
-        self.processes = procs.source(settings)
+        self._root = main_checkout(common_dir(root))
+        self._invoked_from = os.path.realpath(os.getcwd())
+        self._settings = settings
+        self._store = state.Store(settings)
+        self._processes = procs.source(settings)
 
     def run(self, dry_run: bool = False) -> Result:
         result = Result()
-        with self.store.locked("state"):
-            targets = git(self.root, "for-each-ref", "--format=%(refname)", "refs/remotes/origin/dev",
+        with self._store.locked("state"):
+            targets = git(self._root, "for-each-ref", "--format=%(refname)", "refs/remotes/origin/dev",
                           "refs/remotes/origin/main", "refs/heads/integrate/").splitlines()
             if not targets:
-                result.kept.append({"path": self.root, "reason": "no merge target refs"})
+                result.kept.append({"path": self._root, "reason": "no merge target refs"})
                 return result
-            records = [r for r in self.store.lanes(strict=True) if r.get("status") != "done"]
-            entries = worktree_list(self.root)
+            records = [r for r in self._store.lanes(strict=True) if r.get("status") != "done"]
+            entries = worktree_list(self._root)
             removed: set[str] = set()
             for entry in entries:
                 path = entry["path"]
-                if not path.startswith(os.path.realpath(Path(self.root) / ".claude/worktrees") + "/"):
+                if not path.startswith(os.path.realpath(Path(self._root) / ".claude/worktrees") + "/"):
                     continue
                 reason = self._keep(entry, targets, records)
                 if reason:
                     result.kept.append({"path": path, "reason": reason})
                     continue
                 # Read again immediately before removal: don't act on an earlier state snapshot if Git changed.
-                current = next((w for w in worktree_list(self.root) if w["path"] == path), None)
+                current = next((w for w in worktree_list(self._root) if w["path"] == path), None)
                 reason = self._keep(current, targets, records) if current else "worktree disappeared"
                 if reason:
                     result.kept.append({"path": path, "reason": reason})
                     continue
+                assert current is not None
                 try:
-                    self._remove(entry, dry_run, result)
+                    self._remove(current, targets, dry_run, result)
                 except (LaneError, OSError) as error:
                     result.errors.append(f"{path}: {error}")
                     continue
@@ -79,14 +81,14 @@ class Project:
             in_use = {e.get("branch") for e in entries if e["path"] not in removed}
             in_use.update(f"worktree-{os.path.basename(e['path'])}" for e in entries if e["path"] not in removed)
             in_use.update(r.get("branch") for r in records)
-            for branch in git(self.root, "for-each-ref", "--format=%(refname:short)",
+            for branch in git(self._root, "for-each-ref", "--format=%(refname:short)",
                               "refs/heads/worktree-agent-*", "refs/heads/lane/").splitlines():
-                if branch in in_use or not any(git_ok(self.root, "merge-base", "--is-ancestor",
+                if branch in in_use or not any(git_ok(self._root, "merge-base", "--is-ancestor",
                                                      f"refs/heads/{branch}", t) for t in targets):
                     continue
                 try:
                     if not dry_run:
-                        git(self.root, "branch", "-D", branch)
+                        git(self._root, "branch", "-D", branch)
                     result.removed.append({"kind": "branch", "path": branch})
                 except LaneError as error:
                     result.errors.append(str(error))
@@ -94,6 +96,8 @@ class Project:
 
     def _keep(self, entry: dict[str, str], targets: list[str], records: list[state.Record]) -> str | None:
         path, branch = entry["path"], entry.get("branch", "")
+        if self._invoked_from == path or self._invoked_from.startswith(path + "/"):
+            return "the collector is running inside this worktree"
         if not (any(fnmatch.fnmatchcase(os.path.basename(path), p) for p in DIRS)
                 or any(fnmatch.fnmatchcase(branch, p) for p in BRANCHES)):
             return "not an agent or lane worktree"
@@ -115,38 +119,48 @@ class Project:
             return "HEAD is not merged"
         if git(path, "--no-optional-locks", "status", "--porcelain"):
             return "uncommitted or untracked changes"
-        if isinstance(self.processes, procs.NoSource):
+        if isinstance(self._processes, procs.NoSource):
             return "no process source; worktree use is unknown"
-        _, held = self.processes.sort_for_removal(path)
+        _, held = self._processes.sort_for_removal(path)
         return "in use by " + "; ".join(held[:3]) if held else None
 
-    def _remove(self, entry: dict[str, str], dry_run: bool, result: Result) -> None:
+    def _remove(self, entry: dict[str, str], targets: list[str], dry_run: bool, result: Result) -> None:
         path = entry["path"]
-        left, held = self.processes.sort_for_removal(path)
+        left, held = self._processes.sort_for_removal(path)
         if held:
             raise LaneError("in use by " + "; ".join(held))
         size = worktrees.size(path)
         if not dry_run:
             if left:
-                remaining = self.processes.stop(left, path)
+                remaining = self._processes.stop(left, path)
                 if remaining:
                     raise LaneError("still in use after process cleanup: "
                                     + "; ".join(p.describe() for p in remaining))
-            # Changes can arrive while processes stop. Every retention check must still pass.
-            if git(path, "--no-optional-locks", "status", "--porcelain") or Path(path, ".keep").exists():
-                raise LaneError("changed during process cleanup; left in place")
+            # Termination handlers can change HEAD, ownership or the retention lock. Re-run the entire policy
+            # after stopping, rather than duplicating selected predicates from _keep.
+            current = next((w for w in worktree_list(self._root) if w["path"] == path), None)
+            records = [r for r in self._store.lanes(strict=True) if r.get("status") != "done"]
+            reason = self._keep(current, targets, records) if current else "worktree disappeared"
+            if reason:
+                raise LaneError(f"retained after process cleanup: {reason}")
+            further, held = self._processes.sort_for_removal(path)
+            if further or held:
+                raise LaneError("still in use after process cleanup: "
+                                + "; ".join([p.describe() for p in further] + held))
+            assert current is not None
+            entry = current
             if entry.get("locked") is not None:
-                git(self.root, "worktree", "unlock", path)
-            git(self.root, "worktree", "remove", path)
+                git(self._root, "worktree", "unlock", path)
+            git(self._root, "worktree", "remove", path)
         result.removed.append({"kind": "worktree", "path": path, "branch": entry.get("branch"), "bytes": size,
                                "stopped": [p.describe() for p in left]})
         result.freed += size
-        hook = self.settings.gc_after_remove
+        hook = self._settings.gc_after_remove
         if not dry_run and hook:
-            project = str(self.settings.path.parent) if self.settings.path else self.root
+            project = str(self._settings.path.parent) if self._settings.path else self._root
             argv = [s.replace("{worktree}", path).replace("{name}", os.path.basename(path))
                     .replace("{project}", project) for s in hook]
-            run = subprocess.run(argv, cwd=self.root, capture_output=True, text=True)
+            run = subprocess.run(argv, cwd=self._root, capture_output=True, text=True)
             if run.returncode:
                 result.errors.append(f"after_remove {path}: exit {run.returncode}: {run.stderr.strip()}")
 

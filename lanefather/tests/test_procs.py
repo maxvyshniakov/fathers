@@ -11,7 +11,8 @@ import unittest.mock
 
 from support import ROOT  # noqa: F401  # pyright: ignore[reportUnusedImport]
 
-from lanefather.procs import Item, SlotfatherSource
+from lanefather import config, procs, slots
+from lanefather.procs import SlotfatherSource
 
 SCRIPT = '''#!/usr/bin/env python3
 import json,os,pathlib,sys
@@ -20,16 +21,15 @@ data = json.loads((root / "answer.json").read_text())
 args = sys.argv[1:]
 with (root / "calls.jsonl").open("a") as f: f.write(json.dumps(args)+"\\n")
 if args[0] == "procs":
-    phase = "after" if (root / "stopped").exists() else "initial"
-    rows = data.get("current", data[phase]) if "--pid" in args else data[phase]
+    rows = data["initial"]
     if "--cwd" in args:
         cwd = args[args.index("--cwd") + 1]
         rows = [p for p in rows if p.get("cwd") == cwd or str(p.get("cwd", "")).startswith(cwd + "/")]
     print(json.dumps({"v": data.get("v",1), "cwd_unknown": data.get("cwd_unknown",[]),
                       "lease_unknown": data.get("lease_unknown",[]), "processes": rows}))
 else:
-    if "--live" in args: (root / "stopped").touch()
-    print(json.dumps({"v": 1, "items": [dict(p, action="stopped" if "--live" in args else "would-stop")
+    if "--live" in args: raise SystemExit("fixture forbids PID-only live stopping")
+    print(json.dumps({"v": 1, "items": [dict(p, action="would-stop")
                                        for p in data.get("offers", [])]}))
 '''
 
@@ -49,19 +49,19 @@ class ProcessSourceTests(unittest.TestCase):
         self.process: dict[str, Any] = {"pid": 1234, "start": "one", "cmd": "runner", "cwd": "/work/lane"}
 
     def answer(self, **extra: Any) -> None:
-        data = {"initial": [self.process], "after": [], "offers": [{"pid": 1234, "cmd": "runner", "tree": [1234]}]}
+        data = {"initial": [self.process], "offers": [{"pid": 1234, "cmd": "runner", "tree": [1234]}]}
         (self.root / "answer.json").write_text(json.dumps({**data, **extra}))
 
-    def test_an_offered_process_stops_only_through_sweep_and_the_worktree_is_queried_again(self) -> None:
+    def test_pid_only_sweep_is_never_used_to_stop_an_earlier_observation(self) -> None:
         self.answer()
         stopping, held = self.source.sort_for_removal("/work/lane")
         self.assertEqual(held, [])
         self.assertEqual([p.pid for p in stopping], [1234])
-        self.assertEqual(self.source.stop(stopping, "/work/lane"), [])
+        left = self.source.stop(stopping, "/work/lane")
+        self.assertEqual([p.pid for p in left], [1234])
+        self.assertIn("identity-bound", left[0].describe())
         calls = [json.loads(s) for s in (self.root / "calls.jsonl").read_text().splitlines()]
-        self.assertIn(["procs", "--json", "--pid", "1234"], calls)
-        self.assertIn(["sweep", "--json", "--live", "--pid", "1234"], calls)
-        self.assertEqual(calls[-2:], [["procs", "--json", "--cwd", "/work/lane"], ["procs", "--json"]])
+        self.assertFalse(any("--live" in call for call in calls))
 
     def test_unknown_schema_unknown_membership_and_spared_processes_hold_the_worktree(self) -> None:
         values_list: list[dict[str, Any]] = [{"v": 2}, {"cwd_unknown": [333]},
@@ -73,11 +73,24 @@ class ProcessSourceTests(unittest.TestCase):
                 self.assertEqual(stopping, [])
                 self.assertTrue(held)
 
-    def test_reused_pid_is_not_given_to_live_sweep(self) -> None:
-        self.answer(current=[dict(self.process, start="two")])
-        process = Item(1234, "one", "runner")
-        self.assertEqual(self.source.stop([process], "/work/lane"), [process])
-        self.assertFalse((self.root / "stopped").exists())
+    def test_an_older_slotfather_without_procs_keeps_legacy_done_behavior(self) -> None:
+        program = self.root / "old-slotfather"
+        program.write_text("#!/bin/sh\nprintf 'unknown procs\\n' >&2\nexit 2\n")
+        program.chmod(0o755)
+        with unittest.mock.patch.object(slots, "command", return_value=str(program)):
+            source = procs.source(config.Config())
+        self.assertIsInstance(source, procs.NoSource)
+        self.assertEqual(source.sort_for_removal("/work/lane"), ([], []))
+
+    def test_inspection_failure_is_not_mistaken_for_an_older_command_surface(self) -> None:
+        program = self.root / "broken-slotfather"
+        program.write_text("#!/bin/sh\nprintf 'process table unavailable\\n' >&2\nexit 2\n")
+        program.chmod(0o755)
+        with unittest.mock.patch.object(slots, "command", return_value=str(program)):
+            source = procs.source(config.Config())
+        self.assertIsInstance(source, SlotfatherSource)
+        _, held = source.sort_for_removal("/work/lane")
+        self.assertTrue(held)
 
     def test_a_command_line_reference_retains_a_worktree_even_with_a_different_cwd(self) -> None:
         self.answer(initial=[dict(self.process, cmd="cargo --manifest-path=/work/lane/Cargo.toml", cwd="/elsewhere")],
