@@ -12,7 +12,7 @@ import unittest.mock
 
 from support import FIXTURE_CONFIG, ROOT  # noqa: F401  (ROOT puts the package on sys.path)
 
-from lanefather import config, procs, review, slots
+from lanefather import config, procs, reviewer, slots
 from lanefather.errors import LaneError
 
 
@@ -136,9 +136,10 @@ class SeamTests(ConfigCase):
             self.assertEqual(slots.lease_count(), 2)
 
     def test_without_a_process_source_nothing_is_scanned(self):
-        # Until slotfather procs lands (maxvyshniakov/slotfather#1), only a project hook sees processes.
+        # With neither a project hook nor the machine-wide CLI, legacy done keeps its original behavior.
         self.use("")
-        source = procs.source()
+        with unittest.mock.patch.object(slots, "command", return_value=None):
+            source = procs.source()
         self.assertIsInstance(source, procs.NoSource)
         self.assertEqual(source.sort_for_removal(str(self.tmp)), ([], []))
 
@@ -169,13 +170,13 @@ class SeamTests(ConfigCase):
             ]
             """))
         os.environ["LANEFATHER_MODELS"] = str(models)
-        chosen = review.review_models()
+        chosen = reviewer.Reviewer(config.current()).models
         self.assertEqual((chosen["sol"], chosen["sol_effort"], chosen["sol_min_left"], chosen["opus"],
                           chosen["opus_effort"]), ("gpt-9-sol", "high", 30, "claude-opus-9", "low"))
         models.write_text("schema = 1\n")
-        self.assertEqual(review.review_models(), review.DEFAULT_MODELS)
+        self.assertEqual(reviewer.Reviewer(config.current()).models, reviewer.DEFAULT_MODELS)
         os.environ["LANEFATHER_MODELS"] = str(self.tmp / "missing.toml")
-        self.assertEqual(review.review_models(), review.DEFAULT_MODELS)
+        self.assertEqual(reviewer.Reviewer(config.current()).models, reviewer.DEFAULT_MODELS)
 
 
 if __name__ == "__main__":

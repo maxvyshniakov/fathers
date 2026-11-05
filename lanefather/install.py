@@ -26,6 +26,8 @@ SOURCE = Path(__file__).resolve().parent
 LAUNCHER = """#!{python}
 # lanefather's command (install.py): the release share/current points at, on the interpreter it was installed for.
 import sys
+# An installed release stays immutable, including while a new CLI starts from it.
+sys.dont_write_bytecode = True
 sys.path.insert(0, {current!r})
 from lanefather.cli import main
 sys.exit(main())

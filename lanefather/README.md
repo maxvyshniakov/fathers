@@ -26,6 +26,7 @@ lanefather land <id> [--into WORKTREE] [--keep]
 lanefather review <id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane]
 lanefather review --overall <sha> --since <base>
 lanefather done <id>
+lanefather gc [--dry-run] [--json]         merged idle worktrees and unused branches
 lanefather promote <sha> [--ship] [--no-push] [--install [--deploy HOST]]
 lanefather sync [--drop-local]
 lanefather perf <sha>
@@ -52,6 +53,7 @@ complete example.
 | `[lane]` `targets`, `cache_partitions` | build directories `done` removes |
 | `[gate]` `stamp_tool`, `stamp_file`, `pre_push_hook` | the verified-tree stamp of the full gate |
 | `[promote]` `install`, `deploy`, `after`, `ship_refuses` | what promote runs after it moved dev |
+| `[gc]` `after_remove` | project cache cleanup after a worktree was removed (`{worktree}`, `{name}`, `{project}`) |
 | `[hooks]` `process_scan` | what a lane left running in its worktree, until `slotfather procs` answers |
 
 ### The check contract
@@ -77,8 +79,12 @@ suite. A project without one gets whole suites.
 | `gitops`, `worktrees`, `landing` | git calls; smoke, gate, base and review checkouts; the landing lock |
 | `host`, `slots`, `procs` | the lane cap and load; the slotfather client; the process source |
 | `plan`, `checks` | the check contract; verify runs, receipts and red-check classification |
+| `gc` | generic worktree/branch retention and collection, with explicit project/state values |
+| `reviewer` | configured reviewer, real CLI adapters, fallback and interpreted answer |
 | `land`, `review`, `done`, `promote` | land and the smoke; the review; finishing a lane; gate, perf, promote, sync |
 | `lanes`, `cli` | start, next, adopt, list; the command line |
+
+The [architecture pass](docs/architecture-667.md) records the survey, alternative interfaces and deployment order.
 
 ### State and its versions
 
