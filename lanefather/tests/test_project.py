@@ -59,6 +59,26 @@ class ProjectTests(unittest.TestCase):
             project.readiness()
         self.assertFalse(directory.exists())
 
+    def test_cache_queries_use_explicit_projects_without_replacing_ambient_configuration(self) -> None:
+        from dataclasses import replace
+
+        from lanefather import worktrees
+        alpha, beta = self.project('alpha'), self.project('beta')
+        alpha = Project(replace(alpha.config, cache_partitions='cargo-v2'))
+        beta = Project(replace(beta.config, cache_partitions='cargo-v2'))
+        first, second = self.root / 'cache-alpha', self.root / 'cache-beta'
+        with patch.dict(os.environ, ALPHA_BUILD_CACHE=str(first), BETA_BUILD_CACHE=str(second)):
+            config.use(beta.config)
+            self.assertEqual(worktrees.cache_root(alpha.config), first)
+            self.assertEqual(worktrees.cache_root(beta.config), second)
+            partition = first / 'cargo-v2' / ('a' * 64)
+            (partition / 'debug').mkdir(parents=True)
+            (partition / 'debug/core.d').write_text('/checkout/src/lib.rs: source\n')
+            self.assertEqual(worktrees.shared_partitions('/checkout', project=alpha.config), [partition])
+            self.assertEqual(worktrees.shared_partitions('/checkout', project=beta.config), [])
+            self.assertFalse(second.exists())
+            self.assertIs(config.current(), beta.config)
+
     def test_queue_policy_returns_a_proposal_while_the_project_owns_the_atomic_write_and_ledger(self) -> None:
         project = self.project('alpha')
         message = project.update_queue(lambda snapshot: QueueUpdate(

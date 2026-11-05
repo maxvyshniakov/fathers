@@ -124,13 +124,14 @@ def review_checkout(main: str, label: str, tip: str) -> Generator[str]:
 
 # The lane's build directories under the project's cache
 
-def cache_root() -> Path:
-    configured = config.current().env("BUILD_CACHE")
+def cache_root(project: config.Config | None = None) -> Path:
+    current = project or config.current()
+    configured = current.env("BUILD_CACHE")
     if configured:
         return Path(configured)
     base = Path.home() / "Library/Caches" if sys.platform == "darwin" else Path(
         os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
-    return base / config.current().cache_name
+    return base / current.cache_name
 
 
 def lane_targets(lane_id: str) -> list[str]:
@@ -154,14 +155,14 @@ def remove_tree(path: str, protected: list[str]) -> int:
     return freed
 
 
-def shared_partitions(*checkouts: str) -> list[Path]:
+def shared_partitions(*checkouts: str, project: config.Config | None = None) -> list[Path]:
     """Shared cache partitions (`[lane] cache_partitions` under the cache root, 64-hex directories of a build cache
     such as Straylight's cargo-v2) whose dependency files name a path under the checkouts."""
-    name = config.current().cache_partitions
+    name = (project or config.current()).cache_partitions
     if not name:
         return []
     found: list[Path] = []
-    for partition in (cache_root() / name).glob("[0-9a-f]" * 64):
+    for partition in (cache_root(project) / name).glob("[0-9a-f]" * 64):
         if not partition.is_dir() or partition.is_symlink():
             continue
         for depfile in [*partition.glob("debug/*.d"), *partition.glob("release/*.d")]:
