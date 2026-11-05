@@ -40,8 +40,11 @@ def summary(lane_id: str, directory: Path) -> dict[str, Any]:
     ticket = {'number': number, 'url': f'{repository}/issues/{number}' if repository and number.isdigit() else None}
     receipt = state.read_json(directory / f'{lane_id}.receipt.json')
     tree = git_read(root, 'rev-parse', '--verify', str(record.get('branch', '')) + '^{tree}') if root else ''
+    tree_match = receipt.get('tree') == tree if receipt and tree else None
+    # A branch-tree mismatch proves staleness. A match cannot certify the toolchain or other
+    # verification conditions without executing project code, which this read-only query never does.
     checks = {'status': receipt.get('status', 'unknown') if receipt else 'not run',
-              'current': receipt.get('tree') == tree if receipt and tree else None}
+              'current': False if tree_match is False else None, 'tree_match': tree_match}
     review = state.read_json(directory / f'{lane_id}.review.json') or {}
     findings = review.get('findings', [])
     config_path = Path(root) / config.CONFIG_NAME

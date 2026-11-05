@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -44,10 +45,19 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(second.ready['id'], 'beta')
         self.assertEqual((first.cap, second.cap), (4, 2))
         self.assertEqual(first.records, ())
-        self.assertEqual(first.active, ())
+        self.assertEqual(first.planned_or_active, ())
         self.assertFalse(first.state_dir.exists())
         self.assertFalse(second.state_dir.exists())
         self.assertIs(config.current(), beta.config)
+
+    def test_readiness_names_planned_and_active_records_without_an_ambiguous_alias(self) -> None:
+        project = self.project('alpha')
+        project.paths.state_dir.mkdir()
+        for status in ('planned', 'active', 'done'):
+            (project.paths.state_dir / f'{status}.json').write_text(json.dumps({'id': status, 'status': status, 'claims': []}))
+        snapshot = project.readiness()
+        self.assertEqual({'planned', 'active'}, {record['id'] for record in snapshot.planned_or_active})
+        self.assertFalse(hasattr(snapshot, 'active'))
 
     def test_configured_paths_are_available_before_a_queue_or_state_exists(self) -> None:
         directory = self.root / 'new-project'

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from support import LaneCase
+from support import LaneCase, RUST_STUB
 
 
 class ShowTests(LaneCase):
@@ -27,13 +27,33 @@ class ShowTests(LaneCase):
         self.assertEqual('integrate/q', shown['base'])
         self.assertEqual(['lib/**'], shown['claims'])
         self.assertEqual('https://github.com/example/project.with-dots/issues/404', shown['ticket']['url'])
-        self.assertEqual({'status': 'green', 'current': True}, shown['checks'])
+        self.assertEqual({'status': 'green', 'current': None, 'tree_match': True}, shown['checks'])
         self.assertEqual('not started', shown['review']['status'])
         self.assertEqual(before, {str(p): p.read_bytes() for p in self.state.rglob('*') if p.is_file()})
         self.commit(worktree, {'lib/new.txt': 'changed\n'})
         stale = json.loads(self.lane('show', 'context', '--json'))
         self.assertFalse(stale['checks']['current'])
         self.assertIn('context', self.lane('show', 'context'))
+
+    def test_matching_tree_cannot_prove_current_toolchain_and_does_not_run_resolver(self):
+        worktree = self.created('toolchain', 'lib/**')
+        marker = self.tmp / 'resolver-ran'
+        resolver = f'from pathlib import Path\nPath({str(marker)!r}).touch()\n' + RUST_STUB
+        self.write(self.repo, 'tools/rust-toolchain.py', resolver)
+        self.commit(worktree, {'lib/new.txt': 'context\n', 'tools/rust-toolchain.py': resolver,
+                               'rust-toolchain.toml': '[toolchain]\nchannel="1.98.1"\n'})
+        self.lane('check', 'toolchain')
+        receipt = json.loads((self.state / 'toolchain.receipt.json').read_text())
+        self.assertIsNotNone(receipt['toolchain'])
+        self.assertTrue(marker.exists())
+        marker.unlink()
+        self.env['FIXTURE_RUST'] = '9.9.9'
+        before = {str(p): p.read_bytes() for p in self.state.rglob('*') if p.is_file()}
+        shown = json.loads(self.lane('show', 'toolchain', '--json'))
+        self.assertIsNone(shown['checks']['current'])
+        self.assertTrue(shown['checks']['tree_match'])
+        self.assertFalse(marker.exists(), 'read-only dashboard never executes the project resolver')
+        self.assertEqual(before, {str(p): p.read_bytes() for p in self.state.rglob('*') if p.is_file()})
 
     def test_missing_state_and_invalid_ids_do_not_create_files(self):
         missing = self.tmp / 'missing-state'

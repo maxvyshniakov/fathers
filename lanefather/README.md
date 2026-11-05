@@ -131,7 +131,13 @@ lane through `lanefather show ID --state-dir DIR --json`.
 
 The version-1 summary contains project and repository identity, ticket number
 and URL, lane status, branch, base, worktree, claims, dependencies, receipt
-status/currentness and review status/finding counts. Ticket URLs are derived
+status and review status/finding counts. `checks.tree_match` is true/false when the
+branch tree can be compared with the receipt, otherwise null. `checks.current`
+is false for a proven tree mismatch and null (unknown) for a match: current
+toolchain resolution and other verification conditions cannot be certified
+without executing project code. A green saved status is not a currentness claim.
+The version-1 nullable field remains compatible with receivers that omit a
+current/stale annotation for null; `tree_match` is an additive narrow field. Ticket URLs are derived
 from the GitHub origin without a network call. A missing origin leaves the
 URL empty. The command does not create state directories, take locks, run
 project hooks, start reviews or change records. A missing lane is an error.
@@ -156,8 +162,23 @@ release without replacing its bytes.
 a named script from `[hooks.project]`, with the project's directory as its working
 directory. The script receives `LANEFATHER_PROJECT`, an explicit
 `lanefather.project.Project`; `readiness()` supplies one configured queue/state
-snapshot including active records; `Project.paths` resolves state/queue locations
+snapshot with `planned_or_active`, the exact planned-plus-active lane-cap group; `Project.paths` resolves state/queue locations
 without creating them. `update_queue(policy)` validates and atomically writes policy under
 the shared queue lock. The script owns project selection and presentation; the
 installed package owns the lane workflow and persistence. A script's exit status
 is returned unchanged. Project code needs no source-checkout import path.
+
+
+## Unfinished machine-admission ownership
+
+Execution worker budgets already use `slotfather advise`. Lifetime lane admission
+is a separate unfinished requirement of Straylight #648: committed Slotfather
+5f76d1be exposes execution `jobs`/capacity/load advice, not a lifetime lane-cap
+or lane-admission decision. Lanefather therefore retains its existing cores/memory
+lane cap, load15 and disk admission guards, including explicit configured overrides.
+`Project.readiness()` reports these retained guards; it does not imply that all
+machine policy has moved to Slotfather. Do not interpret execution `jobs` as a
+lifetime lane cap or remove admission protection to simulate that migration.
+The owning follow-up [slotfather#2](https://github.com/maxvyshniakov/slotfather/issues/2)
+must define a versioned lane-admission contract in Slotfather,
+then migrate CLI start/next and Project readiness together with compatibility tests.

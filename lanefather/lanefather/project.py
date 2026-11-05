@@ -36,7 +36,7 @@ class Readiness:
     timestamp: str
 
     @property
-    def active(self) -> tuple[state.Record, ...]:
+    def planned_or_active(self) -> tuple[state.Record, ...]:
         return tuple(state.occupying(list(self.records)))
 
     @property
