@@ -94,9 +94,10 @@ class RuntimeTests(unittest.TestCase):
         project = self.tmp / 'project'
         project.mkdir()
         script = project / 'policy.py'
-        script.write_text("import json,sys,lanefather\n"
+        (project / 'policy_support.py').write_text('VALUE = 42\n')
+        script.write_text("import json,sys,lanefather,policy_support\n"
                           "print(json.dumps({'root': str(LANEFATHER_PROJECT.config.path.parent), "
-                          "'args': sys.argv[1:], 'package': lanefather.__file__}))\n"
+                          "'args': sys.argv[1:], 'package': lanefather.__file__, 'support': policy_support.VALUE}))\n"
                           "raise SystemExit(7)\n")
         configuration = project / '.lanefather.toml'
         configuration.write_text('project = "fixture"\n[hooks.project]\npolicy = "policy.py"\n')
@@ -107,6 +108,7 @@ class RuntimeTests(unittest.TestCase):
         report = json.loads(run.stdout)
         self.assertEqual(report['root'], str(project.resolve()))
         self.assertEqual(report['args'], ['--ref', 'abc def'])
+        self.assertEqual(report['support'], 42)
         self.assertTrue(Path(report['package']).resolve().is_relative_to(self.release))
         refused = subprocess.run([*command, str(script)], cwd=self.tmp, env=self.env, capture_output=True, text=True)
         self.assertEqual(refused.returncode, 1)

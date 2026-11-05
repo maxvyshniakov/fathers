@@ -76,11 +76,12 @@ def project_hook(args: argparse.Namespace) -> int:
     path = (root / script).resolve()
     if not path.is_file():
         raise LaneError(f"configured project hook {args.name!r} has no script at {path}")
-    previous_argv, previous_cwd = sys.argv, Path.cwd()
+    previous_argv, previous_cwd, previous_path = sys.argv, Path.cwd(), sys.path[:]
     arguments = args.arguments[1:] if args.arguments[:1] == ['--'] else args.arguments
     try:
         sys.argv = [str(path), *arguments]
         os.chdir(root)
+        sys.path.insert(0, str(path.parent))
         runpy.run_path(str(path), run_name='__main__', init_globals={'LANEFATHER_PROJECT': project})
         return 0
     except SystemExit as error:
@@ -90,4 +91,5 @@ def project_hook(args: argparse.Namespace) -> int:
         return 1
     finally:
         sys.argv = previous_argv
+        sys.path[:] = previous_path
         os.chdir(previous_cwd)
