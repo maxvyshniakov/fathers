@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 import subprocess
 import tomllib
-from typing import Any
+from typing import Any, cast
 
 from .errors import LaneError
 
@@ -77,6 +77,7 @@ class Config:
     install_env_drop: tuple[str, ...] = ("LANDING_TOKEN",)
     after_promote: tuple[str, ...] = ()
     process_scan: str = ""
+    project_hooks: tuple[tuple[str, str], ...] = ()
     gc_after_remove: tuple[str, ...] = ()
 
     def names(self, name: str) -> list[str]:
@@ -153,7 +154,7 @@ TABLE_KEYS = {
     "lane": ("cache_name", "targets", "cache_partitions"),
     "gate": ("stamp_tool", "stamp_file", "pre_push_hook"),
     "promote": ("ship_refuses", "ship_refusal", "install", "deploy", "install_env_drop", "after"),
-    "hooks": ("process_scan",),
+    "hooks": ("process_scan", "project"),
     "gc": ("after_remove",),
 }
 
@@ -190,6 +191,12 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         for step in steps:
             if isinstance(step, dict):
                 _known(step, f"promote.{key}", ("name", "argv", "env"))  # pyright: ignore[reportUnknownArgumentType]
+    raw_hooks: Any = hooks.get("project", {})
+    if not isinstance(raw_hooks, dict):
+        raise LaneError(f"{CONFIG_NAME}: [hooks.project] maps hook names to script paths")
+    project_hooks = cast(dict[str, Any], raw_hooks)
+    if not all(name and isinstance(script, str) and script for name, script in project_hooks.items()):
+        raise LaneError(f"{CONFIG_NAME}: [hooks.project] maps hook names to script paths")
     default = Config()
     return Config(
         path=path,
@@ -225,6 +232,7 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         install_env_drop=_strings(promote, "install_env_drop", default.install_env_drop),
         after_promote=_strings(promote, "after", default.after_promote),
         process_scan=_string(hooks, "process_scan", default.process_scan),
+        project_hooks=tuple(sorted((str(name), str(script)) for name, script in project_hooks.items())),
         gc_after_remove=_strings(gc, "after_remove", default.gc_after_remove),
     )
 

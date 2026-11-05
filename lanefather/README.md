@@ -60,6 +60,7 @@ complete example.
 | `[promote]` `install`, `deploy`, `after`, `ship_refuses` | what promote runs after it moved dev |
 | `[gc]` `after_remove` | project cache cleanup after a worktree was removed (`{worktree}`, `{name}`, `{project}`) |
 | `[hooks]` `process_scan` | legacy process adapter for live lanes; without it `procs` supplies read-only inspection |
+| `[hooks.project]` | named project policy scripts run by `project-hook NAME -- ARGS` in the installed interpreter |
 
 ### The check contract
 
@@ -139,3 +140,23 @@ For older requests that carry only a lane ID, `--project-dir DIR` resolves the
 project configuration and checks the lane's repository identity. An unrelated
 repository or missing project configuration is refused rather than matched by
 ID alone.
+
+
+## Installed runtime contract
+
+`lanefather capabilities --json` returns version 1, the state schema, supported
+Slotfather query versions and the installed source commit and payload SHA-256.
+An installed release verifies its package and canonical hook against its
+manifest; a changed or missing manifest refuses verification. A checkout reports
+`installed: false`, so a project launcher can require the installed artifact.
+The installer accepts committed shipping inputs and reuses an identical existing
+release without replacing its bytes.
+
+`lanefather --config /path/to/.lanefather.toml project-hook NAME -- ARGS` runs only
+a named script from `[hooks.project]`, with the project's directory as its working
+directory. The script receives `LANEFATHER_PROJECT`, an explicit
+`lanefather.project.Project`; `readiness()` supplies one configured queue/state
+snapshot and `update_queue(policy)` validates and atomically writes policy under
+the shared queue lock. The script owns project selection and presentation; the
+installed package owns the lane workflow and persistence. A script's exit status
+is returned unchanged. Project code needs no source-checkout import path.

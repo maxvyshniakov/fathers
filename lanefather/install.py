@@ -13,12 +13,18 @@ release), so the installer keeps the three newest releases. `lanefather --versio
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
+
+# Inspect and copy source without creating uncommitted interpreter cache files in it.
+sys.dont_write_bytecode = True
+from lanefather.errors import LaneError  # noqa: E402
+from lanefather.runtime import MANIFEST, installed_identity, payload_digest, shipping_files  # noqa: E402
 
 MIN_PYTHON = (3, 11)
 KEEP_RELEASES = 3
@@ -92,10 +98,22 @@ def install(share: Path, bin_dir: Path, python: str) -> Path:
     shutil.rmtree(pending, ignore_errors=True)
     shutil.copytree(SOURCE / "lanefather", pending / "lanefather",
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    shutil.copytree(SOURCE / "hooks", pending / "hooks")
     (pending / "lanefather" / "COMMIT").write_text(built + "\n")
+    files = shipping_files(pending)
+    manifest = {"v": 1, "commit": built, "files": files, "sha256": payload_digest(files)}
+    (pending / "lanefather" / MANIFEST).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     if release.exists():
-        shutil.rmtree(release)
-    pending.rename(release)
+        try:
+            identity = installed_identity(release)
+            if identity["commit"] != built or identity["sha256"] != manifest["sha256"]:
+                raise InstallError("existing release differs from committed shipping inputs")
+        except LaneError as error:
+            raise InstallError(str(error)) from None
+        finally:
+            shutil.rmtree(pending, ignore_errors=True)
+    else:
+        pending.rename(release)
     # Swap share/current in one rename, so a starting command sees the old release or the new one.
     link = share / f".current-{os.getpid()}"
     link.unlink(missing_ok=True)

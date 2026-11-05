@@ -30,7 +30,7 @@ import argparse
 from pathlib import Path
 import sys
 
-from . import __version__, checks, config, done, gc, land, lanes, promote, review, show
+from . import __version__, checks, config, done, gc, land, lanes, promote, review, runtime, show
 from .errors import LaneError
 from .host import CHECK_MAX_JOBS
 
@@ -50,6 +50,13 @@ def parser() -> argparse.ArgumentParser:
     root.add_argument("--config", metavar="PATH", help="the project's .lanefather.toml")
     root.add_argument("--version", action="version", version=version())
     commands = root.add_subparsers(dest="command", required=True)
+    p = commands.add_parser("capabilities", help="versioned capabilities and verified installed source identity")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(run=runtime.capabilities)
+    p = commands.add_parser("project-hook", help="run one configured project policy in the installed runtime")
+    p.add_argument("name")
+    p.add_argument("arguments", nargs=argparse.REMAINDER)
+    p.set_defaults(run=runtime.project_hook)
     p = commands.add_parser("start", help="register a lane: lane cap, path claims and agent brief")
     p.add_argument("id")
     p.add_argument("--ticket", required=True, help="issue number, or none")
