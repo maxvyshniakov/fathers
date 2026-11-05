@@ -30,7 +30,7 @@ import argparse
 from pathlib import Path
 import sys
 
-from . import __version__, checks, config, done, land, lanes, promote, review
+from . import __version__, checks, config, done, gc, land, lanes, promote, review
 from .errors import LaneError
 from .host import CHECK_MAX_JOBS
 
@@ -138,6 +138,10 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("id")
     p.add_argument("--force-reason", help="clean up a lane that is not landed or lacks a ticket comment; logged")
     p.set_defaults(run=done.done)
+    p = commands.add_parser("gc", help="remove merged idle agent worktrees and unused branches")
+    p.add_argument("--dry-run", action="store_true", help="report removals without changing anything")
+    p.add_argument("--json", action="store_true", help="machine-readable removals, retained paths and errors")
+    p.set_defaults(run=gc.collect)
     p = commands.add_parser("list", help="lanes that are not done, with claims, receipts, disk and load")
     p.add_argument("--all", action="store_true", help="include done lanes")
     p.add_argument("--json", action="store_true", help="the lane records with their worktree and receipt state, the "

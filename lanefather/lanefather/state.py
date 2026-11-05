@@ -35,8 +35,38 @@ LANDED = ("landed", "released", "done")
 ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
+class Store:
+    """A project's state directory. Instances keep one project's reads and locks together, independently of the CLI."""
+
+    def __init__(self, project: config.Config):
+        self.directory = Path(os.path.expanduser(project.env("STATE") or project.state_dir))
+
+    def lanes(self, *, strict: bool = False) -> list[Record]:
+        found: list[Record] = []
+        for path in sorted(self.directory.glob("*.json")):
+            if path.name.count(".") == 1:
+                record = read_json(path)
+                if record is not None and "id" in record:
+                    found.append(migrate(record))
+                elif strict:
+                    raise LaneError(f"lane state {path} is unreadable or has no id; collection refuses")
+        return found
+
+    @contextlib.contextmanager
+    def locked(self, name: str, waiting: str | None = None) -> Generator[None]:
+        self.directory.mkdir(parents=True, exist_ok=True)
+        with open(self.directory / f".{name}.lock", "a") as handle:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                if waiting:
+                    print(waiting, flush=True)
+                fcntl.flock(handle, fcntl.LOCK_EX)
+            yield
+
+
 def state_dir() -> Path:
-    path = Path(os.path.expanduser(config.current().env("STATE") or config.current().state_dir))
+    path = Store(config.current()).directory
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -89,13 +119,7 @@ def save(record: Record) -> None:
 
 
 def lanes() -> list[Record]:
-    found: list[Record] = []
-    for path in sorted(state_dir().glob("*.json")):
-        if path.name.count(".") == 1:
-            record = read_json(path)
-            if isinstance(record, dict) and "id" in record:
-                found.append(migrate(record))  # pyright: ignore[reportUnknownArgumentType]
-    return found
+    return Store(config.current()).lanes()
 
 
 def occupying(records: list[Record] | None = None) -> list[Record]:
@@ -105,12 +129,6 @@ def occupying(records: list[Record] | None = None) -> list[Record]:
 
 @contextlib.contextmanager
 def locked(name: str, waiting: str | None = None) -> Generator[None]:
-    """Hold the named lock in the state directory; print `waiting` first when another process holds it."""
-    with open(state_dir() / f".{name}.lock", "a") as handle:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            if waiting:
-                print(waiting, flush=True)
-            fcntl.flock(handle, fcntl.LOCK_EX)
+    """Hold the current project's state lock; explicit project callers use Store directly."""
+    with Store(config.current()).locked(name, waiting):
         yield

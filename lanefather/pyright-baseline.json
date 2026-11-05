@@ -24,9 +24,9 @@
     "reportUnknownMemberType": 1
   },
   "lanefather/review.py": {
-    "reportUnknownArgumentType": 8,
-    "reportUnknownMemberType": 21,
-    "reportUnknownVariableType": 11
+    "reportUnknownArgumentType": 3,
+    "reportUnknownMemberType": 6,
+    "reportUnknownVariableType": 2
   },
   "tests/support.py": {
     "reportDeprecated": 1,

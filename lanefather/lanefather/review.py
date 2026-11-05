@@ -17,74 +17,23 @@ import os
 from pathlib import Path
 import posixpath
 import re
-import shutil
 import subprocess
 import sys
-import threading
 import time
-import tomllib
 from typing import Any
 
-from . import claims, config, done, journal, lanes, state, worktrees
+from . import claims, config, done, journal, lanes, reviewer, state, worktrees
 from .checks import terminable
 from .errors import LaneError
 from .gitops import common_dir, git, git_ok, main_checkout
 from .state import Record
 
-WEEK_MINUTES = 10080
-LIMIT_TIMEOUT = 20
-REVIEW_TIMEOUT = 30 * 60
-OPUS_TOOLS = "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
-MAX_INLINE_DIFF = 400_000
-MAX_FINDINGS = 8
 SEVERITIES = ("P1", "P2", "P3")
-# The review role when no models.toml is found: the owner decisions of 2026-10-27.
-DEFAULT_MODELS = {"sol": "gpt-6.1-sol", "sol_effort": "medium", "sol_min_left": 15,
-                  "opus": "claude-opus-5-5", "opus_effort": "medium"}
-
-
-class ReviewFailed(Exception):
-    pass
 
 
 def mark_help(lane_id: str = "{id}") -> str:
     return f"{config.prog()} review {lane_id} --mark <n> fixed:<merge>|rejected:<reason>"
 
-
-# The reviewer
-
-def models_path() -> Path | None:
-    """LANEFATHER_MODELS, else mastack's models.toml where mastack keeps it."""
-    configured = config.current().env("MODELS")
-    candidates = [configured] if configured else ["~/.config/mastack/models.toml", "~/mastack/models.toml"]
-    for candidate in candidates:
-        path = Path(os.path.expanduser(candidate))
-        if path.is_file():
-            return path
-    return None
-
-
-def review_models() -> dict[str, Any]:
-    """The review role's two choices: the Codex one with its weekly-limit condition, and the Claude one."""
-    chosen = dict(DEFAULT_MODELS)
-    path = models_path()
-    if path is None:
-        return chosen
-    try:
-        data = tomllib.loads(path.read_text())
-        models: dict[str, Any] = data["models"]
-        for choice in data["roles"]["review"]["choices"]:
-            model = models[choice["model"]]
-            if model.get("cli") == "codex" and "sol_from" not in chosen:
-                limit = ((choice.get("when") or {}).get("limit") or {}).get("codex_weekly")
-                chosen.update(sol=model["id"], sol_effort=choice.get("effort", "medium"), sol_from=str(path),
-                              **({"sol_min_left": int(limit)} if isinstance(limit, (int, float)) else {}))
-            elif model.get("cli") == "claude" and "opus_from" not in chosen:
-                chosen.update(opus=model["id"], opus_effort=choice.get("effort", "medium"), opus_from=str(path))
-    except (OSError, KeyError, TypeError, ValueError, tomllib.TOMLDecodeError) as error:
-        print(f"lane: warning: {path}: no review role ({error}); reviewing with the defaults", file=sys.stderr)
-        return dict(DEFAULT_MODELS)
-    return chosen
 
 
 def gh_command() -> str:
@@ -96,88 +45,6 @@ def repo_args(common: str) -> list[str]:
     origin = git(main_checkout(common), "remote", "get-url", "origin", check=False)
     found = re.search(r"github\.com[:/]([^/]+/[^/.]+)", origin)
     return ["-R", found.group(1)] if found else []
-
-
-def configured_codex() -> str | None:
-    """CODEX_CLI_PATH from the Codex config ($CODEX_HOME/config.toml), wherever the ChatGPT app put it."""
-    try:
-        path = Path(os.path.expanduser(os.environ.get("CODEX_HOME") or "~/.codex")) / "config.toml"
-        stack: list[dict[str, Any]] = [tomllib.loads(path.read_text())]
-    except Exception:
-        return None
-    while stack:
-        table = stack.pop()
-        if isinstance(table.get("CODEX_CLI_PATH"), str):
-            return table["CODEX_CLI_PATH"]
-        stack += [value for value in table.values() if isinstance(value, dict)]
-    return None
-
-
-def codex_cli() -> str | None:
-    """The Codex CLI the review runs: LANEFATHER_CODEX; else CODEX_CLI_PATH from the environment or the Codex
-    config, as the ChatGPT app sets it; else codex on PATH. A CLI that cannot run the model fails its run, and Opus
-    reviews."""
-    explicit = config.current().env("CODEX")
-    if explicit is not None:
-        return explicit if explicit and os.access(explicit, os.X_OK) else None
-    for candidate in (os.environ.get("CODEX_CLI_PATH"), configured_codex()):
-        if candidate and os.access(candidate, os.X_OK):
-            return candidate
-    return shutil.which("codex")
-
-
-def codex_limit(codex: str) -> dict[str, Any]:
-    """The live weekly Codex limit, from `codex app-server` (initialize, initialized, account/rateLimits/read):
-    {"left": percent or None, "blocked": why Sol may not run or None}."""
-    try:
-        child = subprocess.Popen([codex, "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                 stderr=subprocess.DEVNULL, text=True)
-    except OSError as error:
-        return {"left": None, "blocked": f"codex app-server did not start: {error}"}
-    answer: dict[str, Any] = {}
-
-    def read() -> None:
-        assert child.stdout is not None
-        for line in child.stdout:
-            try:
-                message = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(message, dict) and message.get("id") == 2:  # pyright: ignore[reportUnknownMemberType]
-                answer.update(message)  # pyright: ignore[reportUnknownArgumentType]
-                return
-    reader = threading.Thread(target=read, daemon=True)
-    reader.start()
-    try:
-        assert child.stdin is not None
-        for message in ({"id": 1, "method": "initialize",
-                         "params": {"clientInfo": {"name": "lanefather-review", "version": "1"}}},
-                        {"method": "initialized"}, {"id": 2, "method": "account/rateLimits/read"}):
-            child.stdin.write(json.dumps(message) + "\n")
-        child.stdin.flush()
-        reader.join(LIMIT_TIMEOUT)
-    except OSError:
-        pass
-    finally:
-        child.kill()
-        child.wait()
-    if not answer:
-        return {"left": None, "blocked": f"codex app-server gave no rate limits within {LIMIT_TIMEOUT} s"}
-    if answer.get("error"):
-        return {"left": None, "blocked": f"codex app-server: {answer['error'].get('message', answer['error'])}"}
-    limits: dict[str, Any] = (answer.get("result") or {}).get("rateLimits") or {}
-    windows = [w for w in (limits.get("primary"), limits.get("secondary")) if isinstance(w, dict)]
-    weekly = next((w for w in windows if w.get("windowDurationMins") == WEEK_MINUTES), windows[0] if windows else {})
-    used = weekly.get("usedPercent")
-    left = int(100 - used) if isinstance(used, (int, float)) else None
-    blocked = (f"Codex reports {limits['rateLimitReachedType']}" if limits.get("rateLimitReachedType")
-               else "Codex spend control is reached" if limits.get("spendControlReached")
-               else "the Codex limit could not be read" if left is None else None)
-    return {"left": left, "blocked": blocked, "rate_limits": limits}
-
-
-def claude_cli() -> str | None:
-    return config.current().env("CLAUDE") or shutil.which("claude")
 
 
 def alive(pid: Any) -> bool:
@@ -277,121 +144,16 @@ def ticket_text(record: Record) -> str:
     return f"Ticket #{record['ticket']}: {data.get('title', '')}\n\n{data.get('body', '')}".strip()  # pyright: ignore[reportUnknownMemberType]
 
 
-def review_prompt(standards: str, subject: str, base: str, tip: str, diff: str | None) -> str:
-    """The reviewer gets the diff, the ticket and the coding standards; never the lane's report."""
-    cfg = config.current()
-    lines = [
-        f"You review one change to the {cfg.project} repository before it reaches the owner's machine. Report",
-        "correctness bugs and breaks of the coding standards below; no style nits and no praise.",
-        "",
-        f"## Coding standards ({cfg.coding_standards})",
-        "",
-        standards,
-        "",
-        "## What the change is for",
-        "",
-        subject,
-        "",
-        "## The change",
-        "",
-        f"The change is `git diff {base}...{tip}` in this checkout (HEAD is {tip}). Read it and the code around it;",
-        "do not modify files.",
-    ]
-    if diff is not None:
-        lines += ["", "```diff", diff.rstrip("\n"), "```"]
-    lines += [
-        "",
-        "## Answer",
-        "",
-        f"List at most {MAX_FINDINGS} findings, most severe first: P1 a bug, P2 a risk, P3 minor. For each give",
-        "file:line, the concrete failure scenario and the fix. End the answer with one fenced json block that holds",
-        "the same findings in the same order:",
-        "",
-        "```json",
-        '{"findings": [{"severity": "P1", "file": "path/in/repo", "line": 123, "title": "one line",',
-        '               "detail": "the failure scenario and the fix"}]}',
-        "```",
-        "",
-        'With nothing to report, end with {"findings": []}.',
-    ]
-    return "\n".join(lines) + "\n"
-
-
-def parse_findings(text: str) -> list[dict[str, Any]]:
-    """The findings of the last json block that has them. An answer without one is a single finding to read, so
-    an unreadable review never passes as clean."""
-    for block in reversed(re.findall(r"```json[ \t]*\n(.*?)```", text, re.S)):
-        try:
-            data = json.loads(block)
-        except ValueError:
-            continue
-        items = data.get("findings") if isinstance(data, dict) else None  # pyright: ignore[reportUnknownMemberType]
-        if isinstance(items, list) and not all(isinstance(i, dict) for i in items):  # pyright: ignore[reportUnknownVariableType]
-            return unreadable_answer(text)
-        if isinstance(items, list):
-            found: list[dict[str, Any]] = []
-            for item in items:  # pyright: ignore[reportUnknownVariableType]
-                entry: dict[str, Any] = item  # pyright: ignore[reportUnknownVariableType]
-                severity = str(entry.get("severity", "")).upper()
-                line = entry.get("line")
-                found.append({"n": len(found) + 1, "severity": severity if severity in SEVERITIES else "P2",
-                              "file": entry.get("file") if isinstance(entry.get("file"), str) else None,
-                              "line": line if isinstance(line, int) else None,
-                              "title": str(entry.get("title") or "").strip()[:300],
-                              "detail": str(entry.get("detail") or "").strip()[:4000], "mark": None})
-            return found
-    if re.search(r"\bno findings\b", text, re.I) and len(text) < 400:
-        return []
-    return unreadable_answer(text)
-
-
-def unreadable_answer(text: str) -> list[dict[str, Any]]:
-    return [{"n": 1, "severity": "P2", "file": None, "line": None, "mark": None,
-             "title": "the review answer has no readable findings block: read it and mark it",
-             "detail": text.strip()[:4000]}]
-
-
-def run_reviewer(argv: list[str], cwd: str, prompt: str, stdout: Path, log: Path) -> int:
-    """Run one reviewer with the prompt on stdin; its exit, 124 on the timeout. Stopping this process stops it."""
-    with open(stdout, "w") as out, open(log, "a") as err:
-        child = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.PIPE, stdout=out,
-                                 stderr=err if stdout != log else subprocess.STDOUT, text=True)
-        try:
-            child.communicate(prompt, timeout=REVIEW_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            child.kill()
-            child.wait()
-            return 124
-        except BaseException:
-            child.terminate()
-            try:
-                child.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                child.kill()
-                child.wait()
-            raise
-    return child.returncode
-
-
-def last_lines(path: Path, count: int = 3) -> str:
-    try:
-        lines = [line for line in path.read_text(errors="replace").splitlines() if line.strip()]
-    except OSError:
-        return ""
-    return " / ".join(lines[-count:])[:500]
-
-
 def perform_review(label: str, fields: dict[str, Any], main: str, base: str, tip: str, subject: str,
                    finalize: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
     """Review base...tip with Sol, or Opus when Sol may not or cannot run; write and return the receipt.
     `finalize` completes a finished receipt before anyone can read it as finished."""
-    models = review_models()
-    sol, opus = models["sol"], models["opus"]
+    runner = reviewer.Reviewer(config.current())
     path = state.receipt_path(label, "review")
     receipt: dict[str, Any] = {"version": 1, "label": label, **fields, "base": base, "tip": tip,
                                "tree": git(main, "rev-parse", tip + "^{tree}"), "status": "running",
                                "pid": os.getpid(), "log": config.current().env("REVIEW_LOG"),
-                               "started": journal.now(), "effort": models["sol_effort"]}
+                               "started": journal.now(), "effort": runner.models["sol_effort"]}
     with state.locked(f"review-{label}"):
         state.write_json(path, receipt)
     reviews = state.state_dir() / "reviews"
@@ -402,49 +164,11 @@ def perform_review(label: str, fields: dict[str, Any], main: str, base: str, tip
     try:
         with terminable(), worktrees.review_checkout(main, label, tip) as checkout:
             standards = coding_standards(main, tip)
-            codex = codex_cli()
-            limit = codex_limit(codex) if codex else {"left": None, "blocked": None}
-            receipt.update(codex=codex, codex_left=limit["left"])
-            fallback = (f"no Codex CLI ({config.current().env_names('CODEX')}, CODEX_CLI_PATH, codex on PATH)"
-                        if not codex
-                        else limit["blocked"] or (f"Codex has {limit['left']}% of the weekly limit left, under "
-                                                  f"{models['sol_min_left']}%"
-                                                  if limit["left"] < models["sol_min_left"] else None))
-            text = ""
-            if fallback is None and codex:
-                effort = models["sol_effort"]
-                receipt.update(reviewer="sol", model=sol, effort=effort)
-                print(f"lane: review {label}: {sol} {effort} ({limit['left']}% of the weekly Codex "
-                      f"limit left) on {base[:10]}...{tip[:10]}", flush=True)
-                # A stale answer of an earlier run must never stand in for this one's.
-                output.unlink(missing_ok=True)
-                status = run_reviewer([codex, "exec", "-C", checkout, "-s", "read-only", "-m", sol, "-c",
-                                       f'model_reasoning_effort="{effort}"', "--ephemeral", "-o", str(output),
-                                       "-"], checkout, review_prompt(standards, subject, base, tip, None), log, log)
-                text = output.read_text(errors="replace") if output.exists() else ""
-                # A model error, a limit hit mid-run or an empty answer: Sol is unavailable, Opus reviews once.
-                if status or not text.strip():
-                    fallback = (f"the Sol run failed (exit {status}): {last_lines(log)}" if status
-                                else "Sol returned an empty review")
-            if fallback is not None:
-                effort = models["opus_effort"]
-                receipt.update(reviewer="opus", model=opus, fallback=fallback, effort=effort)
-                print(f"lane: review {label}: {opus} {effort} ({fallback})", flush=True)
-                claude = claude_cli()
-                if not claude:
-                    raise ReviewFailed(f"no claude CLI on PATH ({config.current().env_names('CLAUDE')})")
-                diff = git(checkout, "diff", f"{base}...{tip}")
-                if len(diff) > MAX_INLINE_DIFF:
-                    diff = diff[:MAX_INLINE_DIFF] + "\n[diff truncated: read the rest with git diff]"
-                output.unlink(missing_ok=True)
-                status = run_reviewer([claude, "-p", "--model", opus, "--effort", effort,
-                                       "--allowedTools", OPUS_TOOLS], checkout,
-                                      review_prompt(standards, subject, base, tip, diff), output, log)
-                text = output.read_text(errors="replace") if output.exists() else ""
-                if status or not text.strip():
-                    raise ReviewFailed(f"the Opus run failed (exit {status}): {last_lines(log)}"
-                                       if status else "Opus returned an empty review")
-        receipt.update(status="finished", findings=parse_findings(text), output=str(output))
+            answer = runner.run(label, checkout, reviewer.Request(standards, subject, base, tip), output, log)
+            receipt.update(answer.evidence)
+            if answer.error is not None:
+                raise LaneError(answer.error)
+        receipt.update(status="finished", output=str(output))
         if finalize:
             finalize(receipt)
     except Exception as error:  # any failure leaves a failed receipt, not a running one
@@ -523,7 +247,7 @@ def spawn_review(label: str, fields: dict[str, Any], argv: list[str], cwd: str) 
                                  stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
                                  start_new_session=True, env=self_env(LANEFATHER_REVIEW_LOG=str(log)))
         receipt = {"version": 1, "label": label, **fields, "status": "running", "pid": child.pid, "log": str(log),
-                   "started": journal.now(), "effort": review_models()["sol_effort"]}
+                   "started": journal.now(), "effort": reviewer.Reviewer(config.current()).models["sol_effort"]}
         state.write_json(state.receipt_path(label, "review"), receipt)
     journal.ledger(f"review-start {label} pid={child.pid} log={log}")
     return receipt

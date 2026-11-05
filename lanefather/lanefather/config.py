@@ -77,6 +77,7 @@ class Config:
     install_env_drop: tuple[str, ...] = ("LANDING_TOKEN",)
     after_promote: tuple[str, ...] = ()
     process_scan: str = ""
+    gc_after_remove: tuple[str, ...] = ()
 
     def names(self, name: str) -> list[str]:
         """The variables of setting `name`, first wins: LANEFATHER_<name>, an [env] alias, the legacy prefix's."""
@@ -146,13 +147,14 @@ def _steps(data: dict[str, Any], key: str) -> tuple[Step, ...]:
 
 TOP_KEYS = ("project", "command", "state_dir", "legacy_env_prefix", "shared_env", "report_doc", "queue_name",
             "coding_standards", "rules_dir", "steering", "unclaimed", "merge_config", "checks", "lane", "gate",
-            "promote", "hooks", "env")
+            "promote", "hooks", "env", "gc")
 TABLE_KEYS = {
     "checks": ("verify", "plan_module", "triage", "toolchain", "toolchain_pin", "slot_env"),
     "lane": ("cache_name", "targets", "cache_partitions"),
     "gate": ("stamp_tool", "stamp_file", "pre_push_hook"),
     "promote": ("ship_refuses", "ship_refusal", "install", "deploy", "install_env_drop", "after"),
     "hooks": ("process_scan",),
+    "gc": ("after_remove",),
 }
 
 
@@ -172,14 +174,16 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
     promote: dict[str, Any] = data.get("promote", {})
     hooks: dict[str, Any] = data.get("hooks", {})
     env: dict[str, Any] = data.get("env", {})
+    gc: dict[str, Any] = data.get("gc", {})
     for name, table in (("checks", checks), ("lane", lane), ("gate", gate), ("promote", promote), ("hooks", hooks),
-                        ("env", env)):
+                        ("env", env), ("gc", gc)):
         if not isinstance(table, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
             raise LaneError(f"{CONFIG_NAME}: [{name}] must be a table")
     if not all(isinstance(v, str) for v in env.values()):
         raise LaneError(f"{CONFIG_NAME}: [env] maps LANEFATHER_<NAME> to the project's variable name")
     _known(data, "", TOP_KEYS)
-    for name, table in (("checks", checks), ("lane", lane), ("gate", gate), ("promote", promote), ("hooks", hooks)):
+    for name, table in (("checks", checks), ("lane", lane), ("gate", gate), ("promote", promote),
+                        ("hooks", hooks), ("gc", gc)):
         _known(table, name, TABLE_KEYS[name])
     for key in ("install", "deploy"):
         steps: list[Any] = promote.get(key, []) if isinstance(promote.get(key), list) else []
@@ -221,6 +225,7 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         install_env_drop=_strings(promote, "install_env_drop", default.install_env_drop),
         after_promote=_strings(promote, "after", default.after_promote),
         process_scan=_string(hooks, "process_scan", default.process_scan),
+        gc_after_remove=_strings(gc, "after_remove", default.gc_after_remove),
     )
 
 
