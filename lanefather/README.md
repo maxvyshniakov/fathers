@@ -113,3 +113,10 @@ python3 tools/check.py --update-baseline
 ```
 
 The pyright baseline counts errors per file and rule and only shrinks.
+
+## Protected reference hook
+
+`hooks/reference-transaction` is the canonical guard for agent updates to `main` and `dev`. Projects and repo-kit
+pin its committed bytes; `tests/fixtures/reference-transaction` remains historical compatibility evidence.
+The canonical hook keeps the existing landing token, two-hour lock and non-agent behavior. Refusals name the
+generic `lanefather land`, `promote` and `sync` commands, resolved through the repository's configuration.

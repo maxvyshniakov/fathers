@@ -12,7 +12,7 @@ import time
 from typing import Any
 import unittest
 
-from support import FAKE_PLAN, FIXTURES, LaneCase
+from support import FAKE_PLAN, ROOT, LaneCase
 
 
 class PromoteGateTests(LaneCase):
@@ -382,7 +382,7 @@ class SyncTests(LaneCase):
         # The guard as Straylight, Sid-Kit and Data Grid run it, and an agent session around every lane call.
         hooks = self.tmp / "hooks"
         hooks.mkdir()
-        shutil.copy2(FIXTURES / "reference-transaction", hooks / "reference-transaction")
+        shutil.copy2(ROOT / "hooks" / "reference-transaction", hooks / "reference-transaction")
         self.git(self.repo, "config", "core.hooksPath", str(hooks))
         self.env = {k: v for k, v in self.env.items()
                     if not k.startswith(("CODEX_", "LANDING_")) or k == "CODEX_HOME"}
@@ -443,7 +443,7 @@ class SyncTests(LaneCase):
                                  env=self.env, capture_output=True, text=True)
         self.assertNotEqual(refused.returncode, 0)
         # The vendored hook is Straylight's, which names its command.
-        self.assertIn("tools/lane sync", refused.stderr)
+        self.assertIn("lanefather sync", refused.stderr)
         # Up to date: nothing to move, and it says so.
         self.lane("sync", cwd=self.repo)
         self.assertIn("up to date", self.lane("sync", cwd=self.repo))

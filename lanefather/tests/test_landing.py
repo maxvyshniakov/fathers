@@ -5,7 +5,7 @@ import shutil
 import time
 import unittest
 
-from support import FIXTURES, LaneCase
+from support import ROOT, LaneCase
 
 
 class LandingLockTests(LaneCase):
@@ -17,7 +17,7 @@ class LandingLockTests(LaneCase):
         self.git(self.repo, "worktree", "add", "-q", "-b", "dev", str(self.dev))
         hooks = self.tmp / "hooks"
         hooks.mkdir()
-        shutil.copy2(FIXTURES / "reference-transaction", hooks / "reference-transaction")
+        shutil.copy2(ROOT / "hooks" / "reference-transaction", hooks / "reference-transaction")
         self.git(self.repo, "config", "core.hooksPath", str(hooks))
         self.env = {k: v for k, v in self.env.items()
                     if not k.startswith(("CODEX_", "LANDING_")) or k == "CODEX_HOME"}
