@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from support import LaneCase, RUST_STUB
+from support import RUST_STUB, LaneCase
 
 
 class ShowTests(LaneCase):

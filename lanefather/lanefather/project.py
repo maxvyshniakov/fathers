@@ -37,6 +37,7 @@ class Readiness:
 
     @property
     def planned_or_active(self) -> tuple[state.Record, ...]:
+        """Records in either state that counts against the lifetime lane cap."""
         return tuple(state.occupying(list(self.records)))
 
     @property
@@ -72,10 +73,10 @@ class Project:
         states = queue.queue_states(entries, records)
         cap, source = host.lane_cap(self.config)
         machine = host.host(self.config)
-        active = len(state.occupying(records))
+        planned_or_active = len(state.occupying(records))
         blocked = None
-        if active >= cap:
-            blocked = f'{active} of {cap} lanes planned or active'
+        if planned_or_active >= cap:
+            blocked = f'{planned_or_active} of {cap} lanes planned or active'
         elif machine['load15'] >= host.LOAD_FACTOR * machine['cores']:
             blocked = f"load15 {machine['load15']:.1f} is at or above {host.LOAD_FACTOR * machine['cores']:.1f}"
         elif machine['disk_free_gb'] < host.MIN_DISK_GB:
