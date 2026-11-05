@@ -50,7 +50,7 @@ def parser() -> argparse.ArgumentParser:
     root.add_argument("--config", metavar="PATH", help="the project's .lanefather.toml")
     root.add_argument("--version", action="version", version=version())
     commands = root.add_subparsers(dest="command", required=True)
-    p = commands.add_parser("start", help="register a lane: caps, claims, header for the Agent prompt")
+    p = commands.add_parser("start", help="register a lane: lane cap, path claims and agent brief")
     p.add_argument("id")
     p.add_argument("--ticket", required=True, help="issue number, or none")
     p.add_argument("--claims", nargs="+", required=True, metavar="GLOB")
@@ -77,17 +77,16 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("id")
     p.add_argument("--rerun", action="store_true", help="run every suite even if a receipt covers the tree")
     p.add_argument("--slots", type=int, choices=range(1, 5),
-                   help="verification slots, as verify --jobs (default: slotfather advise, at most "
-                        f"{CHECK_MAX_JOBS}); checks run side by side while the cores they declare fit the slots' "
-                        "(#642)")
+                   help="verification worker budget passed as verify --jobs (default: slotfather advise, at most "
+                        f"{CHECK_MAX_JOBS})")
     p.set_defaults(run=checks.check)
     p = commands.add_parser("land", help="merge a lane with a current green receipt, run the smoke, then finish it")
     p.add_argument("id")
     p.add_argument("--into", help="integration worktree (default: the worktree on the lane's base branch)")
     p.add_argument("-m", "--message")
     p.add_argument("--slots", type=int, choices=range(1, 5),
-                   help="verify --jobs for the post-merge run (default: slotfather advise --max 3, the free slots "
-                        "less the cores of load without a lease)")
+                   help="worker budget passed as verify --jobs for the post-merge smoke "
+                        "(default: slotfather advise --max 3)")
     p.add_argument("--keep", action="store_true",
                    help="leave the landed lane for done (another lane needs its artifacts)")
     p.add_argument("--force-reason", help="land without a current green receipt; logged")
@@ -100,8 +99,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--no-push", action="store_true",
                    help="move the local branches only, and only to a SHA the remote already has (#666)")
     p.add_argument("--jobs", type=int, choices=range(1, 9), metavar="{1..8}",
-                   help="verify --jobs for the batch gate (default: slotfather advise --max 2, shared slots less "
-                        "the cores of load without a lease, sized after any load wait)")
+                   help="worker budget passed as verify --jobs for the batch gate "
+                        "(default: slotfather advise --max 2, sized after any load wait)")
     p.add_argument("--remote", default="origin")
     p.add_argument("--wait", type=float, default=120, metavar="SECONDS", help="wait this long for the landing lock")
     p.add_argument("--install", action="store_true",
@@ -139,7 +138,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("id")
     p.add_argument("--force-reason", help="clean up a lane that is not landed or lacks a ticket comment; logged")
     p.set_defaults(run=done.done)
-    p = commands.add_parser("list", help="active lanes, claims, receipts, disk and load")
+    p = commands.add_parser("list", help="lanes that are not done, with claims, receipts, disk and load")
     p.add_argument("--all", action="store_true", help="include done lanes")
     p.add_argument("--json", action="store_true", help="the lane records with their worktree and receipt state, the "
                                                         "cap and the host, as JSON")

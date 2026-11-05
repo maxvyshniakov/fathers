@@ -1,12 +1,16 @@
 # lanefather
 
-The lane workflow for coding agents working in parallel on one repository: lanes and their path claims, a ranked
-queue, a receipt for each lane's checks, a landing lock, a post-merge smoke, one independent review per lane, a batch
-gate, and the promotion of `dev` and `main`. It began as Straylight's `tools/lane` (#648) and serves any repository
+Coordinate parallel repository work from declared path claims through verification, landing, review and cleanup.
+Each **lane** tracks one unit of work; the ranked queue orders proposed lanes, and promotion publishes verified
+changes to `dev` and `main`. It began as Straylight's `tools/lane` (#648) and serves any repository
 that names its own commands in a `.lanefather.toml`.
 
 lanefather is standard library Python (3.11 or newer), installed without a build step beside
-[slotfather](https://github.com/maxvyshniakov/slotfather), which owns the machine's slots, leases and processes.
+[slotfather](https://github.com/maxvyshniakov/slotfather), which manages machine capacity through slot requests
+and leases. A lane does not reserve slots for its lifetime.
+
+See the [glossary](GLOSSARY.md) for domain definitions and
+[terminology](docs/terminology.md) for naming decisions and compatibility.
 
 ## Install
 
@@ -32,10 +36,10 @@ lanefather perf <sha>
 lanefather list [--all] [--json]
 ```
 
-`lanefather --help` and each module's docstring give the rules: statuses, the cap, claims, receipts, the review, the
-gate.
+`lanefather --help` describes the commands. The [glossary](GLOSSARY.md) distinguishes lane states, receipts,
+reviews and verification gates.
 
-## A project's seams: `.lanefather.toml`
+## Project configuration: `.lanefather.toml`
 
 lanefather reads `.lanefather.toml` at the top of the repository it runs in (or `--config PATH`,
 `LANEFATHER_CONFIG`). Every key is optional; see `lanefather/config.py` for the full list and Straylight's file for a
@@ -52,7 +56,7 @@ complete example.
 | `[lane]` `targets`, `cache_partitions` | build directories `done` removes |
 | `[gate]` `stamp_tool`, `stamp_file`, `pre_push_hook` | the verified-tree stamp of the full gate |
 | `[promote]` `install`, `deploy`, `after`, `ship_refuses` | what promote runs after it moved dev |
-| `[hooks]` `process_scan` | what a lane left running in its worktree, until `slotfather procs` answers |
+| `[hooks]` `process_scan` | processes a lane left running in its worktree |
 
 ### The check contract
 

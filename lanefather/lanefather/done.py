@@ -1,8 +1,8 @@
 """Finishing a landed lane: stop what it left running in its worktree (#661), then remove the worktree, its branches,
 its build directories, its scratch and the shared cache partitions built from it.
 
-A lane whose agent still locks its worktree is released instead: its slot and claims are free, and done finishes it
-once the agent exits.
+A lane whose agent still locks its worktree is released instead. It no longer counts toward the lane cap or holds
+claims; done finishes it once the agent exits.
 """
 from __future__ import annotations
 
@@ -41,11 +41,12 @@ def done(args: Any) -> int:
 
 def finish_landed(lane_id: str, keep: bool) -> None:
     """After a green post-merge smoke: finish the lane as done does. When its agent still locks the worktree, keep
-    the worktree and release the lane; done finishes it later. A landed lane holds no slot, so a refused done only
-    leaves cleanup behind."""
+    the worktree and release the lane; done finishes it later. A landed lane does not count toward the lane cap;
+    a refused done only leaves cleanup behind."""
     prog = config.prog()
     if keep:
-        print(f"Lane {lane_id} kept (--keep): it holds no slot; finish it with {prog} done {lane_id}")
+        print(f"Lane {lane_id} kept (--keep): it does not count toward the lane cap; "
+              f"finish it with {prog} done {lane_id}")
         return
     record = state.load(lane_id)
     if record["status"] == "done":
@@ -59,15 +60,18 @@ def finish_landed(lane_id: str, keep: bool) -> None:
             record = state.load(lane_id)
             record.update(status="released", released=journal.now())
             state.save(record)
-            journal.ledger(f"release {lane_id}: worktree {worktree} is locked ({lock}); slot and claims freed")
-        print(f"Lane {lane_id} released: its slot and claims are free. Its agent still holds {worktree} "
+            journal.ledger(f"release {lane_id}: worktree {worktree} is locked ({lock}); "
+                           "lane cap space and claims freed")
+        print(f"Lane {lane_id} released: it no longer counts toward the lane cap or holds claims. "
+              f"Its agent still holds {worktree} "
               f"(locked: {lock}); once the agent exits, remove it with {prog} done {lane_id}")
         return
     try:
         finish(lane_id, None)
     except LaneError as error:
         journal.ledger(f"auto-done {lane_id} refused: {str(error).replace(chr(10), ' ')}")
-        print(f"{prog} done {lane_id} did not run after landing; the lane stays landed and holds no slot.\n"
+        print(f"{prog} done {lane_id} did not run after landing; "
+              "the lane stays landed and does not count toward the lane cap.\n"
               f"{error}\nFix that, then run {prog} done {lane_id}")
 
 

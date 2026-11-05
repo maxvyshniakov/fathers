@@ -129,7 +129,7 @@ class DoneTests(LaneCase):
 
 
 class AutoDoneTests(LaneCase):
-    """#446: land finishes the lane after a green post-merge smoke, so its slot frees at once."""
+    """#446: land finishes the lane after a green post-merge smoke, so it no longer counts toward the lane cap."""
 
     def agent_lane(self, lane_id, claim):
         self.start(lane_id, claim)
@@ -165,10 +165,10 @@ class AutoDoneTests(LaneCase):
         self.assertTrue(worktree.exists())
         self.assertEqual(self.record("a")["status"], "released")
         self.assertIn("release a", (self.state / "ledger.log").read_text())
-        # A released lane holds no slot and no claims.
+        # A released lane does not count toward the lane cap or hold claims.
         for index, claim in enumerate(("lib/**", "x/**", "y/**")):
             self.start(f"n{index}", claim)
-        self.assertIn("3 of 3 lanes active", self.lane("list"))
+        self.assertIn("3 of 3 lanes planned or active", self.lane("list"))
         # done finishes it once the agent lets go of the worktree.
         self.assertIn("claude agent agent-a", self.lane("done", "a", ok=False))
         self.assertTrue(worktree.exists())
@@ -177,7 +177,7 @@ class AutoDoneTests(LaneCase):
         self.assertFalse(worktree.exists())
         self.assertEqual(self.record("a")["status"], "done")
 
-    def test_a_refused_done_leaves_the_lane_landed_without_a_slot(self):
+    def test_a_refused_done_leaves_the_lane_landed_outside_the_lane_cap(self):
         worktree = self.agent_lane("a", "lib/a.txt")
         self.comments.write_text(json.dumps([]))
         self.lane("land", "a")

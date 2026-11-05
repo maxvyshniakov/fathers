@@ -26,7 +26,7 @@ class StartTests(LaneCase):
         for index, claim in enumerate(("a/**", "b/**", "c/**")):
             self.start(f"l{index}", claim)
         output = self.start("l3", "d/**", ok=False)
-        self.assertIn("3 lanes are active", output)
+        self.assertIn("3 lanes are planned or active", output)
         self.assertFalse((self.state / "l3.json").exists())
         self.start("l3", "d/**", extra=("--force-reason", "owner allowed a fourth lane for a docs fix"))
         self.assertIn("owner allowed a fourth lane", (self.state / "ledger.log").read_text())
@@ -36,11 +36,11 @@ class StartTests(LaneCase):
         for index, claim in enumerate(("a/**", "b/**", "c/**", "d/**", "e/**")):
             self.start(f"l{index}", claim)
         output = self.start("l5", "f/**", ok=False)
-        self.assertIn("5 lanes are active", output)
+        self.assertIn("5 lanes are planned or active", output)
         self.assertIn("the cap is 5 (LANEFATHER_CAP override; derived: 3)", output)
         # #572: the override stays, and every start logs it.
         self.assertIn("cap=5 (LANEFATHER_CAP override; derived: 3)", (self.state / "ledger.log").read_text())
-        self.assertIn("5 of 5 lanes active (cap LANEFATHER_CAP override; derived: 3)", self.lane("list"))
+        self.assertIn("5 of 5 lanes planned or active (cap LANEFATHER_CAP override; derived: 3)", self.lane("list"))
 
     def test_the_default_cap_is_derived_from_the_cores_and_the_memory(self):
         # #572: the orchestrator raised LANEFATHER_CAP by hand up to 16 on 12 cores while load15 reached 66.
@@ -50,10 +50,10 @@ class StartTests(LaneCase):
                 self.assertEqual(lane.host.derived_cap(cores, memory), cap)
         self.env.update(LANEFATHER_CORES="12", LANEFATHER_MEMORY_GB="32")
         output = self.lane("list")
-        self.assertIn("0 of 6 lanes active (cap derived from 12 cores and 32 GB of memory)", output)
+        self.assertIn("0 of 6 lanes planned or active (cap derived from 12 cores and 32 GB of memory)", output)
         for index, claim in enumerate(("a/**", "b/**", "c/**", "d/**", "e/**", "f/**")):
             self.start(f"l{index}", claim)
-        self.assertIn("6 lanes are active", self.start("l6", "g/**", ok=False))
+        self.assertIn("6 lanes are planned or active", self.start("l6", "g/**", ok=False))
         self.assertIn("cap=6 (derived from 12 cores and 32 GB of memory)", (self.state / "ledger.log").read_text())
 
     def test_a_bad_cap_falls_back_to_the_derived_cap_with_a_warning(self):
@@ -61,7 +61,7 @@ class StartTests(LaneCase):
         for value in ("many", "0", "-2", "2.5"):
             self.env["LANEFATHER_CAP"] = value
             output = self.lane("list")
-            self.assertIn("0 of 3 lanes active", output, value)
+            self.assertIn("0 of 3 lanes planned or active", output, value)
             self.assertIn(f"LANEFATHER_CAP={value!r} is not a positive whole number; the cap is 3", output)
         self.env["LANEFATHER_CAP"] = ""
         self.assertNotIn("LANEFATHER_CAP", self.lane("list"), "an empty value is the default")

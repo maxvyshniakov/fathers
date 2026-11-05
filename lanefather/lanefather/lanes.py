@@ -77,13 +77,13 @@ def register(record: Record, rules: list[dict[str, Any]], force_reason: str | No
         others = [r for r in state.lanes() if r["id"] != lane_id]
         for name in after:
             if name not in {r["id"] for r in others if r["status"] != "done"}:
-                raise LaneError(f"--after {name}: no active lane by that name")
+                raise LaneError(f"--after {name}: no lane that is not done by that name")
         active = state.occupying(others)
         refusals: list[str] = []
         info = host.host()
         if len(active) >= cap:
-            refusals.append(f"{len(active)} lanes are active ({', '.join(r['id'] for r in active)}); "
-                            f"the cap is {cap} ({source}): land one (a landed lane frees its slot)")
+            refusals.append(f"{len(active)} lanes are planned or active ({', '.join(r['id'] for r in active)}); "
+                            f"the cap is {cap} ({source}): land one to make room under the lane cap")
         if info["disk_free_gb"] < host.MIN_DISK_GB:
             refusals.append(f"free disk is {info['disk_free_gb']:.0f} GB, under {host.MIN_DISK_GB} GB: "
                             f"run {prog} done on landed lanes")
@@ -200,7 +200,7 @@ def list_lanes(args: Any) -> int:
               + (f"  after: {', '.join(record['after'])}" if record["after"] else ""))
         if record.get("worktree"):
             print(f"    worktree: {record['worktree']}")
-    print(f"{len(state.occupying())} of {cap} lanes active (cap {source}); {host.host_line(host.host())}")
+    print(f"{len(state.occupying())} of {cap} lanes planned or active (cap {source}); {host.host_line(host.host())}")
     # #666: the repository it runs in, as last fetched; outside a Git checkout there is nothing to compare.
     if git_ok(os.getcwd(), "rev-parse", "--git-dir"):
         for line in promote.ahead_lines(os.getcwd()):

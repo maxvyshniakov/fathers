@@ -210,7 +210,8 @@ def land(args: Any) -> int:
             done.finish_landed(args.id, args.keep)
         else:
             # The fix round runs in the lane's worktree, where a resumed agent keeps its context (#570).
-            print(f"Lane {args.id} kept for its review ({words}): it holds no slot; marking its last finding "
+            print(f"Lane {args.id} kept for its review ({words}): it does not count toward the lane cap; "
+                  "marking its last finding "
                   f"finishes it (" + review.mark_help(args.id) + ")")
         return 0
     # A suite whose checks did not start because the first checks were red (#639) is not one of the failures.

@@ -1,12 +1,12 @@
-"""The client of slotfather, the machine-wide queue of slot leases (maxvyshniakov/slotfather).
+"""The client of slotfather, the machine-wide scheduler of slot requests and leases (maxvyshniakov/slotfather).
 
 lanefather only calls the installed command:
 
   slotfather run -n K|all --label L [--meta K=V]... --class C [--wait S] -- COMMAND...
-  slotfather advise [--max N] [--exclusive]      JSON advice on how many jobs to run
+  slotfather advise [--max N] [--exclusive]      JSON advice on the verification worker budget
   slotfather slots                               the shared capacity
 
-A verify run queues itself: lanefather hands it the label, class and metadata of its lease as
+A verify run queues itself: lanefather hands it the label, class and metadata of its slot request as
 <slot_env>_LABEL, _CLASS, _META (a JSON object) and _YIELDABLE, slot_env from `.lanefather.toml`. Without slotfather on
 PATH a command runs directly, under no lease.
 """
@@ -76,7 +76,7 @@ def wrap(count: int | str, label: str, argv: list[str], wait: float | None = Non
     if leased() or found is None:
         return list(argv)
     if klass not in CLASSES:
-        raise ValueError(f"lease class {klass!r} is not one of {', '.join(CLASSES)}")
+        raise ValueError(f"request priority class {klass!r} is not one of {', '.join(CLASSES)}")
     flags = [part for key, value in lease_meta(meta).items() for part in ("--meta", f"{key}={value}")]
     return [found, "run", "-n", str(count), "--label", label, *flags, "--class", klass,
             *(("--yieldable",) if yieldable else ()), *(("--wait", f"{wait:g}") if wait is not None else ()),
@@ -86,7 +86,7 @@ def wrap(count: int | str, label: str, argv: list[str], wait: float | None = Non
 def queue_environment(label: str, klass: str = "normal", yieldable: bool = False, **meta: Any) -> dict[str, str]:
     """The variables that make a verify run which queues itself take this label, class and metadata."""
     if klass not in CLASSES:
-        raise ValueError(f"lease class {klass!r} is not one of {', '.join(CLASSES)}")
+        raise ValueError(f"request priority class {klass!r} is not one of {', '.join(CLASSES)}")
     prefix = config.current().slot_env
     return {f"{prefix}_LABEL": label, f"{prefix}_CLASS": klass,
             f"{prefix}_META": json.dumps(clean_meta(meta), sort_keys=True),
@@ -108,13 +108,13 @@ def ask(*args: str) -> str:
 
 
 def advise(maximum: int | None = None, exclusive: bool = False) -> dict[str, Any]:
-    """`slotfather advise`: the job count for the load and the queue, with the reasons slotfather gives."""
+    """`slotfather advise`: the worker budget for the load and the queue, with the reasons slotfather gives."""
     output = ask("advise", *(("--max", str(maximum)) if maximum else ()), *(("--exclusive",) if exclusive else ()))
     try:
         advice = json.loads(output)
         int(advice["jobs"])
     except (ValueError, KeyError, TypeError):
-        raise Unavailable(f"slotfather advise printed no job count: {output.strip()[:300]}") from None
+        raise Unavailable(f"slotfather advise printed no worker budget: {output.strip()[:300]}") from None
     return advice
 
 
