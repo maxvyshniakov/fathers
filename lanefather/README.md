@@ -58,7 +58,7 @@ complete example.
 | `[lane]` `targets`, `cache_partitions` | build directories `done` removes |
 | `[gate]` `stamp_tool`, `stamp_file`, `pre_push_hook` | the verified-tree stamp of the full gate |
 | `[promote]` `install`, `deploy`, `after`, `ship_refuses` | what promote runs after it moved dev |
-| `[gc]` `after_remove` | project cache cleanup after a worktree was removed (`{worktree}`, `{name}`, `{project}`); a successful hook may emit `{"v":1,"freed":123}` to add its actually removed bytes to the GC total. Empty stdout adds zero; diagnostics go to stderr. |
+| `[gc]` `after_remove`, `after_remove_report` | project cache cleanup after removal (`{worktree}`, `{name}`, `{project}`). Stdout is ignored by default, preserving existing hooks. With `after_remove_report = true`, a successful hook must emit `{"v":1,"freed":123}` to add its actually removed bytes; diagnostics go to stderr. Invalid reports add zero bytes and a report error. |
 | `[hooks]` `process_scan` | legacy process adapter for live lanes; without it `procs` supplies read-only inspection |
 | `[hooks.project]` | named project policy scripts run by `project-hook NAME -- ARGS` in the installed interpreter |
 

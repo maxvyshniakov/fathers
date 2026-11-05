@@ -163,7 +163,7 @@ class Project:
             run = subprocess.run(argv, cwd=self._root, capture_output=True, text=True)
             if run.returncode:
                 result.errors.append(f"after_remove {path}: exit {run.returncode}: {run.stderr.strip()}")
-            elif run.stdout.strip():
+            elif self._settings.gc_after_remove_report:
                 try:
                     decoded: Any = json.loads(run.stdout)
                     if not isinstance(decoded, dict):

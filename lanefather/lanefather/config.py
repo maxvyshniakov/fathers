@@ -79,6 +79,7 @@ class Config:
     process_scan: str = ""
     project_hooks: tuple[tuple[str, str], ...] = ()
     gc_after_remove: tuple[str, ...] = ()
+    gc_after_remove_report: bool = False
 
     def names(self, name: str) -> list[str]:
         """The variables of setting `name`, first wins: LANEFATHER_<name>, an [env] alias, the legacy prefix's."""
@@ -155,7 +156,7 @@ TABLE_KEYS = {
     "gate": ("stamp_tool", "stamp_file", "pre_push_hook"),
     "promote": ("ship_refuses", "ship_refusal", "install", "deploy", "install_env_drop", "after"),
     "hooks": ("process_scan", "project"),
-    "gc": ("after_remove",),
+    "gc": ("after_remove", "after_remove_report"),
 }
 
 
@@ -198,6 +199,9 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
     if not all(name and isinstance(script, str) and script for name, script in project_hooks.items()):
         raise LaneError(f"{CONFIG_NAME}: [hooks.project] maps hook names to script paths")
     default = Config()
+    gc_report = gc.get("after_remove_report", default.gc_after_remove_report)
+    if type(gc_report) is not bool:
+        raise LaneError(f"{CONFIG_NAME}: after_remove_report must be a boolean")
     return Config(
         path=path,
         project=_string(data, "project", default.project),
@@ -234,6 +238,7 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         process_scan=_string(hooks, "process_scan", default.process_scan),
         project_hooks=tuple(sorted((str(name), str(script)) for name, script in project_hooks.items())),
         gc_after_remove=_strings(gc, "after_remove", default.gc_after_remove),
+        gc_after_remove_report=gc_report,
     )
 
 

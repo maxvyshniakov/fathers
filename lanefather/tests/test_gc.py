@@ -152,7 +152,7 @@ class GcTests(LaneCase):
         hook = self.write(self.repo, "cleanup-bytes.py", "import json\n"
                           "print(json.dumps({'v': 1, 'freed': 12345}))\n")
         cfg = self.integration / ".lanefather.toml"
-        cfg.write_text(cfg.read_text() + f'\n[gc]\nafter_remove = ["python3", "{hook}", "{{worktree}}"]\n')
+        cfg.write_text(cfg.read_text() + f'\n[gc]\nafter_remove_report = true\nafter_remove = ["python3", "{hook}", "{{worktree}}"]\n')
         preview = self.collect("--dry-run")
         worktree_bytes = next(a["bytes"] for a in preview["removed"] if a["kind"] == "worktree")
         self.assertEqual(preview["freed"], worktree_bytes)
@@ -165,18 +165,38 @@ class GcTests(LaneCase):
         cases = [("failed", {"v": 1, "freed": 12345}, 3),
                  ("negative", {"v": 1, "freed": -1}, 0),
                  ("boolean", {"v": 1, "freed": True}, 0),
-                 ("version", {"v": 2, "freed": 12345}, 0)]
+                 ("version", {"v": 2, "freed": 12345}, 0),
+                 ("malformed", "{ truncated", 0),
+                 ("empty", "", 0)]
         for name, payload, status in cases:
             with self.subTest(name=name):
                 old = self.candidate(name)
+                output = payload if isinstance(payload, str) else json.dumps(payload)
                 hook = self.write(self.repo, "cleanup-invalid.py",
-                                  f"print({json.dumps(payload)!r})\nraise SystemExit({status})\n")
+                                  f"print({output!r})\nraise SystemExit({status})\n")
                 cfg = self.integration / ".lanefather.toml"
                 text = cfg.read_text().split("\n[gc]", 1)[0]
-                cfg.write_text(text + f'\n[gc]\nafter_remove = ["python3", "{hook}", "{{worktree}}"]\n')
+                cfg.write_text(text + f'\n[gc]\nafter_remove_report = true\nafter_remove = ["python3", "{hook}", "{{worktree}}"]\n')
                 preview = self.collect("--dry-run")
                 report = self.collect()
                 self.assertFalse(old.exists())
                 self.assertEqual(report["freed"], preview["freed"])
                 self.assertEqual(len(report["errors"]), 1)
                 self.assertIn("exit 3" if status else "invalid cleanup report", report["errors"][0])
+
+    def test_gc_ignores_successful_legacy_hook_stdout_without_report_opt_in(self):
+        outputs = ["2026-11-05T23:00:00Z delete Cargo target: cache (0.1 GB)",
+                   '{"v":1,"freed":12345}']
+        for number, output in enumerate(outputs):
+            with self.subTest(output=output):
+                old = self.candidate(f"legacy-output-{number}")
+                hook = self.write(self.repo, "cleanup-legacy.py", f"print({output!r})\n")
+                cfg = self.integration / ".lanefather.toml"
+                text = cfg.read_text().split("\n[gc]", 1)[0]
+                cfg.write_text(text + f'\n[gc]\nafter_remove = ["python3", "{hook}", "{{worktree}}"]\n')
+                preview = self.collect("--dry-run")
+                report = self.collect()
+                self.assertFalse(old.exists())
+                self.assertEqual(report["errors"], [])
+                self.assertEqual(report["freed"], preview["freed"],
+                                 "legacy stdout is diagnostic, even when it resembles a report")

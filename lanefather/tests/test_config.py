@@ -90,6 +90,7 @@ class ConfigTests(ConfigCase):
     def test_a_malformed_config_is_refused_with_its_key(self):
         for text, words in (('[checks]\nverify = 3\n', "verify must be a string"),
                             ('unclaimed = [1]\n', "unclaimed must be a string or a list of strings"),
+                            ('[gc]\nafter_remove_report = 1\n', "after_remove_report must be a boolean"),
                             ('[[promote.install]]\nargv = ["x"]\n', "needs a name and an argv"),
                             ('checks = "x"\n', "[checks] must be a table"),
                             ('[env]\nLANEFATHER_X = 1\n', "[env] maps"),
