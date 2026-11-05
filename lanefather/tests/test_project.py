@@ -55,7 +55,7 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(project.paths.state_dir, directory / 'lanes')
         self.assertEqual(project.paths.queue_path, directory / 'queue' / 'queue.toml')
         self.assertFalse(directory.exists())
-        with self.assertRaises(LaneError):
+        with self.assertRaisesRegex(LaneError, "no queue at"):
             project.readiness()
         self.assertFalse(directory.exists())
 

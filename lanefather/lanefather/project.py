@@ -62,6 +62,9 @@ class Project:
     def readiness(self) -> Readiness:
         try:
             text = self._queue_path.read_text()
+        except FileNotFoundError:
+            raise LaneError(f"no queue at {self._queue_path}: rank the next tickets there "
+                            "as [[lane]] entries") from None
         except OSError as error:
             raise LaneError(f'{self._queue_path}: {error}') from None
         settings, entries = queue.parse_queue(text, self._queue_path)
