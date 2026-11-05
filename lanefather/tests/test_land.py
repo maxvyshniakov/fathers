@@ -118,6 +118,12 @@ class CheckAndLandTests(LaneCase):
         leases = pathlib.Path(str(self.verify_log) + ".leases").read_text().splitlines()
         # The post-merge smoke runs three jobs on an idle machine (#446).
         self.assertEqual(["lane-a --jobs 2", "post-merge-a --jobs 3"], leases)
+        requests = [json.loads(line) for line in pathlib.Path(str(self.verify_log) + ".requests").read_text().splitlines()]
+        self.assertEqual([("normal", "404"), ("interactive", "404")],
+                         [(entry["priority"], entry["ticket"]) for entry in requests])
+        for entry in requests:
+            self.assertTrue({"lane", "phase", "lanefather.state"} <= set(entry["meta"]))
+            self.assertFalse({"class", "priority", "ticket"} & set(entry["meta"]))
 
     def test_a_lane_check_sizes_its_lease_from_slotfather_advise(self):
         """#642 review: a lane check asks slotfather advise --max 2, as the gate does, and records the decision; an

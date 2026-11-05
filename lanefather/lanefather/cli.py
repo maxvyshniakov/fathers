@@ -30,7 +30,7 @@ import argparse
 from pathlib import Path
 import sys
 
-from . import __version__, checks, config, done, land, lanes, promote, review
+from . import __version__, checks, config, done, land, lanes, promote, review, show
 from .errors import LaneError
 from .host import CHECK_MAX_JOBS
 
@@ -138,6 +138,12 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("id")
     p.add_argument("--force-reason", help="clean up a lane that is not landed or lacks a ticket comment; logged")
     p.set_defaults(run=done.done)
+    p = commands.add_parser("show", help="read-only lane details for people and dashboards")
+    p.add_argument("id")
+    p.add_argument("--json", action="store_true", help="version-1 lane summary")
+    p.add_argument("--state-dir", metavar="DIR", help="explicit lane-state directory, without creating it")
+    p.add_argument("--project-dir", metavar="DIR", help="resolve project config and verify lane repository identity")
+    p.set_defaults(run=show.show)
     p = commands.add_parser("list", help="lanes that are not done, with claims, receipts, disk and load")
     p.add_argument("--all", action="store_true", help="include done lanes")
     p.add_argument("--json", action="store_true", help="the lane records with their worktree and receipt state, the "

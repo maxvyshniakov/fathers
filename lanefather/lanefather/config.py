@@ -62,7 +62,7 @@ class Config:
     triage: tuple[str, ...] = ()
     toolchain: tuple[str, ...] = ()
     toolchain_pin: str = ""
-    # The variables a verify run that queues itself reads: <slot_env>_LABEL, _CLASS, _META, _YIELDABLE.
+    # The variables a verify run that queues itself reads: <slot_env>_LABEL, _PRIORITY, _TICKET, _META, _YIELDABLE.
     slot_env: str = "LANEFATHER_SLOT"
     cache_name: str = "lanefather"
     lane_targets: tuple[str, ...] = ()

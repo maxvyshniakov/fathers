@@ -217,6 +217,13 @@ class RedCheckClassificationTests(LaneCase):
         leases = pathlib.Path(str(self.verify_log) + ".leases").read_text().splitlines()
         # Each rerun holds all four machine-wide slots: nothing else verifies beside it.
         self.assertEqual(leases[1:], ["lane-core-alone --jobs 1 held 4", "lane-core-base --jobs 1 held 4"])
+        requests = [json.loads(line) for line in pathlib.Path(str(self.verify_log) + ".requests").read_text().splitlines()]
+        self.assertEqual([("normal", "404"), ("interactive", "404"), ("interactive", "404")],
+                         [(entry["priority"], entry["ticket"]) for entry in requests])
+        self.assertTrue(all(not ({"class", "priority", "ticket"} & set(entry["meta"])) for entry in requests))
+        queued = [json.loads(line)["args"] for line in (self.tmp / "slotfather.log").read_text().splitlines()
+                  if json.loads(line)["command"] == "run"]
+        self.assertEqual(["404", "404"], [argv[argv.index("--ticket") + 1] for argv in queued])
         entry = self.entries("core")["native-check"]
         self.assertEqual(entry["class"], "regression")
         self.assertEqual(entry["base"]["sha"], base)
@@ -449,7 +456,7 @@ class RedCheckClassificationTests(LaneCase):
                 if json.loads(line)["command"] == "run"]
         self.assertEqual(runs[0][:4], ["-n", "all", "--label", "lane-core-alone"])
         lease = runs[0][:runs[0].index("--")]
-        self.assertEqual(("1", "interactive"), (lease[lease.index("--wait") + 1], lease[lease.index("--class") + 1]))
+        self.assertEqual(("1", "interactive"), (lease[lease.index("--wait") + 1], lease[lease.index("--priority") + 1]))
         self.assertIn("kind=rerun-alone", lease)
         self.assertIn("native-check: unclassified", output)
 

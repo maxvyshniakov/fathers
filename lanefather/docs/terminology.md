@@ -49,3 +49,7 @@ In `list --json`, the historical `active` count includes both planned and active
 lanes; the per-lane `status` remains exact. `jobs` fields and `--slots` / `--jobs`
 options retain their names for the verification worker budget. Runtime messages
 and help use the precise terms above. Historical fixtures remain unchanged.
+
+The dashboard calls a lane's lifecycle **stage**, the verification evidence
+**receipt**, and a particular execution's role **phase**. The version-1 summary
+retains `status` and `checks` as wire keys; these do not introduce other concepts.

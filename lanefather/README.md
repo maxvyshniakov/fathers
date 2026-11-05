@@ -34,6 +34,7 @@ lanefather promote <sha> [--ship] [--no-push] [--install [--deploy HOST]]
 lanefather sync [--drop-local]
 lanefather perf <sha>
 lanefather list [--all] [--json]
+lanefather show <id> [--state-dir DIR] [--project-dir DIR] [--json]   read-only lane context
 ```
 
 `lanefather --help` describes the commands. The [glossary](GLOSSARY.md) distinguishes lane states, receipts,
@@ -103,3 +104,21 @@ python3 tools/check.py --update-baseline
 ```
 
 The pyright baseline counts errors per file and rule and only shrinks.
+
+## Dashboard integration
+
+Verification requests carry the lane ID and its state directory as `meta.lane`
+and `meta.lanefather.state`. Slotfather uses that pair to read the selected
+lane through `lanefather show ID --state-dir DIR --json`.
+
+The version-1 summary contains project and repository identity, ticket number
+and URL, lane status, branch, base, worktree, claims, dependencies, receipt
+status/currentness and review status/finding counts. Ticket URLs are derived
+from the GitHub origin without a network call. A missing origin leaves the
+URL empty. The command does not create state directories, take locks, run
+project hooks, start reviews or change records. A missing lane is an error.
+
+For older requests that carry only a lane ID, `--project-dir DIR` resolves the
+project configuration and checks the lane's repository identity. An unrelated
+repository or missing project configuration is refused rather than matched by
+ID alone.
