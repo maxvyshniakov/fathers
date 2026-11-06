@@ -167,13 +167,18 @@ def response_for(raw: bytes, request: dict[str, Any]) -> dict[str, Any]:
     if (response["refusals"] != expected or type(response["allowed"]) is not bool
             or response["allowed"] != (not expected)):
         raise ValueError("inconsistent admission decision")
-    if response["warnings"] not in ([], ["invalid_cap_override"]):
-        raise ValueError("invalid warnings")
-    if response["cap_source"] == "derived":
-        if response["cap"] != response["derived_cap"]:
-            raise ValueError("inconsistent derived cap")
-    elif not request["cap_override"] or response["cap_source"] != request["cap_override"]["source"]:
-        raise ValueError("mismatched cap provenance")
+    override = request["cap_override"]
+    raw_cap = override["value"] if override else ""
+    try:
+        explicit_cap = int(raw_cap) if raw_cap.strip().isdigit() else 0
+    except ValueError:
+        explicit_cap = 0
+    expected_cap = explicit_cap if explicit_cap > 0 else response["derived_cap"]
+    expected_source = override["source"] if explicit_cap > 0 else "derived"
+    expected_warnings = ["invalid_cap_override"] if raw_cap and explicit_cap <= 0 else []
+    if (response["cap"] != expected_cap or response["cap_source"] != expected_source
+            or response["warnings"] != expected_warnings):
+        raise ValueError("cap override was not applied consistently")
     return response
 
 

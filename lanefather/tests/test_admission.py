@@ -198,3 +198,58 @@ print(json.dumps(answer))
         output = self.start("first","src/**",extra=("--force-reason","override"),ok=False)
         self.assertIn("invalid identity or status",output)
         self.assertFalse((self.state / "first.json").exists())
+
+    def test_provider_cannot_ignore_an_explicit_cap_even_with_force(self):
+        self.provider()
+        self.start("first", "first/**")
+        self.env["LANEFATHER_CAP"] = "1"
+        output = self.start("ignored", "other/**", extra=("--force-reason", "owner decision"), ok=False)
+        self.assertIn("lifetime admission unavailable", output)
+        self.assertFalse((self.state / "ignored.json").exists())
+
+    def test_valid_invalid_and_whitespace_cap_controls_match_the_wire_contract(self):
+        self.provider()
+        self.write(self.state.parent, "queue/queue.toml", '[[lane]]\nid="next"\nticket=2\nclaims=["src/**"]\n')
+        project = config.load(self.integration / ".lanefather.toml")
+        for raw, cap, source, warnings in (
+                (None, 6, "derived", []), ("", 6, "derived", []),
+                ("1", 1, "LANEFATHER_CAP", []), (" 1 ", 1, "LANEFATHER_CAP", []),
+                ("01", 1, "LANEFATHER_CAP", []), ("١", 1, "LANEFATHER_CAP", []),
+                (" ", 6, "derived", ["invalid_cap_override"]),
+                ("0", 6, "derived", ["invalid_cap_override"]),
+                ("-1", 6, "derived", ["invalid_cap_override"]),
+                ("+1", 6, "derived", ["invalid_cap_override"]),
+                ("1.0", 6, "derived", ["invalid_cap_override"]),
+                ("typo", 6, "derived", ["invalid_cap_override"]),
+                ("²", 6, "derived", ["invalid_cap_override"])):
+            with self.subTest(raw=raw):
+                self.env.pop("LANEFATHER_CAP", None)
+                if raw is not None:
+                    self.env["LANEFATHER_CAP"] = raw
+                self.env["ADMISSION_PATCH"] = json.dumps({"cap": cap, "cap_source": source, "warnings": warnings})
+                with patch.dict("os.environ", self.env, clear=True):
+                    snapshot = Project(project).readiness()
+                self.assertTrue(snapshot.can_start, snapshot.blocked)
+                self.assertEqual(cap, snapshot.cap)
+                self.assertIn(source, snapshot.cap_source)
+        self.assertFalse(self.state.exists(), "wire controls stay read-only")
+
+    def test_wrong_override_source_cap_or_warnings_are_technical_not_forceable(self):
+        self.provider()
+        for index, (raw, cap, source, warnings) in enumerate((
+                ("1", 1, "LANEFATHER_CAP", ["invalid_cap_override"]),
+                ("1", 1, "derived", []), ("1", 1, "OTHER_CAP", []),
+                ("1", 6, "LANEFATHER_CAP", []),
+                ("typo", 6, "LANEFATHER_CAP", ["invalid_cap_override"]),
+                ("typo", 6, "derived", []), (" ", 6, "derived", []),
+                ("", 6, "derived", ["invalid_cap_override"]),
+                (None, 6, "derived", ["invalid_cap_override"]))):
+            with self.subTest(raw=raw, cap=cap, source=source, warnings=warnings):
+                self.env.pop("LANEFATHER_CAP", None)
+                if raw is not None:
+                    self.env["LANEFATHER_CAP"] = raw
+                self.env["ADMISSION_PATCH"] = json.dumps({"cap": cap, "cap_source": source, "warnings": warnings})
+                lane_id = f"invalid-override-{index}"
+                output = self.start(lane_id, "src/**", extra=("--force-reason", "owner decision"), ok=False)
+                self.assertIn("lifetime admission unavailable", output)
+                self.assertFalse((self.state / f"{lane_id}.json").exists())
