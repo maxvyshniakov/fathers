@@ -24,12 +24,21 @@ CONFIG_NAME = ".lanefather.toml"
 
 
 @dataclass(frozen=True)
+class Lease:
+    """An execution's machine budget and request fields; Slotfather owns admission and nested leases."""
+    slots: int | str
+    priority: str = "normal"
+    ticket: str | None = None
+
+
+@dataclass(frozen=True)
 class Step:
     """One install or deploy step: argv run in the gate worktree, with extra environment. `{sha}`, `{short}` (its
     first 10 characters), `{host}` and `{package}` in either are replaced."""
     name: str
     argv: tuple[str, ...]
     env: tuple[tuple[str, str], ...] = ()
+    lease: Lease | None = None
 
 
 @dataclass(frozen=True)
@@ -130,6 +139,26 @@ def _string(data: dict[str, Any], key: str, default: str) -> str:
     return value
 
 
+def _step_lease(table: dict[str, Any], name: str) -> Lease | None:
+    if "lease" not in table:
+        return None
+    raw = table["lease"]
+    if not isinstance(raw, dict):
+        raise LaneError(f"{CONFIG_NAME}: step {name}: lease must be a table with slots")
+    lease = cast(dict[str, Any], raw)
+    _known(lease, f"step {name} lease", ("slots", "priority", "ticket"))
+    count = lease.get("slots")
+    if not ((type(count) is int and count > 0) or count == "all"):
+        raise LaneError(f"{CONFIG_NAME}: step {name}: lease slots must be a positive integer or 'all'")
+    priority = _string(lease, "priority", "normal")
+    if priority not in ("interactive", "normal", "batch"):
+        raise LaneError(f"{CONFIG_NAME}: step {name}: lease priority must be interactive, normal or batch")
+    ticket = _string(lease, "ticket", "") if "ticket" in lease else None
+    if ticket is not None and (not ticket or len(ticket) > 200 or not ticket.isprintable()):
+        raise LaneError(f"{CONFIG_NAME}: step {name}: lease ticket must be a short printable identifier")
+    return Lease(count, priority, ticket)
+
+
 def _steps(data: dict[str, Any], key: str) -> tuple[Step, ...]:
     raw = data.get(key, [])
     if not isinstance(raw, list):
@@ -143,7 +172,10 @@ def _steps(data: dict[str, Any], key: str) -> tuple[Step, ...]:
         if not isinstance(env, dict) or not all(isinstance(v, str) for v in env.values()):  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]
             raise LaneError(f"{CONFIG_NAME}: {key} step {table['name']}: env must map names to strings")
         env_items: dict[str, str] = env  # pyright: ignore[reportUnknownVariableType]
-        steps.append(Step(table["name"], _strings(table, "argv", ()), tuple(sorted(env_items.items()))))
+        argv = _strings(table, "argv", ())
+        if not table["name"].strip() or not argv or not argv[0]:
+            raise LaneError(f"{CONFIG_NAME}: each {key} step needs a nonempty name and argv")
+        steps.append(Step(table["name"], argv, tuple(sorted(env_items.items())), _step_lease(table, table["name"])))
     return tuple(steps)
 
 
@@ -191,7 +223,7 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         steps: list[Any] = promote.get(key, []) if isinstance(promote.get(key), list) else []
         for step in steps:
             if isinstance(step, dict):
-                _known(step, f"promote.{key}", ("name", "argv", "env"))  # pyright: ignore[reportUnknownArgumentType]
+                _known(step, f"promote.{key}", ("name", "argv", "env", "lease"))  # pyright: ignore[reportUnknownArgumentType]
     raw_hooks: Any = hooks.get("project", {})
     if not isinstance(raw_hooks, dict):
         raise LaneError(f"{CONFIG_NAME}: [hooks.project] maps hook names to script paths")

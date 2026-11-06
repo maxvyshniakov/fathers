@@ -62,6 +62,33 @@ complete example.
 | `[hooks]` `process_scan` | legacy process adapter for live lanes; without it `procs` supplies read-only inspection |
 | `[hooks.project]` | named project policy scripts run by `project-hook NAME -- ARGS` in the installed interpreter |
 
+### Execution leases after promotion
+
+An install or deploy command that may build can opt into its own execution lease:
+
+```toml
+[[promote.install]]
+name = "install"
+argv = ["./install.sh"]
+lease = { slots = 2, ticket = "42" }
+```
+
+`slots` is a positive integer or `"all"`; the optional `priority` is `normal`
+by default (`interactive` and `batch` are also supported). `ticket` is optional.
+These are Slotfather request fields, not metadata. Lanefather adds the step's
+phase, candidate SHA and project state directory as metadata. The command still
+runs from the exact promoted gate worktree, in order, and a failure stops later
+commands. The lease covers a rebuild even when the tree's gate stamp is reused
+or an earlier bundle is missing; a gate's finished lease supplies no capacity
+for later execution.
+
+Configured steps require Slotfather on PATH before promotion publishes anything.
+Every such execution enters Slotfather, which owns admission and deduplicates a
+real outer lease. Steps without `lease` keep their existing direct execution.
+This feature advertises `promote.step-leases`; older engines reject the unknown
+configuration key. Machine budgets and command costs belong in the project
+adapter. Lane lifetime admission is separate from these execution leases.
+
 ### The check contract
 
 ```

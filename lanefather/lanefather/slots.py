@@ -80,15 +80,17 @@ def ticket_value(ticket: str | None) -> str | None:
 
 def wrap(count: int | str, label: str, argv: list[str], wait: float | None = None,
          meta: dict[str, Any] | None = None, priority: str = "normal", yieldable: bool = False,
-         ticket: str | None = None) -> list[str]:
+         ticket: str | None = None, required: bool = False) -> list[str]:
     """argv run under a lease of `count` slots (a number or "all"); argv itself under a lease or without
-    slotfather."""
+    slotfather. Required executions always enter the real CLI: it validates and deduplicates outer leases."""
     if priority not in PRIORITIES:
         raise ValueError(f"request priority {priority!r} is not one of {', '.join(PRIORITIES)}")
     ticket = ticket_value(ticket)
     tags = lease_meta(meta)
     found = command()
-    if leased() or found is None:
+    if required and found is None:
+        raise Unavailable("slotfather is not on PATH; a required execution lease cannot be acquired")
+    if found is None or (leased() and not required):
         return list(argv)
     flags = [part for key, value in tags.items() for part in ("--meta", f"{key}={value}")]
     return [found, "run", "-n", str(count), "--label", label, *flags, "--priority", priority,

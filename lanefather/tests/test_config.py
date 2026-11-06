@@ -36,6 +36,23 @@ class ConfigCase(unittest.TestCase):
 
 
 class ConfigTests(ConfigCase):
+    def test_step_leases_require_explicit_valid_cost_and_request_fields(self):
+        head = '[[promote.install]]\nname="build"\nargv=["build.sh"]\n'
+        for lease, message in (("true", "lease must be a table"),
+                               ("{}", "slots must be"),
+                               ("{slots=true}", "slots must be"),
+                               ("{slots=0}", "slots must be"),
+                               ("{slots=-1}", "slots must be"),
+                               ('{slots="many"}', "slots must be"),
+                               ('{slots=1,priority="urgent"}', "priority must be"),
+                               ("{slots=1,ticket=42}", "ticket must be a string"),
+                               ('{slots=1,ticket=""}', "ticket must be a short"),
+                               ('{slots=1,clas="batch"}', "unknown keys clas")):
+            with self.subTest(lease=lease), self.assertRaisesRegex(LaneError, message):
+                self.use(head + f"lease={lease}\n")
+        current = self.use(head + 'lease={slots="all",priority="batch",ticket="682"}\n')
+        self.assertEqual(current.install[0].lease, config.Lease("all", "batch", "682"))
+
     def test_a_project_without_the_file_gets_the_defaults(self):
         config.use(config.load(None))
         current = config.current()

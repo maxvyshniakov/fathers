@@ -24,7 +24,7 @@ import sys
 import time
 from typing import Any
 
-from . import checks, config, host, journal, plan, review, state, worktrees
+from . import checks, config, host, journal, plan, review, slots, state, worktrees
 from .errors import LaneError
 from .gitops import common_dir, git, git_ok, worktree_list
 from .landing import landing
@@ -269,6 +269,15 @@ def install_and_deploy(common: str, sha: str, deploy: str | None) -> None:
             argv = [substitute(part, values) for part in step.argv]
             extra = {key: substitute(value, values) for key, value in step.env}
             print(f"lane: {step.name}: {' '.join(argv)} in {path}", flush=True)
+            if step.lease:
+                try:
+                    argv = slots.wrap(step.lease.slots, f"promote-{sha[:10]}-{step.name}", argv,
+                                      priority=step.lease.priority, ticket=step.lease.ticket, required=True,
+                                      meta={"phase": step.name, "kind": "promote", "sha": sha[:10],
+                                            "lanefather.state": str(state.state_dir())})
+                except slots.Unavailable as error:
+                    raise LaneError(f"promote of {sha[:10]} went through, but {step.name} cannot run: "
+                                    f"{error}") from None
             status = subprocess.run(argv, cwd=path, env={**environment, **extra}).returncode
             journal.ledger(f"promote-{step.name} {sha} exit={status}")
             if status:
@@ -286,6 +295,10 @@ def promote(args: Any) -> int:
     if (args.install or args.deploy) and args.no_push:
         raise LaneError("promote refused: --install and --deploy need the push: the install and deploy guards take "
                         "only a SHA on origin/dev")
+    cfg = config.current()
+    steps = (*cfg.install, *(cfg.deploy if args.deploy else ())) if args.install else ()
+    if any(step.lease for step in steps) and slots.command() is None:
+        raise LaneError("promote refused: configured execution leases require slotfather on PATH; nothing published")
     status = promote_sha(args)
     if status == 0 and args.install:
         cwd = os.getcwd()

@@ -16,7 +16,8 @@ from .errors import LaneError
 from .project import Project
 
 MANIFEST = 'INSTALL.json'
-CAPABILITIES = ('project.readiness', 'project.update_queue', 'project-hook', 'canonical-reference-transaction')
+CAPABILITIES = ('project.readiness', 'project.update_queue', 'project-hook', 'canonical-reference-transaction',
+                'promote.step-leases')
 
 
 def shipping_files(root: Path) -> dict[str, str]:
