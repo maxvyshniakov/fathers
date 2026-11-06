@@ -14,7 +14,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from . import claims, config, host, journal, promote, queue, review, state, worktrees
+from . import admission, claims, config, host, journal, promote, queue, review, state, worktrees
 from .errors import LaneError
 from .gitops import common_dir, current_branch, git, git_ok, main_checkout, worktree_list
 from .state import Record
@@ -69,26 +69,18 @@ def register(record: Record, rules: list[dict[str, Any]], force_reason: str | No
     """Enforce the cap, disk, load and claims, save the record and print its brief header."""
     prog = config.prog()
     lane_id, lane_claims, after = record["id"], record["claims"], record["after"]
-    cap, source = host.lane_cap()
     with state.locked("state"):
         existing = state.read_json(state.record_path(lane_id))
         if existing and existing["status"] != "done":
             raise LaneError(f"lane {lane_id} exists ({existing['status']}); finish it with {prog} done")
-        others = [r for r in state.lanes() if r["id"] != lane_id]
+        others = [r for r in state.Store(config.current()).lanes(strict=True) if r["id"] != lane_id]
         for name in after:
             if name not in {r["id"] for r in others if r["status"] != "done"}:
                 raise LaneError(f"--after {name}: no lane that is not done by that name")
         active = state.occupying(others)
-        refusals: list[str] = []
-        info = host.host()
-        if len(active) >= cap:
-            refusals.append(f"{len(active)} lanes are planned or active ({', '.join(r['id'] for r in active)}); "
-                            f"the cap is {cap} ({source}): land one to make room under the lane cap")
-        if info["disk_free_gb"] < host.MIN_DISK_GB:
-            refusals.append(f"free disk is {info['disk_free_gb']:.0f} GB, under {host.MIN_DISK_GB} GB: "
-                            f"run {prog} done on landed lanes")
-        if info["load15"] > host.load_limit(info["cores"]):
-            refusals.append(f"load15 is {info['load15']:.1f}, above {host.LOAD_FACTOR}x{info['cores']} cores")
+        decision = admission.evaluate(config.current(), others)
+        cap, source, info = decision.cap, decision.source, decision.machine
+        refusals = list(decision.refusals)
         if refusals and not force_reason:
             raise LaneError("refused:\n- " + "\n- ".join(refusals))
         for other in active:
@@ -185,13 +177,15 @@ def receipt_state(record: Record) -> str:
 
 
 def list_lanes(args: Any) -> int:
-    shown = [r for r in state.lanes() if args.all or r["status"] != "done"]
-    cap, source = host.lane_cap()
+    records = state.Store(config.current()).lanes(strict=True)
+    shown = [r for r in records if args.all or r["status"] != "done"]
+    decision = admission.evaluate(config.current(), records)
+    cap, source, machine = decision.cap, decision.source, decision.machine
     if args.json:
         # Scripts read lanes here (#577): every record with its worktree (null until adopt) and receipt state.
         print(json.dumps({"lanes": [dict(r, receipt=receipt_state(r)) for r in shown],
-                          "active": len(state.occupying()), "cap": cap, "cap_source": source,
-                          "host": host.host()}, indent=2))
+                          "active": len(state.occupying(records)), "cap": cap, "cap_source": source,
+                          "host": machine}, indent=2))
         return 0
     for record in shown:
         print(f"{record['id']}  {record['status']}  #{record['ticket']}  {record['branch']}  "
@@ -200,7 +194,7 @@ def list_lanes(args: Any) -> int:
               + (f"  after: {', '.join(record['after'])}" if record["after"] else ""))
         if record.get("worktree"):
             print(f"    worktree: {record['worktree']}")
-    print(f"{len(state.occupying())} of {cap} lanes planned or active (cap {source}); {host.host_line(host.host())}")
+    print(f"{len(state.occupying(records))} of {cap} lanes planned or active (cap {source}); {host.host_line(machine)}")
     # #666: the repository it runs in, as last fetched; outside a Git checkout there is nothing to compare.
     if git_ok(os.getcwd(), "rev-parse", "--git-dir"):
         for line in promote.ahead_lines(os.getcwd()):

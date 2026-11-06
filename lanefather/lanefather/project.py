@@ -9,7 +9,7 @@ import stat
 import tempfile
 from typing import Any
 
-from . import config, host, journal, queue, state
+from . import admission, config, journal, queue, state
 from .errors import LaneError
 
 
@@ -71,16 +71,9 @@ class Project:
         settings, entries = queue.parse_queue(text, self._queue_path)
         records = self._store.lanes(strict=True)
         states = queue.queue_states(entries, records)
-        cap, source = host.lane_cap(self.config)
-        machine = host.host(self.config)
-        planned_or_active = len(state.occupying(records))
-        blocked = None
-        if planned_or_active >= cap:
-            blocked = f'{planned_or_active} of {cap} lanes planned or active'
-        elif machine['load15'] >= host.LOAD_FACTOR * machine['cores']:
-            blocked = f"load15 {machine['load15']:.1f} is at or above {host.LOAD_FACTOR * machine['cores']:.1f}"
-        elif machine['disk_free_gb'] < host.MIN_DISK_GB:
-            blocked = f"free disk {machine['disk_free_gb']:.0f} GB is under {host.MIN_DISK_GB} GB"
+        decision = admission.evaluate(self.config, records)
+        cap, source, machine = decision.cap, decision.source, decision.machine
+        blocked = decision.refusals[0] if decision.refusals else None
         return Readiness(self._store.directory, self._queue_path, text, settings, tuple(entries), tuple(records),
                          tuple(states), next((entry for entry, reason in states if reason is None), None),
                          cap, source, machine, blocked, journal.now())

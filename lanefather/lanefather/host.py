@@ -78,9 +78,13 @@ def load15(project: config.Config | None = None) -> float:
     return float(stub) if stub else os.getloadavg()[2]
 
 
-def host(project: config.Config | None = None) -> dict[str, Any]:
+def disk_free_gb(project: config.Config | None = None) -> float:
     disk = (project or config.current()).env("DISK_FREE_GB")
-    return {"disk_free_gb": float(disk) if disk else shutil.disk_usage(Path.home()).free / 1e9,
+    return float(disk) if disk else shutil.disk_usage(Path.home()).free / 1e9
+
+
+def host(project: config.Config | None = None) -> dict[str, Any]:
+    return {"disk_free_gb": disk_free_gb(project),
             "load15": load15(project), "cores": machine_cores(project)}
 
 
@@ -95,8 +99,9 @@ def host_fields(info: dict[str, Any]) -> str:
 
 
 def host_line(info: dict[str, Any]) -> str:
+    limit = info["load_limit"] if "load_limit" in info else load_limit(info["cores"])
     return (f"disk free {info['disk_free_gb']:.0f} GB (minimum {MIN_DISK_GB} GB); load15 {info['load15']:.1f} on "
-            f"{info['cores']} cores (maximum {load_limit(info['cores']):.1f})")
+            f"{info['cores']} cores (maximum {limit:.1f})")
 
 
 def jobs_decision(info: dict[str, Any], maximum: int, exclusive: bool = False) -> dict[str, Any]:

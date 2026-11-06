@@ -47,6 +47,8 @@ class Store:
             if path.name.count(".") == 1:
                 record = read_json(path)
                 if record is not None and "id" in record:
+                    if strict and (record["id"] != path.stem or record.get("status") not in (*OCCUPYING, *LANDED)):
+                        raise LaneError(f"lane state {path} has invalid identity or status; collection refuses")
                     found.append(migrate(record))
                 elif strict:
                     raise LaneError(f"lane state {path} is unreadable or has no id; collection refuses")

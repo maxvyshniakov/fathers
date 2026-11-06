@@ -89,6 +89,7 @@ class Config:
     project_hooks: tuple[tuple[str, str], ...] = ()
     gc_after_remove: tuple[str, ...] = ()
     gc_after_remove_report: bool = False
+    admission_provider: str = "legacy"
 
     def names(self, name: str) -> list[str]:
         """The variables of setting `name`, first wins: LANEFATHER_<name>, an [env] alias, the legacy prefix's."""
@@ -181,8 +182,9 @@ def _steps(data: dict[str, Any], key: str) -> tuple[Step, ...]:
 
 TOP_KEYS = ("project", "command", "state_dir", "legacy_env_prefix", "shared_env", "report_doc", "queue_name",
             "coding_standards", "rules_dir", "steering", "unclaimed", "merge_config", "checks", "lane", "gate",
-            "promote", "hooks", "env", "gc")
+            "promote", "hooks", "env", "gc", "admission")
 TABLE_KEYS = {
+    "admission": ("provider",),
     "checks": ("verify", "plan_module", "triage", "toolchain", "toolchain_pin", "slot_env"),
     "lane": ("cache_name", "targets", "cache_partitions"),
     "gate": ("stamp_tool", "stamp_file", "pre_push_hook"),
@@ -209,15 +211,16 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
     hooks: dict[str, Any] = data.get("hooks", {})
     env: dict[str, Any] = data.get("env", {})
     gc: dict[str, Any] = data.get("gc", {})
+    admission: dict[str, Any] = data.get("admission", {})
     for name, table in (("checks", checks), ("lane", lane), ("gate", gate), ("promote", promote), ("hooks", hooks),
-                        ("env", env), ("gc", gc)):
+                        ("env", env), ("gc", gc), ("admission", admission)):
         if not isinstance(table, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
             raise LaneError(f"{CONFIG_NAME}: [{name}] must be a table")
     if not all(isinstance(v, str) for v in env.values()):
         raise LaneError(f"{CONFIG_NAME}: [env] maps LANEFATHER_<NAME> to the project's variable name")
     _known(data, "", TOP_KEYS)
     for name, table in (("checks", checks), ("lane", lane), ("gate", gate), ("promote", promote),
-                        ("hooks", hooks), ("gc", gc)):
+                        ("hooks", hooks), ("gc", gc), ("admission", admission)):
         _known(table, name, TABLE_KEYS[name])
     for key in ("install", "deploy"):
         steps: list[Any] = promote.get(key, []) if isinstance(promote.get(key), list) else []
@@ -234,6 +237,9 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
     gc_report = gc.get("after_remove_report", default.gc_after_remove_report)
     if type(gc_report) is not bool:
         raise LaneError(f"{CONFIG_NAME}: after_remove_report must be a boolean")
+    provider = _string(admission, "provider", default.admission_provider)
+    if provider not in ("legacy", "slotfather"):
+        raise LaneError(".lanefather.toml: admission provider must be legacy or slotfather")
     return Config(
         path=path,
         project=_string(data, "project", default.project),
@@ -271,6 +277,7 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         project_hooks=tuple(sorted((str(name), str(script)) for name, script in project_hooks.items())),
         gc_after_remove=_strings(gc, "after_remove", default.gc_after_remove),
         gc_after_remove_report=gc_report,
+        admission_provider=provider,
     )
 
 
