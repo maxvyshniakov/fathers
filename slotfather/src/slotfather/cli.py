@@ -5,6 +5,7 @@
   slotfather yield                                                   inside a yieldable lease: yield if asked
   slotfather status [--json [--pid PID]]                             running and waiting requests, in queue order
   slotfather procs --json [--cwd PATH] [--pid PID]                  read-only process, lease and session ancestry
+  slotfather lane-admission --json                                    stateless lifetime lane policy, stdin JSON
   slotfather version [--json]                                        identify this runtime source
   slotfather history [N]                                             the last N requests that left the queue
   slotfather stats [--since W] [--label L] [--by B] [--json]         request resource use and machine occupancy
@@ -103,6 +104,7 @@ USAGE = ("usage: slotfather                     (in a terminal: the live dashboa
          "       slotfather run [-n N|all] [--label L] [--meta KEY=VALUE]... [--priority interactive|normal|batch] [--ticket ID]\n"
          "                      [--yieldable] [--wait SECONDS] [--] COMMAND...      (inside a lease: slotfather yield)\n"
          "       slotfather status [--json [--pid PID]] | history [N] | available [--label L] [-- COMMAND...]\n"
+         "       slotfather lane-admission --json                         (one lifetime request on stdin)\n"
          "       slotfather advise [--max N] [--exclusive] [--label L] [-- COMMAND...]\n"
          "       slotfather order [backfill|window] [--safety X] [--limit S] [--fallback S] [--overrun X]\n"
          "                        [--interactive S] [--batch S] [--yield-after S] | reset\n"
@@ -343,6 +345,9 @@ def main(argv: list[str] | None = None) -> int:
     if not argv and sys.stdin.isatty() and sys.stdout.isatty():
         command = "dashboard"
     try:
+        if command == "lane-admission":
+            from .lane_admission import command as lane_admission_command
+            return lane_admission_command(rest)
         if command == "version":
             from .version import info, text
             if rest == ["--json"]:

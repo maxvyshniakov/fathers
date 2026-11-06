@@ -16,6 +16,7 @@ Definitions: [glossary](../GLOSSARY.md). Naming and wire aliases: [terminology](
 | `schedule` | Queue ranking, backfill, runtime estimates and cooperative-yield decisions. |
 | `leases` | Taking, granting, releasing, reaping and inheriting leases; command execution. |
 | `usage` | Process-tree accounting and machine sampling while work runs. |
+| `lane_admission` | Stateless versioned lifetime lane policy and JSON validation; no execution state. |
 | `query` | Compatible queue snapshots and status output. |
 | `procs` | Read-only process queries for guards and other tools. |
 | `cli` | Argument validation and command dispatch. |

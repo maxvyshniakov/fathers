@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -11,6 +12,27 @@ import sys
 import time
 
 from . import config as _config
+
+
+def physical_cores() -> int | None:
+    """Logical host CPU count, without execution-budget environment overrides."""
+    return os.cpu_count()
+
+
+def physical_memory_gib() -> float | None:
+    """Physical host memory, not cgroup capacity; None when unavailable (the lifetime policy applies its fallback)."""
+    with contextlib.suppress(ValueError, OSError, AttributeError):
+        value = os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / (1 << 30)
+        return value if math.isfinite(value) and value >= 0 else None
+    return None
+
+
+def physical_load15() -> float:
+    """Unrounded host load15, without execution-budget environment overrides."""
+    value = os.getloadavg()[2]
+    if not math.isfinite(value) or value < 0:
+        raise OSError("load15 unavailable")
+    return value
 
 
 def memory_gib(group: str | None = None) -> float | None:

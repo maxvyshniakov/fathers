@@ -1,5 +1,8 @@
 # State, metadata and JSON status
 
+The separate [lifetime lane-admission query](lane-admission.md) is stateless;
+it does not use execution job budgets or reserve slots.
+
 [Domain definitions](../GLOSSARY.md) · [Compatibility aliases](terminology.md)
 
 State lives in `~/.local/state/slotfather/`; `queue.log` records grants, releases, and reaping. `history.jsonl` has one JSON line per request that left the queue: label, command, directory, slots, queue, grant and end times, seconds waited and run, the outcome (`released`, `left` after giving up, or `reaped`), `until` for a request with `--wait` (when it would give up) and, for `run`, the exit status and what the command used (see Statistics). Past 4 MB it becomes `history.jsonl.1`, replacing the previous one, so at most two files' worth is kept; readers take `.1` first. `history [N]` lists the last N (default 20). `status` lists holders and waiters.

@@ -118,3 +118,8 @@ and separately recorded workload metrics. It is an illustrative demo, not a
 recording of those historical processes. [Regenerate media](docs/media.md).
 
 [Verification](docs/testing.md) · [Scheduler experiments](docs/scheduler-experiments.md)
+
+Lifetime workflow registrations can use the separate, stateless
+[`lane-admission --json` contract](docs/lane-admission.md); it does not reserve
+slots or reinterpret the execution worker budget. Receiver migration and caller
+activation remain explicit delivery steps.
