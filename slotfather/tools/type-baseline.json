@@ -1349,7 +1349,6 @@
     "tests/test_order.py|pyright|reportUnknownArgumentType|Argument type is unknown\n  Argument corresponds to parameter \"key\" in function \"get\"": 1,
     "tests/test_order.py|pyright|reportUnknownArgumentType|Argument type is unknown\n  Argument corresponds to parameter \"object\" in function \"__new__\"": 1,
     "tests/test_order.py|pyright|reportUnknownArgumentType|Argument type is unknown\n  Argument corresponds to parameter \"stop\" in function \"__new__\"": 1,
-    "tests/test_order.py|pyright|reportUnknownArgumentType|Argument type is unknown\n  Argument corresponds to parameter \"text\" in function \"assertRegex\"": 1,
     "tests/test_order.py|pyright|reportUnknownArgumentType|Argument type is unknown\n  Argument corresponds to parameter \"waiters\" in function \"plan\"": 1,
     "tests/test_order.py|pyright|reportUnknownLambdaType|Return type of lambda, \"Unknown | None\", is partially unknown": 1,
     "tests/test_order.py|pyright|reportUnknownLambdaType|Type of parameter \"entry\" is unknown": 1,

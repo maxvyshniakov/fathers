@@ -10,6 +10,7 @@ from slotfather import state as sf_state
 from slotfather import schedule as sf_schedule
 
 
+import datetime
 import json
 import os
 import pathlib
@@ -556,15 +557,23 @@ class DashboardOrderTests(SlotCase):
         with mock.patch.dict(os.environ,self.env,clear=True):
             dashboard=load(TOOL+"-dashboard","order_dashboard")
             model=dashboard.dashboard_model()
+            self.assertTrue(model["start"] is not None, "the real queue supplies its estimate")
+            # Keep the display fixture away from midnight: a one-hour estimate
+            # otherwise changes from HH:MM:SS to a weekday while this test runs.
+            noon = datetime.datetime(2026, 11, 7, 12).astimezone()
+            model["start"] = noon + datetime.timedelta(hours=1)
+            model["waiters"][0]["since"] = noon
+            model["limit"] = 600
             canvas=dashboard.Canvas(200,40)
-            dashboard.dashboard_draw(canvas,model,selected=len(model["holders"]))
+            with mock.patch.object(dashboard, "today", return_value=noon.date()):
+                dashboard.dashboard_draw(canvas,model,selected=len(model["holders"]))
         lines=canvas.render(False).splitlines()
         details=lines[0].index("╭",1)
         values={}
-        for name in ("start est","pass until"):
+        for name, expected in (("start est", "13:00:00"), ("pass until", "12:10:00")):
             line=next(line for line in lines if name in line[details:])
             values[name]=line[details:].split(name,1)[1].strip().split()[0]
-            self.assertRegex(values[name],r"^\d\d:\d\d:\d\d$")
+            self.assertEqual(expected, values[name])
         self.assertNotIn("backfill by", "\n".join(cast(list[str], lines)))
         self.assertIn("▶gate",canvas.render(False))
         for label in ("one", "gate"):
