@@ -73,7 +73,6 @@ empty to ignore) count as used, scaled from their 4 slots, until their holders e
 only, Python 3.9 or later: install.py puts thin entry points in ~/.local/bin and preserves their complete package in an immutable release."""
 from __future__ import annotations
 
-import contextlib
 import json
 import math
 import os
@@ -255,18 +254,7 @@ def order_command(argv: list[str]) -> int:
     if reset and changes:
         raise _config.SlotError("order reset takes nothing else")
     if changes or reset:
-        _state.require_own(directory, "an order change")
-        with _state.locked(directory):
-            saved = dict(_config.ORDER_DEFAULTS)  # what is saved, without this client's environment
-            with contextlib.suppress(OSError, ValueError, TypeError, AttributeError):
-                saved.update(_schedule.checked_order(json.loads((directory / "order.json").read_text())))
-            values = None if reset else {**saved, **changes}
-            try:
-                _state.save_order(values, directory)
-            except ValueError as error:
-                raise _config.SlotError(str(error)) from None
-            except OSError as error:
-                raise _config.SlotError(f"cannot save the order: {error}") from None
+        _state.configure({"order.json": None if reset else changes})
     saved = _schedule.order_settings(directory, environment=False)
     moved = [k for k in _config.ORDER_DEFAULTS if k not in _config.ORDER_BASE and saved[k] != _config.ORDER_DEFAULTS[k]]
     if (changes or reset) and moved:
@@ -276,7 +264,7 @@ def order_command(argv: list[str]) -> int:
     return 0
 
 
-def slots_value(argv: list[str]) -> dict | None:
+def slots_value(argv: list[str]) -> dict[str, Any] | None:
     """What `slots` saves: {"slots": N}, {"mode", "gib_per_slot", "slots"} or None for reset. The memory modes also
     save the count they give now as "slots", which slotfather 0af7546 and older read alone."""
     from . import platform as _platform
@@ -311,28 +299,12 @@ def slots_value(argv: list[str]) -> dict | None:
 
 
 def slots_command(argv: list[str]) -> int:
-    from . import leases as _leases
-    from . import platform as _platform
     from . import state as _state
     directory = _config.state_dir()
     if argv:
         _state.require_own(directory, "a capacity change")
-    value = slots_value(argv) if argv else None
+        _state.configure({"capacity.json": slots_value(argv)})
     with _state.locked(directory):
-        if argv:
-            table = _platform.processes()
-            live = _leases.reap(directory, table)
-            legacy_live = any(_platform.alive(entry, table) for old in _config.legacy_dirs() for _, entry in _state.entries(old))
-            if live or legacy_live:
-                raise _config.SlotError("queue is busy; capacity can change only after every holder and waiter leaves")
-            path = directory / "capacity.json"
-            try:
-                if value is None:
-                    path.unlink(missing_ok=True)
-                else:
-                    _state.write(path, value)
-            except OSError as error:
-                raise _config.SlotError(f"cannot save capacity: {error}") from None
         found = _config.capacity_basis()
     print(_config.capacity_text(found))
     return 0

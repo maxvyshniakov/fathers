@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""slotfather-dashboard: a read-only live view of the slotfather queue; `slotfather dashboard` runs it.
+"""slotfather-dashboard: a live queue view with explicit settings; `slotfather dashboard` runs it.
 
   slotfather dashboard [--interval S]                        live view: ? lists the keys, q quits
   slotfather dashboard --once [--width N] [--height N] [--color]   one snapshot as text
@@ -30,6 +30,7 @@ from typing import Any, NamedTuple, cast
 
 
 from . import config as _config
+from . import dashboard_settings as _settings
 from . import lane_context as _lane_context
 from . import platform as _platform
 from . import query as _query
@@ -1072,7 +1073,7 @@ HELP_CONTENT: list[tuple[str, str]] = [
     ("In the dashboard", "dim"),
     ("↑/↓ or j/k: select an running or waiting request. Click a row to select it.", "text"),
     ("Home/End or g/G: first/last request. Wheel: scroll the table under the pointer.", "text"),
-    ("p or space: pause updates. r: refresh. m: native text selection; updates freeze while copying.", "text"),
+    ("p or space: pause updates. r: refresh. m: native text selection; updates freeze while copying. s: settings.", "text"),
     ("In this help", "dim"),
     ("↑/↓ or j/k: scroll. PgUp/PgDown or space: page. Home/End or g/G: top/bottom.", "text"),
     ("Wheel: scroll help. ? or Esc: close help. q: quit the dashboard.", "text"),
@@ -1112,7 +1113,7 @@ HELP_CONTENT: list[tuple[str, str]] = [
     ("memory and swap bars show used capacity. Low memory or swap blocks additional leases; an idle machine may still start its first request.", "text"),
     ("The held chart shows occupied slots over time, newest on the right. Each column preserves its interval's peak; fractional heights show more than whole rows.", "text"),
     ("held/N is the slot scale; s/col is seconds per column. Blue is the bottom, orange is full capacity. avg is average occupancy; peak is the most held; full is time at capacity.", "text"),
-    ("The dashboard only observes. It never grants, cancels or kills work.", "dim"),
+    ("s opens Settings: draft shared capacity and queue policy, or this dashboard's refresh interval. Apply saves; Esc cancels. Capacity changes require no running or waiting requests. The dashboard never grants, cancels or kills work.", "dim"),
 ]
 
 
@@ -1227,12 +1228,14 @@ def allocate(available: int, panels: list[tuple[str, int, int]]) -> dict[str, in
 
 def dashboard_draw(canvas: Canvas, model: dict | None, selected: int = 0, paused: bool = False,
                    help_open: bool = False, error: str | None = None, cwd: str | None = None,
-                   scroll: dict | None = None, mouse_enabled: bool = True) -> None:
+                   scroll: dict | None = None, mouse_enabled: bool = True,
+                   settings: _settings.Settings | None = None) -> None:
     canvas.scroll = scroll if scroll is not None else {}
     width, height = canvas.width, canvas.height
     x, status_end = draw_header(canvas, model, paused, error, copying=not mouse_enabled)
-    keys = [("↑↓", "select"), ("p", "resume" if paused else "pause"), ("r", "refresh"),
-            ("m", "select text" if mouse_enabled else "mouse on"), ("?", "help"), ("q", "quit")]
+    keys = [("s", "settings"), ("?", "help"), ("q", "quit"), ("↑↓", "select"),
+            ("p", "resume" if paused else "pause"), ("r", "refresh"),
+            ("m", "select text" if mouse_enabled else "mouse on")]
     for key, action in keys:
         if x + text_width(key + action) + 2 > status_end:
             break
@@ -1244,6 +1247,8 @@ def dashboard_draw(canvas: Canvas, model: dict | None, selected: int = 0, paused
                    "bad" if error else "dim", width - 6)
         if help_open:
             draw_help(canvas)
+        if settings is not None:
+            settings.draw(canvas, cast(dict[str, Any] | None, model))
         return
     moment = datetime.datetime.now(datetime.timezone.utc)
     if width < 50 or height < 14:
@@ -1252,6 +1257,8 @@ def dashboard_draw(canvas: Canvas, model: dict | None, selected: int = 0, paused
             canvas.put(6, 3, "Enlarge the terminal for leases and the queue", "dim", width - 6)
         if help_open:
             draw_help(canvas)
+        if settings is not None:
+            settings.draw(canvas, cast(dict[str, Any] | None, model))
         return
     left = width - max(52, width * 2 // 5) - 1 if width >= WIDE else width
     slot_height = 5
@@ -1287,6 +1294,8 @@ def dashboard_draw(canvas: Canvas, model: dict | None, selected: int = 0, paused
                 y += heights[name]
     if help_open:
         draw_help(canvas)
+    if settings is not None:
+        settings.draw(canvas, cast(dict[str, Any] | None, model))
 
 
 def draw_panel(canvas: Canvas, name: str, y: int, x: int, height: int, width: int, model: dict, selected: int,
@@ -1306,7 +1315,8 @@ def draw_panel(canvas: Canvas, name: str, y: int, x: int, height: int, width: in
 # Ghostty and cmux, then draw each run of █ or ─ as garbage. Writing the canvas ourselves avoids every such quirk.
 
 KEYS = {"\x1b[A": "up", "\x1bOA": "up", "\x1b[B": "down", "\x1bOB": "down", "\x1b[H": "home", "\x1bOH": "home",
-        "\x1b[1~": "home", "\x1b[F": "end", "\x1bOF": "end", "\x1b[4~": "end", "\x1b[5~": "page_up", "\x1b[6~": "page_down"}
+        "\x1b[1~": "home", "\x1b[F": "end", "\x1bOF": "end", "\x1b[4~": "end", "\x1b[5~": "page_up", "\x1b[6~": "page_down",
+        "\x1b[C": "right", "\x1bOC": "right", "\x1b[D": "left", "\x1bOD": "left", "\x1b[Z": "back_tab"}
 KEY_PENDING: dict[int, str] = {}
 MOUSE = re.compile(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])")
 SEQUENCE = re.compile(r"\x1b(\[[0-9;?<]*[ -/]*[@-~]|O.)")
@@ -1354,6 +1364,9 @@ def full_screen(fd_in: int, fd_out: int):
     saved = termios.tcgetattr(fd_in)
     try:
         tty.setcbreak(fd_in)
+        active = termios.tcgetattr(fd_in)
+        active[0] &= ~(termios.IXON | termios.IXOFF)  # Ctrl-S belongs to Settings, not terminal flow control.
+        termios.tcsetattr(fd_in, termios.TCSANOW, active)
         os.write(fd_out, b"\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1006h\x1b[2J")
         yield
     finally:
@@ -1372,6 +1385,7 @@ def dashboard_live(interval: float) -> None:
     idle_seen = {}
     mouse_enabled = True
     paused = help_open = False
+    settings: _settings.Settings | None = None
     fetched, drawn, whole, force, dirty = 0.0, 0.0, 0.0, True, True
     canvas = Canvas(0, 0)
     with full_screen(fd_in, fd_out):
@@ -1407,7 +1421,7 @@ def dashboard_live(interval: float) -> None:
             if dirty or (mouse_enabled and time.monotonic() - drawn >= 1) or not shown:
                 canvas = Canvas(size.columns, size.lines)
                 dashboard_draw(canvas, model, index, paused, help_open, error,
-                               cwds.get(items[index]["pid"]) if items else None, scroll, mouse_enabled)
+                               cwds.get(items[index]["pid"]) if items else None, scroll, mouse_enabled, settings)
                 lines = canvas.lines(colour, ascii_only)
                 # Only rows that changed are written: a second's tick usually touches the clock and a few ages.
                 frame = "".join(f"\x1b[{row + 1};1H{line}" for row, line in enumerate(lines)
@@ -1420,6 +1434,19 @@ def dashboard_live(interval: float) -> None:
                 continue
             for key in read_keys(fd_in):
                 dirty = True
+                if settings is not None:
+                    action = settings.mouse(key) if isinstance(key, tuple) and mouse_enabled else (
+                        settings.key(key) if isinstance(key, str) else "handled")
+                    if action == "quit":
+                        return
+                    if action == "applied":
+                        interval = settings.interval
+                    if action in ("close", "applied"):
+                        settings = None
+                        shown = []
+                    if action in ("applied", "reload"):
+                        force = True
+                    continue
                 if isinstance(key, tuple):
                     if mouse_enabled:
                         previous = index
@@ -1447,6 +1474,13 @@ def dashboard_live(interval: float) -> None:
                     help_open = True
                     scroll.pop("help", None)
                     draw_help(canvas)
+                elif key == "s":
+                    try:
+                        settings = _settings.Settings(interval)
+                    except (_config.SlotError, OSError) as failure:
+                        error = dashboard_text(failure)
+                    if settings is not None:
+                        settings.draw(canvas, cast(dict[str, Any] | None, model))
                 elif key in ("m", "M"):
                     clear_idle(model, idle_seen)
                     mouse_enabled = not mouse_enabled

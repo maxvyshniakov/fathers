@@ -25,6 +25,7 @@ import sys
 import tempfile
 import time
 import unittest
+from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 TOOL = str(ROOT / "slotfather")
@@ -60,7 +61,7 @@ class SlotCase(unittest.TestCase):
             if process.stdout:
                 process.stdout.close()
 
-    def request(self, label, count, *command, options=()):
+    def request(self, label: str, count: int | str, *command: str, options: Any = ()) -> subprocess.Popen[str]:
         """Start `slotfather run -n count --label label -- <fake work label>` in the background."""
         argv = [TOOL, "run", "-n", str(count), "--label", label, *options, "--",
                 *(command or ("sh", "-c", WORK, "work", label))]
@@ -72,7 +73,7 @@ class SlotCase(unittest.TestCase):
     def tool(self, *args: str, **env: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run([TOOL, *args], env={**self.env, **env}, capture_output=True, text=True, timeout=20)
 
-    def release(self, label):
+    def release(self, label: str) -> None:
         (self.release_dir / label).touch()
 
     def events(self):
@@ -93,10 +94,10 @@ class SlotCase(unittest.TestCase):
         ready, _, _ = select.select([process.stdout], [], [], timeout)
         return process.stdout.readline() if ready else ""
 
-    def started(self, label):
+    def started(self, label: str) -> None:
         self.wait_for(lambda: f"start {label}" in self.events(), f"{label} to start")
 
-    def finish(self, process, timeout=20):
+    def finish(self, process: subprocess.Popen[str], timeout: float = 20) -> str:
         output, _ = process.communicate(timeout=timeout)
         self.assertEqual(0, process.returncode, output)
         return output

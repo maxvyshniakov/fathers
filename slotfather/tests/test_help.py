@@ -150,7 +150,7 @@ class HelpTests(unittest.TestCase):
                 receive("HELP")
                 screen.clear()
                 os.write(master, b"\x1b[F")
-                self.assertIn("Esc close", receive("only observes.", "work.", "Esc close"))
+                self.assertIn("Esc close", receive("never grants,", "kills work.", "Esc close"))
                 screen.clear()
                 os.write(master, b"\x1b[H")
                 receive("In the dashboard")
@@ -159,7 +159,7 @@ class HelpTests(unittest.TestCase):
                 receive("REQUESTS")
                 screen.clear()
                 os.write(master, b"?\x1b[F")
-                receive("only observes.", "work.")
+                receive("never grants,", "kills work.")
                 os.write(master, b"q")
                 deadline = time.monotonic() + 5
                 while process.poll() is None and time.monotonic() < deadline:

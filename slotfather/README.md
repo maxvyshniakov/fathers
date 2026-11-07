@@ -67,6 +67,8 @@ Run `slotfather` in a terminal to open the live dashboard.
 
 Use **↑/↓** or click to select, the mouse wheel to scroll a table, **m** to
 freeze updates for native text selection, **?** for help and **q** to quit.
+Press **s** for Settings: shared capacity, local refresh interval and advanced
+queue policy. Changes are drafts until Apply; Esc cancels.
 
 ```sh
 slotfather status                  # a plain-text queue summary

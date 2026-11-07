@@ -263,3 +263,67 @@ def save_order(values: dict[str, Any] | None, directory: Path | None = None) -> 
     # them refuses a file with keys it does not know (and falls back to the window order).
     write(path, {k: values.get(k, _config.ORDER_DEFAULTS[k]) if k == "order" else float(values.get(k, _config.ORDER_DEFAULTS[k]))
                  for k in _config.ORDER_DEFAULTS if k in _config.ORDER_BASE or values.get(k, _config.ORDER_DEFAULTS[k]) != _config.ORDER_DEFAULTS[k]})
+
+
+def configuration_bytes(directory: Path) -> dict[str, bytes | None]:
+    """Read shared settings without creating a queue or lock; bytes are an optimistic edit token."""
+    result: dict[str, bytes | None] = {}
+    for name in ("capacity.json", "order.json"):
+        try:
+            result[name] = (directory / name).read_bytes()
+        except FileNotFoundError:
+            result[name] = None
+    return result
+
+
+def configure(changes: dict[str, dict[str, Any] | None], *,
+              expected: dict[str, bytes | None] | None = None) -> None:
+    """CLI and dashboard share validation, ownership, conflict checking and queue admission locking."""
+    from . import leases, platform, schedule
+    directory = _config.state_dir()
+    if set(changes) - {"capacity.json", "order.json"}:
+        raise _config.SlotError("unknown configuration file")
+    if not changes:
+        return
+    require_own(directory, "a settings change")
+    with locked(directory):
+        before = configuration_bytes(directory)
+        if expected is not None and before != expected:
+            raise _config.SlotError("Settings changed in another process. Reload before applying.")
+        values = dict(changes)
+        if values.get("order.json") is not None:
+            saved = dict(_config.ORDER_DEFAULTS)
+            with contextlib.suppress(OSError, ValueError, TypeError, AttributeError):
+                saved.update(schedule.checked_order(json.loads(before["order.json"] or b"{}")))
+            try:
+                values["order.json"] = schedule.checked_order({**saved, **(values["order.json"] or {})})
+            except ValueError as error:
+                raise _config.SlotError(str(error)) from None
+        if "capacity.json" in values:
+            table = platform.processes()
+            live: list[tuple[Path, dict[str, Any]]] = cast(Any, leases).reap(directory, table)
+            alive = cast(Any, platform).alive
+            legacy_live = any(alive(entry, table) for old in _config.legacy_dirs()
+                              for _, entry in entries(old))
+            if live or legacy_live:
+                raise _config.SlotError("queue is busy; capacity can change only after every holder and waiter leaves")
+        changed: list[str] = []
+        try:
+            for name, value in values.items():
+                if name == "order.json":
+                    save_order(value, directory)
+                elif value is None:
+                    (directory / name).unlink(missing_ok=True)
+                else:
+                    write(directory / name, value)
+                changed.append(name)
+        except OSError as error:
+            for name in reversed(changed):
+                path, original = directory / name, before[name]
+                if original is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    pending = path.with_name(path.name + ".pending")
+                    pending.write_bytes(original)
+                    pending.replace(path)
+            raise _config.SlotError(f"cannot save settings: {error}") from None

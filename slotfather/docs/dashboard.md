@@ -20,6 +20,7 @@ slotfather dashboard --once --width 156 --height 43 --color
 | r | Refresh. |
 | m | Toggle native text selection; copying freezes updates and disables app mouse handling. |
 | ? | Open scrollable help. |
+| s | Open Settings. |
 | q | Quit. |
 
 Only the selected request has a triangle and a soft background. The blank separator
@@ -81,6 +82,38 @@ differ. Historical over-capacity values are retained in the legend.
 
 Refreshing can reap dead queue entries, like `status`. Selecting, pausing and
 scrolling never grants a lease, cancels work or kills a process.
+
+## Settings
+
+`s` opens a centered, scrollable dialog like Help. Changes stay in a draft until
+Apply (or Ctrl-S); Esc or Cancel discards them. Use arrows or Tab/Shift-Tab to
+select, left/right to adjust, and Enter to type a number. The wheel scrolls inside
+the dialog; clicks outside it do not select requests underneath. Esc discards the
+whole dialog, including while editing. `q` outside a field still quits the dashboard.
+
+Shared capacity has Automatic, Fixed, Memory and CPU + memory modes. Fixed edits
+the total slot count; the memory modes edit GiB per slot. The draft previews the
+resulting capacity. Total, free and admission are separate live observations;
+free/admission are not editable settings. Changing or resetting capacity is
+disabled while any holder or waiter exists. Apply checks again under the queue
+lock, including migration queues; nothing is queued for automatic later application.
+
+Refresh interval (0.1–60 seconds) affects only this dashboard session and is never
+written to the shared queue. It can change while work is running.
+
+Advanced expands shared queue order, safety multiplier, overtaking limit, unknown
+runtime, overrun factor, interactive advance, batch delay and cooperative yield
+delay. These use the existing `slotfather order` rules and take effect at the next
+queue check, also while busy. Stored values are shown separately from effective
+values tightened by this dashboard's environment; other clients can have their
+own stricter environment. No request priority or lifetime lane cap is edited here.
+
+Defaults resets the draft; Apply is still required. Reload discards the draft and
+reads current shared settings. Concurrent CLI/TUI edits are detected under the
+same lock as admission and require Reload rather than silently overwriting newer
+values. Capacity and policy validation completes before saving either change;
+a failed policy write restores the previous capacity. Another user's queue stays
+read-only, with ownership enforced by the same shared layer as the CLI.
 
 ## Lane context and details scrolling
 

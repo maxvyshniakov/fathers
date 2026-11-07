@@ -21,6 +21,7 @@ Definitions: [glossary](../GLOSSARY.md). Naming and wire aliases: [terminology](
 | `procs` | Read-only process queries for guards and other tools. |
 | `cli` | Argument validation and command dispatch. |
 | `dashboard`, `stats`, `sweep` | Presentation, historical analysis and guarded leftover-process cleanup. |
+| `dashboard_settings` | Modal draft, input, preview and local refresh preference; shared writes go through `state.configure`, also used by the CLI. |
 
 Scheduling decisions operate on entry data; OS inspection and file mutation stay outside
 those decisions. Optional views load separately from admission. Tests cross the same package
