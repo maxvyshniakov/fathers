@@ -1,17 +1,47 @@
 # slotfather
 
-One queue for expensive work on a shared machine. Builds, tests and agents take
-slots before they start, so separate projects share one capacity budget.
+One queue for expensive work on a shared machine. Builds, tests and agents request capacity before starting,
+so independent terminals, projects and automation share one budget.
+
+## Why use it?
+
+A test runner, a compiler and several coding agents can each decide to use every core. Started together, they
+compete for memory, make the machine unresponsive and turn benchmark results into noise. Per-project worker
+settings do not coordinate those separate processes.
+
+Slotfather gives them one place to wait and a visible answer to “what is using the machine?”:
+
+- Wrap a build or test command and it waits until its requested slots are available.
+- Give an interactive check priority over unattended batch work.
+- Reserve all cooperating slots for a benchmark instead of timing it beside another wrapped build.
+- Inspect the dashboard, process/lease ancestry and history when work seems stuck.
+- Reuse a parent's lease through nested scripts instead of reserving the same work twice.
+
+Use it on a development workstation or shared runner when expensive commands overlap. It runs any command and
+does not require a specific build system, repository layout or AI agent.
+
+## How the tools fit
+
+Slotfather coordinates **execution capacity**. [Lanefather](https://github.com/maxvyshniakov/lanefather) coordinates
+repository tasks, path claims, integration and cleanup. [Repo-Kit](https://github.com/maxvyshniakov/repo-kit) runs
+configured checks and package releases. Slotfather works on its own; the others can use its leases for heavy phases.
+A long-lived lane is not a long-lived machine reservation.
+
+The budget is cooperative: a slot is **not a CPU or memory limit**, and unwrapped commands can still compete with
+leased work. `-n all` is exclusive among participating Slotfather jobs. The queue is local to one machine and shared
+state location; it is not a distributed scheduler or a sandbox.
+
+## Dashboard
 
 ![Slotfather dashboard: navigating running and waiting requests](assets/dashboard.webp)
 
 ## Install
 
-Requires Python 3.9+ on macOS or Linux. The installed commands use only the Python
+Requires Git for source installation and Python 3.9+ on macOS or Linux. The installed commands use only the Python
 standard library; Linux needs procps-compatible `ps`.
 
 ```sh
-gh repo clone maxvyshniakov/slotfather
+git clone https://github.com/maxvyshniakov/slotfather.git
 cd slotfather
 python3 install.py
 ```
@@ -103,7 +133,8 @@ default. Only `sweep --live` stops eligible leftover processes.
 
 The commands are thin entry points into `src/slotfather/`: queue files, leases,
 scheduling, OS inspection and views have separate modules. State upgrades preserve
-active leases and old clients. [Modules, state versions and safe changes](docs/architecture.md).
+active leases; CLI and query-version changes follow explicit migration contracts.
+[Modules, state versions and safe changes](docs/architecture.md).
 `slotfather version` identifies the installed source; [remote installation](docs/installation.md)
 uses the same verified source snapshot.
 
@@ -125,3 +156,7 @@ Lifetime workflow registrations can use the separate, stateless
 [`lane-admission --json` contract](docs/lane-admission.md); it does not reserve
 slots or reinterpret the execution worker budget. Receiver migration and caller
 activation remain explicit delivery steps.
+
+## License
+
+[MIT](LICENSE). The initial extraction retains its [source provenance](PROVENANCE.json).
