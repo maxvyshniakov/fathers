@@ -104,9 +104,10 @@ Stores retain independent count scope. Broader machine-wide atomic lifetime
 registration would require a different durable broker contract.
 
 Use one adapter for registration, start/next--start and Project.readiness.
-Reconcile the existing registration `>` versus readiness `>=` load comparison
-explicitly with this contract; require strict registry parsing to avoid corrupt
-record undercount. These consumer changes and tests are separate delivery work.
+Lanefather's opt-in provider uses this contract for all three, including registration's
+strict `>` load comparison at readiness. Strict registry parsing must reject ambiguous
+duplicate fields as well as invalid identities/statuses to avoid corrupt record undercount.
+The consumer retains its legacy provider until explicitly activated for its registration group.
 Disk remains project policy: existing home-filesystem 150 decimal-GB guard is
 not moved or changed. A force reason can audit/bypass known cap/load/disk
 refusals according to the caller's rules, never claim overlap or an unavailable
@@ -121,6 +122,17 @@ approved caller inventory/cutoff, draining live old-format clients with PID/star
 identity validation, supported history conversion and retention of immutable
 releases. An empty queue snapshot is not a future-caller cutoff. Do not install
 strict main merely to obtain this command.
+
+An additive bridge can avoid a breaking receiver cutover: prepare a new immutable
+copy of the current compatible payload with only this command, its dispatch and host
+sampling helpers added. Preserve its existing execution CLI, status/procs versions,
+lease identity and memory hotfixes. Record both the original payload digest and the
+query revision in the new source identity; never label the hybrid as clean main.
+Before publishing entry points, prove in a private installation that old held and
+waiting clients retain identical records and can finish, canonical clients still
+work, and the query leaves execution state unchanged. Keep the original release for
+running clients and rollback. This is a separately authorized installation, not a
+reason to relax current main's canonical request contract or rewrite the live queue.
 
 First compare private exact-version results in shadow mode with existing local
 guards authoritative. Activate the negotiated query for the whole registration
