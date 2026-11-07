@@ -45,7 +45,7 @@ class Store:
         found: list[Record] = []
         for path in sorted(self.directory.glob("*.json")):
             if path.name.count(".") == 1:
-                record = read_json(path)
+                record = read_json(path, reject_duplicates=strict)
                 if record is not None and "id" in record:
                     if strict and (record["id"] != path.stem or record.get("status") not in (*OCCUPYING, *LANDED)):
                         raise LaneError(f"lane state {path} has invalid identity or status; collection refuses")
@@ -83,10 +83,19 @@ def receipt_path(lane_id: str, kind: str = "receipt") -> Path:
     return state_dir() / f"{lane_id}.{kind}.json"
 
 
-def read_json(path: Path) -> dict[str, Any] | None:
+def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    record: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in record:
+            raise ValueError("duplicate JSON field")
+        record[key] = value
+    return record
+
+
+def read_json(path: Path, *, reject_duplicates: bool = False) -> dict[str, Any] | None:
     """The JSON object in the file; None for a missing or unreadable file, or one that holds no object."""
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(), object_pairs_hook=unique_object if reject_duplicates else None)
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None  # pyright: ignore[reportUnknownVariableType]

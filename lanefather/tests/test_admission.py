@@ -199,6 +199,21 @@ print(json.dumps(answer))
         self.assertIn("invalid identity or status",output)
         self.assertFalse((self.state / "first.json").exists())
 
+    def test_duplicate_registry_status_cannot_hide_occupancy_or_claims(self):
+        self.provider()
+        self.write(self.state.parent, "queue/queue.toml", '[[lane]]\nid="next"\nticket=2\nclaims=["src/**"]\n')
+        self.state.mkdir(parents=True)
+        record = self.state / "existing.json"
+        ambiguous = '{"id":"existing","status":"active","status":"done","claims":["src/**"]}'
+        record.write_text(ambiguous)
+        project = config.load(self.integration / ".lanefather.toml")
+        with patch.dict("os.environ", self.env, clear=True), self.assertRaisesRegex(LaneError, "unreadable"):
+            Project(project).readiness()
+        output = self.start("first", "src/**", extra=("--force-reason", "owner decision"), ok=False)
+        self.assertIn("unreadable", output)
+        self.assertFalse((self.state / "first.json").exists())
+        self.assertEqual(ambiguous, record.read_text())
+
     def test_provider_cannot_ignore_an_explicit_cap_even_with_force(self):
         self.provider()
         self.start("first", "first/**")

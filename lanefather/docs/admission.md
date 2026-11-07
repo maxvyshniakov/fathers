@@ -47,7 +47,7 @@ capacity, lease or ordering files are read or changed by lifetime advice.
 
 Two deliberate corrections apply: readiness now uses registration's strict `>`
 load comparison (equality allows); registration/list now refuse corrupt registry
-records rather than silently undercounting them. Strict reads reject invalid
+records rather than silently undercounting them. Strict reads reject duplicate JSON fields and invalid
 record identity/status. The state schema and existing lifecycle fields are unchanged.
 
 ## Compatibility and acceptance
