@@ -1,7 +1,7 @@
 # Lifetime lane admission
 
 Existing configurations retain `legacy` admission. Opt in only after the installed
-Slotfather receiver supports the [v1 lifetime contract](https://github.com/maxvyshniakov/slotfather/blob/3985cc0cf0a430e27df3e9cbeda0797cd9b61ea6/docs/lane-admission.md):
+Slotfather receiver supports the [v1 lifetime contract](https://github.com/maxvyshniakov/slotfather/blob/445be5826346e94163238420b687baa3c9a646d2/docs/lane-admission.md):
 
 ```toml
 [admission]
@@ -52,16 +52,14 @@ record identity/status. The state schema and existing lifecycle fields are uncha
 
 ## Compatibility and acceptance
 
-This source change does not activate existing projects. At preparation time the
-installed Slotfather `49b50258…` accepted legacy and canonical request fields but
-emitted status/procs v1; strict source main5f emitted v2 and rejected legacy request
-aliases. Adding a lifetime command does not authorize replacing that receiver.
-Coordinate caller inventory, old-client cutoff/drain, supported migration and
-immutable-release retention separately before opting a registration group in.
-Unknown/missing query versions fail closed after activation. Old callers that
-still use local policy need a coordinated group rollout; this adapter cannot fence
-them. Straylight #648 and Slotfather #2 remain open until actual receiver and
-consumer delivery acceptance, including mixed-client evidence.
+Installing Lanefather does not activate the Slotfather provider for existing projects. Verify the installed
+receiver's lifetime query and its independent execution/status protocols before opting a registration group in.
+A compatible receiver can add the lifetime query without changing its execution clients. Preserve existing lane
+records and in-flight immutable releases, coordinate old callers, then exercise actual readiness/start/next.
+An unavailable or unknown query fails closed after activation; do not substitute execution job advice.
+
+The initial Straylight/Slotfather rollout is completed; its historical project issues are acceptance records,
+not outstanding prerequisites for a new consumer. Each new registration group still owns its own activation.
 
 Always-on tests use external executable stand-ins for transport/contract failures,
 concurrent registration, force/claims and the readonly Project interface. Optional
