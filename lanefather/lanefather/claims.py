@@ -1,16 +1,19 @@
 """Path claims and the rule snippets a lane's brief carries.
 
 Claims are globs relative to the repository: `*` and `?` stay within a path segment, `**` spans segments, and a
-claim without wildcards covers that path and everything under it. Two lanes' claims overlap when some path matches
-both. check adds each path the lane changed outside its claims to them (#574), and warns only when one is in the
-claims of another planned or active lane that is not declared in sequence with it, naming that lane.
+claim without wildcards names one file, or a directory and everything under it (names_directory, lanefather#2).
+Two lanes' claims overlap when some path matches both. check adds each path the lane changed outside its claims to
+them (#574), and warns only when one is in the claims of another planned or active lane that is not declared in
+sequence with it, naming that lane.
 """
 from __future__ import annotations
 
 from collections.abc import Iterable
 import fnmatch
 import functools
+import os
 from pathlib import Path
+import subprocess
 from typing import Any
 
 from . import config, journal, state
@@ -50,9 +53,55 @@ def segments_overlap(a: tuple[str, ...], b: tuple[str, ...]) -> bool:
     return "*" not in (a[0], b[0]) and char_overlap(a[0], b[0]) and segments_overlap(a[1:], b[1:])
 
 
+_head_kinds: dict[tuple[str, str], str] = {}
+
+
+def head_kind(path: str) -> str:
+    """The object type HEAD has at the repository path (`tree`, `blob`), or "" when HEAD has none or the working
+    directory is no repository; asked once per path and working directory in a run."""
+    key = (os.getcwd(), path)
+    if key not in _head_kinds:
+        result = subprocess.run(["git", "cat-file", "-t", f"HEAD:{path}"], capture_output=True, text=True)
+        _head_kinds[key] = result.stdout.strip() if result.returncode == 0 else ""
+    return _head_kinds[key]
+
+
+def prefetch_kinds(literals: Iterable[str]) -> None:
+    """Ask HEAD for the type at each claim without wildcards in one git call (a lane check widens claims by whole
+    file lists), so head_kind answers them from the cache."""
+    cwd = os.getcwd()
+    paths = list(dict.fromkeys(c.strip("/") for c in literals if c.strip("/") and "\n" not in c
+                               and not any(w in c for w in "*?[") and (cwd, c.strip("/")) not in _head_kinds))
+    if not paths:
+        return
+    result = subprocess.run(["git", "cat-file", "--batch-check=%(objecttype)"], capture_output=True, text=True,
+                            input="".join(f"HEAD:{path}\n" for path in paths))
+    answers = result.stdout.splitlines() if result.returncode == 0 else []
+    if len(answers) != len(paths):
+        return  # no repository here: head_kind asks one path at a time and finds none
+    for path, answer in zip(paths, answers, strict=True):
+        _head_kinds[(cwd, path)] = answer if answer in ("tree", "blob", "commit") else ""
+
+
+def names_directory(literal: str) -> bool:
+    """A claim without wildcards names a directory when it ends in '/' or HEAD has a tree there; one HEAD has as a
+    file is that file; a path HEAD does not have names a directory when its last segment has no extension
+    (lanefather#2: `desktop_methods.json/**` let `src/**/ledger*.rs` overlap a file through a path no repository
+    holds)."""
+    path = literal.strip("/")
+    if literal.endswith("/") or not path:
+        return True
+    kind = head_kind(path)
+    if kind:
+        return kind in ("tree", "commit")  # a commit at HEAD is a submodule, a directory
+    return "." not in path.rsplit("/", 1)[-1].lstrip(".")
+
+
 def glob_segments(claim: str) -> tuple[str, ...]:
     parts = tuple(part for part in claim.strip("/").split("/") if part)
-    return parts + ("**",) if not any(c in claim for c in "*?[") else parts
+    if any(c in claim for c in "*?["):
+        return parts
+    return parts + ("**",) if names_directory(claim) else parts
 
 
 @functools.cache
@@ -77,6 +126,8 @@ def matches(claim: str, path: str) -> bool:
 
 
 def overlapping(claims: Iterable[str], other: Record) -> list[tuple[str, str]]:
+    claims = list(claims)
+    prefetch_kinds([*claims, *other["claims"]])
     return [(mine, theirs) for mine in claims for theirs in other["claims"] if claims_overlap(mine, theirs)]
 
 
@@ -95,6 +146,7 @@ def widen_claims(lane_id: str, paths: list[str]) -> tuple[list[str], list[dict[s
             return [], []
         others = [r for r in state.occupying() if r["id"] != lane_id and r["id"] not in record["after"]
                   and lane_id not in r.get("after", [])]
+        prefetch_kinds([*record["claims"], *(claim for other in others for claim in other["claims"])])
         overlaps = [{"path": path, "lane": other["id"], "ticket": other["ticket"], "claim": claim}
                     for path in added for other in others for claim in other["claims"] if matches(claim, path)]
         record["claims"] = [*record["claims"], *added]

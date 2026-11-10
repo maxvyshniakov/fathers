@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import pathlib
 import subprocess
 import sys
 import textwrap
@@ -201,7 +202,7 @@ class AdoptAndListTests(LaneCase):
 class QueueTests(LaneCase):
     """#446: a ranked queue in queue/queue.toml beside the lane state, and lanefather next."""
 
-    def queue(self, text):
+    def queue(self, text: str) -> pathlib.Path:
         path = self.state.parent / "queue" / "queue.toml"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(textwrap.dedent(text))
@@ -294,6 +295,32 @@ class QueueTests(LaneCase):
         self.assertIn("No ready entry", output)
         self.lane("land", "a")
         self.assertIn("Lane 506-calls", self.lane("next"))
+
+    def test_a_file_claim_is_one_path_not_a_directory_globs_reach_into(self):
+        # Replay (lanefather#2): 480-busy-errors waited for hours behind false overlaps: its glob reached under the
+        # file claims of 428-slice4 and 474 through imaginary paths like desktop_methods.json/ledgerX.rs.
+        self.queue("""\
+            [[lane]]
+            ticket = 480
+            id = "480-busy-errors"
+            claims = ["native/straylight-core/src/runtime/engine/capacity*.rs",
+                      "native/straylight-core/src/**/ledger*.rs"]
+            """)
+        self.start("428-slice4", "native/straylight-core/src/access/desktop_methods.json")
+        self.start("474-review-fixes", "native/straylight-core/src/keyboard/indication.rs")
+        self.assertIn("Lane 480-busy-errors", self.lane("next"))
+
+    def test_a_directory_claim_still_covers_the_files_under_it(self):
+        # lanefather#2: a literal names a directory when HEAD has a tree there (whatever its name), or, for a path
+        # HEAD does not have, when its last segment has no extension; a file at HEAD is one path.
+        self.env["LANEFATHER_CAP"] = "6"
+        self.commit(self.integration, {"desktop/App.xcodeproj/project.pbxproj": "x\n"}, "a directory with a dot")
+        self.start("project", "desktop/App.xcodeproj")
+        self.assertIn("claims overlap lane project", self.start("pbx", "desktop/**/*.pbxproj", ok=False))
+        self.start("new-dir", "desktop/src/future")
+        self.assertIn("claims overlap lane new-dir", self.start("tsx", "desktop/src/**/*.tsx", ok=False))
+        self.start("ignore", ".gitignore")
+        self.assertIn("Lane md", self.start("md", "*/*.md"))
 
     def test_a_malformed_entry_is_named(self):
         self.queue('[[lane]]\nticket = 1\nid = "bad id"\nclaims = ["a/**"]\n')

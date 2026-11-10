@@ -66,10 +66,10 @@
     "reportUnknownMemberType": 2
   },
   "tests/test_lanes.py": {
-    "reportMissingParameterType": 3,
-    "reportUnknownArgumentType": 2,
-    "reportUnknownMemberType": 9,
-    "reportUnknownParameterType": 3
+    "reportMissingParameterType": 2,
+    "reportUnknownArgumentType": 1,
+    "reportUnknownMemberType": 3,
+    "reportUnknownParameterType": 2
   },
   "tests/test_promote.py": {
     "reportMissingParameterType": 7,

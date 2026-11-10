@@ -21,6 +21,11 @@ lanefather list [--all] [--json]
 lanefather show <id> [--state-dir DIR] [--project-dir DIR] [--json]   read-only lane context
 ```
 
+A claim is a glob relative to the repository: `*` and `?` stay within a path segment and `**` spans segments. A
+claim without wildcards names a directory, and everything under it, when it ends in `/`, when HEAD has a directory
+(or submodule) there, or, for a path HEAD does not have, when its last segment has no extension; otherwise it names
+that one file.
+
 `lanefather --help` describes the commands. The [glossary](../GLOSSARY.md) distinguishes lane states, receipts,
 reviews and verification gates.
 
