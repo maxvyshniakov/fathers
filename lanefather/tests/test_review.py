@@ -318,6 +318,21 @@ class ReviewGateTests(ReviewGateCase):
         self.assertIn(str(self.integration), output)
         self.assertFalse((self.state / "a-review-fixes.json").exists())
 
+    def test_a_fix_lane_refusal_names_an_integration_worktree_that_is_gone(self):
+        self.review_text.write_text(TWO_FINDINGS)
+        self.lane("start", "a", "--ticket", "404", "--base", self.tip(), "--claims", "lib/**", "--create")
+        self.commit(self.record("a")["worktree"], {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.lane("land", "a", "--into", str(self.integration))
+        self.lane("review", "a")
+        record = self.record("a")
+        gone = str(self.tmp / "gone-integration")
+        record["landed"]["integration"] = gone
+        (self.state / "a.json").write_text(json.dumps(record))
+        output = self.lane("review", "a", "--fix-lane", ok=False)
+        self.assertIn(f"its integration worktree {gone} is gone", output)
+        self.assertFalse((self.state / "a-review-fixes.json").exists())
+
     def test_the_fix_lane_claims_only_the_files_its_findings_name_and_check_widens_it_from_its_diff(self):
         """#586: the fix lane inherits none of the landed lane's claims, so a lane started since on a path the
         landed lane widened to does not block the hand-over."""

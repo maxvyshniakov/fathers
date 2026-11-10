@@ -411,10 +411,20 @@ def fix_base(record: Record, cwd: str) -> str:
         if (merge and git_ok(cwd, "show-ref", "--verify", "--quiet", f"refs/heads/{ref}")
                 and git_ok(cwd, "merge-base", "--is-ancestor", merge, ref)):
             return ref
-    where = f"{integration} is on {into}" if into else f"{integration} has no branch checked out"
-    raise LaneError(f"hand-over refused: no branch holds lane {record['id']}'s merge {merge[:10]} ({where}, and "
-                    f"its base {record['base']} is not such a branch): check out the integration branch the lane "
-                    f"landed on in {integration}, then run {config.prog()} review {record['id']} --fix-lane again")
+    prog, lane_id = config.prog(), record["id"]
+    if not integration:
+        where = "its landed record names no integration worktree"
+        todo = "check out the branch it landed on in an integration worktree and give that branch to the fix lane"
+    elif not os.path.isdir(integration):
+        where = f"its integration worktree {integration} is gone"
+        todo = f"recreate it on the branch the lane landed on (git worktree add {integration} <branch>)"
+    else:
+        where = (f"its integration worktree {integration} is on {into}, which does not hold it" if into
+                 else f"its integration worktree {integration} has no branch checked out")
+        todo = f"check out the integration branch the lane landed on in {integration}"
+    raise LaneError(f"hand-over refused: no branch holds lane {lane_id}'s merge {merge[:10]}: {where}, and its base "
+                    f"{record['base']} is not such a branch; {todo}, then run {prog} review {lane_id} --fix-lane "
+                    "again")
 
 
 def hand_over(args: Any) -> int:
