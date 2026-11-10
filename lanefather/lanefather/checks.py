@@ -503,24 +503,29 @@ def changed_red_tests_line(tests: list[dict[str, Any]]) -> str:
 
 # The base a check plans against
 
-def integration_refs(record: Record) -> list[str]:
-    """The branches a lane may have merged its integration from: the branch checked out in the worktree it lands
-    (or landed) into, the one its parent landed into for a fix lane, and the ranked queue's base."""
+def integration_refs(record: Record, worktree: str) -> list[str]:
+    """The branches the lane lands into, whose merge-base may be newer than its base: the branch checked out in
+    the worktree it lands (or landed) into. Only a lane registered at a literal commit, whose branch is unknown
+    until it lands, also takes the one its parent landed into for a fix lane and the ranked queue's base. A lane
+    based on a branch lands there: another branch it merged (a dev-based lane merging the queue's integration
+    branch) never stands in for it, or that branch's commits would land unchecked (review of lanefather#3)."""
     def landed_into(lane: dict[str, Any]) -> Any:
         landed: dict[str, Any] = lane.get("landed") or {}
         return landed.get("integration")
 
     places: list[Any] = [record.get("integration"), landed_into(record)]
-    if record.get("review_fix_of"):
+    literal = not git_ok(worktree, "show-ref", "--verify", "--quiet", f"refs/heads/{record['base']}")
+    if literal and record.get("review_fix_of"):
         places.append(landed_into(state.read_json(state.record_path(record["review_fix_of"])) or {}))
     refs = [branch for path in places if isinstance(path, str) and os.path.isdir(path)
             for branch in [current_branch(path)] if branch]
-    try:
-        settings, _ = queue.read_queue()
-    except LaneError:
-        settings = {}
-    if isinstance(settings.get("base"), str) and settings["base"]:
-        refs.append(settings["base"])
+    if literal:
+        try:
+            settings, _ = queue.read_queue()
+        except LaneError:
+            settings = {}
+        if isinstance(settings.get("base"), str) and settings["base"]:
+            refs.append(settings["base"])
     return list(dict.fromkeys(refs))
 
 
@@ -530,7 +535,7 @@ def plan_base(record: Record, worktree: str) -> str:
     the integration branch; planning against it would count all the integration gained since as the lane's diff."""
     base_ref = git(worktree, "rev-parse", "--verify", "--quiet", record["base"] + "^{commit}", check=False)
     base = git(worktree, "merge-base", "HEAD", base_ref or record["base_sha"])
-    for ref in integration_refs(record):
+    for ref in integration_refs(record, worktree):
         tip = git(worktree, "rev-parse", "--verify", "--quiet", ref + "^{commit}", check=False)
         newer = git(worktree, "merge-base", "HEAD", tip, check=False) if tip else ""
         if newer and newer != base and git_ok(worktree, "merge-base", "--is-ancestor", base, newer):

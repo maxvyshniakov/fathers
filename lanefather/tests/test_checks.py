@@ -115,6 +115,23 @@ class NewestMergeBaseTests(LaneCase):
         self.assertEqual(json.loads((self.state / "a.receipt.json").read_text())["base"], base)
 
 
+    def test_a_lane_based_on_another_branch_that_merges_the_queue_branch_keeps_its_own_base(self):
+        # Review of lanefather#3: the queue's base is not the branch every lane lands into. A dev-based lane that
+        # merges integrate/q would plan against that merge and land integrate/q's commits into dev un-gated.
+        self.queue("integrate/q")
+        self.git(self.repo, "branch", "dev")
+        self.lane("start", "a", "--ticket", "404", "--base", "dev", "--claims", "lib/**", "--create")
+        worktree = self.record("a")["worktree"]
+        dev = self.git(self.repo, "rev-parse", "dev")
+        self.commit(self.integration, {"unowned/arrived.txt": "x\n"}, "the integration moves on")
+        self.git(worktree, "merge", "-q", "--no-edit", "integrate/q")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        receipt = json.loads((self.state / "a.receipt.json").read_text())
+        self.assertEqual(receipt["base"], dev)
+        self.assertTrue(receipt["full"], "what the integration brought in is checked against dev")
+
+
 class LoadThrottleTests(LaneCase):
     """#572: every result records the load at its verify run's start and end. Owner decision on the #572 review: the
     load wait is off by default; with LANEFATHER_LOAD_THROTTLE=1 a verify run of check, land or promote starts only while
