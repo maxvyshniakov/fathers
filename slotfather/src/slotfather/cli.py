@@ -312,7 +312,7 @@ def slots_command(argv: list[str]) -> int:
         _state.require_own(directory, "a capacity change")
         _state.configure({"capacity.json": slots_value(argv)})  # applies at the next grant, busy or not (#7)
     live, legacy, _, found = _query.locked_snapshot(directory)
-    held = sum(e["count"] for e in live if e["state"] == "held") + sum(count for _, _, count in legacy)
+    held = _query.held_slots(live, legacy, int(found["slots"]))
     drain = _query.draining(held, found["slots"])
     if drain:
         print(f"slotfather: note: {held} slots held: draining {drain}; running work keeps its slots and nothing "

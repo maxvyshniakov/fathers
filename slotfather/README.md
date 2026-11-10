@@ -90,8 +90,8 @@ Run `slotfather` in a terminal to open the live dashboard.
 | Widget | Shows |
 | --- | --- |
 | SLOTS | Occupied and free capacity; colours identify running requests. |
-| REQUESTS | Running and waiting requests. Select either to see details. |
-| REQUEST DETAILS | Command, status, resource use and the busiest processes. |
+| QUEUE | Running and waiting requests. Select either to see details. |
+| LEASE DETAILS / REQUEST DETAILS | Command, status, resource use and the busiest processes; the title says whether the selection holds slots. |
 | MACHINE | Admission status, load, memory, swap and occupied-slot history. |
 | EVENTS | Recent grants, releases and abandoned requests. |
 

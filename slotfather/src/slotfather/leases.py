@@ -181,7 +181,7 @@ def grant(directory: Path, table: Table) -> str | None:
     slots = _config.total()
     found = _schedule.plan(_schedule.fit(waiters, slots), held, slots, time.time(), estimate=estimate, other=other,
                  settings=_schedule.order_settings(directory))
-    used = sum(e["count"] for e in held) + other
+    used = sum(_schedule.holds(e, slots) for e in held) + other
     short = None
     for entry in found.grants:
         if used:

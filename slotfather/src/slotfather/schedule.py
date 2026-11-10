@@ -208,6 +208,13 @@ def deferring(entry: Entry) -> bool:
     return _config.priority_of(entry) == "batch"
 
 
+def holds(entry: Entry, slots: int) -> int:
+    """The slots a held lease takes from a capacity of `slots`: its count, and for an `-n all` lease (its entry's
+    `all`) at least the whole capacity, so that a capacity grown under it keeps it exclusive (#7)."""
+    count = int(entry["count"])
+    return max(count, slots) if entry.get("all") else count
+
+
 def whole_machine(entry: Entry, slots: int) -> bool:
     """Whether a waiter asks for every slot: `-n all`, or a count of at least the capacity."""
     return bool(entry.get("all")) or entry["count"] >= slots
@@ -274,7 +281,7 @@ def reserve(found: Plan, held: list[Entry], slots: int, used: int, moment: float
     is too)."""
     assert found.head is not None
     need: int = found.head["count"]
-    ends = [(expected_end(entry, moment, estimate(entry), fallback, overrun), int(entry["count"]))
+    ends = [(expected_end(entry, moment, estimate(entry), fallback, overrun), holds(entry, slots))
             for entry in held + found.grants]
     have, start = slots - used, moment  # below zero while a shrunk capacity drains: those ends free nothing yet
     for end, count in sorted(ends):
@@ -302,7 +309,7 @@ def soonest_start(count: int, holding: list[Entry], slots: int, used: int, momen
         run = estimate(entry)
         if run is None:
             return None
-        ends.append((expected_end(entry, moment, run, run, overrun), int(entry["count"])))
+        ends.append((expected_end(entry, moment, run, run, overrun), holds(entry, slots)))
     have, start = slots - used, moment  # below zero while a shrunk capacity drains
     for end, size in sorted(ends):
         if have >= count:
@@ -354,7 +361,7 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
         waiters = ranked(waiters, settings)
     fallback, safety, overrun, limit = (float(settings[key]) for key in ("fallback", "safety", "overrun", "limit"))
     found = Plan()
-    used = sum(e["count"] for e in held) + other
+    used = sum(holds(e, slots) for e in held) + other
     extra = None  # slots free at the head's start that it does not need; reserved once a request behind it fits
 
     def quiet(free: int, entry: Entry) -> str:
@@ -466,11 +473,11 @@ def yield_asks(waiters: list[Entry], held: list[Entry], slots: int, moment: floa
         queued = _config.seconds(entry.get("since"))
         if wait_for is None or queued is None or moment - queued < wait_for:
             continue
-        free = slots - other - sum(h["count"] for h in holding)
+        free = slots - other - sum(holds(h, slots) for h in holding)
         if entry["count"] <= free:
             continue  # it fits: what holds it back is not slots
         have, when = free, moment
-        for end, count in sorted((ends(h), h["count"]) for h in holding):
+        for end, count in sorted((ends(h), holds(h, slots)) for h in holding):
             if have >= entry["count"]:
                 break
             have, when = have + count, end
@@ -486,7 +493,7 @@ def yield_asks(waiters: list[Entry], held: list[Entry], slots: int, moment: floa
             if need <= 0:
                 break
             chosen.append(h)
-            need -= h["count"]
+            need -= holds(h, slots)
         if need > 0:
             continue
         behind = rank_time(entry, settings) + _config.YIELD_BEHIND
@@ -503,11 +510,14 @@ def yield_asks(waiters: list[Entry], held: list[Entry], slots: int, moment: floa
 
 
 def room(waiters: list[Entry], free: int, held: list[Entry] | None = None, estimate: Estimate | None = None,
-         other: int = 0, settings: dict[str, Any] | None = None, label: str = "", command: str = "") -> int:
+         other: int = 0, settings: dict[str, Any] | None = None, label: str = "", command: str = "",
+         slots: int | None = None) -> int:
     """The slots a new request gets at once behind `waiters` with `free` slots unheld, as grant() admits it: one
     for `command` under `label`, whose run the estimates know, or else one of unknown run (the fallback). Without
-    `held` (the entries holding slots; `other` slots more held without one), the window order's answer."""
-    slots = free + sum(e["count"] for e in held or ()) + other
+    `held` (the entries holding slots; `other` slots more held without one), the window order's answer. `slots`
+    is the capacity; without it, what `free` and the held slots add up to (wrong only while a shrink drains)."""
+    if slots is None:
+        slots = free + sum(int(e["count"]) for e in held or ()) + other
     if held is not None:  # the whole capacity: what grant() fits the waiters to
         fit(waiters, slots)
     moment = time.time()

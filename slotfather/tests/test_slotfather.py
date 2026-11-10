@@ -261,6 +261,24 @@ class CapacityTests(SlotCase):
         for process in (holders["d"], waiter):
             self.finish(process)
 
+    def test_a_grown_capacity_keeps_a_running_whole_machine_lease_exclusive(self):
+        whole = self.request("whole", "all")
+        self.started("whole")
+        changed = self.tool("slots", "6")
+        self.assertEqual(0, changed.returncode, changed.stderr)
+        one = self.request("one", 1)
+        self.wait_for(lambda: "waiting: 1 slot(s) one" in self.status(), "the 1-slot request to queue")
+        self.assertIn("6 of 6 slots held", self.status(), "-n all holds the grown capacity too")
+        self.assertEqual(0, json.loads(self.tool("status", "--json").stdout)["free"])
+        self.assertEqual("0", self.tool("available").stdout.strip())
+        self.assertNotIn("start one", self.events())
+        self.release("whole")
+        self.finish(whole)
+        self.started("one")
+        self.assertLess(self.events().index("end whole"), self.events().index("start one"))
+        self.release("one")
+        self.finish(one)
+
     def test_waiters_and_migration_queue_leases_no_longer_block_a_capacity_change(self):
         legacy = self.tmp / "legacy"
         self.env["SLOTFATHER_LEGACY_DIRS"] = str(legacy)

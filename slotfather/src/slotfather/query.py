@@ -15,10 +15,11 @@ from . import state as _state
 
 def snapshot(directory: Path | None = None) -> tuple[list[dict[str, Any]], list[tuple[Path, dict[str, Any], int]],
                                                     dict[int, tuple[int, str]]]:
-    """The live queue entries, the earlier queues' holders and the process table."""
+    """The live queue entries, the earlier queues' holders and the process table, taken under the queue lock so
+    that no holder starts or ends between the table and the entries."""
     directory = directory or _config.state_dir()
-    table = _platform.processes()
     with _state.locked(directory):
+        table = _platform.processes()
         live = [entry for _, entry in _leases.reap(directory, table)]
     return live, _leases.legacy_holders(table), table
 
@@ -28,8 +29,8 @@ def locked_snapshot(directory: Path | None = None) -> tuple[list[dict[str, Any]]
     """snapshot() and the capacity basis (config.capacity_basis()) read under the same lock, as a plan reads them:
     a capacity saved meanwhile counts for the next look, never for half of this one."""
     directory = directory or _config.state_dir()
-    table = _platform.processes()
     with _state.locked(directory):
+        table = _platform.processes()
         live = [entry for _, entry in _leases.reap(directory, table)]
         basis: dict[str, Any] = _config.capacity_basis()
     return live, _leases.legacy_holders(table), table, basis
@@ -37,8 +38,8 @@ def locked_snapshot(directory: Path | None = None) -> tuple[list[dict[str, Any]]
 
 def status_lines(directory: Path | None = None) -> list[str]:
     directory = directory or _config.state_dir()
-    table = _platform.processes()
-    with _state.locked(directory):  # the capacity the plans of this moment read
+    with _state.locked(directory):  # the processes and capacity the plans of this moment read
+        table = _platform.processes()
         live = _leases.reap(directory, table)
         slots = _config.total()
     legacy = _leases.legacy_holders(table)
@@ -54,8 +55,14 @@ def status_lines(directory: Path | None = None) -> list[str]:
                      f"cmd={e['cmd']}")
     lines += [f"legacy: {count} slot(s) {e.get('label')} pid={e.get('pid')} (earlier queue {path.parent.parent})"
               for path, e, count in legacy]
-    used = sum(e["count"] for _, e in live if e["state"] == "held") + sum(count for _, _, count in legacy)
+    used = held_slots([e for _, e in live], legacy, slots)
     return lines + [held_line(used, slots)]
+
+
+def held_slots(live: list[dict[str, Any]], legacy: list[tuple[Path, dict[str, Any], int]], slots: int) -> int:
+    """The slots held now: each held lease's (an `-n all` one's at least the capacity, schedule.holds()) and the
+    earlier queues'."""
+    return sum(_schedule.holds(e, slots) for e in live if e["state"] == "held") + sum(c for _, _, c in legacy)
 
 
 def draining(held: int, slots: int) -> int:
@@ -123,11 +130,12 @@ def status_json(directory: Path | None = None, pid: int | None = None) -> dict:
     for (path, entry), item in zip(live, entries_found):
         item["position"] = places.get(id(entry))  # waiters: their place in the order the queue serves them
     legacy = []
-    for path, entry, count in _leases.legacy_holders(table):
+    earlier = _leases.legacy_holders(table)
+    for path, entry, count in earlier:
         legacy.append({"id": path.stem, "lease": str(path), "state": "held", "count": count,
                        "label": entry.get("label"), "pid": entry.get("pid"), "pgid": _platform.process_group(entry.get("pid")),
                        "tree": _platform.descendants(table, entry.get("pid"))})
-    held = sum(e["count"] for e in entries_found if e["state"] == "held") + sum(e["count"] for e in legacy)
+    held = held_slots([entry for _, entry in live], earlier, slots)
     found = {}
     if pid is not None:
         from .procs import environment_leases
@@ -155,8 +163,9 @@ def available(directory: Path | None = None, label: str = "", command: str = "")
     live, legacy, _, basis = locked_snapshot(directory)
     held = [e for e in live if e["state"] == "held"]
     other = sum(count for _, _, count in legacy)
-    return _schedule.room([e for e in live if e["state"] != "held"], max(0, basis["slots"] - sum(e["count"] for e in held) - other),
-                held, _schedule.estimator(directory), other, label=label, command=command)
+    slots = int(basis["slots"])
+    return _schedule.room([e for e in live if e["state"] != "held"], max(0, slots - held_slots(live, legacy, slots)),
+                          held, _schedule.estimator(directory), other, label=label, command=command, slots=slots)
 
 
 def size(maximum: int, cores: int, total: int, averages: tuple[float, float, float], held: int,
@@ -186,12 +195,12 @@ def advise(maximum: int | None = None, exclusive: bool = False, cores_now: int |
     mine = _leases.inherited_lease(table)
     holders = [e for e in live if e["state"] == "held" and not (mine and e["pid"] == mine[1]["pid"])]
     other = sum(count for path, e, count in legacy if not (mine and path == mine[0]))
-    held = sum(e["count"] for e in holders) + other
-    slots = basis["slots"]
+    slots = int(basis["slots"])
+    held = sum(_schedule.holds(e, slots) for e in holders) + other
     waiters = [e for e in live if e["state"] != "held"]
     estimate = _schedule.estimator(_config.state_dir())
     waiting = bool(waiters) and _schedule.room(waiters, max(0, slots - held), holders, estimate, other, label=label,
-                                     command=command) == 0
+                                               command=command, slots=slots) == 0
     found = size(maximum or slots, cores_now or _config.cores(), slots, averages or _platform.loads(), min(held, slots), waiting,
                  exclusive)
     found["run_estimate"] = estimate({"label": label, "cmd": command}) if command else None

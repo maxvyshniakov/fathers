@@ -17,7 +17,7 @@ choices and compatibility aliases; it does not define a second vocabulary.
 | class for scheduling | priority | Priority is request state, not arbitrary caller metadata. |
 | guard for the memory condition | memory block | The condition has a specific cause and affects additional grants; it is not a general protection mechanism. |
 
-The dashboard uses REQUESTS and REQUEST DETAILS. The `label` field names a
+The dashboard's QUEUE panel lists the queue's running and waiting requests; the details panel is LEASE DETAILS for a request whose lease holds slots and REQUEST DETAILS for one that waits. The `label` field names a
 request; it is not another entity. `pass until` and `start est` remain the concise display labels for the distinct scheduling times explained
 in [dashboard help](dashboard.md).
 

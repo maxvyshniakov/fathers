@@ -25,6 +25,24 @@ def example() -> tuple[dict[str, Any], datetime.datetime]:
 
 
 class DetailsTests(unittest.TestCase):
+    def test_the_title_follows_the_selection_lease_while_it_holds_slots_request_while_it_waits(self) -> None:
+        model, now = example()
+        held = model["holders"][0]
+        waiting = dict(held, key=(124, 'now'), label='waiter', kind='waiting', pid=124, granted=None, tree=[])
+        yielded = dict(waiting, key=(125, 'now'), label='yielded', pid=125, yields=1)
+        model.update(waiters=[waiting, yielded], free=0, used=1, memory_block=None, admission=0, start=None, limit=600.0, order="backfill")
+        titles: list[str] = []
+        for selected in range(3):
+            canvas = view.Canvas(80, 12)
+            view.draw_detail(canvas, 0, 0, 12, 80, model, selected, '/project', now)
+            first = canvas.render(False).splitlines()[0]
+            titles.append('LEASE DETAILS' if 'LEASE DETAILS' in first else 'REQUEST DETAILS' if 'REQUEST DETAILS' in first
+                          else first)
+        self.assertEqual(['LEASE DETAILS', 'REQUEST DETAILS', 'REQUEST DETAILS'], titles)
+        canvas = view.Canvas(80, 12)
+        view.draw_detail(canvas, 0, 0, 12, 80, dict(model, holders=[], waiters=[]), 0, None, now)
+        self.assertIn('REQUEST DETAILS', canvas.render(False).splitlines()[0], "nothing selected")
+
     def test_wheel_anywhere_in_details_scrolls_the_whole_document(self) -> None:
         model, now = example()
         scroll: dict[str, int] = {}
@@ -45,7 +63,7 @@ class DetailsTests(unittest.TestCase):
             canvas = draw()
         self.assertIn('worker-19', canvas.render(False))
         self.assertNotIn('more', canvas.render(False))
-        self.assertIn('REQUEST DETAILS', canvas.render(False).splitlines()[0])
+        self.assertIn('LEASE DETAILS', canvas.render(False).splitlines()[0])
         view.mouse_action(canvas, ('mouse', 64, 25, 3, True), scroll, 0)
         self.assertLess(scroll['details'], canvas.tables['details']['offset'])
 

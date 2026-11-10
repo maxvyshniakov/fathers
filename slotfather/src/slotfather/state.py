@@ -276,6 +276,10 @@ def configuration_bytes(directory: Path) -> dict[str, bytes | None]:
     return result
 
 
+class Conflict(_config.SlotError):
+    """A settings file changed since the caller read it (configure()'s `expected`): nothing was saved."""
+
+
 def configure(changes: dict[str, dict[str, Any] | None], *,
               expected: dict[str, bytes | None] | None = None) -> None:
     """CLI and dashboard share validation, ownership, conflict checking and queue admission locking. A change
@@ -289,8 +293,9 @@ def configure(changes: dict[str, dict[str, Any] | None], *,
     require_own(directory, "a settings change")
     with locked(directory):
         before = configuration_bytes(directory)
-        if expected is not None and before != expected:
-            raise _config.SlotError("Settings changed in another process. Reload before applying.")
+        changed_since = [name for name, value in (expected or {}).items() if before.get(name) != value]
+        if changed_since:  # per file: a caller expects only the files it read and means to replace
+            raise Conflict(f"{', '.join(changed_since)} changed in another process; nothing was saved")
         values = dict(changes)
         if values.get("order.json") is not None:
             saved = dict(_config.ORDER_DEFAULTS)

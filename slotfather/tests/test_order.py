@@ -265,6 +265,26 @@ class CapacityChangeTests(PlanCase):
         assert found.head is not None
         self.assertEqual(("head", M + 1200), (found.head["label"], found.start), "a's end only drains")
 
+    def test_a_whole_machine_lease_keeps_a_grown_capacity_to_itself(self):
+        whole = dict(holder("whole", 4, -60), all=True)  # granted all 4, then the capacity grew to 6
+        self.assertEqual((6, 4), (sf_schedule.holds(whole, 6), sf_schedule.holds(holder("four", 4, -60), 6)))
+        self.assertEqual([], self.started([waiter("w", 1, -30)], [whole], slots=6))
+        self.assertEqual(["w"], self.started([waiter("w", 1, -30)], [holder("four", 4, -60)], slots=6))
+        with mock.patch.object(sf_config, "now", return_value=stamp(0)), mock.patch.object(time, "time", return_value=M):
+            self.assertEqual(0, sf_schedule.room([], 0, [whole], settings=self.settings, slots=6))
+
+    def test_a_drain_counts_when_an_interactive_waiter_asks_yieldable_holders(self):
+        self.settings["yield_after"] = 60
+        asker = dict(waiter("ask", 1, -600), priority="interactive")
+        estimate = runs(batch=99999, normal=99999)
+        # 4 held of 2: the batch lease's 2 would leave 2 held, still no room for the asker, so nobody is asked.
+        held = [dict(holder("batch", 2, -600), priority="batch", yieldable=True), holder("normal", 2, -600)]
+        self.assertEqual([], sf_schedule.yield_asks([asker], held, 2, M, estimate, settings=self.settings))
+        # 4 held of 2 again, the batch lease holding 3: its yield leaves 1 held, and the asker starts.
+        held = [dict(holder("batch", 3, -600), priority="batch", yieldable=True), holder("normal", 1, -600)]
+        found = sf_schedule.yield_asks([asker], held, 2, M, estimate, settings=self.settings)
+        self.assertEqual([("batch", "ask")], [(h["label"], w["label"]) for h, w in found])
+
     def test_a_head_that_gives_up_before_a_drain_ends_holds_nobody_back(self):
         held = [holder("a", 2, -10), holder("b", 2, -10), holder("c", 2, -10)]
         head = dict(waiter("head", 2, -700), until=stamp(900))  # a ends at 600, but only b's end at 1200 frees two

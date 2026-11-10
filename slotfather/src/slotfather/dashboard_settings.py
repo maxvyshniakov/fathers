@@ -1,9 +1,11 @@
 """The dashboard's Settings panel (#7): a read-only status of the queue above the editable settings.
 
-Every change is saved at once through the CLI's state boundary (state.configure(): validation, ownership and the
-queue lock) and applies at the queue's next grant, busy or not; nothing is drafted. A capacity below what running
-leases hold drains: they keep their slots and nothing more starts until enough of them end. The refresh interval
-belongs to this dashboard alone."""
+A change is saved through the CLI's state boundary (state.configure(): validation, ownership and the queue lock) and
+applies at the queue's next grant, busy or not; nothing is drafted. An arrow change is shown at once and saved once
+the keys have settled for SETTLE_SECONDS (or at once on Enter), so stepping through the choices never applies the
+ones on the way; a typed value is saved on Enter. A capacity change is refused when capacity.json changed since this
+panel read it. A capacity below what running leases hold drains: they keep their slots and nothing more starts until
+enough of them end. The refresh interval belongs to this dashboard alone."""
 from __future__ import annotations
 
 import contextlib
@@ -12,7 +14,7 @@ import math
 import os
 import textwrap
 import time
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, Callable, NamedTuple, cast
 
 from . import cli, config, platform, schedule, state
 
@@ -27,6 +29,7 @@ KNOBS = {"safety": ("Safety multiplier", 0.5), "limit": ("Overtaking limit (s)",
          "yield_after": ("Yield after (s)", 30)}
 GROUPS = (("SHARED CAPACITY", ("mode", "amount")), ("QUEUE POLICY", ("order", *KNOBS)),
           ("THIS DASHBOARD", ("interval",)))
+FIELDS = tuple(key for _, keys in GROUPS for key in keys)
 DESCRIPTIONS = {
     "mode": "Shared by every client. Automatic: the lower of the CPU and memory budgets.",
     "amount.fixed": "Total slots for every client. Applies at the next grant; a shrink drains.",
@@ -42,10 +45,13 @@ DESCRIPTIONS = {
     "interval": "Seconds between this dashboard's refreshes, 0.1 to 60. Not shared.",
 }
 DEFAULT_INTERVAL = 1.0
-FLASH_SECONDS = 4.0
+FLASH_SECONDS = 4.0  # how long a confirmation shows, and how long a first D stays armed
+SETTLE_SECONDS = 1.0  # quiet after an arrow change before it is saved
 READ_EVERY = 1.0  # seconds between looks at the shared settings while the panel is open
+CAPACITY_PER_CORE = 4  # the most slots the panel saves: this many per core
 STATUS_LABEL = 13  # columns of a status label
 FIELD_LABEL = 28  # columns of a setting's label, its gutter included
+MIN_WIDTH, MIN_HEIGHT = 30, 12  # below this the panel only says to enlarge the terminal
 
 
 class Row(NamedTuple):
@@ -54,19 +60,33 @@ class Row(NamedTuple):
     parts: tuple[tuple[int, str, str], ...]
 
 
+class Pending(NamedTuple):
+    """An arrow change shown but not saved yet: saved at `at` + SETTLE_SECONDS, or at once on Enter."""
+    key: str
+    value: Any
+    at: float
+
+
 def number(value: float) -> str:
     return f"{value:g}"
 
 
+def plural(count: int, word: str) -> str:
+    return f"{count} {word}{'' if count == 1 else 's'}"
+
+
 class Settings:
-    def __init__(self, interval: float):
+    def __init__(self, interval: float, clock: Callable[[], float] = time.monotonic):
+        self.clock = clock
         self.interval = interval
-        self.focus = "mode"
-        self.editing = False
+        self.focus: str = "mode"
+        self.editing: bool = False
         self.buffer = ""
         self.replace = True
+        self.pending: Pending | None = None
         self.flash: tuple[str, str, float] | None = None
-        self.confirm_reset = False
+        self.armed: float | None = None  # when D was pressed once
+        self.small = False  # the last draw was below the minimum size
         self.offset = 0
         self.visible = 0
         self.total = 0
@@ -74,7 +94,9 @@ class Settings:
         self.hits: list[tuple[str, int, int, int, int]] = []
         self.bounds = (0, 0, 0, 0)
         self.held = 0  # slots running leases hold, from the last model drawn
+        self.waiting: list[int] = []  # the waiting requests' slot counts, in queue order, from the last model
         self.basis: dict[str, Any] = {}
+        self.capacity_bytes: bytes | None = None  # capacity.json as read: a save expects it unchanged
         self.saved: dict[str, Any] = {}
         self.effective: dict[str, Any] = {}
         self.memory_budget: int | None = None
@@ -86,7 +108,14 @@ class Settings:
 
     def read(self) -> None:
         """The saved settings as every client reads them now; raises SlotError for a file that cannot be read."""
-        self.basis = cast(Any, config).capacity_basis()
+        directory = config.state_dir()
+        before: bytes | None = None
+        for _ in range(3):
+            before = state.configuration_bytes(directory)["capacity.json"]
+            self.basis = cast(Any, config).capacity_basis()
+            if before == state.configuration_bytes(directory)["capacity.json"]:
+                break
+        self.capacity_bytes = before
         self.saved = cast(Any, schedule).order_settings(environment=False)
         self.effective = cast(Any, schedule).order_settings()
         self.memory_budget, self.memory_gib = self.basis["memory_slots"], self.basis["memory_gib"]
@@ -94,33 +123,55 @@ class Settings:
             gib = platform.memory_gib()
             self.memory_budget = config.memory_slots(gib, config.AUTO_GIB_PER_SLOT)
             self.memory_gib = None if gib is None else round(gib, 1)
-        self.read_at = time.monotonic()
+        self.read_at = self.clock()
+        self.settle_focus()
 
     def refresh(self) -> None:
         """Reads the shared settings again, at most once a second, and never under a field being typed."""
-        if self.editing or time.monotonic() - self.read_at < READ_EVERY:
+        if self.editing or self.clock() - self.read_at < READ_EVERY:
             return
         try:
             self.read()
         except (config.SlotError, OSError) as error:
             self.say(str(error), "bad")
-            self.read_at = time.monotonic()
+            self.read_at = self.clock()
 
-    def value(self, key: str) -> str:
+    def mode(self) -> str:
+        """The capacity mode shown: a pending one, else the saved one."""
+        return self.pending.value if self.pending and self.pending.key == "mode" else self.basis["mode"]
+
+    def amount_for(self, mode: str) -> Any:
+        """The amount a mode starts from: the current capacity for Fixed, the GiB per slot for the memory modes."""
+        if mode == "fixed":
+            return self.basis["slots"]
+        return self.basis["gib_per_slot"] or config.AUTO_GIB_PER_SLOT
+
+    def saved_value(self, key: str) -> Any:
         if key == "mode":
             return self.basis["mode"]
         if key == "amount":
-            return number(self.basis["slots"] if self.basis["mode"] == "fixed"
-                          else self.basis["gib_per_slot"] or config.AUTO_GIB_PER_SLOT)
+            return self.amount_for(self.mode())
         if key == "interval":
-            return number(self.interval)
-        return self.saved[key] if key == "order" else number(self.saved[key])
+            return self.interval
+        return self.saved[key]
+
+    def shown_value(self, key: str) -> Any:
+        if self.pending and self.pending.key == key:
+            return self.pending.value
+        return self.saved_value(key)
+
+    def text(self, key: str, value: Any) -> str:
+        if key == "mode":
+            return MODE_LABELS[value]
+        if key == "order":
+            return str(value).capitalize()
+        return number(value)
 
     def label(self, key: str) -> str:
         if key == "mode":
             return "Capacity mode"
         if key == "amount":
-            return "Total slots" if self.basis["mode"] == "fixed" else "GiB per slot"
+            return "Total slots" if self.mode() == "fixed" else "GiB per slot"
         if key == "order":
             return "Queue order"
         if key == "interval":
@@ -129,21 +180,37 @@ class Settings:
 
     def description(self, key: str) -> str:
         if key == "amount":
-            return DESCRIPTIONS["amount.fixed" if self.basis["mode"] == "fixed" else "amount.memory"]
+            return DESCRIPTIONS["amount.fixed" if self.mode() == "fixed" else "amount.memory"]
         return DESCRIPTIONS[key]
 
     def fields(self) -> list[str]:
-        return [key for _, keys in GROUPS for key in keys if key != "amount" or self.basis["mode"] != "automatic"]
+        return [key for key in FIELDS if key != "amount" or self.mode() != "automatic"]
+
+    def settle_focus(self) -> None:
+        """A focused field that is no longer shown (Total slots after a reset to Automatic) gives the focus to the
+        capacity mode; its edit and pending change go with it."""
+        if self.pending and self.pending.key not in self.fields():
+            self.pending = None
+        if self.focus in self.fields():
+            return
+        self.focus, self.editing, self.reveal = "mode", False, True
+
+    def most_slots(self) -> int:
+        return CAPACITY_PER_CORE * config.cores()
 
     def check(self, key: str, text: str) -> tuple[Any, str]:
         """(value, "") for typed text that `key` accepts, else (None, why not)."""
+        if key not in self.fields() or key in ("mode", "order"):
+            return None, "This setting takes no typed value."
         try:
             value = float(text)
         except ValueError:
             value = math.nan
-        if key == "amount" and self.basis["mode"] == "fixed":
+        if key == "amount" and self.mode() == "fixed":
             if not (text.isascii() and text.isdigit() and int(text) >= 1):
                 return None, "Enter a whole number of slots, at least 1."
+            if int(text) > self.most_slots():
+                return None, f"At most {self.most_slots()} slots ({CAPACITY_PER_CORE} per core)."
             return int(text), ""
         if not math.isfinite(value):
             return None, "Enter a number."
@@ -155,54 +222,84 @@ class Settings:
         return (value, "") if value >= least else (None, f"Enter a number of at least {least:g}.")
 
     def capacity_value(self, mode: str, amount: Any) -> dict[str, Any] | None:
-        """What `slotfather slots` would save for the mode and amount; raises SlotError where it would refuse."""
+        """What `slotfather slots` would save for the mode and amount; raises SlotError where it would refuse,
+        or where it gives more slots than the panel saves."""
         arguments = ["reset"] if mode == "automatic" else [str(amount)] if mode == "fixed" else [mode, str(amount)]
         with contextlib.redirect_stderr(io.StringIO()):
-            return cli.slots_value(arguments)
+            found = cli.slots_value(arguments)
+        if found and found["slots"] > self.most_slots():
+            raise config.SlotError(f"{found['slots']} slots is above the most the panel saves, "
+                                   f"{self.most_slots()} ({CAPACITY_PER_CORE} per core).")
+        return found
+
+    def capacity_of(self, key: str, value: Any) -> tuple[str, Any]:
+        """(mode, amount) for a value of a capacity field."""
+        return (value, self.amount_for(value)) if key == "mode" else (self.mode(), value)
+
+    def slots_of(self, key: str, value: Any) -> int:
+        mode, amount = self.capacity_of(key, value)
+        found = self.capacity_value(mode, amount)
+        return int(found["slots"]) if found else config.automatic_capacity()
 
     def drain_note(self, slots: int) -> str:
         drain = max(0, self.held - slots)
         return f"will drain {drain}: running work keeps its slots" if drain else ""
 
+    def starts(self, slots: int) -> int:
+        """How many waiting requests a capacity of `slots` lets start now by slot counts alone, in queue order."""
+        free, started = slots - self.held, 0
+        for count in self.waiting:
+            if 0 < count <= free:
+                free, started = free - count, started + 1
+        return started
+
+    def effect(self, key: str, value: Any) -> tuple[str, str]:
+        """What a capacity value would do, (text, style): the slots, what drains or starts, or why it is refused."""
+        try:
+            slots = self.slots_of(key, value)
+        except config.SlotError as error:
+            return "✗ " + str(error), "bad"
+        drain, start = self.drain_note(slots), self.starts(slots)
+        if drain:
+            return f"→ {plural(slots, 'slot')} · {drain}", "warn"
+        return f"→ {plural(slots, 'slot')}" + (f" · will start {start} waiting" if start else ""), "dim"
+
     def preview(self) -> tuple[str, str]:
-        """What the text being typed would do, (text, style): the capacity it gives, or why it is refused."""
+        """What the text being typed would do, (text, style): its effect, or why it is refused."""
         if not self.buffer:
             return "", "dim"
         value, problem = self.check(self.focus, self.buffer)
         if problem:
             return "✗ " + problem, "bad"
-        if self.focus != "amount":
-            return "Enter saves", "dim"
-        try:
-            found = self.capacity_value(self.basis["mode"], value)
-        except config.SlotError as error:
-            return "✗ " + str(error), "bad"
-        slots = (found or {}).get("slots", value)
-        note = self.drain_note(slots)
-        return (f"→ {slots} slot{'s' if slots != 1 else ''}" + (f" · {note}" if note else ""),
-                "warn" if note else "dim")
+        return self.effect(self.focus, value) if self.focus == "amount" else ("Enter saves", "dim")
 
     def save(self, key: str, value: Any) -> str:
-        """Saves one field at once and says what it did; local fields change only this dashboard."""
+        """Saves one field and says what it did; local fields change only this dashboard. A capacity change
+        expects capacity.json as this panel read it (state.Conflict otherwise)."""
         if key == "interval":
             self.interval = float(value)
             return f"Refresh interval {number(self.interval)} s · this dashboard only"
         if key in ("mode", "amount"):
-            mode = value if key == "mode" else self.basis["mode"]
-            amount = value if key == "amount" else (
-                self.basis["slots"] if mode == "fixed" else self.basis["gib_per_slot"] or config.AUTO_GIB_PER_SLOT)
-            state.configure({"capacity.json": self.capacity_value(mode, amount)})
+            mode, amount = self.capacity_of(key, value)
+            state.configure({"capacity.json": self.capacity_value(mode, amount)},
+                            expected={"capacity.json": self.capacity_bytes})
             self.read()
             # Short: what drains is said once in STATUS and once beside the field.
             return f"Saved · capacity {self.basis['slots']} slots"
         state.configure({"order.json": {key: value}})
         self.read()
-        return f"Saved · {self.label(key)} {self.value(key).capitalize() if key == 'order' else self.value(key)}"
+        return f"Saved · {self.label(key)} {self.text(key, self.saved_value(key))}"
 
     def apply(self, key: str, value: Any) -> bool:
         """save() with its outcome flashed; False when the change was refused."""
+        self.pending = None
         try:
             text = self.save(key, value)
+        except state.Conflict:
+            with contextlib.suppress(config.SlotError, OSError):
+                self.read()
+            self.say(f"Capacity changed elsewhere: now {self.basis['slots']} slots · nothing was saved", "bad")
+            return False
         except (config.SlotError, OSError, ValueError) as error:
             self.say(str(error), "bad")
             with contextlib.suppress(config.SlotError, OSError):
@@ -212,43 +309,91 @@ class Settings:
         return True
 
     def say(self, text: str, style: str) -> None:
-        self.flash = (text, style, time.monotonic())
+        self.flash = (text, style, self.clock())
+
+    # Arrow changes settle before they are saved
+
+    def step(self, direction: int) -> None:
+        """Shows the next value of the focused field; tick() or Enter saves it."""
+        key = self.focus
+        current = self.shown_value(key)
+        if key == "mode":
+            value: Any = MODES[(MODES.index(current) + direction) % len(MODES)]
+        elif key == "order":
+            value = "window" if current == "backfill" else "backfill"
+        elif key == "interval":  # 0.1, 1, 2, 3 ... 60
+            value = (1.0 if current < 1 else min(60.0, math.floor(current) + 1.0)) if direction > 0 else \
+                (max(1.0, math.ceil(current) - 1.0) if current > 1 else 0.1)
+        else:
+            fixed = key == "amount" and self.mode() == "fixed"
+            minimum = 1 if fixed else 0.5 if key == "amount" else config.ORDER_KNOBS[key][1]
+            size = 1 if fixed else 0.5 if key == "amount" else KNOBS[key][1]
+            value = max(minimum, round(float(current) + direction * size, 3))
+            if fixed:
+                value = min(self.most_slots(), int(value))
+        if value == current:
+            return
+        if value == self.saved_value(key):
+            self.pending = None
+            self.say(f"{self.label(key)} back to its saved value", "dim")
+        else:
+            self.pending = Pending(key, value, self.clock())
+            self.say(f"{self.label(key)} {self.text(key, value)} · saves in {number(SETTLE_SECONDS)} s · "
+                     f"Enter now · Esc cancels", "accent")
+        self.settle_focus()
+
+    def commit_pending(self) -> bool:
+        """Saves the pending change now; False when there is none or it was refused."""
+        if self.pending is None:
+            return False
+        return self.apply(self.pending.key, self.pending.value)
+
+    def tick(self) -> bool:
+        """Saves a pending change once the keys have settled; True when something was saved."""
+        if self.pending and self.clock() - self.pending.at >= SETTLE_SECONDS:
+            return self.commit_pending()
+        return False
+
+    def cancel_pending(self) -> None:
+        if self.pending:
+            self.pending = None
+            self.say("Change cancelled · nothing was saved", "dim")
+            self.settle_focus()
 
     # Editing
 
-    def move(self, count: int) -> None:
+    def move(self, count: int) -> bool:
+        """Moves the focus; a pending change is saved first (True when it was)."""
+        saved = self.commit_pending()
         if self.flash and self.flash[1] == "bad":
             self.flash = None  # a refusal belongs to the field it was about
         keys = self.fields()
         self.focus = keys[(keys.index(self.focus) + count) % len(keys)] if self.focus in keys else keys[0]
-        self.reveal = True
+        self.editing, self.reveal = False, True
+        return saved
 
-    def step(self, direction: int) -> bool:
-        key = self.focus
-        if key == "mode":
-            return self.apply(key, MODES[(MODES.index(self.basis["mode"]) + direction) % len(MODES)])
-        if key == "order":
-            return self.apply(key, "window" if self.saved["order"] == "backfill" else "backfill")
-        fixed = key == "amount" and self.basis["mode"] == "fixed"
-        minimum = (1 if fixed else 0.5 if key == "amount" else 0.1 if key == "interval"
-                   else config.ORDER_KNOBS[key][1])
-        size = 1 if fixed or key == "interval" else 0.5 if key == "amount" else KNOBS[key][1]
-        current = float(self.value(key))
-        value = max(minimum, round(current + direction * size, 3))
-        if key == "interval":
-            value = min(60.0, value)
-        if value == current:
-            return False
-        return self.apply(key, int(value) if fixed else value)
+    def select(self, key: str) -> bool:
+        """Focuses `key`; a pending change is saved first (True when it was), an edit is cancelled."""
+        saved = self.commit_pending()
+        if self.editing:
+            self.say("Edit cancelled · nothing was saved", "dim")
+        self.focus, self.editing, self.reveal = key, False, True
+        self.settle_focus()
+        return saved
 
     def reset(self, key: str) -> bool:
+        self.pending = None
         if key in ("mode", "amount"):
-            return self.apply("mode", "automatic")
-        if key == "interval":
-            return self.apply(key, DEFAULT_INTERVAL)
-        return self.apply(key, config.ORDER_DEFAULTS[key])
+            saved = self.apply("mode", "automatic")
+        elif key == "interval":
+            saved = self.apply(key, DEFAULT_INTERVAL)
+        else:
+            saved = self.apply(key, config.ORDER_DEFAULTS[key])
+        self.settle_focus()
+        return saved
 
     def reset_all(self) -> bool:
+        self.pending = None
         try:
             state.configure({"capacity.json": None, "order.json": None})
             self.interval = DEFAULT_INTERVAL
@@ -260,13 +405,17 @@ class Settings:
         return True
 
     def begin(self, text: str = "") -> None:
+        self.pending = None
         self.editing, self.replace = True, not text
-        self.buffer = text or self.value(self.focus)
+        self.buffer = text or number(self.saved_value(self.focus))
         self.flash = None
 
     def commit(self) -> bool:
         """Saves the typed value; an invalid one stays in the field, unsaved, with why it was refused."""
         value, problem = self.check(self.focus, self.buffer)
+        if not problem and self.focus == "amount":
+            text, style = self.effect(self.focus, value)
+            problem = text[2:] if style == "bad" else ""
         if problem:
             self.say(problem + " Nothing was saved.", "bad")
             return False
@@ -296,49 +445,60 @@ class Settings:
 
     def key(self, key: str) -> str:
         """One key: "close", "quit", "changed" when a setting was saved, else "handled"."""
+        if self.small:  # nothing to see: only the ways out
+            return "close" if key in ("esc", "s") else "quit" if key in ("q", "Q") else "handled"
+        self.settle_focus()
         if self.editing:
             return self.edit_key(key)
-        confirming, self.confirm_reset = self.confirm_reset, False
-        if confirming and key != "D":
+        armed, self.armed = self.armed, None
+        if armed is not None and key != "D":
             self.flash = None  # the reset-all question is withdrawn
         if key in ("esc", "s"):
+            if self.pending:
+                self.cancel_pending()
+                return "handled"
             return "close"
         if key in ("q", "Q"):
             return "quit"
         choice = self.focus in ("mode", "order")
+        saved = False
         if key in ("down", "j", "\t"):
-            self.move(1)
+            saved = self.move(1)
         elif key in ("up", "k", "back_tab"):
-            self.move(-1)
+            saved = self.move(-1)
         elif key in ("home", "g", "end", "G"):
-            self.focus = self.fields()[0 if key in ("home", "g") else -1]
-            self.reveal = True
+            saved = self.select(self.fields()[0 if key in ("home", "g") else -1])
         elif key in ("left", "right", "h", "l", "-", "+"):
-            return "changed" if self.step(-1 if key in ("left", "h", "-") else 1) else "handled"
+            self.step(-1 if key in ("left", "h", "-") else 1)
         elif key in ("\r", "\n", " "):
-            if choice:
-                return "changed" if self.step(1) else "handled"
-            self.begin()
+            if self.pending and key != " ":
+                saved = self.commit_pending()
+            elif choice:
+                self.step(1)
+            else:
+                self.begin()
         elif len(key) == 1 and key in "0123456789." and not choice:
             self.begin(key)
         elif key == "d":
-            return "changed" if self.reset(self.focus) else "handled"
+            saved = self.reset(self.focus)
         elif key == "D":
-            if confirming:
-                return "changed" if self.reset_all() else "handled"
-            self.confirm_reset = True
-            self.say("Press D again to reset every setting to its default", "warn")
+            if armed is not None and self.clock() - armed < FLASH_SECONDS:
+                saved = self.reset_all()
+            else:
+                self.pending = None
+                self.armed = self.clock()
+                self.say("Press D again to reset every setting to its default", "warn")
         elif key in ("page_up", "page_down"):
             self.offset = max(0, min(max(0, self.total - self.visible),
                                      self.offset + (1 if key == "page_down" else -1) * max(1, self.visible - 1)))
             self.reveal = False
-        return "handled"
+        return "changed" if saved else "handled"
 
     def mouse(self, event: tuple[str, int, int, int, bool]) -> str:
         """A click selects a field, a click on the selected one changes or edits it; the wheel scrolls."""
         _, button, mx, my, pressed = event
         x, y, width, height = self.bounds
-        if not pressed or not (x < mx < x + width - 1 and y < my < y + height - 1):
+        if self.small or not pressed or not (x < mx < x + width - 1 and y < my < y + height - 1):
             return "handled"
         code = button & ~28
         if code in (64, 65):
@@ -350,17 +510,15 @@ class Settings:
         for key, left, top, columns, rows in self.hits:
             if left <= mx < left + columns and top <= my < top + rows:
                 if key != self.focus:
-                    self.editing, self.confirm_reset = False, False
-                    self.focus = key
-                    return "handled"
+                    return "changed" if self.select(key) else "handled"
                 if self.editing:
                     return "handled"
-                return self.key("\r")
+                return self.key(" " if key in ("mode", "order") else "\r")
         return "handled"
 
     # Drawing
 
-    def status_rows(self, model: dict[str, Any] | None, inner: int) -> list[Row]:
+    def status_rows(self, model: dict[str, Any] | None) -> list[Row]:
         def row(label: str, text: str, style: str = "text") -> Row:
             return Row("", ((2, label, "dim"), (2 + STATUS_LABEL, text, style)))
 
@@ -371,18 +529,20 @@ class Settings:
                                      f"{model.get('used', 0)} held · {len(model.get('waiters', []))} waiting"))
         else:
             rows.append(row("slots", "queue unavailable", "dim"))
-        basis = self.basis
+        # The capacity the queue's last look read under its lock; this panel's own reading only without a model.
+        basis = cast(dict[str, Any], (model or {}).get("basis") or self.basis)
         per = number(basis["gib_per_slot"] or 0)
         how = {"fixed": "saved, fixed count", "memory": f"saved, one per {per} GiB of memory",
                "lower": f"saved, lower of CPU and one per {per} GiB",
                "automatic": "automatic, lower of the two budgets"}[basis["mode"]]
         rows.append(row("capacity", f"{basis['slots']} slots · {how}"))
-        memory = self.memory_gib
+        budget_slots = basis["memory_slots"] if basis["memory_slots"] is not None else self.memory_budget
+        memory = basis["memory_gib"] if basis["memory_gib"] is not None else self.memory_gib
         budget = (f"CPU {basis['cpu_slots']} ({basis['cores']} cores) · memory "
-                  + (f"{self.memory_budget}" if self.memory_budget is not None else "unknown")
+                  + (f"{budget_slots}" if budget_slots is not None else "unknown")
                   + (f" ({number(memory)} GiB)" if memory is not None else ""))
         rows.append(row("budgets", budget))
-        drain = max(0, self.held - (model or {}).get("slots", basis["slots"])) if model else 0
+        drain = max(0, self.held - int(model["slots"])) if model else 0
         rows.append(row("draining", f"{drain} slots · nothing starts until at most {model['slots']} are held"
                         if drain and model else "none", "warn" if drain else "dim"))
         overrides = ["SLOTFATHER_" + name for name in ("CORES", "MEMORY_GIB", "CGROUP") if config.setting(name)]
@@ -395,7 +555,7 @@ class Settings:
         return "~" + directory[len(home):] if directory.startswith(home + os.sep) else directory
 
     def field_rows(self, key: str, value_column: int) -> list[Row]:
-        """The field's row; while it is being typed, a second row says what the value would do, or why not."""
+        """The field's row; while it is typed or pending, a second row says what the value would do, or why not."""
         selected = key == self.focus
         label, room = self.label(key), value_column - 3
         label = label if len(label) <= room else label[:max(0, room - 1)] + "…"
@@ -404,16 +564,19 @@ class Settings:
             parts.append((value_column, "[" + self.buffer + "▏]", "cursor"))
             note, style = self.preview()
             return [Row(key, tuple(parts)), Row(key, ((4, note, style),))]
-        value = self.value(key)
-        if key == "mode":
-            value = MODE_LABELS[value]
-        elif key == "order":
-            value = value.capitalize()
+        pending = self.pending is not None and self.pending.key == key
+        value = self.text(key, self.shown_value(key))
         if selected and key in ("mode", "order"):
             value = f"‹ {value} ›"
-        parts.append((value_column, value, "accent"))
+        parts.append((value_column, value, "cursor" if pending else "accent"))
         after = value_column + len(value) + 2
-        if key == "amount" and self.basis["mode"] == "fixed":
+        if pending:
+            parts.append((after, "pending", "dim"))
+            if key in ("mode", "amount"):
+                note, style = self.effect(key, self.shown_value(key))
+                return [Row(key, tuple(parts)), Row(key, ((4, note, style),))]
+            return [Row(key, tuple(parts))]
+        if key == "amount" and self.mode() == "fixed":
             note = self.drain_note(self.basis["slots"])
             if note:
                 parts.append((after, note.replace("will drain", "draining"), "warn"))
@@ -424,7 +587,7 @@ class Settings:
         return [Row(key, tuple(parts))]
 
     def rows(self, model: dict[str, Any] | None, inner: int) -> list[Row]:
-        rows = self.status_rows(model, inner)
+        rows = self.status_rows(model)
         rows.append(Row("", ((0, "─" * inner, "frame"),)))
         value_column = min(FIELD_LABEL, max(12, inner // 2))
         shown = self.fields()
@@ -441,6 +604,8 @@ class Settings:
         """The panel's one key-hint line; on a narrow panel the least needed hints go first, never Esc."""
         if self.editing:
             hints = [("Enter", "save", 0), ("Esc", "cancel", 0), ("⌫", "delete", 1), ("^U", "clear", 2)]
+        elif self.pending:
+            hints = [("Enter", "save now", 0), ("Esc", "cancel", 0), ("←→", "change", 1)]
         else:
             hints = [("↑↓", "select", 1), ("←→", "change", 1), ("Enter", "edit", 2), ("d", "default", 3),
                      ("D", "all defaults", 4), ("Esc", "close", 0)]
@@ -458,8 +623,8 @@ class Settings:
         self.refresh()
         if model:
             self.held = int(model.get("used", 0))
-        if self.focus not in self.fields():
-            self.focus = self.fields()[0]
+            self.waiting = [int(waiter.get("count", 1)) for waiter in model.get("waiters", [])]
+        self.settle_focus()
         width = min(max(0, canvas.width - 2), 80)
         inner = max(0, width - 4)
         body = self.rows(model, inner)
@@ -469,15 +634,16 @@ class Settings:
         self.hits = []
         canvas.fill(y, x, height, width)
         canvas.box(y, x, height, width, "SETTINGS", "saved at once · applies at the next grant" if inner >= 60 else "")
-        if height < 12 or width < 30:
+        self.small = height < MIN_HEIGHT or width < MIN_WIDTH
+        if self.small:
             canvas.put(y + 1, x + 2, "Enlarge terminal · Esc closes", "dim", inner)
             return
         self.visible, self.total = height - 7, len(body)
         if self.reveal:
-            at = next((n for n, row in enumerate(body) if row.key == self.focus), None)
-            if at is not None:
-                self.offset = min(self.offset, at)
-                self.offset = max(self.offset, at - self.visible + 1)
+            lines = [n for n, row in enumerate(body) if row.key == self.focus]
+            if lines:
+                self.offset = min(self.offset, lines[0])
+                self.offset = max(self.offset, lines[-1] - self.visible + 1)
             self.reveal = False
         self.offset = max(0, min(self.offset, max(0, len(body) - self.visible)))
         if self.offset:
@@ -496,9 +662,10 @@ class Settings:
         if below:
             canvas.right(rule, x + width - 2, f" ↓ {below} more ", "dim")
         notes = [(text, "dim") for text in textwrap.wrap(self.description(self.focus), max(1, inner))[:2]]
-        if self.flash and (time.monotonic() - self.flash[2] < FLASH_SECONDS or self.flash[1] == "bad"):
+        if self.flash and (self.clock() - self.flash[2] < FLASH_SECONDS or self.flash[1] == "bad"
+                           or (self.flash[1] == "accent" and self.pending)):
             text, style, _ = self.flash
-            mark = {"ok": "✓ ", "warn": "! ", "bad": "✗ "}.get(style, "")
+            mark = {"ok": "✓ ", "warn": "! ", "bad": "✗ ", "accent": "… "}.get(style, "")
             notes = notes[:1] + [(text, style) for text in textwrap.wrap(mark + text, max(1, inner))[:2]]
         for line, (text, style) in enumerate(notes[:3], rule + 1):
             canvas.put(line, x + 2, text, style, inner)

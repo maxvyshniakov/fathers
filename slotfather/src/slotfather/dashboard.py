@@ -438,7 +438,7 @@ def history_summary(steps: list, slots: int) -> dict:
 def dashboard_admission(waiters: list[dict[str, Any]], held: list[dict[str, Any]], slots: int, other: int,
                         memory_block: str | None, estimate: _schedule.Estimate | None, settings: dict[str, Any]) -> int:
     """Largest generic request grant() would admit, including earlier grants consuming the memory exemption."""
-    used = sum(entry["count"] for entry in held) + other
+    used = sum(_schedule.holds(entry, slots) for entry in held) + other
     free = max(0, slots - used)
     if not free or memory_block and used:
         return 0
@@ -451,7 +451,7 @@ def dashboard_admission(waiters: list[dict[str, Any]], held: list[dict[str, Any]
         found = _schedule.plan(waiters + [probe], held, slots, time.time(), estimate=estimate,
                         other=other, settings=settings)
         return free if found.grants and found.grants[0] is probe else 0
-    return _schedule.room(waiters, free, held, estimate, other, settings=settings)
+    return _schedule.room(waiters, free, held, estimate, other, settings=settings, slots=slots)
 
 
 def dashboard_model() -> dict:
@@ -479,7 +479,8 @@ def dashboard_model() -> dict:
                 "granted": parse_utc(entry.get("granted")), "passable": kind == "waiting" and _schedule.overtakable(entry),
                 "style": "warn" if kind == "waiting" else "legacy"}
 
-    holders = [item(e, "held", e["count"]) for e in live if e["state"] == "held"]
+    # An `-n all` lease holds the whole capacity, also one grown under it (#7).
+    holders = [item(e, "held", _schedule.holds(e, slots)) for e in live if e["state"] == "held"]
     holders += [item(e, "legacy", count, str(path.parent.parent)) for path, e, count in legacy]
     settings, start = _schedule.order_settings(directory), None
     order = settings["order"]
@@ -724,7 +725,7 @@ def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model
     placed = columns(width - 6, [("label", "label", 0, False, 0), ("status", "status", 10, False, 0),
                                  ("slots", "slots", 5, True, 1), ("time", "time", 8, True, 2),
                                  ("cpu", "cpu use/share", 15, True, 3), ("pid", "pid", 6, True, 4)])
-    table_header(canvas, y, x, height, width, "REQUESTS", placed)
+    table_header(canvas, y, x, height, width, "QUEUE", placed)
     if not items:
         canvas.put(y + 2, x + 3, f"No requests · all {model['slots']} slots free", "dim", width - 6)
     visual_selected = row_items.index(selected) if selected in row_items else None
@@ -791,10 +792,16 @@ def detail_ticket(item: dict[str, Any], lane: dict[str, Any], context: dict[str,
     return ("#" + value if value.isdigit() else value), url
 
 
+def detail_title(item: dict[str, Any] | None) -> str:
+    return "LEASE DETAILS" if item is not None and item["kind"] != "waiting" else "REQUEST DETAILS"
+
+
 def draw_detail(canvas: Canvas, y: int, x: int, height: int, width: int, model: dict, selected: int,
                 cwd: str | None, moment: datetime.datetime) -> None:
-    canvas.box(y, x, height, width, "REQUEST DETAILS")
     items = cast(list[dict[str, Any]], model["holders"] + model["waiters"])
+    # The title follows the selection: a request whose lease holds slots has LEASE DETAILS; a waiting or yielded
+    # one, holding none, REQUEST DETAILS.
+    canvas.box(y, x, height, width, detail_title(items[selected] if items else None))
     inner = width - 6
     if not items:
         canvas.put(y + 2, x + 3, "Nothing to select · the queue is idle", "dim", inner)
@@ -1083,20 +1090,21 @@ HELP_CONTENT: list[tuple[str, str]] = [
     ("Each block is one slot: a unit of shared work capacity. Running requests hold slots; free slots are dim. Slots are a scheduling budget, not a CPU or memory limit.", "text"),
     ("One colour identifies one running request across its slots and row. Labels below the blocks name their owners; free marks unused capacity.", "text"),
     ("The header shows machine cores and shared slot capacity. manual means a saved capacity setting; auto means capacity calculated from the machine.", "text"),
-    ("REQUESTS", "title"),
-    ("Running requests come first, followed by a blank separator and waiting requests. ▶ and a soft background identify the selected row. Selection opens its REQUEST DETAILS.", "text"),
+    ("QUEUE", "title"),
+    ("Running requests come first, followed by a blank separator and waiting requests. ▶ and a soft background identify the selected row. Selection opens its details.", "text"),
     ("status: running, legacy from an earlier queue, or waiting #N. N is the request's current place in the waiting queue.", "text"),
     ("slots is the held or requested slot count. time is elapsed run time for running work and elapsed wait time for waiting work. pid is the lease owner.", "text"),
     ("cpu use/share: observed cores used by the request / the core budget represented by its slots. A request can exceed its share; it is not a hard limit. Waiting requests show no CPU reading.", "text"),
     ("Yellow CPU indicates nearly idle work holding slots; red means use well above its share.", "text"),
     ("↑ above and ↓ more count rows outside the visible table. Scroll with the wheel or move the selection to reveal them.", "text"),
-    ("REQUEST DETAILS", "title"),
+    ("LEASE DETAILS and REQUEST DETAILS", "title"),
+    ("The details title follows the selection: LEASE DETAILS for a running request, whose lease holds slots; REQUEST DETAILS for a waiting or yielded one, which holds none. The rows are the same.", "text"),
     ("label is the caller-supplied name. status gives the run or wait state and slot count. idle for means sustained near-zero observed CPU while still holding slots.", "text"),
-    ("For running work, cpu uses the same core scale as REQUESTS. granted shows when the lease started, how long it waited and how long it has run. memory is the process tree's resident memory.", "text"),
+    ("For running work, cpu uses the same core scale as QUEUE. granted shows when the lease started, how long it waited and how long it has run. memory is the process tree's resident memory.", "text"),
     ("owner pid is the process holding the lease. The process table includes it and its descendants, busiest first. Process CPU uses percent: 100% is one core.", "text"),
     ("priority is interactive, normal or batch; omitted priority is normal. Ticket is optional. Known caller context such as phase, kind, check, revision and session is shown separately; meta contains only custom fields.", "text"),
     ("receipt is the saved verification result: green or red, and current or stale relative to the lane branch. Green can include accepted failure classifications. Review is independent code review; unresolved counts findings without a recorded disposition.", "text"),
-    ("command is the launched work; meta is caller-supplied context; cwd is its working directory. Wheel anywhere in REQUEST DETAILS scrolls the whole panel, including its process table.", "text"),
+    ("command is the launched work; meta is caller-supplied context; cwd is its working directory. Wheel anywhere in the details scrolls the whole panel, including its process table.", "text"),
     ("Lane fields show optional context from lanefather: project, stage, branch, receipt and review. Stage is the lane lifecycle; phase describes this particular run. Ticket numbers are terminal hyperlinks; use your terminal's link gesture (usually Cmd-click on macOS). Missing or older lanefather versions leave request inspection available.", "text"),
     ("For waiting work, queued shows when the request joined and how long it has waited. free is currently unused slot capacity; ahead counts earlier waiting requests and their requested slots.", "text"),
     ("start est is the first waiting request's estimated start. Later work may backfill if its predicted finish, including a safety margin, is before this time, or if it uses only slots the protected request will not need.", "text"),
@@ -1116,7 +1124,7 @@ HELP_CONTENT: list[tuple[str, str]] = [
     ("The held chart shows occupied slots over time, newest on the right. Each column preserves its interval's peak; fractional heights show more than whole rows.", "text"),
     ("held/N is the slot scale; s/col is seconds per column. Blue is the bottom, orange is full capacity. avg is average occupancy; peak is the most held; full is time at capacity.", "text"),
     ("SETTINGS", "title"),
-    ("s opens Settings: a read-only STATUS of the queue above shared capacity, queue policy and this dashboard's refresh interval. ←/→ or Enter changes the selected setting and saves it at once; it applies at the next grant, also while requests run or wait. d resets the selected setting, D twice resets them all; Esc closes.", "text"),
+    ("s opens Settings: a read-only STATUS of the queue above shared capacity, queue policy and this dashboard's refresh interval. ←/→ shows the next value of the selected setting and saves it once the keys have settled for a second (Enter saves now, Esc cancels); Enter edits a number. A saved setting applies at the next grant, also while requests run or wait. d resets the selected setting, D twice resets them all; Esc closes.", "text"),
     ("A capacity below the held slots drains: running work keeps its slots, nothing more starts until no more than the capacity is held, and SLOTS shows draining N. The dashboard never cancels or kills work.", "dim"),
 ]
 
@@ -1395,6 +1403,8 @@ def dashboard_live(interval: float) -> None:
     canvas = Canvas(0, 0)
     with full_screen(fd_in, fd_out):
         while True:
+            if settings is not None and settings.tick():  # an arrow change settled: saved, so show its effect now
+                interval, force, dirty = settings.interval, True, True
             if force or (mouse_enabled and not paused and time.monotonic() - fetched >= interval):
                 try:
                     fresh = dashboard_model()

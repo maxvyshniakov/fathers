@@ -45,7 +45,7 @@ class DashboardTests(SlotCase):
     def test_table_headers_share_the_border_and_empty_messages_start_under_them(self):
         text = self.snapshot(width=220, height=50)
         lines = text.splitlines()
-        for title, message in (("REQUESTS", "No requests"), ("EVENTS", "No grants")):
+        for title, message in (("QUEUE", "No requests"), ("EVENTS", "No grants")):
             row = next(i for i, line in enumerate(lines) if title in line)
             self.assertEqual(lines[row].index(title), lines[row + 2].index(message))
             self.assertIn("╭", lines[row])
@@ -108,9 +108,9 @@ class DashboardTests(SlotCase):
         self.assertNotIn("next:", text)
         self.assertNotIn("2/4 held", text)
         self.assertIn("no admission",text)
-        self.assertIn("REQUESTS", text)
+        self.assertIn("─ QUEUE ", text)
+        self.assertNotIn("REQUESTS", text, "the request table is the QUEUE panel")
         self.assertNotIn("RUNNING", text)
-        self.assertNotIn("QUEUE", text)
         self.assertIn("│ ▶holder", text)
         self.assertEqual(1, text.count("▶"), "only the selected row has a cursor")
         self.assertRegex(text, r"gate +waiting #1 +4")
@@ -187,7 +187,7 @@ class DashboardTests(SlotCase):
                     return
             self.fail("live terminal did not render the expected selection")
         read_until(lambda text: re.search(r"label\s+click-owner", text) and re.search(r"status\s+running", text))
-        # REQUESTS starts at row 5: holder at 7, gap at 8, waiter at 9 (zero-based).
+        # QUEUE starts at row 5: holder at 7, gap at 8, waiter at 9 (zero-based).
         os.write(master, b"\x1b[<0;10;10M\x1b[<0;10;10m")
         read_until(lambda text: re.search(r"label\s+click-target",text) and re.search(r"status\s+waiting",text))
         os.write(master, b"m")
@@ -248,7 +248,7 @@ class SeparationTests(SlotCase):
             os.execve(TOOL, [TOOL], {**self.env, "TERM": "xterm-ghostty"})
         fcntl.ioctl(terminal, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 120, 0, 0))
         screen, deadline = b"", time.monotonic() + 15
-        while b"REQUESTS" not in screen and time.monotonic() < deadline:
+        while b"QUEUE" not in screen and time.monotonic() < deadline:
             if select.select([terminal], [], [], 0.1)[0]:
                 with contextlib.suppress(OSError):
                     screen += os.read(terminal, 65536)
@@ -266,7 +266,7 @@ class SeparationTests(SlotCase):
             os.kill(pid, 9)
             os.waitpid(pid, 0)
             self.fail("the dashboard did not quit on q")
-        self.assertIn(b"REQUESTS", screen)
+        self.assertIn(b"QUEUE", screen)
         self.assertIn(b"\x1b[?1000h\x1b[?1006h", screen)
         self.assertIn(b"\x1b[?1006l\x1b[?1000l", screen)
         self.assertEqual(0, os.waitstatus_to_exitcode(status))
@@ -291,7 +291,7 @@ class UnifiedLaneTests(unittest.TestCase):
         canvas=tool.Canvas(130,8)
         tool.draw_requests(canvas,0,0,8,130,model,1,now)
         lines=canvas.render(False).splitlines()
-        self.assertIn("REQUESTS",lines[0])
+        self.assertIn("QUEUE",lines[0])
         self.assertIn("active",lines[2])
         self.assertFalse(lines[3][1:-1].strip())
         self.assertIn("│ ▶pending",lines[4])
@@ -441,7 +441,7 @@ class DetailLayoutTests(unittest.TestCase):
         tool.draw_detail(canvas, 0, 0, 20, 70, {"holders": [item], "waiters": [], "cores": 12, "slots": 6},
                          0, "/project", now)
         lines = canvas.render(False).splitlines()
-        self.assertIn("REQUEST DETAILS", lines[0])
+        self.assertIn("LEASE DETAILS", lines[0], "a running request's lease holds slots")
         lane = next(i for i,line in enumerate(lines) if re.search(r"label\s+build", cast(str, line)))
         self.assertRegex(lines[lane + 1], r"status\s+running")
         command = next(i for i,line in enumerate(lines) if "command" in line)

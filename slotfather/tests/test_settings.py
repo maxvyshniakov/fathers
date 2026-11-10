@@ -158,15 +158,80 @@ class RenderTests(PanelCase):
         self.assertFalse(self.state.exists(), "viewing settings creates no queue")
 
 
+class Clock:
+    """A settable monotonic clock for the panel's settle, flash and reset-all timing."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
 class KeyTests(PanelCase):
-    def test_changing_a_choice_saves_it_at_once_and_flashes_what_it_did(self) -> None:
+    def setUp(self) -> None:
+        super().setUp()
+        self.clock = Clock()
+
+    def dialog(self, interval: float = 1.0) -> Any:
+        return self.settings.Settings(interval, clock=self.clock)
+
+    def settle(self, dialog: Any) -> bool:
+        self.clock.now += self.settings.SETTLE_SECONDS
+        return dialog.tick()
+
+    def test_an_arrow_change_shows_at_once_and_saves_after_the_keys_settle(self) -> None:
         dialog = self.dialog()
-        self.assertEqual("changed", dialog.key("right"))
+        self.assertEqual("handled", dialog.key("right"))
+        self.assertIsNone(self.saved_capacity(), "nothing is saved while the keys may still move")
+        text = self.panel(dialog, idle())
+        self.assertRegex(text, r"Capacity mode +‹ Fixed › +pending")
+        self.assertIn("→ 4 slots", text)
+        self.assertIn("… Capacity mode Fixed · saves in 1 s · Enter now · Esc cancels", text)
+        self.clock.now += 0.5
+        self.assertFalse(dialog.tick())
+        self.assertTrue(self.settle(dialog))
         self.assertEqual({"slots": 4}, self.saved_capacity(), "fixed keeps the current count")
         flash = [line for line in self.panel(dialog, idle()).split("\n") if "✓" in line]
         self.assertEqual(1, len(flash))
         self.assertRegex(flash[0], r"│ ✓ Saved · capacity 4 slots +│$", "one short line")
-        self.assertIn("4 slots (saved)", self.tool("slots").stdout)
+
+    def test_stepping_through_memory_never_saves_it_or_grants_by_it(self) -> None:
+        dialog = self.dialog()
+        saves: list[Any] = []
+        configure = self.settings.state.configure
+
+        def spy(changes: Any, **options: Any) -> None:
+            saves.append(changes)
+            configure(changes, **options)
+
+        with mock.patch.object(self.settings.state, "configure", spy):
+            for key in ("right", "right", "right"):  # Fixed, Memory, CPU + memory
+                self.clock.now += 0.4
+                dialog.key(key)
+                self.assertFalse(dialog.tick(), "each step restarts the settle")
+            self.assertTrue(self.settle(dialog))
+        self.assertEqual([{"capacity.json": {"slots": 4, "mode": "lower", "gib_per_slot": 4}}], saves)
+
+    def test_enter_saves_a_pending_change_now_and_escape_cancels_one(self) -> None:
+        dialog = self.dialog()
+        dialog.focus = "safety"
+        dialog.key("right")
+        self.assertEqual("changed", dialog.key("\r"))
+        self.assertEqual(3.5, self.saved_order()["safety"])
+        dialog.key("right")
+        self.assertEqual("handled", dialog.key("esc"), "the first Esc cancels the pending change")
+        self.assertFalse(self.settle(dialog))
+        self.assertEqual(3.5, self.saved_order()["safety"])
+        self.assertIn("Change cancelled", self.panel(dialog, idle()))
+        self.assertEqual("close", dialog.key("esc"))
+
+    def test_moving_on_saves_a_pending_change(self) -> None:
+        dialog = self.dialog()
+        dialog.focus = "safety"
+        dialog.key("right")
+        self.assertEqual("changed", dialog.key("down"))
+        self.assertEqual(("limit", 3.5), (dialog.focus, self.saved_order()["safety"]))
 
     def test_enter_edits_a_number_and_enter_saves_it(self) -> None:
         self.assertEqual(0, self.tool("slots", "4").returncode)
@@ -179,6 +244,20 @@ class KeyTests(PanelCase):
         self.assertEqual("changed", dialog.key("\r"))
         self.assertFalse(dialog.editing)
         self.assertEqual({"slots": 6}, self.saved_capacity())
+
+    def test_typed_capacity_has_an_upper_bound_and_a_large_grow_says_what_starts(self) -> None:
+        self.assertEqual(0, self.tool("slots", "4").returncode)
+        dialog = self.dialog()
+        self.panel(dialog, {**busy(4, 4, 3), "waiters": [{"count": 2}, {"count": 6}, {"count": 1}]})
+        for key in ("down", "\r", "4", "9"):
+            dialog.key(key)
+        self.assertIn("✗ At most 48 slots (4 per core).", self.panel(dialog, busy(4, 4, 3)))
+        self.assertEqual("handled", dialog.key("\r"))
+        self.assertEqual({"slots": 4}, self.saved_capacity())
+        for key in ("\x15", "1", "2"):
+            dialog.key(key)
+        model = {**busy(4, 4, 3), "waiters": [{"count": 2}, {"count": 6}, {"count": 1}]}
+        self.assertIn("→ 12 slots · will start 2 waiting", self.panel(dialog, model))
 
     def test_typing_a_digit_on_a_number_starts_editing_with_it(self) -> None:
         dialog = self.dialog()
@@ -211,14 +290,16 @@ class KeyTests(PanelCase):
         self.assertEqual("handled", dialog.key("\r"), "an empty field is refused")
         self.assertTrue(dialog.editing)
 
-    def test_arrows_step_a_number_and_save_each_step(self) -> None:
-        dialog = self.dialog()
-        dialog.focus = "safety"
-        self.assertEqual("changed", dialog.key("right"))
-        self.assertEqual(3.5, self.saved_order()["safety"])
+    def test_the_interval_steps_through_a_tenth_and_whole_seconds(self) -> None:
+        dialog = self.dialog(0.1)
         dialog.focus = "interval"
-        self.assertEqual("changed", dialog.key("right"))
-        self.assertEqual(2.0, dialog.interval)
+        seen: list[float] = []
+        for key in ("right", "right", "right", "left", "left", "left"):
+            dialog.key(key)
+            dialog.key("\r")
+            seen.append(dialog.interval)
+        self.assertEqual([1.0, 2.0, 3.0, 2.0, 1.0, 0.1], seen)
+        self.assertFalse(self.state.exists(), "no shared file for a local setting")
 
     def test_reset_restores_the_selected_field_alone(self) -> None:
         self.assertEqual(0, self.tool("slots", "6").returncode)
@@ -233,15 +314,30 @@ class KeyTests(PanelCase):
         self.assertIsNone(self.saved_capacity(), "a capacity field resets to automatic capacity")
         self.assertNotIn("amount", dialog.fields())
 
-    def test_reset_all_asks_twice_and_then_restores_every_default(self) -> None:
+    def test_a_field_that_disappears_takes_its_focus_and_keys_with_it(self) -> None:
+        self.assertEqual(0, self.tool("slots", "6").returncode)
+        dialog = self.dialog()
+        dialog.focus = "amount"
+        for key in ("d", "5"):  # one batch: Total slots is gone after the reset
+            dialog.key(key)
+        self.assertEqual("mode", dialog.focus)
+        self.assertFalse(dialog.editing)
+        self.assertIsNone(self.saved_capacity())
+        self.assertEqual((None, "This setting takes no typed value."), dialog.check("amount", "5"))
+        self.panel(dialog, idle())
+
+    def test_reset_all_asks_twice_within_the_flash_and_then_restores_every_default(self) -> None:
         self.assertEqual(0, self.tool("slots", "6").returncode)
         self.assertEqual(0, self.tool("order", "window").returncode)
         dialog = self.dialog(5.0)
         self.assertEqual("handled", dialog.key("D"))
         self.assertIn("Press D again", self.panel(dialog, idle()))
-        self.assertIsNotNone(self.saved_capacity())
         dialog.key("down")
         self.assertEqual("handled", dialog.key("D"), "another key in between withdraws the question")
+        self.clock.now += self.settings.FLASH_SECONDS + 0.1
+        self.assertEqual("handled", dialog.key("D"), "the question expires with its flash")
+        self.assertIsNotNone(self.saved_capacity())
+        self.clock.now += 1
         self.assertEqual("changed", dialog.key("D"))
         self.assertEqual((None, {}, 1.0), (self.saved_capacity(), self.saved_order(), dialog.interval))
 
@@ -257,7 +353,7 @@ class KeyTests(PanelCase):
         self.assertEqual(5.0, dialog.interval)
         self.assertFalse(self.state.exists(), "no shared file for a local setting")
 
-    def test_a_click_selects_a_field_and_a_second_click_edits_it(self) -> None:
+    def test_a_click_selects_a_field_a_second_click_edits_and_another_cancels_the_edit(self) -> None:
         dialog = self.dialog()
         self.panel(dialog, idle())
         _, left, top, _, _ = next(hit for hit in dialog.hits if hit[0] == "interval")
@@ -265,24 +361,77 @@ class KeyTests(PanelCase):
         self.assertEqual(("interval", False), (dialog.focus, dialog.editing))
         dialog.mouse(("mouse", 0, left + 3, top, True))
         self.assertTrue(dialog.editing)
+        dialog.key("7")
+        self.panel(dialog, idle())
+        _, left, top, _, _ = next(hit for hit in dialog.hits if hit[0] == "safety")
+        dialog.mouse(("mouse", 0, left + 3, top, True))
+        self.assertEqual(("safety", False, 1.0), (dialog.focus, dialog.editing, dialog.interval))
+        self.assertIn("Edit cancelled · nothing was saved", self.panel(dialog, idle()))
+
+    def test_below_the_minimum_size_only_the_ways_out_work(self) -> None:
+        dialog = self.dialog()
+        text = self.panel(dialog, idle(), width=28, height=10)
+        self.assertIn("Enlarge", text)
+        for key in ("right", "d", "D", "D", "\r", "5", "\r"):
+            self.assertEqual("handled", dialog.key(key))
+        self.assertEqual((False, None), (dialog.editing, dialog.pending))
+        self.assertFalse(self.state.exists())
+        self.assertEqual("quit", dialog.key("q"))
+        self.assertEqual("close", dialog.key("esc"))
 
     def test_changes_from_another_client_show_while_open_and_are_not_overwritten(self) -> None:
         dialog = self.dialog()
         self.assertEqual(0, self.tool("order", "window").returncode)
-        dialog.read_at = -1e9  # its next draw reads the shared settings
+        self.clock.now += self.settings.READ_EVERY
         self.assertRegex(self.panel(dialog, idle()), r"Queue order +Window")
         dialog.focus = "safety"
         dialog.key("right")
+        dialog.key("\r")
         self.assertEqual(("window", 3.5), (self.saved_order()["order"], self.saved_order()["safety"]))
+
+    def test_a_capacity_saved_elsewhere_while_typing_is_not_overwritten(self) -> None:
+        self.assertEqual(0, self.tool("slots", "4").returncode)
+        dialog = self.dialog()
+        for key in ("down", "\r", "3"):
+            dialog.key(key)
+        self.assertEqual(0, self.tool("slots", "6").returncode)
+        self.assertEqual("handled", dialog.key("\r"))
+        self.assertEqual({"slots": 6}, self.saved_capacity(), "the other save stands")
+        self.assertIn("✗ Capacity changed elsewhere: now 6 slots · nothing was saved", self.panel(dialog, idle()))
+        self.assertRegex(self.panel(dialog, idle()), r"Total slots +6")
+        dialog.key("\r")
+        dialog.key("3")
+        self.assertEqual("changed", dialog.key("\r"), "once it has read the new value it saves")
+        self.assertEqual({"slots": 3}, self.saved_capacity())
+
+    def test_two_dashboards_do_not_overwrite_each_others_capacity(self) -> None:
+        self.assertEqual(0, self.tool("slots", "4").returncode)
+        first, second = self.dialog(), self.dialog()
+        for dialog in (first, second):
+            dialog.focus = "amount"
+        first.key("right")
+        self.assertEqual("changed", first.key("\r"))
+        second.key("left")
+        self.assertEqual("handled", second.key("\r"))
+        self.assertEqual({"slots": 5}, self.saved_capacity())
+        self.assertIn("Capacity changed elsewhere: now 5 slots", self.panel(second, idle()))
 
     def test_a_refused_change_says_why_and_keeps_the_value(self) -> None:
         dialog = self.dialog()
-        dialog.key("right")  # Fixed, 4 slots
+        dialog.key("right")
+        dialog.key("\r")  # Fixed, 4 slots
         with mock.patch.dict(os.environ, {"SLOTFATHER_MEMORY_GIB": ""}), \
                 mock.patch.object(self.settings.platform, "memory_gib", return_value=None):
-            self.assertEqual("handled", dialog.key("right"), "Memory needs the machine's memory")
+            dialog.key("right")  # Memory needs the machine's memory
+            self.assertIn("memory is unknown", self.panel(dialog, idle()))
+            self.assertEqual("handled", dialog.key("\r"))
         self.assertIn("memory is unknown", self.panel(dialog, idle()))
         self.assertEqual({"slots": 4}, self.saved_capacity())
+
+    def test_status_shows_the_capacity_the_queue_read_under_its_lock(self) -> None:
+        dialog = self.dialog()
+        model = {**idle(9), "basis": {**dialog.basis, "slots": 9, "mode": "fixed", "saved": True}}
+        self.assertRegex(self.panel(dialog, model), r"capacity +9 slots · saved, fixed count")
 
 
 class LiveCapacityTests(PanelCase):
@@ -296,8 +445,10 @@ class LiveCapacityTests(PanelCase):
         self.wait_for(lambda: "waiting: 2 slot(s) waiter" in self.status(), "the waiter to queue")
         dialog = self.dialog()
         dialog.focus = "amount"
-        self.assertEqual("changed", dialog.key("right"))
-        self.assertEqual("changed", dialog.key("right"))
+        self.assertEqual("handled", dialog.key("right"))
+        self.assertEqual("handled", dialog.key("right"))
+        self.assertEqual({"slots": 4}, self.saved_capacity(), "5 on the way is never saved")
+        self.assertEqual("changed", dialog.key("\r"))
         self.assertEqual({"slots": 6}, self.saved_capacity())
         self.started("waiter")
         model = self.view.dashboard_model()
@@ -369,11 +520,12 @@ class TerminalTests(SlotCase):
                         return
                 self.fail(f"terminal did not show {fragment!r}: {screen.decode('utf-8', 'replace')!r}")
 
-            receive("REQUESTS")
+            receive("─ QUEUE ")
             os.write(master, b"s")
             receive("STATUS")
-            os.write(master, b"\x1b[C")  # Capacity mode: Automatic -> Fixed, saved at once
-            receive("Saved")
+            os.write(master, b"\x1b[C")  # Capacity mode: Automatic -> Fixed, shown at once
+            receive("saves in 1 s")
+            receive("Saved")  # once the keys have settled
             self.assertIn("4 slots (saved)", self.tool("slots").stdout)
             os.write(master, b"\x1b[B\r6\r")  # Total slots: type 6, Enter saves
             receive("capacity 6 slots")
@@ -382,7 +534,7 @@ class TerminalTests(SlotCase):
             receive("Edit cancelled")
             self.assertIn("6 slots (saved)", self.tool("slots").stdout)
             os.write(master, b"\x1b")
-            receive("REQUESTS")
+            receive("─ QUEUE ")
             os.write(master, b"q")
             deadline = time.monotonic() + 5
             while process.poll() is None and time.monotonic() < deadline:

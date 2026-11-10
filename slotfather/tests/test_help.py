@@ -28,7 +28,7 @@ class HelpTests(unittest.TestCase):
         canvas = view.Canvas(112, 220)
         view.draw_help(canvas)
         text = canvas.render(False)
-        for heading in ("KEYS", "SLOTS", "REQUESTS", "REQUEST DETAILS", "EVENTS", "MACHINE"):
+        for heading in ("KEYS", "SLOTS", "QUEUE", "LEASE DETAILS", "REQUEST DETAILS", "EVENTS", "MACHINE"):
             self.assertIn(heading, text)
         self.assertIn("start est", text)
         self.assertNotIn("backfill by", text)
@@ -143,7 +143,7 @@ class HelpTests(unittest.TestCase):
                             return plain
                     self.fail(f"terminal did not show {fragment!r}: {screen.decode('utf-8', 'replace')!r}")
 
-                receive("REQUESTS")
+                receive("─ QUEUE ")
                 before = {path.relative_to(state): path.read_bytes() for path in state.rglob("*") if path.is_file()}
                 screen.clear()
                 os.write(master, b"?")
@@ -156,7 +156,7 @@ class HelpTests(unittest.TestCase):
                 receive("In the dashboard")
                 screen.clear()
                 os.write(master, b"\x1b")
-                receive("REQUESTS")
+                receive("─ QUEUE ")
                 screen.clear()
                 os.write(master, b"?\x1b[F")
                 receive("never cancels or", "kills work.")

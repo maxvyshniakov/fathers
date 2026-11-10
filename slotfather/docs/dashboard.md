@@ -32,7 +32,13 @@ Space scroll a page, and Home / End or g / G jump to the ends. `?` / Esc close
 help; q still quits the dashboard. Help navigation preserves request selection and
 the tables' scroll positions.
 
-## Requests and details
+## Queue and details
+
+The QUEUE panel lists the queue: the running requests, then a blank separator
+and the waiting ones in the order the queue serves them. The details panel's title
+follows the selection: **LEASE DETAILS** for a running request, whose lease holds
+slots, and **REQUEST DETAILS** for a waiting or yielded request, which holds none.
+The rows are the same either way.
 
 Time is elapsed run time for a running request and elapsed wait time for a pending
 one. CPU use/share is **cores used / cores represented by the lease’s slots**;
@@ -87,8 +93,9 @@ scrolling never grants a lease, cancels work or kills a process.
 
 `s` opens a centered, scrollable Settings panel like Help. Its top block,
 **STATUS**, is read-only and live: the queue directory; total, free and held
-slots and waiting requests; the capacity and how it was found; the CPU and
-memory budgets; and how many slots are draining. Status rows have dim labels
+slots and waiting requests; the capacity and how it was found, as the dashboard's
+last look read it under the queue lock; the CPU and memory budgets; and how many
+slots are draining. Status rows have dim labels
 and no selection cursor. Below a rule are the editable settings, in three
 groups: shared capacity (mode, and total slots or GiB per slot), queue policy
 (order, safety multiplier, overtaking limit, unknown runtime, overrun factor,
@@ -96,22 +103,32 @@ interactive advance, batch delay, yield delay) and this dashboard's refresh
 interval. The selected setting has ▶, a soft background and a one-line
 description under the list.
 
-There is no draft. ←/→ (or Enter on a choice) changes the selected setting and
-saves it at once; Enter (or typing a digit) edits a number in place, Enter saves
-it and Esc leaves the field without saving. What a typed value would do shows
-under it: the capacity it gives and, below the held slots, `will drain N`.
-Invalid input is shown there in red and is never saved. A short line confirms
+There is no draft. ←/→ (Space, or Enter, on a choice) shows the next value at
+once, marked `pending`, and saves it once no key has moved it for one second;
+Enter saves it now, Esc cancels it, and moving to another setting saves it first.
+Stepping through the capacity modes therefore never applies the ones on the way.
+Enter (or typing a digit) edits a number in place; Enter saves it and Esc leaves
+the field without saving. What a pending or typed capacity would do shows under
+it: the slots it gives, `will drain N` below the held slots, or `will start N
+waiting` for a grow (by slot counts in queue order; backfill and memory checks
+can still hold some back). Invalid input is shown there in red and is never
+saved; a capacity above four slots per core is refused. A short line confirms
 each save. `d` resets the selected setting to its default (either capacity field
-returns to automatic capacity); `D` twice resets every setting. One hint line at
-the bottom lists the keys. A click selects a setting and a click on the selected
-one changes or edits it; the wheel scrolls inside the panel, and clicks outside
-it do not select requests underneath. `q` outside a field still quits.
+returns to automatic capacity); `D` twice within four seconds resets every
+setting. One hint line at the bottom lists the keys. A click selects a setting,
+cancelling an edit of another one, and a click on the selected one changes or
+edits it; the wheel scrolls inside the panel, and clicks outside it do not select
+requests underneath. `q` outside a field still quits. On a terminal too small
+for the panel only Esc, `s` and `q` work.
 
 Shared settings use the same rules and lock as `slotfather slots` and
 `slotfather order`, and apply at the queue's next grant, also while requests run
 or wait (see [configuration](configuration.md)). A shrink below the held slots
 drains: running work keeps its slots and nothing more starts until no more than
-the capacity is held; SLOTS shows `draining N` meanwhile. A policy change merges
+the capacity is held; SLOTS shows `draining N` meanwhile. A capacity change is
+refused, and nothing saved, when `capacity.json` changed since the panel read it
+(another dashboard or `slotfather slots`); the panel then shows the new value. A
+policy change merges
 with the saved file under the lock, so a concurrent CLI change to another knob is
 kept. The panel reads the shared settings again every second, so changes from
 other clients show while it is open. Values tightened by this dashboard's
@@ -120,7 +137,7 @@ never written to the shared queue. Another user's queue stays read-only.
 
 ## Lane context and details scrolling
 
-REQUEST DETAILS has one scroll position for its facts, lane context and process
+The details panel has one scroll position for its facts, lane context and process
 rows. Wheel anywhere inside the widget to scroll; the process table has no
 independent viewport. Selecting another request resets the details to the top.
 
