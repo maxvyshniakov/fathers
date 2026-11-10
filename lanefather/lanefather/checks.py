@@ -449,14 +449,15 @@ def classification_lines(classification: dict[str, Any]) -> list[str]:
     for entry in classification["checks"]:
         kind, detail = entry["class"], entry.get("reason", "")
         if kind == "regression":
+            # The receipt key stays "alone": the lane's rerun of the check by itself, at its own lease size.
+            again = "" if entry.get("alone", {}).get("status") == "not rerun" else " again when rerun by itself"
             detail = ("the base defines no such check" if entry["base"]["status"] == "absent"
-                      else f"fails {'' if entry.get('alone', {}).get('status') == 'not rerun' else 'alone '}on "
-                           f"the lane, the base {base} passes it")
+                      else f"fails on the lane{again}, the base {base} passes it")
         elif kind == "pre-existing":
             detail = f"the base {base} fails it too ({entry['base']['log']})"
         elif kind == "flaky-under-load":
             detail = (f"passes rerun by itself; load averages {'/'.join(map(str, entry['load']['first_run']))} "
-                      f"after the lane run, {'/'.join(map(str, entry['load']['alone']))} after the reruns")
+                      f"after the lane run, {'/'.join(map(str, entry['load']['alone']))} after its rerun")
         lines.append(f"  {entry['check']}: {kind}: {detail}")
     if classification["unaccounted"]:
         lines.append(f"  not rerun (no check of a suite): {', '.join(classification['unaccounted'])}")

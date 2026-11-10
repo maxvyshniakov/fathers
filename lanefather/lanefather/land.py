@@ -69,9 +69,10 @@ def merge_problem(args: Any, tip: str, tree: str, receipt: dict[str, Any] | None
                + (f"; not run: {', '.join(unstarted)}" if unstarted else "") + ")")
     entries = [e for e in (receipt.get("classification") or {}).get("checks", []) if e["class"] == "regression"]
     if entries:
-        alone = all((e.get("alone") or {}).get("status") != "not rerun" for e in entries)
-        problem += (f"; regression: {', '.join(e['check'] for e in entries)} fails "
-                    f"{'alone ' if alone else ''}on the lane and passes on its base "
+        # The receipt key stays "alone": the lane's rerun of the check by itself, at its own lease size.
+        rerun = all((e.get("alone") or {}).get("status") != "not rerun" for e in entries)
+        problem += (f"; regression: {', '.join(e['check'] for e in entries)} fails on the lane"
+                    f"{' again when rerun by itself' if rerun else ''} and passes on its base "
                     f"{receipt['classification']['base'][:10]}")
     return problem
 

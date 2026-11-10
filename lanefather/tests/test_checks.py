@@ -312,11 +312,13 @@ class RedCheckClassificationTests(LaneCase):
         self.assertEqual(entry["base"]["sha"], base)
         self.assertEqual(entry["base"]["status"], "passed")
         self.assertEqual(self.receipt("core")["status"], "red")
-        self.assertIn("native-check: regression", output)
+        self.assertIn(f"native-check: regression: fails on the lane again when rerun by itself, the base {base[:10]} "
+                      "passes it", output)
         # The disposable base checkout is gone.
         self.assertEqual(self.base_checkouts("core"), [])
         refusal = self.lane("land", "core", ok=False)
-        self.assertIn("regression: native-check", refusal)
+        self.assertIn("regression: native-check fails on the lane again when rerun by itself and passes on its base",
+                      refusal)
 
     def test_a_check_its_base_fails_too_is_pre_existing_and_names_the_base_failure(self):
         # The integration branch already breaks the frozen corpus; the lane changes another native file.
