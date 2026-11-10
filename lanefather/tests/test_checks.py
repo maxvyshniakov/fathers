@@ -72,6 +72,47 @@ class ClaimsFollowTheDiffTests(LaneCase):
         self.assertNotIn("warning", output)
 
 
+class NewestMergeBaseTests(LaneCase):
+    """lanefather#3: a lane registered at a literal commit keeps it after it merges the integration branch, and
+    check then planned and widened claims from everything the integration gained since (Straylight 515: 148 files
+    instead of 10, the full gate, and false overlap warnings)."""
+
+    def queue(self, base: str) -> None:
+        path = self.state.parent / "queue" / "queue.toml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f'base = "{base}"\n')
+
+    def literal_lane(self, lane_id: str, claim: str) -> str:
+        self.lane("start", lane_id, "--ticket", "404", "--base", self.tip(), "--claims", claim, "--create")
+        return self.record(lane_id)["worktree"]
+
+    def test_a_literal_base_lane_that_merged_the_integration_branch_plans_against_its_tip(self):
+        self.queue("integrate/q")
+        worktree = self.literal_lane("a", "lib/**")
+        self.created("other", "unowned/**")
+        # The integration gains a path no check reads (the full gate) and one another lane claims.
+        moved = self.commit(self.integration, {"unowned/arrived.txt": "x\n"}, "the integration moves on")
+        self.git(worktree, "merge", "-q", "--no-edit", "integrate/q")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        output = self.lane("check", "a")
+        receipt = json.loads((self.state / "a.receipt.json").read_text())
+        self.assertEqual(receipt["base"], moved)
+        self.assertFalse(receipt["full"], output)
+        self.assertEqual((receipt["outside_claims"], receipt["claim_overlaps"]), ([], []))
+        self.assertNotIn("warning", output)
+        self.assertEqual(self.record("a")["claims"], ["lib/**"])
+        self.assertEqual(self.record("a")["base"], self.record("a")["base_sha"], "the registration stays as it was")
+
+    def test_a_lane_that_did_not_merge_the_integration_branch_keeps_its_own_base(self):
+        self.queue("integrate/q")
+        worktree = self.literal_lane("a", "lib/**")
+        base = self.record("a")["base_sha"]
+        self.commit(self.integration, {"unowned/arrived.txt": "x\n"}, "the integration moves on")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.assertEqual(json.loads((self.state / "a.receipt.json").read_text())["base"], base)
+
+
 class LoadThrottleTests(LaneCase):
     """#572: every result records the load at its verify run's start and end. Owner decision on the #572 review: the
     load wait is off by default; with LANEFATHER_LOAD_THROTTLE=1 a verify run of check, land or promote starts only while

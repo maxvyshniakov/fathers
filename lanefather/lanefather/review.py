@@ -25,7 +25,7 @@ from typing import Any
 from . import claims, config, done, journal, lanes, reviewer, state, worktrees
 from .checks import terminable
 from .errors import LaneError
-from .gitops import common_dir, git, git_ok, main_checkout
+from .gitops import common_dir, current_branch, git, git_ok, main_checkout
 from .state import Record
 
 SEVERITIES = ("P1", "P2", "P3")
@@ -399,6 +399,24 @@ def fix_claims(receipt: dict[str, Any], fix_id: str) -> tuple[list[str], list[st
     return found, lines
 
 
+def fix_base(record: Record, cwd: str) -> str:
+    """The branch a fix lane starts from (lanefather#1): the one checked out in the worktree the lane landed into,
+    else its registration's base when that is a branch; either must hold the landed merge. A lane registered at a
+    literal commit keeps that commit as its own base, which lacks what it landed."""
+    landed: dict[str, Any] = record.get("landed") or {}
+    merge: str = landed.get("merge") or ""
+    integration: str = landed.get("integration") or ""
+    into = current_branch(integration) if integration and os.path.isdir(integration) else ""
+    for ref in dict.fromkeys(r for r in (into, record["base"]) if r):
+        if (merge and git_ok(cwd, "show-ref", "--verify", "--quiet", f"refs/heads/{ref}")
+                and git_ok(cwd, "merge-base", "--is-ancestor", merge, ref)):
+            return ref
+    where = f"{integration} is on {into}" if into else f"{integration} has no branch checked out"
+    raise LaneError(f"hand-over refused: no branch holds lane {record['id']}'s merge {merge[:10]} ({where}, and "
+                    f"its base {record['base']} is not such a branch): check out the integration branch the lane "
+                    f"landed on in {integration}, then run {config.prog()} review {record['id']} --fix-lane again")
+
+
 def hand_over(args: Any) -> int:
     """The fix round: a follow-up lane <id>-review-fixes takes over the landed lane's worktree, where the resumed
     agent keeps its context (a resumed agent is fenced to its own worktree); its land is the fix and gets no
@@ -414,7 +432,7 @@ def hand_over(args: Any) -> int:
     fix_id = f"{args.id}-review-fixes"
     main = main_checkout(record["common_dir"])
     fix_paths, held = fix_claims(receipt, fix_id)
-    fix, rules = lanes.prepare(main, fix_id, record["ticket"], fix_paths, record["base"], [])
+    fix, rules = lanes.prepare(main, fix_id, record["ticket"], fix_paths, fix_base(record, main), [])
     fix.update(review_fix_of=args.id, worktree=record["worktree"])
     lanes.register(fix, rules, args.force_reason, False)
     for line in held:

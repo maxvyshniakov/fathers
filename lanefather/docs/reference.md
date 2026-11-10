@@ -26,6 +26,13 @@ claim without wildcards names a directory, and everything under it, when it ends
 (or submodule) there, or, for a path HEAD does not have, when its last segment has no extension; otherwise it names
 that one file.
 
+check plans the lane's diff, and widens its claims, against the newest merge-base of the lane's HEAD: with its
+base, or with the tip of an integration branch (the branch of the worktree it lands into, its parent's for a fix
+lane, the ranked queue's `base`) when that merge-base descends from the former. A lane registered at a literal
+commit that merged the integration branch is planned from that merge, not from everything the integration gained
+since. `review <id> --fix-lane` starts the fix lane from the branch the lane landed on, which holds its merge, and
+refuses when no branch does; the landed lane keeps its own registration.
+
 `lanefather --help` describes the commands. The [glossary](../GLOSSARY.md) distinguishes lane states, receipts,
 reviews and verification gates.
 

@@ -21,7 +21,7 @@ import time
 from types import FrameType
 from typing import Any, TextIO
 
-from . import claims, config, host, journal, plan, slots, state, worktrees
+from . import claims, config, host, journal, plan, queue, slots, state, worktrees
 from .errors import LaneError
 from .gitops import current_branch, dirty, git, git_ok
 from .state import Record
@@ -489,6 +489,43 @@ def changed_red_tests_line(tests: list[dict[str, Any]]) -> str:
             "confirms each change fixes the test rather than hides a regression (#568)")
 
 
+# The base a check plans against
+
+def integration_refs(record: Record) -> list[str]:
+    """The branches a lane may have merged its integration from: the branch checked out in the worktree it lands
+    (or landed) into, the one its parent landed into for a fix lane, and the ranked queue's base."""
+    def landed_into(lane: dict[str, Any]) -> Any:
+        landed: dict[str, Any] = lane.get("landed") or {}
+        return landed.get("integration")
+
+    places: list[Any] = [record.get("integration"), landed_into(record)]
+    if record.get("review_fix_of"):
+        places.append(landed_into(state.read_json(state.record_path(record["review_fix_of"])) or {}))
+    refs = [branch for path in places if isinstance(path, str) and os.path.isdir(path)
+            for branch in [current_branch(path)] if branch]
+    try:
+        settings, _ = queue.read_queue()
+    except LaneError:
+        settings = {}
+    if isinstance(settings.get("base"), str) and settings["base"]:
+        refs.append(settings["base"])
+    return list(dict.fromkeys(refs))
+
+
+def plan_base(record: Record, worktree: str) -> str:
+    """The newest merge-base of the lane's HEAD (lanefather#3): with its base, or with an integration branch tip
+    when that merge-base descends from the former. A lane registered at a literal commit keeps it after it merges
+    the integration branch; planning against it would count all the integration gained since as the lane's diff."""
+    base_ref = git(worktree, "rev-parse", "--verify", "--quiet", record["base"] + "^{commit}", check=False)
+    base = git(worktree, "merge-base", "HEAD", base_ref or record["base_sha"])
+    for ref in integration_refs(record):
+        tip = git(worktree, "rev-parse", "--verify", "--quiet", ref + "^{commit}", check=False)
+        newer = git(worktree, "merge-base", "HEAD", tip, check=False) if tip else ""
+        if newer and newer != base and git_ok(worktree, "merge-base", "--is-ancestor", base, newer):
+            base = newer
+    return base
+
+
 # The command
 
 def check(args: Any) -> int:
@@ -520,8 +557,7 @@ def check(args: Any) -> int:
             print(f"Receipt current: green for tree {tree} ({path})")
             return 0
         print("lane: the Rust toolchain changed since the receipt (#571); running the checks again")
-    base_ref = git(worktree, "rev-parse", "--verify", "--quiet", record["base"] + "^{commit}", check=False)
-    base = git(worktree, "merge-base", "HEAD", base_ref or record["base_sha"])
+    base = plan_base(record, worktree)
     lane_plan = plan.plan_for(worktree, base)
     suites: list[str] = lane_plan["selected"]
     selected: dict[str, list[str]] | None = lane_plan["by_suite"]

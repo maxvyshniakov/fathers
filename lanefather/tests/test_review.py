@@ -1,6 +1,7 @@
 """Tests of the independent review (lanefather.review): replays of orchestration incidents in scratch Git repositories (support.py)."""
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import shutil
@@ -277,6 +278,45 @@ class ReviewGateTests(ReviewGateCase):
         self.assertEqual(self.review("a")["findings"][0]["mark"]["merge"], merge)
         self.assertEqual(self.record("a")["status"], "done")
         self.lane("promote", self.tip(), "--no-push", "--wait", "0")
+
+    def test_a_literal_base_lane_landed_with_into_gets_a_fix_lane_on_the_integration_branch(self):
+        # Replay (lanefather#1): voice-p2-provider-benchmark registered at a commit, landed with --into, and its fix
+        # header said git checkout -B <fix> <that commit>, which lacks the files to fix.
+        self.review_text.write_text(TWO_FINDINGS)
+        registered = self.tip()
+        self.lane("start", "a", "--ticket", "404", "--base", registered, "--claims", "lib/**", "--create")
+        worktree = self.record("a")["worktree"]
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.lane("land", "a", "--into", str(self.integration))
+        self.lane("review", "a")
+        output = self.lane("review", "a", "--fix-lane")
+        self.assertIn("git checkout -B lane/a-review-fixes integrate/q", output)
+        self.assertNotIn(registered, output)
+        fix = self.record("a-review-fixes")
+        self.assertEqual((fix["base"], fix["base_sha"]), ("integrate/q", self.record("a")["landed"]["merge"]))
+        self.assertEqual(self.record("a")["base"], registered, "the landed lane keeps its registration")
+        # The integration advances; the fix branch starts from its tip and plans only the fix.
+        self.commit(self.integration, {"unowned/arrived.txt": "x\n"}, "the integration moves on")
+        self.git(worktree, "checkout", "-q", "-B", "lane/a-review-fixes", "integrate/q")
+        self.commit(worktree, {"calls/main.txt": "foo\nbaz\n"}, "fix(review): call baz")
+        self.lane("check", "a-review-fixes", cwd=worktree)
+        receipt = json.loads((self.state / "a-review-fixes.receipt.json").read_text())
+        self.assertEqual(receipt["outside_claims"], ["calls/main.txt"])
+        self.assertFalse(receipt["full"])
+
+    def test_a_fix_lane_is_refused_when_no_branch_holds_the_landed_merge(self):
+        self.review_text.write_text(TWO_FINDINGS)
+        self.lane("start", "a", "--ticket", "404", "--base", self.tip(), "--claims", "lib/**", "--create")
+        self.commit(self.record("a")["worktree"], {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.lane("land", "a", "--into", str(self.integration))
+        self.lane("review", "a")
+        self.git(self.integration, "checkout", "-q", "--detach", self.record("a")["landed"]["previous"])
+        output = self.lane("review", "a", "--fix-lane", ok=False)
+        self.assertIn(self.record("a")["landed"]["merge"][:10], output)
+        self.assertIn(str(self.integration), output)
+        self.assertFalse((self.state / "a-review-fixes.json").exists())
 
     def test_the_fix_lane_claims_only_the_files_its_findings_name_and_check_widens_it_from_its_diff(self):
         """#586: the fix lane inherits none of the landed lane's claims, so a lane started since on a path the
