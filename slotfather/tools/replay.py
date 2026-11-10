@@ -18,8 +18,8 @@ uniform time up to the policy's `step` seconds, and queues again with the rest o
 current order's replay against the recorded waits, then per order the waits of the requests that arrived from
 --since (default the first request in the history) to --until, and the slot-hours idle meanwhile while someone
 waited, while a waiter fitted the idle slots, and while a one-slot normal or interactive waiter did (`1-idle`). A
-batch or yieldable request for the whole machine waits for a quiet machine by design (#5): its waits count apart
-(`whole`). Reads only; run it from a checkout.
+batch request for the whole machine lets waiting normal and interactive work go first by design (#5): its waits
+count apart (`whole`), beside the headline. Reads only; run it from a checkout.
 """
 from __future__ import annotations
 import sys as _path_sys
@@ -221,6 +221,19 @@ def live_fields(entry: Any, granted: float | None) -> dict[str, Any]:
             "give_up": None if granted is not None else sf_config.seconds(entry.get("until"))}
 
 
+def leaves_at(request: Any) -> float | None:
+    """When a request gives up: its client's wait, else, for one that left the queue, the wait it had."""
+    if request.get("give_up") is not None:
+        return request["give_up"]
+    return request["arrival"] + request["patience"] if request["patience"] is not None else None
+
+
+def whole_batch(entry: dict[str, Any], slots: int) -> bool:
+    """A batch request for the whole machine: the one that pays for #5 by waiting for normal and interactive work
+    to stop waiting."""
+    return sf_schedule.deferring(entry) and sf_schedule.whole_machine(entry, slots)
+
+
 def one_slot_waits(waiting: Any) -> bool:
     """Whether a one-slot normal or interactive request is among the waiting entries."""
     return any(entry["count"] == 1 and entry["priority"] != "batch" for entry in waiting)
@@ -254,7 +267,8 @@ def short_first(limit: float, bonus: float) -> Callable[[list[dict[str, Any]], C
     return order
 
 
-def plan_all_only(waiters, held, slots, moment, estimate, settings):
+def plan_all_only(waiters: list[dict[str, Any]], held: list[dict[str, Any]], slots: int, moment: float,
+                  estimate: sf_schedule.Estimate, settings: dict[str, Any]) -> sf_schedule.Plan:
     """Backfill around an all-slot waiter only; any other waiter that does not fit keeps the window order."""
     first = sf_schedule.plan(waiters, held, slots, moment, "window", settings=settings)
     if not any(e["count"] >= slots for e in waiters):
@@ -284,7 +298,7 @@ class Replay:
         found = self.assumed.get("estimates").of(request["label"], request["cmd"]) if self.assumed else None
         return float(found if found is not None else ASSUMED_RUN)
 
-    def estimate(self, entry: dict) -> float | None:
+    def estimate(self, entry: dict[str, Any]) -> float | None:
         if self.policy.get("oracle"):
             return self.run_of(self.requests[entry["id"]])
         found = self.estimates.of(entry.get("label"), entry.get("cmd"))
@@ -294,7 +308,7 @@ class Replay:
             found *= math.exp(error)
         return None if found is None else found * bias
 
-    def settings(self) -> dict:
+    def settings(self) -> dict[str, Any]:
         """The queue's defaults before classes (no class moves, nobody asked), and what the policy changes."""
         return {**sf_config.ORDER_DEFAULTS, "interactive": 0.0, "batch": 0.0, "yield_after": 0.0,
                 **self.policy.get("settings", {})}
@@ -304,14 +318,15 @@ class Replay:
         `step` seconds, fixed per request."""
         return random.Random(f"step-{number}").uniform(0, self.policy.get("step", 120))
 
-    def decide(self, waiting: list[dict], held: list[dict], moment: float) -> list[dict]:
+    def decide(self, waiting: list[dict[str, Any]], held: list[dict[str, Any]], moment: float) -> list[dict[str, Any]]:
         """The grants of the policy's order with its settings (the queue's defaults, and what it changes)."""
         name = self.policy["order"]
         settings = self.settings()
         if name == "all-only":
             return plan_all_only(waiting, held, self.slots, moment, self.estimate, settings).grants
         if name.startswith("short"):
-            ordered, bonus = self.policy["reorder"](waiting, self.estimate)
+            reorder = cast(Callable[..., tuple[list[dict[str, Any]], float]], self.policy["reorder"])
+            ordered, bonus = reorder(waiting, self.estimate)
             inner = "backfill" if name == "short+backfill" else "window"
             found = sf_schedule.plan(ordered, held, self.slots, moment, inner, self.estimate,
                             settings={**settings, "interactive": bonus, "batch": 0.0}).grants
@@ -334,17 +349,19 @@ class Replay:
                     os.environ[key] = value
 
     def _simulate(self) -> list[dict]:
-        events, order = [], 0
+        events: list[tuple[Any, ...]] = []
+        order = 0
         for request in self.requests:
             heapq.heappush(events, (request["arrival"], 0, order, "arrive", request["id"]))
             order += 1
-        waiting, held = {}, {}
+        waiting: dict[int, dict[str, Any]] = {}
+        held: dict[int, dict[str, Any]] = {}
         result: dict[int, dict[str, Any]] = {r["id"]: {"id": r["id"], "granted": None, "ended": None, "left": None, "yields": 0,
                             "yielded": 0.0, "class": self.classes[r["id"]], "defers": False} for r in self.requests}
-        remaining = {}  # id -> seconds of its run still to go when it was last granted
-        began = {}  # id -> moment of its last grant
-        generation = {}  # id -> grant count, so an end scheduled before a yield is ignored
-        asked = {}  # holder id -> moment it was asked
+        remaining: dict[int, float] = {}  # id -> seconds of its run still to go when it was last granted
+        began: dict[int, float] = {}  # id -> moment of its last grant
+        generation: dict[int, int] = {}  # id -> grant count, so an end scheduled before a yield is ignored
+        asked: dict[int, int] = {}  # holder id -> the id of the waiter that asked it
         # (from, to, slots held, someone waits, a waiter fits the free slots, a one-slot normal or interactive
         # waiter fits them)
         segments: list[Any] = []
@@ -366,14 +383,13 @@ class Replay:
                                    "count": min(request["count"], self.slots), "since": stamp(request["arrival"]),
                                    "state": "waiting", "priority": cls,
                                    "yieldable": client_yields(request, cls, self.slots)}
-                result[number]["defers"] = sf_schedule.deferring(waiting[number], self.slots)
+                result[number]["defers"] = whole_batch(waiting[number], self.slots)
                 remaining[number] = self.run_of(request)
                 give_up = request.get("give_up")
                 if give_up is not None and self.policy.get("until", True):
                     # Its client's wait (run --wait), which the queue knows from its entry.
                     waiting[number]["until"] = stamp(give_up)
-                if give_up is None and request["patience"] is not None:
-                    give_up = request["arrival"] + request["patience"]
+                give_up = leaves_at(request)
                 if give_up is not None:
                     heapq.heappush(events, (give_up, 1, order, "leave", number))
                     order += 1
@@ -462,9 +478,9 @@ def percentile(values: list[float], q: float) -> float:
 
 
 def measure(requests: list[dict], results: list[dict], start: float, until: float, replay: Replay) -> dict:
-    """The waits of the requests that arrived from `start` to `until`, and the slot-hours idle meanwhile. A batch or
-    yieldable request for the whole machine (sf_schedule.deferring()) waits for the machine to be quiet by design
-    (#5): its waits count apart, under "deferring", and not in the others."""
+    """The waits of the requests that arrived from `start` to `until`, and the slot-hours idle meanwhile. A batch
+    request for the whole machine (whole_batch()) lets waiting normal and interactive work go first by design (#5):
+    its waits count apart, under "whole", and not in the others."""
     waits, large, left = [], [], 0
     deferred: list[float] = []
     deferred_left = 0
@@ -508,7 +524,7 @@ def measure(requests: list[dict], results: list[dict], start: float, until: floa
             "large_mean_s": sum(large) / max(1, len(large)), "large_max_s": max(large, default=0),
             "idle_slot_h": idle / 3600, "blocked_slot_h": blocked / 3600, "small_blocked_slot_h": small / 3600,
             "held_mean": held / max(1.0, until - start), "never_ran": left,
-            "deferring": {"requests": len(deferred), "mean_s": sum(deferred) / max(1, len(deferred)),
+            "whole": {"requests": len(deferred), "mean_s": sum(deferred) / max(1, len(deferred)),
                           "max_s": max(deferred, default=0), "never_ran": deferred_left}}
 
 
@@ -628,17 +644,17 @@ def report(summary: dict) -> str:
         lines.append(f"current order vs recorded waits ({v['requests']} requests): recorded {v['recorded_h']:.1f} h, "
                      f"replayed {v['replayed_h']:.1f} h, mean abs error {v['mean_abs_error_s']:.0f} s, p90 "
                      f"{v['p90_abs_error_s']:.0f} s, {v['within_60s']:.0%} within 60 s")
-    head = f"{'order':<32} {'total h':>7} {'mean s':>7} {'p90 s':>7} {'max s':>7} {'≥3 mean':>8} {'≥3 max':>7} " \
-           f"{'idle sh':>7} {'fit-idle':>8} {'1-idle':>6} {'held':>5} {'gave up':>7} {'whole n':>7} {'mean s':>7} " \
-           f"{'max s':>7} {'gave up':>7}"
+    head = f"{'order':<32} {'total h':>7} {'whole n':>7} {'mean s':>7} {'max s':>7} {'gave up':>7} | " \
+           f"{'mean s':>7} {'p90 s':>7} {'max s':>7} {'≥3 mean':>8} {'≥3 max':>7} {'idle sh':>7} {'fit-idle':>8} " \
+           f"{'1-idle':>6} {'held':>5} {'gave up':>7}"
     lines += ["", head]
     for name, m in summary["policies"].items():
-        d = cast(dict[str, Any], m["deferring"])
-        lines.append(f"{name:<32} {m['total_h']:>7.1f} {m['mean_s']:>7.0f} {m['p90_s']:>7.0f} {m['max_s']:>7.0f} "
+        d = cast(dict[str, Any], m["whole"])
+        lines.append(f"{name:<32} {m['total_h']:>7.1f} {d['requests']:>7} {d['mean_s']:>7.0f} {d['max_s']:>7.0f} "
+                     f"{d['never_ran']:>7} | {m['mean_s']:>7.0f} {m['p90_s']:>7.0f} {m['max_s']:>7.0f} "
                      f"{m['large_mean_s']:>8.0f} {m['large_max_s']:>7.0f} {m['idle_slot_h']:>7.1f} "
                      f"{m['blocked_slot_h']:>8.1f} {m['small_blocked_slot_h']:>6.1f} {m['held_mean']:>5.2f} "
-                     f"{m['never_ran']:>7} {d['requests']:>7} {d['mean_s']:>7.0f} {d['max_s']:>7.0f} "
-                     f"{d['never_ran']:>7}")
+                     f"{m['never_ran']:>7}")
     counts = next(iter(summary["policies"].values()))["classes"]
     sizes = ", ".join(f"{n} {c['requests']}" for n, c in counts.items())
     lines += ["", f"by class ({sizes}; batch delay: its wait plus the time it yielded)",

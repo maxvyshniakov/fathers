@@ -11,7 +11,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Any, cast
+from typing import Any
 
 from . import config as _config
 from . import platform as _platform
@@ -20,10 +20,13 @@ from . import schedule as _schedule
 from . import state as _state
 
 
-def reap(directory: Path, table: dict) -> list[tuple[Path, dict]]:
+Table = dict[int, tuple[int, str]]  # the process table: pid -> (parent pid, start time)
+
+
+def reap(directory: Path, table: Table) -> list[tuple[Path, dict[str, Any]]]:
     """Live entries in queue order; removes those whose holder exited or crashed (in another user's queue it only
     leaves them out)."""
-    live = []
+    live: list[tuple[Path, dict[str, Any]]] = []
     readonly = _state.foreign_owner(directory) is not None
     for path, entry in _state.entries(directory):
         if _platform.alive(entry, table):
@@ -37,10 +40,10 @@ def reap(directory: Path, table: dict) -> list[tuple[Path, dict]]:
     return live
 
 
-def legacy_holders(table: dict) -> list[tuple[Path, dict, int]]:
+def legacy_holders(table: Table) -> list[tuple[Path, dict[str, Any], int]]:
     """Held leases with a live holder in the earlier queues: (path, entry, slots here). Read only: their own
     clients reap them."""
-    found = []
+    found: list[tuple[Path, dict[str, Any], int]] = []
     for directory in _config.legacy_dirs():
         for path, entry in _state.entries(directory):
             if entry.get("state") == "held" and _platform.alive(entry, table):
@@ -48,7 +51,7 @@ def legacy_holders(table: dict) -> list[tuple[Path, dict, int]]:
     return found
 
 
-def legacy_used(table: dict) -> int:
+def legacy_used(table: Table) -> int:
     return sum(count for _, _, count in legacy_holders(table))
 
 
@@ -67,8 +70,8 @@ def resume(entry: dict, moment: float | None = None) -> None:
         entry.pop(key, None)
 
 
-def ask(directory: Path, live: list[tuple[Path, dict]], held: list[dict], waiters: list[dict],
-        estimate, other: int, settings: dict) -> None:
+def ask(directory: Path, live: list[tuple[Path, dict[str, Any]]], held: list[dict[str, Any]],
+        waiters: list[dict[str, Any]], estimate: _schedule.Estimate, other: int, settings: dict[str, Any]) -> None:
     """Writes the yield requests yield_asks() wants and withdraws the others. Under the queue lock. `settings` are
     the saved ones without this client's environment, so that every client's look asks alike (a waiter whose
     client asks later or never says so on its entry)."""
@@ -82,7 +85,7 @@ def ask(directory: Path, live: list[tuple[Path, dict]], held: list[dict], waiter
             who = asks[id(entry)]
             if place.exists():
                 continue
-            _state.write(place, {"by": paths[id(who)].stem, "label": who.get("label"), "priority": _config.priority_of(cast(dict[str, Any], who)),
+            _state.write(place, {"by": paths[id(who)].stem, "label": who.get("label"), "priority": _config.priority_of(who),
                           "count": who["count"], "at": _config.now()})
             _state.log(directory, f"asked {entry['label']} (pid {entry['pid']}) to yield {entry['count']} for "
                            f"{who.get('label')}")
@@ -166,7 +169,7 @@ def held_again(path: Path) -> None:
         time.sleep(min(poll, max(0.0, look - time.monotonic())))
 
 
-def grant(directory: Path, table: dict) -> str | None:
+def grant(directory: Path, table: Table) -> str | None:
     """Grant the waiters plan() starts, in their order, while memory allows; then ask yieldable holders to yield for
     interactive waiters that still wait (yield_asks()). Returns why the first that does not start still waits."""
     live = reap(directory, table)
@@ -253,7 +256,7 @@ class Lease:
         self.release()
 
 
-def inherited_lease(table: dict) -> tuple[Path, dict, int] | None:
+def inherited_lease(table: Table) -> tuple[Path, dict[str, Any], int] | None:
     """The held lease this process runs under, here or in an earlier queue: (path, entry, slots here)."""
     mine = _platform.ancestors(table, os.getpid())
     own = _config.setting("LEASE")
@@ -267,7 +270,7 @@ def inherited_lease(table: dict) -> tuple[Path, dict, int] | None:
     return None
 
 
-def inherited(table: dict) -> Lease | None:
+def inherited(table: Table) -> Lease | None:
     found = inherited_lease(table)
     if found is None:
         return None
@@ -401,7 +404,7 @@ def run(count: int | str, label: str, argv: list[str], wait: float | None = None
     from . import usage as _usage
     try:
         background = policy() == "background"
-        note = "" if count != "all" else _config.QUIET_NOTE if yieldable or priority == "batch" else _config.ALL_NOTE
+        note = _config.BATCH_NOTE if priority == "batch" else _config.ALL_NOTE if count == "all" else ""
         lease = acquire(count, label, " ".join(argv), wait=wait, note=note, meta=meta,
                         yieldable=yieldable, priority=priority, ticket=ticket)
     except _config.SlotTimeout as error:

@@ -118,7 +118,7 @@ class BackfillTests(PlanCase):
     def test_the_head_starts_when_the_held_lease_it_waits_for_ends_whatever_passes_it(self):
         found = sf_schedule.plan([waiter("gate", 6, -700), waiter("short", 1, -10)], self.held, 6, M, None,
                         runs(one=3600, short=60), reserve_head=True, settings=self.settings)
-        self.assertEqual(("gate", M + 3000), (found.head["label"], found.start))
+        self.assertEqual(("gate", M + 3000), (found.head and found.head["label"], found.start))
         self.assertIn("gate is next, and a later request that fits starts first only if it ends before gate can",
                       str(found.reason))
 
@@ -172,7 +172,7 @@ class BackfillTests(PlanCase):
         held = [holder("one", 4, -600)]  # 3000 s left: pair (3) does not fit either, and it waits
         found = sf_schedule.plan(queue, held, 6, M, None, runs(one=3600, smoke=1200), reserve_head=True,
                         settings=self.settings)
-        self.assertEqual(("pair", M + 3000), (found.head["label"], found.start))
+        self.assertEqual(("pair", M + 3000), (found.head and found.head["label"], found.start))
         self.assertEqual(["smoke"], [e["label"] for e in found.grants], "slots pair will not need at its start")
 
     def test_a_head_past_its_limit_that_would_give_up_first_holds_nobody_back_either(self):
@@ -184,11 +184,15 @@ class BackfillTests(PlanCase):
         later = dict(big, until=stamp(3001))  # it still waits when one is expected to end: past the limit, as before
         self.assertEqual([], self.started([later, waiter("long", 1, -10)], self.held, one=3600, long=1))
 
-    def test_a_held_lease_of_unknown_run_counts_the_fallback_for_when_the_head_can_start(self):
-        held = [holder("one", 1, -300)]  # no history: 3600 s of the fallback, 3300 s of it left
+    def test_a_head_keeps_its_head_while_a_held_lease_has_no_known_run_and_starts_when_it_ends_early(self):
+        # Review of 649e879: counting the fallback for an unknown run gave the head up on a pessimistic guess and
+        # made its give-up come true. Unknown, the lease may end any moment.
+        held = [holder("one", 1, -300)]
         big = dict(waiter("big", 6, -700), until=stamp(1000))
-        self.assertEqual(["long"], self.started([big, waiter("long", 1, -10)], held, long=7200))
-        self.assertEqual([], self.started([dict(big, until=stamp(3301)), waiter("long", 1, -10)], held, long=7200))
+        self.assertEqual([], self.started([big, waiter("long", 1, -10)], held, long=7200))
+        later = sf_schedule.plan([big, waiter("long", 1, -10)], [], 6, M + 300, None, runs(long=7200),
+                                 settings=self.settings)  # one ended after 600 s, before big gives up
+        self.assertEqual(["big"], [e["label"] for e in later.grants])
 
     def test_a_head_counts_the_overrun_of_held_leases_for_whether_it_can_start_before_it_gives_up(self):
         # `one` should have ended 2400 s ago: by the overrun it runs on for 1500 s more (#5: the leases a rerun

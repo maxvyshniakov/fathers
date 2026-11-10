@@ -319,8 +319,8 @@ class OvertakeTests(SlotCase):
         self.finish(one)
         self.assertEqual(1, self.finish(gate).count("slot: -n all holds every later request behind it"))
 
-    def test_a_batch_all_slot_request_holds_nobody_back_and_says_so(self):
-        # #5: past its window and its limit alike, a batch `-n all` request lets later work start.
+    def test_a_batch_all_slot_request_lets_normal_work_start_and_says_so(self):
+        # #5: past its window and its limit alike, a batch `-n all` request lets later normal work start.
         self.env.update(SLOTFATHER_OVERTAKE_WINDOW="0", SLOTFATHER_BACKFILL_LIMIT="1")
         one = self.request("one", 1)
         self.started("one")
@@ -335,8 +335,7 @@ class OvertakeTests(SlotCase):
         self.started("gate")
         self.release("gate")
         output = self.finish(gate)
-        self.assertIn("gate waits for the whole machine to be quiet", output)
-        self.assertEqual(1, output.count("slot: -n all as batch or --yieldable holds nobody back"))
+        self.assertEqual(1, output.count("slot: a batch request lets waiting normal and interactive requests go first"))
         self.assertEqual(["start one", "start later", "end later", "end one", "start gate", "end gate"],
                          self.events())
 

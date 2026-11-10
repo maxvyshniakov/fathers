@@ -137,8 +137,8 @@ ALL_NOTE = ("-n all holds every later request behind it until the whole machine 
             "command uses")
 
 
-QUIET_NOTE = ("-n all as batch or --yieldable holds nobody back: it starts once no normal or interactive request waits "
-              "and every slot is free, so it may wait for as long as other work keeps coming")
+BATCH_NOTE = ("a batch request lets waiting normal and interactive requests go first: it is the head only while none "
+              "waits, and one for every slot starts only then, so it may wait for as long as such work keeps coming")
 
 
 LEASE_ENV_PREFIXES = ["SLOTFATHER_"]

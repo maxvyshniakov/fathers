@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 import sys
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from . import config as _config
 from . import leases as _leases
@@ -13,7 +13,8 @@ from . import schedule as _schedule
 from . import state as _state
 
 
-def snapshot(directory: Path | None = None) -> tuple[list[dict], list[tuple[Path, dict, int]], dict]:
+def snapshot(directory: Path | None = None) -> tuple[list[dict[str, Any]], list[tuple[Path, dict[str, Any], int]],
+                                                    dict[int, tuple[int, str]]]:
     """The live queue entries, the earlier queues' holders and the process table."""
     directory = directory or _config.state_dir()
     table = _platform.processes()
@@ -80,12 +81,12 @@ def status_json(directory: Path | None = None, pid: int | None = None) -> dict:
     entries_found: list[dict[str, Any]] = []
     for path, entry in live:
         tree = _platform.descendants(table, entry.get("pid"))
-        priority = _config.priority_of(cast(dict[str, Any], entry))
+        priority = _config.priority_of(entry)
         item: dict[str, Any] = {"id": path.stem, "lease": str(path), "state": entry.get("state"), "count": entry.get("count"),
                 "label": entry.get("label"), "pid": entry.get("pid"), "pgid": _platform.process_group(entry.get("pid")),
                 "start": entry.get("start"), "since": entry.get("since"), "granted": entry.get("granted"),
                 "cmd": entry.get("cmd"), "cwd": entry.get("cwd"), "meta": _config.meta_of(entry), "tree": tree,
-                "priority": priority, "ticket": _config.ticket_of(cast(dict[str, Any], entry)),
+                "priority": priority, "ticket": _config.ticket_of(entry),
                 "yieldable": bool(entry.get("yieldable")),
                 "yields": int(entry.get("yields") or 0), "yield_asked": _state.asked(path), "position": None}
         entries_found.append(item)

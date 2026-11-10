@@ -33,10 +33,11 @@ a later request that fits still starts first if, by the run times of earlier req
 three times its expected run ends before the head can start (when the held leases are expected to end) and before
 the head has waited 2700 s, its limit; past the limit nothing passes it. An all-slot request therefore starts at
 most the limit plus the overrun of what passed it, or, with classes, once what ranks ahead of it has run: the
-requests that came within the class offsets after it (up to 3600 s for a batch one), and their overrun. A batch or
-`--yieldable` all-slot request is never the head: it starts once no normal or interactive request waits and every
-slot is free, and holds nobody back meanwhile. A waiter whose `--wait` ends before the held leases are expected to
-free its slots, counting their overrun, holds nobody back either. `slotfather order` shows and saves the order and these numbers
+requests that came within the class offsets after it (up to 3600 s for a batch one), and their overrun. A batch
+request never holds back a waiting normal or interactive one: while such work waits it is no head, and a batch
+all-slot request does not start; once none waits it is the head over later batch work as before. A waiter whose
+`--wait` ends before the held leases are expected to free its slots, counting the overrun of those past their
+estimate, holds nobody back either. `slotfather order` shows and saves the order and these numbers
 for every client (order.json beside the queue); a client's environment can only tighten them, and
 SLOTFATHER_QUEUE=window falls back to the earlier order, where the head holds back everyone behind it. Classes
 (`--priority interactive|normal|batch`, normal by default): an interactive waiter queues as if it came 1800 s earlier,

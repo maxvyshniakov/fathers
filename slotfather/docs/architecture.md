@@ -44,6 +44,11 @@ A pinned installation shares one user's directory even when a service changes `H
 | `estimates.json` | Disposable cache version 2. Rebuilt when its version or history stamp changes. |
 | `sweep.json`, `sweep.jsonl[.1]` | Cleanup settings and version-1 results. Cleanup never owns lease admission. |
 
+Every client that looks at the queue grants for all of it by its own order, so during an upgrade the queue
+admits what either version's order allows. An old client still makes a batch request the head in front of
+waiting normal work (#5), and a new client's look lets that work pass. Entries and history carry no new
+fields for this, so either version reads the other's queue as before.
+
 A structural migration must preserve these files and active leases. Adding data is safe only
 when old readers can ignore it and old writers can still release their leases. A breaking
 schema needs a distinct migration, validation and an explicit live-client cutoff; moving Python code is

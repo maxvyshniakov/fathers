@@ -58,10 +58,11 @@ class RankTests(PlanCase):
         queue = [waiter("normal", 1, -1000), classed(waiter("test", 1, -100), "interactive")]
         self.assertEqual(["normal"], self.started(queue, self.held, "window"))
 
-    def test_an_interactive_request_goes_ahead_of_a_batch_head_instead_of_passing_it(self):
-        # The gate asks for five of six slots (#5: a batch request for every slot holds back no interactive work).
+    def test_an_interactive_request_goes_ahead_of_a_normal_head_instead_of_passing_it(self):
+        # #5: a batch head would not hold the test back at all (WholeMachineTests); a normal one does until classes
+        # rank the test ahead of it.
         held = [holder("one", 1, -600), holder("two", 1, -10)]
-        queue = [classed(waiter("gate", 5, -700), "batch"), classed(waiter("test", 1, -10), "interactive")]
+        queue = [waiter("gate", 5, -700), classed(waiter("test", 1, -10), "interactive")]
         self.settings.update(interactive=0.0, batch=0.0)
         self.assertEqual([], self.started(queue, held), "unknown run: it would end after the gate can start")
         self.settings.update(interactive=1800.0, batch=1800.0)
@@ -95,59 +96,104 @@ class RankTests(PlanCase):
         self.assertEqual("normal", sf_config.priority_of({}))
 
 
-class WholeMachineTests(PlanCase):
-    """#5: a batch or yieldable request for the whole machine is never the head. On 2026-11-10 a batch, yieldable
-    `-n all` measurement ranked at since + 1800 s became the head in front of lane checks that came later, and past
-    its limit kept five slots idle behind one running check."""
+class BatchDefersTests(PlanCase):
+    """#5: a batch request never holds back waiting normal or interactive work, whatever its slot count. While such
+    work waits it is no head, and one for the whole machine does not take it; once none waits it is the head as
+    before and holds later batch work back. On 2026-11-10 a batch, yieldable `-n all` measurement ranked at since +
+    1800 s became the head in front of lane checks that came later, and past its limit kept five slots idle behind
+    one running check."""
 
     def setUp(self):
         super().setUp()
         self.held = [holder("one", 1, -600)]  # 3000 s of its expected 3600 left
         self.measure = classed(waiter("measure", 6, -7200), "batch", all=True, yieldable=True)
 
-    def test_it_holds_back_no_request_that_fits(self):
+    def plan(self, waiters: list[dict[str, Any]], held: list[dict[str, Any]], slots: int = 6,
+             **estimates: float) -> sf_schedule.Plan:
+        return sf_schedule.plan(waiters, held, slots, M, None, runs(**estimates), reserve_head=True,
+                                settings=self.settings)
+
+    def test_it_holds_back_no_normal_or_interactive_request_that_waits(self):
         check, test = waiter("check", 1, -10), classed(waiter("test", 1, -5), "interactive")
         cargo = classed(waiter("cargo", 1, -1), "batch")
-        found = sf_schedule.plan([self.measure, check, test, cargo], self.held, 6, M, None,
-                                 runs(one=3600, check=7200, test=7200, cargo=7200), reserve_head=True,
-                                 settings=self.settings)
+        found = self.plan([self.measure, check, test, cargo], self.held, one=3600, check=7200, test=7200, cargo=7200)
         self.assertEqual((["test", "check", "cargo"], None), ([e["label"] for e in found.grants], found.head))
-        self.assertIn("measure waits for the whole machine to be quiet, so requests that fit pass it", str(found.reason))
+        self.assertIn("measure is batch and lets the normal and interactive requests that wait go first",
+                      str(found.reason))
 
-    def test_batch_or_yieldable_is_enough_for_a_request_for_every_slot(self):
-        cases = {"batch": classed(waiter("measure", 6, -7200), "batch"),
-                 "yieldable": dict(waiter("measure", 6, -7200), yieldable=True)}
-        for why, measure in cases.items():
+    def test_once_no_other_work_waits_it_is_the_head_and_holds_batch_work_back(self):
+        # Review of 649e879: batch one-slot work would otherwise pass a batch `-n all` request forever.
+        cargo = classed(waiter("cargo", 1, -1), "batch")
+        found = self.plan([self.measure, cargo], self.held, one=3600, cargo=7200)
+        self.assertEqual(([], "measure", M + 3000), (found.grants, found.head and found.head["label"], found.start))
+        measure = dict(self.measure, since=stamp(-1000))  # before its limit: backfill as before
+        self.assertEqual(["cargo"], [e["label"] for e in self.plan([measure, cargo], self.held, one=3600,
+                                                                    cargo=60).grants])
+
+    def test_the_head_comes_and_goes_with_the_other_work_between_looks(self):
+        cargo = classed(waiter("cargo", 1, -1), "batch")
+        self.assertEqual("measure", (self.plan([self.measure, cargo], self.held, one=3600, cargo=7200).head or {})
+                         .get("label"))
+        check = waiter("check", 1, 0)
+        found = self.plan([self.measure, cargo, check], self.held, one=3600, cargo=7200, check=7200)
+        self.assertEqual((["check", "cargo"], None), ([e["label"] for e in found.grants], found.head))
+        held = self.held + [dict(check, state="held", granted=stamp(0))]  # the check started: none waits again
+        later = classed(waiter("cargo2", 1, 0), "batch")
+        found = self.plan([self.measure, later], held, one=3600, check=7200, cargo2=7200)
+        self.assertEqual(([], "measure"), (found.grants, found.head and found.head["label"]))
+
+    def test_priority_decides_not_size_or_yielding(self):
+        cases = {"batch for five slots": (classed(waiter("pair", 5, -7200), "batch"), [holder("one", 2, -600)]),
+                 "batch -n 6 without all": (classed(waiter("measure", 6, -7200), "batch"), self.held)}
+        for why, (head, held) in cases.items():
             with self.subTest(why):
-                self.assertEqual(["check"], self.started([measure, waiter("check", 1, -10)], self.held, one=3600,
+                self.assertEqual(["check"], self.started([head, waiter("check", 1, -10)], held, one=3600,
                                                          check=7200))
-        with self.subTest("a normal request for every slot keeps its head"):
-            self.assertEqual([], self.started([waiter("measure", 6, -7200), waiter("check", 1, -10)], self.held,
-                                              one=3600, check=7200))
-        with self.subTest("a batch request for fewer slots keeps its head"):
-            held = [holder("one", 2, -600)]
-            self.assertEqual([], self.started([classed(waiter("pair", 5, -7200), "batch"), waiter("check", 1, -10)],
-                                              held, one=3600, check=7200))
+        for why, head in {"normal": waiter("measure", 6, -7200),
+                          "yieldable normal": dict(waiter("measure", 6, -7200), yieldable=True),
+                          "yieldable interactive": classed(waiter("measure", 6, -7200), "interactive",
+                                                           yieldable=True)}.items():
+            with self.subTest(f"{why} keeps its head"):
+                self.assertEqual([], self.started([head, waiter("check", 1, -10)], self.held, one=3600, check=7200))
 
-    def test_the_next_waiter_that_does_not_fit_is_the_head_instead(self):
-        held = [holder("one", 4, -600)]
-        found = sf_schedule.plan([self.measure, waiter("pair", 3, -700), waiter("check", 1, -10)], held, 6, M,
-                                 None, runs(one=3600, check=7200), reserve_head=True, settings=self.settings)
-        self.assertEqual(("pair", M + 3000), (found.head["label"], found.start))
+    def test_the_next_normal_waiter_that_does_not_fit_is_the_head_instead(self):
+        found = self.plan([self.measure, waiter("pair", 3, -700), waiter("check", 1, -10)], [holder("one", 4, -600)],
+                          one=3600, check=7200)
+        self.assertEqual(("pair", M + 3000), (found.head and found.head["label"], found.start))
 
-    def test_it_starts_once_the_machine_is_quiet(self):
+    def test_for_the_whole_machine_it_starts_once_no_other_work_waits(self):
         self.assertEqual(["measure"], self.started([self.measure], []))
         self.assertEqual(["measure"], self.started([self.measure, classed(waiter("cargo", 1, -10), "batch")], []),
                          "it ranks ahead of later batch work")
-        found = sf_schedule.plan([self.measure, waiter("check", 1, -10)], [], 6, M, settings=self.settings)
+        found = self.plan([self.measure, waiter("check", 1, -10)], [])
         self.assertEqual(["check"], [e["label"] for e in found.grants], "normal work waits: it goes first")
-        self.assertIn("measure waits for the whole machine to be quiet", str(found.reason))
+        pair = classed(waiter("pair", 4, -7200), "batch")  # leaves room for the check: it starts in its turn
+        self.assertEqual(["pair", "check"], self.started([pair, waiter("check", 1, -10)], []))
 
-    def test_a_lease_back_in_the_queue_after_a_yield_keeps_its_head(self):
+    def test_two_whole_machine_batch_requests(self):
+        second = classed(waiter("second", 6, -7000), "batch", all=True)
+        cargo = classed(waiter("cargo", 1, -1), "batch")
+        found = self.plan([self.measure, second, cargo], self.held, one=3600, cargo=7200)
+        self.assertEqual(([], "measure"), (found.grants, found.head and found.head["label"]))
+        self.assertEqual(["measure"], self.started([self.measure, second], []), "one at a time, in order")
+        found = self.plan([self.measure, second, waiter("check", 1, -10)], self.held, one=3600, check=7200)
+        self.assertEqual((["check"], None), ([e["label"] for e in found.grants], found.head))
+
+    def test_a_capacity_change_under_it(self):
+        shrunk = sf_schedule.fit([dict(self.measure, count=6)], 4)  # -n all is the capacity at the grant
+        self.assertEqual(["check"], self.started(shrunk + [waiter("check", 1, -10)], [], slots=4))
+        grown = classed(waiter("measure", 6, -7200), "batch")  # -n 6 on eight slots no longer takes every slot
+        self.assertEqual(["measure", "check"], self.started([grown, waiter("check", 1, -10)], [], slots=8))
+        self.assertEqual(["check"], self.started([grown, waiter("check", 1, -10)], [holder("one", 3, -600)],
+                                                 slots=8, one=3600, check=7200), "and is no head while it waits")
+
+    def test_a_batch_lease_back_after_a_yield_still_defers(self):
         test = classed(waiter("test", 1, -10), "interactive")
         back = dict(self.measure, granted=stamp(-3000), yields=1, yielded_at=M - 100,
                     rank=sf_schedule.rank_time(test, self.settings) + sf_config.YIELD_BEHIND)
-        self.assertEqual([], self.started([back, waiter("check", 1, -5)], self.held, one=3600, check=7200))
+        self.assertEqual(["check"], self.started([back, waiter("check", 1, -5)], self.held, one=3600, check=7200))
+        cargo = classed(waiter("cargo", 1, -5), "batch")
+        self.assertEqual([], self.started([back, cargo], self.held, one=3600, cargo=7200), "a head over batch work")
 
 
 class YieldAskTests(PlanCase):

@@ -435,8 +435,8 @@ def history_summary(steps: list, slots: int) -> dict:
             "peak": max((level for _, _, level in steps), default=0)}
 
 
-def dashboard_admission(waiters: list, held: list, slots: int, other: int, memory_block: str | None,
-                        estimate, settings: dict) -> int:
+def dashboard_admission(waiters: list[dict[str, Any]], held: list[dict[str, Any]], slots: int, other: int,
+                        memory_block: str | None, estimate: _schedule.Estimate | None, settings: dict[str, Any]) -> int:
     """Largest generic request grant() would admit, including earlier grants consuming the memory exemption."""
     used = sum(entry["count"] for entry in held) + other
     free = max(0, slots - used)
@@ -447,7 +447,7 @@ def dashboard_admission(waiters: list, held: list, slots: int, other: int, memor
     if memory_block:
         # On an idle host only the first planned grant bypasses the memory gate.
         # A new generic request may rank ahead of a lower-priority existing waiter.
-        probe = dict(count=free, label="", cmd="", since=_config.now())
+        probe: dict[str, Any] = dict(count=free, label="", cmd="", since=_config.now())
         found = _schedule.plan(waiters + [probe], held, slots, time.time(), estimate=estimate,
                         other=other, settings=settings)
         return free if found.grants and found.grants[0] is probe else 0
@@ -478,15 +478,15 @@ def dashboard_model() -> dict:
                 "granted": parse_utc(entry.get("granted")), "passable": kind == "waiting" and _schedule.overtakable(entry),
                 "style": "warn" if kind == "waiting" else "legacy"}
 
-    holders = [item(cast(dict[str, Any], e), "held", e["count"]) for e in live if e["state"] == "held"]
-    holders += [item(cast(dict[str, Any], e), "legacy", count, str(path.parent.parent)) for path, e, count in legacy]
+    holders = [item(e, "held", e["count"]) for e in live if e["state"] == "held"]
+    holders += [item(e, "legacy", count, str(path.parent.parent)) for path, e, count in legacy]
     settings, start = _schedule.order_settings(directory), None
     order = settings["order"]
     live_waiters = [e for e in live if e["state"] != "held"]
     _schedule.fit(live_waiters, slots)  # as the queue grants them when the capacity shrank under them
     if order == "backfill":
         live_waiters = _schedule.ranked(live_waiters, settings)  # the order the queue serves them in
-    waiters = [item(cast(dict[str, Any], e), "waiting", e["count"]) for e in live_waiters]
+    waiters = [item(e, "waiting", e["count"]) for e in live_waiters]
     used = sum(h["count"] for h in holders)
     if order == "backfill" and live_waiters:
         with contextlib.suppress(Exception):  # an estimate that cannot be read leaves the sentence without a time
