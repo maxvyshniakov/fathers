@@ -521,8 +521,9 @@ def integration_refs(record: Record, worktree: str) -> list[str]:
             for branch in [current_branch(path)] if branch]
     if literal:
         try:
-            settings, _ = queue.read_queue()
-        except LaneError:
+            settings = queue.read_settings()
+        except LaneError as error:
+            print(f"lane: warning: the queue's base is unknown, so check plans without it: {error}")
             settings = {}
         if isinstance(settings.get("base"), str) and settings["base"]:
             refs.append(settings["base"])

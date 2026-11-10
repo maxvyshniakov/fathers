@@ -34,6 +34,19 @@ def read_queue() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     return parse_queue(text, path)
 
 
+def read_settings() -> dict[str, Any]:
+    """The queue's top-level settings (`base`) without checking its entries: {} without a queue. An entry next
+    refuses does not change them; a file that is no TOML raises LaneError."""
+    path = queue_path()
+    try:
+        data = tomllib.loads(path.read_text())
+    except FileNotFoundError:
+        return {}
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise LaneError(f"{path}: {error}") from None
+    return {key: value for key, value in data.items() if key != "lane"}
+
+
 def parse_queue(text: str, path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Validate queue text before a caller can replace the configured queue atomically."""
     try:

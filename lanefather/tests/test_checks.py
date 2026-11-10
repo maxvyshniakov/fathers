@@ -105,6 +105,26 @@ class NewestMergeBaseTests(LaneCase):
         self.assertEqual(self.record("a")["claims"], ["lib/**"])
         self.assertEqual(self.record("a")["base"], self.record("a")["base_sha"], "the registration stays as it was")
 
+    def test_a_malformed_queue_entry_does_not_drop_the_queue_base(self):
+        # Review of lanefather#3: the queue's base is a top-level setting; an entry next for its own reasons
+        # refuses must not silently change what check plans against.
+        self.queue("integrate/q")
+        path = self.state.parent / "queue" / "queue.toml"
+        path.write_text(path.read_text() + '[[lane]]\nticket = 1\nid = "bad id"\nclaims = ["a/**"]\n')
+        worktree = self.literal_lane("a", "lib/**")
+        moved = self.commit(self.integration, {"unowned/arrived.txt": "x\n"}, "the integration moves on")
+        self.git(worktree, "merge", "-q", "--no-edit", "integrate/q")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.assertEqual(json.loads((self.state / "a.receipt.json").read_text())["base"], moved)
+
+    def test_an_unreadable_queue_warns_that_check_plans_without_its_base(self):
+        self.queue("integrate/q")
+        (self.state.parent / "queue" / "queue.toml").write_text("base = \n")
+        worktree = self.literal_lane("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.assertIn("lane: warning: ", self.lane("check", "a"))
+
     def test_a_lane_that_did_not_merge_the_integration_branch_keeps_its_own_base(self):
         self.queue("integrate/q")
         worktree = self.literal_lane("a", "lib/**")
