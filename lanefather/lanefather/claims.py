@@ -56,31 +56,36 @@ def segments_overlap(a: tuple[str, ...], b: tuple[str, ...]) -> bool:
 _head_kinds: dict[tuple[str, str], str] = {}
 
 
+def project_root() -> str:
+    """Where claim kinds are asked: the directory of the project's configuration, else the working directory."""
+    path = config.current().path
+    return str(path.parent) if path else os.getcwd()
+
+
 def head_kind(path: str) -> str:
-    """The object type HEAD has at the repository path (`tree`, `blob`), or "" when HEAD has none or the working
-    directory is no repository; asked once per path and working directory in a run."""
-    key = (os.getcwd(), path)
-    if key not in _head_kinds:
-        result = subprocess.run(["git", "cat-file", "-t", f"HEAD:{path}"], capture_output=True, text=True)
-        _head_kinds[key] = result.stdout.strip() if result.returncode == 0 else ""
-    return _head_kinds[key]
+    """The object type HEAD of the project has at the repository path (`tree`, `blob`, `commit` for a submodule),
+    or "" when HEAD has none or the project is no repository; asked once per path and project in a run."""
+    prefetch_kinds([path])
+    return _head_kinds.get((project_root(), path.strip("/")), "")
 
 
 def prefetch_kinds(literals: Iterable[str]) -> None:
-    """Ask HEAD for the type at each claim without wildcards in one git call (a lane check widens claims by whole
-    file lists), so head_kind answers them from the cache."""
-    cwd = os.getcwd()
+    """Ask the project's HEAD for the type at each claim without wildcards in one git call (a lane check widens
+    claims by whole file lists), so head_kind answers them from the cache."""
+    root = project_root()
     paths = list(dict.fromkeys(c.strip("/") for c in literals if c.strip("/") and "\n" not in c
-                               and not any(w in c for w in "*?[") and (cwd, c.strip("/")) not in _head_kinds))
+                               and not any(w in c for w in "*?[") and (root, c.strip("/")) not in _head_kinds))
     if not paths:
         return
-    result = subprocess.run(["git", "cat-file", "--batch-check=%(objecttype)"], capture_output=True, text=True,
-                            input="".join(f"HEAD:{path}\n" for path in paths))
+    result = subprocess.run(["git", "cat-file", "--batch-check=%(objecttype)"], cwd=root, capture_output=True,
+                            text=True, input="".join(f"HEAD:{path}\n" for path in paths))
     answers = result.stdout.splitlines() if result.returncode == 0 else []
     if len(answers) != len(paths):
         answers = [""] * len(paths)  # no repository (or no HEAD) here: HEAD has none of them
     for path, answer in zip(paths, answers, strict=True):
-        _head_kinds[(cwd, path)] = answer if answer in ("tree", "blob", "commit") else ""
+        # A submodule answers `<sha> submodule`; a path HEAD lacks, `HEAD:<path> missing`.
+        kind = "commit" if answer.endswith(" submodule") else answer
+        _head_kinds[(root, path)] = kind if kind in ("tree", "blob", "commit") else ""
 
 
 def names_directory(literal: str) -> bool:

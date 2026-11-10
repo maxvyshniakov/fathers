@@ -23,8 +23,9 @@ lanefather show <id> [--state-dir DIR] [--project-dir DIR] [--json]   read-only 
 
 A claim is a glob relative to the repository: `*` and `?` stay within a path segment and `**` spans segments. A
 claim without wildcards names a directory, and everything under it, when it ends in `/`, when HEAD has a directory
-(or submodule) there, or, for a path HEAD does not have, when its last segment has no extension; otherwise it names
-that one file.
+or a submodule there, or, for a path HEAD does not have, when its last segment has no extension; otherwise it names
+that one file. HEAD is that of the checkout holding the project's `.lanefather.toml` (`--config`), else of the
+working directory.
 
 check plans the lane's diff, and widens its claims, against the newest merge-base of the lane's HEAD: with its
 base, or with the tip of the branch it lands into (the branch of its integration worktree) when that merge-base

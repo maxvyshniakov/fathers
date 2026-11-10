@@ -322,6 +322,31 @@ class QueueTests(LaneCase):
         self.start("ignore", ".gitignore")
         self.assertIn("Lane md", self.start("md", "*/*.md"))
 
+    def test_a_submodule_claim_is_a_directory_whatever_its_name(self):
+        # Review of lanefather#2: HEAD answers a submodule as `<sha> submodule`, not as a type.
+        sub = self.tmp / "sub"
+        sub.mkdir()
+        self.git(sub, "init", "-q", "-b", "main")
+        self.git(sub, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "s")
+        self.git(self.integration, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(sub), "mods/sub.d")
+        self.git(self.integration, "commit", "-qm", "a submodule with a dot")
+        self.start("sub", "mods/sub.d")
+        self.assertIn("claims overlap lane sub", self.start("txt", "mods/**/*.txt", ok=False))
+
+    def test_claim_kinds_come_from_the_project_not_the_working_directory(self):
+        # Review of lanefather#2: next run from another checkout (main, which lacks the directory) still asks the
+        # HEAD of the project its configuration names.
+        self.commit(self.integration, {"desktop/App.xcodeproj/project.pbxproj": "x\n"}, "a directory with a dot")
+        self.start("project", "desktop/App.xcodeproj")
+        self.queue("""\
+            [[lane]]
+            ticket = 507
+            id = "507-pbx"
+            claims = ["desktop/**/*.pbxproj"]
+            """)
+        output = self.lane("--config", str(self.integration / ".lanefather.toml"), "next", cwd=self.repo, ok=False)
+        self.assertIn("507-pbx (#507): claims overlap lane project", output)
+
     def test_a_malformed_entry_is_named(self):
         self.queue('[[lane]]\nticket = 1\nid = "bad id"\nclaims = ["a/**"]\n')
         self.assertIn("entry 1", self.lane("next", ok=False))
