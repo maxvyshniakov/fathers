@@ -278,7 +278,8 @@ def configuration_bytes(directory: Path) -> dict[str, bytes | None]:
 
 def configure(changes: dict[str, dict[str, Any] | None], *,
               expected: dict[str, bytes | None] | None = None) -> None:
-    """CLI and dashboard share validation, ownership, conflict checking and queue admission locking."""
+    """CLI and dashboard share validation, ownership, conflict checking and queue admission locking. A change
+    applies at once, also while requests run or wait; the waiters it lets start are granted before this returns."""
     from . import leases, platform, schedule
     directory = _config.state_dir()
     if set(changes) - {"capacity.json", "order.json"}:
@@ -299,14 +300,8 @@ def configure(changes: dict[str, dict[str, Any] | None], *,
                 values["order.json"] = schedule.checked_order({**saved, **(values["order.json"] or {})})
             except ValueError as error:
                 raise _config.SlotError(str(error)) from None
-        if "capacity.json" in values:
-            table = platform.processes()
-            live: list[tuple[Path, dict[str, Any]]] = cast(Any, leases).reap(directory, table)
-            alive = cast(Any, platform).alive
-            legacy_live = any(alive(entry, table) for old in _config.legacy_dirs()
-                              for _, entry in entries(old))
-            if live or legacy_live:
-                raise _config.SlotError("queue is busy; capacity can change only after every holder and waiter leaves")
+        # A capacity change applies at the next grant, whatever the queue holds (#7): every client's plan reads it
+        # under this lock. Running leases keep their slots; a shrink below them drains, a growth grants below.
         changed: list[str] = []
         try:
             for name, value in values.items():
@@ -327,3 +322,6 @@ def configure(changes: dict[str, dict[str, Any] | None], *,
                     pending.write_bytes(original)
                     pending.replace(path)
             raise _config.SlotError(f"cannot save settings: {error}") from None
+        # Grant now what the new settings start, as a release does: waiters look less often the longer they wait.
+        with contextlib.suppress(_config.SlotError, OSError):
+            cast(Any, leases).grant(directory, platform.processes())

@@ -72,7 +72,7 @@ minimum of one. On Linux, a limited cgroup can determine the memory budget.
 
 ```sh
 slotfather slots           # show capacity and how it was chosen
-slotfather slots 6         # save a shared capacity of six, while the queue is idle
+slotfather slots 6         # save a shared capacity of six; applies at the next grant
 slotfather slots reset     # return to automatic sizing
 ```
 
@@ -97,8 +97,9 @@ Run `slotfather` in a terminal to open the live dashboard.
 
 Use **↑/↓** or click to select, the mouse wheel to scroll a table, **m** to
 freeze updates for native text selection, **?** for help and **q** to quit.
-Press **s** for Settings: shared capacity, local refresh interval and advanced
-queue policy. Changes are drafts until Apply; Esc cancels.
+Press **s** for Settings: a read-only status of the queue above shared capacity,
+queue policy and the local refresh interval. A change is saved at once and applies
+at the next grant, also while work runs; Esc closes.
 
 ```sh
 slotfather status                  # a plain-text queue summary

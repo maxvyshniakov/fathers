@@ -1,0 +1,29 @@
+╭─ SETTINGS ─────────────────────── saved at once · applies at the next grant ─╮
+│ STATUS · read-only, live                                                     │
+│   queue        ~/.local/state/slotfather                                     │
+│   slots        2 total · 0 free · 4 held · 3 waiting                         │
+│   capacity     2 slots · saved, fixed count                                  │
+│   budgets      CPU 4 (12 cores) · memory 16 (64 GiB)                         │
+│   draining     2 slots · nothing starts until at most 2 are held             │
+│   environment  SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB                       │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ SHARED CAPACITY                                                              │
+│   Capacity mode             Fixed                                            │
+│ ▶ Total slots               2  draining 2: running work keeps its slots      │
+│ QUEUE POLICY                                                                 │
+│   Queue order               Backfill                                         │
+│   Safety multiplier         3                                                │
+│   Overtaking limit (s)      2700                                             │
+│   Unknown runtime (s)       3600                                             │
+│   Overrun factor            0.5                                              │
+│   Interactive advance (s)   1800                                             │
+│   Batch delay (s)           1800                                             │
+│   Yield after (s)           120                                              │
+│ THIS DASHBOARD                                                               │
+│   Refresh interval (s)      1                                                │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ Total slots for every client. Applies at the next grant; a shrink drains.    │
+│                                                                              │
+│                                                                              │
+│ ↑↓ select  ←→ change  Enter edit  d default  D all defaults  Esc close       │
+╰──────────────────────────────────────────────────────────────────────────────╯

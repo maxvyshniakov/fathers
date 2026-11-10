@@ -276,7 +276,7 @@ def reserve(found: Plan, held: list[Entry], slots: int, used: int, moment: float
     need: int = found.head["count"]
     ends = [(expected_end(entry, moment, estimate(entry), fallback, overrun), int(entry["count"]))
             for entry in held + found.grants]
-    have, start = max(0, slots - used), moment
+    have, start = slots - used, moment  # below zero while a shrunk capacity drains: those ends free nothing yet
     for end, count in sorted(ends):
         if have >= need:
             break
@@ -303,7 +303,7 @@ def soonest_start(count: int, holding: list[Entry], slots: int, used: int, momen
         if run is None:
             return None
         ends.append((expected_end(entry, moment, run, run, overrun), int(entry["count"])))
-    have, start = max(0, slots - used), moment
+    have, start = slots - used, moment  # below zero while a shrunk capacity drains
     for end, size in sorted(ends):
         if have >= count:
             break

@@ -180,13 +180,13 @@ class Canvas:
             for column in range(max(0, x), min(self.width, end)):
                 self.links[y, column] = url
 
-    def right(self, y: int, end: int, value, style: str = "text") -> int:
+    def right(self, y: int, end: int, value: Any, style: str = "text") -> int:
         """Writes value ending just before column `end`; the column it starts at."""
         start = end - text_width(value)
         self.put(y, start, value, style)
         return start
 
-    def segments(self, y: int, x: int, parts, width: int | None = None) -> int:
+    def segments(self, y: int, x: int, parts: Any, width: int | None = None) -> int:
         """Writes (text, style) parts one after another, all within `width` cells from x."""
         end = self.width if width is None else x + width
         for text, style in parts:
@@ -456,8 +456,9 @@ def dashboard_admission(waiters: list[dict[str, Any]], held: list[dict[str, Any]
 
 def dashboard_model() -> dict:
     directory = _config.state_dir()
-    live, legacy, _ = _query.snapshot(directory)
-    slots, saved = _config.capacity()
+    live, legacy, _, basis = _query.locked_snapshot(directory)  # the capacity under the queue's lock
+    slots: int = basis["slots"]
+    saved: bool = basis["saved"]
     own, children = process_usage()
     asks = {}  # holder pid -> the label of the waiter that asked it to yield
     for place in (directory / "queue").glob("*.yield"):
@@ -503,7 +504,8 @@ def dashboard_model() -> dict:
                     sum(count for _, _, count in legacy), memory_block,
                     _schedule.estimator(directory) if live_waiters else None, settings)
     own_held = sum(h["count"] for h in holders if h["kind"] == "held")
-    return {"directory": str(directory), "slots": slots, "saved": saved, "cores": machine, "averages": averages,
+    return {"directory": str(directory), "slots": slots, "saved": saved, "basis": basis, "cores": machine,
+            "averages": averages, "draining": _query.draining(used, slots),
             "advice": _query.size(slots, machine, slots, averages, min(used, slots),
                               bool(waiters) and admission == 0),
             "holders": holders, "waiters": waiters, "used": used, "free": free, "memory_block": memory_block,
@@ -1113,7 +1115,9 @@ HELP_CONTENT: list[tuple[str, str]] = [
     ("memory and swap bars show used capacity. Low memory or swap blocks additional leases; an idle machine may still start its first request.", "text"),
     ("The held chart shows occupied slots over time, newest on the right. Each column preserves its interval's peak; fractional heights show more than whole rows.", "text"),
     ("held/N is the slot scale; s/col is seconds per column. Blue is the bottom, orange is full capacity. avg is average occupancy; peak is the most held; full is time at capacity.", "text"),
-    ("s opens Settings: draft shared capacity and queue policy, or this dashboard's refresh interval. Apply saves; Esc cancels. Capacity changes require no running or waiting requests. The dashboard never grants, cancels or kills work.", "dim"),
+    ("SETTINGS", "title"),
+    ("s opens Settings: a read-only STATUS of the queue above shared capacity, queue policy and this dashboard's refresh interval. ←/→ or Enter changes the selected setting and saves it at once; it applies at the next grant, also while requests run or wait. d resets the selected setting, D twice resets them all; Esc closes.", "text"),
+    ("A capacity below the held slots drains: running work keeps its slots, nothing more starts until no more than the capacity is held, and SLOTS shows draining N. The dashboard never cancels or kills work.", "dim"),
 ]
 
 
@@ -1263,7 +1267,8 @@ def dashboard_draw(canvas: Canvas, model: dict | None, selected: int = 0, paused
     left = width - max(52, width * 2 // 5) - 1 if width >= WIDE else width
     slot_height = 5
     canvas.box(0, 0, slot_height, left, "SLOTS", f"{model['cores']} cores · {model['slots']} slots "
-               + ("(manual)" if model["saved"] else "(auto)"))
+               + ("(manual)" if model["saved"] else "(auto)")
+               + (f" · draining {drain}" if (drain := cast(dict[str, Any], model).get("draining")) else ""))
     draw_slots(canvas, 2, 3, left - 6, model)
     top, available = slot_height, height - 1 - slot_height
     holders, waiters = model["holders"], model["waiters"]
@@ -1365,7 +1370,7 @@ def full_screen(fd_in: int, fd_out: int):
     try:
         tty.setcbreak(fd_in)
         active = termios.tcgetattr(fd_in)
-        active[0] &= ~(termios.IXON | termios.IXOFF)  # Ctrl-S belongs to Settings, not terminal flow control.
+        active[0] &= ~(termios.IXON | termios.IXOFF)  # Ctrl-S must not freeze the screen by terminal flow control.
         termios.tcsetattr(fd_in, termios.TCSANOW, active)
         os.write(fd_out, b"\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1006h\x1b[2J")
         yield
@@ -1439,13 +1444,12 @@ def dashboard_live(interval: float) -> None:
                         settings.key(key) if isinstance(key, str) else "handled")
                     if action == "quit":
                         return
-                    if action == "applied":
-                        interval = settings.interval
-                    if action in ("close", "applied"):
+                    interval = settings.interval  # this dashboard's own setting, changed at once like the rest
+                    if action == "close":
                         settings = None
                         shown = []
-                    if action in ("applied", "reload"):
-                        force = True
+                    if action == "changed":
+                        force = True  # a saved setting applies at the next grant: show its effect now
                     continue
                 if isinstance(key, tuple):
                     if mouse_enabled:

@@ -239,6 +239,40 @@ class BackfillTests(PlanCase):
             self.assertEqual(5, sf_schedule.room(waiters, 5, self.held, runs(one=3600), settings=self.settings))
 
 
+class CapacityChangeTests(PlanCase):
+    """A capacity saved while the queue is busy counts at the next plan (#7): a grown one starts waiters that now
+    fit; a shrunk one preempts nothing, and nothing starts until the held slots are within it."""
+
+    def test_a_grown_capacity_starts_waiters_that_now_fit(self):
+        held = [holder("a", 2, -60), holder("b", 2, -60)]
+        queue = [waiter("w", 2, -30)]
+        self.assertEqual([], self.started(queue, held, slots=4))
+        self.assertEqual(["w"], self.started(queue, held, slots=6))
+
+    def test_a_shrunk_capacity_starts_nothing_until_the_held_slots_are_within_it(self):
+        queue = [waiter("w", 1, -30)]
+        for count, expected in ((4, []), (3, []), (2, []), (1, ["w"])):
+            with self.subTest(held=count):
+                held = [holder(f"h{n}", 1, -60) for n in range(count)]
+                self.assertEqual(expected, self.started(queue, held, slots=2))
+        found = sf_schedule.plan(queue, [holder(f"h{n}", 1, -60) for n in range(4)], 2, M, settings=self.settings)
+        self.assertIn("0 of 2 slots free", str(found.reason))
+
+    def test_a_head_behind_a_drain_starts_once_enough_leases_end_to_bring_held_within_the_capacity(self):
+        held = [holder("a", 2, -10), holder("b", 2, -10), holder("c", 2, -10)]  # 6 held of 4: 2 drain
+        found = sf_schedule.plan([waiter("head", 2, -700)], held, 4, M, None, runs(a=610, b=1210, c=1810),
+                                 reserve_head=True, settings=self.settings)
+        assert found.head is not None
+        self.assertEqual(("head", M + 1200), (found.head["label"], found.start), "a's end only drains")
+
+    def test_a_head_that_gives_up_before_a_drain_ends_holds_nobody_back(self):
+        held = [holder("a", 2, -10), holder("b", 2, -10), holder("c", 2, -10)]
+        head = dict(waiter("head", 2, -700), until=stamp(900))  # a ends at 600, but only b's end at 1200 frees two
+        found = sf_schedule.plan([head], held, 4, M, None, runs(a=610, b=1210, c=1810), reserve_head=True,
+                                 settings=self.settings)
+        self.assertIsNone(found.head)
+
+
 class SettingsTests(unittest.TestCase):
     """The order's settings are the queue's, saved beside it like the capacity; a client's environment can only
     make them stricter, or fall back to the window order."""

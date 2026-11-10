@@ -1,0 +1,28 @@
+╭─ SETTINGS ─────────────────────── saved at once · applies at the next grant ─╮
+│ STATUS · read-only, live                                                     │
+│   queue        ~/.local/state/slotfather                                     │
+│   slots        4 total · 4 free · 0 held · 0 waiting                         │
+│   capacity     4 slots · automatic, lower of the two budgets                 │
+│   budgets      CPU 4 (12 cores) · memory 16 (64 GiB)                         │
+│   draining     none                                                          │
+│   environment  SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB                       │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ SHARED CAPACITY                                                              │
+│ ▶ Capacity mode             ‹ Automatic ›                                    │
+│ QUEUE POLICY                                                                 │
+│   Queue order               Backfill                                         │
+│   Safety multiplier         3                                                │
+│   Overtaking limit (s)      2700                                             │
+│   Unknown runtime (s)       3600                                             │
+│   Overrun factor            0.5                                              │
+│   Interactive advance (s)   1800                                             │
+│   Batch delay (s)           1800                                             │
+│   Yield after (s)           120                                              │
+│ THIS DASHBOARD                                                               │
+│   Refresh interval (s)      1                                                │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ Shared by every client. Automatic: the lower of the CPU and memory budgets.  │
+│                                                                              │
+│                                                                              │
+│ ↑↓ select  ←→ change  Enter edit  d default  D all defaults  Esc close       │
+╰──────────────────────────────────────────────────────────────────────────────╯

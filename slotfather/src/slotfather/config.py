@@ -203,7 +203,7 @@ def capacity_basis() -> dict:
         found["saved"] = False
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise SlotError(f"cannot read capacity from {path}: {error}") from None
-    invalid = SlotError(f"invalid saved capacity in {path}; use slotfather slots reset while the queue is idle")
+    invalid = SlotError(f"invalid saved capacity in {path}; use slotfather slots reset")
     if value is not None and (type(value) is not int or value < 1):
         raise invalid
     mode = data.get("mode", "fixed")

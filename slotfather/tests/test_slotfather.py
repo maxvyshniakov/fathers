@@ -206,42 +206,75 @@ class CapacityTests(SlotCase):
                 self.assertEqual(2, result.returncode, result.stdout + result.stderr)
                 self.assertEqual("6 slots (saved)", self.tool("slots").stdout.strip())
 
-    def test_capacity_changes_are_refused_until_holders_and_waiters_leave(self):
-        holder = self.request("holder", "all")
+    def test_a_grown_capacity_grants_waiters_at_once_while_work_runs(self):
+        holder = self.request("holder", 4)
         self.started("holder")
-        waiter = self.request("waiter", "all")
-        self.wait_for(lambda: "waiting: 4 slot(s) waiter" in self.status(), "waiter to queue")
-        for value in ("6", "2", "reset"):
-            result = self.tool("slots", value)
-            self.assertEqual(2, result.returncode, result.stdout + result.stderr)
-            self.assertIn("queue is busy", result.stderr)
-            self.assertIn("4 of 4 slots held", self.status())
-        self.release("holder")
-        self.finish(holder)
+        waiter = self.request("waiter", 2)
+        self.wait_for(lambda: "waiting: 2 slot(s) waiter" in self.status(), "the waiter to queue")
+        # A stopped waiter takes no look of its own, so only the capacity change can grant it.
+        with (self.state / ".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            os.kill(waiter.pid, signal.SIGSTOP)
+            os.waitpid(waiter.pid, os.WUNTRACED)
+        try:
+            changed = self.tool("slots", "6")
+            self.assertEqual(0, changed.returncode, changed.stderr)
+            self.assertEqual("6 slots (saved)", changed.stdout.strip())
+            self.assertIn("held: 2 slot(s) waiter", self.status(), "the change grants without the waiter's look")
+        finally:
+            os.kill(waiter.pid, signal.SIGCONT)
         self.started("waiter")
-        self.assertIn("4 of 4 slots held", self.status())
-        self.release("waiter")
-        self.finish(waiter)
-        self.assertEqual(0, self.tool("slots", "6").returncode)
+        self.assertIn("6 of 6 slots held", self.status())
+        for label in ("holder", "waiter"):
+            self.release(label)
+        for process in (holder, waiter):
+            self.finish(process)
 
-    def test_a_live_waiter_alone_also_blocks_capacity_changes(self):
+    def test_a_shrunk_capacity_lets_running_work_finish_and_drains_before_the_next_grant(self):
+        holders = {label: self.request(label, 1) for label in "abcd"}
+        for label in holders:
+            self.started(label)
+        waiter = self.request("w", 1)
+        self.wait_for(lambda: "waiting: 1 slot(s) w" in self.status(), "the waiter to queue")
+        changed = self.tool("slots", "2")
+        self.assertEqual(0, changed.returncode, changed.stderr)
+        self.assertEqual("2 slots (saved)", changed.stdout.strip())
+        self.assertIn("draining 2", changed.stderr)
+        self.assertIn("4 of 2 slots held, draining 2", self.status())
+        found = json.loads(self.tool("status", "--json").stdout)
+        self.assertEqual((2, 4, 0, 2), (found["slots"], found["held"], found["free"], found["draining"]))
+        self.assertEqual(0, json.loads(self.tool("advise", SLOTFATHER_LOADAVG="0").stdout)["free"])
+        self.assertEqual("0", self.tool("available").stdout.strip())
+        for label, after in (("a", "3 of 2 slots held, draining 1"), ("b", "2 of 2 slots held")):
+            self.release(label)
+            self.finish(holders[label])  # its release has granted what it could
+            status = self.status()
+            self.assertIn(after, status)
+            self.assertIn("waiting: 1 slot(s) w", status, "no grant until held is within the capacity")
+        self.assertNotIn("draining", self.status())
+        self.release("c")
+        self.finish(holders["c"])
+        self.started("w")
+        self.assertLess(self.events().index("end c"), self.events().index("start w"))
+        for label in ("d", "w"):
+            self.release(label)
+        for process in (holders["d"], waiter):
+            self.finish(process)
+
+    def test_waiters_and_migration_queue_leases_no_longer_block_a_capacity_change(self):
+        legacy = self.tmp / "legacy"
+        self.env["SLOTFATHER_LEGACY_DIRS"] = str(legacy)
         pid, start = self.holder()
         self.queue_entry(self.state, pid, start, 4, "waiting-only", state="waiting")
-        self.assertIn("queue is busy", self.tool("slots", "6").stderr)
-        self.assertEqual("4 slots (automatic)", self.tool("slots").stdout.strip())
+        self.queue_entry(legacy, pid, start, 4, "legacy", state="held")
+        changed = self.tool("slots", "6")
+        self.assertEqual(0, changed.returncode, changed.stderr)
+        self.assertEqual("6 slots (saved)", self.tool("slots").stdout.strip())
 
     def test_a_crashed_entry_does_not_block_capacity_changes(self):
         self.queue_entry(self.state, 99999999, "gone", 4, "crashed")
         self.assertEqual(0, self.tool("slots", "6").returncode)
         self.assertEqual("6 slots (saved)", self.tool("slots").stdout.strip())
-
-    def test_legacy_holders_and_waiters_block_capacity_changes(self):
-        legacy = self.tmp / "legacy"
-        self.env["SLOTFATHER_LEGACY_DIRS"] = str(legacy)
-        pid, start = self.holder()
-        for state in ("held", "waiting"):
-            self.queue_entry(legacy, pid, start, 4, "legacy", state=state)
-            self.assertIn("queue is busy", self.tool("slots", "6").stderr)
 
 
 class NestingTests(SlotCase):

@@ -23,7 +23,9 @@ Slots: one per three cores, at least one, and no more than one per 4 GiB of memo
 `total = min(max(1, cores // 3), max(1, memory_GiB // 4))`: 4 on a 12-core M2 Max with 32 GiB, 2 on a 6-core VM with
 12 GiB (on Linux the memory is the limit of the queue's cgroup where it has one: SLOTFATHER_CGROUP, the one
 install.py --cgroup wrote in, the one saved with the capacity, or the caller's outermost limited one). A request
-above a capacity that shrank takes every slot at its grant, and -n all the capacity then. `slotfather slots N` saves shared capacity; `slots memory G` one slot per G GiB of memory, `slots lower G` the
+above a capacity that shrank takes every slot at its grant, and -n all the capacity then. `slotfather slots N` saves shared capacity,
+which applies at the next grant while requests run or wait: growing it starts waiters at once, shrinking it lets running
+leases keep their slots and starts nothing until no more than the new capacity is held (draining); `slots memory G` one slot per G GiB of memory, `slots lower G` the
 lower of that and the CPU budget (#653); `slotfather slots reset` restores the automatic default. SLOTFATHER_CORES
 replaces the core count, SLOTFATHER_MEMORY_GIB the memory. A request above the total takes every slot.
 
@@ -305,11 +307,16 @@ def slots_value(argv: list[str]) -> dict[str, Any] | None:
 def slots_command(argv: list[str]) -> int:
     from . import state as _state
     directory = _config.state_dir()
+    from . import query as _query
     if argv:
         _state.require_own(directory, "a capacity change")
-        _state.configure({"capacity.json": slots_value(argv)})
-    with _state.locked(directory):
-        found = _config.capacity_basis()
+        _state.configure({"capacity.json": slots_value(argv)})  # applies at the next grant, busy or not (#7)
+    live, legacy, _, found = _query.locked_snapshot(directory)
+    held = sum(e["count"] for e in live if e["state"] == "held") + sum(count for _, _, count in legacy)
+    drain = _query.draining(held, found["slots"])
+    if drain:
+        print(f"slotfather: note: {held} slots held: draining {drain}; running work keeps its slots and nothing "
+              f"more starts until at most {found['slots']} are held", file=sys.stderr)
     print(_config.capacity_text(found))
     return 0
 

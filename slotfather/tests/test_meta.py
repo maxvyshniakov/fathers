@@ -118,7 +118,7 @@ class MetaTests(SlotCase):
         for args in (("--json", "--pid"), ("--json", "--pid", "x"), ("--json", "extra"), ("--pid", "1")):
             self.assertEqual(2, self.tool("status", *args).returncode, args)
         found = json.loads(self.tool("status", "--json").stdout)
-        self.assertEqual({"v": 2, "slots": 4, "held": 0, "free": 4, "entries": [], "legacy": []}, found)
+        self.assertEqual({"v": 2, "slots": 4, "held": 0, "free": 4, "draining": 0, "entries": [], "legacy": []}, found)
 
     def test_entries_without_meta_read_as_before(self):
         pid, start = self.holder()

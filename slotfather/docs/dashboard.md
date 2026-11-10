@@ -85,35 +85,38 @@ scrolling never grants a lease, cancels work or kills a process.
 
 ## Settings
 
-`s` opens a centered, scrollable dialog like Help. Changes stay in a draft until
-Apply (or Ctrl-S); Esc or Cancel discards them. Use arrows or Tab/Shift-Tab to
-select, left/right to adjust, and Enter to type a number. The wheel scrolls inside
-the dialog; clicks outside it do not select requests underneath. Esc discards the
-whole dialog, including while editing. `q` outside a field still quits the dashboard.
+`s` opens a centered, scrollable Settings panel like Help. Its top block,
+**STATUS**, is read-only and live: the queue directory; total, free and held
+slots and waiting requests; the capacity and how it was found; the CPU and
+memory budgets; and how many slots are draining. Status rows have dim labels
+and no selection cursor. Below a rule are the editable settings, in three
+groups: shared capacity (mode, and total slots or GiB per slot), queue policy
+(order, safety multiplier, overtaking limit, unknown runtime, overrun factor,
+interactive advance, batch delay, yield delay) and this dashboard's refresh
+interval. The selected setting has ▶, a soft background and a one-line
+description under the list.
 
-Shared capacity has Automatic, Fixed, Memory and CPU + memory modes. Fixed edits
-the total slot count; the memory modes edit GiB per slot. The draft previews the
-resulting capacity. Total, free and admission are separate live observations;
-free/admission are not editable settings. Changing or resetting capacity is
-disabled while any holder or waiter exists. Apply checks again under the queue
-lock, including migration queues; nothing is queued for automatic later application.
+There is no draft. ←/→ (or Enter on a choice) changes the selected setting and
+saves it at once; Enter (or typing a digit) edits a number in place, Enter saves
+it and Esc leaves the field without saving. What a typed value would do shows
+under it: the capacity it gives and, below the held slots, `will drain N`.
+Invalid input is shown there in red and is never saved. A short line confirms
+each save. `d` resets the selected setting to its default (either capacity field
+returns to automatic capacity); `D` twice resets every setting. One hint line at
+the bottom lists the keys. A click selects a setting and a click on the selected
+one changes or edits it; the wheel scrolls inside the panel, and clicks outside
+it do not select requests underneath. `q` outside a field still quits.
 
-Refresh interval (0.1–60 seconds) affects only this dashboard session and is never
-written to the shared queue. It can change while work is running.
-
-Advanced expands shared queue order, safety multiplier, overtaking limit, unknown
-runtime, overrun factor, interactive advance, batch delay and cooperative yield
-delay. These use the existing `slotfather order` rules and take effect at the next
-queue check, also while busy. Stored values are shown separately from effective
-values tightened by this dashboard's environment; other clients can have their
-own stricter environment. No request priority or lifetime lane cap is edited here.
-
-Defaults resets the draft; Apply is still required. Reload discards the draft and
-reads current shared settings. Concurrent CLI/TUI edits are detected under the
-same lock as admission and require Reload rather than silently overwriting newer
-values. Capacity and policy validation completes before saving either change;
-a failed policy write restores the previous capacity. Another user's queue stays
-read-only, with ownership enforced by the same shared layer as the CLI.
+Shared settings use the same rules and lock as `slotfather slots` and
+`slotfather order`, and apply at the queue's next grant, also while requests run
+or wait (see [configuration](configuration.md)). A shrink below the held slots
+drains: running work keeps its slots and nothing more starts until no more than
+the capacity is held; SLOTS shows `draining N` meanwhile. A policy change merges
+with the saved file under the lock, so a concurrent CLI change to another knob is
+kept. The panel reads the shared settings again every second, so changes from
+other clients show while it is open. Values tightened by this dashboard's
+environment show `effective here:`. The refresh interval (0.1–60 seconds) is
+never written to the shared queue. Another user's queue stays read-only.
 
 ## Lane context and details scrolling
 
