@@ -78,7 +78,7 @@ def prefetch_kinds(literals: Iterable[str]) -> None:
                             input="".join(f"HEAD:{path}\n" for path in paths))
     answers = result.stdout.splitlines() if result.returncode == 0 else []
     if len(answers) != len(paths):
-        return  # no repository here: head_kind asks one path at a time and finds none
+        answers = [""] * len(paths)  # no repository (or no HEAD) here: HEAD has none of them
     for path, answer in zip(paths, answers, strict=True):
         _head_kinds[(cwd, path)] = answer if answer in ("tree", "blob", "commit") else ""
 
