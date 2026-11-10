@@ -30,9 +30,10 @@ check plans the lane's diff, and widens its claims, against the newest merge-bas
 base, or with the tip of an integration branch (the branch of the worktree it lands into, its parent's for a fix
 lane, the ranked queue's `base`) when that merge-base descends from the former. A lane registered at a literal
 commit that merged the integration branch is planned from that merge, not from everything the integration gained
-since. A red check reruns by itself on the lane and on its base side by side, each under a lease of the lane
-check's own size (one or two slots) at interactive priority that waits at most `LANEFATHER_RERUN_WAIT` seconds;
-only the perf suite asks for the whole machine. `review <id> --fix-lane` starts the fix lane from the branch the lane landed on, which holds its merge, and
+since. A red check reruns by itself on the lane and, when it is red again, then on its base (never both at once:
+two copies of a check with a fixed port or path collide), each under a lease of the lane check's own size (one or
+two slots) at interactive priority that waits at most `LANEFATHER_RERUN_WAIT` seconds; only the perf suite asks for
+the whole machine. `review <id> --fix-lane` starts the fix lane from the branch the lane landed on, which holds its merge, and
 refuses when no branch does; the landed lane keeps its own registration.
 
 `lanefather --help` describes the commands. The [glossary](../GLOSSARY.md) distinguishes lane states, receipts,

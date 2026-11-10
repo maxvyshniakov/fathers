@@ -2,8 +2,8 @@
 
 check runs the checks the tree's plan selects for the lane's diff and writes the receipt for the committed tree,
 reusing each check that passed for an earlier tree of the lane and that no change since selects. Each red check
-reruns by itself on the lane and on its base, side by side at the lane check's own lease size (lanefather#4), and
-is classified (#568): lane red again and base green, `regression`; base red too, `pre-existing`; lane green on its
+reruns by itself on the lane at the lane check's own lease size (lanefather#4), then, red again, on its base, and is
+classified (#568): lane red again and base green, `regression`; base red too, `pre-existing`; lane green on its
 rerun, `flaky-under-load`. Only the last two leave the receipt landable. A red cheap check stops the run before any
 heavier check starts and reruns on the base only; the heavier checks run when it is pre-existing there (#639).
 """
@@ -306,27 +306,16 @@ class Rerun:
 Outcome = tuple[dict[str, Any] | None, Path | None, Path | None, str | None]
 
 
-def run_reruns(reruns: list[Rerun]) -> list[Outcome]:
-    """Each rerun's (report, log, run directory, problem): side by side, or one after another under a lease this
-    process holds that has too few slots for all of them. When this process exits first, the children stop."""
-    together = not slots.leased() or (slots.lease_count() or 0) >= sum(r.jobs for r in reruns)
-    outcomes: list[Outcome] = []
+def run_rerun(rerun: Rerun) -> Outcome:
+    """The rerun's (report, log, run directory, problem); when this process exits first, the child stops."""
     try:
-        if together:
-            for rerun in reruns:
-                rerun.start()
-        for rerun in reruns:
-            if not together:
-                rerun.start()
-            try:
-                report, log, run = rerun.finish()
-                outcomes.append((report, log, run, rerun_problem(report, log)))
-            except RerunUnavailable as error:
-                outcomes.append((None, None, None, str(error)))
+        rerun.start()
+        report, log, run = rerun.finish()
+        return report, log, run, rerun_problem(report, log)
+    except RerunUnavailable as error:
+        return None, None, None, str(error)
     finally:
-        for rerun in reruns:
-            rerun.stop()
-    return outcomes
+        rerun.stop()
 
 
 def rerun_problem(report: dict[str, Any] | None, log: Path | None) -> str | None:
@@ -386,40 +375,43 @@ def classify(record: Record, worktree: str, base: str, fresh: Rows,
         for check_id in rerun:
             entries[check_id] = {"check": check_id, "alone": {
                 "status": "not rerun", "reason": "a first check (#639): static, so load does not make it red"}}
-    if rerun:
+    still_red: list[str] = list(rerun) if first else []
+    if rerun and not first:
+        alone_report, log, _, problem = run_rerun(Rerun(worktree, rerun, f"lane-{record['id']}-alone",
+                                                        rerun_jobs(jobs), meta=lane_meta(record),
+                                                        ticket=lane_ticket(record)))
+        load["alone"] = host.load_averages()
+        for check_id in rerun:
+            row = report_row(alone_report, check_id)
+            if problem:
+                entries[check_id] = {"check": check_id, "class": "unclassified", "reason": problem}
+            elif row["status"] == "passed":
+                entries[check_id] = {"check": check_id, "class": "flaky-under-load", "load": load,
+                                     "alone": {"status": "passed", "log": str(log)}}
+            elif row["status"] in RED_ALONE:
+                still_red.append(check_id)
+                entries[check_id] = {"check": check_id, "alone": {"status": row["status"], "log": str(log),
+                                                                  **({"blocked_by": row["blocked_by"]}
+                                                                     if row.get("blocked_by") else {})}}
+            else:
+                entries[check_id] = {"check": check_id, "class": "unclassified",
+                                     "reason": f"the lane's rerun did not run it ({not_run(row)}): {log}"}
+    base_side: Outcome | None = None
+    kept: Path | None = None
+    if still_red:
+        # Only after the lane's rerun is red, never beside it (review of lanefather#4): a check with a fixed port,
+        # /tmp path or launchd label fails when two copies run at once, and a base red from that collision would
+        # call the lane's regression pre-existing.
         with worktrees.base_checkout(record, worktree, base) as path:
             known = plan.known_checks(path)
-            present = [c for c in rerun if known is None or c in known]
-            base_label = f"lane-{record['id']}-base"
-            reruns = [] if first else [Rerun(worktree, rerun, f"lane-{record['id']}-alone", rerun_jobs(jobs),
-                                             meta=lane_meta(record), ticket=lane_ticket(record))]
+            present = [c for c in still_red if known is None or c in known]
             if present:
+                base_label = f"lane-{record['id']}-base"
                 # The cheap first checks rerun as verify queues them; others under a lease like the lane's rerun.
-                reruns.append(Rerun(path, present, base_label, 1 if first else rerun_jobs(jobs), queued=not first,
-                                    meta={**lane_meta(record), "on": "base"}, ticket=lane_ticket(record)))
-            outcomes = run_reruns(reruns)
-            load["alone"] = host.load_averages()
-            lane_side = None if first else outcomes.pop(0)
-            base_side = outcomes.pop(0) if present else None
-            kept = keep_run(base_side[2], base_label) if base_side else None
-        still_red = list(rerun) if first else []
-        if lane_side is not None:
-            alone_report, log, _, problem = lane_side
-            for check_id in rerun:
-                row = report_row(alone_report, check_id)
-                if problem:
-                    entries[check_id] = {"check": check_id, "class": "unclassified", "reason": problem}
-                elif row["status"] == "passed":
-                    entries[check_id] = {"check": check_id, "class": "flaky-under-load", "load": load,
-                                         "alone": {"status": "passed", "log": str(log)}}
-                elif row["status"] in RED_ALONE:
-                    still_red.append(check_id)
-                    entries[check_id] = {"check": check_id, "alone": {"status": row["status"], "log": str(log),
-                                                                      **({"blocked_by": row["blocked_by"]}
-                                                                         if row.get("blocked_by") else {})}}
-                else:
-                    entries[check_id] = {"check": check_id, "class": "unclassified",
-                                         "reason": f"the rerun alone did not run it ({not_run(row)}): {log}"}
+                base_side = run_rerun(Rerun(path, present, base_label, 1 if first else rerun_jobs(jobs),
+                                            queued=not first, meta={**lane_meta(record), "on": "base"},
+                                            ticket=lane_ticket(record)))
+                kept = keep_run(base_side[2], base_label)
         for check_id in still_red:
             if check_id not in present:
                 entries[check_id].update({"class": "regression", "base": {
@@ -453,7 +445,7 @@ def classification_lines(classification: dict[str, Any]) -> list[str]:
     base = classification["base"][:10]
     first = classification.get("first")
     lines = [f"lane: red first checks rerun on the base {base} (#639):" if first
-             else f"lane: red checks rerun by themselves on the lane and on its base {base}, side by side (#568):"]
+             else f"lane: red checks rerun by themselves on the lane, then on its base {base} (#568):"]
     for entry in classification["checks"]:
         kind, detail = entry["class"], entry.get("reason", "")
         if kind == "regression":
