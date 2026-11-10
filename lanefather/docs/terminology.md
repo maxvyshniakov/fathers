@@ -34,7 +34,7 @@ prevent an editor from writing a file.
 | Worker budget | Verification parallelism, rather than lane count or process count. |
 
 A green receipt need not mean every first attempt passed: failure classification
-can accept pre-existing failures or failures that disappear when rerun alone.
+can accept pre-existing failures or failures that disappear when rerun by themselves.
 The receipt records that evidence. Likewise, **landed** means merged; it does not
 promise green post-merge verification, finished review or completed cleanup.
 

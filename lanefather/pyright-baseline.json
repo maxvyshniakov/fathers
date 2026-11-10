@@ -38,10 +38,10 @@
     "reportUnusedImport": 1
   },
   "tests/test_checks.py": {
-    "reportMissingParameterType": 10,
-    "reportUnknownArgumentType": 3,
-    "reportUnknownMemberType": 58,
-    "reportUnknownParameterType": 9
+    "reportMissingParameterType": 8,
+    "reportUnknownArgumentType": 2,
+    "reportUnknownMemberType": 28,
+    "reportUnknownParameterType": 7
   },
   "tests/test_compat.py": {
     "reportUnknownMemberType": 1

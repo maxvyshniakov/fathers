@@ -9,6 +9,7 @@ import pathlib
 import subprocess
 import sys
 import time
+from typing import Any
 import unittest
 import unittest.mock
 
@@ -223,16 +224,18 @@ class LoadThrottleTests(LaneCase):
 
 
 class RedCheckClassificationTests(LaneCase):
-    """#568: a red lane check reruns each failed check alone on the lane and on the lane's base, and says why
-    it failed: regression, pre-existing or flaky-under-load. Replays #551, whose agent called a regression load."""
+    """#568: a red lane check reruns each failed check by itself on the lane and on the lane's base, and says why
+    it failed: regression, pre-existing or flaky-under-load. Replays #551, whose agent called a regression load.
+    lanefather#4: the two reruns run side by side, each at the check's own lease size (at most 2 slots) at
+    interactive priority, not under a lease of the whole machine that never came within its wait."""
 
-    def receipt(self, lane_id):
+    def receipt(self, lane_id: str) -> dict[str, Any]:
         return json.loads((self.state / f"{lane_id}.receipt.json").read_text())
 
-    def entries(self, lane_id):
+    def entries(self, lane_id: str) -> dict[str, dict[str, Any]]:
         return {entry["check"]: entry for entry in self.receipt(lane_id)["classification"]["checks"]}
 
-    def runs(self):
+    def runs(self) -> list[tuple[str, ...]]:
         """Each verify run as (label, commit, branch or detached, checkout, selection)."""
         path = pathlib.Path(str(self.verify_log) + ".runs")
         return [tuple(line.split(" ", 4)) for line in path.read_text().splitlines()] if path.exists() else []
@@ -249,15 +252,15 @@ class RedCheckClassificationTests(LaneCase):
         self.commit(worktree, {"native/straylight-core/corpus.txt": "v2\n"})
         head = self.git(worktree, "rev-parse", "HEAD")
         output = self.lane("check", "core", ok=False)
-        self.assertEqual([(label, commit, where, selection) for label, commit, where, _, selection in self.runs()], [
-            ("lane-core", head, "branch", "checks structure-check,native-check"),
-            # Alone: one job, no other check beside it.
-            ("lane-core-alone", head, "branch", "checks native-check"),
-            ("lane-core-base", base, "detached", "checks native-check"),
-        ])
+        runs = [(label, commit, where, selection) for label, commit, where, _, selection in self.runs()]
+        self.assertEqual(runs[0], ("lane-core", head, "branch", "checks structure-check,native-check"))
+        # The lane and its base rerun the red check side by side.
+        self.assertEqual(sorted(runs[1:]), [("lane-core-alone", head, "branch", "checks native-check"),
+                                            ("lane-core-base", base, "detached", "checks native-check")])
         leases = pathlib.Path(str(self.verify_log) + ".leases").read_text().splitlines()
-        # Each rerun holds all four machine-wide slots: nothing else verifies beside it.
-        self.assertEqual(leases[1:], ["lane-core-alone --jobs 1 held 4", "lane-core-base --jobs 1 held 4"])
+        # Each rerun holds the check's own lease size (the lane check's 2 jobs here), never the whole machine.
+        self.assertEqual(leases[0], "lane-core --jobs 2")
+        self.assertEqual(sorted(leases[1:]), ["lane-core-alone --jobs 2 held 2", "lane-core-base --jobs 2 held 2"])
         requests = [json.loads(line) for line in pathlib.Path(str(self.verify_log) + ".requests").read_text().splitlines()]
         self.assertEqual([("normal", "404"), ("interactive", "404"), ("interactive", "404")],
                          [(entry["priority"], entry["ticket"]) for entry in requests])
@@ -361,8 +364,8 @@ class RedCheckClassificationTests(LaneCase):
         worktree = self.created("a", "lib/**")
         self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
         output = self.lane("check", "a")
-        # Green alone: the base run would add nothing.
-        self.assertEqual([run[0] for run in self.runs()], ["lane-a", "lane-a-alone"])
+        # The base reran beside it; green on the lane, the check is a flake whatever the base says.
+        self.assertEqual(sorted(run[0] for run in self.runs()), ["lane-a", "lane-a-alone", "lane-a-base"])
         entry = self.entries("a")["lib-check"]
         self.assertEqual(entry["class"], "flaky-under-load")
         self.assertEqual(sorted(entry["load"]), ["alone", "first_run"])
@@ -480,39 +483,69 @@ class RedCheckClassificationTests(LaneCase):
         entry = self.entries("core")["native-check"]
         self.assertEqual(entry["class"], "unclassified")
         self.assertIn("the rerun alone did not run it (unrun)", entry["reason"])
-        # Without a result alone there is nothing to compare with the base.
-        self.assertEqual([run[0] for run in self.runs()], ["lane-core", "lane-core-alone"])
+        # Without a result on the lane there is nothing to compare with the base, which ran beside it.
+        self.assertEqual(sorted(run[0] for run in self.runs()), ["lane-core", "lane-core-alone", "lane-core-base"])
 
-    def test_a_rerun_waits_for_the_whole_machine_and_a_timeout_leaves_it_unclassified(self):
-        # Review of #568: --jobs 1 took one of four slots, so other verifications ran beside "alone". The rerun asks
-        # slotfather for every slot with a wait; here the machine stays busy and slotfather gives up (exit 75).
+    def test_a_rerun_asks_for_the_checks_own_lease_size_and_a_timeout_leaves_it_unclassified(self):
+        # lanefather#4: reruns under a lease of all six slots waited 3301 s and never ran (Straylight 515, 644),
+        # and as the queue head held one-slot lane checks back. A rerun asks for its own lease size with a wait;
+        # here the machine stays busy and slotfather gives up (exit 75).
         self.env.update(FAKE_SLOTFATHER_BUSY="1")
         output = self.red_core(LANEFATHER_RERUN_WAIT="1")
         entry = self.entries("core")["native-check"]
         self.assertEqual(entry["class"], "unclassified")
-        self.assertIn("no lease of every machine slot within 1 s", entry["reason"])
+        self.assertIn("no lease of 2 slot(s) within 1 s", entry["reason"])
         self.assertEqual(self.receipt("core")["status"], "red")
         self.assertEqual([run[0] for run in self.runs()], ["lane-core"])
-        runs = [json.loads(line)["args"] for line in (self.tmp / "slotfather.log").read_text().splitlines()
-                if json.loads(line)["command"] == "run"]
-        self.assertEqual(runs[0][:4], ["-n", "all", "--label", "lane-core-alone"])
-        lease = runs[0][:runs[0].index("--")]
-        self.assertEqual(("1", "interactive"), (lease[lease.index("--wait") + 1], lease[lease.index("--priority") + 1]))
-        self.assertIn("kind=rerun-alone", lease)
+        runs = sorted(json.loads(line)["args"] for line in (self.tmp / "slotfather.log").read_text().splitlines()
+                      if json.loads(line)["command"] == "run")
+        self.assertEqual([argv[:4] for argv in runs], [["-n", "2", "--label", "lane-core-alone"],
+                                                       ["-n", "2", "--label", "lane-core-base"]])
+        for argv in runs:
+            lease = argv[:argv.index("--")]
+            self.assertEqual(("1", "interactive"),
+                             (lease[lease.index("--wait") + 1], lease[lease.index("--priority") + 1]))
+            self.assertIn("kind=rerun", lease)
         self.assertIn("native-check: unclassified", output)
 
-    def test_without_slotfather_a_rerun_is_not_alone_and_leaves_the_check_unclassified(self):
-        # Review of #610: without slotfather nothing keeps other verifications beside "alone", and its result
-        # classified a regression as load. No slotfather on PATH and no lease: the rerun does not run.
+    def test_a_rerun_is_one_slot_when_the_lane_check_had_one_and_never_more_than_two(self):
+        self.red_core(FAKE_SLOTFATHER_HELD="3")
+        leases = pathlib.Path(str(self.verify_log) + ".leases").read_text().splitlines()
+        self.assertEqual(leases[0], "lane-core --jobs 1")
+        self.assertEqual(sorted(leases[1:]), ["lane-core-alone --jobs 1 held 1", "lane-core-base --jobs 1 held 1"])
+        self.lane("check", "core", "--rerun", "--slots", "4", ok=False)
+        leases = pathlib.Path(str(self.verify_log) + ".leases").read_text().splitlines()
+        self.assertEqual(sorted(leases[4:]), ["lane-core-alone --jobs 2 held 2", "lane-core-base --jobs 2 held 2"])
+
+    def test_the_lane_and_its_base_rerun_side_by_side(self):
+        hold = self.tmp / "hold-alone"
+        self.env["FIXTURE_HOLD"] = f"lane-core-alone:{hold}"
+        worktree = self.created("core", "native/**")
+        self.commit(worktree, {"native/straylight-core/corpus.txt": "v2\n"})
+        check = subprocess.Popen([sys.executable, "-m", "lanefather", "check", "core"], cwd=self.integration,
+                                 env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.addCleanup(lambda: check.poll() is None and (check.kill(), check.wait()))
+        self.addCleanup(hold.touch)
+        deadline = time.monotonic() + 60
+        while "lane-core-base" not in [run[0] for run in self.runs()]:
+            self.assertLess(time.monotonic(), deadline, "the base did not rerun while the lane's rerun ran")
+            self.assertIsNone(check.poll(), "the check exited before its base rerun")
+            time.sleep(0.05)
+        self.assertTrue(pathlib.Path(str(hold) + ".started").exists(), "the lane's rerun is running")
+        hold.touch()
+        self.assertEqual(check.wait(timeout=60), 1, check.stdout.read() if check.stdout else "")
+        self.assertEqual(self.entries("core")["native-check"]["class"], "regression")
+
+    def test_without_slotfather_the_reruns_run_without_a_lease_and_classify(self):
+        # Without slotfather no rerun can wait for a lease; the lane and its base rerun as the lane check ran,
+        # under no lease, and their comparison classifies the check.
         (self.tmp / "bin" / "slotfather").unlink()
         path = [d for d in self.env["PATH"].split(os.pathsep) if d and not os.path.exists(os.path.join(d, "slotfather"))]
         output = self.red_core(PATH=os.pathsep.join(path))
-        entry = self.entries("core")["native-check"]
-        self.assertEqual(entry["class"], "unclassified")
-        self.assertIn("slotfather is not on PATH", entry["reason"])
-        self.assertEqual([run[0] for run in self.runs()], ["lane-core"])
+        self.assertEqual(self.entries("core")["native-check"]["class"], "regression")
+        self.assertEqual(sorted(run[0] for run in self.runs()), ["lane-core", "lane-core-alone", "lane-core-base"])
         self.assertEqual(self.receipt("core")["status"], "red")
-        self.assertIn("native-check: unclassified", output)
+        self.assertIn("native-check: regression", output)
 
     def test_a_lane_whose_first_receipt_was_green_lists_no_tests(self):
         worktree = self.created("a", "calls/**")

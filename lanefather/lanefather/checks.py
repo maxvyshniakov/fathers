@@ -2,10 +2,10 @@
 
 check runs the checks the tree's plan selects for the lane's diff and writes the receipt for the committed tree,
 reusing each check that passed for an earlier tree of the lane and that no change since selects. Each red check
-reruns alone on the lane and on its base and is classified (#568): lane red alone and base green, `regression`;
-base red too, `pre-existing`; lane green alone, `flaky-under-load`. Only the last two leave the receipt landable. A
-red cheap check stops the run before any heavier check starts and reruns on the base only; the heavier checks run
-when it is pre-existing there (#639).
+reruns by itself on the lane and on its base, side by side at the lane check's own lease size (lanefather#4), and
+is classified (#568): lane red again and base green, `regression`; base red too, `pre-existing`; lane green on its
+rerun, `flaky-under-load`. Only the last two leave the receipt landable. A red cheap check stops the run before any
+heavier check starts and reruns on the base only; the heavier checks run when it is pre-existing there (#639).
 """
 from __future__ import annotations
 
@@ -40,10 +40,13 @@ TEST_PATH = re.compile(r"(?:^|/)(?:tests?|__tests__)/|(?:^|/)test[-_][^/]*$|[._-
 # Longer than slotfather's head limit (2700 s) plus a margin: an all-slot rerun that becomes the queue head starts
 # by then (#650).
 DEFAULT_RERUN_WAIT = 3300.0
+# A rerun's most slots (lanefather#4): the lane check's own lease size, never the whole machine; only the perf suite
+# measures alone.
+RERUN_MAX_JOBS = 2
 # A check is red alone when it failed, or its producer failed alone (blocked). On the base only a failure of the
 # check itself is pre-existing.
 RED_ALONE = ("failed", "blocked")
-# Each run's lease priority (#650). The orchestrator waits on a post-merge smoke, a batch gate and a rerun alone; a
+# Each run's lease priority (#650). The orchestrator waits on a post-merge smoke, a batch gate and a rerun; a
 # lane check is ordinary work; the perf suite measures, which slotfather ranks batch.
 SLOT_PRIORITIES = {"check": "normal", "post-merge": "interactive", "gate": "interactive", "rerun": "interactive",
                 "perf": "batch"}
@@ -229,28 +232,12 @@ def terminable() -> Generator[None]:
         signal.signal(signal.SIGTERM, previous)
 
 
-def run_child(argv: list[str], cwd: Any, env: dict[str, str], out: TextIO) -> int:
-    """The child's exit status; when this process exits first, the child gets SIGTERM (verify stops its jobs on
-    it) and SIGKILL 30 s later."""
-    child = subprocess.Popen(argv, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT)
-    try:
-        return child.wait()
-    except BaseException:
-        child.terminate()
-        try:
-            child.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            child.kill()
-            child.wait()
-        raise
-
-
 class RerunUnavailable(Exception):
-    """A rerun could not run alone; its checks stay unclassified."""
+    """A rerun could not run; its checks stay unclassified."""
 
 
 def rerun_wait() -> float:
-    """LANEFATHER_RERUN_WAIT: seconds a rerun waits for the whole machine before its checks stay unclassified."""
+    """LANEFATHER_RERUN_WAIT: seconds a rerun waits for its lease before its checks stay unclassified."""
     value = config.current().env("RERUN_WAIT")
     try:
         seconds = float(value) if value else DEFAULT_RERUN_WAIT
@@ -259,49 +246,87 @@ def rerun_wait() -> float:
     return seconds if seconds > 0 else DEFAULT_RERUN_WAIT
 
 
-def alone(argv: list[str], label: str, meta: dict[str, Any] | None = None, *, ticket: str | None = None) -> list[str]:
-    """argv under a lease of every machine slot, so no other verification runs beside a rerun: `slotfather run -n
-    all --wait <rerun wait>`, which exits 75 without running argv when the lease does not come in time. verify then
-    takes no lease of its own. Raises RerunUnavailable when lanefather already runs under a smaller lease, and
-    without slotfather and a lease: no queue keeps other verifications out, so a rerun would not be alone, and a
-    classification from it would call a regression load (review of #610)."""
-    if not slots.leased() and slots.command() is None:
-        raise RerunUnavailable("slotfather is not on PATH, so nothing keeps other verifications beside a rerun; "
-                               "it would not run alone")
-    count = slots.lease_count()
-    if count is not None:
-        try:
-            total = slots.total()
-        except slots.Unavailable:
-            total = count
-        if count < total:
-            raise RerunUnavailable(f"{config.prog()} runs under a lease of {count} slot(s); a rerun alone needs all "
-                                   f"{total}")
-    return slots.wrap("all", label, argv, wait=rerun_wait(),
-                      meta={"phase": "rerun", "kind": "rerun-alone", **(meta or {})},
-                      priority=SLOT_PRIORITIES["rerun"], ticket=ticket,
-                      yieldable=False)
+def rerun_jobs(jobs: int) -> int:
+    """A rerun's lease size (lanefather#4): the lane check's own, 1 to RERUN_MAX_JOBS slots. A lease of the whole
+    machine never came within its wait while one-slot lane checks ran, and as the queue head held them back."""
+    return max(1, min(RERUN_MAX_JOBS, jobs))
 
 
-def rerun_checks(root: Any, ids: list[str], label: str, whole: bool = True,
-                 meta: dict[str, Any] | None = None, *, ticket: str | None = None,
-                 ) -> tuple[dict[str, Any] | None, Path, Path | None]:
-    """Run the checks in `root` one after another (verify --checks --jobs 1) while holding every verification
-    slot: the report (None when there is none), the run's log and its run directory. `whole=False` runs them as
-    verify queues them: cheap checks (#639), which on a clean checkout run before the queue and need no slot."""
-    log = journal.log_path(label)
-    verify = [plan.verify_path(root), "--checks", ",".join(ids), "--keep-going", "--jobs", "1"]
-    meta = {"check": ",".join(ids), **(meta or {})}
-    argv = alone(verify, label, meta, ticket=ticket) if whole else verify
-    print(f"lane: rerunning {', '.join(ids)} {'alone ' if whole else ''}in {root} (log {log})"
-          + ("; waiting for every slot" if whole else ""), flush=True)
-    with open(log, "w") as handle:
-        status = run_child(argv, root, verify_env(label, "rerun", ticket=ticket, **meta), handle)
-    reports = REPORT.findall(log.read_text(errors="replace"))
-    if argv != verify and status == slots.TIMED_OUT and not reports:
-        raise RerunUnavailable(f"no lease of every machine slot within {rerun_wait():g} s (slotfather status)")
-    run = Path(reports[-1].strip()).parent if reports else None
-    return (state.read_json(run / "report.json") if run else None), log, run
+class Rerun:
+    """One verify run of red checks in a checkout: `verify --checks <ids> --keep-going --jobs <jobs>`, under a
+    lease of `jobs` slots at interactive priority that waits at most the rerun wait (`slotfather run -n <jobs>
+    --wait`, which exits 75 without running verify when the lease does not come). Without slotfather, or under a
+    lease this process holds, verify runs as the lane check ran. `queued=False` runs verify as it queues itself:
+    the cheap first checks (#639), which on a clean checkout run before the queue and need no slot."""
+
+    def __init__(self, root: Any, ids: list[str], label: str, jobs: int, queued: bool = True,
+                 meta: dict[str, Any] | None = None, ticket: str | None = None):
+        self.root, self.ids, self.label, self.jobs = root, ids, label, jobs
+        self.log = journal.log_path(label)
+        self.meta = {"check": ",".join(ids), **(meta or {})}
+        self.ticket = ticket
+        self.verify = [plan.verify_path(root), "--checks", ",".join(ids), "--keep-going", "--jobs", str(jobs)]
+        self.argv = slots.wrap(jobs, label, self.verify, wait=rerun_wait(),
+                               meta={"phase": "rerun", "kind": "rerun", **self.meta},
+                               priority=SLOT_PRIORITIES["rerun"], ticket=ticket) if queued else self.verify
+        self.child: subprocess.Popen[bytes] | None = None
+        self.handle: TextIO | None = None
+
+    def start(self) -> None:
+        print(f"lane: rerunning {', '.join(self.ids)} in {self.root} on {self.jobs} slot(s) (log {self.log})",
+              flush=True)
+        self.handle = open(self.log, "w")  # noqa: SIM115 - closed in finish, after the child exits
+        self.child = subprocess.Popen(self.argv, cwd=self.root, stdout=self.handle, stderr=subprocess.STDOUT,
+                                      env=verify_env(self.label, "rerun", ticket=self.ticket, **self.meta))
+
+    def finish(self) -> tuple[dict[str, Any] | None, Path, Path | None]:
+        """The report (None when there is none), the log and the run directory, once the child exited."""
+        assert self.child is not None and self.handle is not None
+        status = self.child.wait()
+        self.handle.close()
+        reports = REPORT.findall(self.log.read_text(errors="replace"))
+        if self.argv != self.verify and status == slots.TIMED_OUT and not reports:
+            raise RerunUnavailable(f"no lease of {self.jobs} slot(s) within {rerun_wait():g} s (slotfather status)")
+        run = Path(reports[-1].strip()).parent if reports else None
+        return (state.read_json(run / "report.json") if run else None), self.log, run
+
+    def stop(self) -> None:
+        """SIGTERM to a child still running (verify stops its jobs on it), SIGKILL 30 s later."""
+        if self.child is not None and self.child.poll() is None:
+            self.child.terminate()
+            try:
+                self.child.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                self.child.kill()
+                self.child.wait()
+        if self.handle is not None:
+            self.handle.close()
+
+
+Outcome = tuple[dict[str, Any] | None, Path | None, Path | None, str | None]
+
+
+def run_reruns(reruns: list[Rerun]) -> list[Outcome]:
+    """Each rerun's (report, log, run directory, problem): side by side, or one after another under a lease this
+    process holds that has too few slots for all of them. When this process exits first, the children stop."""
+    together = not slots.leased() or (slots.lease_count() or 0) >= sum(r.jobs for r in reruns)
+    outcomes: list[Outcome] = []
+    try:
+        if together:
+            for rerun in reruns:
+                rerun.start()
+        for rerun in reruns:
+            if not together:
+                rerun.start()
+            try:
+                report, log, run = rerun.finish()
+                outcomes.append((report, log, run, rerun_problem(report, log)))
+            except RerunUnavailable as error:
+                outcomes.append((None, None, None, str(error)))
+    finally:
+        for rerun in reruns:
+            rerun.stop()
+    return outcomes
 
 
 def rerun_problem(report: dict[str, Any] | None, log: Path | None) -> str | None:
@@ -332,7 +357,7 @@ def keep_run(run: Path | None, label: str) -> Path | None:
 
 
 def classify(record: Record, worktree: str, base: str, fresh: Rows,
-             report: dict[str, Any] | None) -> dict[str, Any] | None:
+             report: dict[str, Any] | None, jobs: int = 1) -> dict[str, Any] | None:
     """Rerun the red checks of a lane check (at most LANEFATHER_RERUNS) and classify each; None when nothing is red.
     `green` is true when every red check is flaky-under-load or pre-existing.
 
@@ -356,71 +381,66 @@ def classify(record: Record, worktree: str, base: str, fresh: Rows,
     entries: dict[str, dict[str, Any]] = {
         c: {"check": c, "class": "unclassified", "reason": f"only the first {cap} red checks rerun"}
         for c in candidates[cap:]}
-    still_red: list[str] = []
+    present: list[str] = []
     if rerun and first:
-        still_red = list(rerun)
         for check_id in rerun:
             entries[check_id] = {"check": check_id, "alone": {
                 "status": "not rerun", "reason": "a first check (#639): static, so load does not make it red"}}
-    elif rerun:
-        log: Path | None
-        try:
-            alone_report, log, _ = rerun_checks(worktree, rerun, f"lane-{record['id']}-alone",
-                                                        meta=lane_meta(record), ticket=lane_ticket(record))
-            problem = rerun_problem(alone_report, log)
-        except RerunUnavailable as error:
-            alone_report, log, problem = None, None, str(error)
-        load["alone"] = host.load_averages()
-        for check_id in rerun:
-            row = report_row(alone_report, check_id)
-            if problem:
-                entries[check_id] = {"check": check_id, "class": "unclassified", "reason": problem}
-            elif row["status"] == "passed":
-                entries[check_id] = {"check": check_id, "class": "flaky-under-load", "load": load,
-                                     "alone": {"status": "passed", "log": str(log)}}
-            elif row["status"] in RED_ALONE:
-                still_red.append(check_id)
-                entries[check_id] = {"check": check_id, "alone": {"status": row["status"], "log": str(log),
-                                                                  **({"blocked_by": row["blocked_by"]}
-                                                                     if row.get("blocked_by") else {})}}
-            else:
-                entries[check_id] = {"check": check_id, "class": "unclassified",
-                                     "reason": f"the rerun alone did not run it ({not_run(row)}): {log}"}
-    if still_red:
+    if rerun:
         with worktrees.base_checkout(record, worktree, base) as path:
             known = plan.known_checks(path)
-            present = [c for c in still_red if known is None or c in known]
-            for check_id in still_red:
-                if check_id not in present:
-                    entries[check_id].update({"class": "regression", "base": {
-                        "sha": base, "status": "absent", "reason": "the base defines no such check"}})
+            present = [c for c in rerun if known is None or c in known]
+            base_label = f"lane-{record['id']}-base"
+            reruns = [] if first else [Rerun(worktree, rerun, f"lane-{record['id']}-alone", rerun_jobs(jobs),
+                                             meta=lane_meta(record), ticket=lane_ticket(record))]
             if present:
-                label = f"lane-{record['id']}-base"
-                base_log: Path | None
-                try:
-                    report_base, base_log, run = rerun_checks(path, present, label, whole=not first,
-                                                              meta={**lane_meta(record), "on": "base"},
-                                                              ticket=lane_ticket(record))
-                    problem = rerun_problem(report_base, base_log)
-                except RerunUnavailable as error:
-                    report_base, base_log, run, problem = None, None, None, str(error)
-                kept = keep_run(run, label)
-                for check_id in present:
-                    row = report_row(report_base, check_id)
-                    own = kept / Path(row["log"]).name if kept and row.get("log") else None
-                    evidence = {"sha": base, "status": row["status"],
-                                "log": str(own) if own and own.is_file() else str(base_log),
-                                **({"blocked_by": row["blocked_by"]} if row.get("blocked_by") else {})}
-                    if problem:
-                        entries[check_id].update({"class": "unclassified", "reason": problem, "base": evidence})
-                    elif row["status"] == "passed":
-                        entries[check_id].update({"class": "regression", "base": evidence})
-                    elif row["status"] == "failed":
-                        entries[check_id].update({"class": "pre-existing", "base": evidence})
-                    else:
-                        # Blocked behind a failed producer, not run or unrun: the base says nothing about the check.
-                        entries[check_id].update({"class": "unclassified", "base": evidence,
-                                                  "reason": f"the base did not run it ({not_run(row)})"})
+                # The cheap first checks rerun as verify queues them; others under a lease like the lane's rerun.
+                reruns.append(Rerun(path, present, base_label, 1 if first else rerun_jobs(jobs), queued=not first,
+                                    meta={**lane_meta(record), "on": "base"}, ticket=lane_ticket(record)))
+            outcomes = run_reruns(reruns)
+            load["alone"] = host.load_averages()
+            lane_side = None if first else outcomes.pop(0)
+            base_side = outcomes.pop(0) if present else None
+            kept = keep_run(base_side[2], base_label) if base_side else None
+        still_red = list(rerun) if first else []
+        if lane_side is not None:
+            alone_report, log, _, problem = lane_side
+            for check_id in rerun:
+                row = report_row(alone_report, check_id)
+                if problem:
+                    entries[check_id] = {"check": check_id, "class": "unclassified", "reason": problem}
+                elif row["status"] == "passed":
+                    entries[check_id] = {"check": check_id, "class": "flaky-under-load", "load": load,
+                                         "alone": {"status": "passed", "log": str(log)}}
+                elif row["status"] in RED_ALONE:
+                    still_red.append(check_id)
+                    entries[check_id] = {"check": check_id, "alone": {"status": row["status"], "log": str(log),
+                                                                      **({"blocked_by": row["blocked_by"]}
+                                                                         if row.get("blocked_by") else {})}}
+                else:
+                    entries[check_id] = {"check": check_id, "class": "unclassified",
+                                         "reason": f"the rerun alone did not run it ({not_run(row)}): {log}"}
+        for check_id in still_red:
+            if check_id not in present:
+                entries[check_id].update({"class": "regression", "base": {
+                    "sha": base, "status": "absent", "reason": "the base defines no such check"}})
+                continue
+            report_base, base_log, _, problem = base_side or (None, None, None, None)
+            row = report_row(report_base, check_id)
+            own = kept / Path(row["log"]).name if kept and row.get("log") else None
+            evidence = {"sha": base, "status": row["status"],
+                        "log": str(own) if own and own.is_file() else str(base_log),
+                        **({"blocked_by": row["blocked_by"]} if row.get("blocked_by") else {})}
+            if problem:
+                entries[check_id].update({"class": "unclassified", "reason": problem, "base": evidence})
+            elif row["status"] == "passed":
+                entries[check_id].update({"class": "regression", "base": evidence})
+            elif row["status"] == "failed":
+                entries[check_id].update({"class": "pre-existing", "base": evidence})
+            else:
+                # Blocked behind a failed producer, not run or unrun: the base says nothing about the check.
+                entries[check_id].update({"class": "unclassified", "base": evidence,
+                                          "reason": f"the base did not run it ({not_run(row)})"})
     checks = [entries[c] for c in candidates]
     green = bool(checks) and not unaccounted and all(e["class"] in LANDABLE for e in checks)
     return {"base": base, "checks": checks, "load": load, "unaccounted": unaccounted, "green": green,
@@ -433,7 +453,7 @@ def classification_lines(classification: dict[str, Any]) -> list[str]:
     base = classification["base"][:10]
     first = classification.get("first")
     lines = [f"lane: red first checks rerun on the base {base} (#639):" if first
-             else f"lane: red checks rerun alone on the lane and on its base {base} (#568):"]
+             else f"lane: red checks rerun by themselves on the lane and on its base {base}, side by side (#568):"]
     for entry in classification["checks"]:
         kind, detail = entry["class"], entry.get("reason", "")
         if kind == "regression":
@@ -443,8 +463,8 @@ def classification_lines(classification: dict[str, Any]) -> list[str]:
         elif kind == "pre-existing":
             detail = f"the base {base} fails it too ({entry['base']['log']})"
         elif kind == "flaky-under-load":
-            detail = (f"passes alone; load averages {'/'.join(map(str, entry['load']['first_run']))} after the "
-                      f"lane run, {'/'.join(map(str, entry['load']['alone']))} alone")
+            detail = (f"passes rerun by itself; load averages {'/'.join(map(str, entry['load']['first_run']))} "
+                      f"after the lane run, {'/'.join(map(str, entry['load']['alone']))} after the reruns")
         lines.append(f"  {entry['check']}: {kind}: {detail}")
     if classification["unaccounted"]:
         lines.append(f"  not rerun (no check of a suite): {', '.join(classification['unaccounted'])}")
@@ -653,7 +673,7 @@ def lane_run(record: Record, worktree: str, base: str, suites: list[str], remain
             run = next((Path(r["report"]).parent for r in fresh if r.get("report")), None)
             report = state.read_json(run / "report.json") if run else None
             with terminable():
-                classification = classify(record, worktree, base, fresh, report)
+                classification = classify(record, worktree, base, fresh, report, jobs)
             if classification and run:
                 # The project's gate triage reads the classification beside the run's report (rerun.json).
                 state.write_json(run / "rerun.json", classification)
