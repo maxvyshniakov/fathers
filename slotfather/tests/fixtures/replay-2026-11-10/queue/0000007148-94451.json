@@ -1,0 +1,1 @@
+{"pid": 94451, "start": "", "count": 6, "label": "measure-644", "cmd": "verify.sh --keep-going --jobs 2 --suites structure,tooling,native,straylight-link,host-journeys,package,desktop", "since": "2026-11-10T20:21:28Z", "state": "waiting", "priority": "batch", "ticket": "644", "all": true, "until": "2026-11-10T21:21:28Z", "cwd": "/w"}

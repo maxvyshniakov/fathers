@@ -192,7 +192,29 @@ def history_estimates(directory: Path) -> Estimates:
 
 
 
-def rank_time(entry: dict, settings: dict) -> float:
+def no_estimate(entry: Any) -> float | None:
+    """An estimate for which every run is unknown."""
+    return None
+
+
+def deferring(entry: Any, slots: int) -> bool:
+    """Whether a waiter defers to everyone else (#5): it asks for the whole machine (every slot, or `-n all`), is
+    batch or yieldable, and has not run yet (a lease back after a yield keeps its head). Such a waiter is never the
+    head: it holds nobody back, and starts in its turn once the machine is quiet, with no normal or interactive
+    waiter waiting and every slot free."""
+    whole = bool(entry.get("all")) or entry.get("count", 0) >= slots
+    yielding = _config.priority_of(entry) == "batch" or entry.get("yieldable") is True
+    return whole and yielding and not entry.get("granted") and type(entry.get("rank")) not in (int, float)
+
+
+def others_wait(waiters: Any, entry: Any, grants: Any, slots: int) -> bool:
+    """Whether a normal or interactive waiter other than `entry` waits in `waiters` and is not among `grants`: work
+    that a deferring() waiter lets go first."""
+    return any(other is not entry and not any(other is g for g in grants) and _config.priority_of(other) != "batch"
+               and not deferring(other, slots) for other in waiters)
+
+
+def rank_time(entry: Any, settings: Any) -> float:
     """When a waiter counts as queued: an interactive one `interactive` seconds before it came, a batch one `batch`
     seconds after. The offset is its ageing: a batch request that has waited longer than the two together is ahead
     of every interactive one that comes after. A lease that yielded counts as queued at its pinned `rank`, just
@@ -216,8 +238,22 @@ class Plan:
     """What grant() does to the waiters: `grants` start now, in queue order; `reason` says why the first that does
     not start waits; `head` is the waiter the others must not delay, expected to start at `start` (epoch seconds)."""
 
-    def __init__(self):
-        self.grants, self.reason, self.head, self.start = [], None, None, None
+    def __init__(self) -> None:
+        self.grants: list[Any] = []
+        self.reason: str | None = None
+        self.head: Any = None
+        self.start: float | None = None
+
+
+def expected_end(entry: Any, moment: float, estimate: Any, fallback: float, overrun: float) -> float:
+    """When a lease that holds slots is expected to end: its expected run (`fallback` when unknown) after its grant,
+    less the time it spent yielded; one already past it runs on for `overrun` times what it has run so far, because
+    a run that overran its kind tends to be a long one."""
+    granted = _config.seconds(entry.get("granted"))
+    ran = 0.0 if granted is None else max(0.0, moment - granted - float(entry.get("yielded") or 0))
+    run = estimate(entry)
+    run = fallback if run is None else run
+    return moment + max(run - ran, overrun * ran)
 
 
 def reserve(found: Plan, held: list[dict], slots: int, used: int, moment: float, estimate, fallback: float,
@@ -226,43 +262,35 @@ def reserve(found: Plan, held: list[dict], slots: int, used: int, moment: float,
     far), enough slots will be free for it. Returns the slots spare then, those the head will not need even if the
     leases expected to run on past its start are the largest ones (estimates are rough, and which lease ends first
     is too)."""
-    ends = []
-    for entry in held + found.grants:
-        granted = _config.seconds(entry.get("granted"))
-        ran = 0.0 if granted is None else max(0.0, moment - granted - float(entry.get("yielded") or 0))
-        run = estimate(entry)
-        run = fallback if run is None else run
-        ends.append((moment + max(run - ran, overrun * ran), entry["count"]))
-    have, found.start = max(0, slots - used), moment
+    assert found.head is not None
+    need: int = found.head["count"]
+    ends: list[tuple[float, int]] = [(expected_end(entry, moment, estimate, fallback, overrun), entry["count"])
+                                     for entry in held + found.grants]
+    have, start = max(0, slots - used), moment
     for end, count in sorted(ends):
-        if have >= found.head["count"]:
+        if have >= need:
             break
-        have, found.start = have + count, end
-    if have < found.head["count"]:  # slots held in an earlier queue, whose end is unknown: nothing passes
+        have, start = have + count, end
+    found.start = start
+    if have < need:  # slots held in an earlier queue, whose end is unknown: nothing passes
         found.start = moment
         return 0
-    staying = sum(1 for end, _ in ends if end > found.start)
+    staying = sum(1 for end, _ in ends if end > start)
     largest = sum(sorted((count for _, count in ends), reverse=True)[:staying])
     other = used - sum(count for _, count in ends)  # held in an earlier queue
-    return max(0, min(have, slots - other - largest) - found.head["count"])
+    return max(0, min(have, slots - other - largest) - need)
 
 
-def soonest_start(count: int, holding: list[dict], slots: int, used: int, moment: float, estimate) -> float | None:
-    """The earliest moment `count` slots can be free if each lease in `holding` ends when its expected run does,
-    with no overrun (one past its expected run may end any moment). None when that is unknown: a lease whose run
-    the history does not know (it may end any moment too), or slots held in an earlier queue. reserve() is the
-    cautious counterpart, for what may pass a head; this one is for whether a waiter can start at all before its
-    client gives up."""
-    ends = []
-    for entry in holding:
-        run = estimate(entry)
-        if run is None:
-            return None
-        granted = _config.seconds(entry.get("granted"))
-        ran = 0.0 if granted is None else max(0.0, moment - granted - float(entry.get("yielded") or 0))
-        ends.append((moment + max(0.0, run - ran), entry["count"]))
+def soonest_start(count: int, holding: Any, slots: int, used: int, moment: float, estimate: Any,
+                  fallback: float, overrun: float) -> float | None:
+    """When `count` slots are expected to be free if nothing more starts: by the expected ends of the leases in
+    `holding` (expected_end(): an unknown run counts the fallback, and one past its expected run runs on for the
+    overrun, #5), as reserve() counts them for what may pass a head. None when slots held in an earlier queue
+    leave it unknown. It says whether a waiter can start at all before its client gives up."""
+    ends: list[tuple[float, int]] = sorted((expected_end(entry, moment, estimate, fallback, overrun), entry["count"])
+                                           for entry in holding)
     have, start = max(0, slots - used), moment
-    for end, size in sorted(ends):
+    for end, size in ends:
         if have >= count:
             break
         have, start = have + size, end
@@ -280,8 +308,8 @@ def fit(waiters: list[dict], slots: int) -> list[dict]:
     return waiters
 
 
-def plan(waiters: list[dict], held: list[dict], slots: int, moment: float, order: str | None = None,
-         estimate=None, other: int = 0, reserve_head: bool = False, settings: dict | None = None) -> Plan:
+def plan(waiters: Any, held: Any, slots: int, moment: float, order: str | None = None, estimate: Any = None,
+         other: int = 0, reserve_head: bool = False, settings: Any = None) -> Plan:
     """Which of `waiters` (queue order) start now beside `held` (entries; `other` slots more held without one) on
     `slots` slots at epoch `moment`. `estimate(entry)` is its expected run in seconds or None (unknown).
 
@@ -296,20 +324,27 @@ def plan(waiters: list[dict], held: list[dict], slots: int, moment: float, order
     the head's start and by that limit, or when it takes only slots the head will not need then (reserve()); past
     the limit nothing passes. An unknown run counts `fallback` seconds; a held lease past its expected run is
     expected to run on for `overrun` times what it has run so far. A waiter whose client gives up (its entry's
-    `until`, from `run --wait`) before it has waited `limit` and before even the held leases' expected runs,
-    without overrun, free its slots (soonest_start(); unknown runs keep it the head) is no head: it would leave
-    without running, so it holds nobody back. `settings` are order_settings() unless given; `order` overrides
-    theirs. The head's start is worked out only when a request behind it fits, or with `reserve_head`."""
-    settings = settings or order_settings()
+    `until`, from `run --wait`) before the held leases are expected to free its slots, counting their overrun
+    (soonest_start()), is no head, whether or not it has waited `limit`: it would leave without running, so it
+    holds nobody back. Nor is a batch or yieldable waiter for the whole machine (deferring()): it starts in its
+    turn once no normal or interactive waiter waits and it fits, and holds nobody back meanwhile. `settings` are
+    order_settings() unless given; `order` overrides theirs. The head's start is worked out only when a request
+    behind it fits, or with `reserve_head`."""
+    settings = cast(dict[str, Any], settings or order_settings())
     order = order or settings["order"]
-    estimate = estimate or (lambda entry: None)
+    estimate = estimate or no_estimate
     window = _config.overtake_window()
     if order == "backfill":
         waiters = ranked(waiters, settings)
-    fallback, safety, overrun, limit = (settings[key] for key in ("fallback", "safety", "overrun", "limit"))
+    fallback, safety, overrun, limit = (cast(float, settings[key]) for key in ("fallback", "safety", "overrun", "limit"))
     found = Plan()
     used = sum(e["count"] for e in held) + other
     extra = None  # slots free at the head's start that it does not need; reserved once a request behind it fits
+
+    def quiet(free: Any, entry: Any) -> str:
+        return f"{free} of {slots} slots free; {entry['label']} waits for the whole machine to be quiet, so " \
+               "requests that fit pass it"
+
     for entry in waiters:
         free = max(0, slots - used)
         if found.head is not None:
@@ -323,8 +358,9 @@ def plan(waiters: list[dict], held: list[dict], slots: int, moment: float, order
             if moment >= deadline:
                 continue  # the head has waited the limit: it holds back everyone behind it
             run = estimate(entry)
-            run = fallback if run is None else run
-            if moment + run * safety <= min(found.start, deadline):
+            run = cast(float, fallback if run is None else run)
+            start = moment if found.start is None else found.start
+            if moment + run * safety <= min(start, deadline):
                 pass  # ends before the head can start, and before it has waited the limit
             elif entry["count"] <= extra:
                 extra -= entry["count"]
@@ -333,6 +369,10 @@ def plan(waiters: list[dict], held: list[dict], slots: int, moment: float, order
             found.grants.append(entry)
             used += entry["count"]
             continue
+        defers = deferring(entry, slots) if order == "backfill" else False
+        if defers and entry["count"] <= free and others_wait(waiters, entry, found.grants, slots):
+            found.reason = found.reason or quiet(free, entry)
+            continue  # normal or interactive work waits: it goes first, and the machine is not quiet
         if entry["count"] <= free:
             found.grants.append(entry)
             used += entry["count"]
@@ -343,16 +383,19 @@ def plan(waiters: list[dict], held: list[dict], slots: int, moment: float, order
             if not passable:
                 found.reason = found.reason or f"{free} of {slots} slots free"
                 return found
+        elif defers:
+            found.reason = found.reason or quiet(free, entry)
+            continue
         elif not passable:
             found.head = entry
             gives_up = None if entry.get("granted") else _config.seconds(entry.get("until"))
-            began = _config.seconds(entry.get("since"))
-            if gives_up is not None and began is not None and (not limit or moment < began + limit):
-                soonest = soonest_start(entry["count"], held + found.grants, slots, used, moment, estimate)
+            if gives_up is not None:
+                soonest = soonest_start(entry["count"], held + found.grants, slots, used, moment, estimate, fallback,
+                                        overrun)
                 if soonest is not None and soonest > gives_up:
-                    # Its client gives up before the slots it needs can be free even if every held lease ends
-                    # when its kind usually does: holding the others back would only leave slots idle until it
-                    # leaves without running. Past its limit it is the head whatever its wait, as before.
+                    # Its client gives up before the held leases are expected to free its slots: holding the
+                    # others back would only leave slots idle until it leaves without running. Past its limit too
+                    # (#5): nothing passes then, but the leases it waits for still run on.
                     found.head = None
                     clock = time.strftime("%H:%M:%S", time.localtime(gives_up))
                     found.reason = found.reason or (f"{free} of {slots} slots free; {entry['label']} gives up at "
@@ -387,13 +430,10 @@ def yield_asks(waiters: list[dict], held: list[dict], slots: int, moment: float,
     level = {name: n for n, name in enumerate(_config.PRIORITIES)}
     asked_ids = {id(entry) for entry in asked}
     holding, found, granted = list(held), [], []
+    fallback, overrun = cast(float, settings["fallback"]), cast(float, settings["overrun"])
 
-    def expected_end(entry):
-        began = _config.seconds(entry.get("granted"))
-        ran = 0.0 if began is None else max(0.0, moment - began - float(entry.get("yielded") or 0))
-        run = estimate(entry)
-        run = settings["fallback"] if run is None else run
-        return moment + max(run - ran, settings["overrun"] * ran)
+    def ends(entry: Any) -> float:
+        return expected_end(entry, moment, estimate, fallback, overrun)
 
     for entry in ranked(waiters, settings):
         if _config.priority_of(cast(dict[str, Any], entry)) not in _config.ASKERS or any(entry is g for g in granted):
@@ -408,7 +448,7 @@ def yield_asks(waiters: list[dict], held: list[dict], slots: int, moment: float,
         if entry["count"] <= free:
             continue  # it fits: what holds it back is not slots
         have, when = free, moment
-        for end, count in sorted((expected_end(h), h["count"]) for h in holding):
+        for end, count in sorted((ends(h), h["count"]) for h in holding):
             if have >= entry["count"]:
                 break
             have, when = have + count, end
@@ -417,7 +457,7 @@ def yield_asks(waiters: list[dict], held: list[dict], slots: int, moment: float,
         candidates = [h for h in holding if h.get("yieldable") and level[_config.priority_of(cast(dict[str, Any], h))] > level[_config.priority_of(cast(dict[str, Any], entry))]
                       and int(h.get("yields") or 0) < _config.YIELDS_MAX
                       and moment - (_config.seconds(h.get("resumed") or h.get("granted")) or moment) >= after]
-        candidates.sort(key=lambda h: (id(h) not in asked_ids, -level[_config.priority_of(cast(dict[str, Any], h))], -expected_end(h)))
+        candidates.sort(key=lambda h: (id(h) not in asked_ids, -level[_config.priority_of(cast(dict[str, Any], h))], -ends(h)))
         chosen, need = [], entry["count"] - free
         for h in candidates:
             if need <= 0:

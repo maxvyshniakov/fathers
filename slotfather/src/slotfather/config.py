@@ -5,7 +5,7 @@ import json
 import math
 import os
 from pathlib import Path
-from typing import Mapping, cast
+from typing import Any, Mapping, cast
 import re
 
 from . import platform as _platform
@@ -135,6 +135,10 @@ WATCH_JOIN = 5  # seconds a release waits for the sampler to stop, and for its l
 ALL_NOTE = ("-n all holds every later request behind it until the whole machine is free; use it only for work that "
             "needs the machine to itself, such as a performance measurement, and otherwise ask for the slots the "
             "command uses")
+
+
+QUIET_NOTE = ("-n all as batch or --yieldable holds nobody back: it starts once no normal or interactive request waits "
+              "and every slot is free, so it may wait for as long as other work keeps coming")
 
 
 LEASE_ENV_PREFIXES = ["SLOTFATHER_"]
@@ -276,7 +280,7 @@ def now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def seconds(stamp) -> float | None:
+def seconds(stamp: Any) -> float | None:
     """A UTC queue timestamp as epoch seconds, including earlier unpadded spellings."""
     if not isinstance(stamp, str):
         return None

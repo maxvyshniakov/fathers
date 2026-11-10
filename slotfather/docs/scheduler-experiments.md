@@ -83,4 +83,19 @@ The history before `until` does not say which requests had a wait, and a replay 
 
 The Mac's history holds no reaped run with a time, so leaving them out changes nothing here. A head that gives up first saves 2–4% and never adds a give-up (8 from 01:41 and 29 over the day in every row). Safety 2 waits less whenever the estimates are off (5–12%), more with the medians as they were (18.2 against 16.7 h from 01:41), and with estimates halved lets the longest wait of a large request grow (4187 against 3911 s). It is not saved as the default; `slotfather order --safety 2` sets it.
 
+#### Whole-machine waiters (2026-11-10, #5)
+
+The queue of 2026-11-10 15:59 to 20:51 UTC (213 requests on 6 slots: 204 from the history, 9 live; `tests/fixtures/replay-2026-11-10`) and the 2026-11-02 fixture, replayed through the installed order (classes and yields) with the recorded priorities. *1-idle* is the slot-hours idle while a one-slot normal or interactive request waited; *whole* are the batch or yieldable whole-machine requests, which since #5 wait for a quiet machine, counted apart from the rest.
+
+| Fixture, order | rest: total h | rest gave up | whole: n, mean s, max s, gave up | 1-idle | fit-idle | mean held |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2026-11-10, `c2d793c` | 37.9 | 4 | 3, 4899, 6259, 2 | 7.1 | 7.1 | 4.05 |
+| 2026-11-10, only overrun counted for heads that give up | 30.4 | 5 | (counted in the rest) | 3.3 | 4.2 | 4.12 |
+| 2026-11-10, only whole-machine batch requests hold nobody back | 26.7 | 4 | 3, 5412, 7796, 2 | 3.0 | 3.0 | 4.45 |
+| **2026-11-10, both (shipped)** | **17.0** | **3** | **3, 5174, 7300, 1** | **0.0** | **0.0** | **4.54** |
+| 2026-11-02, `c2d793c` | 10.4 | 5 | 9, 2245, 3770, 3 | 3.5 | 4.8 | 4.34 |
+| **2026-11-02, shipped** | **2.9** | **0** | **9, 4185, 9031, 3** | **0.0** | **0.0** | **4.01** |
+
+On 2026-11-10 the whole-machine reruns (`-n all --wait 3300`, interactive) were the head for the last ten minutes of their wait, past the limit, behind checks running an hour past their estimates, and left without running; a batch, yieldable measurement ranked at its arrival plus 1800 s was the head in front of normal lane checks, and past its limit kept five slots idle behind one running check. Each half of the change removes about half of the idle slot-hours; together they remove them, and the rest of the requests wait less than half as long. The whole-machine batch requests pay for it: they now wait for a moment with every slot free and no other work waiting, on average about twice as long in the 2026-11-02 replay and up to 2.5 h instead of the limit plus overrun, and under a steady stream of other work until it stops; no more of them give up. The replay of 2026-11-10 is rough (the installed order replays its recorded waits poorly: a 6-slot request of queue sequence 6978, about 16:15 to 17:36, left no line in `queue.log` or the history, and the replay's estimates start from `queue.log` labels), so the rows compare orders on the same requests rather than predict the day.
+
 Re-run after more history: `python3 tools/replay.py` (or `--since/--until` for a period, `--families`, `--json`).

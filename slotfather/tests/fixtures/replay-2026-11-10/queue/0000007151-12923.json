@@ -1,0 +1,1 @@
+{"pid": 12923, "start": "", "count": 1, "label": "desktop", "cmd": "node --test --test-name-pattern layout tests/editor-interactions.test.mjs", "since": "2026-11-10T20:39:01Z", "state": "waiting", "priority": "normal", "ticket": "540", "cwd": "/w"}

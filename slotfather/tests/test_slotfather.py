@@ -25,7 +25,7 @@ import sys
 import tempfile
 import time
 import unittest
-from typing import Any
+from typing import Any, Callable
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 TOOL = str(ROOT / "slotfather")
@@ -82,7 +82,7 @@ class SlotCase(unittest.TestCase):
     def status(self):
         return self.tool("status").stdout
 
-    def wait_for(self, predicate, what, timeout=20):
+    def wait_for(self, predicate: Callable[[], object], what: str, timeout: float = 20) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if predicate():
@@ -318,6 +318,27 @@ class OvertakeTests(SlotCase):
         self.release("gate")
         self.finish(one)
         self.assertEqual(1, self.finish(gate).count("slot: -n all holds every later request behind it"))
+
+    def test_a_batch_all_slot_request_holds_nobody_back_and_says_so(self):
+        # #5: past its window and its limit alike, a batch `-n all` request lets later work start.
+        self.env.update(SLOTFATHER_OVERTAKE_WINDOW="0", SLOTFATHER_BACKFILL_LIMIT="1")
+        one = self.request("one", 1)
+        self.started("one")
+        gate = self.request("gate", "all", options=("--priority", "batch"))
+        self.wait_for(lambda: "waiting: 4 slot(s) gate" in self.status(), "the gate to queue")
+        later = self.request("later", 1)
+        self.started("later")
+        self.release("later")
+        self.finish(later)
+        self.release("one")
+        self.finish(one)
+        self.started("gate")
+        self.release("gate")
+        output = self.finish(gate)
+        self.assertIn("gate waits for the whole machine to be quiet", output)
+        self.assertEqual(1, output.count("slot: -n all as batch or --yieldable holds nobody back"))
+        self.assertEqual(["start one", "start later", "end later", "end one", "start gate", "end gate"],
+                         self.events())
 
 
 class HistoryTests(SlotCase):

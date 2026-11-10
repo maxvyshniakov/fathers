@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """The replay (#643): recorded requests through the queue orders. tests/fixtures/replay is the queue of
 2026-11-02 22:10 to 2026-11-03 01:48 UTC (commands cut to their kind): the 6-slot measurements and the incident of
-#643, where one 6-slot request held back twelve others with five slots idle."""
+#643, where one 6-slot request held back twelve others with five slots idle. tests/fixtures/replay-2026-11-10 is
+the queue of 2026-11-10 from 15:59 to 20:51 UTC (#5; commands cut to their kind, no directories or metadata;
+queue.log from 2026-11-07 for the estimates): whole-machine reruns and a batch, yieldable measurement that were
+the head while one-slot work waited beside idle slots."""
 from __future__ import annotations
 import sys as _path_sys
 from pathlib import Path as _Path
@@ -14,17 +17,20 @@ import pathlib
 import shutil
 import tempfile
 import unittest
+from typing import Any, cast
 
 from test_slotfather import ROOT
 from test_usage import load
 
-replay = load(str(ROOT / "tools" / "replay.py"), "slotfather_replay_under_test")
+replay = cast(Any, load(str(ROOT / "tools" / "replay.py"), "slotfather_replay_under_test"))  # a script, loaded
 
 FIXTURE = ROOT / "tests" / "fixtures" / "replay"
 NOW = sf_config.seconds("2026-11-03T01:48:36Z")  # when the live queue in the fixture was copied
 INCIDENT = (sf_config.seconds("2026-11-03T00:48:50Z"), sf_config.seconds("2026-11-03T01:40:00Z"))
 SHIPPED, CURRENT = "backfill (shipped)", "window (current)"
 CLASSES = "classes + yields (#643 shipped)"
+TODAY = ROOT / "tests" / "fixtures" / "replay-2026-11-10"
+TODAY_SINCE, TODAY_NOW = sf_config.seconds("2026-11-10T15:59:00Z"), sf_config.seconds("2026-11-10T20:51:00Z")
 
 
 class RecordedReplayTests(unittest.TestCase):
@@ -50,14 +56,26 @@ class RecordedReplayTests(unittest.TestCase):
         self.assertLessEqual(shipped["large_max_s"], current["large_max_s"])
         self.assertLess(shipped["blocked_slot_h"], current["blocked_slot_h"])
 
+    def test_whole_machine_batch_requests_wait_for_a_quiet_machine_and_leave_no_slot_idle(self):
+        # #5: the 6-slot measurements (batch) no longer hold anyone back. They wait longer than the window order
+        # made them, and no more of them give up; nothing that fits waits beside an idle slot.
+        current, shipped = (self.whole["policies"][name] for name in (CURRENT, SHIPPED))
+        self.assertEqual(9, shipped["deferring"]["requests"])
+        self.assertLessEqual(shipped["deferring"]["never_ran"], current["deferring"]["never_ran"])
+        self.assertLess(shipped["deferring"]["max_s"], 3 * 3600)
+        for name in (SHIPPED, CLASSES):
+            self.assertLess(self.whole["policies"][name]["blocked_slot_h"], 0.05)
+
     def test_wrong_estimates_do_not_hold_large_requests_back_longer(self):
         current, noisy = (self.whole["policies"][name] for name in (CURRENT, "backfill, estimates noisy"))
         self.assertLessEqual(noisy["large_max_s"], current["large_max_s"])
 
     def test_classes_wait_less_and_serve_interactive_work_first_without_starving_batch_work(self):
+        # Before #5 classes took a fifth off the total; with whole-machine batch requests holding nobody back,
+        # backfill alone waits as little here, and classes keep it.
         backfill, classes = (self.whole["policies"][name] for name in (SHIPPED, CLASSES))
-        self.assertLess(classes["total_h"], 0.8 * backfill["total_h"])
-        self.assertLess(classes["classes"]["interactive"]["p90_s"], 0.5 * backfill["classes"]["interactive"]["p90_s"])
+        self.assertLessEqual(classes["total_h"], 1.05 * backfill["total_h"])
+        self.assertLessEqual(classes["classes"]["interactive"]["p90_s"], backfill["classes"]["interactive"]["p90_s"])
         self.assertLessEqual(classes["large_max_s"], backfill["large_max_s"])
         self.assertLessEqual(classes["classes"]["batch"]["delay_max_s"],
                              1.1 * backfill["classes"]["batch"]["delay_max_s"])
@@ -65,7 +83,7 @@ class RecordedReplayTests(unittest.TestCase):
         bound = replay.CLASSES["interactive"] + replay.CLASSES["batch"]  # the most a class moves a request
         self.assertLessEqual(noisy["classes"]["batch"]["delay_max_s"], before["classes"]["batch"]["delay_max_s"] + bound)
         incident = self.incident["policies"]
-        self.assertLessEqual(incident[CLASSES]["total_h"], incident[SHIPPED]["total_h"])
+        self.assertLessEqual(incident[CLASSES]["total_h"], 1.05 * incident[SHIPPED]["total_h"])
 
     def test_the_incident_waits_far_less(self):
         current, shipped = (self.incident["policies"][name] for name in (CURRENT, SHIPPED))
@@ -106,28 +124,70 @@ class YieldTraceTests(unittest.TestCase):
 
 
 class AllSlotTraceTests(unittest.TestCase):
-    """Review P2-2: a batch `-n all` measurement under a steady stream of interactive checks (one a minute, five
-    minutes each, for four hours). Requests that rank ahead of it start first, so it is not bound by its limit;
-    it starts once those that came within both class offsets after it have run."""
+    """A batch `-n all` measurement among interactive checks (one a minute, five minutes each). Before #5 requests
+    that ranked ahead of it started first and it then held back the rest (review P2-2: it started after both class
+    offsets); since #5 it holds nobody back and starts once the machine is quiet: no other work waits and every slot
+    is free."""
 
-    def test_an_all_slot_batch_request_starts_after_the_class_offsets_and_the_runs_ahead_of_it(self):
-        start = sf_config.seconds("2026-11-02T10:00:00Z")
-        found = [{"label": "lane-1", "cmd": "make", "count": 1, "arrival": 0.0, "run": 600.0},
+    def requests(self, gaps: range | tuple[int, ...] = ()) -> list[dict[str, Any]]:
+        start = sf_config.seconds("2026-11-02T10:00:00Z") or 0.0
+        found: list[dict[str, Any]] = [{"label": "lane-1", "cmd": "make", "count": 1, "arrival": 0.0, "run": 600.0},
                  {"label": "lane-2-measure", "cmd": "measure.sh", "count": 6, "arrival": 10.0, "run": 600.0}]
         found += [{"label": "sid-kit-wt-1", "cmd": "node scripts/pre-push.mjs origin", "count": 1,
-                   "arrival": 20.0 + 60 * n, "run": 300.0} for n in range(240)]
+                   "arrival": 20.0 + 60 * n, "run": 300.0} for n in range(240) if n not in gaps]
         for number, request in enumerate(found):
             request.update(id=number, patience=None, waited=None, source="history",
                            arrival=start + request["arrival"])
         self.assertEqual("batch", replay.classify(found[1], 6))
+        return found
+
+    def waited(self, found: list[dict[str, Any]], policy: str) -> float:
         seed = [("sid-kit-wt-1", found[2]["cmd"], 300.0), ("lane-1", "make", 600.0)]
-        offsets = replay.CLASSES["interactive"] + replay.CLASSES["batch"]
-        head = replay.Replay(found, 6, replay.POLICIES[CLASSES], seed).simulate()[1]
-        waited = head["granted"] - found[1]["arrival"]
-        self.assertGreater(waited, sf_config.ORDER_DEFAULTS["limit"], "the limit alone no longer bounds it")
-        self.assertLessEqual(waited, offsets + 300 + 2 * replay.POLL, "the offsets and the runs ahead of it do")
-        before = replay.Replay(found, 6, replay.POLICIES[SHIPPED], seed).simulate()[1]
-        self.assertLessEqual(before["granted"] - found[1]["arrival"], sf_config.ORDER_DEFAULTS["limit"] + 600 + replay.POLL)
+        head = replay.Replay(found, 6, replay.POLICIES[policy], seed).simulate()[1]
+        self.assertTrue(head["defers"])
+        return head["granted"] - found[1]["arrival"]
+
+    def test_an_all_slot_batch_request_waits_for_the_stream_of_checks_to_end(self):
+        found = self.requests()
+        last = found[-1]["arrival"] + 300 - found[1]["arrival"]  # when the last check ends
+        for policy in (CLASSES, SHIPPED):
+            with self.subTest(policy):
+                self.assertAlmostEqual(last, self.waited(found, policy), delta=2 * replay.POLL)
+
+    def test_it_starts_in_the_first_quiet_moment(self):
+        found = self.requests(gaps=range(60, 75))  # no check comes from 3620 s to 4520 s
+        quiet = found[2 + 59]["arrival"] + 300 - found[1]["arrival"]  # the last check before the gap ends
+        self.assertAlmostEqual(quiet, self.waited(found, CLASSES), delta=2 * replay.POLL)
+
+
+class TodayReplayTests(unittest.TestCase):
+    """#5: 2026-11-10, replayed through the installed order (classes and yields). Before #5 it left 7.1 slot-hours
+    idle while a one-slot normal or interactive request waited and fitted (the order of c2d793c on this fixture);
+    a waiter whose rerun would give up before the leases it waited for ran on was the head past its limit, and a
+    batch, yieldable measurement of the whole machine was the head in front of normal lane checks."""
+
+    @classmethod
+    def setUpClass(cls):
+        policies = {name: replay.POLICIES[name] for name in (CURRENT, CLASSES)}
+        cls.today = replay.compare(TODAY, TODAY_NOW, 6, policies, since=TODAY_SINCE, until=TODAY_NOW)
+
+    def test_no_slot_stays_idle_while_one_slot_work_waits(self):
+        found = self.today["policies"][CLASSES]
+        self.assertLess(found["small_blocked_slot_h"], 0.05, "slot-hours: a few slot-minutes between looks")
+        self.assertLess(found["blocked_slot_h"], 0.05)
+        self.assertLess(found["total_h"], 0.5 * self.today["policies"][CURRENT]["total_h"])
+
+    def test_recorded_priorities_and_live_waits_are_replayed(self):
+        found = replay.requests(TODAY, TODAY_NOW)
+        live = {r["label"]: r for r in found if r["source"] == "live"}
+        self.assertEqual(("batch", True, None), (live["data-grid-perf-61-confirm"]["priority"],
+                                                 live["data-grid-perf-61-confirm"]["yieldable"],
+                                                 live["data-grid-perf-61-confirm"]["give_up"]))
+        self.assertEqual(("interactive", sf_config.seconds("2026-11-10T21:02:52Z")),
+                         (live["lane-480-offline-expiry-alone"]["priority"],
+                          live["lane-480-offline-expiry-alone"]["give_up"]))
+        self.assertEqual({"interactive", "normal", "batch"}, {r["priority"] for r in found if r["source"] == "history"})
+        self.assertEqual(3, self.today["policies"][CLASSES]["deferring"]["requests"])
 
 
 class TraceTests(unittest.TestCase):

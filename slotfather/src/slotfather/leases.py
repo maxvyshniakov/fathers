@@ -337,7 +337,8 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
         if yieldable:
             entry["yieldable"] = True
         if wait is not None:
-            # When this client gives up (plan(): a head that would give up before its start holds nobody back).
+            # When this client gives up (plan(): a head that would give up before its expected start holds nobody
+            # back).
             entry["until"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + wait))
         own = _schedule.order_settings(directory)["yield_after"]
         if own != _schedule.order_settings(directory, environment=False)["yield_after"]:
@@ -400,7 +401,8 @@ def run(count: int | str, label: str, argv: list[str], wait: float | None = None
     from . import usage as _usage
     try:
         background = policy() == "background"
-        lease = acquire(count, label, " ".join(argv), wait=wait, note=_config.ALL_NOTE if count == "all" else "", meta=meta,
+        note = "" if count != "all" else _config.QUIET_NOTE if yieldable or priority == "batch" else _config.ALL_NOTE
+        lease = acquire(count, label, " ".join(argv), wait=wait, note=note, meta=meta,
                         yieldable=yieldable, priority=priority, ticket=ticket)
     except _config.SlotTimeout as error:
         print(f"slot: {label}: {error}", file=sys.stderr)

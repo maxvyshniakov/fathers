@@ -19,7 +19,7 @@ import tempfile
 import time
 import unittest
 from unittest import mock
-from typing import cast
+from typing import Any, Callable, Optional, cast
 
 from test_slotfather import ROOT, TOOL, SlotCase, WORK
 from test_usage import load
@@ -33,19 +33,21 @@ def stamp(offset: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(M + offset))
 
 
-def waiter(label: str, count: int, queued: float) -> dict:
+def waiter(label: str, count: int, queued: float) -> dict[str, Any]:
     """A waiter that queued `queued` seconds before M (negative: earlier)."""
     return {"label": label, "count": count, "cmd": label, "since": stamp(queued), "state": "waiting"}
 
 
-def holder(label: str, count: int, granted: float) -> dict:
+def holder(label: str, count: int, granted: float) -> dict[str, Any]:
     return {"label": label, "count": count, "cmd": label, "since": stamp(granted), "granted": stamp(granted),
             "state": "held"}
 
 
-def runs(**estimates):
+def runs(**estimates: float) -> Callable[[dict[str, Any]], Optional[float]]:
     """estimate(entry) from label -> seconds; other labels are unknown."""
-    return lambda entry: estimates.get(entry["label"])
+    def estimate(entry: dict[str, Any]) -> float | None:
+        return estimates.get(entry["label"])
+    return estimate
 
 
 class PlanCase(unittest.TestCase):
@@ -55,9 +57,10 @@ class PlanCase(unittest.TestCase):
         self.addCleanup(patcher.stop)
         for key in [k for k in os.environ if k.startswith("SLOTFATHER_") and k not in SETTINGS]:
             os.environ.pop(key)
-        self.settings = dict(sf_config.ORDER_DEFAULTS)  # what `slotfather order` saves
+        self.settings: dict[str, Any] = dict(sf_config.ORDER_DEFAULTS)  # what `slotfather order` saves
 
-    def started(self, waiters, held, order=None, slots=6, **estimates):
+    def started(self, waiters: list[dict[str, Any]], held: list[dict[str, Any]], order: str | None = None, slots: int = 6,
+                **estimates: float) -> list[str]:
         found = sf_schedule.plan(waiters, held, slots, M, order, runs(**estimates), settings=self.settings)
         return [e["label"] for e in found.grants]
 
@@ -70,7 +73,7 @@ class WindowOrderTests(PlanCase):
 
     def test_its_reason_names_the_waiter_and_the_end_of_the_window(self):
         found = sf_schedule.plan([waiter("gate", 6, -100)], [holder("one", 1, -60)], 6, M, "window")
-        self.assertIn("5 of 6 slots free; requests that fit may pass gate until", found.reason)
+        self.assertIn("5 of 6 slots free; requests that fit may pass gate until", str(found.reason))
         found = sf_schedule.plan([waiter("gate", 6, -700)], [holder("one", 1, -60)], 6, M, "window")
         self.assertEqual("5 of 6 slots free", found.reason)
 
@@ -117,7 +120,7 @@ class BackfillTests(PlanCase):
                         runs(one=3600, short=60), reserve_head=True, settings=self.settings)
         self.assertEqual(("gate", M + 3000), (found.head["label"], found.start))
         self.assertIn("gate is next, and a later request that fits starts first only if it ends before gate can",
-                      found.reason)
+                      str(found.reason))
 
     def test_nothing_passes_a_head_that_has_waited_the_limit_and_a_pass_must_end_before_it(self):
         self.settings["limit"] = sf_config.ORDER_DEFAULTS["limit"]  # 2700 s
@@ -158,8 +161,8 @@ class BackfillTests(PlanCase):
         self.assertEqual((["smoke"], None), ([e["label"] for e in found.grants], found.head))
         self.assertIsNone(sf_schedule.plan([gate], self.held, 6, M, None, runs(one=3600), reserve_head=True,
                                   settings=self.settings).head)
-        self.assertIn("gate gives up at", sf_schedule.plan([gate], self.held, 6, M, None, runs(one=3600),
-                                                  settings=self.settings).reason)
+        self.assertIn("gate gives up at", str(sf_schedule.plan([gate], self.held, 6, M, None, runs(one=3600),
+                                                      settings=self.settings).reason))
         later = dict(gate, until=stamp(3000))  # it still waits when one is expected to end: it is the head
         self.assertEqual([], self.started([later, waiter("smoke", 1, -10)], self.held, one=3600, smoke=1200))
 
@@ -172,24 +175,29 @@ class BackfillTests(PlanCase):
         self.assertEqual(("pair", M + 3000), (found.head["label"], found.start))
         self.assertEqual(["smoke"], [e["label"] for e in found.grants], "slots pair will not need at its start")
 
-    def test_a_head_past_its_limit_keeps_its_head_whatever_its_wait(self):
-        # Review of d1cccbe: past the limit nothing passes, as it always did; a 7200 s job must not take the slot of
-        # a lease that, unknown to the history, really ends in five minutes.
+    def test_a_head_past_its_limit_that_would_give_up_first_holds_nobody_back_either(self):
+        # 2026-11-10 (#5): three `-n all --wait 3300` reruns were the head for the last ten minutes of their wait,
+        # past the limit, behind checks that ran on for an hour, and left without running while slots stood idle.
         self.settings["limit"] = sf_config.ORDER_DEFAULTS["limit"]
-        held = [holder("one", 1, -300)]  # no history: the fallback
-        big = dict(waiter("big", 6, -2800), until=stamp(1000))
-        self.assertEqual([], self.started([big, waiter("long", 1, -10)], held, long=7200))
+        big = dict(waiter("big", 6, -2800), until=stamp(1000))  # one is expected to end in 3000 s
+        self.assertEqual(["long"], self.started([big, waiter("long", 1, -10)], self.held, one=3600, long=7200))
+        later = dict(big, until=stamp(3001))  # it still waits when one is expected to end: past the limit, as before
+        self.assertEqual([], self.started([later, waiter("long", 1, -10)], self.held, one=3600, long=1))
 
-    def test_a_head_keeps_its_head_while_a_held_lease_has_no_known_run(self):
-        held = [holder("one", 1, -300)]  # no history: it may end any moment
+    def test_a_held_lease_of_unknown_run_counts_the_fallback_for_when_the_head_can_start(self):
+        held = [holder("one", 1, -300)]  # no history: 3600 s of the fallback, 3300 s of it left
         big = dict(waiter("big", 6, -700), until=stamp(1000))
-        self.assertEqual([], self.started([big, waiter("long", 1, -10)], held, long=7200))
+        self.assertEqual(["long"], self.started([big, waiter("long", 1, -10)], held, long=7200))
+        self.assertEqual([], self.started([dict(big, until=stamp(3301)), waiter("long", 1, -10)], held, long=7200))
 
-    def test_a_head_is_demoted_only_if_even_the_expected_runs_without_overrun_end_after_it_gives_up(self):
-        # `one` should have ended 2400 s ago: by the overrun it runs on for 1500 s more, but it may end any moment.
+    def test_a_head_counts_the_overrun_of_held_leases_for_whether_it_can_start_before_it_gives_up(self):
+        # `one` should have ended 2400 s ago: by the overrun it runs on for 1500 s more (#5: the leases a rerun
+        # waited for ran on past their estimates, and its start kept slipping until it gave up).
         held = [holder("one", 1, -3000)]
         big = dict(waiter("big", 6, -700), until=stamp(1000))
-        self.assertEqual([], self.started([big, waiter("long", 1, -10)], held, one=600, long=7200))
+        self.assertEqual(["long"], self.started([big, waiter("long", 1, -10)], held, one=600, long=7200))
+        self.assertEqual([], self.started([dict(big, until=stamp(1501)), waiter("long", 1, -10)], held, one=600,
+                                          long=7200))
         held = [holder("one", 1, -600), holder("two", 2, -100)]  # one ends in 3000 s, two in 100 s
         self.assertEqual(["long"], self.started([big, waiter("long", 1, -10)], held, one=3600, two=200, long=7200))
         self.assertEqual([], self.started([dict(big, until=stamp(3001)), waiter("long", 1, -10)], held, one=3600,
