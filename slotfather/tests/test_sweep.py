@@ -465,18 +465,18 @@ class ReportTests(unittest.TestCase):
             return {"Id": "abcdef0123456789", "Name": "/" + name, "RestartCount": restarts, "Created": created,
                     "State": {"Status": status, "Restarting": restarting, "StartedAt": started, "ExitCode": 1},
                     "HostConfig": {"RestartPolicy": {"Name": policy}},
-                    "Config": {"Labels": {"com.docker.compose.project": "sirv-demo"}}}
+                    "Config": {"Labels": {"com.docker.compose.project": "acme-demo"}}}
         moment = sweep.docker_time("2027-01-15T08:00:00Z")
         found = sweep.restart_loops([
-            container("sirv-demo-app-1", 412),
+            container("acme-demo-app-1", 412),
             container("steady", 5, "running", False, started="2027-01-14T00:00:00Z"),
             container("few", 2),
             container("no-policy", 50, policy="no"),
             container("new", 50, created="2027-01-15T07:50:00Z"),
             container("again", 9, "running", False, started="2027-01-15T07:59:00Z"),
         ], SETTINGS, moment)
-        self.assertEqual(["sirv-demo-app-1", "again"], [c["name"] for c in found])
-        self.assertEqual(("report", "sirv-demo", 412, "unless-stopped"),
+        self.assertEqual(["acme-demo-app-1", "again"], [c["name"] for c in found])
+        self.assertEqual(("report", "acme-demo", 412, "unless-stopped"),
                          (found[0]["action"], found[0]["project"], found[0]["restarts"], found[0]["policy"]))
 
     def test_memory_holders_only_while_memory_is_short_with_their_class(self):
