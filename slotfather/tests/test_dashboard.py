@@ -396,8 +396,8 @@ class QueueTableTests(unittest.TestCase):
             text = {cell[1] for cell in cells if cell[0] not in (" ", "■", "")}
             self.assertEqual({style}, text, label)
         build = self.row(canvas, "build")
-        self.assertTrue({"accent", "frame"} >= {cell[1] for cell in canvas.cells[build] if cell[0] == "■"},
-                        "the CPU bar keeps its own colours")
+        self.assertEqual({"h0", "frame"}, {cell[1] for cell in canvas.cells[build] if cell[0] == "■"},
+                         "the CPU bar fills in the row's colour; its empty cells keep the frame colour")
         self.assertTrue(all(cell[2] for cell in canvas.cells[build][3:-3]), "the selection highlight stays on top")
 
     def test_bars_and_states_start_at_one_column_and_the_numbers_line_up(self) -> None:
@@ -419,6 +419,21 @@ class QueueTableTests(unittest.TestCase):
                 states = {lines[self.row(canvas, label)].index(state) for label, state in (("gate", "waiting #1"),
                                                                                           ("back", "yielded #2"))}
                 self.assertEqual(starts, states, "a waiting row's state starts where the bars do")
+
+    def test_a_cpu_bar_fills_in_the_rows_colour_unless_it_warns(self) -> None:
+        now, old = self.now, self.now - datetime.timedelta(minutes=10)
+        model = self.model()
+        model["holders"] = [
+            dict(label="fair", kind="held", count=2, pid=10, style="h0", cpu=200, since=now, granted=now),
+            dict(label="hog", kind="held", count=1, pid=11, style="h1", cpu=900, since=now, granted=now),
+            dict(label="idle", kind="held", count=1, pid=12, style="h2", cpu=5, since=old, granted=old)]
+        styles = [self.tool.queue_bar_style(item, model, now) for item in model["holders"]]
+        self.assertEqual(["h0", "bad", "warn"], styles, "over its share stays red, nearly idle stays yellow")
+        canvas = self.draw(model)
+        cpu = canvas.render(False).splitlines()[0].index("cpu use/share")
+        for label, filled in (("fair", {"h0", "frame"}), ("hog", {"bad"})):
+            y = self.row(canvas, label)
+            self.assertEqual(filled, {cell[1] for cell in canvas.cells[y][cpu:cpu + 10] if cell[0] == "■"}, label)
 
     def test_slots_are_countable_cells_in_the_rows_colour_alike_for_running_and_waiting(self) -> None:
         for form, two in (("spaced", "■ ■"), ("small", "▪▪")):
@@ -542,9 +557,9 @@ class EventDetailTests(unittest.TestCase):
             with self.subTest(padding=padding):
                 found = [(e["verb"], e["label"], e["detail"], e["delta"]) for e in self.events(padding)]
                 self.assertEqual([("granted", "build", "waited 3m00s", 1), ("granted", "verify", "no wait", 2),
-                                  ("released", "build", "exit 1 · ran 4m00s", -1),
+                                  ("released", "build", "exit 1, ran 4m00s", -1),
                                   ("left", "gate", "gave up after 15m00s", 0),
-                                  ("reaped", "verify", "owner exited · ran 5m55s", -2),
+                                  ("reaped", "verify", "owner exited, ran 5m55s", -2),
                                   ("granted", "live", "waited 1m00s", 1)], found)
 
     def test_slots_are_cells_filled_when_taken_and_hollow_when_handed_back(self) -> None:
@@ -567,20 +582,20 @@ class EventDetailTests(unittest.TestCase):
         self.assertIn("o", canvas.lines(False, ascii_only=True)[next(
             n for n, line in enumerate(lines) if " released " in line)][column:column + 2])
 
-    def test_the_columns_are_time_slots_event_detail_label_pid(self) -> None:
+    def test_the_columns_are_time_event_slots_detail_label_pid(self) -> None:
         tool = load_dashboard()
         canvas = tool.Canvas(120, 12)
         tool.draw_events(canvas, 0, 0, 12, 120, {"events": self.events()})
         lines = canvas.render(False).splitlines()
-        places = [lines[0].index(title) for title in ("EVENTS", "slots", "event", "detail", "label", "pid")]
+        places = [lines[0].index(title) for title in ("EVENTS", "event", "slots", "detail", "label", "pid")]
         self.assertEqual(sorted(places), places)
         row = next(line for line in lines if " gate " in line)
-        self.assertRegex(row, r"\d\d:\d\d:\d\d +▫ +left +gave up after 15m00s +gate +103")
+        self.assertRegex(row, r"\d\d:\d\d:\d\d +left +▫ +gave up after 15m00s +gate +103")
         narrow = tool.Canvas(48, 12)
         tool.draw_events(narrow, 0, 0, 12, 48, {"events": self.events()})
         header = narrow.render(False).splitlines()[0]
-        self.assertEqual(["slots", "event"], [t for t in ("slots", "event", "detail", "pid") if t in header],
-                         "pid and detail drop first, the cells and the event stay")
+        self.assertEqual(["event", "slots"], [t for t in ("event", "slots", "detail", "pid") if t in header],
+                         "pid and detail drop first, the event and the cells stay")
 
     def test_the_detail_column_shows_it_dim(self) -> None:
         tool = load_dashboard()
@@ -591,7 +606,7 @@ class EventDetailTests(unittest.TestCase):
         row = next(n for n, line in enumerate(lines) if "gave up after 15m00s" in line)
         start = lines[row].index("gave up")
         self.assertEqual("dim", canvas.cells[row][start][1])
-        self.assertTrue(any("exit 1 · ran 4m00s" in line for line in lines))
+        self.assertTrue(any("exit 1, ran 4m00s" in line for line in lines))
 
 
 class MouseInputTests(unittest.TestCase):

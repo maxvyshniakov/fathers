@@ -42,7 +42,9 @@ The rows are the same either way.
 
 The QUEUE columns are label, slots, cpu use/share, time and pid. Each row has one
 colour: a running request's row (label, slot cells, CPU numbers, time and pid) is
-in the colour of its blocks in SLOTS, and only the CPU bar keeps its own colours; a
+in the colour of its blocks in SLOTS, the filled part of its CPU bar included (red
+when above 1.5 times its share and yellow while nearly idle, as before; the empty
+part keeps the frame colour); a
 waiting or yielded request's row is white, the normal text colour. The selected
 row keeps its highlight on top. **slots** draws one countable cell per slot
 (`▪▪▪`, small squares whose side bearing keeps them apart). A count too wide for
@@ -85,13 +87,13 @@ start. The help explains them alongside CPU, load, memory, admission and history
 ## Events
 
 EVENTS lists the grants, releases, waiters that left and reaped requests at the end
-of `queue.log`, newest first, in the columns time, slots, event, detail, label and
+of `queue.log`, newest first, in the columns time, event, slots, detail, label and
 pid. **slots** uses the same cells as QUEUE in the event's
 colour: filled `▪` for slots taken (granted) and hollow `▫` for slots handed back
 (released, a held lease reaped) or never held (a waiter that left or was reaped).
 **detail** comes from the request's line in `history.jsonl`: `waited 3m00s` (or
-`no wait`) for a grant, `exit 1 · ran 4m00s` for a release, `gave up after 15m00s`
-for a waiter that left and `owner exited · ran 5m55s` for a reap. The history line
+`no wait`) for a grant, `exit 1, ran 4m00s` for a release, `gave up after 15m00s`
+for a waiter that left and `owner exited, ran 5m55s` for a reap. The history line
 also tells a waiter that gave up from a lease that ended, which `queue.log` alone
 cannot once it is longer than the part the dashboard reads. Detail is empty where
 the history does not reach back.

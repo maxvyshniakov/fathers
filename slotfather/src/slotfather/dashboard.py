@@ -394,8 +394,8 @@ EVENT_MATCH = 2.0  # seconds between a queue.log line and the history stamp of t
 
 def describe_events(events: list[dict[str, Any]], directory: Path, live: list[dict[str, Any]]) -> None:
     """Adds each event's `detail` from the history line of its request (state.record() writes it as the request
-    leaves): `waited 3m00s` for a grant (a running lease's from its queue entry), `exit 1 · ran 4m00s` for a release,
-    `gave up after 15m00s` for a waiter that left, `owner exited · ran 5m55s` for a reap. The history line also
+    leaves): `waited 3m00s` for a grant (a running lease's from its queue entry), `exit 1, ran 4m00s` for a release,
+    `gave up after 15m00s` for a waiter that left, `owner exited, ran 5m55s` for a reap. The history line also
     settles whether a release was a lease ending or a waiter giving up, which queue.log alone cannot say once it is
     longer than the part queue_events() reads; a waiter that gave up changed no held slots."""
     by_pid: dict[int, list[dict[str, Any]]] = {}
@@ -430,14 +430,14 @@ def describe_events(events: list[dict[str, Any]], directory: Path, live: list[di
         ran = item.get("ran")
         ran_text = f"ran {span(ran)}" if isinstance(ran, (int, float)) else ""
         if verb == "reaped":
-            event["detail"] = " · ".join(part for part in ("owner exited", ran_text) if part)
+            event["detail"] = ", ".join(part for part in ("owner exited", ran_text) if part)
         elif item.get("outcome") == "left":
             event.update(verb="left", delta=0, label=event["label"] or str(item.get("label") or ""))
             waited = item.get("waited")
             event["detail"] = f"gave up after {span(waited)}" if isinstance(waited, (int, float)) else "gave up"
         else:
             status = item.get("status")
-            event["detail"] = " · ".join(part for part in (
+            event["detail"] = ", ".join(part for part in (
                 f"exit {status}" if isinstance(status, int) else "", ran_text) if part)
             event["label"] = event["label"] or str(item.get("label") or "")
 
@@ -632,6 +632,13 @@ def share_style(item: dict, model: dict, moment: datetime.datetime) -> str:
     if running > 120 and used < 0.1 * allotted:
         return "warn"  # holds slots while nearly idle
     return "bad" if used > 1.5 * allotted else "accent"
+
+
+def queue_bar_style(item: dict[str, Any], model: dict[str, Any], moment: datetime.datetime) -> str:
+    """A QUEUE row's CPU bar fills in the row's colour (its SLOTS colour), except when it warns: red over 1.5 times
+    its share, yellow while nearly idle on its slots (share_style())."""
+    style = share_style(item, model, moment)
+    return str(item["style"]) if style == "accent" else style
 
 
 def columns(width: int, spec: list[tuple]) -> list[tuple]:
@@ -893,7 +900,7 @@ def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model
         item = items[index]
         row = y + 2 + visual - offset
         waiting = index >= len(holders)
-        # One colour per row: a running lease's SLOTS colour (the CPU bar keeps its own), the text colour for a
+        # One colour per row: a running lease's SLOTS colour (its CPU bar too, but for a warning), the text colour for a
         # request that holds no slots.
         style = "text" if waiting else str(item["style"])
         if waiting:
@@ -904,7 +911,7 @@ def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model
         else:
             age = (moment - item["granted"]).total_seconds() if item["granted"] else None
             used, allotted = shares[index]
-            cpu = bar(used / allotted if allotted else 0, layout.bar, share_style(item, model, moment)) + [
+            cpu = bar(used / allotted if allotted else 0, layout.bar, queue_bar_style(item, cast(dict[str, Any], model), moment)) + [
                 (f" {used:.1f}".rjust(use_width + 1) + "/" + short(allotted).ljust(share_width), style)]
         draw_row(canvas, row, x + 3, placed, {
             "label": (str(item["label"]), style), "slots": slot_cells(item, size),
@@ -1222,7 +1229,7 @@ def draw_events(canvas: Canvas, y: int, x: int, height: int, width: int, model: 
     events = cast(list[dict[str, Any]], model["events"])[::-1]
     cells = max([5] + [text_width(cells_text(min(SLOT_CELLS, int(event["count"])))) for event in events])
     placed = cast(list[tuple[str, str, int, int, bool]], columns(width - 6, [
-        ("time", "time", 10, False, 0), ("slots", "slots", cells, False, 2), ("event", "event", 8, False, 1),
+        ("time", "time", 10, False, 0), ("event", "event", 8, False, 1), ("slots", "slots", cells, False, 2),
         ("detail", "detail", 22, False, 3), ("label", "label", 0, False, 0), ("pid", "pid", 6, True, 4)]))
     size = next((column[3] for column in placed if column[0] == "slots"), cells)
     table_header(canvas, y, x, height, width, "EVENTS", placed)
@@ -1253,7 +1260,7 @@ HELP_CONTENT: list[tuple[str, str]] = [
     ("The header shows machine cores and shared slot capacity. manual means a saved capacity setting; auto means capacity calculated from the machine.", "text"),
     ("QUEUE", "title"),
     ("Running requests come first, followed by a blank separator and waiting requests. ▶ and a soft background identify the selected row. Selection opens its details.", "text"),
-    ("Each row has one colour: a running request's row is in the colour of its SLOTS blocks (the CPU bar keeps its own colours); a waiting or yielded request's row is white.", "text"),
+    ("Each row has one colour: a running request's row is in the colour of its SLOTS blocks, its CPU bar too, except that the bar turns red above 1.5 times its share and yellow while nearly idle; a waiting or yielded request's row is white.", "text"),
     ("slots: one cell per slot the request holds or asks for. A count too wide for the column shows the cells that fit and +N for the rest; -n all that does not fit shows all.", "text"),
     ("cpu use/share: observed cores used by a running request / the core budget represented by its slots. A request can exceed its share; it is not a hard limit. A request that holds no slots shows its state there instead: waiting #N, its current place in the waiting queue, or yielded #N for a lease back in the queue after a yield. Bars and states start at one column; the numbers line up around the slash.", "text"),
     ("time is elapsed run time for running work and elapsed wait time for waiting work. pid is the lease owner. A wide terminal shares the spare width among the columns in proportion to their own widths; on a narrow one pid goes first, then time, then cpu use/share.", "text"),
@@ -1274,7 +1281,7 @@ HELP_CONTENT: list[tuple[str, str]] = [
     ("Example: start est 10:30, pass until 10:20. At 10:10, a later request may pass if it can finish before 10:30 with a margin. At 10:21, it cannot pass at all.", "text"),
     ("These are scheduling estimates and rules, not a promised start. Deadlines can change as the queue advances.", "text"),
     ("EVENTS", "title"),
-    ("Recent queue events, newest first: time, slots, event, detail, label and pid. time is the event time; label and pid identify the request. On a narrow terminal pid and detail go first. Scroll to read older events.", "text"),
+    ("Recent queue events, newest first: time, event, slots, detail, label and pid. time is the event time; label and pid identify the request. On a narrow terminal pid and detail go first. Scroll to read older events.", "text"),
     ("granted: the request received slots. released: it returned them. left: it stopped waiting. reaped: its owner exited and the stale request was removed.", "text"),
     ("slots: one cell per slot in the event's colour, filled ▪ for slots taken (granted) and hollow ▫ for slots handed back (released, a held lease reaped) or never held (left, a waiter reaped).", "text"),
     ("detail comes from the request's history line: waited for a grant, the exit status and run time for a release, gave up after for a waiter that left, owner exited for a reap. It is empty where the history does not reach back.", "text"),
