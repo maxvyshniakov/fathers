@@ -33,8 +33,10 @@ SELECTION_MIX, TRACK_MIX, FREE_MIX = 0.10, 0.15, 0.20
 HOLDERS = 12
 GOLDEN_ANGLE = 180 * (3 - math.sqrt(5))  # 137.5°: each next hue lands in the widest gap the earlier ones left
 HOLDER_START = 248.0  # OKLCH hue of the first holder colour, the blue of the palette before #14 (256-colour 75)
-DARK_PASTEL = (0.80, 0.09)  # (OKLCH lightness, chroma) of holder colours on a dark background
-LIGHT_PASTEL = (0.64, 0.11)  # deeper on a light one
+# (OKLCH lightness, chroma) of holder colours on a dark background, and deeper on a light one. The chroma is a
+# target: a hue whose colour at it falls outside sRGB (blue and cyan at these lightnesses) gets the most that fits.
+DARK_PASTEL = (0.80, 0.13)
+LIGHT_PASTEL = (0.64, 0.14)  # 0.15 puts the coral (hue 25) within ΔE 0.1 of a light theme's over-share red
 MIN_CONTRAST = 3.0  # holder text against the background it is drawn on
 CHART_STEPS = 8
 FIXED_LOW, FIXED_HIGH = (80, 140, 240), (225, 85, 80)  # the chart without the theme's own blue and red

@@ -101,6 +101,17 @@ class HolderColourTests(unittest.TestCase):
         self.assertTrue(all(0.60 <= theme.oklab(c)[0] <= 0.68 for c in light))
         self.assertGreaterEqual(min(theme.contrast(c, LIGHT_BG) for c in light), 3.0)
 
+    def test_one_chroma_lowered_only_where_srgb_ends(self) -> None:
+        for light, (_, chroma) in ((False, theme.DARK_PASTEL), (True, theme.LIGHT_PASTEL)):
+            self.assertEqual((0.13, 0.14)[light], chroma, "saturated, not neon (owner, 2026-11-11)")
+            for colour in theme.holder_colours(None, light):
+                _, a, b = theme.oklab(colour)
+                found = (a * a + b * b) ** 0.5
+                with self.subTest(light=light, colour=colour):
+                    self.assertLess(found, chroma + 0.004)
+                    if found < chroma - 0.004:  # lowered only where the colour reaches the edge of sRGB
+                        self.assertTrue(any(channel <= 2 or channel >= 253 for channel in colour))
+
     def test_the_first_hues_stay_close_to_the_palette_before(self) -> None:
         hues = [theme.hue(c) for c in theme.holder_colours(DARK_BG, False)]
         before = {"blue": 250, "peach": 47, "mint": 168, "violet": 297}  # 256-colour 75, 216, 79, 141
