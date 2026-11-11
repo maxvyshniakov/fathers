@@ -85,7 +85,8 @@ start. The help explains them alongside CPU, load, memory, admission and history
 ## Events
 
 EVENTS lists the grants, releases, waiters that left and reaped requests at the end
-of `queue.log`, newest first. **slots** uses the same cells as QUEUE in the event's
+of `queue.log`, newest first, in the columns time, slots, event, detail, label and
+pid. **slots** uses the same cells as QUEUE in the event's
 colour: filled `▪` for slots taken (granted) and hollow `▫` for slots handed back
 (released, a held lease reaped) or never held (a waiter that left or was reaped).
 **detail** comes from the request's line in `history.jsonl`: `waited 3m00s` (or

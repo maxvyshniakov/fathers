@@ -1222,7 +1222,7 @@ def draw_events(canvas: Canvas, y: int, x: int, height: int, width: int, model: 
     events = cast(list[dict[str, Any]], model["events"])[::-1]
     cells = max([5] + [text_width(cells_text(min(SLOT_CELLS, int(event["count"])))) for event in events])
     placed = cast(list[tuple[str, str, int, int, bool]], columns(width - 6, [
-        ("time", "time", 10, False, 0), ("event", "event", 8, False, 1), ("slots", "slots", cells, False, 2),
+        ("time", "time", 10, False, 0), ("slots", "slots", cells, False, 2), ("event", "event", 8, False, 1),
         ("detail", "detail", 22, False, 3), ("label", "label", 0, False, 0), ("pid", "pid", 6, True, 4)]))
     size = next((column[3] for column in placed if column[0] == "slots"), cells)
     table_header(canvas, y, x, height, width, "EVENTS", placed)
@@ -1274,7 +1274,7 @@ HELP_CONTENT: list[tuple[str, str]] = [
     ("Example: start est 10:30, pass until 10:20. At 10:10, a later request may pass if it can finish before 10:30 with a margin. At 10:21, it cannot pass at all.", "text"),
     ("These are scheduling estimates and rules, not a promised start. Deadlines can change as the queue advances.", "text"),
     ("EVENTS", "title"),
-    ("Recent queue events, newest first. time is the event time; slots is its slot count; label and pid identify the request. Scroll to read older events.", "text"),
+    ("Recent queue events, newest first: time, slots, event, detail, label and pid. time is the event time; label and pid identify the request. On a narrow terminal pid and detail go first. Scroll to read older events.", "text"),
     ("granted: the request received slots. released: it returned them. left: it stopped waiting. reaped: its owner exited and the stale request was removed.", "text"),
     ("slots: one cell per slot in the event's colour, filled ▪ for slots taken (granted) and hollow ▫ for slots handed back (released, a held lease reaped) or never held (left, a waiter reaped).", "text"),
     ("detail comes from the request's history line: waited for a grant, the exit status and run time for a release, gave up after for a waiter that left, owner exited for a reap. It is empty where the history does not reach back.", "text"),

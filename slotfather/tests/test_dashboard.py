@@ -567,6 +567,21 @@ class EventDetailTests(unittest.TestCase):
         self.assertIn("o", canvas.lines(False, ascii_only=True)[next(
             n for n, line in enumerate(lines) if " released " in line)][column:column + 2])
 
+    def test_the_columns_are_time_slots_event_detail_label_pid(self) -> None:
+        tool = load_dashboard()
+        canvas = tool.Canvas(120, 12)
+        tool.draw_events(canvas, 0, 0, 12, 120, {"events": self.events()})
+        lines = canvas.render(False).splitlines()
+        places = [lines[0].index(title) for title in ("EVENTS", "slots", "event", "detail", "label", "pid")]
+        self.assertEqual(sorted(places), places)
+        row = next(line for line in lines if " gate " in line)
+        self.assertRegex(row, r"\d\d:\d\d:\d\d +▫ +left +gave up after 15m00s +gate +103")
+        narrow = tool.Canvas(48, 12)
+        tool.draw_events(narrow, 0, 0, 12, 48, {"events": self.events()})
+        header = narrow.render(False).splitlines()[0]
+        self.assertEqual(["slots", "event"], [t for t in ("slots", "event", "detail", "pid") if t in header],
+                         "pid and detail drop first, the cells and the event stay")
+
     def test_the_detail_column_shows_it_dim(self) -> None:
         tool = load_dashboard()
         model = {"events": self.events()}
