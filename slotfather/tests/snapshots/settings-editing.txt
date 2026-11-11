@@ -7,27 +7,24 @@
 │   draining     none                                                          │
 │   environment  SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB                       │
 │ ──────────────────────────────────────────────────────────────────────────── │
-│ SHARED CAPACITY                                                              │
-│   Capacity mode             Fixed                                            │
-┃ ▶ Total slots               [1▏]                                             │
+│   Capacity                  Fixed                                            │
+┃ ▶ Slots                     [1▏]                                             │
 ┃     → 1 slot · will drain 3: running work keeps its slots                    │
-│ QUEUE POLICY                                                                 │
 │   Queue order               Backfill                                         │
-│   Safety multiplier         3                                                │
-│   Overtaking limit (s)      2700                                             │
-│   Unknown runtime (s)       3600                                             │
-│   Overrun factor            0.5                                              │
-│   Interactive advance (s)   1800                                             │
-│   Batch delay (s)           1800                                             │
-│   Yield after (s)           120                                              │
-│   Idle below (cores)        0.1                                              │
-│   Idle after (s)            300                                              │
-│ THIS DASHBOARD                                                               │
-│   Refresh interval (s)      1                                                │
+│   Backfill margin           3×                                               │
+│   Unknown job runtime       3600 s                                           │
+│   Overrun estimate          0.5×                                             │
+│   Overtaking stops after    2700 s                                           │
+│   Interactive head start    1800 s                                           │
+│   Batch held back           1800 s                                           │
+│   Idle when below           0.1 cores                                        │
+│   Idle for                  300 s                                            │
+│   Ask to yield after        120 s                                            │
+│   Refresh every             1 s                                              │
 │   Colour theme              Auto                                             │
 │ ──────────────────────────────────────────────────────────────────────────── │
 │ Total slots for every client. Applies at the next grant; a shrink drains.    │
 │                                                                              │
 │                                                                              │
-│ Enter save  Esc cancel  ⌫ delete  ^U clear                                   │
+│                           enter save   esc cancel                            │
 ╰──────────────────────────────────────────────────────────────────────────────╯

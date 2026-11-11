@@ -23,7 +23,8 @@ from typing import Any
 
 from test_slotfather import ROOT, SlotCase
 
-HINTS = ["↑↓ select", "s settings", "? help", "q quit"]
+HINTS = ["↑↓ select", "tab panel", "s settings", "? help", "q quit"]
+DROPS = ["? help", "s settings", "tab panel", "↑↓ select"]  # the order a narrow footer drops them in
 
 
 def model() -> dict[str, Any]:
@@ -38,44 +39,55 @@ class FooterTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tool: Any = importlib.reload(importlib.import_module("slotfather.dashboard"))
 
-    def footer(self, width: int) -> str:
+    def footer(self, width: int, **extra: Any) -> str:
         canvas = self.tool.Canvas(width, 30)
-        self.tool.dashboard_draw(canvas, model())
+        self.tool.dashboard_draw(canvas, dict(model(), **extra))
         return canvas.render(False).splitlines()[-1].ljust(width)
 
     def test_the_hints_are_centred_in_order_between_the_name_and_the_status(self) -> None:
-        for width, shown in ((120, HINTS), (80, [hint for hint in HINTS if hint != "? help"])):
+        for width in (120, 80, 60):
             with self.subTest(width=width):
                 line = self.footer(width)
-                self.assertTrue(line.startswith(" slotfather "), line)
+                self.assertTrue(line.startswith(" Slotfather"), line)
                 self.assertRegex(line.rstrip(), r"updated \d\d:\d\d:\d\d  ● live$")
+                status = line.index("updated")
+                shown = [hint for hint in HINTS if hint in line]
+                self.assertIn("q quit", shown, "quit is the last to go")
+                self.assertEqual(set(HINTS) - set(shown), set(DROPS[:len(HINTS) - len(shown)]), "help goes first")
                 hints = "   ".join(shown)
-                self.assertIn(hints, line, "navigation, settings, help, quit last; at 80 cells help gives way")
-                start, status = line.index(hints), line.index("updated")
-                self.assertEqual(min((width - len(hints)) // 2, status - 3 - len(hints)), start,
-                                 "centred on the footer, or as near as the status leaves room for")
+                self.assertIn(hints, line, "navigation, panels, settings, help, quit last")
+                start = line.index(hints)
+                self.assertLess(start + len(hints), status - 1, "never over the status")
                 if width == 120:
-                    self.assertLessEqual(abs(start + len(hints) / 2 - width / 2), 1)
+                    self.assertEqual(HINTS, shown)
+                    self.assertLessEqual(abs(start + len(hints) / 2 - width / 2), 1, "centred on the footer")
 
-    def test_a_narrow_footer_drops_hints_from_the_right_but_quit_and_never_overlaps(self) -> None:
-        line = self.footer(60)
-        status = line.index("updated") if "updated" in line else line.index("● live")
-        shown = [hint for hint in HINTS if hint in line]
-        self.assertIn("q quit", shown, "quit is the last to go")
-        self.assertEqual(shown, [hint for hint in HINTS if hint in shown], "the order stays")
-        dropped = [hint for hint in HINTS if hint not in shown]
-        self.assertTrue(dropped, "60 cells cannot hold every hint beside the name and status")
-        self.assertEqual(set(dropped), set(["? help", "s settings", "↑↓ select"][:len(dropped)]),
-                         "help goes first, then settings, then select")
-        self.assertLess(max(line.index(hint) + len(hint) for hint in shown), status - 1, "never over the status")
+    def test_the_version_follows_the_name_and_goes_before_any_hint(self) -> None:
+        version = self.tool.running_version()
+        self.assertTrue(version, "a commit or semver")
+        self.assertIn(f" Slotfather {version} ", self.footer(120))
+        self.assertIn(f" Slotfather {version} ↻ ", self.footer(120, installed="another release"),
+                      "installed after this dashboard started: it runs older code until it restarts")
+        self.assertNotIn("↻", self.footer(120, installed=self.tool.running_source()))
+        narrow = self.footer(80)
+        self.assertNotIn(version, narrow, "the version goes first")
+        self.assertIn("↑↓ select", narrow)
+
+    def test_a_scrollable_panel_has_the_arrows_scroll(self) -> None:
+        canvas = self.tool.Canvas(120, 30)
+        canvas.focus = "details"
+        self.tool.dashboard_draw(canvas, model())
+        self.assertIn("↑↓ scroll   tab panel", canvas.render(False).splitlines()[-1])
 
     def test_the_removed_keys_and_states_are_gone(self) -> None:
         line = self.footer(120)
         for gone in ("pause", "refresh", "select text", "text selection", "paused"):
             self.assertNotIn(gone, line)
-        help_text = " ".join(text for text, _ in self.tool.HELP_CONTENT)
-        self.assertNotRegex(help_text, r"\bp or space\b|\br: refresh|\bm: ")
-        self.assertIn("Shift", help_text, "text is selected with Shift+drag")
+        keys = dict(self.tool.HELP)["KEYS"]
+        terms = [entry[0] for entry in keys if entry[0]]
+        for gone in ("p", "r", "m", "space"):
+            self.assertNotIn(gone, terms)
+        self.assertIn("shift+drag", terms, "text is selected with Shift+drag")
 
 
 class RemovedKeyTests(SlotCase):

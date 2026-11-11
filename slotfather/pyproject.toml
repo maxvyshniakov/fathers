@@ -1,3 +1,7 @@
+[project]
+name = "slotfather"
+version = "0.1.0"  # the newest release in CHANGELOG.md; src/slotfather/version.py VERSION matches it
+
 [tool.ruff]
 target-version = "py39"
 extend-include = ["slotfather", "slotfather-dashboard", "slotfather-stats", "slotfather-sweep"]

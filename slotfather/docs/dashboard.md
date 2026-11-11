@@ -12,19 +12,38 @@ slotfather dashboard --once --width 156 --height 43 --color
 
 | Input | Action |
 | --- | --- |
-| ↑ / ↓ or j / k | Select a running or waiting request. |
-| Click a request | Select that row. |
-| Mouse wheel | Scroll the table under the pointer. |
-| g / G, Home / End | First or last request. |
+| ↑ / ↓ or j / k | QUEUE: select a request. DETAILS, EVENTS: scroll a line. |
+| PgUp / PgDn | QUEUE: first or last request. DETAILS, EVENTS: a page. |
+| g / G, Home / End | QUEUE: first or last request. DETAILS, EVENTS: top or bottom. |
+| Tab / Shift-Tab | Focus the next or previous panel: QUEUE, DETAILS, EVENTS. |
+| Click | Select a request; focus the panel it lands in. A click on the footer's version opens the changelog. |
+| Mouse wheel | Scroll the panel under the pointer. |
 | s | Open Settings. |
-| ? | Open scrollable help. |
+| ? | Open help. |
+| v | Open the changelog. |
+| Esc | Close help, Settings or the changelog; so does a click outside them. |
 | q | Quit. |
 | Shift+drag | Select text: the terminal keeps the drag for its own selection while the dashboard reads the mouse (button tracking with SGR reports, modes 1000 and 1006). Kitty, Ghostty, WezTerm, xterm, Alacritty and GNOME Terminal use Shift; iTerm2 uses Option. |
 
-The view refreshes on its own, every second by default (the refresh interval in Settings). The footer has the
-name on the left, the hints in the middle (`↑↓ select   s settings   ? help   q quit`) and the last update and
-`● live` on the right; a narrow terminal drops the hints help first, then settings, then select, quit last, and
-they never cover the status.
+The view refreshes on its own, every second by default (Refresh every, in Settings). The footer has the name and
+version on the left (`Slotfather 0.1.0`, with `↻` once a newer install waits for a restart), the hints in the
+middle (`↑↓ select   tab panel   s settings   ? help   q quit`; `↑↓ scroll` on DETAILS and EVENTS) and the
+last update and `● live` on the right; a narrow terminal drops the version first, then the hints help,
+settings, tab and select, quit last, and they never cover the status.
+
+**Focus** (#15). One panel has the keys: QUEUE at start, then Tab and Shift-Tab, or a click. Its frame is in the
+foreground colour, the others muted. EVENTS stays on its newest entry while scrolled to the top; scrolled down,
+it keeps showing the same events and counts the new ones (`↑ 3 new`); Home goes back.
+
+**Details in the background** (#15). Moving the selection redraws at once; the selected request's lane facts
+(a lanefather call, 150–260 ms) and its holder's directory (`lsof`, about 25 ms) load in a background worker,
+one at a time, the newest request replacing a waiting one, with a spinner meanwhile. Loaded details are shown at
+once for five seconds and then refreshed quietly; a load that finishes after the selection moved on never paints
+over it. The queue itself (about 0.4 s a look) refreshes in the background too.
+
+**Changelog**. Click the footer's version, or press `v`: what each release changed, from the CHANGELOG.md
+installed with the package. The running release is marked installed; after a newer install, the releases it
+adds are marked new until the dashboard restarts.
 
 **Any keyboard layout** (#13). Hotkeys are the keys at their US-QWERTY positions:
 on a Russian (ЙЦУКЕН) or Ukrainian layout `ы` opens Settings and `й` quits. Where
@@ -220,12 +239,13 @@ scrolling never grants a lease, cancels work or kills a process.
 slots and waiting requests; the capacity and how it was found, as the dashboard's
 last look read it under the queue lock; the CPU and memory budgets; and how many
 slots are draining. Status rows have dim labels
-and no selection cursor. Below a rule are the editable settings, in three
-groups: shared capacity (mode, and total slots or GiB per slot), queue policy
-(order, safety multiplier, overtaking limit, unknown runtime, overrun factor,
-interactive advance, batch delay, yield delay) and this dashboard's refresh
-interval and colour theme. The selected setting has ▶, a soft background and a one-line
-description under the list.
+and no selection cursor. Below a rule are the editable settings, one flat list,
+each value with its unit: Capacity, Slots or GiB per slot, Queue order (Backfill
+or Arrival), Backfill margin (×), Unknown job runtime, Overrun estimate (×),
+Overtaking stops after, Interactive head start, Batch held back, Idle when below
+(cores), Idle for, Ask to yield after, and this dashboard's own Refresh every and
+Colour theme. The selected setting has ▶, a soft background and a one-line
+description under the list; the key line at the bottom is centred.
 
 There is no draft. ←/→ (Space, or Enter, on a choice) shows the next value at
 once, marked `pending`, and saves it once no key has moved it for one second;
@@ -241,8 +261,8 @@ each save. `d` resets the selected setting to its default (either capacity field
 returns to automatic capacity); `D` twice within four seconds resets every
 setting. One hint line at the bottom lists the keys. A click selects a setting,
 cancelling an edit of another one, and a click on the selected one changes or
-edits it; the wheel scrolls inside the panel, and clicks outside it do not select
-requests underneath. `q` outside a field still quits. On a terminal too small
+edits it; the wheel scrolls inside the panel and does nothing outside it, and a
+click outside closes the panel, as Esc does (never selecting requests underneath). `q` outside a field still quits. On a terminal too small
 for the panel only Esc, `s` and `q` work.
 
 Shared settings use the same rules and lock as `slotfather slots` and

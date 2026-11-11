@@ -414,6 +414,8 @@ def source_files(root: Path) -> list[Path]:
     package = root / "src" / "slotfather"
     if package.is_dir():
         files.extend(sorted(package.rglob("*.py")))
+    if (root / "CHANGELOG.md").is_file():  # shipped with the package: the dashboard's changelog reads it
+        files.append(root / "CHANGELOG.md")
     return files
 
 
@@ -441,7 +443,7 @@ def source_identity(root: Path) -> dict[str, Any]:
     result = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True)
     commit = result.stdout.strip() if result.returncode == 0 else None
     changed = subprocess.run(["git", "-C", str(root), "status", "--porcelain", "--untracked-files=normal", "--",
-                              "install.py", *COMMANDS, "src"], capture_output=True, text=True)
+                              "install.py", *COMMANDS, "src", "CHANGELOG.md"], capture_output=True, text=True)
     return {"v": 1, "commit": commit, "dirty": bool(changed.stdout.strip()) or commit is None,
             "source_sha256": digest}
 
@@ -481,6 +483,8 @@ def install_package(home: Path, root: Path, state: Path | None = None, cgroup: s
             payload = payload.replace(CGROUP_LINE, b"DEFAULT_CGROUP = " + json.dumps(cgroup).encode() + b"  ")
         config.write_bytes(payload)
         (package / "version.json").write_text(json.dumps(identity, sort_keys=True) + "\n")
+        if (root / "CHANGELOG.md").is_file():
+            shutil.copyfile(root / "CHANGELOG.md", package / "CHANGELOG.md")
         # mkdtemp is private while preparing; published root-owned code must be readable by runner.
         for path in pending.rglob("*"):
             path.chmod(0o755 if path.is_dir() else 0o644)

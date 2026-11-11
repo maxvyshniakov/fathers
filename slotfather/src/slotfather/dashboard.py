@@ -22,6 +22,7 @@ import subprocess
 import sys
 import termios
 import textwrap
+import threading
 import time
 import tty
 import unicodedata
@@ -38,6 +39,7 @@ from . import query as _query
 from . import schedule as _schedule
 from . import state as _state
 from . import theme as _theme
+from . import version as _version
 
 
 # dashboard_model() gathers plain data and dashboard_draw() lays it out on a Canvas of styled cells; the live view
@@ -181,9 +183,13 @@ class Canvas:
 
     def __init__(self, width: int, height: int):
         self.scroll: dict[str, int] = {}
-        self.tables = {}
+        self.tables: dict[str, dict[str, Any]] = {}
         self.links: dict[tuple[int, int], str] = {}
         self.help_view: HelpViewport | None = None
+        self.focus = "requests"  # the panel keys act on (#15): requests (QUEUE), details or events; its frame is bright
+        self.loading: int | None = None  # the details' spinner frame while they load in the background, else None
+        self.fresh_events = 0  # events that arrived while EVENTS was scrolled down
+        self.version_at: tuple[int, int, int] | None = None  # the footer version's row and columns: the changelog
         self.width, self.height = max(0, width), max(0, height)
         self.cells = [[[" ", "text", False] for _ in range(self.width)] for _ in range(self.height)]
 
@@ -248,6 +254,23 @@ class Canvas:
                 self.links.pop((row, column), None)
             self.unsplit(row, max(0, x), min(self.width, x + width))
 
+    def overlay_footer(self, y: int, x: int, width: int, hints: list[tuple[str, str]], right: str = "") -> None:
+        """An overlay's key line, as the main footer (#15): the hints centred in key and muted tokens, the least
+        needed dropped when narrow (closing last), and a muted position on the right."""
+        inner = max(0, width - 4)
+        room = inner - (text_width(right) + 2 if right else 0)
+        for drop in ("↑↓", "q", "←→", "d", "enter"):
+            if hints_width(hints) <= room:
+                break
+            hints = [hint for hint in hints if hint[0] != drop]
+        start = x + 2 + max(0, (inner - hints_width(hints)) // 2)
+        if right:
+            self.right(y, x + width - 2, right, "dim")
+        for index, (key, action) in enumerate(hints):
+            start = self.segments(y, start, [(key, "key"), (f" {action}", "dim")], x + width - 2 - start)
+            if index < len(hints) - 1:
+                start += HINT_GAP
+
     def scrollbar(self, y: int, x: int, height: int, offset: int, visible: int, total: int) -> None:
         """A panel's right frame from row y down `height` rows as its scrollbar: a heavy thumb in the muted token,
         max(1, round(height × visible / total)) cells long, as far down as the scroll offset, at the bottom on the
@@ -265,14 +288,16 @@ class Canvas:
             for column in range(max(0, start), min(self.width, end)):
                 self.cells[y][column][2] = tint
 
-    def box(self, y: int, x: int, height: int, width: int, title: str = "", note: str = "") -> None:
+    def box(self, y: int, x: int, height: int, width: int, title: str = "", note: str = "", name: str = "") -> None:
+        """A frame in the muted token; the focused panel's (`name`, #15) in the foreground."""
         if height < 2 or width < 6:
             return
-        self.put(y, x, "╭" + "─" * (width - 2) + "╮", "dim")
+        frame = "text" if name and name == self.focus else "dim"
+        self.put(y, x, "╭" + "─" * (width - 2) + "╮", frame)
         for row in range(y + 1, y + height - 1):
-            self.put(row, x, "│", "dim")
-            self.put(row, x + width - 1, "│", "dim")
-        self.put(y + height - 1, x, "╰" + "─" * (width - 2) + "╯", "dim")
+            self.put(row, x, "│", frame)
+            self.put(row, x + width - 1, "│", frame)
+        self.put(y + height - 1, x, "╰" + "─" * (width - 2) + "╯", frame)
         after = self.put(y, x + 2, f" {title} ", "title", width - 4) if title else x + 2
         if note and x + width - 2 - text_width(note) - 2 > after:
             self.right(y, x + width - 2, f" {note} ", "dim")
@@ -745,7 +770,10 @@ def table_view(canvas: Canvas, name: str, y: int, x: int, height: int, width: in
                               visible=visible, count=count, offset=offset, base=base, row_items=row_items)
     if room:
         above = sum(index is not None for index in row_items[:offset]) if row_items is not None else offset
-        if above:
+        fresh = canvas.fresh_events if name == "events" and offset else 0
+        if fresh:  # EVENTS scrolled down: what arrived since (Home goes back to it)
+            canvas.put(top - 1, x + 3, f"↑ {fresh} new", "dim", width - 6)
+        elif above:
             canvas.put(top - 1, x + 3, f"↑ {above} above", "dim", width - 6)
         below = (sum(index is not None for index in row_items[offset + visible:]) if row_items is not None
                  else max(0, count - offset - visible))
@@ -784,22 +812,23 @@ def mouse_action(canvas: Canvas, event: tuple[str, int, int, int, bool],
     return selected
 
 
-def table_header(canvas: Canvas, y: int, x: int, height: int, width: int, title: str, placed: list, gutter: int = 0) -> None:
+def table_header(canvas: Canvas, y: int, x: int, height: int, width: int, title: str, placed: list[Any], gutter: int = 0,
+                 name: str = "") -> None:
     """The panel's top border doubles as its table header, aligned with the data."""
-    canvas.box(y, x, height, width)
+    canvas.box(y, x, height, width, name=name)
     for index, (key, label, column, size, right) in enumerate(cast(list[tuple[str, str, int, int, bool]], placed)):
         value = title if index == 0 else label.lower()
         # The title sits where every panel's does (x + 3); the other headers over their columns, `gutter` in
         start = x + 3 if index == 0 else x + 3 + gutter + column + (max(0, size - text_width(value)) if right else 0)
-        canvas.put(y, start - 1, " ", "dim")
+        canvas.put(y, start - 1, " ", "text")
         canvas.put(y, start, value, "title" if index == 0 else "dim", size)
-        canvas.put(y, min(x + width - 2, start + min(size, text_width(value))), " ", "dim")
+        canvas.put(y, min(x + width - 2, start + min(size, text_width(value))), " ", "text")
 
 
 def draw_header(canvas: Canvas, model: dict | None, error: str | None) -> tuple[int, int]:
     """The name on the left, the last update and live or stale on the right; (first free column, last free one)."""
     y = canvas.height - 1
-    x = canvas.put(y, 1, "slotfather", "title", max(0, canvas.width - 2))
+    x = canvas.put(y, 1, "Slotfather", "title", max(0, canvas.width - 2))
     status, style = ("● stale", "bad") if error else ("● live", "ok")
     room = canvas.width - 1 - x - 2
     right = canvas.width - 1
@@ -998,7 +1027,7 @@ def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model
     shares = {index: share(item, model) for index, item in enumerate(holders)}
     use_width, share_width = layout.use_width, layout.share_width
     size = next((column[3] for column in placed if column[0] == "slots"), cells)
-    table_header(canvas, y, x, height, width, "QUEUE", placed, gutter=3)
+    table_header(canvas, y, x, height, width, "QUEUE", placed, gutter=3, name="requests")
     if not items:
         canvas.put(y + 2, x + 3, f"No requests · all {model['slots']} slots free", "dim", width - 6)
     visual_selected = row_items.index(selected) if selected in row_items else None
@@ -1083,10 +1112,17 @@ def draw_detail(canvas: Canvas, y: int, x: int, height: int, width: int, model: 
     items = cast(list[dict[str, Any]], model["holders"] + model["waiters"])
     # The title follows the selection: a request whose lease holds slots has LEASE DETAILS; a waiting or yielded
     # one, holding none, REQUEST DETAILS.
-    canvas.box(y, x, height, width, detail_title(items[selected] if items else None))
+    canvas.box(y, x, height, width, detail_title(items[selected] if items else None), name="details")
     inner = width - 6
     if not items:
         canvas.put(y + 2, x + 3, "Nothing to select · the queue is idle", "dim", inner)
+        return
+    if canvas.loading is not None:  # loading in the background (#15): a spinner, centred, until they arrive
+        middle = y + max(1, (height - 2) // 2)
+        glyph = SPINNER[canvas.loading % len(SPINNER)]
+        canvas.put(middle, x + (width - 1) // 2, glyph, "dim")
+        if middle + 1 < y + height - 1:
+            canvas.put(middle + 1, x + (width - len("loading")) // 2, "loading", "dim")
         return
     item = items[selected]
     lane: dict[str, Any] = item.get("lane") or {}
@@ -1384,7 +1420,7 @@ def draw_events(canvas: Canvas, y: int, x: int, height: int, width: int, model: 
         ("time", "time", 10, False, 0), ("event", "event", 8, False, 1), ("slots", "slots", cells, False, 2),
         ("detail", "detail", 22, False, 3), ("label", "label", 0, False, 0), ("pid", "pid", 6, True, 4)]))
     size = next((column[3] for column in placed if column[0] == "slots"), cells)
-    table_header(canvas, y, x, height, width, "EVENTS", placed)
+    table_header(canvas, y, x, height, width, "EVENTS", placed, name="events")
     styles = {"granted": "ok", "released": "accent", "left": "dim", "reaped": "bad"}
     offset, visible = table_view(canvas, "events", y, x, height, width, y + 2, height - 4, len(events))
     if not events:
@@ -1397,75 +1433,109 @@ def draw_events(canvas: Canvas, y: int, x: int, height: int, width: int, model: 
             "detail": (str(event.get("detail") or ""), "dim"), "pid": str(event["pid"])})
 
 
-HELP_CONTENT: list[tuple[str, str]] = [
-    ("KEYS", "title"),
-    ("In the dashboard", "dim"),
-    ("↑/↓ or j/k: select an running or waiting request. Click a row to select it.", "text"),
-    ("Home/End or g/G: first/last request. Wheel: scroll the table under the pointer.", "text"),
-    ("s: settings. ?: this help. q: quit. The view refreshes on its own. Shift+drag selects text: the terminal keeps it for itself while the dashboard reads the mouse.", "text"),
-    ("Hotkeys are the keys at these US-QWERTY positions on any layout: on a Russian or Ukrainian layout ы is s and й is q, and a terminal with the kitty keyboard protocol reports each key's position itself. Typed Settings values stay as typed.", "text"),
-    ("In this help", "dim"),
-    ("↑/↓ or j/k: scroll. PgUp/PgDown or space: page. Home/End or g/G: top/bottom.", "text"),
-    ("Wheel: scroll help. ? or Esc: close help. q: quit the dashboard.", "text"),
-    ("SLOTS", "title"),
-    ("Each block is one slot: a unit of shared work capacity. Running requests hold slots; free slots are dim. Slots are a scheduling budget, not a CPU or memory limit.", "text"),
-    ("One colour identifies one running request across its slots and row. Labels below the blocks name their owners; free marks unused capacity.", "text"),
-    ("The header shows machine cores and shared slot capacity. manual means a saved capacity setting; auto means capacity calculated from the machine.", "text"),
-    ("QUEUE", "title"),
-    ("Running requests come first, followed by a blank separator and waiting requests. The selected row has a heavy left frame in its colour and a background tinted with it (a waiting row's is neutral). Selection opens its details.", "text"),
-    ("Each row has one colour: a running request's row is in the colour of its SLOTS blocks, its CPU bar too, except that the bar turns red above 1.5 times its share and yellow while the lease is idle; a waiting or yielded request's row is in the normal text colour.", "text"),
-    ("slots: one cell per slot the request holds or asks for. A count too wide for the column shows the cells that fit and +N for the rest; -n all that does not fit shows all.", "text"),
-    ("cpu use/share: observed cores used by a running request / the core budget represented by its slots. A request can exceed its share; it is not a hard limit. A request that holds no slots shows its state there instead: waiting #N, its current place in the waiting queue, or yielded #N for a lease back in the queue after a yield. Bars and states start at one column; the numbers line up around the slash.", "text"),
-    ("time is elapsed run time for running work and elapsed wait time for waiting work. pid is the lease owner. A wide terminal shares the spare width among the columns in proportion to their own widths; on a narrow one pid goes first, then time, then cpu use/share.", "text"),
-    ("Yellow CPU marks an idle lease: below the idle cores (0.1 by default) for the idle time (5 minutes) by its holder's own samples, with no process starting or ending; both are queue settings. A short pause never counts. Red means use well above its share.", "text"),
-    ("The first column is the row's state: ▶️ running, ⏸️ waiting, ↩️ yielded and back in the queue. A running row shows the first of these instead: ❓ asked to yield, 💤 idle, 🔥 above 1.5 times its share, 👨‍🦳 a lease of an older client. An ASCII terminal shows > . < ? z ! o.", "text"),
-    ("A yieldable idle lease is asked to yield while a request waits that its slots would start; one that cannot yield is only marked. Nobody is ever stopped.", "text"),
-    ("↑ above and ↓ more count rows outside the visible table, and a panel that overflows shows a scrollbar on its right frame. Scroll with the wheel or move the selection to reveal them.", "text"),
-    ("LEASE DETAILS and REQUEST DETAILS", "title"),
-    ("The details title follows the selection: LEASE DETAILS for a running request, whose lease holds slots; REQUEST DETAILS for a waiting or yielded one, which holds none. The rows are the same.", "text"),
-    ("label is the caller-supplied name. status gives the run or wait state and slot count. idle says how long the lease has been idle and since when; yield says when it was asked to yield and for whom.", "text"),
-    ("For running work, cpu uses the same core scale as QUEUE. granted shows when the lease started, how long it waited and how long it has run. memory is the process tree's resident memory.", "text"),
-    ("owner pid is the process holding the lease. The process table includes it and its descendants, busiest first. Process CPU uses percent: 100% is one core.", "text"),
-    ("priority is interactive, normal or batch; omitted priority is normal. Ticket is optional. Known caller context such as phase, kind, check, revision and session is shown separately; meta contains only custom fields.", "text"),
-    ("receipt is the saved verification result: green or red, and current or stale relative to the lane branch. Green can include accepted failure classifications. Review is independent code review; unresolved counts findings without a recorded disposition.", "text"),
-    ("command is the launched work; meta is caller-supplied context; cwd is its working directory. Wheel anywhere in the details scrolls the whole panel, including its process table.", "text"),
-    ("Lane fields show optional context from lanefather: project, stage, branch, receipt and review. Stage is the lane lifecycle; phase describes this particular run. Ticket numbers are terminal hyperlinks; use your terminal's link gesture (usually Cmd-click on macOS). Missing or older lanefather versions leave request inspection available.", "text"),
-    ("For waiting work, queued shows when the request joined and how long it has waited. free is currently unused slot capacity; ahead counts earlier waiting requests and their requested slots.", "text"),
-    ("start est is the first waiting request's estimated start. Later work may backfill if its predicted finish, including a safety margin, is before this time, or if it uses only slots the protected request will not need.", "text"),
-    ("pass until: end of the current overtaking window. With start est shown, no later request may pass after this time. Without start est, stricter backfill rules may follow.", "text"),
-    ("Example: start est 10:30, pass until 10:20. At 10:10, a later request may pass if it can finish before 10:30 with a margin. At 10:21, it cannot pass at all.", "text"),
-    ("These are scheduling estimates and rules, not a promised start. Deadlines can change as the queue advances.", "text"),
-    ("EVENTS", "title"),
-    ("Recent queue events, newest first: time, event, slots, detail, label and pid. time is the event time; label and pid identify the request. On a narrow terminal pid and detail go first. Scroll to read older events.", "text"),
-    ("granted: the request received slots. released: it returned them. left: it stopped waiting. reaped: its owner exited and the stale request was removed.", "text"),
-    ("slots: one cell per slot in the event's colour, filled ▪ for slots taken (granted) and hollow ▫ for slots handed back (released, a held lease reaped) or never held (left, a waiter reaped).", "text"),
-    ("detail comes from the request's history line: waited for a grant, the exit status and run time for a release, gave up after for a waiter that left, owner exited for a reap. It is empty where the history does not reach back.", "text"),
-    ("MACHINE", "title"),
-    ("The status row summarizes memory, swap, estimated unleased demand and admission. The normal text colour is normal; red identifies a condition limiting additional work.", "text"),
-    ("load 1m: the system load averaged over one minute, shown beside the logical CPU count. The bar compares the two; load is not CPU utilization.", "text"),
-    ("unleased load: estimated demand outside leased work. This is not the number of free cores.", "text"),
-    ("admission: how many slots a generic new request can get now, after the queue and memory checks. It is not a worker count; free slots can still have no admission.", "text"),
-    ("memory and swap bars show used capacity. Low memory or swap blocks additional leases; an idle machine may still start its first request.", "text"),
-    ("Each bar fills in the chart's blue-to-red ramp along its length, so a nearly full bar ends red. A bar is all red while its resource is critical: memory low, swap low, or a one-minute load that leaves less than one slot's share of the cores free.", "text"),
-    ("The held chart shows occupied slots over time, newest on the right. Each column preserves its interval's peak; fractional heights show more than whole rows.", "text"),
-    ("The legend under the chart is its time axis: how far back it reaches on the left (−60m), now on the right. Between them, in slots: avg is the mean held, peak the most held, full the share of the time every slot was held. Blue is the bottom, red is full capacity.", "text"),
-    ("Colours follow the terminal's theme, light or dark, and repaint when it switches. Colour theme: Auto mixes the selection, bar tracks and free slots from its background; Terminal uses its palette only; Built-in is a fixed palette for themes whose bright black is close to the background.", "text"),
-    ("SETTINGS", "title"),
-    ("s opens Settings: a read-only STATUS of the queue above shared capacity, queue policy and this dashboard's refresh interval and colour theme. ←/→ shows the next value of the selected setting and saves it once the keys have settled for a second (Enter saves now, Esc cancels); Enter edits a number. A saved setting applies at the next grant, also while requests run or wait. d resets the selected setting, D twice resets them all; Esc closes.", "text"),
-    ("A capacity below the held slots drains: running work keeps its slots, nothing more starts until no more than the capacity is held, and SLOTS shows draining N. The dashboard never cancels or kills work.", "dim"),
+# The help (#15): sections of term → description rows and short notes. A row is (term, description); a note is
+# ("", text) in the muted token, or ("", text, "text") in the text colour.
+HELP: list[tuple[str, list[tuple[str, ...]]]] = [
+    ("KEYS", [
+        ("↑ ↓", "select a row · scroll a panel"),
+        ("pgup pgdn", "a page"),
+        ("home end", "first · last row, top · bottom"),
+        ("tab", "next panel (shift-tab: back)"),
+        ("click", "select a row, focus its panel"),
+        ("wheel", "scroll the panel under the pointer"),
+        ("s", "settings"),
+        ("?", "help"),
+        ("v", "changelog (or click the version)"),
+        ("esc", "close an overlay"),
+        ("q", "quit"),
+        ("shift+drag", "select text"),
+        ("", "Hotkeys work on any keyboard layout."),
+    ]),
+    ("STATES", [
+        ("▶️", "running"),
+        ("⏸️", "waiting"),
+        ("↩️", "yielded, back in the queue"),
+        ("❓", "asked to yield its slots"),
+        ("💤", "idle: under 0.1 core for 5 min"),
+        ("🔥", "above 1.5× its CPU share"),
+        ("👨‍🦳", "lease of an older client"),
+    ]),
+    ("SLOTS", [
+        ("", "One block per slot; the colour is its owner.", "text"),
+        ("", "Slots budget scheduling, not CPU or memory."),
+        ("manual · auto", "saved or computed capacity"),
+        ("draining N", "held above a lowered capacity"),
+    ]),
+    ("QUEUE", [
+        ("slots", "cells held or asked for"),
+        ("cpu", "cores used / cores its slots stand for (a soft limit)"),
+        ("time", "running or waiting for"),
+        ("pid", "lease owner"),
+        ("", "The bar turns red above 1.5× its share and yellow when idle."),
+        ("", "An idle lease that can yield is asked to when a request waits for its slots. Nothing is ever killed."),
+    ]),
+    ("DETAILS", [
+        ("start est", "when the queue head should start"),
+        ("pass until", "later work may overtake until then"),
+        ("receipt", "the lane's check: green or red, current or stale"),
+        ("review", "review findings still open"),
+        ("", "Estimates, not promises."),
+    ]),
+    ("EVENTS", [
+        ("granted ▪", "got slots"),
+        ("released ▫", "gave them back"),
+        ("left", "stopped waiting"),
+        ("reaped", "owner exited; entry removed"),
+    ]),
+    ("MACHINE", [
+        ("load 1m", "1-minute load against cores (not CPU %)"),
+        ("unleased", "demand outside leased work"),
+        ("admission", "slots a new request could get now"),
+        ("", "Bars run blue→red, and turn all red when the resource is critical."),
+        ("", "The chart shows held slots over time, now on the right."),
+    ]),
+    ("SETTINGS", [
+        ("← →", "change the value"),
+        ("enter", "edit · save"),
+        ("d · D D", "reset one · reset all"),
+        ("esc", "close"),
+        ("", "A lower capacity drains: running work keeps its slots."),
+        ("", "Colours follow the terminal theme; Colour theme picks Auto, Terminal or Built-in."),
+    ]),
 ]
+HELP_INDENT, HELP_GAP = 2, 2  # before a term, and between the term column and its description
 
 
-def help_lines(width: int) -> list[tuple[str, str]]:
-    """Wrap the same help document to the modal's available text width."""
-    lines: list[tuple[str, str]] = []
-    for text, style in HELP_CONTENT:
-        if not text:
-            continue
+def wrap(text: str, width: int) -> list[str]:
+    return textwrap.wrap(text, max(1, width), break_long_words=True, break_on_hyphens=False) or [""]
+
+
+
+
+def help_lines(width: int) -> list[list[tuple[str, str]]]:
+    """The help laid out at `width` cells: a section title, then its rows with the terms in one column as wide as the
+    section's longest term and each description wrapped under itself (a hanging indent), then its notes; one blank
+    line between sections. A row too narrow for both columns puts its description under its term."""
+    lines: list[list[tuple[str, str]]] = []
+    for title, entries in HELP:
         if lines:
-            lines.extend([("", "text")] * (2 if style == "title" else 1))
-        wrapped = textwrap.wrap(text, max(1, width), break_long_words=True, break_on_hyphens=False)
-        lines.extend((line, style) for line in wrapped)
+            lines.append([])
+        lines.append([(title, "title")])
+        terms = max([text_width(entry[0]) for entry in entries if entry[0]] or [0])
+        column = HELP_INDENT + terms + HELP_GAP
+        for entry in entries:
+            term, text = entry[0], entry[1]
+            pad = " " * HELP_INDENT
+            if not term:
+                lines.extend([[(pad + line, entry[2] if len(entry) > 2 else "dim")] for line in wrap(text, width - HELP_INDENT)])
+            elif width - column >= 12:
+                wrapped = wrap(text, width - column)
+                lines.append([(pad, "text"), (term, "bold"), (" " * (column - HELP_INDENT - text_width(term)), "text"),
+                              (wrapped[0], "text")])
+                lines.extend([[(" " * column + line, "text")] for line in wrapped[1:]])
+            else:
+                lines.append([(pad, "text"), (term, "bold")])
+                lines.extend([[(" " * (HELP_INDENT * 2) + line, "text")] for line in wrap(text, width - 2 * HELP_INDENT)])
     return lines
 
 
@@ -1477,11 +1547,12 @@ class HelpViewport(NamedTuple):
     offset: int
     visible: int
     total: int
+    name: str = "help"  # the overlay: help, or changelog
 
 
 def help_key(canvas: Canvas, key: str, scroll: dict[str, int]) -> str:
     """Help owns navigation while open; dashboard actions cannot leak through it."""
-    if key in ("?", "esc"):
+    if key in ("?", "v", "esc"):
         return "close"
     if key in ("q", "Q"):
         return "quit"
@@ -1489,7 +1560,7 @@ def help_key(canvas: Canvas, key: str, scroll: dict[str, int]) -> str:
     if info is None:
         return "ignored"
     maximum = max(0, info.total - info.visible)
-    offset = scroll.get("help", info.offset)
+    offset = scroll.get(info.name, info.offset)
     page = max(1, info.visible - 1)
     if key in ("j", "down"):
         offset += 1
@@ -1505,34 +1576,40 @@ def help_key(canvas: Canvas, key: str, scroll: dict[str, int]) -> str:
         offset = maximum
     else:
         return "ignored"
-    scroll["help"] = max(0, min(offset, maximum))
+    scroll[info.name] = max(0, min(offset, maximum))
     return "scroll"
 
 
-def help_mouse(canvas: Canvas, event: tuple[str, int, int, int, bool], scroll: dict[str, int]) -> None:
+def help_mouse(canvas: Canvas, event: tuple[str, int, int, int, bool], scroll: dict[str, int]) -> str:
+    """The wheel inside the help scrolls it; a left click outside closes it ("close"); nothing reaches the dashboard."""
     info = canvas.help_view
     if info is None:
-        return
+        return "ignored"
     _, button, x, y, pressed = event
-    if not pressed or not (info.x < x < info.x + info.width - 1 and info.y < y < info.y + info.height - 1):
-        return
     code = button & ~28
+    if not (info.x <= x < info.x + info.width and info.y <= y < info.y + info.height):
+        return "close" if pressed and code == 0 else "ignored"
+    if not pressed:
+        return "ignored"
     if code in (64, 65):
-        offset = scroll.get("help", info.offset) + (3 if code == 65 else -3)
-        scroll["help"] = max(0, min(offset, max(0, info.total - info.visible)))
+        offset = scroll.get(info.name, info.offset) + (3 if code == 65 else -3)
+        scroll[info.name] = max(0, min(offset, max(0, info.total - info.visible)))
+    return "ignored"
 
 
-def draw_help(canvas: Canvas) -> None:
-    width = min(max(0, canvas.width - 2), 70)
-    lines = help_lines(width - 4)
+def draw_overlay(canvas: Canvas, title: str, layout: Any, name: str) -> None:
+    """A centred, scrollable overlay (help, the changelog): `layout(width)` gives its lines as (text, style) parts;
+    the frame, scrollbar, counts and centred footer are the same for every one."""
+    width = min(max(0, canvas.width - 2), 76)
+    lines = cast(list[list[tuple[str, str]]], layout(width - 4))
     height = min(max(0, canvas.height - 2), len(lines) + 5)
     y, x = (canvas.height - height) // 2, (canvas.width - width) // 2
     visible = max(0, height - 5)
-    offset = max(0, min(canvas.scroll.get("help", 0), max(0, len(lines) - visible)))
-    canvas.scroll["help"] = offset
-    canvas.help_view = HelpViewport(x, y, width, height, offset, visible, len(lines))
+    offset = max(0, min(canvas.scroll.get(name, 0), max(0, len(lines) - visible)))
+    canvas.scroll[name] = offset
+    canvas.help_view = HelpViewport(x, y, width, height, offset, visible, len(lines), name)
     canvas.fill(y, x, height, width)
-    canvas.box(y, x, height, width, "HELP")
+    canvas.box(y, x, height, width, title)
     inner = max(0, width - 4)
     if height < 6:
         canvas.put(y + 1, x + 2, "Enlarge terminal", "dim", inner)
@@ -1540,14 +1617,117 @@ def draw_help(canvas: Canvas) -> None:
     canvas.scrollbar(y + 1, x + width - 1, height - 2, offset, visible, len(lines))
     if offset:
         canvas.put(y + 1, x + 2, f"↑ {offset} above", "dim", inner)
-    for row, (text, style) in enumerate(lines[offset:offset + visible], y + 2):
-        canvas.put(row, x + 2, text, style, inner)
+    for row, parts in enumerate(lines[offset:offset + visible], y + 2):
+        canvas.segments(row, x + 2, parts, inner)
     below = max(0, len(lines) - offset - visible)
     if below:
         canvas.put(y + height - 3, x + 2, f"↓ {below} more", "dim", inner)
-    hint = ("↑↓ scroll  PgUp/PgDown page  Home/End  ?/Esc close  q quit" if inner >= 58 else
-            "↑↓ scroll · ?/Esc close" if inner >= 23 else "↑↓  ?/Esc close" if inner >= 15 else "Esc close")
-    canvas.put(y + height - 2, x + 2, hint, "key", inner)
+    shown = f"{round(100 * (offset + visible) / len(lines))}%" if len(lines) > visible else ""
+    hints = [("↑↓", "scroll"), ("esc", "close")] + ([("q", "quit")] if name == "help" else [])
+    canvas.overlay_footer(y + height - 2, x, width, hints, shown)
+
+
+def draw_help(canvas: Canvas) -> None:
+    draw_overlay(canvas, "HELP", help_lines, "help")
+
+
+# The changelog: CHANGELOG.md shipped with the installed package, as titles and bullet rows
+
+RELEASE = re.compile(r"^## \[?([^\]\s]+)\]?(?: - (\d{4}-\d\d-\d\d))?(?: \((\w+)\))?")
+MARKUP = re.compile(r"\*\*|`|\[([^\]]*)\]\([^)]*\)")
+
+
+class Release(NamedTuple):
+    version: str
+    date: str
+    commit: str
+    sections: list[tuple[str, list[str]]]  # (Added, [entries])
+
+
+def plain(text: str) -> str:
+    """Markdown taken out of a changelog entry: bold, code and links."""
+    return MARKUP.sub(lambda found: found[1] or "", text)
+
+
+def parse_changelog(text: str) -> list[Release]:
+    """The releases of a Keep a Changelog file, newest first, with markdown taken out of the entries; an entry's
+    continuation lines join it."""
+    found: list[Release] = []
+    for line in text.splitlines():
+        heading = RELEASE.match(line)
+        if heading:
+            found.append(Release(heading[1], heading[2] or "", heading[3] or "", []))
+        elif not found:
+            continue
+        elif line.startswith("### "):
+            found[-1].sections.append((line[4:].strip(), []))
+        elif line.startswith("- ") and found[-1].sections:
+            found[-1].sections[-1][1].append(plain(line[2:].strip()))
+        elif line.startswith("  ") and line.strip() and found[-1].sections and found[-1].sections[-1][1]:
+            entries = found[-1].sections[-1][1]
+            entries[-1] += " " + plain(line.strip())
+    return found
+
+
+def version_key(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", version)) or (-1,)
+
+
+def installed_release() -> Path | None:
+    """The package directory the installed `slotfather` command runs now, from its entry point."""
+    with contextlib.suppress(OSError, UnicodeDecodeError):
+        found = INSTALLED_RELEASE.search(Path(sys.argv[0]).read_text())
+        if found:
+            return Path(found[1]) / "slotfather"
+    return None
+
+
+def changelog_text() -> str:
+    """The changelog bundled with the installed package; this package's own, or the checkout's, without one."""
+    here = Path(__file__).resolve()
+    for path in (installed_release(), here.parent, here.parents[2]):
+        if path is not None and (path / "CHANGELOG.md").is_file():
+            with contextlib.suppress(OSError, UnicodeDecodeError):
+                return (path / "CHANGELOG.md").read_text()
+    return ""
+
+
+def changelog_lines(width: int, releases: list[Release] | None = None, running: str | None = None,
+                    stale: bool = False) -> list[list[tuple[str, str]]]:
+    """The changelog laid out at `width`: a release title (version · date · commit), the running one marked
+    installed and, when a newer install waits for a restart, newer ones marked new; then each section's entries as
+    bullets with a hanging indent. An empty release (Unreleased) goes."""
+    releases = parse_changelog(changelog_text()) if releases is None else releases
+    running = _version.VERSION if running is None else running
+    lines: list[list[tuple[str, str]]] = []
+    for release in releases:
+        if not any(entries for _, entries in release.sections):
+            continue
+        if lines:
+            lines.append([])
+        title: list[tuple[str, str]] = [(release.version, "title")]
+        title += [(f" · {part}", "dim") for part in (release.date, release.commit) if part]
+        if release.version == running:
+            title.append(("  installed", "ok"))
+        elif stale and release.version[:1].isdigit() and version_key(release.version) > version_key(running):
+            title.append(("  new — restart to get these", "warn"))
+        lines.append(title)
+        for heading, entries in release.sections:
+            if not entries:
+                continue
+            lines.append([("  " + heading, "bold")])
+            for entry in entries:
+                wrapped = wrap(entry, width - 6)
+                lines.append([("    • ", "dim"), (wrapped[0], "text")])
+                lines.extend([[(" " * 6 + more, "text")] for more in wrapped[1:]])
+    return lines or [[("No changelog in this installation.", "dim")]]
+
+
+def draw_changelog(canvas: Canvas, stale: bool = False) -> None:
+    def layout(width: int) -> list[list[tuple[str, str]]]:
+        return changelog_lines(width, stale=stale)
+
+    draw_overlay(canvas, "CHANGELOG", layout, "changelog")
 
 
 def allocate(available: int, panels: list[tuple[str, int, int]]) -> dict[str, int]:
@@ -1566,20 +1746,73 @@ def allocate(available: int, panels: list[tuple[str, int, int]]) -> dict[str, in
     return heights
 
 
-# The footer's hints in their order: navigation, configuration, help, quit last; a narrow footer drops them in
-# DROP_ORDER, quit last to go.
-FOOTER_HINTS: tuple[tuple[str, str], ...] = (("↑↓", "select"), ("s", "settings"), ("?", "help"), ("q", "quit"))
-DROP_ORDER = ("?", "s", "↑↓", "q")
+# The footer's hints in their order: navigation, panels, configuration, help, quit last; a narrow footer drops them
+# in DROP_ORDER, quit last to go. On a scrollable panel the arrows scroll.
+FOOTER_HINTS: tuple[tuple[str, str], ...] = (("↑↓", "select"), ("tab", "panel"), ("s", "settings"), ("?", "help"),
+                                             ("q", "quit"))
+DROP_ORDER = ("?", "s", "tab", "↑↓", "q")
 HINT_GAP = 3
+SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+def footer_hints(focus: str) -> list[tuple[str, str]]:
+    return [("↑↓", "select" if focus == "requests" else "scroll"), *FOOTER_HINTS[1:]]
+
+
+_identity: dict[str, Any] = {}
+
+
+def running_identity() -> dict[str, Any]:
+    """The version metadata of the code this process runs, read once (version.info())."""
+    if not _identity:
+        try:
+            _identity.update(_version.info())
+        except (OSError, ValueError, RuntimeError):
+            _identity["commit"] = None
+    return _identity
+
+
+def running_version() -> str:
+    """The footer's version: a semver where the package has one, else the short commit (+ for a dirty checkout)."""
+    found = running_identity()
+    if found.get("version"):
+        return str(found["version"])
+    commit = str(found.get("commit") or "")[:7]
+    return commit + ("+" if commit and found.get("dirty") else "")
+
+
+def running_source() -> str | None:
+    return running_identity().get("source_sha256")
+
+
+INSTALLED_RELEASE = re.compile(r"sys\.path\.insert\(0, '([^']+)'\)")
+
+
+def installed_source(entry: str | None = None) -> str | None:
+    """The source digest of the release the installed `slotfather` command runs now, from its entry point; None where
+    it cannot be told (a checkout, a missing file). A digest other than running_source() means a newer install."""
+    try:
+        found = INSTALLED_RELEASE.search(Path(entry or sys.argv[0]).read_text())
+        if found is None:
+            return None
+        data: Any = json.loads((Path(found[1]) / "slotfather" / "version.json").read_text())
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+    digest = cast(dict[str, Any], data).get("source_sha256") if isinstance(data, dict) else None
+    return str(digest) if digest else None
+
+
+def hints_width(hints: list[tuple[str, str]]) -> int:
+    return sum(text_width(key) + 1 + text_width(action) for key, action in hints) + HINT_GAP * max(0, len(hints) - 1)
 
 
 def draw_hints(canvas: Canvas, start: int, end: int) -> int:
     """The hints centred on the footer between columns start and end (the name and the status), never over them;
     the column after the last hint."""
-    hints: list[tuple[str, str]] = list(FOOTER_HINTS)
+    hints: list[tuple[str, str]] = footer_hints(canvas.focus)
 
     def width() -> int:
-        return sum(text_width(key) + 1 + text_width(action) for key, action in hints) + HINT_GAP * (len(hints) - 1)
+        return hints_width(hints)
 
     for key in DROP_ORDER:
         if not hints or width() <= end - start - 2:
@@ -1595,12 +1828,17 @@ def draw_hints(canvas: Canvas, start: int, end: int) -> int:
     return x
 
 
-def dashboard_draw(canvas: Canvas, model: dict | None, selected: int = 0, help_open: bool = False,
+def dashboard_draw(canvas: Canvas, model: dict[str, Any] | None, selected: int = 0, help_open: bool | str = False,
                    error: str | None = None, cwd: str | None = None, scroll: dict | None = None,
                    settings: _settings.Settings | None = None) -> None:
     canvas.scroll = scroll if scroll is not None else {}
     width, height = canvas.width, canvas.height
     x, status_end = draw_header(canvas, model, error)
+    version = running_version() + (" ↻" if model and model.get("installed") not in (None, running_source()) else "")
+    if version and status_end - x - text_width(version) - 1 >= hints_width(footer_hints(canvas.focus)) + 2:
+        end = canvas.put(height - 1, x - 2, version, "dim")  # the version goes before any hint on a narrow footer
+        canvas.version_at = (height - 1, x - 2, end)  # a click here opens the changelog
+        x = end + 3
     x = draw_hints(canvas, x, status_end)
     if error:
         canvas.put(height - 1, x + 2, f"refresh failed: {error}", "bad", max(0, status_end - x - 2))
@@ -1608,7 +1846,7 @@ def dashboard_draw(canvas: Canvas, model: dict | None, selected: int = 0, help_o
         canvas.put(2, 3, f"Queue unavailable: {error}" if error else "Reading the queue…",
                    "bad" if error else "dim", width - 6)
         if help_open:
-            draw_help(canvas)
+            draw_open_overlay(canvas, help_open, model)
         if settings is not None:
             settings.draw(canvas, cast(dict[str, Any] | None, model))
         return
@@ -1618,7 +1856,7 @@ def dashboard_draw(canvas: Canvas, model: dict | None, selected: int = 0, help_o
         if 6 < height - 1:
             canvas.put(6, 3, "Enlarge the terminal for leases and the queue", "dim", width - 6)
         if help_open:
-            draw_help(canvas)
+            draw_open_overlay(canvas, help_open, model)
         if settings is not None:
             settings.draw(canvas, cast(dict[str, Any] | None, model))
         return
@@ -1626,7 +1864,7 @@ def dashboard_draw(canvas: Canvas, model: dict | None, selected: int = 0, help_o
     slot_height = 5
     canvas.box(0, 0, slot_height, left, "SLOTS", f"{model['cores']} cores · {model['slots']} slots "
                + ("(manual)" if model["saved"] else "(auto)")
-               + (f" · draining {drain}" if (drain := cast(dict[str, Any], model).get("draining")) else ""))
+               + (f" · draining {drain}" if (drain := model.get("draining")) else ""))
     draw_slots(canvas, 2, 3, left - 6, model)
     top, available = slot_height, height - 1 - slot_height
     holders, waiters = model["holders"], model["waiters"]
@@ -1656,9 +1894,16 @@ def dashboard_draw(canvas: Canvas, model: dict | None, selected: int = 0, help_o
                 draw_panel(canvas, name, y, 0, heights[name], width, model, selected, cwd, moment)
                 y += heights[name]
     if help_open:
-        draw_help(canvas)
+        draw_open_overlay(canvas, help_open, model)
     if settings is not None:
         settings.draw(canvas, cast(dict[str, Any] | None, model))
+
+
+def draw_open_overlay(canvas: Canvas, which: bool | str, model: dict[str, Any] | None) -> None:
+    if which == "changelog":
+        draw_changelog(canvas, bool(model and model.get("installed") not in (None, running_source())))
+    else:
+        draw_help(canvas)
 
 
 def draw_panel(canvas: Canvas, name: str, y: int, x: int, height: int, width: int, model: dict, selected: int,
@@ -1767,136 +2012,332 @@ def full_screen(fd_in: int, fd_out: int, answers: _theme.Answers | None = None):
         termios.tcsetattr(fd_in, termios.TCSAFLUSH if answers is not None else termios.TCSADRAIN, saved)
 
 
+DETAILS_FRESH = 5.0  # seconds a request's loaded details are shown as they are; older ones load again, quietly
+PANELS = ("requests", "details", "events")  # Tab's order (#15)
+
+
+class Loader:
+    """One background thread running `work` for the newest request only (#15): a request made while one runs
+    replaces any that waits, so moving quickly through rows loads just the row it ends on. Results are taken on the
+    main thread with take(); each one wakes the main loop through `wake`, a pipe its select watches."""
+
+    def __init__(self, work: Any, wake: int) -> None:
+        self.work, self.wake = work, wake
+        self.lock = threading.Lock()
+        self.pending: tuple[Any, Any] | None = None
+        self.current: Any = None  # the key being worked on
+        self.busy = False
+        self.results: list[tuple[Any, Any, BaseException | None]] = []
+
+    def request(self, key: Any, argument: Any = None) -> None:
+        with self.lock:
+            self.pending = (key, argument)
+            if self.busy:
+                return
+            self.busy = True
+        threading.Thread(target=self.run, daemon=True).start()
+
+    def wants(self, key: Any) -> bool:
+        with self.lock:
+            return self.current == key or (self.pending is not None and self.pending[0] == key)
+
+    def run(self) -> None:
+        while True:
+            with self.lock:
+                if self.pending is None:
+                    self.busy, self.current = False, None
+                    return
+                (key, argument), self.pending = self.pending, None
+                self.current = key
+            value: Any = None
+            failure: BaseException | None = None
+            try:
+                value = self.work(argument)
+            except Exception as error:  # noqa: BLE001 - a failed load is shown, never the end of the view
+                failure = error
+            with self.lock:
+                self.results.append((key, value, failure))
+            with contextlib.suppress(OSError):
+                os.write(self.wake, b".")
+
+    def take(self) -> list[tuple[Any, Any, BaseException | None]]:
+        with self.lock:
+            found, self.results = self.results, []
+            return found
+
+
+def load_details(item: dict[str, Any]) -> tuple[Any, str | None]:
+    """A request's slow facts, off the main thread (#15): its lane (a lanefather call) and its holder's directory (lsof
+    or /proc). SLOTFATHER_DETAILS_DELAY, a test seam, adds seconds first."""
+    delay = _config.number_setting("DETAILS_DELAY", 0.0)
+    if delay > 0:
+        time.sleep(delay)
+    found = dict(item)
+    enrich_details(found)  # the lane, through the same seam --once and the demo use
+    cwd = process_cwd(item["pid"]) if item.get("kind") != "waiting" else None
+    return found.get("lane"), cwd
+
+
+def load_model(_: Any = None) -> tuple[dict[str, Any], str | None]:
+    return cast(dict[str, Any], dashboard_model()), installed_source()
+
+
+class DetailsCache:
+    """Loaded details by request key, with when they arrived. A result is kept under the key it was loaded for, so a
+    load that finishes after the selection moved on never paints over the row now selected (#15)."""
+
+    def __init__(self, clock: Any = time.monotonic) -> None:
+        self.clock = clock
+        self.found: dict[Any, tuple[float, Any, str | None]] = {}
+
+    def put(self, key: Any, lane: Any, cwd: str | None) -> None:
+        self.found[key] = (self.clock(), lane, cwd)
+
+    def get(self, key: Any) -> tuple[Any, str | None, bool] | None:
+        """(lane, cwd, fresh) for a key loaded before, else None."""
+        entry = self.found.get(key)
+        if entry is None:
+            return None
+        return entry[1], entry[2], self.clock() - entry[0] < DETAILS_FRESH
+
+
+def panel_at(canvas: Canvas, mx: int, my: int) -> str | None:
+    """The panel (requests, details, events) under a click."""
+    for name in PANELS:
+        view = canvas.tables.get(name)
+        if view and view["x"] <= mx < view["x"] + view["width"] and view["y"] <= my < view["y"] + view["height"]:
+            return name
+    return None
+
+
+def scroll_panel(canvas: Canvas, scroll: dict[str, int], name: str, key: str) -> bool:
+    """A scroll key on the focused DETAILS or EVENTS panel: a line, a page, the top or the bottom (#15)."""
+    view = canvas.tables.get(name)
+    if not view:
+        return False
+    visible, count = int(view["visible"]), int(view["count"])
+    last = max(0, count - visible)
+    offset = scroll[name] if name in scroll else int(view["offset"])
+    moves = {"up": -1, "k": -1, "down": 1, "j": 1, "page_up": -max(1, visible - 1), "page_down": max(1, visible - 1)}
+    if key in moves:
+        offset += moves[key]
+    elif key in ("home", "g"):
+        offset = 0
+    elif key in ("end", "G"):
+        offset = last
+    else:
+        return False
+    scroll[name] = max(0, min(last, offset))
+    return True
+
+
+def event_id(event: dict[str, Any]) -> tuple[Any, ...]:
+    return (event.get("when"), event.get("verb"), event.get("pid"), event.get("count"))
+
+
+def follow_events(scroll: dict[str, int], fresh: int, newest: Any, events: list[dict[str, Any]]) -> tuple[int, Any]:
+    """EVENTS (newest first) after a refresh (#15): at the top it shows the newest; scrolled down, it keeps showing
+    the same events as new ones arrive above them and counts those (fresh). (fresh, the newest event's id)."""
+    ids = [event_id(event) for event in events[::-1]]
+    arrived = ids.index(newest) if newest in ids else 0
+    if scroll.get("events"):
+        scroll["events"] += arrived
+        fresh += arrived
+    else:
+        fresh = 0
+    return fresh, ids[0] if ids else None
+
+
 def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
     fd_in, fd_out = sys.stdin.fileno(), sys.stdout.fileno()
     colour = not os.environ.get("NO_COLOR")
     # What the terminal says about its colours (#14) and how wide it draws 👨‍🦳 (#15): asked with colour off too
     answers = _theme.Answers()
     ascii_only = "utf" not in (sys.stdout.encoding or "").lower()
-    model = error = selected_key = None
-    index, colours, cwds, shown, drawn_size = 0, {}, {}, [], None
+    model: dict[str, Any] | None = None
+    error: str | None = None
+    selected_key: Any = None
+    index, colours, shown, drawn_size = 0, {}, [], None
     scroll: dict[str, int] = {}
-    help_open = False
+    focus, fresh_events, newest = "requests", 0, None
+    help_open: bool | str = False  # True: help; "changelog": the changelog
     settings: _settings.Settings | None = None
-    fetched, drawn, whole, force, dirty = 0.0, 0.0, 0.0, True, True
+    drawn, whole, dirty = 0.0, 0.0, True
     canvas = Canvas(0, 0)
-    with full_screen(fd_in, fd_out, answers):
-        set_theme(_theme.from_environment(answers=answers, mode=theme))
-        # 👨‍🦳 is one glyph where the cursor ended two cells on (column 3); without an answer, assume it is
-        use_marks(ascii_only, joined=answers.column in (None, 3))
-        while True:
-            if settings is not None and settings.tick():  # an arrow change settled: saved, so show its effect now
-                interval, force, dirty = float(settings.interval), True, True
-            if settings is not None and settings.theme != theme:  # this dashboard's theme, applied at once
-                theme = str(settings.theme)
-                shown, dirty = [], True
-                set_theme(_theme.from_environment(answers=answers, mode=theme))
-            if force or time.monotonic() - fetched >= interval:
-                try:
-                    fresh = dashboard_model()
-                    dashboard_colours(fresh, colours)
-                    model, error = fresh, None
-                except (_config.SlotError, OSError) as failure:
-                    error = dashboard_text(failure)
-                fetched, force, dirty = time.monotonic(), False, True
-            items = (model["holders"] + model["waiters"]) if model else []
-            keys = [item["key"] for item in items]
-            index = keys.index(selected_key) if selected_key in keys else max(0, min(index, len(items) - 1))
-            next_key = keys[index] if items else None
-            if next_key != selected_key:
-                scroll.pop("details", None)
-            selected_key = next_key
-            if items:
-                enrich_details(cast(dict[str, Any], items[index]))
-            if items and items[index]["kind"] != "waiting" and items[index]["pid"] not in cwds:
-                cwds[items[index]["pid"]] = process_cwd(items[index]["pid"])
-            size = os.get_terminal_size(fd_out)  # read each pass: at most 0.25 s behind a resize
-            if size != drawn_size:
-                # A terminal reflows its own screen on resize: clear it and draw every row.
-                os.write(fd_out, b"\x1b[2J")
-                shown, drawn_size, dirty = [], size, True
-            elif time.monotonic() - whole >= 5:
-                shown = []  # rewrite every row now and then, in place, so a stray line cannot stay wrong
-            if dirty or time.monotonic() - drawn >= 1 or not shown:
-                canvas = Canvas(size.columns, size.lines)
-                dashboard_draw(canvas, model, index, help_open, error,
-                               cwds.get(items[index]["pid"]) if items else None, scroll, settings)
-                lines = canvas.lines(colour, ascii_only, place=True)
-                # Only rows that changed are written: a second's tick usually touches the clock and a few ages.
-                frame = "".join(f"\x1b[{row + 1};1H{line}" for row, line in enumerate(lines)
-                                if row >= len(shown) or shown[row] != line)
-                if frame:
-                    os.write(fd_out, frame.encode("utf-8", "replace"))
-                whole = time.monotonic() if not shown else whole
-                shown, drawn, dirty = lines, time.monotonic(), False
-            if not select.select([fd_in], [], [], 0.25)[0]:
-                continue
-            reports: list[str] = []
-            pressed = read_keys(fd_in, reports)
-            if reports and theme_reports(reports, answers, fd_out, ascii_only):
-                set_theme(_theme.from_environment(answers=answers, mode=theme))
-                shown, dirty = [], True  # every row's colours changed
-            for key in pressed:
-                dirty = True
-                if settings is not None:
-                    action = settings.mouse(key) if isinstance(key, tuple) else settings.key(key)
-                    if action == "quit":
-                        return
-                    interval = float(settings.interval)  # this dashboard's own setting, changed at once like the rest
-                    if settings.theme != theme:  # so is its colour theme
-                        theme = str(settings.theme)
-                        shown = []
-                        set_theme(_theme.from_environment(answers=answers, mode=theme))
-                    if action == "close":
-                        settings = None
-                        shown = []
-                    if action == "changed":
-                        force = True  # a saved setting applies at the next grant: show its effect now
-                    continue
-                if isinstance(key, tuple):  # a click or the wheel; Shift+drag stays the terminal's own selection
-                    previous = index
-                    index = mouse_action(canvas, key, scroll, index)
-                    if index != previous:
-                        scroll.pop("details", None)
-                    selected_key = keys[index] if items else None
-                    continue
-                key = _keys.hotkey(key)  # the hotkey at this key's US-QWERTY position (#13)
-                if help_open:
-                    action = help_key(canvas, key, scroll)
-                    if action == "quit":
-                        return
-                    if action == "close":
-                        help_open = False
-                        canvas.help_view = None
-                    continue
-                if key in ("j", "down", "k", "up", "g", "home", "G", "end", "page_up", "page_down"):
-                    scroll.pop("requests", None)
-                    scroll.pop("details", None)
-                if key in ("q", "Q"):
-                    return
-                if key == "esc":
-                    help_open = False
-                elif key == "?":
-                    help_open = True
-                    scroll.pop("help", None)
-                    draw_help(canvas)
-                elif key == "s":
-                    try:
-                        settings = _settings.Settings(interval, theme)
-                    except (_config.SlotError, OSError) as failure:
+    wake_read, wake_write = os.pipe()
+    # Everything slow runs in the background, so a key moves the selection within one frame (#15)
+    models, details, cache = Loader(load_model, wake_write), Loader(load_details, wake_write), DetailsCache()
+    models.request("model")
+    fetched = time.monotonic()
+    try:
+        with full_screen(fd_in, fd_out, answers):
+            set_theme(_theme.from_environment(answers=answers, mode=theme))
+            # 👨‍🦳 is one glyph where the cursor ended two cells on (column 3); without an answer, assume it is
+            use_marks(ascii_only, joined=answers.column in (None, 3))
+            while True:
+                for _, value, failure in models.take():
+                    if failure is not None:
                         error = dashboard_text(failure)
+                    else:
+                        fresh, installed = value
+                        fresh["installed"] = installed
+                        dashboard_colours(fresh, colours)
+                        fresh_events, newest = follow_events(scroll, fresh_events, newest,
+                                                             cast(list[dict[str, Any]], fresh["events"]))
+                        model, error = fresh, None
+                    dirty = True
+                for key, value, failure in details.take():
+                    lane, cwd = value if failure is None and value else (None, None)
+                    cache.put(key, lane, cwd)
+                    dirty = dirty or key == selected_key
+                if settings is not None and settings.tick():  # an arrow change settled: saved, so show its effect now
+                    interval, dirty = float(settings.interval), True
+                    models.request("model")
+                    fetched = time.monotonic()
+                if settings is not None and settings.theme != theme:  # this dashboard's theme, applied at once
+                    theme = str(settings.theme)
+                    shown, dirty = [], True
+                    set_theme(_theme.from_environment(answers=answers, mode=theme))
+                if time.monotonic() - fetched >= interval and not models.wants("model"):
+                    models.request("model")
+                    fetched = time.monotonic()
+                items = cast(list[dict[str, Any]], (model["holders"] + model["waiters"]) if model else [])
+                keys = [item["key"] for item in items]
+                index = keys.index(selected_key) if selected_key in keys else max(0, min(index, len(items) - 1))
+                next_key = keys[index] if items else None
+                if next_key != selected_key:
+                    scroll.pop("details", None)
+                selected_key = next_key
+                loading, cwd = None, None
+                if items:
+                    item = items[index]
+                    known = cache.get(selected_key)
+                    if known is None:
+                        loading = int(time.monotonic() * 10)  # a spinner at ten frames a second
+                        if not details.wants(selected_key):
+                            details.request(selected_key, dict(item))
+                    else:
+                        lane, cwd, current = known
+                        if lane is not None:
+                            item["lane"] = lane
+                        if not current and not details.wants(selected_key):
+                            details.request(selected_key, dict(item))  # quietly: the cached facts stay meanwhile
+                if not scroll.get("events"):
+                    fresh_events = 0
+                size = os.get_terminal_size(fd_out)  # read each pass: at most 0.25 s behind a resize
+                if size != drawn_size:
+                    # A terminal reflows its own screen on resize: clear it and draw every row.
+                    os.write(fd_out, b"\x1b[2J")
+                    shown, drawn_size, dirty = [], size, True
+                elif time.monotonic() - whole >= 5:
+                    shown = []  # rewrite every row now and then, in place, so a stray line cannot stay wrong
+                if dirty or loading is not None or time.monotonic() - drawn >= 1 or not shown:
+                    canvas = Canvas(size.columns, size.lines)
+                    canvas.focus, canvas.loading, canvas.fresh_events = focus, loading, fresh_events
+                    dashboard_draw(canvas, model, index, help_open, error, cwd, scroll, settings)
+                    lines = canvas.lines(colour, ascii_only, place=True)
+                    # Only rows that changed are written: a second's tick usually touches the clock and a few ages.
+                    frame = "".join(f"\x1b[{row + 1};1H{line}" for row, line in enumerate(lines)
+                                    if row >= len(shown) or shown[row] != line)
+                    if frame:
+                        os.write(fd_out, frame.encode("utf-8", "replace"))
+                    whole = time.monotonic() if not shown else whole
+                    shown, drawn, dirty = lines, time.monotonic(), False
+                ready = select.select([fd_in, wake_read], [], [], 0.1 if loading is not None else 0.25)[0]
+                if wake_read in ready:
+                    os.read(wake_read, 4096)
+                if fd_in not in ready:
+                    continue
+                reports: list[str] = []
+                pressed = read_keys(fd_in, reports)
+                if reports and theme_reports(reports, answers, fd_out, ascii_only):
+                    set_theme(_theme.from_environment(answers=answers, mode=theme))
+                    shown, dirty = [], True  # every row's colours changed
+                for key in pressed:
+                    dirty = True
                     if settings is not None:
-                        settings.draw(canvas, cast(dict[str, Any] | None, model))
-                elif key in ("j", "down"):
-                    index += 1
-                elif key in ("k", "up"):
-                    index -= 1
-                elif key in ("g", "home", "page_up"):
-                    index = 0
-                elif key in ("G", "end", "page_down"):
-                    index = len(items) - 1
-                index = max(0, min(index, len(items) - 1))
-                selected_key = keys[index] if items else None
+                        action = settings.mouse(key) if isinstance(key, tuple) else settings.key(key)
+                        if action == "quit":
+                            return
+                        interval = float(settings.interval)  # this dashboard's own setting, changed at once
+                        if settings.theme != theme:  # so is its colour theme
+                            theme = str(settings.theme)
+                            shown = []
+                            set_theme(_theme.from_environment(answers=answers, mode=theme))
+                        if action == "close":
+                            settings = None
+                            shown = []
+                        if action == "changed":  # a saved setting applies at the next grant: show its effect now
+                            models.request("model")
+                            fetched = time.monotonic()
+                        continue
+                    if isinstance(key, tuple) and help_open:  # the help keeps the mouse; a click outside closes it
+                        if help_mouse(canvas, key, scroll) == "close":
+                            help_open, canvas.help_view = False, None
+                        continue
+                    if isinstance(key, tuple):  # a click or the wheel; Shift+drag stays the terminal's own selection
+                        _, button, mx, my, pressed_now = key
+                        at = canvas.version_at
+                        if pressed_now and button & ~28 == 0 and at and my == at[0] and at[1] <= mx < at[2]:
+                            help_open = "changelog"  # the footer's version opens what changed
+                            scroll.pop("changelog", None)
+                            continue
+                        if pressed_now and button & ~28 == 0 and canvas.help_view is None:
+                            focus = panel_at(canvas, mx, my) or focus  # a click focuses the panel it lands in
+                        previous = index
+                        index = mouse_action(canvas, key, scroll, index)
+                        if index != previous:
+                            scroll.pop("details", None)
+                        selected_key = keys[index] if items else None
+                        continue
+                    key = _keys.hotkey(key)  # the hotkey at this key's US-QWERTY position (#13)
+                    if help_open:
+                        action = help_key(canvas, key, scroll)
+                        if action == "quit":
+                            return
+                        if action == "close":
+                            help_open = False
+                            canvas.help_view = None
+                        continue
+                    if key in ("q", "Q"):
+                        return
+                    if key in ("\t", "back_tab"):  # Tab and Shift-Tab move between the panels (#15)
+                        focus = PANELS[(PANELS.index(focus) + (1 if key == "\t" else -1)) % len(PANELS)]
+                        continue
+                    if focus != "requests" and scroll_panel(canvas, scroll, focus, key):
+                        continue
+                    if key in ("j", "down", "k", "up", "g", "home", "G", "end", "page_up", "page_down"):
+                        scroll.pop("requests", None)
+                        scroll.pop("details", None)
+                    if key == "esc":
+                        help_open = False
+                    elif key == "?":
+                        help_open = True
+                        scroll.pop("help", None)
+                        draw_help(canvas)
+                    elif key == "v":  # the changelog, as a click on the footer's version
+                        help_open = "changelog"
+                        scroll.pop("changelog", None)
+                    elif key == "s":
+                        try:
+                            settings = _settings.Settings(interval, theme)
+                        except (_config.SlotError, OSError) as failure:
+                            error = dashboard_text(failure)
+                        if settings is not None:
+                            settings.draw(canvas, model)
+                    elif key in ("j", "down"):
+                        index += 1
+                    elif key in ("k", "up"):
+                        index -= 1
+                    elif key in ("g", "home", "page_up"):
+                        index = 0
+                    elif key in ("G", "end", "page_down"):
+                        index = len(items) - 1
+                    index = max(0, min(index, len(items) - 1))
+                    selected_key = keys[index] if items else None
+    finally:
+        for fd in (wake_read, wake_write):
+            os.close(fd)
 
 
 def theme_reports(reports: list[str], answers: _theme.Answers, fd_out: int, ascii_only: bool = False) -> bool:
@@ -1954,7 +2395,7 @@ def dashboard_command(argv: list[str]) -> int:
         use_marks("utf" not in (sys.stdout.encoding or "").lower())
         size_now = shutil.get_terminal_size((120, 40))
         canvas = Canvas(width or size_now.columns, height or size_now.lines)
-        dashboard_draw(canvas, model, cwd=process_cwd(items[0]["pid"]) if items and items[0]["kind"] != "waiting"
+        dashboard_draw(canvas, cast(dict[str, Any], model), cwd=process_cwd(items[0]["pid"]) if items and items[0]["kind"] != "waiting"
                        else None)
         tty = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
         print(canvas.render(colour if colour is not None else tty,

@@ -459,14 +459,14 @@ class SettingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             sf_settings.Settings(1.0, "solarized")
 
-    def test_the_panel_shows_the_theme_under_this_dashboard(self) -> None:
+    def test_the_panel_shows_the_theme_last_after_the_refresh(self) -> None:
         tool = importlib.import_module("slotfather.dashboard")
         dialog = sf_settings.Settings(1.0, "builtin", clock=self.clock)
-        canvas = tool.Canvas(100, 40)
+        canvas = tool.Canvas(100, 44)
         dialog.draw(canvas, None)
         text = canvas.render(False)
         self.assertRegex(text, r"Colour theme +Built-in")
-        self.assertLess(text.index("THIS DASHBOARD"), text.index("Colour theme"))
+        self.assertLess(text.index("Refresh every"), text.index("Colour theme"))
 
 
 class OnceTests(SlotCase):

@@ -106,13 +106,17 @@ class RenderTests(PanelCase):
         dialog = self.dialog()
         text = self.panel(dialog, busy(4, 2, 1))
         rows = text.split("\n")
-        heading = dialog.bounds[1] + next(n for n, line in enumerate(rows) if "SHARED CAPACITY" in line)
+        heading = dialog.bounds[1] + next(n for n, line in enumerate(rows) if "─" * 20 in line and n)
         self.assertTrue(dialog.hits and all(key and row > heading for key, _, row, _, _ in dialog.hits),
                         "only the settings below the status are selectable")
-        self.assertEqual(1, text.count("Esc close"))
+        self.assertEqual(1, text.count("esc close"))
+        for heading in ("SHARED CAPACITY", "QUEUE POLICY", "THIS DASHBOARD"):
+            self.assertNotIn(heading, text, "one flat list")
         for button in ("[Apply]", "[Defaults]", "[Reload]", "[Cancel]", "Draft"):
             self.assertNotIn(button, text)
-        self.assertIn("Esc close", rows[-2], "the hint line is the panel's last row")
+        self.assertIn("esc close", rows[-2], "the hint line is the panel's last row")
+        hints = rows[-2].strip("│ ")
+        self.assertLessEqual(abs(rows[-2].index(hints) + len(hints) / 2 - len(rows[-2]) / 2), 2, "centred")
 
     def test_status_labels_are_dim_and_the_selected_field_alone_is_highlighted(self) -> None:
         dialog = self.dialog()
@@ -124,35 +128,37 @@ class RenderTests(PanelCase):
         self.assertFalse(any(cell[2] for cell in canvas.cells[queue]), "status rows have no selection")
         selected = [n for n, line in enumerate(canvas.cells) if any(cell[2] for cell in line)]
         self.assertEqual(1, len(selected))
-        self.assertIn("▶ Capacity mode", rows[selected[0]])
+        self.assertIn("▶ Capacity ", rows[selected[0]])
         value = rows[selected[0]].index("Automatic")
         self.assertEqual("accent", canvas.cells[selected[0]][value][1], "editable values stand out from status")
 
     def test_the_selected_field_has_a_one_line_description(self) -> None:
         dialog = self.dialog()
         for key, line in (("mode", "Automatic: the lower of the CPU and memory budgets"),
-                          ("safety", "Multiplier on expected runtimes"), ("interval", "Not shared")):
+                          ("safety", "Multiplier on expected runtimes"), ("interval", "this dashboard only"),
+                          ("theme", "this dashboard only"), ("idle_cpu", "💤")):
             dialog.focus = key
             self.assertIn(line, self.panel(dialog, idle()))
 
     def test_the_environment_tightened_order_shows_beside_the_saved_one(self) -> None:
         with mock.patch.dict(os.environ, {"SLOTFATHER_QUEUE": "window"}):
             text = self.panel(self.dialog(), idle(), height=44)
-        self.assertRegex(text, r"Queue order +Backfill +effective here: Window")
+        self.assertRegex(text, r"Queue order +Backfill +effective here: Arrival")
 
-    def test_a_short_terminal_scrolls_the_panel_and_ignores_outside_clicks(self) -> None:
+    def test_a_short_terminal_scrolls_the_panel_and_an_outside_click_closes_it(self) -> None:
         dialog = self.dialog()
         text = self.panel(dialog, idle(), width=40, height=18)
         self.assertIn("SETTINGS", text)
         self.assertRegex(text, r"↓ \d+ more")
-        dialog.mouse(("mouse", 0, 0, 0, True))
+        self.assertEqual("close", dialog.mouse(("mouse", 0, 0, 0, True)), "a click outside closes the panel")
+        self.assertEqual("handled", dialog.mouse(("mouse", 65, 0, 0, True)), "the wheel outside does nothing")
         self.assertEqual("mode", dialog.focus)
         for _ in range(12):
             dialog.mouse(("mouse", 65, 10, 5, True))
         text = self.panel(dialog, idle(), width=40, height=18)
         self.assertRegex(text, r"↑ \d+ above")
-        self.assertIn("Refresh inter… 1", text)
-        self.assertIn("Esc close", text.split("\n")[-2], "a narrow footer keeps the way out")
+        self.assertIn("Refresh every", text)
+        self.assertIn("esc close", text.split("\n")[-2], "a narrow footer keeps the way out")
         self.assertNotRegex(text, r"↓ \d+ more")
         self.assertEqual("close", dialog.key("esc"))
         self.assertFalse(self.state.exists(), "viewing settings creates no queue")
@@ -185,9 +191,9 @@ class KeyTests(PanelCase):
         self.assertEqual("handled", dialog.key("right"))
         self.assertIsNone(self.saved_capacity(), "nothing is saved while the keys may still move")
         text = self.panel(dialog, idle())
-        self.assertRegex(text, r"Capacity mode +‹ Fixed › +pending")
+        self.assertRegex(text, r"Capacity +‹ Fixed › +pending")
         self.assertIn("→ 4 slots", text)
-        self.assertIn("… Capacity mode Fixed · saves in 1 s · Enter now · Esc cancels", text)
+        self.assertIn("… Capacity Fixed · saves in 1 s · Enter now · Esc cancels", text)
         self.clock.now += 0.5
         self.assertFalse(dialog.tick())
         self.assertTrue(self.settle(dialog))
@@ -226,12 +232,26 @@ class KeyTests(PanelCase):
         self.assertIn("Change cancelled", self.panel(dialog, idle()))
         self.assertEqual("close", dialog.key("esc"))
 
+    def test_one_flat_list_with_labels_that_read_alone_and_units_by_the_values(self) -> None:
+        dialog = self.dialog()
+        self.assertEqual(["mode", "order", "safety", "fallback", "overrun", "limit", "interactive", "batch",
+                          "idle_cpu", "idle_after", "yield_after", "interval", "theme"], dialog.fields())
+        text = self.panel(dialog, idle(), height=60)
+        for label, value in (("Capacity", "Automatic"), ("Queue order", "Backfill"), ("Backfill margin", "3×"),
+                             ("Unknown job runtime", "3600 s"), ("Overrun estimate", "0.5×"),
+                             ("Overtaking stops after", "2700 s"), ("Interactive head start", "1800 s"),
+                             ("Batch held back", "1800 s"), ("Idle when below", "0.1 cores"),
+                             ("Idle for", "300 s"), ("Ask to yield after", "120 s"), ("Refresh every", "1 s"),
+                             ("Colour theme", "Auto")):
+            self.assertRegex(text, rf"{re.escape(label)} +(‹ )?{re.escape(value)}")
+        self.assertNotRegex(text, r"\((s|cores)\)", "no units in the labels")
+
     def test_moving_on_saves_a_pending_change(self) -> None:
         dialog = self.dialog()
         dialog.focus = "safety"
         dialog.key("right")
         self.assertEqual("changed", dialog.key("down"))
-        self.assertEqual(("limit", 3.5), (dialog.focus, self.saved_order()["safety"]))
+        self.assertEqual(("fallback", 3.5), (dialog.focus, self.saved_order()["safety"]))
 
     def test_enter_edits_a_number_and_enter_saves_it(self) -> None:
         self.assertEqual(0, self.tool("slots", "4").returncode)
@@ -383,7 +403,7 @@ class KeyTests(PanelCase):
         dialog = self.dialog()
         self.assertEqual(0, self.tool("order", "window").returncode)
         self.clock.now += self.settings.READ_EVERY
-        self.assertRegex(self.panel(dialog, idle()), r"Queue order +Window")
+        self.assertRegex(self.panel(dialog, idle()), r"Queue order +Arrival")
         dialog.focus = "safety"
         dialog.key("right")
         dialog.key("\r")
@@ -398,7 +418,7 @@ class KeyTests(PanelCase):
         self.assertEqual("handled", dialog.key("\r"))
         self.assertEqual({"slots": 6}, self.saved_capacity(), "the other save stands")
         self.assertIn("✗ Capacity changed elsewhere: now 6 slots · nothing was saved", self.panel(dialog, idle()))
-        self.assertRegex(self.panel(dialog, idle()), r"Total slots +6")
+        self.assertRegex(self.panel(dialog, idle()), r"Slots +6")
         dialog.key("\r")
         dialog.key("3")
         self.assertEqual("changed", dialog.key("\r"), "once it has read the new value it saves")

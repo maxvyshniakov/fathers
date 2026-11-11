@@ -25,33 +25,37 @@ if TYPE_CHECKING:
 
 MODES = ("automatic", "fixed", "memory", "lower")
 MODE_LABELS = {"automatic": "Automatic", "fixed": "Fixed", "memory": "Memory", "lower": "CPU + memory"}
-KNOBS = {"safety": ("Safety multiplier", 0.5), "limit": ("Overtaking limit (s)", 60),
-         "fallback": ("Unknown runtime (s)", 60), "overrun": ("Overrun factor", 0.1),
-         "interactive": ("Interactive advance (s)", 60), "batch": ("Batch delay (s)", 60),
-         "yield_after": ("Yield after (s)", 30), "idle_cpu": ("Idle below (cores)", 0.05),
-         "idle_after": ("Idle after (s)", 60)}
-GROUPS = (("SHARED CAPACITY", ("mode", "amount")), ("QUEUE POLICY", ("order", *KNOBS)),
-          ("THIS DASHBOARD", ("interval", "theme")))
+ORDER_LABELS = {"backfill": "Backfill", "window": "Arrival"}
+# Each setting's label and arrow step; the unit goes beside the value (UNITS), not in the label. Display text only:
+# the keys, order.json, the CLI flags and the environment keep their names.
+KNOBS = {"safety": ("Backfill margin", 0.5), "limit": ("Overtaking stops after", 60),
+         "fallback": ("Unknown job runtime", 60), "overrun": ("Overrun estimate", 0.1),
+         "interactive": ("Interactive head start", 60), "batch": ("Batch held back", 60),
+         "yield_after": ("Ask to yield after", 30), "idle_cpu": ("Idle when below", 0.05),
+         "idle_after": ("Idle for", 60)}
+UNITS = {"safety": "×", "overrun": "×", "limit": " s", "fallback": " s", "interactive": " s", "batch": " s",
+         "yield_after": " s", "idle_after": " s", "idle_cpu": " cores", "interval": " s"}
+# One flat list (owner, 2026-11-11), the STATUS block above it
+FIELDS = ("mode", "amount", "order", "safety", "fallback", "overrun", "limit", "interactive", "batch", "idle_cpu",
+          "idle_after", "yield_after", "interval", "theme")
 LOCAL = ("interval", "theme")  # this dashboard's own settings, never written to the shared queue
 CHOICES = ("mode", "order", "theme")
-FIELDS = tuple(key for _, keys in GROUPS for key in keys)
 DESCRIPTIONS = {
     "mode": "Shared by every client. Automatic: the lower of the CPU and memory budgets.",
     "amount.fixed": "Total slots for every client. Applies at the next grant; a shrink drains.",
     "amount.memory": "One slot per this many GiB of memory. Applies at the next grant.",
-    "order": "Backfill lets predicted short work pass; Window serves in arrival order.",
-    "safety": "Multiplier on expected runtimes for backfill; at least 1, higher is safer.",
-    "limit": "Seconds a protected request waits before nothing passes it; 0: no limit.",
-    "fallback": "Assumed runtime, in seconds, of work with no history.",
+    "order": "Backfill lets short work pass; Arrival serves in arrival order.",
+    "safety": "Multiplier on expected runtimes for backfill; at least 1.",
+    "limit": "How long a waiting head can be overtaken; 0: no limit.",
+    "fallback": "Assumed runtime of work with no history.",
     "overrun": "Remaining runtime as a share of elapsed time once a run overruns.",
-    "interactive": "Seconds interactive requests move ahead in the queue; 0: no advance.",
-    "batch": "Seconds batch requests move back in the queue; 0: no delay.",
-    "yield_after": "Seconds before a yieldable holder is asked to yield; 0: nobody is asked.",
-    "idle_cpu": "A lease below this many cores for the idle time is idle (◌); 0: never.",
-    "idle_after": "Seconds below the idle cores before a lease is idle and, if yieldable, asked.",
-    "interval": "Seconds between this dashboard's refreshes, 0.1 to 60. Not shared.",
-    "theme": "Auto: the terminal's colours, with mixed surfaces. Terminal: its palette only. Built-in: fixed colours, "
-             "for themes such as Solarized. Not shared.",
+    "interactive": "How far interactive requests move ahead; 0: not at all.",
+    "batch": "How far batch requests move back; 0: not at all.",
+    "yield_after": "Before a yieldable holder is asked to yield; 0: nobody is asked.",
+    "idle_cpu": "A lease below this for the idle time is idle (💤); 0: never.",
+    "idle_after": "Below the idle cores this long: idle, and asked if it can yield.",
+    "interval": "Seconds between refreshes, 0.1 to 60 · this dashboard only.",
+    "theme": "Auto, Terminal (palette only) or Built-in colours · this dashboard only.",
 }
 DEFAULT_INTERVAL = 1.0
 FLASH_SECONDS = 4.0  # how long a confirmation shows, and how long a first D stays armed
@@ -173,23 +177,26 @@ class Settings:
         return self.saved_value(key)
 
     def text(self, key: str, value: Any) -> str:
+        """A value as shown, with its unit beside it: 30 s, 0.05 cores, 1.5×, 8 GiB."""
         if key == "mode":
             return MODE_LABELS[value]
         if key == "order":
-            return str(value).capitalize()
+            return ORDER_LABELS.get(str(value), str(value).capitalize())
         if key == "theme":
             return _theme.MODE_LABELS[value]
-        return number(value)
+        if key == "amount":
+            return number(value) + ("" if self.mode() == "fixed" else " GiB")
+        return number(value) + UNITS.get(key, "")
 
     def label(self, key: str) -> str:
         if key == "mode":
-            return "Capacity mode"
+            return "Capacity"
         if key == "amount":
-            return "Total slots" if self.mode() == "fixed" else "GiB per slot"
+            return "Slots" if self.mode() == "fixed" else "GiB per slot"
         if key == "order":
             return "Queue order"
         if key == "interval":
-            return "Refresh interval (s)"
+            return "Refresh every"
         if key == "theme":
             return "Colour theme"
         return KNOBS[key][0]
@@ -294,7 +301,7 @@ class Settings:
         expects capacity.json as this panel read it (state.Conflict otherwise)."""
         if key == "interval":
             self.interval = float(value)
-            return f"Refresh interval {number(self.interval)} s · this dashboard only"
+            return f"Refresh every {number(self.interval)} s · this dashboard only"
         if key == "theme":
             self.theme = _theme.checked_mode(value)
             return f"Colour theme {self.text(key, self.theme)} · this dashboard only"
@@ -523,9 +530,11 @@ class Settings:
         """A click selects a field, a click on the selected one changes or edits it; the wheel scrolls."""
         _, button, mx, my, pressed = event
         x, y, width, height = self.bounds
+        code = button & ~28
+        if not (x <= mx < x + width and y <= my < y + height):  # outside: a left click closes, as Esc does (#15)
+            return "close" if pressed and code == 0 and not self.editing and not self.pending else "handled"
         if self.small or not pressed or not (x < mx < x + width - 1 and y < my < y + height - 1):
             return "handled"
-        code = button & ~28
         if code in (64, 65):
             self.offset = max(0, min(max(0, self.total - self.visible), self.offset + (3 if code == 65 else -3)))
             self.reveal = False
@@ -607,7 +616,7 @@ class Settings:
                 parts.append((after, note.replace("will drain", "draining"), "warn"))
         elif key in self.effective and key not in LOCAL and self.effective[key] != self.saved[key]:
             effective = self.effective[key]
-            shown = effective.capitalize() if key == "order" else number(effective)
+            shown = self.text(key, effective)
             parts.append((after, f"effective here: {shown}", "dim"))  # this dashboard's environment tightens it
         return [Row(key, tuple(parts))]
 
@@ -616,33 +625,17 @@ class Settings:
         rows.append(Row("", ((0, "─" * inner, "dim"),)))
         value_column = min(FIELD_LABEL, max(12, inner // 2))
         shown = self.fields()
-        for title, keys in GROUPS:
-            keys = tuple(key for key in keys if key in shown)
-            if not keys:
-                continue
-            rows.append(Row("", ((0, title, "title"),)))
-            for key in keys:
-                rows.extend(self.field_rows(key, value_column))
+        for key in shown:  # one flat list (owner, 2026-11-11)
+            rows.extend(self.field_rows(key, value_column))
         return rows
 
-    def footer(self, inner: int) -> list[tuple[str, str]]:
-        """The panel's one key-hint line; on a narrow panel the least needed hints go first, never Esc."""
+    def footer(self) -> list[tuple[str, str]]:
+        """The panel's short key line, centred like the dashboard's footer (Canvas.overlay_footer())."""
         if self.editing:
-            hints = [("Enter", "save", 0), ("Esc", "cancel", 0), ("⌫", "delete", 1), ("^U", "clear", 2)]
-        elif self.pending:
-            hints = [("Enter", "save now", 0), ("Esc", "cancel", 0), ("←→", "change", 1)]
-        else:
-            hints = [("↑↓", "select", 1), ("←→", "change", 1), ("Enter", "edit", 2), ("d", "default", 3),
-                     ("D", "all defaults", 4), ("Esc", "close", 0)]
-        kept: list[tuple[str, str]] = []
-        for drop in (5, 4, 3, 2, 1, 0):
-            kept = [(key, action) for key, action, rank in hints if rank < drop]
-            if sum(len(key) + len(action) + 3 for key, action in kept) - 2 <= inner:
-                break
-        parts: list[tuple[str, str]] = []
-        for key, action in kept:
-            parts += [(key, "key"), (f" {action}  ", "dim")]
-        return parts
+            return [("enter", "save"), ("esc", "cancel")]
+        if self.pending:
+            return [("enter", "save now"), ("esc", "cancel")]
+        return [("↑↓", "select"), ("←→", "change"), ("enter", "edit"), ("d", "reset"), ("esc", "close")]
 
     def draw(self, canvas: Canvas, model: dict[str, Any] | None) -> None:
         self.refresh()
@@ -696,4 +689,4 @@ class Settings:
             notes = notes[:1] + [(text, style) for text in textwrap.wrap(mark + text, max(1, inner))[:2]]
         for line, (text, style) in enumerate(notes[:3], rule + 1):
             canvas.put(line, x + 2, text, style, inner)
-        canvas.segments(y + height - 2, x + 2, self.footer(inner), inner)
+        canvas.overlay_footer(y + height - 2, x, width, self.footer())

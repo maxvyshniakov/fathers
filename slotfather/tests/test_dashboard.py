@@ -97,7 +97,7 @@ class DashboardTests(SlotCase):
         for height in (5, 7):
             with self.subTest(height=height):
                 text = self.snapshot(width=40, height=height)
-                self.assertIn("slotfather", text.splitlines()[-1])
+                self.assertIn("Slotfather", text.splitlines()[-1])
                 self.assertIn("live", text.splitlines()[-1])
 
     def test_admission_is_available_slots_not_worker_advice_and_honours_memory_gates(self):
@@ -125,8 +125,8 @@ class DashboardTests(SlotCase):
         text = self.snapshot()
         self.assertIn("SLOTS", text.splitlines()[0])
         self.assertIn("free", text)
-        self.assertIn("slotfather", text.splitlines()[-1])
-        self.assertNotIn("slotfather", "\n".join(text.splitlines()[:-1]))
+        self.assertIn("Slotfather", text.splitlines()[-1])
+        self.assertNotIn("Slotfather", "\n".join(text.splitlines()[:-1]))
         self.assertNotIn(str(self.state), text)
         self.assertNotIn("OPEN", text)
         self.assertIn("No requests · all 4 slots free", text)

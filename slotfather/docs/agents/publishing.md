@@ -20,6 +20,18 @@ jobs to successful completion on the exact pushed SHA; a green local test run
 does not substitute for either CI job. Fix code failures in new commits; rerun
 only infrastructure failures.
 
+## Changelog and versions
+
+CHANGELOG.md uses the Sid-Kit format (`~/sid-kit/docs/VERSIONING.md`, Format and Rules): the title
+`# Slotfather Changelog`, one `## Unreleased`, then releases as `## x.y.z - YYYY-MM-DD`, newest first, with
+sections only when they have entries, in the order Breaking, Added, Changed, Deprecated, Removed, Fixed,
+Security. Entries are user-facing. Before 1.0 a breaking or broad behaviour change takes a minor version,
+anything else a patch. A release moves the Unreleased entries under the new version and sets it in
+`pyproject.toml` and in `VERSION` in `src/slotfather/version.py`; `tests/test_changelog.py` checks the layout and
+that both match the newest release (until repo-kit's `check-changelogs` and `release` read `pyproject.toml`).
+`install.py` ships CHANGELOG.md with the package, where the dashboard's changelog (click the footer's version, or
+`v`) reads it.
+
 A push does not install the CLI, change its immutable installed package, migrate
 the live queue or deploy to another machine. Those actions require their own
 explicit scope and the compatibility rules in [installation](../installation.md).
