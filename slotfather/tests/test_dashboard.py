@@ -392,13 +392,13 @@ class QueueTableTests(unittest.TestCase):
         for label, style in (("build", "h0"), ("older", "legacy"), ("gate", "text"), ("back", "text")):
             y = self.row(canvas, label)
             cells = canvas.cells[y][3:-3]
-            # build is selected and tinted with its colour (#15): its text in the foreground, its cells in h0
+            # build is selected and tinted with its colour (#15): its text in its ink, its cells in its fill
             text = {cell[1] for cell in cells if cell[0] not in (" ", "■", "", "▪", ">")}
             self.assertEqual({style}, text, f"{label}: the selected row keeps its colour too")
-            self.assertTrue(all(cell[1] == style for cell in cells if cell[0] == "▪"), label)
+            self.assertTrue(all(cell[1] == self.tool.fill(style) for cell in cells if cell[0] == "▪"), label)
         build = self.row(canvas, "build")
-        self.assertEqual({"h0", "track"}, {cell[1] for cell in canvas.cells[build] if cell[0] == "■"},
-                         "the CPU bar fills in the row's colour; its empty cells keep the track colour")
+        self.assertEqual({"f0", "track"}, {cell[1] for cell in canvas.cells[build] if cell[0] == "■"},
+                         "the CPU bar fills in the row's fill; its empty cells keep the track colour")
         self.assertTrue(all(cell[2] for cell in canvas.cells[build][3:-3]), "the selection highlight stays on top")
 
     def test_bars_and_states_start_at_one_column_and_the_numbers_line_up(self) -> None:
@@ -430,10 +430,10 @@ class QueueTableTests(unittest.TestCase):
             dict(label="idle", kind="held", count=1, pid=12, style="h2", cpu=5, since=old, granted=old,
                  idle_since=old)]  # #12: idle is the holder's record (idle.idle_since()), not a guess from one sample
         styles = [self.tool.queue_bar_style(item, model, now) for item in model["holders"]]
-        self.assertEqual(["h0", "bad", "warn"], styles, "over its share stays red, an idle lease stays yellow")
+        self.assertEqual(["f0", "bad", "warn"], styles, "over its share stays red, an idle lease stays yellow")
         canvas = self.draw(model)
         cpu = canvas.render(False).splitlines()[0].index("cpu use/share")
-        for label, filled in (("fair", {"h0", "track"}), ("hog", {"bad"})):
+        for label, filled in (("fair", {"f0", "track"}), ("hog", {"bad"})):
             y = self.row(canvas, label)
             self.assertEqual(filled, {cell[1] for cell in canvas.cells[y][cpu:cpu + 10] if cell[0] == "■"}, label)
 
@@ -445,7 +445,7 @@ class QueueTableTests(unittest.TestCase):
                 canvas = self.draw(self.model())
                 lines = canvas.render(False).splitlines()
                 column = lines[0].index("slots")
-                for label, cells, style in (("build", two, "h0"), ("older", one, "legacy"), ("gate", three, "text"),
+                for label, cells, style in (("build", two, "f0"), ("older", one, "legacy"), ("gate", three, "text"),
                                             ("back", one, "text")):
                     y = self.row(canvas, label)
                     self.assertEqual(cells, lines[y][column:].split("  ")[0], label)
@@ -514,9 +514,10 @@ class QueueTableTests(unittest.TestCase):
     def test_a_large_count_is_cut_without_trying_every_count_below_it(self) -> None:
         item = dict(kind="held", style="h0", count=100000)
         with mock.patch.object(self.tool, "cells_text", wraps=self.tool.cells_text) as tries:
-            self.assertEqual([("▪", "h0"), (" +99999", "h0")], self.tool.slot_cells(item, 11), "at most 8 columns")
+            self.assertEqual([("▪", "f0"), (" +99999", "h0")], self.tool.slot_cells(item, 11), "at most 8 columns")
         self.assertLess(tries.call_count, 25, "a bounded number of tries, not one per count")
-        self.assertEqual([("▪▪▪▪", "h0"), (" +16", "h0")], self.tool.slot_cells(dict(item, count=20), 8))
+        self.assertEqual([("▪▪▪▪", "f0"), (" +16", "h0")], self.tool.slot_cells(dict(item, count=20), 8),
+                         "cells in the fill, the count in the ink")
 
 
 class EventDetailTests(unittest.TestCase):
@@ -778,6 +779,15 @@ class SlotBarTests(unittest.TestCase):
         line = canvas.render(False).splitlines()[0]
         self.assertEqual("🮅" * 38 + "  " + "🮅" * 37 + "  " + "🮅" * 37, line[2:118])
         self.assertNotIn("▉", line)
+
+    def test_blocks_are_in_the_holders_fill_and_its_label_in_its_ink(self):
+        tool = surfaces(load_dashboard())
+        canvas = tool.Canvas(120, 3)
+        tool.draw_slots(canvas, 0, 2, 116, dict(slots=3, used=2, waiters=[],
+                        holders=[dict(count=2, kind="held", style="h3", label="build")]))
+        self.assertEqual({"f3"}, {cell[1] for cell in canvas.cells[0] if cell[0] == "🮅"} - {"free"})
+        self.assertEqual({"h3"}, {cell[1] for cell in canvas.cells[1][2:7]})
+        self.assertNotEqual(tool.current_theme.styles["f3"], tool.current_theme.styles["h3"], "two tokens")
 
 
 class MachineStatusTests(unittest.TestCase):

@@ -99,7 +99,7 @@ class MarkTests(unittest.TestCase):
 
     def test_the_selected_row_is_marked_on_the_left_frame_in_its_colour(self) -> None:
         model = self.model()
-        for index, style, sgr in ((0, "h0", "\x1b[0;38;2;%d;%d;%dm" % self.tool.current_theme.styles["h0"][0]),
+        for index, style, sgr in ((0, "f0", "\x1b[0;38;2;%d;%d;%dm" % self.tool.current_theme.styles["f0"][0]),
                                   (6, "text", "\x1b[0m")):  # a running lease: its colour; a waiter: the text colour
             with self.subTest(index=index):
                 canvas = self.tool.Canvas(120, 14)
@@ -212,29 +212,39 @@ class TintTests(unittest.TestCase):
             self.assertTrue(code.startswith(unselected[:-1] + ";48;2;"), "the same text colour as unselected")
             self.assertEqual(unselected[:-1] + ";48;2;%d;%d;%dm" % self.tool.current_theme.tints["h0"], code)
             self.assertNotIn("38;2;%d;%d;%d" % fg, code)  # not the foreground
-            self.assertEqual(["┃", "h0"], cells[0][:2], "the frame marker in its colour")
-            self.assertEqual("h0", next(cell[1] for cell in cells if cell[0] == "▪"), "slot cells keep it")
+            self.assertEqual(["┃", "f0"], cells[0][:2], "the frame marker in its fill")
+            self.assertEqual("f0", next(cell[1] for cell in cells if cell[0] == "▪"), "slot cells too")
             code, _ = self.selected_sgr(6)
             self.assertEqual("\x1b[0;48;2;%d;%d;%dm" % theme.mix(bg, fg, theme.SELECTION_MIX), code, "waiting: neutral")
 
-    def test_every_holder_tint_loses_at_most_a_tenth_of_its_texts_contrast(self) -> None:
-        for environ in (LIGHT, {"SLOTFATHER_TERMINAL_BG": "#1e1e1e", "SLOTFATHER_TERMINAL_FG": "#e6e6e6"}):
+    def test_every_holder_tint_mixes_its_fill_and_keeps_nine_tenths_of_its_inks_contrast(self) -> None:
+        for environ in (LIGHT, {"SLOTFATHER_TERMINAL_BG": "#1e1e1e", "SLOTFATHER_TERMINAL_FG": "#e6e6e6"},
+                        {"SLOTFATHER_TERMINAL_BG": "#282c34", "SLOTFATHER_TERMINAL_FG": "#ffffff"}):
             found = theme.resolve("auto", environ=environ)
             background = found.background
             assert background is not None
-            self.assertEqual(12, len(found.tints))
+            self.assertEqual(10, len(found.tints))
             for name, tinted in found.tints.items():
-                colour = found.styles[name][0]
-                assert isinstance(colour, tuple)
-                plain = theme.contrast(colour, background)
-                self.assertGreaterEqual(theme.contrast(colour, tinted), 0.9 * plain - 1e-9, (name, tinted))
-                self.assertNotEqual(background, tinted, f"{name} has a tint to see")
+                ink, fill = found.styles[name][0], found.styles["f" + name[1:]][0]
+                assert isinstance(ink, tuple) and isinstance(fill, tuple)
+                mixes = [theme.mix(background, fill, step / 100) for step in range(1, 19)]
+                self.assertIn(tinted, mixes, f"{name}: its fill in the background, at most 18%")
+                plain = theme.contrast(ink, background)
+                self.assertGreaterEqual(plain, 4.5)
+                self.assertGreaterEqual(theme.contrast(ink, tinted), 0.9 * plain - 1e-9, (name, tinted))
+                step = mixes.index(tinted) + 1
+                stronger = theme.mix(background, fill, (step + 1) / 100)
+                self.assertTrue(step == round(theme.TINT_MIX * 100) or theme.contrast(ink, stronger) < 0.9 * plain,
+                                f"{name}: as much fill as the rule allows ({step}%)")
                 self.assertGreater(theme.distance(tinted, background), 0.02, f"{name}'s tint shows")
+            if found.light:
+                self.assertGreaterEqual(min(theme.distance(tinted, background) for tinted in found.tints.values()),
+                                        0.035, "on a light background stronger than the single-colour tints")
 
     def test_the_selected_rows_text_colour_is_its_unselected_one_for_every_holder(self) -> None:
         self.tool.set_theme(theme.resolve("auto", environ=LIGHT))
         now = self.now
-        for n in range(12):
+        for n in range(self.tool.current_theme.holders()):
             holder = dict(label=f"h{n}", kind="held", count=1, pid=10, style=f"h{n}", cpu=50, since=now, granted=now)
             model = {"holders": [holder], "waiters": [], "slots": 4, "cores": 12}
             canvas = self.tool.Canvas(80, 5)
@@ -307,7 +317,7 @@ class FrameTests(unittest.TestCase):
         canvas = self.tool.Canvas(120, 7)  # room for three of the nine rows
         self.tool.draw_requests(canvas, 0, 0, 7, 120, model, 0, self.now)
         selected = [y for y in range(7) if any(cell[2] for cell in canvas.cells[y])]
-        self.assertEqual(["┃", "h0"], canvas.cells[selected[0]][0][:2], "left: the row's colour")
+        self.assertEqual(["┃", "f0"], canvas.cells[selected[0]][0][:2], "left: the row's fill")
         self.assertEqual(["┃", "text"], canvas.cells[selected[0]][118][:2], "right: the thumb, same row (QUEUE has focus)")
         self.assertEqual(["│", "accent"], canvas.cells[selected[0]][119][:2], "the focused frame: light, in blue")
         self.assertNotIn("↓", canvas.render(False), "no row counts: the scrollbar shows it")

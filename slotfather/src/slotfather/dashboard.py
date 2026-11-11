@@ -706,7 +706,7 @@ def dashboard_colours(model: dict, assigned: dict) -> None:
     keys = {h["key"] for h in model["holders"]}
     for key in [key for key in assigned if key not in keys]:
         del assigned[key]
-    count = current_theme.holders()  # 12 vivid colours, or the builtin palette's 6 (#14)
+    count = current_theme.holders()  # 10 holder colours less any the theme reserves, or the builtin 6 (#14)
     for holder in model["holders"]:
         if holder["kind"] != "held":
             continue
@@ -714,6 +714,13 @@ def dashboard_colours(model: dict, assigned: dict) -> None:
             taken = [index % count for index in cast("dict[Any, int]", assigned).values()]
             assigned[holder["key"]] = min(range(count), key=lambda n: (taken.count(n), n))
         holder["style"] = f"h{assigned[holder['key']] % count}"
+
+
+def fill(style: str) -> str:
+    """A holder's fill token (`f3`) for its ink token (`h3`): what paints blocks, cells, bars and the selection marker;
+    any other style is its own fill."""
+    token = "f" + style[1:]
+    return token if style[:1] == "h" and style[1:].isdigit() and token in current_theme.styles else style
 
 
 # Dashboard layout
@@ -754,10 +761,10 @@ def share_style(item: dict, model: dict, moment: datetime.datetime) -> str:
 
 
 def queue_bar_style(item: dict[str, Any], model: dict[str, Any], moment: datetime.datetime) -> str:
-    """A QUEUE row's CPU bar fills in the row's colour (its SLOTS colour), except when it warns: red over 1.5 times
+    """A QUEUE row's CPU bar fills in the holder's fill (its SLOTS colour), except when it warns: red over 1.5 times
     its share, yellow while the lease is idle (#12, share_style())."""
     style = share_style(item, model, moment)
-    return str(item["style"]) if style == "accent" else style
+    return fill(str(item["style"])) if style == "accent" else style
 
 
 def columns(width: int, spec: list[tuple]) -> list[tuple]:
@@ -883,7 +890,7 @@ def draw_slots(canvas: Canvas, y: int, x: int, width: int, model: dict) -> None:
             break
         labels.append((starts[filled], holder["label"], holder["style"]))
         for index in range(filled, filled + count):
-            canvas.put(y, starts[index], "🮅" * widths[index], holder["style"])
+            canvas.put(y, starts[index], "🮅" * widths[index], fill(str(holder["style"])))
         filled += count
     for index in range(filled, slots):
         canvas.put(y, starts[index], free_slot(widths[index]), "free")
@@ -918,27 +925,30 @@ def cells_text(count: int, hollow: bool = False) -> str:
     return gap.join((HOLLOW[glyph] if hollow else glyph) * count)
 
 
-def cell_run(count: int, size: int, style: str, hollow: bool = False, whole: bool = False) -> list[tuple[str, str]]:
+def cell_run(count: int, size: int, style: str, hollow: bool = False, whole: bool = False,
+             text: str = "") -> list[tuple[str, str]]:
     """`count` countable cells in `style` within `size` columns and at most SLOT_CELLS cells. A count wider than
     that keeps the cells that fit
-    and counts the rest (`▪▪▪▪ +16` for 20 in 8 columns); a `whole` (-n all) one that does not fit says `all`."""
+    and counts the rest (`▪▪▪▪ +16` for 20 in 8 columns); a `whole` (-n all) one that does not fit says `all`. The
+    words are in `text` (a holder's ink), else in `style`."""
+    text = text or style
     count = max(0, count)
     size = min(size, text_width(cells_text(SLOT_CELLS)))  # more than SLOT_CELLS cells cannot be counted at a glance
     if text_width(cells_text(count, hollow)) <= size:
         return [(cells_text(count, hollow), style)]
     if whole:
-        return [("all", style)]
+        return [("all", text)]
     shown = min(count, size)  # no more cells than the column has cells: at most `size` tries
     while shown and text_width(cells_text(shown, hollow)) + len(f" +{count - shown}") > size:
         shown -= 1
-    return [(cells_text(shown, hollow), style), (f" +{count - shown}", style)]
+    return [(cells_text(shown, hollow), style), (f" +{count - shown}", text)]
 
 
 def slot_cells(item: dict[str, Any], size: int) -> list[tuple[str, str]]:
-    """A QUEUE row's slots as countable cells in the row's colour (the colour of its SLOTS blocks for a lease; the
+    """A QUEUE row's slots as countable cells in the row's colour (the fill of its SLOTS blocks for a lease; the
     plain text colour for a waiting request, whose state the cpu column gives); see cell_run()."""
-    style = "text" if item["kind"] == "waiting" else item["style"]
-    return cell_run(int(item["count"]), size, style, whole=bool(item.get("all")))
+    style = "text" if item["kind"] == "waiting" else str(item["style"])
+    return cell_run(int(item["count"]), size, fill(style), whole=bool(item.get("all")), text=style)
 
 
 def event_cells(event: dict[str, Any], size: int, style: str) -> list[tuple[str, str]]:
@@ -1086,7 +1096,7 @@ def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model
             "time": (span(age) if age is not None else "—", ink), "cpu": cpu, "pid": (str(item["pid"]), ink)})
         if index == selected:  # its background, and the left frame heavy in the row's colour: no cursor glyph
             canvas.select(row, x + 1, x + width - 1, style if tinted else True)
-            canvas.put(row, x, SELECTED_FRAME, style)
+            canvas.put(row, x, SELECTED_FRAME, fill(style))
 
 
 def queue_policy(model: dict) -> dict[str, str]:

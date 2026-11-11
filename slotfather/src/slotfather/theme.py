@@ -5,9 +5,9 @@ cursor and status use the default foreground (SGR 39); muted text and every fram
 ok, warn, bad and accent are ANSI green, yellow, red and blue. The surfaces the palette lacks (the selected row's
 background, a bar's track and a free slot) are mixed in OKLab from the background and foreground the terminal reports
 (OSC 10/11). Without a report COLORFGBG says light or dark; without that either, they are drawn with no background
-colour. Holder colours are ours: one vivid colour per hue, at the lightness that gives it the most chroma while it
-reads on the background, kept apart from the theme's red and yellow. The load chart runs from the theme's blue to its
-red in OKLab.
+colour. Holder colours are ours: per holder a vivid fill (blocks, bars, the selection) and an ink of the same hue that
+reads on the background (labels, numbers), with every fill kept apart from the theme's blue, red and yellow. The load
+chart runs from the theme's blue to its red in OKLab.
 
 Modes: auto (the above), terminal (tokens only: no mixed surfaces, the chart in palette steps) and builtin (the fixed
 256-colour palette from before #14, for themes such as Solarized where bright black is close to the background)."""
@@ -19,7 +19,7 @@ import os
 import re
 import select
 import time
-from typing import Callable, Dict, List, Mapping, NamedTuple, Optional, Tuple, Union
+from typing import Callable, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Union
 
 RGB = Tuple[int, int, int]
 Lab = Tuple[float, float, float]
@@ -32,38 +32,45 @@ MODE_LABELS = {"auto": "Auto", "terminal": "Terminal", "builtin": "Built-in"}
 
 # Surfaces: the share of the foreground mixed into the background.
 SELECTION_MIX, TRACK_MIX, FREE_MIX = 0.10, 0.15, 0.20
-TINT_MIX = 0.14  # a selected running row's background: this much of its holder colour in the background (#15)
-TINT_KEEP = 0.9  # the share of its text's contrast a tint keeps; a colour that would lose more gets less of it
-# Holder colours (owner, 2026-11-11): one vivid colour per hue, handed out in this order, so the first holders
-# are the most distinct. (name, OKLCH hue and the lightness it looks best at on a light background, the same on a
-# dark one), measured from Tailwind's 600 and 400 shades, which the colours land close to on white and near black.
-HOLDER_HUES = (("blue", 262.9, 0.546, 254.6, 0.714), ("rose", 17.6, 0.586, 13.4, 0.719),
-               ("emerald", 163.2, 0.596, 163.2, 0.773), ("violet", 293.0, 0.541, 293.5, 0.709),
-               ("orange", 41.1, 0.646, 55.9, 0.758), ("cyan", 221.7, 0.609, 211.5, 0.797),
-               ("fuchsia", 322.9, 0.591, 322.2, 0.748), ("lime", 131.7, 0.648, 128.8, 0.849),
-               ("amber", 58.3, 0.666, 84.4, 0.837), ("indigo", 277.0, 0.511, 276.9, 0.680),
-               ("pink", 0.6, 0.592, 349.8, 0.725), ("teal", 184.7, 0.600, 181.9, 0.785))
+TINT_MIX = 0.16  # a selected running row's background: this much of its holder fill in the background (#15)
+TINT_KEEP = 0.9  # the share of its ink's contrast a tint keeps; a fill that would take more is mixed in less
+# Holder colours (owner, 2026-11-11): two tokens per holder. The fill paints what needs no text contrast (SLOTS
+# blocks, slot cells, the CPU bar, the selection marker and tint), a juicy candy colour; the ink, the same hue
+# darker on a light background and lighter on a dark one, paints the label and the numbers at MIN_INK or more.
+# Handed out in this order; anchors (fill, ink) on a light background (the owner's mock) and on a dark one (about
+# Tailwind's 400 and 300 shades). No blue, sky or indigo: the theme's blue marks the focused panel.
+HOLDER_HUES = (("rose", "#f2668b", "#c8264f", "#fb7185", "#fda4af"),
+               ("emerald", "#2ec4a0", "#0b7f63", "#34d399", "#6ee7b7"),
+               ("violet", "#9b7bf4", "#6a45d6", "#a78bfa", "#c4b5fd"),
+               ("tangerine", "#ff9248", "#c2530a", "#fb923c", "#fdba74"),
+               ("teal", "#2bb5b0", "#0f7f7a", "#2dd4bf", "#5eead4"),
+               ("orchid", "#d77ae6", "#9d3bb0", "#e879f9", "#f0abfc"),
+               ("lime", "#9ad94a", "#4a7a12", "#a3e635", "#bef264"),
+               ("pink", "#f06aae", "#b8236f", "#f472b6", "#f9a8d4"),
+               ("cyan", "#23b8d0", "#0a7286", "#22d3ee", "#67e8f9"),
+               ("grape", "#bb76f0", "#8a32c8", "#c084fc", "#d8b4fe"))
 HOLDERS = len(HOLDER_HUES)
 
 
-class Band(NamedTuple):
-    """Where holder colours are looked for: a lightness range and the most chroma taken (more reads as neon)."""
-    low: float
-    high: float
-    chroma: float
+class Holder(NamedTuple):
+    name: str
+    fill: RGB
+    ink: RGB
 
 
-LIGHT_BAND, DARK_BAND = Band(0.52, 0.68, 0.22), Band(0.70, 0.82, 0.17)
-CHROMA_SLACK = 0.015  # chroma given up for a lightness nearer the hue's own
-LIGHTNESS_STEP = 0.01
-MIN_CONTRAST = 3.0  # holder text against the background it is drawn on
-WARNING_APART = 0.10  # ΔE a holder keeps from the over-share red and the idle yellow
-HOLDER_APART = 0.045  # ΔE a holder keeps from the ones handed out before it
-MOST_TURN = 30  # degrees a holder's hue turns at most, so an orange never becomes a pink
-# The theme's red (over share) and yellow (idle) where the terminal does not say them: on a light background
-# GitHub Light's red and Tango's yellow, on a dark one Ghostty's default palette
-LIGHT_WARNINGS: Tuple[RGB, RGB] = ((207, 34, 46), (196, 160, 0))
-DARK_WARNINGS: Tuple[RGB, RGB] = ((204, 102, 102), (240, 198, 116))
+MIN_INK = 4.5  # a holder's ink against the background (WCAG AA for text)
+RESERVED_APART = 0.12  # ΔE a holder's fill keeps from the theme's blue (focus), red (over share) and yellow (idle)
+HOLDER_APART = 0.045  # ΔE a holder's fill keeps from the ones handed out before it
+MOST_TURN = 30  # degrees a fill's hue turns at most to keep those apart; a hue with no room left is dropped
+LIGHTNESS_SHIFTS = (0.0, 0.03, -0.03, 0.06, -0.06)  # or the lightness it moves by, lighter first
+BLUE_HUES = (225.0, 280.0)  # OKLCH hues no fill turns into, whatever the theme's blue: sky, blue and indigo
+LIGHTNESS_STEP = 0.005
+# The theme's blue, red and yellow where the terminal does not say them: on a light background GitHub Light's
+# blue and red with Tango's yellow, on a dark one Ghostty's default palette (Tomorrow Night)
+LIGHT_RESERVED: Tuple[RGB, RGB, RGB] = ((9, 105, 218), (207, 34, 46), (196, 160, 0))
+DARK_RESERVED: Tuple[RGB, RGB, RGB] = ((129, 162, 190), (204, 102, 102), (240, 198, 116))
+# Where the background is unknown, inks are measured against these
+LIGHT_REFERENCE, DARK_REFERENCE = (253, 252, 250), (30, 30, 30)
 CHART_STEPS = 8
 FIXED_LOW, FIXED_HIGH = (80, 140, 240), (225, 85, 80)  # the chart without the theme's own blue and red
 QUERY_TIMEOUT = 0.1  # seconds the dashboard waits at startup for the terminal's colours
@@ -192,81 +199,59 @@ def is_light(background: RGB) -> bool:
     return contrast(background, (0, 0, 0)) > contrast(background, (255, 255, 255))
 
 
-def _fits(lightness: float, chroma: float, angle: float) -> bool:
-    a, b = chroma * math.cos(math.radians(angle)), chroma * math.sin(math.radians(angle))
-    return all(-1e-4 <= value <= 1 + 1e-4 for value in _linear_rgb((lightness, a, b)))
+def hex_colour(text: str) -> RGB:
+    return int(text[1:3], 16), int(text[3:5], 16), int(text[5:7], 16)
 
 
-def most_chroma(lightness: float, angle: float, limit: float) -> float:
-    """The most chroma, up to `limit`, that the hue has in sRGB at this lightness."""
-    if _fits(lightness, limit, angle):
-        return limit
-    low, high = 0.0, limit
-    for _ in range(16):
-        middle = (low + high) / 2
-        low, high = (middle, high) if _fits(lightness, middle, angle) else (low, middle)
-    return low
+def lch(rgb: RGB) -> Tuple[float, float, float]:
+    """(lightness, chroma, hue) in OKLCH."""
+    lightness, a, b = oklab(rgb)
+    return lightness, math.hypot(a, b), math.degrees(math.atan2(b, a)) % 360
 
 
-def vivid(angle: float, preferred: float, background: Optional[RGB], band: Band) -> RGB:
-    """The hue at its most chroma in the band that keeps MIN_CONTRAST on the background; of the lightnesses within
-    CHROMA_SLACK of that, the one nearest `preferred`. A background no lightness in the band reads on widens it."""
-    for low, high in ((band.low, band.high), (min(band.low, 0.25), max(band.high, 0.95))):
-        found: List[Tuple[float, float, RGB]] = []
-        for step in range(int(round((high - low) / LIGHTNESS_STEP)) + 1):
-            lightness = low + step * LIGHTNESS_STEP
-            chroma = most_chroma(lightness, angle, band.chroma)
-            colour = oklch(lightness, chroma, angle)
-            if background is None or contrast(colour, background) >= MIN_CONTRAST:
-                found.append((chroma, lightness, colour))
-        if found:
-            most = max(chroma for chroma, _, _ in found)
-            return min((item for item in found if item[0] >= most - CHROMA_SLACK),
-                       key=lambda item: abs(item[1] - preferred))[2]
-    return oklch(preferred, band.chroma, angle)
+def ink_for(anchor: RGB, angle: float, background: RGB, shift: float = 0.0) -> RGB:
+    """The ink at the anchor's lightness (moved by `shift`, as its fill was) and chroma in hue `angle`, moved away
+    from the background in lightness until it reads at MIN_INK."""
+    lightness, chroma, _ = lch(anchor)
+    lightness = min(0.97, max(0.2, lightness + shift))
+    away = -1 if is_light(background) else 1
+    colour = oklch(lightness, chroma, angle)
+    while contrast(colour, background) < MIN_INK and 0 < lightness < 1:
+        lightness += away * LIGHTNESS_STEP
+        colour = oklch(lightness, chroma, angle)
+    return colour
 
 
-def holder_colours(background: Optional[RGB], light: bool, warnings: Optional[Tuple[RGB, ...]] = None,
-                   count: int = HOLDERS) -> List[RGB]:
-    """`count` vivid holder colours in HOLDER_HUES order for this background: each hue at the lightness in the
-    theme's band that gives it the most chroma sRGB allows while it reads at MIN_CONTRAST. A hue that lands within
-    WARNING_APART of a warning colour (the theme's red and yellow), or HOLDER_APART of an earlier holder, turns away
-    from it a few degrees at a time; nothing is dulled."""
-    return list(_holder_colours(background, light, warnings or (LIGHT_WARNINGS if light else DARK_WARNINGS), count))
+def holder_pairs(background: Optional[RGB], light: bool,
+                 reserved: Optional[Sequence[RGB]] = None) -> List[Holder]:
+    """The holders for this background in HOLDER_HUES order: each hue's anchor fill, turned away a few degrees at a
+    time from a reserved colour (the theme's blue, red and yellow) it is within RESERVED_APART of, or from an earlier
+    holder within HOLDER_APART; a hue that finds no room within MOST_TURN is dropped. The ink keeps the fill's turn
+    and reads at MIN_INK on the background (a reference one where it is unknown)."""
+    return list(_holder_pairs(background, light, tuple(reserved or (LIGHT_RESERVED if light else DARK_RESERVED))))
 
 
 @functools.lru_cache(maxsize=64)
-def _holder_colours(background: Optional[RGB], light: bool, warnings: Tuple[RGB, ...], count: int) -> Tuple[RGB, ...]:
-    band = LIGHT_BAND if light else DARK_BAND
-    found: List[RGB] = []
-    for _, light_hue, light_level, dark_hue, dark_level in HOLDER_HUES[:count]:
-        angle, preferred = (light_hue, light_level) if light else (dark_hue, dark_level)
-        preferred = min(band.high, max(band.low, preferred))
-        nearest = min(warnings, key=lambda warning: abs((hue(warning) - angle + 180) % 360 - 180))
-        away = -1 if (hue(nearest) - angle) % 360 < 180 else 1  # turn away from the nearest warning first
-        chosen: Optional[RGB] = None
-        # Turn away from what it is too close to, a few degrees at a time; a hue with no room left between its
-        # neighbours and a warning (amber between orange and a yellow) also moves in lightness, inside a narrow band
-        # around a lighter or deeper level. Every turn first (a red holder keeps its distance from the over-share red
-        # by hue, which reads better than by lightness), then lightness, the smallest change first.
-        tries: List[Tuple[float, float, Band, float]] = []
-        for shift in (0.0, -0.04, 0.04, -0.08, 0.08, -0.12, 0.12):
-            level = preferred + shift
-            if not 0.3 <= level <= 0.9:
-                continue
-            where = band if not shift else Band(level - 0.015, level + 0.015, band.chroma)
-            for step in range(0, MOST_TURN + 1, 2):
-                for sign in ((away, -away) if step else (1,)):
-                    cost = step if not shift else MOST_TURN + abs(shift) * 250 + step
-                    tries.append((cost, sign * step, where, level))
-        tries.sort(key=lambda item: item[0])
-        for _, turn, where, level in tries:
-            colour = vivid((angle + turn) % 360, level, background, where)
-            if (all(distance(colour, warning) >= WARNING_APART for warning in warnings)
-                    and all(distance(colour, earlier) >= HOLDER_APART for earlier in found)):
-                chosen = colour
+def _holder_pairs(background: Optional[RGB], light: bool, reserved: Tuple[RGB, ...]) -> Tuple[Holder, ...]:
+    surface = background or (LIGHT_REFERENCE if light else DARK_REFERENCE)
+    found: List[Holder] = []
+    for name, light_fill, light_ink, dark_fill, dark_ink in HOLDER_HUES:
+        fill, ink = (hex_colour(light_fill), hex_colour(light_ink)) if light else (hex_colour(dark_fill),
+                                                                                 hex_colour(dark_ink))
+        lightness, chroma, angle = lch(fill)
+        nearest = min(reserved, key=lambda colour: distance(colour, fill))
+        away = -1 if (hue(nearest) - angle) % 360 < 180 else 1  # turn away from the nearest reserved colour first
+        # The smallest change first: a few degrees of hue, or a little lightness (0.01 costs as much as 2.5°)
+        tries = sorted(((abs(turn) + abs(shift) * 250, turn, shift)
+                        for turn in sorted(range(-MOST_TURN, MOST_TURN + 1, 2), key=lambda turn: (abs(turn), turn != away * abs(turn)))
+                        for shift in LIGHTNESS_SHIFTS), key=lambda item: item[0])
+        for _, turn, shift in tries:
+            colour = oklch(lightness + shift, chroma, (angle + turn) % 360) if turn or shift else fill
+            if (not BLUE_HUES[0] < hue(colour) < BLUE_HUES[1]
+                    and all(distance(colour, other) >= RESERVED_APART for other in reserved)
+                    and all(distance(colour, earlier.fill) >= HOLDER_APART for earlier in found)):
+                found.append(Holder(name, colour, ink_for(ink, (lch(ink)[2] + turn) % 360, surface, shift)))
                 break
-        found.append(chosen or vivid(angle, preferred, background, band))
     return tuple(found)
 
 
@@ -444,13 +429,15 @@ def resolve(mode: str, answers: Optional[Answers] = None,
     light = is_light(background) if background else answers.scheme == "light"
     if mode == "builtin":
         styles = dict(BUILTIN)
-        styles.update({f"h{n}": (colour, "") for n, colour in enumerate(BUILTIN_HOLDERS)})
+        styles.update({f"{token}{n}": (colour, "") for n, colour in enumerate(BUILTIN_HOLDERS) for token in "hf"})
         styles.update({f"chart{n}": (colour, "") for n, colour in enumerate(BUILTIN_CHART)})
         return Theme(mode, styles, (56, 62, 74), 252, "■", "block", light, background, source)
     styles = dict(TOKENS)
-    defaults = LIGHT_WARNINGS if light else DARK_WARNINGS  # over share and idle: the theme's red and yellow
-    warnings = (answers.palette.get(1, defaults[0]), answers.palette.get(3, defaults[1]))
-    styles.update({f"h{n}": (colour, "") for n, colour in enumerate(holder_colours(background, light, warnings))})
+    defaults = LIGHT_RESERVED if light else DARK_RESERVED  # focus, over share and idle: the theme's blue, red, yellow
+    reserved = tuple(answers.palette.get(index, default) for index, default in zip((4, 1, 3), defaults))
+    holders = holder_pairs(background, light, reserved)
+    styles.update({f"h{n}": (holder.ink, "") for n, holder in enumerate(holders)})
+    styles.update({f"f{n}": (holder.fill, "") for n, holder in enumerate(holders)})
     mixing = mode == "auto" and background is not None
     if mixing:
         assert background is not None
@@ -458,8 +445,7 @@ def resolve(mode: str, answers: Optional[Answers] = None,
         styles["track"] = (mix(background, ink, TRACK_MIX), "")
         styles["free"] = (mix(background, ink, FREE_MIX), "")
         selection: Optional[RGB] = mix(background, ink, SELECTION_MIX)
-        tints = {name: tint(background, colour) for name, (colour, _) in styles.items()
-                 if name.startswith("h") and isinstance(colour, tuple)}
+        tints = {f"h{n}": tint(background, holder.fill, holder.ink) for n, holder in enumerate(holders)}
     else:
         selection, tints = None, {}
     styles.update({f"chart{n}": (colour, "") for n, colour in enumerate(chart_colours(mode, answers, background))})
@@ -467,14 +453,14 @@ def resolve(mode: str, answers: Optional[Answers] = None,
                  light, background, source, tints)
 
 
-def tint(background: RGB, colour: RGB) -> RGB:
-    """A selected row's background in its own colour: TINT_MIX of it in the background, less where the row's text,
-    in that colour, would keep under TINT_KEEP of its contrast against the plain background."""
-    plain = contrast(colour, background)
+def tint(background: RGB, fill: RGB, ink: RGB) -> RGB:
+    """A selected row's background in its holder's colour: TINT_MIX of its fill in the background, less where its
+    ink would keep under TINT_KEEP of its contrast against the plain background."""
+    plain = contrast(ink, background)
     found = background
     for step in range(round(TINT_MIX * 100), 0, -1):
-        found = mix(background, colour, step / 100)
-        if contrast(colour, found) >= TINT_KEEP * plain:
+        found = mix(background, fill, step / 100)
+        if contrast(ink, found) >= TINT_KEEP * plain:
             return found
     return found
 

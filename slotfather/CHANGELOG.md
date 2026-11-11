@@ -16,6 +16,10 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   what its key does.
 - Tab goes by columns: QUEUE, EVENTS, then DETAILS (top to bottom in one column), only through panels on
   screen.
+- Holder colours come in pairs: a vivid fill for slot blocks, cells, CPU bars and the selection, and an ink of
+  the same hue for labels and numbers, readable at 4.5:1 on light and dark backgrounds. Ten hues, none near the
+  theme's blue, red or yellow, so a holder is never taken for the focused frame, an over-share bar or an idle
+  lease; the selected row's tint is stronger on light backgrounds.
 
 ### Fixed
 

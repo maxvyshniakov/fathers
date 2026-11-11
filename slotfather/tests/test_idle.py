@@ -204,9 +204,9 @@ class MarkerTests(unittest.TestCase):
     def test_the_bar_warns_by_the_same_idle(self) -> None:
         model = self.model()
         styles = [self.tool.queue_bar_style(item, model, self.now) for item in model["holders"]]
-        self.assertEqual(["h0", "warn", "warn"], styles)
+        self.assertEqual(["f0", "warn", "warn"], styles)
         long_ago = dict(model["holders"][0], cpu=0, granted=self.now - datetime.timedelta(hours=1))
-        self.assertEqual("h0", self.tool.queue_bar_style(long_ago, model, self.now),
+        self.assertEqual("f0", self.tool.queue_bar_style(long_ago, model, self.now),
                          "no own idle rule any more: only the holder's record says idle")
 
     def test_lease_details_say_since_when_and_when_it_was_asked(self) -> None:

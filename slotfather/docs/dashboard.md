@@ -57,10 +57,10 @@ restores the terminal's mode on exit, also after a failure; elsewhere a table ma
 those layouts to the US positions. Only hotkeys are translated: what you type into
 a Settings field stays as typed. Help keeps showing the Latin letters.
 
-Only the selected request has a heavy `┃` on the left frame, in its colour, and a
-tinted background; its text keeps its colour. A running row's tint mixes up to 14% of
-its own colour into the terminal's background, less for a colour whose text would
-lose more than a tenth of its contrast; a waiting row's is the neutral selection;
+Only the selected request has a heavy `┃` on the left frame, in its fill, and a
+tinted background; its text keeps its ink. A running row's tint mixes up to 16% of
+its fill into the terminal's background, less where its ink would lose more than a
+tenth of its contrast; a waiting row's is the neutral selection;
 without a known background the row is bold. Every panel that overflows (QUEUE,
 EVENTS, the details, Settings, help, the changelog) shows a scrollbar thumb, no
 track, in the padding cell left of its right frame: muted, or in the foreground on
@@ -184,13 +184,18 @@ between light and dark, the dashboard asks again and repaints. A terminal that d
 dark by `COLORFGBG`; with neither, the surfaces have no background colour: tracks are `░` in bright black, a free
 slot is an outline and the selected row is bold beside its ▶.
 
-Holder colours are the dashboard's own: twelve vivid colours, handed out in an order that makes the first ones
-the most distinct (blue, rose, emerald, violet, orange, cyan, fuchsia, lime, amber, indigo, pink, teal). Each hue
-takes the lightness, within the theme's band (OKLCH 0.52–0.68 on a light background, 0.70–0.82 on a dark one), that
-gives it the most chroma sRGB allows while it stays at least 3:1 against the reported background, so they land close
-to Tailwind's 600 shades on white and its 400 shades on near black. A holder too close to the theme's red (a CPU bar
-over its share) or yellow (an idle lease) turns its hue away from it, or failing that its lightness. The load chart
-runs from the theme's blue to its red in OKLab, without the terminal's answer from a fixed blue to red.
+Holder colours are the dashboard's own, two tokens per holder. The **fill**, a vivid candy colour (OKLCH lightness
+about 0.67–0.82 on a light background, 0.71–0.85 on a dark one), paints what needs no text contrast: the SLOTS
+blocks, the QUEUE slot cells, the CPU bar, the selection marker and its tint. The **ink**, the same hue darker on a
+light background and lighter on a dark one, paints the label, the numbers and the SLOTS labels, at 4.5:1 or more
+against the reported background (a reference `#fdfcfa` or `#1e1e1e` where none is reported). Ten hues are handed
+out in order: rose, emerald, violet, tangerine, teal, orchid, lime, pink, cyan, grape, anchored on the owner's
+mock on light backgrounds and about Tailwind's 400 (fill) and 300 (ink) shades on dark ones. No hue may sit within
+OKLab ΔE 0.12 of the theme's blue (the focused panel's frame), red (a CPU bar over its share) or yellow (an idle
+lease), measured on the colours the terminal reports: a hue too close turns away a few degrees at a time (at most
+30°) or moves a little in lightness, the smallest change first, and one with no room left is dropped (Dracula,
+whose blue is a violet, drops violet). No fill turns into blue, sky or indigo (OKLCH hues 225–280). The load chart runs from the theme's blue to its red in OKLab, without the terminal's answer
+from a fixed blue to red.
 
 Settings → this dashboard → **Colour theme**: `Auto` is the above; `Terminal` uses the palette only, with nothing
 mixed (the chart in palette steps); `Built-in` is the fixed 256-colour palette from before, for themes such as
