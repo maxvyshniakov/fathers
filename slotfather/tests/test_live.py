@@ -153,17 +153,17 @@ class FocusTests(unittest.TestCase):
             return canvas
 
         def thumb(canvas: Any) -> list[int]:
-            return [y for y in range(1, 13) if canvas.cells[y][79][0] == "┃"]
+            return [y for y in range(1, 13) if canvas.cells[y][78][0] == "┃"]
 
         canvas = draw()
         top = thumb(canvas)
-        self.assertEqual(1, top[0])
+        self.assertEqual(2, top[0], "the first content row")
         for key, expected in (("down", 1), ("j", 2), ("page_down", 11), ("up", 10), ("end", 30), ("home", 0)):
             self.assertTrue(view.scroll_panel(canvas, scroll, "events", key))
             self.assertEqual(expected, scroll["events"], key)
             canvas = draw()
         scroll["events"] = 30
-        self.assertEqual(12, thumb(draw())[-1], "the last page puts the thumb at the bottom")
+        self.assertEqual(11, thumb(draw())[-1], "the last page puts the thumb at the bottom")
         self.assertFalse(view.scroll_panel(canvas, scroll, "events", "x"))
 
     def test_events_follow_the_newest_at_the_top_and_stay_put_when_scrolled(self) -> None:
@@ -334,9 +334,9 @@ class LiveTests(SlotCase):
         os.write(master, b"\t")
         receive(lambda text: "↑↓ scroll" in text, 3, "the scroll hint")
         os.write(master, b"\x1b[B\x1b[B")
-        receive(lambda text: "↑ 2 above" in text, 3, "the details scrolled two lines")
-        os.write(master, b"\x1b[Z\x1b[Z")  # back-tab twice: back to QUEUE
-        receive(lambda text: "↑↓ select" in text[-4000:], 3, "QUEUE focused again")
+        mark = len(receive(lambda text: "↑ 2 above" in text, 3, "the details scrolled two lines"))
+        os.write(master, b"\x1b[Z")  # back-tab: from the details back to QUEUE
+        receive(lambda text: "↑↓ select" in text[mark:], 3, "QUEUE focused again")
         os.write(master, b"q")
         self.release("scroller")
         self.finish(holder)

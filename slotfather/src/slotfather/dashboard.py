@@ -64,7 +64,7 @@ def set_theme(theme: _theme.Theme) -> None:
 
 ASCII = str.maketrans({"🮅": "#", "■": "#", "▪": "#", "◌": "o", "□": "o", "▫": "o", "▶": ">", "▉": "#", "▌": "+", "▐": "|", "█": "#", "▓": "%", "▒": "=", "░": ".", "·": ".", "●": "*", "…": "~", "─": "-", "│": "|",
                        "╭": "+", "╮": "+", "╰": "+", "╯": "+", "↑": "^", "↓": "v", "↗": "/", "↘": "\\", "→": ">",
-                       "←": "<", "≈": "~", "×": "x", "—": "-", "⏸": "=", "▭": "o", "−": "-", "┃": "#", "▁": "_", "▂": "_", "▃": "-", "▄": "-",
+                       "←": "<", "≈": "~", "×": "x", "—": "-", "⏸": "=", "▭": "o", "−": "-",  "┃": "#", "▁": "_", "▂": "_", "▃": "-", "▄": "-",
                        "▅": "=", "▆": "=", "▇": "#"})
 GRANTED = re.compile(r"granted (\d+) to (.*) \(pid (\d+)\)$")
 RELEASED = re.compile(r"released (\d+) \(\d+-(\d+)\.json\)$")
@@ -271,16 +271,21 @@ class Canvas:
             if index < len(hints) - 1:
                 start += HINT_GAP
 
-    def scrollbar(self, y: int, x: int, height: int, offset: int, visible: int, total: int) -> None:
-        """A panel's right frame from row y down `height` rows as its scrollbar: a heavy thumb in the muted token,
-        max(1, round(height × visible / total)) cells long, as far down as the scroll offset, at the bottom on the
-        last page; nothing when everything fits (#15)."""
+    def scrollbar(self, y: int, x: int, height: int, offset: int, visible: int, total: int,
+                  focused: bool = False) -> None:
+        """A scrollable panel's scrollbar in column x, the outer of the two padding cells left of its right frame, so
+        a blank cell stays between it and the content (a right-aligned pid touched the inner one) and nothing moves
+        (#15): a quiet `│` track in the bar-track
+        token and a heavy `┃` thumb, muted or, on the focused panel, in the foreground, as long as the visible share
+        and at the bottom on the last page. Nothing while everything fits."""
         if total <= visible or height <= 0 or visible <= 0:
             return
         length = min(height, max(1, round(height * visible / total)))
         top = round((height - length) * min(offset, total - visible) / (total - visible))
-        for row in range(y + top, y + top + length):
-            self.put(row, x, SCROLL_THUMB, "dim")
+        for row in range(height):
+            thumb = top <= row < top + length
+            self.put(y + row, x, SCROLL_THUMB if thumb else SCROLL_TRACK,
+                     ("text" if focused else "dim") if thumb else "track")
 
     def select(self, y: int, start: int, end: int, tint: bool | str = True) -> None:
         """Marks cells start..end of row y selected: True for the neutral background, a holder style for its tint."""
@@ -779,7 +784,7 @@ def table_view(canvas: Canvas, name: str, y: int, x: int, height: int, width: in
                  else max(0, count - offset - visible))
         if below:
             canvas.put(top + visible, x + 3, f"↓ {below} more", "dim", width - 6)
-        canvas.scrollbar(y + 1, x + width - 1, height - 2, offset, visible, count)
+        canvas.scrollbar(top, x + width - 2, visible, offset, visible, count, canvas.focus == name)
     return offset, visible
 
 
@@ -1008,7 +1013,7 @@ def row_state(item: dict[str, Any], model: dict[str, Any]) -> str:
 
 
 SELECTED_FRAME = "┃"  # the left frame beside a selected row, in the row's colour (#15); # on an ASCII terminal
-SCROLL_THUMB = "┃"  # the right frame's scrollbar thumb, muted (#15); # on an ASCII terminal
+SCROLL_THUMB, SCROLL_TRACK = "┃", "│"  # a scrollbar's thumb and track (#15); # and | on an ASCII terminal
 
 
 def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model: dict, selected: int,
@@ -1601,7 +1606,7 @@ def draw_overlay(canvas: Canvas, title: str, layout: Any, name: str) -> None:
     """A centred, scrollable overlay (help, the changelog): `layout(width)` gives its lines as (text, style) parts;
     the frame, scrollbar, counts and centred footer are the same for every one."""
     width = min(max(0, canvas.width - 2), 76)
-    lines = cast(list[list[tuple[str, str]]], layout(width - 4))
+    lines = cast(list[list[tuple[str, str]]], layout(width - 6))  # two padding cells, the scrollbar in one
     height = min(max(0, canvas.height - 2), len(lines) + 5)
     y, x = (canvas.height - height) // 2, (canvas.width - width) // 2
     visible = max(0, height - 5)
@@ -1614,11 +1619,11 @@ def draw_overlay(canvas: Canvas, title: str, layout: Any, name: str) -> None:
     if height < 6:
         canvas.put(y + 1, x + 2, "Enlarge terminal", "dim", inner)
         return
-    canvas.scrollbar(y + 1, x + width - 1, height - 2, offset, visible, len(lines))
+    canvas.scrollbar(y + 2, x + width - 2, visible, offset, visible, len(lines), True)
     if offset:
         canvas.put(y + 1, x + 2, f"↑ {offset} above", "dim", inner)
     for row, parts in enumerate(lines[offset:offset + visible], y + 2):
-        canvas.segments(row, x + 2, parts, inner)
+        canvas.segments(row, x + 2, parts, width - 6)
     below = max(0, len(lines) - offset - visible)
     if below:
         canvas.put(y + height - 3, x + 2, f"↓ {below} more", "dim", inner)

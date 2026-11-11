@@ -246,21 +246,36 @@ class FrameTests(unittest.TestCase):
             with self.subTest(offset=offset):
                 canvas = self.tool.Canvas(20, 12)
                 canvas.box(0, 0, 12, 20)
-                canvas.scrollbar(1, 19, 10, offset, 30, 100)  # 10 rows, 30 of 100 shown: a thumb of 3
-                self.assertEqual(expected, self.thumb(canvas, 19, 1, 10))
-                self.assertEqual({"dim"}, {canvas.cells[1 + row][19][1] for row in expected}, "muted, not coloured")
-                self.assertTrue(all(canvas.cells[1 + row][19][0] == "│" for row in range(10) if row not in expected))
+                canvas.scrollbar(1, 18, 10, offset, 30, 100)  # 10 rows, 30 of 100 shown: a thumb of 3
+                self.assertEqual(expected, self.thumb(canvas, 18, 1, 10))
+                track = [row for row in range(10) if row not in expected]
+                self.assertEqual({("│", "track")}, {tuple(canvas.cells[1 + row][18][:2]) for row in track})
+                self.assertEqual({"dim"}, {canvas.cells[1 + row][18][1] for row in expected}, "unfocused: muted")
+                self.assertEqual({"│"}, {canvas.cells[row][19][0] for row in range(1, 11)}, "the frame is unbroken")
         canvas = self.tool.Canvas(20, 12)
-        canvas.box(0, 0, 12, 20)
-        canvas.scrollbar(1, 19, 10, 0, 30, 3000)
-        self.assertEqual([0], self.thumb(canvas, 19, 1, 10), "at least one cell")
-        canvas.scrollbar(1, 19, 10, 0, 30, 30)
-        self.assertEqual("#", canvas.lines(False, ascii_only=True)[1][19])
+        canvas.scrollbar(1, 18, 10, 35, 30, 100, True)
+        self.assertEqual({"text"}, {canvas.cells[1 + row][18][1] for row in (4, 5, 6)}, "focused: the foreground")
+        self.assertEqual("||||###|||", "".join(
+            canvas.lines(False, ascii_only=True)[row][18] for row in range(1, 11)), "ASCII: # on |")
+        canvas = self.tool.Canvas(20, 12)
+        canvas.scrollbar(1, 18, 10, 0, 30, 3000)
+        self.assertEqual([0], self.thumb(canvas, 18, 1, 10), "at least one cell")
+
+    def test_tables_put_it_in_the_outer_padding_cell_and_nothing_moves(self) -> None:
+        model = sample(self.now)
+        fits, overflows = self.tool.Canvas(120, 14), self.tool.Canvas(120, 7)
+        self.tool.draw_requests(fits, 0, 0, 14, 120, model, 0, self.now)
+        self.tool.draw_requests(overflows, 0, 0, 7, 120, model, 0, self.now)
+        self.assertEqual("┃", overflows.cells[2][118][0], "the thumb, in the outer padding cell")
+        self.assertEqual(" ", overflows.cells[2][117][0], "a blank between it and the content")
+        self.assertEqual(" ", fits.cells[2][118][0], "nothing while everything fits")
+        same = ["".join(cell[0] for cell in row[:116]) for row in (fits.cells[2], overflows.cells[2])]
+        self.assertEqual(same[0], same[1], "the content does not move when it starts to overflow")
 
     def test_no_thumb_when_everything_fits(self) -> None:
         canvas = self.tool.Canvas(120, 14)
         self.tool.draw_requests(canvas, 0, 0, 14, 120, sample(self.now), 0, self.now)  # 8 rows fit
-        self.assertEqual([], self.thumb(canvas, 119, 1, 12))
+        self.assertEqual([], self.thumb(canvas, 118, 1, 12))
 
     def test_the_selection_marker_and_the_thumb_share_a_row(self) -> None:
         model = sample(self.now)
@@ -268,7 +283,8 @@ class FrameTests(unittest.TestCase):
         self.tool.draw_requests(canvas, 0, 0, 7, 120, model, 0, self.now)
         selected = [y for y in range(7) if any(cell[2] for cell in canvas.cells[y])]
         self.assertEqual(["┃", "h0"], canvas.cells[selected[0]][0][:2], "left: the row's colour")
-        self.assertEqual(["┃", "dim"], canvas.cells[selected[0]][119][:2], "right: the muted thumb, same row")
+        self.assertEqual(["┃", "text"], canvas.cells[selected[0]][118][:2], "right: the thumb, same row (QUEUE has focus)")
+        self.assertEqual("│", canvas.cells[selected[0]][119][0], "the right frame stays plain")
         self.assertIn("↓", canvas.render(False), "the counts stay")
 
     def test_every_panel_title_sits_at_one_offset(self) -> None:
