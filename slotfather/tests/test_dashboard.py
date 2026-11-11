@@ -512,9 +512,9 @@ class QueueTableTests(unittest.TestCase):
 
     def test_a_large_count_is_cut_without_trying_every_count_below_it(self) -> None:
         item = dict(kind="held", style="h0", count=100000)
-        started = time.perf_counter()
-        self.assertEqual([("▪", "h0"), (" +99999", "h0")], self.tool.slot_cells(item, 11), "at most 8 columns")
-        self.assertLess(time.perf_counter() - started, 0.05)
+        with mock.patch.object(self.tool, "cells_text", wraps=self.tool.cells_text) as tries:
+            self.assertEqual([("▪", "h0"), (" +99999", "h0")], self.tool.slot_cells(item, 11), "at most 8 columns")
+        self.assertLess(tries.call_count, 25, "a bounded number of tries, not one per count")
         self.assertEqual([("▪▪▪▪", "h0"), (" +16", "h0")], self.tool.slot_cells(dict(item, count=20), 8))
 
 
