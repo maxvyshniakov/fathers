@@ -66,13 +66,16 @@ QUEUE_ORDERS = ("backfill", "window")  # `slotfather order`; the first is the de
 
 
 ORDER_DEFAULTS = {"order": "backfill", "safety": 3.0, "limit": 2700.0, "fallback": 3600.0, "overrun": 0.5,
-                  "interactive": 1800.0, "batch": 1800.0, "yield_after": 120.0}
+                  "interactive": 1800.0, "batch": 1800.0, "yield_after": 120.0, "idle_cpu": 0.1, "idle_after": 300.0}
 
 
 ORDER_KNOBS = {"safety": ("BACKFILL_SAFETY", 1.0, "up"), "limit": ("BACKFILL_LIMIT", 0.0, "limit"),
                "fallback": ("BACKFILL_FALLBACK", 0.0, "up"), "overrun": ("BACKFILL_OVERRUN", 0.0, "down"),
                "interactive": ("PRIORITY_INTERACTIVE", 0.0, "down"), "batch": ("PRIORITY_BATCH", 0.0, "down"),
-               "yield_after": ("YIELD_AFTER", 0.0, "delay")}
+               "yield_after": ("YIELD_AFTER", 0.0, "delay"),
+               # Idle leases (#12): below idle_cpu cores for idle_after seconds. A client's environment tightens them
+               # by finding fewer leases idle: a lower threshold, a longer duration.
+               "idle_cpu": ("IDLE_CPU", 0.0, "down"), "idle_after": ("IDLE_AFTER", 1.0, "up")}
 
 
 ORDER_BASE = ("order", "safety", "limit", "fallback", "overrun")  # always saved; the rest only when not the default

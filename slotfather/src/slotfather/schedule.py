@@ -509,6 +509,32 @@ def yield_asks(waiters: list[Entry], held: list[Entry], slots: int, moment: floa
     return found
 
 
+def idle_asks(waiters: list[Entry], held: list[Entry], idle: list[Entry], slots: int, moment: float,
+              estimate: Estimate | None = None, other: int = 0,
+              settings: dict[str, Any] | None = None) -> list[tuple[Entry, Entry]]:
+    """Idle leases asked to yield (#12): (holder, waiter) pairs for the `idle` holders (idle.idle_since()) that opted
+    in (`yieldable`), were asked fewer than YIELDS_MAX times, and whose slots would start a waiting request that would
+    not start otherwise; that waiter is the one the request names. Nobody is asked while nobody waits, a lease that
+    cannot yield is only marked, and nobody is ever stopped: the holder yields when its client gets round to it."""
+    if not waiters:
+        return []
+    settings = settings or order_settings()
+    holding = list(held)
+    found: list[tuple[Entry, Entry]] = []
+    for lease in idle:
+        if not lease.get("yieldable") or int(lease.get("yields") or 0) >= _config.YIELDS_MAX:
+            continue
+        before = plan(waiters, holding, slots, moment, estimate=estimate, other=other, settings=settings).grants
+        after = plan(waiters, [h for h in holding if h is not lease], slots, moment, estimate=estimate, other=other,
+                     settings=settings).grants
+        started = [w for w in after if not any(w is b for b in before)
+                   and not any(w is asked for _, asked in found)]
+        if started:
+            found.append((lease, started[0]))
+            holding = [h for h in holding if h is not lease]
+    return found
+
+
 def room(waiters: list[Entry], free: int, held: list[Entry] | None = None, estimate: Estimate | None = None,
          other: int = 0, settings: dict[str, Any] | None = None, label: str = "", command: str = "",
          slots: int | None = None) -> int:

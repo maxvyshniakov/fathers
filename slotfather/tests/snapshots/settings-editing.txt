@@ -20,6 +20,8 @@
 │   Interactive advance (s)   1800                                             │
 │   Batch delay (s)           1800                                             │
 │   Yield after (s)           120                                              │
+│   Idle below (cores)        0.1                                              │
+│   Idle after (s)            300                                              │
 │ THIS DASHBOARD                                                               │
 │   Refresh interval (s)      1                                                │
 │ ──────────────────────────────────────────────────────────────────────────── │

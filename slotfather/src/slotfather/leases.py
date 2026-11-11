@@ -14,6 +14,7 @@ import time
 from typing import Any
 
 from . import config as _config
+from . import idle as _idle
 from . import platform as _platform
 from . import query as _query
 from . import schedule as _schedule
@@ -34,6 +35,7 @@ def reap(directory: Path, table: Table) -> list[tuple[Path, dict[str, Any]]]:
         elif not readonly:
             path.unlink(missing_ok=True)
             _state.marker(path).unlink(missing_ok=True)
+            _idle.path(path).unlink(missing_ok=True)
             _state.log(directory, f"reaped {entry.get('state')} lease of {entry.get('count')} for "
                            f"{entry.get('label')} (pid {entry.get('pid')} exited)")
             _state.record(directory, entry, "reaped")
@@ -76,9 +78,15 @@ def ask(directory: Path, live: list[tuple[Path, dict[str, Any]]], held: list[dic
     the saved ones without this client's environment, so that every client's look asks alike (a waiter whose
     client asks later or never says so on its entry)."""
     paths = {id(e): path for path, e in live}
-    wanted = _schedule.yield_asks(waiters, held, _config.total(), time.time(), estimate, other, settings,
+    moment, slots = time.time(), _config.total()
+    wanted = _schedule.yield_asks(waiters, held, slots, moment, estimate, other, settings,
                         asked=[e for e in held if _state.marker(paths[id(e)]).exists()])
     asks = {id(h): w for h, w in wanted}
+    # Idle leases (#12): a yieldable one is asked while a request waits that its slots would start.
+    idle = [h for h in held if id(h) in paths and id(h) not in asks
+            and _idle.idle_since(paths[id(h)], settings, moment) is not None]
+    asks.update({id(h): w for h, w in _schedule.idle_asks(waiters, [h for h in held if id(h) not in asks], idle,
+                                                          slots, moment, estimate, other, settings)})
     for path, entry in live:
         place = _state.marker(path)
         if id(entry) in asks:
@@ -92,8 +100,8 @@ def ask(directory: Path, live: list[tuple[Path, dict[str, Any]]], held: list[dic
         elif place.exists():
             place.unlink(missing_ok=True)
             _state.log(directory, f"withdrew the yield request to {entry['label']} (pid {entry['pid']})")
-    for place in (directory / "queue").glob("*.yield"):  # requests left by entries gone meanwhile
-        if not place.with_suffix(".json").exists():
+    for place in [*(directory / "queue").glob("*.yield"), *(directory / "queue").glob("*" + _idle.SUFFIX)]:
+        if not place.with_suffix(".json").exists():  # requests and idle records left by entries gone meanwhile
             place.unlink(missing_ok=True)
 
 
@@ -241,6 +249,7 @@ class Lease:
                 self.path.unlink(missing_ok=True)
                 _state.log(directory, f"released {self.count} ({self.path.name})")
                 _state.marker(self.path).unlink(missing_ok=True)
+                _idle.path(self.path).unlink(missing_ok=True)
                 if isinstance(entry, dict):
                     ran = entry.get("state") == "held" or bool(entry.get("yields"))  # a yielded lease ran
                     _state.record(directory, entry, "released" if ran else "left", self.status, self.usage)
@@ -429,7 +438,7 @@ def run(count: int | str, label: str, argv: list[str], wait: float | None = None
         if lease.path is not None and not lease.inherited:
             marker = str(lease.path)
             watch = _usage.Watch(_usage.TreeUsage(child.pid, time.time() - 1, lambda pids: _platform.carrying(pids, marker)),
-                          lease.path.parent.parent)
+                          lease.path.parent.parent, entry=lease.path)
             with contextlib.suppress(RuntimeError):
                 watch.start()
         reaped = []

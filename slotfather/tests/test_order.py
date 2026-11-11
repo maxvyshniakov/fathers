@@ -525,7 +525,7 @@ class OrderTests(SlotCase):
             self.finish(process)
 
     def test_the_order_is_saved_for_every_client_and_reset(self):
-        classes = "interactive 1800 s ahead, batch 1800 s behind, yield after 120 s"
+        classes = "interactive 1800 s ahead, batch 1800 s behind, yield after 120 s; idle below 0.1 cores for 300 s"
         self.assertEqual(f"backfill: safety 3, limit 2700 s, fallback 3600 s, overrun 0.5; {classes} (default)",
                          self.tool("order").stdout.strip())
         self.assertEqual(f"window: safety 3, limit 2700 s, fallback 3600 s, overrun 0.5; {classes} (saved)",
@@ -641,7 +641,7 @@ class DashboardOrderTests(SlotCase):
             values[name]=line[details:].split(name,1)[1].strip().split()[0]
             self.assertEqual(expected, values[name])
         self.assertNotIn("backfill by", "\n".join(cast(list[str], lines)))
-        self.assertIn("▶gate",canvas.render(False))
+        self.assertIn("▶  gate",canvas.render(False))
         for label in ("one", "gate"):
             self.release(label)
         for process in (one, gate):

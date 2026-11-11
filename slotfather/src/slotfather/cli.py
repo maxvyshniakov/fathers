@@ -112,7 +112,7 @@ USAGE = ("usage: slotfather                     (in a terminal: the live dashboa
          "       slotfather lane-admission --json                         (one lifetime request on stdin)\n"
          "       slotfather advise [--max N] [--exclusive] [--label L] [-- COMMAND...]\n"
          "       slotfather order [backfill|window] [--safety X] [--limit S] [--fallback S] [--overrun X]\n"
-         "                        [--interactive S] [--batch S] [--yield-after S] | reset\n"
+         "                        [--interactive S] [--batch S] [--yield-after S] [--idle-cpu C] [--idle-after S] | reset\n"
          "       slotfather stats [--since WHEN] [--label GLOB] [--by both|label|kind] [--top N] [--json]\n"
          "       slotfather slots [N|memory GIB|lower GIB|reset]\n"
          "       slotfather procs --json [--cwd PATH] [--pid PID] | version [--json]\n"
@@ -232,12 +232,13 @@ def available_command(argv: list[str]) -> int:
 def order_line(found: dict) -> str:
     return (f"{found['order']}: safety {found['safety']:g}, limit {found['limit']:g} s, fallback "
             f"{found['fallback']:g} s, overrun {found['overrun']:g}; interactive {found['interactive']:g} s ahead, "
-            f"batch {found['batch']:g} s behind, yield after {found['yield_after']:g} s "
-            f"({'saved' if found['saved'] else 'default'})")
+            f"batch {found['batch']:g} s behind, yield after {found['yield_after']:g} s; idle below "
+            f"{found['idle_cpu']:g} cores for {found['idle_after']:g} s ({'saved' if found['saved'] else 'default'})")
 
 
 def order_command(argv: list[str]) -> int:
-    """`slotfather order [backfill|window] [--safety X] [--limit S] [--fallback S] [--overrun X] | reset`."""
+    """`slotfather order [backfill|window] [--safety X] [--limit S] [--fallback S] [--overrun X] [--idle-cpu C]
+    [--idle-after S] | reset`."""
     from . import schedule as _schedule
     from . import state as _state
     directory = _config.state_dir()
@@ -256,7 +257,7 @@ def order_command(argv: list[str]) -> int:
                 raise _config.SlotError(f"{word} takes a number") from None
         else:
             raise _config.SlotError(f"order takes backfill or window, --safety, --limit, --fallback, --overrun, "
-                            f"--interactive, --batch, --yield-after, or reset; not {word!r}")
+                            f"--interactive, --batch, --yield-after, --idle-cpu, --idle-after, or reset; not {word!r}")
     if reset and changes:
         raise _config.SlotError("order reset takes nothing else")
     if changes or reset:

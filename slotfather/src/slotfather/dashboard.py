@@ -62,7 +62,7 @@ CHART_COLOURS = [(95, 175, 255), (105, 155, 255), (135, 145, 255), (170, 135, 24
                  (200, 140, 210), (225, 150, 170), (245, 160, 130), (255, 175, 95)]
 STYLES.update({f"chart{i}": (rgb, "") for i, rgb in enumerate(CHART_COLOURS)})
 HOLDER_STYLES = 6
-ASCII = str.maketrans({"🮅": "#", "■": "#", "▪": "#", "□": "o", "▫": "o", "▶": ">", "▉": "#", "▌": "+", "▐": "|", "█": "#", "▓": "%", "▒": "=", "░": ".", "·": ".", "●": "*", "…": "~", "─": "-", "│": "|",
+ASCII = str.maketrans({"🮅": "#", "■": "#", "▪": "#", "◌": "o", "□": "o", "▫": "o", "▶": ">", "▉": "#", "▌": "+", "▐": "|", "█": "#", "▓": "%", "▒": "=", "░": ".", "·": ".", "●": "*", "…": "~", "─": "-", "│": "|",
                        "╭": "+", "╮": "+", "╰": "+", "╯": "+", "↑": "^", "↓": "v", "↗": "/", "↘": "\\", "→": ">",
                        "←": "<", "≈": "~", "×": "x", "—": "-", "⏸": "=", "▁": "_", "▂": "_", "▃": "-", "▄": "-",
                        "▅": "=", "▆": "=", "▇": "#"})
@@ -109,6 +109,14 @@ def span(seconds: float) -> str:
     if seconds < 86400:
         return f"{seconds // 3600}h{seconds // 60 % 60:02}m"
     return f"{seconds // 86400}d{seconds // 3600 % 24:02}h"
+
+
+def minutes(seconds: float) -> str:
+    """A long span to the minute: 45s, 23m, 1h05m."""
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    return f"{seconds // 60}m" if seconds < 3600 else f"{seconds // 3600}h{seconds // 60 % 60:02}m"
 
 
 def today() -> datetime.date:
@@ -515,10 +523,11 @@ def dashboard_model() -> dict:
     slots: int = basis["slots"]
     saved: bool = basis["saved"]
     own, children = process_usage()
-    asks = {}  # holder pid -> the label of the waiter that asked it to yield
+    asks: dict[int, tuple[str, datetime.datetime | None]] = {}  # holder pid -> (waiter that asked it to yield, when)
     for place in (directory / "queue").glob("*.yield"):
         with contextlib.suppress(OSError, ValueError, AttributeError):
-            asks[int(place.stem.split("-")[-1])] = str(json.loads(place.read_text()).get("label") or "?")
+            request = json.loads(place.read_text())
+            asks[int(place.stem.split("-")[-1])] = (str(request.get("label") or "?"), parse_utc(request.get("at")))
 
     def item(entry: dict[str, Any], kind: str, count: int, queue: str = "") -> dict[str, Any]:
         tree = process_tree(entry.get("pid"), own, children) if kind != "waiting" else []
@@ -530,7 +539,11 @@ def dashboard_model() -> dict:
                 "context": _config.meta_of(entry), "workdir": entry.get("cwd") or "",
                 "priority": _config.priority_of(entry), "ticket": _config.ticket_of(entry),
                 "yieldable": bool(entry.get("yieldable")), "yields": int(entry.get("yields") or 0),
-                "asked": dashboard_text(asks.get(entry.get("pid"), "")),
+                "asked": dashboard_text(asks.get(int(entry.get("pid") or 0), ("", None))[0]),
+                "asked_at": asks.get(int(entry.get("pid") or 0), ("", None))[1],
+                # #12: since when the holder's record says the lease has been idle (query.locked_snapshot()).
+                "idle_since": datetime.datetime.fromtimestamp(entry["idle_since"], datetime.timezone.utc)
+                if isinstance(entry.get("idle_since"), (int, float)) else None,
                 "granted": parse_utc(entry.get("granted")), "passable": kind == "waiting" and _schedule.overtakable(entry),
                 "all": bool(entry.get("all")),
                 "style": "text" if kind == "waiting" else "legacy"}
@@ -602,41 +615,16 @@ def share(item: dict, model: dict) -> tuple[float, float]:
     return item["cpu"] / 100, item["count"] * model["cores"] / model["slots"]
 
 
-def dashboard_idle(model: dict, tracked: dict) -> None:
-    """Track observed low CPU per grant, never infer idle time before the dashboard saw it."""
-    live = set()
-    for item in model["holders"]:
-        key = (item["key"], item["granted"])
-        live.add(key)
-        used, allotted = share(item, model)
-        if allotted > 0 and used < 0.1 * allotted:
-            item["idle_since"] = tracked.setdefault(key, model["updated"])
-        else:
-            tracked.pop(key, None)
-            item["idle_since"] = None
-    for key in list(tracked):
-        if key not in live:
-            del tracked[key]
-
-
-def clear_idle(model: dict | None, tracked: dict) -> None:
-    """A pause or sampling failure breaks the observed idle interval."""
-    tracked.clear()
-    for item in model["holders"] if model else []:
-        item.pop("idle_since", None)
-
-
 def share_style(item: dict, model: dict, moment: datetime.datetime) -> str:
     used, allotted = share(item, model)
-    running = (moment - item["granted"]).total_seconds() if item["granted"] else 0
-    if running > 120 and used < 0.1 * allotted:
-        return "warn"  # holds slots while nearly idle
+    if item.get("idle_since") is not None:
+        return "warn"  # an idle lease (#12; the holder's record, idle.idle_since()): holds slots doing nothing
     return "bad" if used > 1.5 * allotted else "accent"
 
 
 def queue_bar_style(item: dict[str, Any], model: dict[str, Any], moment: datetime.datetime) -> str:
     """A QUEUE row's CPU bar fills in the row's colour (its SLOTS colour), except when it warns: red over 1.5 times
-    its share, yellow while nearly idle on its slots (share_style())."""
+    its share, yellow while the lease is idle (#12, share_style())."""
     style = share_style(item, model, moment)
     return str(item["style"]) if style == "accent" else style
 
@@ -872,6 +860,19 @@ def queue_layout(inner: int, model: dict[str, Any]) -> QueueLayout:
     return QueueLayout(placed, natural, use_width, share_width, bar_length)
 
 
+def queue_marker(item: dict[str, Any]) -> tuple[str, str]:
+    """The QUEUE row's marker beside the cursor (#12): `↓` asked to yield, the actionable state, over `◌` (dim)
+    idle; nothing for a lease at work, over its share (its red bar says so) or a waiting request (its cpu column
+    does)."""
+    if item["kind"] == "waiting":
+        return "", "text"
+    if item.get("asked"):
+        return "↓", str(item["style"])
+    if item.get("idle_since") is not None:
+        return "◌", "dim"
+    return "", "text"
+
+
 def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model: dict, selected: int,
                moment: datetime.datetime) -> None:
     holders = cast(list[dict[str, Any]], model["holders"])
@@ -883,14 +884,14 @@ def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model
     row_items.extend(range(len(holders), len(items)))
     # cpu use/share: the bar starts at the column's left edge on every row, then `use` right-aligned and `/share`
     # left-aligned around the slash, padded to the widest on screen; a waiting row's state starts where the bars do.
-    layout = queue_layout(width - 6, cast(dict[str, Any], model))
+    layout = queue_layout(width - 8, cast(dict[str, Any], model))  # the marker column takes two cells
     placed, cells = layout.placed, layout.natural["slots"]
     shares = {index: share(item, model) for index, item in enumerate(holders)}
     use_width, share_width = layout.use_width, layout.share_width
     size = next((column[3] for column in placed if column[0] == "slots"), cells)
-    table_header(canvas, y, x, height, width, "QUEUE", placed)
+    table_header(canvas, y, x, height, width, "QUEUE", placed, gutter=2)
     if not items:
-        canvas.put(y + 2, x + 3, f"No requests · all {model['slots']} slots free", "dim", width - 6)
+        canvas.put(y + 2, x + 5, f"No requests · all {model['slots']} slots free", "dim", width - 8)
     visual_selected = row_items.index(selected) if selected in row_items else None
     offset, rows = table_view(canvas, "requests", y, x, height, width, y + 2, height - 4,
                               len(row_items), visual_selected, row_items=row_items)
@@ -913,7 +914,9 @@ def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model
             used, allotted = shares[index]
             cpu = bar(used / allotted if allotted else 0, layout.bar, queue_bar_style(item, cast(dict[str, Any], model), moment)) + [
                 (f" {used:.1f}".rjust(use_width + 1) + "/" + short(allotted).ljust(share_width), style)]
-        draw_row(canvas, row, x + 3, placed, {
+        mark, mark_style = queue_marker(item)
+        canvas.put(row, x + 3, mark, mark_style)
+        draw_row(canvas, row, x + 5, placed, {
             "label": (str(item["label"]), style), "slots": slot_cells(item, size),
             "time": (span(age) if age is not None else "—", style), "cpu": cpu, "pid": (str(item["pid"]), style)})
         if index == selected:
@@ -981,10 +984,6 @@ def draw_detail(canvas: Canvas, y: int, x: int, height: int, width: int, model: 
         heading = f"waiting · #{position + 1} · wants {item['count']}"
     else:
         heading = ("earlier queue" if item["kind"] == "legacy" else "running") + f" · {item['count']} slot{'s' if item['count'] != 1 else ''}"
-    if item["kind"] != "waiting" and item.get("idle_since") is not None and share_style(item, model, moment) == "warn":
-        minutes, seconds = divmod(max(0, int((moment - item["idle_since"]).total_seconds())), 60)
-        duration = f"{minutes}m {seconds:02}s" if minutes else f"{seconds}s"
-        heading += f" · idle for {duration}"
     facts: list[tuple[str, list[tuple[str, str]]]] = [("label", [(item["label"] or "(no label)", "bold")]), ("status", [(heading, "text")])]
     priority = _config.priority_of({"priority": item.get("priority")})
     facts.append(("priority", [(priority, "text")]))
@@ -1015,8 +1014,14 @@ def draw_detail(canvas: Canvas, y: int, x: int, height: int, width: int, model: 
             facts.append(("granted", [(f"{clock(item['granted'])}{waited} · running "
                                        f"{span((moment - item['granted']).total_seconds())}", "text")]))
         facts.append(("memory", [(f"{megabytes(item['rss'] / 1024)} in {item['procs']} processes", "text")]))
+    if item["kind"] != "waiting" and item.get("idle_since") is not None:  # #12: one definition (idle.idle_since())
+        since = item["idle_since"]
+        facts.append(("idle", [(f"{minutes((moment - since).total_seconds())} since "
+                                f"{since.astimezone().strftime('%H:%M')}", "warn")]))
     if item.get("asked"):
-        facts.append(("yield", [(f"asked to yield for {item['asked']}", "warn")]))
+        at = item.get("asked_at")
+        facts.append(("yield", [(f"asked at {at.astimezone().strftime('%H:%M')} for {item['asked']}"
+                                 if at else f"asked to yield for {item['asked']}", "warn")]))
     elif item.get("yieldable") or item.get("yields"):
         facts.append(("yield", [("yields between steps when asked" + (f" · yielded {item['yields']}×"
                                                                        if item.get("yields") else ""), "dim")]))
@@ -1260,15 +1265,16 @@ HELP_CONTENT: list[tuple[str, str]] = [
     ("The header shows machine cores and shared slot capacity. manual means a saved capacity setting; auto means capacity calculated from the machine.", "text"),
     ("QUEUE", "title"),
     ("Running requests come first, followed by a blank separator and waiting requests. ▶ and a soft background identify the selected row. Selection opens its details.", "text"),
-    ("Each row has one colour: a running request's row is in the colour of its SLOTS blocks, its CPU bar too, except that the bar turns red above 1.5 times its share and yellow while nearly idle; a waiting or yielded request's row is white.", "text"),
+    ("Each row has one colour: a running request's row is in the colour of its SLOTS blocks, its CPU bar too, except that the bar turns red above 1.5 times its share and yellow while the lease is idle; a waiting or yielded request's row is white.", "text"),
     ("slots: one cell per slot the request holds or asks for. A count too wide for the column shows the cells that fit and +N for the rest; -n all that does not fit shows all.", "text"),
     ("cpu use/share: observed cores used by a running request / the core budget represented by its slots. A request can exceed its share; it is not a hard limit. A request that holds no slots shows its state there instead: waiting #N, its current place in the waiting queue, or yielded #N for a lease back in the queue after a yield. Bars and states start at one column; the numbers line up around the slash.", "text"),
     ("time is elapsed run time for running work and elapsed wait time for waiting work. pid is the lease owner. A wide terminal shares the spare width among the columns in proportion to their own widths; on a narrow one pid goes first, then time, then cpu use/share.", "text"),
-    ("Yellow CPU indicates nearly idle work holding slots; red means use well above its share.", "text"),
+    ("Yellow CPU marks an idle lease: below the idle cores (0.1 by default) for the idle time (5 minutes) by its holder's own samples, with no process starting or ending; both are queue settings. A short pause never counts. Red means use well above its share.", "text"),
+    ("Left of the label, beside the cursor: ◌ (dim) an idle lease; ↓ a lease asked to yield, which wins over idle. A yieldable idle lease is asked while a request waits that its slots would start; one that cannot yield is only marked. Nobody is ever stopped.", "text"),
     ("↑ above and ↓ more count rows outside the visible table. Scroll with the wheel or move the selection to reveal them.", "text"),
     ("LEASE DETAILS and REQUEST DETAILS", "title"),
     ("The details title follows the selection: LEASE DETAILS for a running request, whose lease holds slots; REQUEST DETAILS for a waiting or yielded one, which holds none. The rows are the same.", "text"),
-    ("label is the caller-supplied name. status gives the run or wait state and slot count. idle for means sustained near-zero observed CPU while still holding slots.", "text"),
+    ("label is the caller-supplied name. status gives the run or wait state and slot count. idle says how long the lease has been idle and since when; yield says when it was asked to yield and for whom.", "text"),
     ("For running work, cpu uses the same core scale as QUEUE. granted shows when the lease started, how long it waited and how long it has run. memory is the process tree's resident memory.", "text"),
     ("owner pid is the process holding the lease. The process table includes it and its descendants, busiest first. Process CPU uses percent: 100% is one core.", "text"),
     ("priority is interactive, normal or batch; omitted priority is normal. Ticket is optional. Known caller context such as phase, kind, check, revision and session is shown separately; meta contains only custom fields.", "text"),
@@ -1565,7 +1571,6 @@ def dashboard_live(interval: float) -> None:
     model = error = selected_key = None
     index, colours, cwds, shown, drawn_size = 0, {}, {}, [], None
     scroll: dict[str, int] = {}
-    idle_seen = {}
     mouse_enabled = True
     paused = help_open = False
     settings: _settings.Settings | None = None
@@ -1579,10 +1584,8 @@ def dashboard_live(interval: float) -> None:
                 try:
                     fresh = dashboard_model()
                     dashboard_colours(fresh, colours)
-                    dashboard_idle(fresh, idle_seen)
                     model, error = fresh, None
                 except (_config.SlotError, OSError) as failure:
-                    clear_idle(model, idle_seen)
                     error = dashboard_text(failure)
                 fetched, force, dirty = time.monotonic(), False, True
             items = (model["holders"] + model["waiters"]) if model else []
@@ -1666,13 +1669,11 @@ def dashboard_live(interval: float) -> None:
                     if settings is not None:
                         settings.draw(canvas, cast(dict[str, Any] | None, model))
                 elif key in ("m", "M"):
-                    clear_idle(model, idle_seen)
                     mouse_enabled = not mouse_enabled
                     os.write(fd_out, b"\x1b[?1000h\x1b[?1006h" if mouse_enabled
                              else b"\x1b[?1006l\x1b[?1000l")
                     force = mouse_enabled
                 elif key in ("p", " "):
-                    clear_idle(model, idle_seen)
                     paused = not paused
                 elif key in ("r", "R"):
                     shown, force = [], True

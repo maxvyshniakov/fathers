@@ -10,8 +10,10 @@ import signal
 import sys
 import threading
 import time
+from typing import Any, cast
 
 from . import config as _config
+from . import idle as _idle
 from . import platform as _platform
 from . import state as _state
 
@@ -123,9 +125,10 @@ class Watch(threading.Thread):
     again each time up to SLOTFATHER_SAMPLE_MAX, and samples the machine when no holder has lately. A fault here
     never reaches the lease: the history then lacks what could not be measured."""
 
-    def __init__(self, usage: TreeUsage, directory: Path):
+    def __init__(self, usage: TreeUsage, directory: Path, entry: Path | None = None):
         super().__init__(daemon=True, name="slotfather-watch")
-        self.usage, self.directory = usage, directory
+        self.usage, self.directory, self.entry = usage, directory, entry
+        self.idle = _idle.Tracker()  # since when the tree has been low (#12), recorded beside the entry
         try:
             self.most = max(0.05, float(_config.setting("SAMPLE_MAX") or _config.SAMPLE_MAX))
         except ValueError:
@@ -146,7 +149,24 @@ class Watch(threading.Thread):
         with contextlib.suppress(Exception):
             self.observe()
         with contextlib.suppress(Exception):
+            self.record_idle()
+        with contextlib.suppress(Exception):
             sample_machine(self.directory)
+
+    def record_idle(self) -> None:
+        """Records since when the command's tree has been low, by the queue's saved threshold, beside the entry."""
+        usage = cast(Any, self.usage)
+        if self.entry is None or usage.last is None:
+            return
+        from . import schedule as _schedule
+        threshold = float(_schedule.order_settings(self.directory, environment=False)["idle_cpu"])
+        with self.lock:
+            moment = float(usage.last[0])
+            known = cast(dict[tuple[int, str], list[Any]], usage.members)
+            members = {key: float(value[0]) for key, value in known.items()}
+        since = self.idle.observe(moment, members, threshold)
+        if self.entry.exists():  # a release removes the entry, and with it the record
+            _idle.record(self.entry, since, self.idle.rate, moment)
 
     def run(self) -> None:
         # Signals for the holder (forwarded to its command) must interrupt the holder's wait4, not this thread.

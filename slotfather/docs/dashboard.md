@@ -43,7 +43,7 @@ The rows are the same either way.
 The QUEUE columns are label, slots, cpu use/share, time and pid. Each row has one
 colour: a running request's row (label, slot cells, CPU numbers, time and pid) is
 in the colour of its blocks in SLOTS, the filled part of its CPU bar included (red
-when above 1.5 times its share and yellow while nearly idle, as before; the empty
+when above 1.5 times its share and yellow while the lease is idle; the empty
 part keeps the frame colour); a
 waiting or yielded request's row is white, the normal text colour. The selected
 row keeps its highlight on top. **slots** draws one countable cell per slot
@@ -61,9 +61,20 @@ any of them.
 
 Time is elapsed run time for a running request and elapsed wait time for a pending
 one. CPU use/share is **cores used / cores represented by the lease’s slots**;
-it is an observation, not a hard CPU limit. Yellow indicates a nearly idle
-holder; red indicates use well above its share. After sustained low activity,
-status includes `idle for …`; this is not a diagnosis of a hung process.
+it is an observation, not a hard CPU limit. Red indicates use well above its share.
+
+**Idle leases** (#12). A running lease is idle when its command's process tree has used
+less than the idle cores (0.1 by default) for the idle time (5 minutes), with no process
+starting or ending, by its holder's own samples. Both are queue settings (Settings →
+queue policy, or `slotfather order --idle-cpu C --idle-after S`). A short pause for the
+network, a disk or a browser never lasts that long. Idle is one definition everywhere:
+the bar turns yellow, the marker column left of the label shows `◌` (dim), LEASE DETAILS
+says `idle 23m since 10:12`, and `status` and `status --json` show it. A yieldable idle
+lease is asked to yield while a request waits that its slots would start; the marker then
+shows `↓`, which wins over idle, and LEASE DETAILS says `asked at 10:35 for …`. A lease
+that cannot yield is only marked. Nothing is ever stopped. Over-share needs no marker (the
+red bar shows it), nor do waiting rows (their state is in cpu use/share). On an
+ASCII-only terminal the markers are `o` and `v`. Idle is not a diagnosis of a hung process.
 
 `owner pid` is the process holding the lease. The process table includes that
 owner and its descendants, busiest first. Each row’s CPU is a percentage:

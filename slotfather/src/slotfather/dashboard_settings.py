@@ -26,7 +26,8 @@ MODE_LABELS = {"automatic": "Automatic", "fixed": "Fixed", "memory": "Memory", "
 KNOBS = {"safety": ("Safety multiplier", 0.5), "limit": ("Overtaking limit (s)", 60),
          "fallback": ("Unknown runtime (s)", 60), "overrun": ("Overrun factor", 0.1),
          "interactive": ("Interactive advance (s)", 60), "batch": ("Batch delay (s)", 60),
-         "yield_after": ("Yield after (s)", 30)}
+         "yield_after": ("Yield after (s)", 30), "idle_cpu": ("Idle below (cores)", 0.05),
+         "idle_after": ("Idle after (s)", 60)}
 GROUPS = (("SHARED CAPACITY", ("mode", "amount")), ("QUEUE POLICY", ("order", *KNOBS)),
           ("THIS DASHBOARD", ("interval",)))
 FIELDS = tuple(key for _, keys in GROUPS for key in keys)
@@ -42,6 +43,8 @@ DESCRIPTIONS = {
     "interactive": "Seconds interactive requests move ahead in the queue; 0: no advance.",
     "batch": "Seconds batch requests move back in the queue; 0: no delay.",
     "yield_after": "Seconds before a yieldable holder is asked to yield; 0: nobody is asked.",
+    "idle_cpu": "A lease below this many cores for the idle time is idle (◌); 0: never.",
+    "idle_after": "Seconds below the idle cores before a lease is idle and, if yieldable, asked.",
     "interval": "Seconds between this dashboard's refreshes, 0.1 to 60. Not shared.",
 }
 DEFAULT_INTERVAL = 1.0

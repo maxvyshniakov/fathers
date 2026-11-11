@@ -139,7 +139,7 @@ class DashboardTests(SlotCase):
         self.assertIn("─ QUEUE ", text)
         self.assertNotIn("REQUESTS", text, "the request table is the QUEUE panel")
         self.assertNotIn("RUNNING", text)
-        self.assertIn("│ ▶holder", text)
+        self.assertIn("│ ▶  holder", text, "the cursor, the (empty) marker column, the label")
         self.assertEqual(1, text.count("▶"), "only the selected row has a cursor")
         self.assertRegex(text, r"gate +▪▪▪▪ +waiting #1 ")
         self.assertRegex(text, r"small +▪ +waiting #2 ")
@@ -230,9 +230,9 @@ class DashboardTests(SlotCase):
         os.write(master, b"r")
         # A split PTY read can contain the details before the selected request row.
         read_until(lambda text: re.search(r"label\s+click-target",text) and re.search(r"status\s+running",text)
-                   and "▶click-target" in text)
+                   and "▶  click-target" in text)
         selected = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", screen.decode("utf-8", "replace"))
-        self.assertIn("▶click-target", selected,
+        self.assertIn("▶  click-target", selected,
                       "the same lease stays selected after moving into the active group")
         os.write(master, b"q")
         read_until(lambda text: process.poll() is not None)
@@ -322,7 +322,7 @@ class UnifiedLaneTests(unittest.TestCase):
         self.assertIn("QUEUE",lines[0])
         self.assertIn("active",lines[2])
         self.assertFalse(lines[3][1:-1].strip())
-        self.assertIn("│ ▶pending",lines[4])
+        self.assertIn("│ ▶  pending",lines[4])
         column=lines[0].index("cpu use/share")+len("cpu use/share")
         self.assertTrue(lines[4][:column].rstrip().endswith("waiting #1"),lines[4])
         self.assertEqual(1,tool.mouse_action(canvas,("mouse",0,20,4,True),{},0))
@@ -358,7 +358,7 @@ class QueueTableTests(unittest.TestCase):
 
     def row(self, canvas: Any, label: str) -> int:
         return next(n for n, line in enumerate(canvas.render(False).splitlines()) if f" {label} " in line + " "
-                    or f"▶{label}" in line)
+                    or f"▶  {label}" in line)
 
     def styles(self, canvas: Any, y: int, text: str) -> set[str]:
         line = "".join(cell[0] for cell in canvas.cells[y])
@@ -426,9 +426,10 @@ class QueueTableTests(unittest.TestCase):
         model["holders"] = [
             dict(label="fair", kind="held", count=2, pid=10, style="h0", cpu=200, since=now, granted=now),
             dict(label="hog", kind="held", count=1, pid=11, style="h1", cpu=900, since=now, granted=now),
-            dict(label="idle", kind="held", count=1, pid=12, style="h2", cpu=5, since=old, granted=old)]
+            dict(label="idle", kind="held", count=1, pid=12, style="h2", cpu=5, since=old, granted=old,
+                 idle_since=old)]  # #12: idle is the holder's record (idle.idle_since()), not a guess from one sample
         styles = [self.tool.queue_bar_style(item, model, now) for item in model["holders"]]
-        self.assertEqual(["h0", "bad", "warn"], styles, "over its share stays red, nearly idle stays yellow")
+        self.assertEqual(["h0", "bad", "warn"], styles, "over its share stays red, an idle lease stays yellow")
         canvas = self.draw(model)
         cpu = canvas.render(False).splitlines()[0].index("cpu use/share")
         for label, filled in (("fair", {"h0", "frame"}), ("hog", {"bad"})):
@@ -670,45 +671,6 @@ class IdleStatusTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 tool.process_usage()
 
-
-    def test_idle_duration_tracks_low_usage_and_resets_on_activity_or_a_new_grant(self):
-        tool=load_dashboard()
-        now=datetime.datetime.now(datetime.timezone.utc)
-        item=dict(key=(12345,"lease"),label="build",kind="held",count=1,pid=12345,style="h0",cpu=10,
-                  rss=1024,procs=1,granted=now-datetime.timedelta(minutes=10),since=now-datetime.timedelta(minutes=10),
-                  queue="",cmd="build",tree=[])
-        model=dict(holders=[item],waiters=[],slots=6,cores=12,updated=now)
-        tracked={}
-        tool.dashboard_idle(model,tracked)
-        model["updated"]=now+datetime.timedelta(seconds=92)
-        tool.dashboard_idle(model,tracked)
-        canvas=tool.Canvas(90,24)
-        tool.draw_detail(canvas,0,0,24,90,model,0,None,model["updated"])
-        text=canvas.render(False)
-        self.assertRegex(text, r"status\s+running · 1 slot · idle for 1m 32s")
-        self.assertNotIn("idle while holding slots",text)
-        item["cpu"]=50
-        tool.dashboard_idle(model,tracked)
-        self.assertIsNone(item["idle_since"])
-        item["cpu"]=10
-        model["updated"]=now+datetime.timedelta(seconds=100)
-        tool.dashboard_idle(model,tracked)
-        self.assertEqual(model["updated"],item["idle_since"])
-        item["granted"]=now+datetime.timedelta(seconds=110)
-        model["updated"]=item["granted"]
-        tool.dashboard_idle(model,tracked)
-        self.assertEqual(item["granted"],item["idle_since"])
-        model["holders"]=[]
-        tool.dashboard_idle(model,tracked)
-        self.assertFalse(tracked)
-        model["holders"]=[item]
-        tool.dashboard_idle(model,tracked)
-        tool.clear_idle(model,tracked)
-        self.assertFalse(tracked)
-        self.assertNotIn("idle_since",item)
-        model["updated"]=now+datetime.timedelta(seconds=200)
-        tool.dashboard_idle(model,tracked)
-        self.assertEqual(model["updated"],item["idle_since"])
 
 
 class DetailLayoutTests(unittest.TestCase):

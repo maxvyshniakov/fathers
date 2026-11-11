@@ -37,7 +37,8 @@ belong to their own context; the relationship is recorded in [terminology](docs/
 | Unleased load | Estimated system load not accounted for by held slot budgets. It is demand outside leases, not free CPU capacity. |
 | Worker budget | A recommended amount of parallel work inside a command. It neither reserves slots nor grants admission. |
 | Memory block | A memory, swap or pressure condition that prevents additional grants while requests are running. |
-| Idle duration | How long a running request has shown sustained near-zero observed CPU use while keeping its slots. |
+| Idle lease | A running request whose command's process tree has used less than the idle cores (0.1 by default) for the idle time (5 minutes) or more, with no process starting or ending, by its holder's samples. A yieldable one is asked to yield while a request waits that its slots would start; none is stopped. |
+| Idle duration | How long a lease has been idle: since its idle run began, once it has lasted the idle time. |
 | Process identity | A PID together with its process start time, so reuse of a PID does not imply the same process. |
 | Session | An active terminal or agent-controlled work context. |
 | Sweep | Inspection of leftover processes, optionally stopping only those eligible under the cleanup policy. |

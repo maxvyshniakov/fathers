@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import math
+import time
 import sys
 from pathlib import Path
 from typing import Any
 
 from . import config as _config
+from . import idle as _idle
 from . import leases as _leases
 from . import platform as _platform
 from . import schedule as _schedule
@@ -31,9 +33,20 @@ def locked_snapshot(directory: Path | None = None) -> tuple[list[dict[str, Any]]
     directory = directory or _config.state_dir()
     with _state.locked(directory):
         table = _platform.processes()
-        live = [entry for _, entry in _leases.reap(directory, table)]
+        found = _leases.reap(directory, table)
         basis: dict[str, Any] = _config.capacity_basis()
+    marked = idle_of(directory, found)
+    live = [dict(entry, idle_since=marked.get(id(entry))) if entry.get("state") == "held" else entry
+            for _, entry in found]
     return live, _leases.legacy_holders(table), table, basis
+
+
+def idle_of(directory: Path, live: list[tuple[Path, dict[str, Any]]]) -> dict[int, float | None]:
+    """id(entry) -> since when each held lease has been idle (#12; idle.idle_since(), by the queue's saved
+    settings), None where it is not."""
+    settings = _schedule.order_settings(directory, environment=False)
+    moment = time.time()
+    return {id(entry): _idle.idle_since(path, settings, moment) for path, entry in live if entry.get("state") == "held"}
 
 
 def status_lines(directory: Path | None = None) -> list[str]:
@@ -43,10 +56,14 @@ def status_lines(directory: Path | None = None) -> list[str]:
         live = _leases.reap(directory, table)
         slots = _config.total()
     legacy = _leases.legacy_holders(table)
+    marked = idle_of(directory, live)
     lines = []
     for path, e in live:
         meta = _config.meta_of(e)
         tags = f" meta={_config.meta_text(meta)}" if meta else ""
+        since = marked.get(id(e))
+        if since is not None:  # #12: below the idle threshold for at least the idle duration
+            tags += f" idle={_config.duration(time.time() - since)}"
         if e.get("yieldable"):
             request = _state.asked(path) if e.get("state") == "held" else None
             tags += " yieldable" + (f" asked-to-yield-for={request.get('label')}" if request else "") + \
@@ -111,6 +128,7 @@ def status_json(directory: Path | None = None, pid: int | None = None) -> dict:
         table = status_processes(directory, pid)
         live = _leases.reap(directory, table)
         slots = _config.total()
+    marked = idle_of(directory, live)
     entries_found: list[dict[str, Any]] = []
     for path, entry in live:
         tree = _platform.descendants(table, entry.get("pid"))
@@ -121,7 +139,8 @@ def status_json(directory: Path | None = None, pid: int | None = None) -> dict:
                 "cmd": entry.get("cmd"), "cwd": entry.get("cwd"), "meta": _config.meta_of(entry), "tree": tree,
                 "priority": priority, "ticket": _config.ticket_of(entry),
                 "yieldable": bool(entry.get("yieldable")),
-                "yields": int(entry.get("yields") or 0), "yield_asked": _state.asked(path), "position": None}
+                "yields": int(entry.get("yields") or 0), "yield_asked": _state.asked(path), "position": None,
+                "idle_since": marked.get(id(entry))}
         entries_found.append(item)
     settings = _schedule.order_settings(directory)
     serving = _schedule.ranked([e for _, e in live if e.get("state") != "held"], settings) \
