@@ -14,7 +14,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from . import admission, claims, config, host, journal, promote, queue, review, state, worktrees
+from . import admission, claims, config, host, journal, promote, queue, review, state, tickets, worktrees
 from .errors import LaneError
 from .gitops import common_dir, current_branch, git, git_ok, main_checkout, worktree_list
 from .state import Record
@@ -103,6 +103,9 @@ def register(record: Record, rules: list[dict[str, Any]], force_reason: str | No
                        f"base={record['base']}@{record['base_sha'][:10]} claims={' '.join(lane_claims)} "
                        f"after={','.join(after) or '-'} cap={cap} ({source}) {host.host_fields(info)}")
     print(header(record, rules))
+    warning = tickets.no_ticket_warning(record)
+    if warning:
+        print(warning, file=sys.stderr)
 
 
 def start(args: Any) -> int:

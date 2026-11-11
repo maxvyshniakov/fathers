@@ -24,7 +24,7 @@ import sys
 import time
 from typing import Any
 
-from . import checks, config, host, journal, plan, review, slots, state, worktrees
+from . import checks, config, host, journal, plan, review, slots, state, tickets, worktrees
 from .errors import LaneError
 from .gitops import common_dir, git, git_ok, worktree_list
 from .landing import landing
@@ -587,5 +587,6 @@ def promote_sha(args: Any) -> int:
     print(f"Promoted {sha[:10]} {subject!r}: {' and '.join(branches)}, {pushed}")
     after_promote(cwd, sha)
     if args.ship and ship_base:
+        tickets.release_comments(cwd, common, ship_base, sha, None)
         print(f"lane: {review.start_overall_review(cwd, sha, ship_base)}")
     return 0

@@ -17,6 +17,7 @@ lanefather gc [--dry-run] [--json]         merged idle worktrees and unused bran
 lanefather promote <sha> [--ship] [--no-push] [--install [--deploy HOST]]
 lanefather sync [--drop-local]
 lanefather perf <sha>
+lanefather released <version> --since REF [--head REF]   comment a published version on the issues it fixes
 lanefather list [--all] [--json]
 lanefather show <id> [--state-dir DIR] [--project-dir DIR] [--json]   read-only lane context
 ```
@@ -64,6 +65,7 @@ self-contained configuration in the README for a Repo-Kit consumer.
 | `[promote]` `install`, `deploy`, `after`, `ship_refuses` | what promote runs after it moved dev |
 | `[gc]` `after_remove`, `after_remove_report` | project cache cleanup after removal (`{worktree}`, `{name}`, `{project}`). Stdout is ignored by default, preserving existing hooks. With `after_remove_report = true`, a successful hook must emit `{"v":1,"freed":123}` to add its actually removed bytes; diagnostics go to stderr. Invalid reports add zero bytes and a report error. |
 | `[admission]` `provider` | `legacy` by default; explicit `slotfather` uses the versioned lifetime-admission query, separately from execution jobs. See [rollout contract](../docs/admission.md). |
+| `[tickets]` | the ticket lifecycle below; every rule is off without it |
 | `[hooks]` `process_scan` | legacy process adapter for live lanes; without it `procs` supplies read-only inspection |
 | `[hooks.project]` | named project policy scripts run by `project-hook NAME -- ARGS` in the installed interpreter |
 
@@ -93,6 +95,29 @@ real outer lease. Steps without `lease` keep their existing direct execution.
 This feature advertises `promote.step-leases`; older engines reject the unknown
 configuration key. Machine budgets and command costs belong in the project
 adapter. Lane lifetime admission is separate from these execution leases.
+
+### The ticket lifecycle
+
+Opt-in rules for a lane registered with `--ticket N`, so the issue shows its land before it reaches `main`:
+
+```toml
+[tickets]
+integrated_label = true   # after a green post-merge smoke: label the issue `integrated`, created when missing
+land_comment = true       # ...and comment the merge, its branch, whether origin has it, the checks and the preview
+fixes_trailer = true      # the landing merge's message ends with `Fixes #N`: GitHub closes N when it reaches main
+release_comment = true    # promote --ship and `released`: comment main's SHA or the version on each fixed issue
+preview = "https://preview.example.com/{short}"   # optional; {sha} {short} {branch} {ticket} {lane}
+repo = "owner/name"       # optional; default: origin's GitHub repository
+```
+
+`integrated` means done and landed in the integration branch, not yet on `main` or released. A merge origin does not
+have yet (a remote-tracking branch, as last fetched, that contains it) is said to be local only and is not linked. A
+red smoke leaves the issue unmarked for the fix's land. The issues a release closes are those a `Fixes #N` line in
+the shipped range names: origin's `main` before the push to the SHA for `promote --ship`, `--since` to `--head` for
+`lanefather released <version>`, which a project's release process runs after it publishes. `gh` runs without a
+prompt with `--repo`; a failure warns and goes to the ledger and never fails the land, promote or release. `start`
+and `next --start` warn about a lane registered with `--ticket none` while any rule is on, and `done` does not count
+land's comment as the lane's evidence. The capability is `tickets.lifecycle`.
 
 ### The check contract
 

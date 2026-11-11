@@ -14,7 +14,7 @@ import os
 import subprocess
 from typing import Any
 
-from . import checks, config, done, journal, plan, review, state, worktrees
+from . import checks, config, done, journal, plan, review, state, tickets, worktrees
 from .errors import LaneError
 from .gitops import current_branch, dirty, git, git_ok, main_checkout
 from .host import given_jobs, host, host_fields, post_merge_jobs
@@ -121,7 +121,7 @@ def land(args: Any) -> int:
         if git_ok(integration, "merge-base", "--is-ancestor", tip, previous):
             raise LaneError(f"land refused: {record['branch']} ({tip[:10]}) is already in {integration}")
         ticket = f" (#{record['ticket']})" if record["ticket"] != "none" else ""
-        message = args.message or f"Merge {record['branch']}{ticket}"
+        message = tickets.merge_message(args.message or f"Merge {record['branch']}{ticket}", record["ticket"])
         merge_config = [part for setting in config.current().merge_config for part in ("-c", setting)]
         # The landing lock lets the merge move an integration worktree that is on dev or main (B2).
         conflicts = ""
@@ -204,6 +204,8 @@ def land(args: Any) -> int:
         what += f"; whole, since {narrowing['reason']}"
     print(f"Landed {record['branch']} as {merge[:10]} on {current_branch(integration) or integration}; "
           f"post-merge {status} ({prefix}{what})")
+    # #25: the lane's issue shows the land once its smoke is green; a gh failure only warns.
+    tickets.after_land(record, merge, integration, onto or integration, receipt, status, prefix + what)
     if receipt and receipt.get("changed_red_tests"):
         print(checks.changed_red_tests_line(receipt["changed_red_tests"]))
     if status == "green":

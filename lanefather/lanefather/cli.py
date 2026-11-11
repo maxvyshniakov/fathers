@@ -17,6 +17,8 @@
   promote <sha> [--ship] [--no-push] [--install [--deploy HOST]]
   sync [--drop-local]
   perf <sha>                         the batch gate, promotion, sync and the perf suite (lanefather.promote)
+  released <version> --since REF     after a release publish: comment the version on each issue a Fixes #N line
+                                     in REF..HEAD names (lanefather.tickets, [tickets] release_comment)
   list [--all] [--json]
 
 --config PATH (or LANEFATHER_CONFIG) names the project's .lanefather.toml; by default it is read from the top of the
@@ -30,7 +32,7 @@ import argparse
 from pathlib import Path
 import sys
 
-from . import __version__, checks, config, done, gc, land, lanes, promote, review, runtime, show
+from . import __version__, checks, config, done, gc, land, lanes, promote, review, runtime, show, tickets
 from .errors import LaneError
 from .host import CHECK_MAX_JOBS
 
@@ -128,6 +130,12 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("sha")
     p.add_argument("--remote", default="origin", help="whose main a red run bisects from (default: origin)")
     p.set_defaults(run=promote.perf)
+    p = commands.add_parser("released", help="after a release publish: comment the version on each issue its "
+                                             "Fixes #N lines close ([tickets] release_comment)")
+    p.add_argument("version", help="the published version, for example v1.4.0")
+    p.add_argument("--since", required=True, metavar="REF", help="the previous release (tag or commit)")
+    p.add_argument("--head", default="HEAD", metavar="REF", help="the released commit (default: HEAD)")
+    p.set_defaults(run=tickets.released)
     p = commands.add_parser("review", help="the lane's one independent review (Sol, or Opus when Codex is low), its "
                                            "marks and its fix lane; --overall for promote --ship")
     p.add_argument("id", nargs="?")

@@ -13,7 +13,7 @@ from pathlib import Path
 import subprocess
 from typing import Any
 
-from . import config, journal, procs, review, state, worktrees
+from . import config, journal, procs, review, state, tickets, worktrees
 from .errors import LaneError
 from .gitops import dirty, git, git_ok, main_checkout, worktree_lock
 from .state import Record
@@ -28,7 +28,9 @@ def ticket_commented(record: Record) -> str | None:
         return f"gh could not read #{record['ticket']}: {result.stderr.strip()}"
     since = journal.parse_time(record["created"])
     comments: list[dict[str, Any]] = json.loads(result.stdout).get("comments", [])
-    if any(journal.parse_time(c["createdAt"]) >= since for c in comments):
+    # The comment land posts (#25) is not the lane's evidence.
+    if any(journal.parse_time(c["createdAt"]) >= since and not c.get("body", "").startswith(tickets.LAND_MARKER)
+           for c in comments):
         return None
     return (f"#{record['ticket']} has no comment since the lane started; post the lane's RED->GREEN evidence with "
             f"gh issue comment {record['ticket']}")

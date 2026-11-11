@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import re
 import subprocess
 import tomllib
 from typing import Any, cast
@@ -39,6 +40,22 @@ class Step:
     argv: tuple[str, ...]
     env: tuple[tuple[str, str], ...] = ()
     lease: Lease | None = None
+
+
+@dataclass(frozen=True)
+class Tickets:
+    """The ticket lifecycle (`[tickets]`, lanefather.tickets): each rule is off unless the project turns it on."""
+    integrated_label: bool = False
+    land_comment: bool = False
+    fixes_trailer: bool = False
+    release_comment: bool = False
+    # The page to try a landed merge on: `{sha}`, `{short}`, `{branch}`, `{ticket}` and `{lane}` are replaced.
+    preview: str = ""
+    # owner/name for gh; by default the GitHub repository of the origin remote.
+    repo: str = ""
+
+    def enabled(self) -> bool:
+        return self.integrated_label or self.land_comment or self.fixes_trailer or self.release_comment
 
 
 @dataclass(frozen=True)
@@ -90,6 +107,7 @@ class Config:
     gc_after_remove: tuple[str, ...] = ()
     gc_after_remove_report: bool = False
     admission_provider: str = "legacy"
+    tickets: Tickets = Tickets()
 
     def names(self, name: str) -> list[str]:
         """The variables of setting `name`, first wins: LANEFATHER_<name>, an [env] alias, the legacy prefix's."""
@@ -182,7 +200,7 @@ def _steps(data: dict[str, Any], key: str) -> tuple[Step, ...]:
 
 TOP_KEYS = ("project", "command", "state_dir", "legacy_env_prefix", "shared_env", "report_doc", "queue_name",
             "coding_standards", "rules_dir", "steering", "unclaimed", "merge_config", "checks", "lane", "gate",
-            "promote", "hooks", "env", "gc", "admission")
+            "promote", "hooks", "env", "gc", "admission", "tickets")
 TABLE_KEYS = {
     "admission": ("provider",),
     "checks": ("verify", "plan_module", "triage", "toolchain", "toolchain_pin", "slot_env"),
@@ -191,6 +209,7 @@ TABLE_KEYS = {
     "promote": ("ship_refuses", "ship_refusal", "install", "deploy", "install_env_drop", "after"),
     "hooks": ("process_scan", "project"),
     "gc": ("after_remove", "after_remove_report"),
+    "tickets": ("integrated_label", "land_comment", "fixes_trailer", "release_comment", "preview", "repo"),
 }
 
 
@@ -200,6 +219,19 @@ def _known(table: dict[str, Any], name: str, keys: tuple[str, ...]) -> None:
     if unknown:
         where = f"[{name}] " if name else ""
         raise LaneError(f"{CONFIG_NAME}: {where}has unknown keys {', '.join(unknown)}; known: {', '.join(keys)}")
+
+
+def _tickets(table: dict[str, Any]) -> Tickets:
+    flags: dict[str, bool] = {}
+    for key in ("integrated_label", "land_comment", "fixes_trailer", "release_comment"):
+        value = table.get(key, False)
+        if type(value) is not bool:
+            raise LaneError(f"{CONFIG_NAME}: [tickets] {key} must be a boolean")
+        flags[key] = value
+    repo = _string(table, "repo", "")
+    if repo and not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
+        raise LaneError(f"{CONFIG_NAME}: [tickets] repo must be owner/name")
+    return Tickets(**flags, preview=_string(table, "preview", ""), repo=repo)
 
 
 def parse(data: dict[str, Any], path: Path | None = None) -> Config:
@@ -212,15 +244,16 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
     env: dict[str, Any] = data.get("env", {})
     gc: dict[str, Any] = data.get("gc", {})
     admission: dict[str, Any] = data.get("admission", {})
+    tickets: dict[str, Any] = data.get("tickets", {})
     for name, table in (("checks", checks), ("lane", lane), ("gate", gate), ("promote", promote), ("hooks", hooks),
-                        ("env", env), ("gc", gc), ("admission", admission)):
+                        ("env", env), ("gc", gc), ("admission", admission), ("tickets", tickets)):
         if not isinstance(table, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
             raise LaneError(f"{CONFIG_NAME}: [{name}] must be a table")
     if not all(isinstance(v, str) for v in env.values()):
         raise LaneError(f"{CONFIG_NAME}: [env] maps LANEFATHER_<NAME> to the project's variable name")
     _known(data, "", TOP_KEYS)
     for name, table in (("checks", checks), ("lane", lane), ("gate", gate), ("promote", promote),
-                        ("hooks", hooks), ("gc", gc), ("admission", admission)):
+                        ("hooks", hooks), ("gc", gc), ("admission", admission), ("tickets", tickets)):
         _known(table, name, TABLE_KEYS[name])
     for key in ("install", "deploy"):
         steps: list[Any] = promote.get(key, []) if isinstance(promote.get(key), list) else []
@@ -278,6 +311,7 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         gc_after_remove=_strings(gc, "after_remove", default.gc_after_remove),
         gc_after_remove_report=gc_report,
         admission_provider=provider,
+        tickets=_tickets(tickets),
     )
 
 
