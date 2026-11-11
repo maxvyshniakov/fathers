@@ -404,9 +404,9 @@ class LiveTests(SlotCase):
             self.started(f"row{n}")
         env = dict(self.env, SLOTFATHER_DETAILS_DELAY="1.5")
         master, _, receive = self.start(env)
-        text = receive(lambda text: re.search(r"label\s+row\d", text) and len(re.findall(r"▶️ row\d", text)) >= 3,
+        text = receive(lambda text: re.search(r"label\s+row\d", text) and len(re.findall(r"▶️\s+row\d", text)) >= 3,
                        10, "the queue and the first row's details")
-        order = re.findall(r"▶️ (row\d)", text)[:3]  # the queue's order, by grant
+        order = re.findall(r"▶️\s+(row\d)", text)[:3]  # the queue's order, by grant
         self.assertRegex(text, rf"label\s+{order[0]}")
         os.write(master, b"\x1b[B")
         started = time.monotonic()

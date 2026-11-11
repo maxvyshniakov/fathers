@@ -156,7 +156,7 @@ class DetailsTests(unittest.TestCase):
         canvas = view.Canvas(110, 80)
         view.draw_detail(canvas, 0, 0, 80, 110, model, 0, '/project', now)
         text = canvas.render(False)
-        for label, value in [('priority', 'interactive'), ('ticket', '#99'), ('phase', 'check'),
+        for label, value in [('priority', '⚡ interactive'), ('ticket', '#99'), ('phase', 'check'),
                              ('kind', 'verify'), ('revision', 'abc123'), ('run on', 'base'),
                              ('session', 'session-a'), ('stage', 'active'), ('receipt', 'green · current')]:
             self.assertRegex(text, label + r'\s+' + value)

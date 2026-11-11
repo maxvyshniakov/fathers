@@ -144,7 +144,7 @@ class DashboardTests(SlotCase):
         self.assertIn("─ QUEUE ", text)
         self.assertNotIn("REQUESTS", text, "the request table is the QUEUE panel")
         self.assertNotIn("RUNNING", text)
-        self.assertIn("┃  ▶️ holder", text, "the selected row on the frame, its state (#15), then the label")
+        self.assertIn("┃  ▶️    holder", text, "the selected row on the frame, its state (#15), then the label")
         self.assertEqual(1, text.count("▶"), "only the selected row has a cursor")
         self.assertRegex(text, r"gate +▪▪▪▪ +waiting #1 ")
         self.assertRegex(text, r"small +▪ +waiting #2 ")
@@ -228,7 +228,7 @@ class DashboardTests(SlotCase):
         screen.clear()  # the view refreshes on its own, every second here
         # A split PTY read can contain the details before the selected request row.
         read_until(lambda text: re.search(r"label\s+click-target",text) and re.search(r"status\s+running",text)
-                   and "▶️ click-target" in text)
+                   and re.search(r"▶️\s+click-target", text))
         selected = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", screen.decode("utf-8", "replace"))
         self.assertRegex(selected, r"label\s+click-target",
                          "the same lease stays selected (its details) after moving into the active group")
@@ -321,7 +321,7 @@ class UnifiedLaneTests(unittest.TestCase):
         self.assertIn("QUEUE",lines[0])
         self.assertIn("active",lines[1])
         self.assertFalse(lines[2][1:-1].strip())
-        self.assertIn("┃  ⏸️ pending",lines[3])
+        self.assertIn("┃  ⏸️    pending",lines[3])
         column=lines[0].index("cpu use/share")+len("cpu use/share")
         self.assertTrue(lines[3][:column].rstrip().endswith("waiting #1"),lines[3])
         self.assertEqual(1,tool.mouse_action(canvas,("mouse",0,20,3,True),{},0))
@@ -466,7 +466,7 @@ class QueueTableTests(unittest.TestCase):
 
     def test_a_narrow_table_drops_columns_and_keeps_every_row_inside_its_frame(self) -> None:
         titles = ("slots", "cpu use/share", "time", "pid")
-        for width, kept in ((110, titles), (59, titles), (52, titles[:3]), (44, titles[:2]), (30, titles[:1])):
+        for width, kept in ((110, titles), (62, titles), (55, titles[:3]), (47, titles[:2]), (33, titles[:1])):
             with self.subTest(width=width):
                 lines = self.draw(self.model(), width=width).render(False).splitlines()
                 self.assertEqual(kept, tuple(title for title in titles if title in lines[0]),

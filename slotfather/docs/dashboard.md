@@ -81,7 +81,7 @@ follows the selection: **LEASE DETAILS** for a running request, whose lease hold
 slots, and **REQUEST DETAILS** for a waiting or yielded request, which holds none.
 The rows are the same either way.
 
-The QUEUE columns are state, label, slots, cpu use/share, time and pid.
+The QUEUE columns are state, priority, label, slots, cpu use/share, time and pid.
 
 **State** (#15) is one emoji per row, two cells wide:
 
@@ -101,6 +101,10 @@ row's style and puts the cursor on the next cell itself, with colour on or off; 
 At startup it measures how wide the terminal draws 👨‍🦳 (with colour off too) and uses 👴 where that is two
 glyphs; a reply that arrives late, over a slow link, still switches it. An ASCII terminal
 (and `--once` without UTF-8) gets the one-character tags.
+
+**Priority** is a second two-cell column right after the state: ⚡ (`!` in ASCII) for an interactive request,
+🐢 (`~`) for a batch one, and blank for normal, so every label starts in the same column. LEASE DETAILS and
+REQUEST DETAILS put the same mark before the priority's name (`⚡ interactive`, `🐢 batch`, plain `normal`).
 
 Each row has one
 colour: a running request's row (label, slot cells, CPU numbers, time and pid) is

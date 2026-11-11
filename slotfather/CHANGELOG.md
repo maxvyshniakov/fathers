@@ -4,6 +4,11 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ## Unreleased
 
+### Added
+
+- QUEUE shows each request's priority after its state: ⚡ interactive, 🐢 batch, nothing for normal; the
+  details put the same mark before the priority's name.
+
 ### Changed
 
 - The scrollbar is a thumb alone, moving in half cells; the `↑ N above` and `↓ N more` counts are gone and

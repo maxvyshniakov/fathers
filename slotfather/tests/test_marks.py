@@ -35,11 +35,13 @@ class MarkTests(unittest.TestCase):
             return {**dict(label=label, kind="held", count=1, pid=pid, style="h0", cpu=50, since=old, granted=old,
                            rss=1024, procs=1, queue="", cmd="work", tree=[]), **extra}
 
-        holders = [holder("plain", 10), holder("everything", 11, idle_since=old, asked="next", cpu=900),
-                   holder("sleepy", 12, idle_since=old, cpu=900), holder("hog", 13, cpu=900),
+        holders = [holder("plain", 10), holder("everything", 11, idle_since=old, asked="next", cpu=900,
+                                              priority="interactive"),
+                   holder("sleepy", 12, idle_since=old, cpu=900, priority="batch"), holder("hog", 13, cpu=900),
                    dict(holder("elder", 14, cpu=900), kind="legacy", style="legacy"), holder("veteran", 15)]
         holders[5]["kind"], holders[5]["style"] = "legacy", "legacy"
-        waiters = [dict(label="next", kind="waiting", count=1, pid=20, style="text", cpu=0, since=now, granted=None),
+        waiters = [dict(label="next", kind="waiting", count=1, pid=20, style="text", cpu=0, since=now, granted=None,
+                        priority="interactive"),
                    dict(label="again", kind="waiting", count=1, pid=21, style="text", cpu=0, since=now, granted=None,
                         yields=1)]
         return {"holders": holders, "waiters": waiters, "slots": 4, "cores": 12}
@@ -54,7 +56,7 @@ class MarkTests(unittest.TestCase):
         self.assertEqual("⏸️", self.tool.marks["waiting"], "⏸️ with VS16")
 
     def test_every_emoji_is_one_two_cell_glyph(self) -> None:
-        for emoji in [*self.tool.marks.values(), self.tool.OLD_FALLBACK]:
+        for emoji in [*self.tool.marks.values(), *self.tool.priority_marks.values(), self.tool.OLD_FALLBACK]:
             self.assertEqual([emoji], self.tool.clusters(emoji), emoji)
             self.assertEqual(2, self.tool.text_width(emoji), emoji)
         self.assertEqual(["a", "👨‍🦳", "b"], self.tool.clusters("a👨‍🦳b"), "the ZWJ sequence stays one glyph")
@@ -71,15 +73,59 @@ class MarkTests(unittest.TestCase):
                     cells = canvas.cells[y]
                     self.assertEqual("", cells[4][0], "the glyph takes two cells")
                     self.assertEqual(" ", cells[5][0], "then a gap")
-                    self.assertNotEqual(" ", cells[6][0], "the label starts in the same cell on every row")
+                    self.assertIn((cells[6][0], cells[7][0]), (("⚡", ""), ("🐢", ""), (" ", " ")),
+                                  "the priority: two cells, blank for normal")
+                    self.assertEqual(" ", cells[8][0], "then a gap")
+                    self.assertNotEqual(" ", cells[9][0], "the label starts in the same cell on every row")
                     self.assertEqual("│", cells[width - 1][0], "the frame stays put")
                     self.assertNotIn("▶", [cell[0] for cell in cells], "no cursor glyph")
                     self.assertFalse({"◌", "↓"} & {cell[0] for cell in cells}, "no marker column")
                 if width >= 60:  # the columns right of the label start in the same cell on every running row
-                    starts = {next(x for x in range(6, width) if canvas.cells[y][x][0] in "■░") for y in rows[:6]}
+                    starts = {next(x for x in range(9, width) if canvas.cells[y][x][0] in "■░") for y in rows[:6]}
                     self.assertEqual(1, len(starts), starts)
                 line = canvas.lines(True, place=True)[rows[5]]  # 👨‍🦳 at cell 3, then the cursor on cell 5 (CHA 6)
                 self.assertIn("👨‍🦳\x1b[0m\x1b[6G", line)
+
+    def test_the_priority_column_marks_interactive_and_batch_and_leaves_normal_blank(self) -> None:
+        model = self.model()
+        canvas = self.tool.Canvas(120, 14)
+        self.tool.draw_requests(canvas, 0, 0, 14, 120, model, 0, self.now)
+        found = {}
+        for y in range(1, 13):
+            text = "".join(cell[0] for cell in canvas.cells[y][9:30])
+            label = next((label for label in ("plain", "everything", "sleepy", "next", "again")
+                          if text.startswith(label + " ")), None)
+            if label:
+                found[label] = tuple(cell[0] for cell in canvas.cells[y][6:9])
+        self.assertEqual({"plain": (" ", " ", " "), "everything": ("⚡", "", " "), "sleepy": ("🐢", "", " "),
+                          "next": ("⚡", "", " "), "again": (" ", " ", " ")}, found, "a waiting request has one too")
+        self.assertEqual(2, self.tool.text_width("⚡"))
+        self.assertEqual(2, self.tool.text_width("🐢"))
+        self.tool.use_marks(True)
+        ascii_lines = self.tool.Canvas(120, 14)
+        self.tool.draw_requests(ascii_lines, 0, 0, 14, 120, model, 0, self.now)
+        plain = ascii_lines.lines(False, ascii_only=True)
+        tags = {label: line[6] for line in plain for label in ("plain", "everything", "sleepy") if f" {label} " in line}
+        self.assertEqual({"plain": " ", "everything": "!", "sleepy": "~"}, tags)
+        self.assertTrue(all(line.isascii() for line in plain))
+
+    def test_the_details_put_the_mark_before_the_priority(self) -> None:
+        now = self.now
+        for priority, shown, ascii_shown in (("interactive", "⚡ interactive", "! interactive"),
+                                             ("batch", "🐢 batch", "~ batch"), ("normal", "normal", "normal"),
+                                             (None, "normal", "normal")):
+            for ascii_only in (False, True):
+                with self.subTest(priority=priority, ascii_only=ascii_only):
+                    self.tool.use_marks(ascii_only)
+                    item = dict(label="build", kind="held", count=1, pid=10, style="h0", cpu=50, since=now,
+                                granted=now, rss=1024, procs=1, queue="", cmd="work", tree=[], priority=priority)
+                    model = {"holders": [item], "waiters": [], "slots": 4, "cores": 12}
+                    canvas = self.tool.Canvas(80, 20)
+                    self.tool.draw_detail(canvas, 0, 0, 20, 80, model, 0, None, now)
+                    line = next(line for line in canvas.render(False).splitlines() if "priority" in line)
+                    self.assertRegex(line, r"priority\s+" + (ascii_shown if ascii_only else shown) + r"\s")
+                    self.assertNotRegex(line, r"priority\s+\S+\s+normal", "normal has no mark")
+        self.tool.use_marks(False)
 
     def test_a_long_label_is_cut_with_an_ellipsis_after_the_state(self) -> None:
         model = self.model()
@@ -87,7 +133,7 @@ class MarkTests(unittest.TestCase):
         canvas = self.tool.Canvas(60, 14)
         self.tool.draw_requests(canvas, 0, 0, 14, 60, model, 0, self.now)
         row = next(line for line in canvas.render(False).splitlines() if "lane-pin" in line)
-        self.assertRegex(row, r"^┃  ▶️ lane-pin-u\S*… ", "the state first, the name cut with a plain ellipsis")
+        self.assertRegex(row, r"^┃  ▶️    lane-pin-u\S*… ", "the state, a blank priority, the name cut with an ellipsis")
 
     def test_the_selected_row_has_its_background_and_no_cursor(self) -> None:
         canvas = self.tool.Canvas(120, 14)
@@ -346,7 +392,7 @@ class FrameTests(unittest.TestCase):
         queue = next(y for y, line in enumerate(canvas.render(False).splitlines()) if " QUEUE " in line)
         row = canvas.cells[queue + 1]
         self.assertEqual("▶️", row[3][0], "the state starts where every panel's content does")
-        self.assertEqual("p", row[6][0], "the label after it")
+        self.assertEqual("p", row[9][0], "the label after it and the priority")
 
 
 if __name__ == "__main__":

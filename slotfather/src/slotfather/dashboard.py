@@ -1015,13 +1015,22 @@ MARKS = {"asked": ("❓", "?"), "idle": ("💤", "z"), "hot": ("🔥", "!"), "le
          "yielded": ("↩️", "<"), "waiting": ("⏸️", ".")}
 OLD_FALLBACK = "👴"  # for a terminal that draws 👨‍🦳 as two glyphs (theme.ask() measures it)
 marks = {key: emoji for key, (emoji, _) in MARKS.items()}  # what this terminal is drawn with
+# A request's priority (owner, 2026-11-11): its own column after the state; normal has none, so the column is blank
+PRIORITY_MARKS = {"interactive": ("⚡", "!"), "batch": ("🐢", "~")}
+priority_marks = {key: emoji for key, (emoji, _) in PRIORITY_MARKS.items()}
 
 
 def use_marks(ascii_only: bool, joined: bool = True) -> None:
     """The QUEUE state column for this terminal: ASCII where it has no UTF-8, 👴 for 👨‍🦳 where it does not join."""
     marks.update({key: plain if ascii_only else emoji for key, (emoji, plain) in MARKS.items()})
+    priority_marks.update({key: plain if ascii_only else emoji for key, (emoji, plain) in PRIORITY_MARKS.items()})
     if not ascii_only and not joined:
         marks["legacy"] = OLD_FALLBACK
+
+
+def priority_mark(item: dict[str, Any]) -> str:
+    """⚡ for an interactive request, 🐢 for a batch one (! and ~ in ASCII), nothing for normal."""
+    return priority_marks.get(_config.priority_of({"priority": item.get("priority")}), "")
 
 
 def row_state(item: dict[str, Any], model: dict[str, Any]) -> str:
@@ -1056,12 +1065,12 @@ def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model
     row_items.extend(range(len(holders), len(items)))
     # cpu use/share: the bar starts at the column's left edge on every row, then `use` right-aligned and `/share`
     # left-aligned around the slash, padded to the widest on screen; a waiting row's state starts where the bars do.
-    layout = queue_layout(width - 9, cast(dict[str, Any], model))  # the state column takes two cells and a gap
+    layout = queue_layout(width - 12, cast(dict[str, Any], model))  # the state and priority: two cells and a gap each
     placed, cells = layout.placed, layout.natural["slots"]
     shares = {index: share(item, model) for index, item in enumerate(holders)}
     use_width, share_width = layout.use_width, layout.share_width
     size = next((column[3] for column in placed if column[0] == "slots"), cells)
-    table_header(canvas, y, x, height, width, "QUEUE", placed, gutter=3, name="requests")
+    table_header(canvas, y, x, height, width, "QUEUE", placed, gutter=6, name="requests")
     if not items:
         canvas.put(y + 1, x + 3, f"No requests · all {model['slots']} slots free", "dim", width - 6)
     visual_selected = row_items.index(selected) if selected in row_items else None
@@ -1091,7 +1100,8 @@ def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model
                 (f" {used:.1f}".rjust(use_width + 1) + "/" + short(allotted).ljust(share_width), ink)]
         # The state is the row's first content, where every panel's starts (x + 3); the label after it (#15)
         canvas.put(row, x + 3, marks[row_state(item, cast(dict[str, Any], model))], style, 2)
-        draw_row(canvas, row, x + 6, placed, {
+        canvas.put(row, x + 6, priority_mark(item), style, 2)  # blank for normal: the labels stay in one column
+        draw_row(canvas, row, x + 9, placed, {
             "label": (str(item["label"]), ink), "slots": slot_cells(item, size),
             "time": (span(age) if age is not None else "—", ink), "cpu": cpu, "pid": (str(item["pid"]), ink)})
         if index == selected:  # its background, and the left frame heavy in the row's colour: no cursor glyph
@@ -1170,7 +1180,8 @@ def draw_detail(canvas: Canvas, y: int, x: int, height: int, width: int, model: 
         heading = ("earlier queue" if item["kind"] == "legacy" else "running") + f" · {item['count']} slot{'s' if item['count'] != 1 else ''}"
     facts: list[tuple[str, list[tuple[str, str]]]] = [("label", [(item["label"] or "(no label)", "bold")]), ("status", [(heading, "text")])]
     priority = _config.priority_of({"priority": item.get("priority")})
-    facts.append(("priority", [(priority, "text")]))
+    mark = priority_mark(item)
+    facts.append(("priority", ([(mark, "text"), (" ", "text")] if mark else []) + [(priority, "text")]))
     if ticket_text:
         facts.append(("ticket", [(ticket_text, "accent" if ticket_url else "text")]))
     for key, label in (("phase", "phase"), ("kind", "kind"), ("check", "check"), ("sha", "revision"),
@@ -1494,6 +1505,11 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
         ("💤", "idle: under 0.1 core for 5 min"),
         ("🔥", "above 1.5× its CPU share"),
         ("👨‍🦳", "lease of an older client"),
+    ]),
+    ("PRIORITY", [
+        ("⚡", "interactive: someone is waiting on it"),
+        ("🐢", "batch: unattended work, after the rest"),
+        ("", "Normal has no mark."),
     ]),
     ("SLOTS", [
         ("", "One block per slot; the colour is its owner.", "text"),
