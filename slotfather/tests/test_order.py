@@ -641,7 +641,7 @@ class DashboardOrderTests(SlotCase):
             values[name]=line[details:].split(name,1)[1].strip().split()[0]
             self.assertEqual(expected, values[name])
         self.assertNotIn("backfill by", "\n".join(cast(list[str], lines)))
-        self.assertIn("▶  gate",canvas.render(False))
+        self.assertIn("⏸️ gate",canvas.render(False))
         for label in ("one", "gate"):
             self.release(label)
         for process in (one, gate):

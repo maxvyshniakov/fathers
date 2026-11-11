@@ -9,8 +9,8 @@
 │ ──────────────────────────────────────────────────────────────────────────── │
 │ SHARED CAPACITY                                                              │
 │   Capacity mode             Fixed                                            │
-│ ▶ Total slots               [1▏]                                             │
-│     → 1 slot · will drain 3: running work keeps its slots                    │
+┃ ▶ Total slots               [1▏]                                             │
+┃     → 1 slot · will drain 3: running work keeps its slots                    │
 │ QUEUE POLICY                                                                 │
 │   Queue order               Backfill                                         │
 │   Safety multiplier         3                                                │

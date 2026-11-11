@@ -62,39 +62,65 @@ def set_theme(theme: _theme.Theme) -> None:
 
 ASCII = str.maketrans({"🮅": "#", "■": "#", "▪": "#", "◌": "o", "□": "o", "▫": "o", "▶": ">", "▉": "#", "▌": "+", "▐": "|", "█": "#", "▓": "%", "▒": "=", "░": ".", "·": ".", "●": "*", "…": "~", "─": "-", "│": "|",
                        "╭": "+", "╮": "+", "╰": "+", "╯": "+", "↑": "^", "↓": "v", "↗": "/", "↘": "\\", "→": ">",
-                       "←": "<", "≈": "~", "×": "x", "—": "-", "⏸": "=", "▭": "o", "▁": "_", "▂": "_", "▃": "-", "▄": "-",
+                       "←": "<", "≈": "~", "×": "x", "—": "-", "⏸": "=", "▭": "o", "┃": "#", "▁": "_", "▂": "_", "▃": "-", "▄": "-",
                        "▅": "=", "▆": "=", "▇": "#"})
 GRANTED = re.compile(r"granted (\d+) to (.*) \(pid (\d+)\)$")
 RELEASED = re.compile(r"released (\d+) \(\d+-(\d+)\.json\)$")
 REAPED = re.compile(r"reaped (\S+) lease of (\d+) for (.*) \(pid (\d+) exited\)$")
 
 
+JOINER, TEXT_STYLE, EMOJI_STYLE = "\u200d", "\ufe0e", "\ufe0f"  # zero-width joiner, variation selectors 15 and 16
+
+
 def dashboard_text(value) -> str:
-    """A label or command as plain text: any process writes queue entries, so control bytes are blanked."""
-    return "".join(char if char.isprintable() else " " for char in str(value))
+    """A label or command as plain text: any process writes queue entries, so control bytes are blanked. The
+    zero-width joiner of an emoji sequence (👨‍🦳) stays."""
+    return "".join(char if char.isprintable() or char == JOINER else " " for char in str(value))
 
 
 def cell_width(char: str) -> int:
-    if unicodedata.combining(char):
+    if unicodedata.combining(char) or char in (JOINER, TEXT_STYLE, EMOJI_STYLE):
         return 0
     return 2 if unicodedata.east_asian_width(char) in "WF" else 1
 
 
+def clusters(text: str) -> list[str]:
+    """Text as the glyphs a terminal draws (#15): each character with the combining marks, variation selectors, skin
+    tones and zero-width-joined characters after it, so ▶️ and 👨‍🦳 are one glyph each."""
+    found: list[str] = []
+    joined = False
+    for char in text:
+        if found and (joined or char in (JOINER, TEXT_STYLE, EMOJI_STYLE) or unicodedata.combining(char)
+                      or 0x1F3FB <= ord(char) <= 0x1F3FF):
+            found[-1] += char
+        else:
+            found.append(char)
+        joined = char == JOINER
+    return found
+
+
+def cluster_width(cluster: str) -> int:
+    """Cells a glyph takes: an emoji sequence (VS16 or joined) two, else its first character's width."""
+    if len(cluster) > 1 and (EMOJI_STYLE in cluster or JOINER in cluster):
+        return 2
+    return cell_width(cluster[0]) if cluster else 0
+
+
 def text_width(value) -> int:
-    return sum(cell_width(char) for char in dashboard_text(value))
+    return sum(cluster_width(cluster) for cluster in clusters(dashboard_text(value)))
 
 
 def clip(value, width: int) -> str:
-    """value cut to `width` cells, ending in … when cut."""
+    """value cut to `width` cells, ending in … when cut; a glyph is never split."""
     text = dashboard_text(value)
     if text_width(text) <= width:
         return text
     kept, used = [], 0
-    for char in text:
-        if used + cell_width(char) > width - 1:
+    for cluster in clusters(text):
+        if used + cluster_width(cluster) > width - 1:
             break
-        kept.append(char)
-        used += cell_width(char)
+        kept.append(cluster)
+        used += cluster_width(cluster)
     return "".join(kept) + "…" if width > 0 else ""
 
 
@@ -166,8 +192,8 @@ class Canvas:
         text = clip(value, width) if width is not None else dashboard_text(value)
         if not 0 <= y < self.height:
             return x
-        for char in text:
-            size = cell_width(char)
+        for char in clusters(text):
+            size = cluster_width(char)
             if size == 0:
                 continue
             if x + size > self.width:
@@ -243,13 +269,16 @@ class Canvas:
                 runs: list[list[Any]] = []
                 for column, (char, style, selected) in enumerate(cast(list[tuple[str, str, bool]], self.cells[y])):
                     url = self.links.get((y, column), "")
-                    if runs and runs[-1][1:] == [style, selected, url]:
+                    # An emoji sequence ends its run with the cursor moved to the cell after it (CHA), so a terminal
+                    # that draws it narrower or wider than two cells shifts nothing after it (#15).
+                    resume = f"\x1b[{column + 3}G" if len(char) > 1 and cluster_width(char) == 2 else ""
+                    if runs and runs[-1][1:4] == [style, selected, url] and not runs[-1][4] and not resume:
                         runs[-1][0] += char
                     else:
-                        runs.append([char, style, selected, url])
+                        runs.append([char, style, selected, url, resume])
                 line = "".join(sgr(style, selected) +
-                               (f"\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\" if url else text) + "\x1b[0m"
-                               for text, style, selected, url in runs)
+                               (f"\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\" if url else text) + "\x1b[0m" + resume
+                               for text, style, selected, url, resume in runs)
             else:
                 line = "".join(char for char, _, _ in self.cells[y])
             found.append(line.translate(ASCII) if ascii_only else line)
@@ -609,6 +638,22 @@ def bar(fraction: float, width: int, style: str) -> list[tuple[str, str]]:
     return [("■" * full, style), (current_theme.track * (width - full), "track")]
 
 
+def ramp_bar(fraction: float, width: int, critical: bool = False) -> list[tuple[str, str]]:
+    """A MACHINE resource bar: each filled cell in the load chart's blue-to-red ramp at its place along the bar, so a
+    nearly full bar reaches red at its tip; a critical one (its status word is bad) entirely in the theme's red."""
+    width = max(0, width)
+    full = max(0, min(width, math.floor(fraction * width + 0.5)))
+    parts: list[tuple[str, str]] = []
+    for cell in range(full):
+        step = round(cell / (width - 1) * (_theme.CHART_STEPS - 1)) if width > 1 else _theme.CHART_STEPS - 1
+        style = "bad" if critical else f"chart{step}"
+        if parts and parts[-1][1] == style:
+            parts[-1] = (parts[-1][0] + "■", style)
+        else:
+            parts.append(("■", style))
+    return parts + [(current_theme.track * (width - full), "track")]
+
+
 def share(item: dict, model: dict) -> tuple[float, float]:
     """(cores the lease's commands use, cores its slots stand for)."""
     return item["cpu"] / 100, item["count"] * model["cores"] / model["slots"]
@@ -867,17 +912,37 @@ def queue_layout(inner: int, model: dict[str, Any]) -> QueueLayout:
     return QueueLayout(placed, natural, use_width, share_width, bar_length)
 
 
-def queue_marker(item: dict[str, Any]) -> tuple[str, str]:
-    """The QUEUE row's marker beside the cursor (#12): `↓` asked to yield, the actionable state, over `◌` (dim)
-    idle; nothing for a lease at work, over its share (its red bar says so) or a waiting request (its cpu column
-    does)."""
+# A QUEUE row's state (#15), the first column of every row: (emoji, ASCII). A running row shows the first of asked,
+# idle, hot and legacy that applies, else running; a waiting row yielded or waiting.
+MARKS = {"asked": ("❓", "?"), "idle": ("💤", "z"), "hot": ("🔥", "!"), "legacy": ("👨‍🦳", "o"), "running": ("▶️", ">"),
+         "yielded": ("↩️", "<"), "waiting": ("⏸️", ".")}
+OLD_FALLBACK = "👴"  # for a terminal that draws 👨‍🦳 as two glyphs (theme.ask() measures it)
+marks = {key: emoji for key, (emoji, _) in MARKS.items()}  # what this terminal is drawn with
+
+
+def use_marks(ascii_only: bool, joined: bool = True) -> None:
+    """The QUEUE state column for this terminal: ASCII where it has no UTF-8, 👴 for 👨‍🦳 where it does not join."""
+    marks.update({key: plain if ascii_only else emoji for key, (emoji, plain) in MARKS.items()})
+    if not ascii_only and not joined:
+        marks["legacy"] = OLD_FALLBACK
+
+
+def row_state(item: dict[str, Any], model: dict[str, Any]) -> str:
+    """The MARKS key of a QUEUE row: `asked` (a waiter asked this lease for its slots, the actionable state) over
+    `idle` (#12) over `hot` (above 1.5 times its share, as its red bar) over `legacy` (an older client's lease)."""
     if item["kind"] == "waiting":
-        return "", "text"
+        return "yielded" if item.get("yields") else "waiting"
     if item.get("asked"):
-        return "↓", str(item["style"])
+        return "asked"
     if item.get("idle_since") is not None:
-        return "◌", "dim"
-    return "", "text"
+        return "idle"
+    used, allotted = share(item, model)
+    if used > 1.5 * allotted:
+        return "hot"
+    return "legacy" if item["kind"] == "legacy" else "running"
+
+
+SELECTED_FRAME = "┃"  # the left frame beside a selected row, in the row's colour (#15); # on an ASCII terminal
 
 
 def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model: dict, selected: int,
@@ -891,7 +956,7 @@ def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model
     row_items.extend(range(len(holders), len(items)))
     # cpu use/share: the bar starts at the column's left edge on every row, then `use` right-aligned and `/share`
     # left-aligned around the slash, padded to the widest on screen; a waiting row's state starts where the bars do.
-    layout = queue_layout(width - 8, cast(dict[str, Any], model))  # the marker column takes two cells
+    layout = queue_layout(width - 8, cast(dict[str, Any], model))  # the state column takes two cells and a gap
     placed, cells = layout.placed, layout.natural["slots"]
     shares = {index: share(item, model) for index, item in enumerate(holders)}
     use_width, share_width = layout.use_width, layout.share_width
@@ -921,14 +986,13 @@ def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model
             used, allotted = shares[index]
             cpu = bar(used / allotted if allotted else 0, layout.bar, queue_bar_style(item, cast(dict[str, Any], model), moment)) + [
                 (f" {used:.1f}".rjust(use_width + 1) + "/" + short(allotted).ljust(share_width), style)]
-        mark, mark_style = queue_marker(item)
-        canvas.put(row, x + 3, mark, mark_style)
+        canvas.put(row, x + 2, marks[row_state(item, cast(dict[str, Any], model))], style, 2)  # #15
         draw_row(canvas, row, x + 5, placed, {
             "label": (str(item["label"]), style), "slots": slot_cells(item, size),
             "time": (span(age) if age is not None else "—", style), "cpu": cpu, "pid": (str(item["pid"]), style)})
-        if index == selected:
-            canvas.put(row, x + 2, "▶", "cursor")
-            canvas.select(row, x + 3, x + width - 3)
+        if index == selected:  # its background, and the left frame heavy in the row's colour: no cursor glyph
+            canvas.select(row, x + 1, x + width - 1)
+            canvas.put(row, x, SELECTED_FRAME, style)
 
 
 def queue_policy(model: dict) -> dict[str, str]:
@@ -1175,10 +1239,10 @@ def draw_machine(canvas: Canvas, y: int, x: int, height: int, width: int, model:
     load1 = model["averages"][0]
     memory = model["memory"]
     ram_status = machine_memory_status(memory)
-    def usage_parts(used: float, total: float, style: str) -> list:
+    def usage_parts(used: float, total: float, critical: bool) -> list:
         label = f"used {megabytes(used)} of {megabytes(total)}"
         bar_width = min(12, max(0, inner - 10 - text_width(label) - 1))
-        return bar(used / total, bar_width, style) + [(" " + label if bar_width else label, "text")]
+        return ramp_bar(used / total, bar_width, critical) + [(" " + label if bar_width else label, "text")]
 
     if memory["swap_total"] == 0:
         swap = ("off", "text")
@@ -1188,21 +1252,22 @@ def draw_machine(canvas: Canvas, y: int, x: int, height: int, width: int, model:
     swap_parts = [swap]
     if memory.get("swap_total") and memory.get("swap_free") is not None:
         used_swap = max(0, memory["swap_total"] - memory["swap_free"])
-        swap_parts = usage_parts(used_swap, memory["swap_total"], "accent")
+        swap_low = cast(float, memory["swap_free"]) < _config.number_setting("MIN_FREE_SWAP_MB", _config.MIN_FREE_SWAP_MB)
+        swap_parts = usage_parts(used_swap, memory["swap_total"], swap_low)  # critical as "swap low"
     used_memory, total_memory = memory.get("used"), memory.get("total")
     if used_memory is None and total_memory and memory.get("available") is not None:
         used_memory = max(0, total_memory - memory["available"])
     memory_parts = [("usage unavailable", "dim")]
     if total_memory and used_memory is not None:
-        memory_style = {"status-normal": "accent", "bad": "bad"}.get(ram_status[1], "dim")
-        memory_parts = usage_parts(used_memory, total_memory, memory_style)
+        memory_parts = usage_parts(used_memory, total_memory, ram_status[1] == "bad")  # critical as "memory low"
     chart_width = max(1, inner)
     buckets = history_buckets(model["history"], chart_width)
     summary = history_summary(model["history"], slots)
     # (priority, name, parts): the lines a short panel drops first have the highest priority number.
     lines = [
-        (0, "load 1m", bar(load1 / model["cores"], 12, "accent") + [(f" {load1:.1f} · {model['cores']} cores",
-                                                                "text")]),
+        # Critical where the load leaves no room for a worker: the advice's capacity (query.size()) is 0
+        (0, "load 1m", ramp_bar(cast(float, load1 / model["cores"]), 12, cast(dict[str, Any], model["advice"]).get("capacity") == 0)
+         + [(f" {load1:.1f} · {model['cores']} cores", "text")]),
         (1, "memory", memory_parts),
         (3, "swap", swap_parts),
     ]
@@ -1219,7 +1284,8 @@ def draw_machine(canvas: Canvas, y: int, x: int, height: int, width: int, model:
         row += 1
     if chart_rows:
         row += 1  # gap above the histogram
-    # Eighth-block heights; the same blue-to-red gradient is tied to the capacity scale.
+    # Eighth-block heights; the same blue-to-red gradient is tied to the capacity scale, and a column that reached
+    # every slot (what the legend's `full` counts) is red from the bottom up.
     for line in range(chart_rows):
         floor = (chart_rows - 1 - line) * 8
         for column, level in enumerate(buckets):
@@ -1227,7 +1293,8 @@ def draw_machine(canvas: Canvas, y: int, x: int, height: int, width: int, model:
             glyph = SPARK[min(8, eighths) - 1] if eighths > 0 else " "
             height_fraction = min(1, level / slots) if chart_rows == 1 else (chart_rows - 1 - line) / (chart_rows - 1)
             colour = round(height_fraction * (_theme.CHART_STEPS - 1))
-            canvas.put(row, x + 3 + column, glyph, f"chart{colour}" if eighths > 0 else "dim")
+            style = ("bad" if level >= slots else f"chart{colour}") if eighths > 0 else "dim"
+            canvas.put(row, x + 3 + column, glyph, style)
         row += 1
     if chart_rows:
         row += 1  # one gap row between histogram and legend
@@ -1272,13 +1339,14 @@ HELP_CONTENT: list[tuple[str, str]] = [
     ("One colour identifies one running request across its slots and row. Labels below the blocks name their owners; free marks unused capacity.", "text"),
     ("The header shows machine cores and shared slot capacity. manual means a saved capacity setting; auto means capacity calculated from the machine.", "text"),
     ("QUEUE", "title"),
-    ("Running requests come first, followed by a blank separator and waiting requests. ▶ and a soft background identify the selected row. Selection opens its details.", "text"),
+    ("Running requests come first, followed by a blank separator and waiting requests. A soft background identifies the selected row. Selection opens its details.", "text"),
     ("Each row has one colour: a running request's row is in the colour of its SLOTS blocks, its CPU bar too, except that the bar turns red above 1.5 times its share and yellow while the lease is idle; a waiting or yielded request's row is in the normal text colour.", "text"),
     ("slots: one cell per slot the request holds or asks for. A count too wide for the column shows the cells that fit and +N for the rest; -n all that does not fit shows all.", "text"),
     ("cpu use/share: observed cores used by a running request / the core budget represented by its slots. A request can exceed its share; it is not a hard limit. A request that holds no slots shows its state there instead: waiting #N, its current place in the waiting queue, or yielded #N for a lease back in the queue after a yield. Bars and states start at one column; the numbers line up around the slash.", "text"),
     ("time is elapsed run time for running work and elapsed wait time for waiting work. pid is the lease owner. A wide terminal shares the spare width among the columns in proportion to their own widths; on a narrow one pid goes first, then time, then cpu use/share.", "text"),
     ("Yellow CPU marks an idle lease: below the idle cores (0.1 by default) for the idle time (5 minutes) by its holder's own samples, with no process starting or ending; both are queue settings. A short pause never counts. Red means use well above its share.", "text"),
-    ("Left of the label, beside the cursor: ◌ (dim) an idle lease; ↓ a lease asked to yield, which wins over idle. A yieldable idle lease is asked while a request waits that its slots would start; one that cannot yield is only marked. Nobody is ever stopped.", "text"),
+    ("The first column is the row's state: ▶️ running, ⏸️ waiting, ↩️ yielded and back in the queue. A running row shows the first of these instead: ❓ asked to yield, 💤 idle, 🔥 above 1.5 times its share, 👨‍🦳 a lease of an older client. An ASCII terminal shows > . < ? z ! o.", "text"),
+    ("A yieldable idle lease is asked to yield while a request waits that its slots would start; one that cannot yield is only marked. Nobody is ever stopped.", "text"),
     ("↑ above and ↓ more count rows outside the visible table. Scroll with the wheel or move the selection to reveal them.", "text"),
     ("LEASE DETAILS and REQUEST DETAILS", "title"),
     ("The details title follows the selection: LEASE DETAILS for a running request, whose lease holds slots; REQUEST DETAILS for a waiting or yielded one, which holds none. The rows are the same.", "text"),
@@ -1305,6 +1373,7 @@ HELP_CONTENT: list[tuple[str, str]] = [
     ("unleased load: estimated demand outside leased work. This is not the number of free cores.", "text"),
     ("admission: how many slots a generic new request can get now, after the queue and memory checks. It is not a worker count; free slots can still have no admission.", "text"),
     ("memory and swap bars show used capacity. Low memory or swap blocks additional leases; an idle machine may still start its first request.", "text"),
+    ("Each bar fills in the chart's blue-to-red ramp along its length, so a nearly full bar ends red. A bar is all red while its resource is critical: memory low, swap low, or a load that leaves no room for another worker. A chart column that reached every slot is all red.", "text"),
     ("The held chart shows occupied slots over time, newest on the right. Each column preserves its interval's peak; fractional heights show more than whole rows.", "text"),
     ("held/N is the slot scale; s/col is seconds per column. Blue is the bottom, red is full capacity. avg is average occupancy; peak is the most held; full is time at capacity.", "text"),
     ("Colours follow the terminal's theme, light or dark, and repaint when it switches. Colour theme: Auto mixes the selection, bar tracks and free slots from its background; Terminal uses its palette only; Built-in is a fixed palette for themes whose bright black is close to the background.", "text"),
@@ -1583,13 +1652,15 @@ def full_screen(fd_in: int, fd_out: int, answers: _theme.Answers | None = None):
         active = termios.tcgetattr(fd_in)
         active[0] &= ~(termios.IXON | termios.IXOFF)  # Ctrl-S must not freeze the screen by terminal flow control.
         termios.tcsetattr(fd_in, termios.TCSANOW, active)
+        os.write(fd_out, b"\x1b[?1049h\x1b[?25l")
         if answers is not None:  # before the kitty push, so no reply can be taken for a key event
-            typed = _theme.ask(fd_in, fd_out, answers)
+            # On the alternate screen, so the width probe of 👨‍🦳 (#15) never shows on the shell's screen
+            typed = _theme.ask(fd_in, fd_out, answers, probe=MARKS["legacy"][0])
             if typed:
                 KEY_PENDING[fd_in] = typed  # keys typed meanwhile come with the next read
         # The kitty keyboard protocol (#13) reports each key's base-layout key, so hotkeys work on any layout; a
         # terminal without it ignores the request, and the layout table in keys.hotkey() stands in.
-        os.write(fd_out, b"\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1006h\x1b[2J"
+        os.write(fd_out, b"\x1b[?7l\x1b[?1000h\x1b[?1006h\x1b[2J"
                  + (_theme.SCHEME_ON if answers is not None else b"") + _keys.KITTY_ON)
         yield
     finally:
@@ -1615,6 +1686,8 @@ def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
     canvas = Canvas(0, 0)
     with full_screen(fd_in, fd_out, answers):
         set_theme(_theme.from_environment(answers=answers, mode=theme))
+        # 👨‍🦳 is one glyph where the cursor ended two cells on (column 3); without an answer, assume it is
+        use_marks(ascii_only, joined=answers is None or answers.column in (None, 3))
         while True:
             if settings is not None and settings.tick():  # an arrow change settled: saved, so show its effect now
                 interval, force, dirty = float(settings.interval), True, True
@@ -1789,6 +1862,7 @@ def dashboard_command(argv: list[str]) -> int:
         items = model["holders"] + model["waiters"]
         if items:
             enrich_details(cast(dict[str, Any], items[0]))
+        use_marks("utf" not in (sys.stdout.encoding or "").lower())
         size_now = shutil.get_terminal_size((120, 40))
         canvas = Canvas(width or size_now.columns, height or size_now.lines)
         dashboard_draw(canvas, model, cwd=process_cwd(items[0]["pid"]) if items and items[0]["kind"] != "waiting"

@@ -681,6 +681,7 @@ class Settings:
                 self.hits.append((row.key, x + 1, line, width - 2, 1))
                 if row.key == self.focus:
                     canvas.select(line, x + 1, x + width - 1)
+                    canvas.put(line, x, "┃", "text")  # the selected row on the left frame, as in QUEUE (#15)
         rule = y + height - 6
         canvas.put(rule, x + 2, "─" * inner, "dim", inner)
         below = max(0, len(body) - self.offset - self.visible)

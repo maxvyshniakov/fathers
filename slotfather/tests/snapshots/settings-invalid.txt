@@ -9,8 +9,8 @@
 │ ──────────────────────────────────────────────────────────────────────────── │
 │ SHARED CAPACITY                                                              │
 │   Capacity mode             Fixed                                            │
-│ ▶ Total slots               [0▏]                                             │
-│     ✗ Enter a whole number of slots, at least 1.                             │
+┃ ▶ Total slots               [0▏]                                             │
+┃     ✗ Enter a whole number of slots, at least 1.                             │
 │ QUEUE POLICY                                                                 │
 │   Queue order               Backfill                                         │
 │   Safety multiplier         3                                                │

@@ -374,7 +374,7 @@ class ProtocolTests(SlotCase):
                                                        entry["yield_asked"]["count"]))
         text = self.tool("dashboard", "--once", "--width", "160", "--height", "40").stdout
         self.assertRegex(text, r"yield +asked at \d\d:\d\d for quick")
-        self.assertIn("▶↓ gate", text, "asked to yield: the marker beside the cursor")
+        self.assertIn("❓ gate", text, "asked to yield: the state column (#15)")
         self.assertEqual(75, quick.wait(timeout=20), "it gave up waiting")
         self.assertEqual([], list((self.state / "queue").glob("*.yield")), "its leaving withdrew the request")
         self.assertIn("withdrew the yield request to gate", (self.state / "queue.log").read_text())

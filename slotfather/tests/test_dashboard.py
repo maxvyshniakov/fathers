@@ -148,7 +148,7 @@ class DashboardTests(SlotCase):
         self.assertIn("─ QUEUE ", text)
         self.assertNotIn("REQUESTS", text, "the request table is the QUEUE panel")
         self.assertNotIn("RUNNING", text)
-        self.assertIn("│ ▶  holder", text, "the cursor, the (empty) marker column, the label")
+        self.assertIn("┃ ▶️ holder", text, "the selected row on the frame, its state (#15), then the label")
         self.assertEqual(1, text.count("▶"), "only the selected row has a cursor")
         self.assertRegex(text, r"gate +▪▪▪▪ +waiting #1 ")
         self.assertRegex(text, r"small +▪ +waiting #2 ")
@@ -239,10 +239,10 @@ class DashboardTests(SlotCase):
         os.write(master, b"r")
         # A split PTY read can contain the details before the selected request row.
         read_until(lambda text: re.search(r"label\s+click-target",text) and re.search(r"status\s+running",text)
-                   and "▶  click-target" in text)
+                   and "▶️ click-target" in text)
         selected = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", screen.decode("utf-8", "replace"))
-        self.assertIn("▶  click-target", selected,
-                      "the same lease stays selected after moving into the active group")
+        self.assertRegex(selected, r"label\s+click-target",
+                         "the same lease stays selected (its details) after moving into the active group")
         os.write(master, b"q")
         read_until(lambda text: process.poll() is not None)
         self.assertEqual(0, process.wait(timeout=3))
@@ -331,7 +331,7 @@ class UnifiedLaneTests(unittest.TestCase):
         self.assertIn("QUEUE",lines[0])
         self.assertIn("active",lines[2])
         self.assertFalse(lines[3][1:-1].strip())
-        self.assertIn("│ ▶  pending",lines[4])
+        self.assertIn("┃ ⏸️ pending",lines[4])
         column=lines[0].index("cpu use/share")+len("cpu use/share")
         self.assertTrue(lines[4][:column].rstrip().endswith("waiting #1"),lines[4])
         self.assertEqual(1,tool.mouse_action(canvas,("mouse",0,20,4,True),{},0))
@@ -349,6 +349,7 @@ class QueueTableTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.tool = surfaces(load_dashboard())
+        self.tool.use_marks(True)  # one-cell ASCII states: these tests read columns as string positions (#15)
         self.now = datetime.datetime.now(datetime.timezone.utc)
 
     def model(self, **extra: Any) -> dict[str, Any]:
@@ -366,8 +367,7 @@ class QueueTableTests(unittest.TestCase):
         return canvas
 
     def row(self, canvas: Any, label: str) -> int:
-        return next(n for n, line in enumerate(canvas.render(False).splitlines()) if f" {label} " in line + " "
-                    or f"▶  {label}" in line)
+        return next(n for n, line in enumerate(canvas.render(False).splitlines()) if f" {label} " in line + " ")
 
     def styles(self, canvas: Any, y: int, text: str) -> set[str]:
         line = "".join(cell[0] for cell in canvas.cells[y])
@@ -877,7 +877,8 @@ class MemoryBarTests(unittest.TestCase):
     def test_memory_bar_colour_reflects_pressure_without_a_separate_pressure_row(self):
         tool = load_dashboard()
         now = datetime.datetime.now(datetime.timezone.utc)
-        for level, colour in ((1,34), (2,31), (4,31)):  # #14: ANSI blue (accent) and red (bad)
+        for level, colour in ((1,"38;2;%d;%d;%d"%tool.current_theme.styles["chart0"][0]), (2,"31"), (4,"31")):
+            # the ramp's blue at the bar's start; under pressure (memory low) the theme's red, the whole bar
             with self.subTest(level=level):
                 canvas = tool.Canvas(90,24)
                 tool.draw_machine(canvas,0,0,24,90,dict(slots=4,cores=12,averages=(1,2,3),
@@ -898,8 +899,46 @@ class MemoryBarTests(unittest.TestCase):
                           history=[(now-datetime.timedelta(hours=1),now,4)]))
         rows=[i for i,line in enumerate(canvas.lines(False)) if "█" in line]
         self.assertEqual(1,len(rows))
-        red=tool._theme.FIXED_HIGH  # #14: the theme's red when the terminal says it; this fixed one without
-        self.assertIn("38;2;%d;%d;%dm"%red,canvas.lines(True)[rows[0]])
+        self.assertIn("\x1b[0;31m█",canvas.lines(True)[rows[0]],"a full column is the theme's red")
+
+    def test_resource_bars_follow_the_chart_ramp_and_turn_red_when_critical(self):
+        tool=surfaces(load_dashboard())
+        styles=[style for text,style in tool.ramp_bar(1,12) for _ in text if style!="track"]
+        self.assertEqual(12,len(styles))
+        self.assertEqual(("chart0","chart7"),(styles[0],styles[-1]),"blue at the start, red at the tip of a full bar")
+        self.assertEqual([f"chart{round(k/11*7)}" for k in range(12)],styles,"each cell at its place on the ramp")
+        half=[style for text,style in tool.ramp_bar(0.5,12) if style!="track" for _ in text]
+        self.assertEqual(["chart0","chart1","chart1","chart2","chart3","chart3"],half,"half full runs blue to mid")
+        self.assertEqual({"bad"},{style for _,style in tool.ramp_bar(0.5,12,True) if style!="track"})
+        now=datetime.datetime.now(datetime.timezone.utc)
+        def machine(**extra: Any) -> Any:
+            model=dict(slots=4,cores=12,averages=(20.3,20,20),admission=0,advice=dict(unleased_load=20,jobs=1,capacity=0),
+                       memory_block=None,memory=dict(level=1,used=512,total=1024,swap_total=1024,swap_free=100),
+                       history=[(now-datetime.timedelta(minutes=30),now-datetime.timedelta(minutes=10),2),
+                                (now-datetime.timedelta(minutes=10),now,4)])
+            model.update(extra)
+            canvas=tool.Canvas(90,24)
+            tool.draw_machine(canvas,0,0,24,90,model)
+            return canvas
+        canvas=machine()
+        def bar_styles(name: str) -> set[str]:
+            row=next(i for i,line in enumerate(canvas.lines(False)) if f"  {name}" in line)
+            return {cell[1] for cell in canvas.cells[row][13:25] if cell[0]=="■" and cell[1]!="track"}
+        self.assertEqual({"bad"},bar_styles("load 1m"),"20.3 on 12 cores leaves no room: all red")
+        self.assertEqual({"bad"},bar_styles("swap"),"swap low: all red")
+        self.assertTrue(all(style.startswith("chart") for style in bar_styles("memory")),"memory ok: the ramp")
+        chart=[i for i,line in enumerate(canvas.lines(False)) if "█" in line]
+        columns=[x for x in range(90) if canvas.cells[chart[0]][x][0]=="█"]  # the columns that reached every slot
+        self.assertTrue(columns)
+        for row in chart:
+            self.assertEqual({"bad"},{canvas.cells[row][x][1] for x in columns},"full columns red from the bottom up")
+        partial=[x for x in range(90) if canvas.cells[chart[-1]][x][0]=="█" and x not in columns]
+        self.assertTrue(partial and all(canvas.cells[chart[-1]][x][1]=="chart0" for x in partial),"others the ramp")
+        calm=machine(averages=(3,3,3),advice=dict(unleased_load=0,jobs=2,capacity=4),
+                     memory=dict(level=1,used=512,total=1024,swap_total=1024,swap_free=900))
+        canvas=calm
+        self.assertTrue(all(style.startswith("chart") for style in bar_styles("load 1m")))
+        self.assertTrue(all(line.isascii() for line in calm.lines(False,ascii_only=True)),"ASCII: # and the rest")
 
     def test_macos_memory_counts_active_wired_and_compressor_physical_pages(self):
         tool = load_dashboard()

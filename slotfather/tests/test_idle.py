@@ -196,27 +196,10 @@ class MarkerTests(unittest.TestCase):
         waiters = [dict(label="next", kind="waiting", count=1, pid=13, style="text", cpu=0, since=now, granted=None)]
         return {"holders": holders, "waiters": waiters, "slots": 4, "cores": 12}
 
-    def test_asked_to_yield_wins_over_idle(self) -> None:
-        markers = [self.tool.queue_marker(item) for item in self.model()["holders"] + self.model()["waiters"]]
-        self.assertEqual([("", "text"), ("◌", "dim"), ("↓", "h2"), ("", "text")], markers)
-
-    def test_the_marker_column_sits_beside_the_cursor_and_falls_back_to_ascii(self) -> None:
-        for width in (120, 60, 40):
-            with self.subTest(width=width):
-                canvas = self.tool.Canvas(width, 10)
-                self.tool.draw_requests(canvas, 0, 0, 10, width, self.model(), 0, self.now)
-                lines = canvas.render(False).splitlines()
-                idle = next(line for line in lines if " idle" in line)
-                asked = next(line for line in lines if " asked" in line)
-                self.assertIn("│  ◌ idle", idle)
-                self.assertIn("│  ↓ asked", asked)
-                self.assertIn("│ ▶  busy", next(line for line in lines if "busy" in line))
-                for line in lines:
-                    self.assertLessEqual(len(line.rstrip()), width)
-                ascii_lines = canvas.lines(False, ascii_only=True)
-                self.assertTrue(all(line.isascii() for line in ascii_lines))
-                self.assertTrue(any("o idle" in line for line in ascii_lines))
-                self.assertTrue(any("v asked" in line for line in ascii_lines))
+    def test_asked_to_yield_wins_over_idle(self) -> None:  # the state column (#15, tests/test_marks.py)
+        model = self.model()
+        self.assertEqual(["running", "idle", "asked", "waiting"],
+                         [self.tool.row_state(item, model) for item in model["holders"] + model["waiters"]])
 
     def test_the_bar_warns_by_the_same_idle(self) -> None:
         model = self.model()

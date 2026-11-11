@@ -31,7 +31,7 @@ restores the terminal's mode on exit, also after a failure; elsewhere a table ma
 those layouts to the US positions. Only hotkeys are translated: what you type into
 a Settings field stays as typed. Help keeps showing the Latin letters.
 
-Only the selected request has a triangle and a soft background. The blank separator
+Only the selected request has a soft background. The blank separator
 between running and waiting requests is not selectable. Overflow counts appear in
 the tables’ top and bottom padding rows.
 
@@ -48,7 +48,26 @@ follows the selection: **LEASE DETAILS** for a running request, whose lease hold
 slots, and **REQUEST DETAILS** for a waiting or yielded request, which holds none.
 The rows are the same either way.
 
-The QUEUE columns are label, slots, cpu use/share, time and pid. Each row has one
+The QUEUE columns are state, label, slots, cpu use/share, time and pid.
+
+**State** (#15) is one emoji per row, two cells wide:
+
+| Emoji | ASCII | Row |
+| --- | --- | --- |
+| ▶️ | `>` | running |
+| ❓ | `?` | running, asked to yield: a waiter wants its slots (wins over the rest) |
+| 💤 | `z` | running, idle (below) |
+| 🔥 | `!` | running above 1.5 times its share, as its red bar |
+| 👨‍🦳 | `o` | a lease of an older client, from the earlier queue directory (👴 where a terminal does not join the sequence) |
+| ⏸️ | `.` | waiting |
+| ↩️ | `<` | yielded and back in the queue |
+
+A running row shows the first of ❓, 💤, 🔥 and 👨‍🦳 that applies, else ▶️. A terminal that draws an emoji
+narrower or wider than two cells shifts nothing after it: the dashboard puts the cursor on the next cell itself.
+At startup it measures how wide the terminal draws 👨‍🦳 and uses 👴 where that is two glyphs. An ASCII terminal
+(and `--once` without UTF-8) gets the one-character tags.
+
+Each row has one
 colour: a running request's row (label, slot cells, CPU numbers, time and pid) is
 in the colour of its blocks in SLOTS, the filled part of its CPU bar included (red
 when above 1.5 times its share and yellow while the lease is idle; the empty
@@ -76,13 +95,11 @@ less than the idle cores (0.1 by default) for the idle time (5 minutes), with no
 starting or ending, by its holder's own samples. Both are queue settings (Settings →
 queue policy, or `slotfather order --idle-cpu C --idle-after S`). A short pause for the
 network, a disk or a browser never lasts that long. Idle is one definition everywhere:
-the bar turns yellow, the marker column left of the label shows `◌` (dim), LEASE DETAILS
+the bar turns yellow, the state column shows 💤, LEASE DETAILS
 says `idle 23m since 10:12`, and `status` and `status --json` show it. A yieldable idle
-lease is asked to yield while a request waits that its slots would start; the marker then
-shows `↓`, which wins over idle, and LEASE DETAILS says `asked at 10:35 for …`. A lease
-that cannot yield is only marked. Nothing is ever stopped. Over-share needs no marker (the
-red bar shows it), nor do waiting rows (their state is in cpu use/share). On an
-ASCII-only terminal the markers are `o` and `v`. Idle is not a diagnosis of a hung process.
+lease is asked to yield while a request waits that its slots would start; the state then
+shows ❓, which wins over idle, and LEASE DETAILS says `asked at 10:35 for …`. A lease
+that cannot yield is only marked. Nothing is ever stopped. Idle is not a diagnosis of a hung process.
 
 `owner pid` is the process holding the lease. The process table includes that
 owner and its descendants, busiest first. Each row’s CPU is a percentage:
@@ -158,6 +175,14 @@ Solarized whose bright black is close to the background. `SLOTFATHER_THEME` sets
   exceed the number of cores.
 - **memory / swap bars:** observed used capacity. Missing observations are shown
   as unavailable rather than as zero.
+- **bar colours:** each filled cell of the load, memory and swap bars takes the
+  history chart's blue-to-red ramp at its place along the bar, so a half-full bar
+  runs from blue to the middle and a nearly full one ends red. A bar is entirely
+  red (the theme's red) while its resource is critical: memory low, swap low
+  (the conditions that turn the status word red), or a one-minute load that leaves
+  no room for another worker (the advice's capacity, `slotfather advise`, is 0).
+  A chart column that reached every slot, the time the legend's `full` counts, is
+  red from the bottom up.
 
 The histogram shows peak occupied slots per fixed time bucket over roughly an
 hour. Blue-to-red colour follows the capacity scale; `s/col` gives the time

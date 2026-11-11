@@ -74,11 +74,13 @@ DEVICE_ATTRIBUTES = b"\x1b[c"  # every terminal answers it, after the answers be
 # An OSC report starts with its number and is short, so a stray ESC ] (Alt+] without the kitty protocol) followed by
 # keys is never taken for one, nor held back waiting for its end.
 OSC_LONGEST = 80
-REPORT = re.compile(r"\x1b\]\d[^\x07\x1b]{0,%d}(?:\x07|\x1b\\)|\x1b\[\?[0-9;]*[nc]" % OSC_LONGEST)
+# A cursor position report (CSI row ; column R) answers ask()'s glyph probe.
+REPORT = re.compile(r"\x1b\]\d[^\x07\x1b]{0,%d}(?:\x07|\x1b\\)|\x1b\[\?[0-9;]*[nc]|\x1b\[\d+;\d+R" % OSC_LONGEST)
 OSC_PARTIAL = r"\](?:\d[^\x07\x1b]{0,%d}\x1b?)?" % OSC_LONGEST
-REPORT_PARTIAL = re.compile(r"\x1b(?:%s|\[\?[0-9;]*)?$" % OSC_PARTIAL)
+REPORT_PARTIAL = re.compile(r"\x1b(?:%s|\[\?[0-9;]*|\[\d+;?\d*)?$" % OSC_PARTIAL)
 COLOUR_REPLY = re.compile(r"\x1b\](10|11|4;(\d+));([^\x07\x1b]*)")
 SCHEME_REPLY = re.compile(r"\x1b\[\?997;([12])n")
+POSITION_REPLY = re.compile(r"\x1b\[(\d+);(\d+)R")
 # xterm's default 16 colours, for COLORFGBG's indices
 XTERM = [(0, 0, 0), (205, 0, 0), (0, 205, 0), (205, 205, 0), (0, 0, 238), (205, 0, 205), (0, 205, 205),
          (229, 229, 229), (127, 127, 127), (255, 0, 0), (0, 255, 0), (255, 255, 0), (92, 92, 255), (255, 0, 255),
@@ -300,11 +302,16 @@ class Answers:
         self.palette: Dict[int, RGB] = {}
         self.scheme: Optional[str] = None
         self.finished = False  # the device attributes came back: nothing more answers this query
+        self.column: Optional[int] = None  # where ask()'s probe left the cursor, 1-based
 
     def feed(self, report: str) -> bool:
         """Takes one report (see REPORT); True when it changed a colour or the scheme."""
         if report.startswith("\x1b[?") and report.endswith("c"):
             self.finished = True
+            return False
+        position = POSITION_REPLY.match(report)
+        if position:
+            self.column = int(position[2])
             return False
         scheme = SCHEME_REPLY.match(report)
         if scheme:
@@ -345,11 +352,14 @@ def split_reports(data: str) -> Tuple[List[str], str, str]:
 
 
 def ask(fd_in: int, fd_out: int, answers: Answers, timeout: float = QUERY_TIMEOUT,
-        clock: Callable[[], float] = time.monotonic) -> str:
+        clock: Callable[[], float] = time.monotonic, probe: str = "") -> str:
     """Asks the terminal for its colours and waits for the answers, at most `timeout` seconds in all; the device
-    attributes asked last end the wait early on any terminal. Returns what arrived that was not a report: keys typed
-    meanwhile. The terminal must be in non-canonical mode, or the answers wait for a newline and echo."""
-    os.write(fd_out, QUERY + DEVICE_ATTRIBUTES)
+    attributes asked last end the wait early on any terminal. `probe` is a glyph drawn at the top left, the cursor
+    position after it asked for (answers.column) and the line cleared: how wide this terminal draws it. Returns what
+    arrived that was not a report: keys typed meanwhile. The terminal must be in non-canonical mode, or the answers
+    wait for a newline and echo; a probe belongs on the alternate screen."""
+    measure = f"\x1b[H{probe}\x1b[6n\x1b[H\x1b[2K".encode() if probe else b""
+    os.write(fd_out, QUERY + measure + DEVICE_ATTRIBUTES)
     deadline, pending, typed = clock() + timeout, "", ""
     while not answers.finished:
         left = deadline - clock()
