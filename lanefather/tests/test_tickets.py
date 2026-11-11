@@ -31,12 +31,17 @@ if args[:2] == ["label", "create"]:
     state["labels"][args[2]] = {"color": args[args.index("--color") + 1],
                                 "description": args[args.index("--description") + 1]}
 elif args[:2] == ["issue", "edit"]:
-    name = args[args.index("--add-label") + 1]
+    flag = "--add-label" if "--add-label" in args else "--remove-label"
+    name = args[args.index(flag) + 1]
     if name not in state["labels"]:
         print(f"failed to update https://github.com/fixture/straylight/issues/{args[2]}: '{name}' not found",
               file=sys.stderr)
         sys.exit(1)
-    issue(args[2])["labels"].append(name)
+    labels = issue(args[2])["labels"]
+    if flag == "--add-label":
+        labels.append(name)
+    elif name in labels:
+        labels.remove(name)
 elif args[:2] == ["issue", "comment"]:
     issue(args[2])["comments"].append({"body": args[args.index("--body") + 1], "createdAt": "2999-01-01T00:00:00Z"})
 elif args[:2] == ["issue", "view"]:
@@ -207,6 +212,12 @@ class ReleaseTests(TicketCase):
         self.assertEqual(self.land_comments("77"), [released])
         self.assertEqual(self.land_comments("404")[-1], released)
         self.assertEqual(self.issue("12")["comments"], [])
+        # Released, #404 is no longer "not yet on main".
+        self.assertEqual(self.issue("404")["labels"], [])
+        removals = [call for call in self.gh_calls() if "--remove-label" in call]
+        self.assertEqual([call[2] for call in removals], ["404", "77"])
+        self.assertIn("label integrated removed from 2", self.ledger())
+        self.assertNotIn("warning", output)
 
     def test_ship_comments_the_main_sha_on_the_issues_it_closes(self):
         self.git(self.repo, "branch", "dev")
@@ -228,6 +239,19 @@ class ReleaseTests(TicketCase):
         self.assertEqual(self.land_comments("404")[-1],
                          f"Shipped to the default branch as [`{tip[:10]}`](https://github.com/fixture/straylight/"
                          f"commit/{tip}).")
+        self.assertEqual(self.issue("404")["labels"], [])
+
+    def test_a_failed_label_removal_warns_in_the_ledger_and_keeps_the_comment(self):
+        base = self.tip()
+        self.checked()
+        self.lane("land", "a")
+        self.env["FAKE_TICKETS_FAIL"] = "--remove-label"
+        output = self.lane("released", "v1.4.0", "--since", base)
+        self.assertIn("lane: warning: release v1.4.0: #404: remove label integrated: gh issue edit exited 1: HTTP 502",
+                      output)
+        self.assertIn("tickets release v1.4.0 warning: #404: remove label integrated", self.ledger())
+        self.assertTrue(self.land_comments("404")[-1].startswith("Released in `v1.4.0`"))
+        self.assertEqual(self.issue("404")["labels"], ["integrated"])
 
     def test_a_release_comment_failure_warns_and_never_fails_the_command(self):
         base = self.tip()

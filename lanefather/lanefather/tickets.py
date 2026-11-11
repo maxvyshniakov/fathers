@@ -7,7 +7,7 @@
   the integration branch, not yet on main or released) and comments the merge, its branch, whether origin has it (a
   local-only SHA does not resolve on GitHub, so it is not linked), the checks it passed and the preview.
 - `release_comment`: promote --ship, and `released` after a project's release publish, comment the main SHA or the
-  version on each issue a `Fixes #N` line in the shipped range names.
+  version on each issue a `Fixes #N` line in the shipped range names, and take its `integrated` label off.
 
 gh runs without a prompt against the project's repository. A gh failure warns and goes to the ledger; it never fails
 the land or the promote, which have already happened.
@@ -92,6 +92,12 @@ def add_label(repo: str, number: str) -> str | None:
     if created and "already exists" not in created:
         return created
     return gh(repo, "issue", "edit", number, "--add-label", LABEL)
+
+
+def remove_label(repo: str, number: str) -> str | None:
+    """Take the `integrated` label off the issue; a repository without the label has nothing to remove."""
+    problem = gh(repo, "issue", "edit", number, "--remove-label", LABEL)
+    return None if problem and f"'{LABEL}' not found" in problem else problem
 
 
 def warn(what: str, problems: list[str]) -> None:
@@ -202,10 +208,22 @@ def release_comments(cwd: str, common: str, base: str, head: str, version: str |
         return 0
     link = f"[`{head[:10]}`](https://github.com/{repo}/commit/{head})"
     body = (f"Released in `{version}` ({link})." if version else f"Shipped to the default branch as {link}.")
-    problems = [f"#{n}: {p}" for n in numbers for p in [gh(repo, "issue", "comment", n, "--body", body)] if p]
-    commented = len(numbers) - len(problems)
+    problems: list[str] = []
+    commented = unlabelled = 0
+    for number in numbers:
+        problem = gh(repo, "issue", "comment", number, "--body", body)
+        if problem:
+            problems.append(f"#{number}: {problem}")
+        else:
+            commented += 1
+        # Released, the issue is no longer "not yet on main": its integrated label goes.
+        problem = remove_label(repo, number)
+        if problem:
+            problems.append(f"#{number}: remove label {LABEL}: {problem}")
+        else:
+            unlabelled += 1
     journal.ledger(f"tickets {what}: commented {commented} of {len(numbers)} fixed issues "
-                   f"({', '.join('#' + n for n in numbers)}) in {repo}")
+                   f"({', '.join('#' + n for n in numbers)}) in {repo}, label {LABEL} removed from {unlabelled}")
     print(f"lane: {what}: commented on {commented} of {len(numbers)} issues it fixes "
           f"({', '.join('#' + n for n in numbers)})")
     if problems:
