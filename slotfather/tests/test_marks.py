@@ -13,6 +13,13 @@ from typing import Any
 from slotfather import theme
 
 DARK = {"SLOTFATHER_TERMINAL_BG": "#282c34", "SLOTFATHER_TERMINAL_FG": "#ffffff"}
+LIGHT = {"SLOTFATHER_TERMINAL_BG": "#fdfcfa", "SLOTFATHER_TERMINAL_FG": "#2a2a2a"}
+
+
+def sample(now: datetime.datetime) -> dict[str, Any]:
+    case = MarkTests()
+    case.now = now
+    return case.model()
 
 
 class MarkTests(unittest.TestCase):
@@ -58,21 +65,21 @@ class MarkTests(unittest.TestCase):
             with self.subTest(width=width):
                 canvas = self.tool.Canvas(width, 14)
                 self.tool.draw_requests(canvas, 0, 0, 14, width, self.model(), 0, self.now)
-                rows = [y for y in range(2, 13) if canvas.cells[y][2][0] not in (" ", "")]
+                rows = [y for y in range(2, 13) if canvas.cells[y][3][0] not in (" ", "")]
                 self.assertEqual(8, len(rows), "every row has a state")
                 for y in rows:
                     cells = canvas.cells[y]
-                    self.assertEqual("", cells[3][0], "the glyph takes two cells")
-                    self.assertEqual(" ", cells[4][0], "then a gap")
-                    self.assertNotEqual(" ", cells[5][0], "the label starts in the same cell on every row")
+                    self.assertEqual("", cells[4][0], "the glyph takes two cells")
+                    self.assertEqual(" ", cells[5][0], "then a gap")
+                    self.assertNotEqual(" ", cells[6][0], "the label starts in the same cell on every row")
                     self.assertEqual("│", cells[width - 1][0], "the frame stays put")
                     self.assertNotIn("▶", [cell[0] for cell in cells], "no cursor glyph")
                     self.assertFalse({"◌", "↓"} & {cell[0] for cell in cells}, "no marker column")
                 if width >= 60:  # the columns right of the label start in the same cell on every running row
-                    starts = {next(x for x in range(5, width) if canvas.cells[y][x][0] in "■░") for y in rows[:6]}
+                    starts = {next(x for x in range(6, width) if canvas.cells[y][x][0] in "■░") for y in rows[:6]}
                     self.assertEqual(1, len(starts), starts)
-                line = canvas.lines(True, place=True)[rows[5]]  # 👨‍🦳 at cell 2, then the cursor on cell 4 (CHA 5)
-                self.assertIn("👨‍🦳\x1b[0m\x1b[5G", line)
+                line = canvas.lines(True, place=True)[rows[5]]  # 👨‍🦳 at cell 3, then the cursor on cell 5 (CHA 6)
+                self.assertIn("👨‍🦳\x1b[0m\x1b[6G", line)
 
     def test_a_long_label_is_cut_with_an_ellipsis_after_the_state(self) -> None:
         model = self.model()
@@ -80,7 +87,7 @@ class MarkTests(unittest.TestCase):
         canvas = self.tool.Canvas(60, 14)
         self.tool.draw_requests(canvas, 0, 0, 14, 60, model, 0, self.now)
         row = next(line for line in canvas.render(False).splitlines() if "lane-pin" in line)
-        self.assertRegex(row, r"^┃ ▶️ lane-pin-ui\S*… ", "the state first, the name cut with a plain ellipsis")
+        self.assertRegex(row, r"^┃  ▶️ lane-pin-u\S*… ", "the state first, the name cut with a plain ellipsis")
 
     def test_the_selected_row_has_its_background_and_no_cursor(self) -> None:
         canvas = self.tool.Canvas(120, 14)
@@ -112,7 +119,7 @@ class MarkTests(unittest.TestCase):
         self.tool.draw_requests(canvas, 0, 0, 14, 120, model, 0, self.now)
         lines = canvas.lines(False, ascii_only=True)
         self.assertTrue(all(line.isascii() for line in lines))
-        found = {label: line[2] for line in lines for label in ("plain", "everything", "sleepy", "hog", "veteran",
+        found = {label: line[3] for line in lines for label in ("plain", "everything", "sleepy", "hog", "veteran",
                                                                 "next", "again") if f" {label} " in line}
         self.assertEqual({"plain": ">", "everything": "?", "sleepy": "z", "hog": "!", "veteran": "o", "next": ".",
                           "again": "<"}, found)
@@ -179,6 +186,116 @@ class PlacementTests(unittest.TestCase):
         finally:
             os.close(read)
             os.close(write)
+
+
+class TintTests(unittest.TestCase):
+    """#15: a selected running row is tinted with its own colour; a waiting one keeps the neutral selection."""
+
+    def setUp(self) -> None:
+        self.tool: Any = importlib.reload(importlib.import_module("slotfather.dashboard"))
+        self.now = datetime.datetime.now(datetime.timezone.utc)
+
+    def selected_sgr(self, index: int) -> tuple[str, Any]:
+        canvas = self.tool.Canvas(120, 14)
+        self.tool.draw_requests(canvas, 0, 0, 14, 120, sample(self.now), index, self.now)
+        [y] = [y for y in range(14) if any(cell[2] for cell in canvas.cells[y])]
+        label = next(x for x in range(6, 60) if canvas.cells[y][x][0] not in (" ", ""))
+        return self.tool.sgr(canvas.cells[y][label][1], canvas.cells[y][label][2]), canvas.cells[y]
+
+    def test_a_running_row_in_its_tint_and_a_waiting_row_neutral(self) -> None:
+        for environ, bg, fg in ((LIGHT, (0xFD, 0xFC, 0xFA), (0x2A, 0x2A, 0x2A)), (DARK, (0x28, 0x2C, 0x34), (255, 255, 255))):
+            self.tool.set_theme(theme.resolve("auto", environ=environ))
+            holder = self.tool.current_theme.styles["h0"][0]
+            code, cells = self.selected_sgr(0)
+            self.assertEqual("\x1b[0;48;2;%d;%d;%dm" % theme.mix(bg, holder, theme.TINT_MIX), code,
+                             "the label in the foreground on its own tint")
+            self.assertEqual(["┃", "h0"], cells[0][:2], "the frame marker in its colour")
+            self.assertEqual("h0", next(cell[1] for cell in cells if cell[0] == "▪"), "slot cells keep it")
+            code, _ = self.selected_sgr(6)
+            self.assertEqual("\x1b[0;48;2;%d;%d;%dm" % theme.mix(bg, fg, theme.SELECTION_MIX), code, "waiting: neutral")
+
+    def test_every_holder_tint_keeps_the_text_at_4_5_to_1(self) -> None:
+        for environ, fg in ((LIGHT, (0x2A, 0x2A, 0x2A)), ({"SLOTFATHER_TERMINAL_BG": "#1e1e1e",
+                                                           "SLOTFATHER_TERMINAL_FG": "#e6e6e6"}, (0xE6, 0xE6, 0xE6))):
+            found = theme.resolve("auto", environ=environ)
+            self.assertEqual(12, len(found.tints))
+            for name, tinted in found.tints.items():
+                self.assertGreaterEqual(theme.contrast(fg, tinted), theme.TINT_CONTRAST, (name, tinted))
+                self.assertNotEqual(found.selection, tinted, f"{name} has its own tint")
+
+    def test_without_a_known_background_the_row_is_bold(self) -> None:
+        self.tool.set_theme(theme.resolve("auto", environ={}))
+        code, _ = self.selected_sgr(0)
+        self.assertTrue(code.startswith("\x1b[0;1;"), code)
+        self.assertNotIn("48;2", code)
+
+
+class FrameTests(unittest.TestCase):
+    """#15: one title offset for every panel, and the right frame as a scrollbar."""
+
+    def setUp(self) -> None:
+        self.tool: Any = importlib.reload(importlib.import_module("slotfather.dashboard"))
+        self.tool.set_theme(theme.resolve("auto", environ=DARK))
+        self.now = datetime.datetime.now(datetime.timezone.utc)
+
+    def thumb(self, canvas: Any, x: int, top: int, height: int) -> list[int]:
+        return [row - top for row in range(top, top + height) if canvas.cells[row][x][0] == "┃"]
+
+    def test_the_thumb_is_sized_by_the_visible_share_and_follows_the_offset(self) -> None:
+        for offset, expected in ((0, [0, 1, 2]), (35, [4, 5, 6]), (70, [7, 8, 9]), (99, [7, 8, 9])):
+            with self.subTest(offset=offset):
+                canvas = self.tool.Canvas(20, 12)
+                canvas.box(0, 0, 12, 20)
+                canvas.scrollbar(1, 19, 10, offset, 30, 100)  # 10 rows, 30 of 100 shown: a thumb of 3
+                self.assertEqual(expected, self.thumb(canvas, 19, 1, 10))
+                self.assertEqual({"dim"}, {canvas.cells[1 + row][19][1] for row in expected}, "muted, not coloured")
+                self.assertTrue(all(canvas.cells[1 + row][19][0] == "│" for row in range(10) if row not in expected))
+        canvas = self.tool.Canvas(20, 12)
+        canvas.box(0, 0, 12, 20)
+        canvas.scrollbar(1, 19, 10, 0, 30, 3000)
+        self.assertEqual([0], self.thumb(canvas, 19, 1, 10), "at least one cell")
+        canvas.scrollbar(1, 19, 10, 0, 30, 30)
+        self.assertEqual("#", canvas.lines(False, ascii_only=True)[1][19])
+
+    def test_no_thumb_when_everything_fits(self) -> None:
+        canvas = self.tool.Canvas(120, 14)
+        self.tool.draw_requests(canvas, 0, 0, 14, 120, sample(self.now), 0, self.now)  # 8 rows fit
+        self.assertEqual([], self.thumb(canvas, 119, 1, 12))
+
+    def test_the_selection_marker_and_the_thumb_share_a_row(self) -> None:
+        model = sample(self.now)
+        canvas = self.tool.Canvas(120, 7)  # room for three of the nine rows
+        self.tool.draw_requests(canvas, 0, 0, 7, 120, model, 0, self.now)
+        selected = [y for y in range(7) if any(cell[2] for cell in canvas.cells[y])]
+        self.assertEqual(["┃", "h0"], canvas.cells[selected[0]][0][:2], "left: the row's colour")
+        self.assertEqual(["┃", "dim"], canvas.cells[selected[0]][119][:2], "right: the muted thumb, same row")
+        self.assertIn("↓", canvas.render(False), "the counts stay")
+
+    def test_every_panel_title_sits_at_one_offset(self) -> None:
+        sys_path = _path_sys.path
+        if str(_Path(__file__).resolve().parent) not in sys_path:
+            sys_path.insert(0, str(_Path(__file__).resolve().parent))
+        from test_footer import model as footer_model
+        state = footer_model()
+        state["holders"] = sample(self.now)["holders"][:2]
+        for holder in state["holders"]:
+            holder.update(key=(holder["pid"], None), priority="normal", ticket=None, meta="", context={},
+                          workdir="", yieldable=False, yields=0, asked_at=None, passable=False, all=False)
+        canvas = self.tool.Canvas(160, 44)
+        self.tool.dashboard_draw(canvas, state)
+        offsets: dict[str, int] = {}
+        for line in canvas.render(False).splitlines():
+            for title in ("SLOTS", "QUEUE", "EVENTS", "LEASE DETAILS", "MACHINE"):
+                at = line.find(f" {title} ")
+                if at >= 0:
+                    frame = max(line.rfind("╭", 0, at), 0)
+                    offsets[title] = at + 1 - frame
+        self.assertEqual(5, len(offsets), offsets)
+        self.assertEqual({3}, set(offsets.values()), offsets)
+        queue = next(y for y, line in enumerate(canvas.render(False).splitlines()) if " QUEUE " in line)
+        row = canvas.cells[queue + 2]
+        self.assertEqual("▶️", row[3][0], "the state starts where every panel's content does")
+        self.assertEqual("p", row[6][0], "the label after it")
 
 
 if __name__ == "__main__":

@@ -475,7 +475,8 @@ class OnceTests(SlotCase):
         self.started("painted")
         light = self.tool("dashboard", "--once", "--color", "--width", "140", "--height", "40", **LIGHT_ENV)
         self.assertEqual(0, light.returncode, light.stderr)
-        self.assertIn("48;2;%d;%d;%dm" % theme.mix(LIGHT_BG, LIGHT_FG, 0.10), light.stdout)
+        self.assertIn("48;2;%d;%d;%dm" % theme.resolve("auto", None, LIGHT_ENV).tints["h0"], light.stdout,
+                      "the selected lease on its own tint (#15)")
         self.assertNotIn("56;62;74", light.stdout)
         self.assertNotIn("38;5;255", light.stdout, "no white text on a light background")
         builtin = self.tool("dashboard", "--once", "--color", "--width", "140", "--height", "40",

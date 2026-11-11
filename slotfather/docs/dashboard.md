@@ -34,7 +34,13 @@ restores the terminal's mode on exit, also after a failure; elsewhere a table ma
 those layouts to the US positions. Only hotkeys are translated: what you type into
 a Settings field stays as typed. Help keeps showing the Latin letters.
 
-Only the selected request has a soft background. The blank separator
+Only the selected request has a heavy `┃` on the left frame, in its colour, and a
+tinted background: a running row's mixes 14% of its own colour into the terminal's
+background (less where its text, then in the normal foreground, would fall below
+4.5:1), a waiting row's the neutral selection; without a known background the row
+is bold. Every panel that overflows (QUEUE, EVENTS, the details, Settings, help)
+shows a scrollbar on its right frame: a muted `┃` thumb as long as the visible
+share, at the bottom on the last page. The blank separator
 between running and waiting requests is not selectable. Overflow counts appear in
 the tables’ top and bottom padding rows.
 
@@ -187,15 +193,22 @@ Solarized whose bright black is close to the background. `SLOTFATHER_THEME` sets
   (the conditions that turn the status word red), or a one-minute load that leaves
   less than one slot's share of the cores free (by load alone: a fully leased but
   quiet machine is not red).
-  A chart column that reached every slot, the time the legend's `full` counts, is
-  red from the bottom up.
 
 The histogram shows peak occupied slots per fixed time bucket over roughly an
-hour. Blue-to-red colour follows the capacity scale; `s/col` gives the time
-represented by each column. The newest bucket is incomplete. Its legend gives
-average occupancy, peak slots and the share of time capacity was full. Whole
-slots can still produce fractional block heights when graph height and capacity
-differ. Historical over-capacity values are retained in the legend.
+hour, four rows high. Blue-to-red colour follows the capacity scale. The newest
+bucket is incomplete. The line under it is its time axis:
+
+```
+−60m              avg 5.2/8 · peak 8 · full 20%              now
+```
+
+The left label is the window the chart shows (its columns times the seconds each
+stands for), in a friendly unit (−45s, −15m, −60m, −2h), under the first column;
+`now` is under the last. Between them, in slots: `avg` is the mean held, `peak`
+the most held and `full` the share of the window's time every slot was held. A
+narrow chart drops `full`, then `peak`; the axis stays. Whole slots can still
+produce fractional block heights when graph height and capacity differ.
+Historical over-capacity values are retained in `peak`.
 
 Refreshing can reap dead queue entries, like `status`. Selecting and
 scrolling never grants a lease, cancels work or kills a process.

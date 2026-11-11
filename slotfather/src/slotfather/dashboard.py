@@ -44,8 +44,8 @@ from . import theme as _theme
 # and --once write that canvas as the same escape sequences, so they are the same picture.
 
 SPARK = "▁▂▃▄▅▆▇█"
-CHART_ROWS = 5
-MACHINE_HEIGHT = 12 + CHART_ROWS  # status, resource bars, gaps, legend and frame
+CHART_ROWS = 4
+MACHINE_HEIGHT = 11 + CHART_ROWS  # frame, status, resource bars, gaps and the legend, the bottom frame right after it
 HISTORY_WINDOW = 3600  # seconds of queue.log the utilisation strip rebuilds
 LOG_TAIL = 262144  # bytes of queue.log read per refresh
 WIDE = 110  # columns from which the panels sit side by side
@@ -62,7 +62,7 @@ def set_theme(theme: _theme.Theme) -> None:
 
 ASCII = str.maketrans({"🮅": "#", "■": "#", "▪": "#", "◌": "o", "□": "o", "▫": "o", "▶": ">", "▉": "#", "▌": "+", "▐": "|", "█": "#", "▓": "%", "▒": "=", "░": ".", "·": ".", "●": "*", "…": "~", "─": "-", "│": "|",
                        "╭": "+", "╮": "+", "╰": "+", "╯": "+", "↑": "^", "↓": "v", "↗": "/", "↘": "\\", "→": ">",
-                       "←": "<", "≈": "~", "×": "x", "—": "-", "⏸": "=", "▭": "o", "┃": "#", "▁": "_", "▂": "_", "▃": "-", "▄": "-",
+                       "←": "<", "≈": "~", "×": "x", "—": "-", "⏸": "=", "▭": "o", "−": "-", "┃": "#", "▁": "_", "▂": "_", "▃": "-", "▄": "-",
                        "▅": "=", "▆": "=", "▇": "#"})
 GRANTED = re.compile(r"granted (\d+) to (.*) \(pid (\d+)\)$")
 RELEASED = re.compile(r"released (\d+) \(\d+-(\d+)\.json\)$")
@@ -248,10 +248,22 @@ class Canvas:
                 self.links.pop((row, column), None)
             self.unsplit(row, max(0, x), min(self.width, x + width))
 
-    def select(self, y: int, start: int, end: int) -> None:
+    def scrollbar(self, y: int, x: int, height: int, offset: int, visible: int, total: int) -> None:
+        """A panel's right frame from row y down `height` rows as its scrollbar: a heavy thumb in the muted token,
+        max(1, round(height × visible / total)) cells long, as far down as the scroll offset, at the bottom on the
+        last page; nothing when everything fits (#15)."""
+        if total <= visible or height <= 0 or visible <= 0:
+            return
+        length = min(height, max(1, round(height * visible / total)))
+        top = round((height - length) * min(offset, total - visible) / (total - visible))
+        for row in range(y + top, y + top + length):
+            self.put(row, x, SCROLL_THUMB, "dim")
+
+    def select(self, y: int, start: int, end: int, tint: bool | str = True) -> None:
+        """Marks cells start..end of row y selected: True for the neutral background, a holder style for its tint."""
         if 0 <= y < self.height:
             for column in range(max(0, start), min(self.width, end)):
-                self.cells[y][column][2] = True
+                self.cells[y][column][2] = tint
 
     def box(self, y: int, x: int, height: int, width: int, title: str = "", note: str = "") -> None:
         if height < 2 or width < 6:
@@ -318,17 +330,20 @@ def safe_link(url: str) -> bool:
         return False
 
 
-def sgr(style: str, selected: bool) -> str:
+def sgr(style: str, selected: bool | str) -> str:
     """The SGR sequence for a cell. A selected cell has the theme's selection background, or is bold where the
     theme has none; its text keeps its colour (builtin: default-foreground text turns 252 over its dark band)."""
     fore, flags = current_theme.styles[style]
     if selected and fore is None:
         fore = current_theme.selected_text
-    bold = "b" in flags or (selected and current_theme.selection is None)
+    # `selected` is True, or a holder style: a running row's own tint (#15), the neutral selection where it has none
+    back = (current_theme.tints.get(selected) if isinstance(selected, str) else None) or current_theme.selection \
+        if selected else None
+    bold = "b" in flags or (bool(selected) and back is None)
     codes = ["0"] + (["1"] if bold else []) + (["2"] if "d" in flags and fore is None else [])
     codes += _theme.sgr_colour(fore)
-    if selected and current_theme.selection is not None:
-        codes += _theme.sgr_colour(current_theme.selection, 4)
+    if back is not None:
+        codes += _theme.sgr_colour(back, 4)
     codes += ["7"] if "r" in flags else []
     return "\x1b[" + ";".join(codes) + "m"
 
@@ -736,6 +751,7 @@ def table_view(canvas: Canvas, name: str, y: int, x: int, height: int, width: in
                  else max(0, count - offset - visible))
         if below:
             canvas.put(top + visible, x + 3, f"↓ {below} more", "dim", width - 6)
+        canvas.scrollbar(y + 1, x + width - 1, height - 2, offset, visible, count)
     return offset, visible
 
 
@@ -771,9 +787,10 @@ def mouse_action(canvas: Canvas, event: tuple[str, int, int, int, bool],
 def table_header(canvas: Canvas, y: int, x: int, height: int, width: int, title: str, placed: list, gutter: int = 0) -> None:
     """The panel's top border doubles as its table header, aligned with the data."""
     canvas.box(y, x, height, width)
-    for index, (key, label, column, size, right) in enumerate(placed):
+    for index, (key, label, column, size, right) in enumerate(cast(list[tuple[str, str, int, int, bool]], placed)):
         value = title if index == 0 else label.lower()
-        start = x + 3 + gutter + column + (max(0, size - text_width(value)) if right else 0)
+        # The title sits where every panel's does (x + 3); the other headers over their columns, `gutter` in
+        start = x + 3 if index == 0 else x + 3 + gutter + column + (max(0, size - text_width(value)) if right else 0)
         canvas.put(y, start - 1, " ", "dim")
         canvas.put(y, start, value, "title" if index == 0 else "dim", size)
         canvas.put(y, min(x + width - 2, start + min(size, text_width(value))), " ", "dim")
@@ -962,6 +979,7 @@ def row_state(item: dict[str, Any], model: dict[str, Any]) -> str:
 
 
 SELECTED_FRAME = "┃"  # the left frame beside a selected row, in the row's colour (#15); # on an ASCII terminal
+SCROLL_THUMB = "┃"  # the right frame's scrollbar thumb, muted (#15); # on an ASCII terminal
 
 
 def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model: dict, selected: int,
@@ -975,14 +993,14 @@ def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model
     row_items.extend(range(len(holders), len(items)))
     # cpu use/share: the bar starts at the column's left edge on every row, then `use` right-aligned and `/share`
     # left-aligned around the slash, padded to the widest on screen; a waiting row's state starts where the bars do.
-    layout = queue_layout(width - 8, cast(dict[str, Any], model))  # the state column takes two cells and a gap
+    layout = queue_layout(width - 9, cast(dict[str, Any], model))  # the state column takes two cells and a gap
     placed, cells = layout.placed, layout.natural["slots"]
     shares = {index: share(item, model) for index, item in enumerate(holders)}
     use_width, share_width = layout.use_width, layout.share_width
     size = next((column[3] for column in placed if column[0] == "slots"), cells)
-    table_header(canvas, y, x, height, width, "QUEUE", placed, gutter=2)
+    table_header(canvas, y, x, height, width, "QUEUE", placed, gutter=3)
     if not items:
-        canvas.put(y + 2, x + 5, f"No requests · all {model['slots']} slots free", "dim", width - 8)
+        canvas.put(y + 2, x + 3, f"No requests · all {model['slots']} slots free", "dim", width - 6)
     visual_selected = row_items.index(selected) if selected in row_items else None
     offset, rows = table_view(canvas, "requests", y, x, height, width, y + 2, height - 4,
                               len(row_items), visual_selected, row_items=row_items)
@@ -995,6 +1013,10 @@ def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model
         # One colour per row: a running lease's SLOTS colour (its CPU bar too, but for a warning), the text colour for a
         # request that holds no slots.
         style = "text" if waiting else str(item["style"])
+        # A selected running row with its own tint: its text in the foreground, which keeps 4.5:1 on the tint, and
+        # its colour in the background, the state, the slot cells, the bar and the frame (#15)
+        tinted = index == selected and style in current_theme.tints
+        ink = "text" if tinted else style
         if waiting:
             place = index - len(holders) + 1
             state = f"yielded #{place}" if item.get("yields") else f"waiting #{place}"  # back in the queue to resume
@@ -1004,13 +1026,14 @@ def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model
             age = (moment - item["granted"]).total_seconds() if item["granted"] else None
             used, allotted = shares[index]
             cpu = bar(used / allotted if allotted else 0, layout.bar, queue_bar_style(item, cast(dict[str, Any], model), moment)) + [
-                (f" {used:.1f}".rjust(use_width + 1) + "/" + short(allotted).ljust(share_width), style)]
-        canvas.put(row, x + 2, marks[row_state(item, cast(dict[str, Any], model))], style, 2)  # #15
-        draw_row(canvas, row, x + 5, placed, {
-            "label": (str(item["label"]), style), "slots": slot_cells(item, size),
-            "time": (span(age) if age is not None else "—", style), "cpu": cpu, "pid": (str(item["pid"]), style)})
+                (f" {used:.1f}".rjust(use_width + 1) + "/" + short(allotted).ljust(share_width), ink)]
+        # The state is the row's first content, where every panel's starts (x + 3); the label after it (#15)
+        canvas.put(row, x + 3, marks[row_state(item, cast(dict[str, Any], model))], style, 2)
+        draw_row(canvas, row, x + 6, placed, {
+            "label": (str(item["label"]), ink), "slots": slot_cells(item, size),
+            "time": (span(age) if age is not None else "—", ink), "cpu": cpu, "pid": (str(item["pid"]), ink)})
         if index == selected:  # its background, and the left frame heavy in the row's colour: no cursor glyph
-            canvas.select(row, x + 1, x + width - 1)
+            canvas.select(row, x + 1, x + width - 1, style if tinted else True)
             canvas.put(row, x, SELECTED_FRAME, style)
 
 
@@ -1291,11 +1314,11 @@ def draw_machine(canvas: Canvas, y: int, x: int, height: int, width: int, model:
         (1, "memory", memory_parts),
         (3, "swap", swap_parts),
     ]
-    room = height - 4
-    while len(lines) + 6 > room and len(lines) > 1:
+    # Rows besides the chart: the frame (2), a gap, the status, a gap, the bars, a gap on each side of the chart and
+    # the legend, which the bottom frame follows directly.
+    while len(lines) + 9 > height and len(lines) > 1:
         lines.remove(max(lines, key=lambda line: line[0]))
-    # Reserve a gap before/after the chart and a one-line summary.
-    chart_rows = max(0, min(CHART_ROWS, room - len(lines) - 5))
+    chart_rows = max(0, min(CHART_ROWS, height - 8 - len(lines)))
     canvas.segments(y + 2, x + 3, machine_status(model, inner), inner)
     row = y + 4  # one gap between the status row and resource bars
     for _, name, parts in lines:
@@ -1304,8 +1327,7 @@ def draw_machine(canvas: Canvas, y: int, x: int, height: int, width: int, model:
         row += 1
     if chart_rows:
         row += 1  # gap above the histogram
-    # Eighth-block heights; the same blue-to-red gradient is tied to the capacity scale, and a column that reached
-    # every slot (what the legend's `full` counts) is red from the bottom up.
+    # Eighth-block heights; the same blue-to-red gradient is tied to the capacity scale.
     for line in range(chart_rows):
         floor = (chart_rows - 1 - line) * 8
         for column, level in enumerate(buckets):
@@ -1313,15 +1335,46 @@ def draw_machine(canvas: Canvas, y: int, x: int, height: int, width: int, model:
             glyph = SPARK[min(8, eighths) - 1] if eighths > 0 else " "
             height_fraction = min(1, level / slots) if chart_rows == 1 else (chart_rows - 1 - line) / (chart_rows - 1)
             colour = round(height_fraction * (_theme.CHART_STEPS - 1))
-            style = ("bad" if level >= slots else f"chart{colour}") if eighths > 0 else "dim"
-            canvas.put(row, x + 3 + column, glyph, style)
+            canvas.put(row, x + 3 + column, glyph, f"chart{colour}" if eighths > 0 else "dim")
         row += 1
     if chart_rows:
         row += 1  # one gap row between histogram and legend
-    if chart_rows and row < y + height - 2:
-        canvas.put(row, x + 3, f"held/{slots}  {max(1, math.ceil(HISTORY_WINDOW / chart_width))}s/col  "
-                                f"avg {summary['average']:.0%}  peak {summary['peak']}/{slots}  "
-                                f"full {summary['full']:.0%}", "dim", inner)
+    if chart_rows and row <= y + height - 2:
+        canvas.segments(row, x + 3, machine_legend(cast(dict[str, Any], summary), cast(int, slots), chart_width), inner)
+
+
+def window_text(seconds: float) -> str:
+    """How far back a chart reaches, in a friendly unit: −45s, −90s, −15m, −60m, −2h."""
+    seconds = max(1, round(seconds))
+    if seconds < 120:
+        return f"−{seconds if seconds < 30 else 5 * round(seconds / 5)}s"
+    minutes = seconds / 60
+    if minutes < 120:
+        return f"−{round(minutes) if minutes < 10 else 5 * round(minutes / 5)}m"
+    return f"−{round(minutes / 60)}h"
+
+
+def machine_legend(summary: dict[str, Any], slots: int, chart_width: int) -> list[tuple[str, str]]:
+    """The history chart's legend, a time axis under it: the window it shows on the left, under its first column,
+    `now` on the right under its last, and between them, centred, the mean and most held slots and the share of
+    the time every slot was held. A narrow chart drops full, then peak, then avg; the axis stays."""
+    left, right = window_text(chart_width * max(1, math.ceil(HISTORY_WINDOW / chart_width))), "now"
+    stats = [[("avg", "dim"), (f" {summary['average'] * slots:.1f}/{slots}", "text")],
+             [("peak", "dim"), (f" {summary['peak']}", "text")],
+             [("full", "dim"), (f" {summary['full']:.0%}", "text")]]
+    room = chart_width - text_width(left) - text_width(right) - 4  # two cells each side of the stats
+    parts: list[tuple[str, str]] = []
+    while stats:
+        parts = [part for index, stat in enumerate(stats) for part in ([(" · ", "dim")] if index else []) + stat]
+        if sum(text_width(text) for text, _ in parts) <= room:
+            break
+        stats.pop()
+        parts = []
+    middle = sum(text_width(text) for text, _ in parts)
+    gap = max(0, chart_width - text_width(left) - text_width(right) - middle)
+    before = gap // 2 if parts else gap
+    return ([(left, "dim"), (" " * before, "text")] + parts
+            + [(" " * (gap - before), "text"), (right, "dim")])
 
 
 def draw_events(canvas: Canvas, y: int, x: int, height: int, width: int, model: dict) -> None:
@@ -1359,7 +1412,7 @@ HELP_CONTENT: list[tuple[str, str]] = [
     ("One colour identifies one running request across its slots and row. Labels below the blocks name their owners; free marks unused capacity.", "text"),
     ("The header shows machine cores and shared slot capacity. manual means a saved capacity setting; auto means capacity calculated from the machine.", "text"),
     ("QUEUE", "title"),
-    ("Running requests come first, followed by a blank separator and waiting requests. A soft background identifies the selected row. Selection opens its details.", "text"),
+    ("Running requests come first, followed by a blank separator and waiting requests. The selected row has a heavy left frame in its colour and a background tinted with it (a waiting row's is neutral). Selection opens its details.", "text"),
     ("Each row has one colour: a running request's row is in the colour of its SLOTS blocks, its CPU bar too, except that the bar turns red above 1.5 times its share and yellow while the lease is idle; a waiting or yielded request's row is in the normal text colour.", "text"),
     ("slots: one cell per slot the request holds or asks for. A count too wide for the column shows the cells that fit and +N for the rest; -n all that does not fit shows all.", "text"),
     ("cpu use/share: observed cores used by a running request / the core budget represented by its slots. A request can exceed its share; it is not a hard limit. A request that holds no slots shows its state there instead: waiting #N, its current place in the waiting queue, or yielded #N for a lease back in the queue after a yield. Bars and states start at one column; the numbers line up around the slash.", "text"),
@@ -1367,7 +1420,7 @@ HELP_CONTENT: list[tuple[str, str]] = [
     ("Yellow CPU marks an idle lease: below the idle cores (0.1 by default) for the idle time (5 minutes) by its holder's own samples, with no process starting or ending; both are queue settings. A short pause never counts. Red means use well above its share.", "text"),
     ("The first column is the row's state: ▶️ running, ⏸️ waiting, ↩️ yielded and back in the queue. A running row shows the first of these instead: ❓ asked to yield, 💤 idle, 🔥 above 1.5 times its share, 👨‍🦳 a lease of an older client. An ASCII terminal shows > . < ? z ! o.", "text"),
     ("A yieldable idle lease is asked to yield while a request waits that its slots would start; one that cannot yield is only marked. Nobody is ever stopped.", "text"),
-    ("↑ above and ↓ more count rows outside the visible table. Scroll with the wheel or move the selection to reveal them.", "text"),
+    ("↑ above and ↓ more count rows outside the visible table, and a panel that overflows shows a scrollbar on its right frame. Scroll with the wheel or move the selection to reveal them.", "text"),
     ("LEASE DETAILS and REQUEST DETAILS", "title"),
     ("The details title follows the selection: LEASE DETAILS for a running request, whose lease holds slots; REQUEST DETAILS for a waiting or yielded one, which holds none. The rows are the same.", "text"),
     ("label is the caller-supplied name. status gives the run or wait state and slot count. idle says how long the lease has been idle and since when; yield says when it was asked to yield and for whom.", "text"),
@@ -1393,9 +1446,9 @@ HELP_CONTENT: list[tuple[str, str]] = [
     ("unleased load: estimated demand outside leased work. This is not the number of free cores.", "text"),
     ("admission: how many slots a generic new request can get now, after the queue and memory checks. It is not a worker count; free slots can still have no admission.", "text"),
     ("memory and swap bars show used capacity. Low memory or swap blocks additional leases; an idle machine may still start its first request.", "text"),
-    ("Each bar fills in the chart's blue-to-red ramp along its length, so a nearly full bar ends red. A bar is all red while its resource is critical: memory low, swap low, or a one-minute load that leaves less than one slot's share of the cores free. A chart column that reached every slot is all red.", "text"),
+    ("Each bar fills in the chart's blue-to-red ramp along its length, so a nearly full bar ends red. A bar is all red while its resource is critical: memory low, swap low, or a one-minute load that leaves less than one slot's share of the cores free.", "text"),
     ("The held chart shows occupied slots over time, newest on the right. Each column preserves its interval's peak; fractional heights show more than whole rows.", "text"),
-    ("held/N is the slot scale; s/col is seconds per column. Blue is the bottom, red is full capacity. avg is average occupancy; peak is the most held; full is time at capacity.", "text"),
+    ("The legend under the chart is its time axis: how far back it reaches on the left (−60m), now on the right. Between them, in slots: avg is the mean held, peak the most held, full the share of the time every slot was held. Blue is the bottom, red is full capacity.", "text"),
     ("Colours follow the terminal's theme, light or dark, and repaint when it switches. Colour theme: Auto mixes the selection, bar tracks and free slots from its background; Terminal uses its palette only; Built-in is a fixed palette for themes whose bright black is close to the background.", "text"),
     ("SETTINGS", "title"),
     ("s opens Settings: a read-only STATUS of the queue above shared capacity, queue policy and this dashboard's refresh interval and colour theme. ←/→ shows the next value of the selected setting and saves it once the keys have settled for a second (Enter saves now, Esc cancels); Enter edits a number. A saved setting applies at the next grant, also while requests run or wait. d resets the selected setting, D twice resets them all; Esc closes.", "text"),
@@ -1484,6 +1537,7 @@ def draw_help(canvas: Canvas) -> None:
     if height < 6:
         canvas.put(y + 1, x + 2, "Enlarge terminal", "dim", inner)
         return
+    canvas.scrollbar(y + 1, x + width - 1, height - 2, offset, visible, len(lines))
     if offset:
         canvas.put(y + 1, x + 2, f"↑ {offset} above", "dim", inner)
     for row, (text, style) in enumerate(lines[offset:offset + visible], y + 2):

@@ -148,7 +148,7 @@ class DashboardTests(SlotCase):
         self.assertIn("─ QUEUE ", text)
         self.assertNotIn("REQUESTS", text, "the request table is the QUEUE panel")
         self.assertNotIn("RUNNING", text)
-        self.assertIn("┃ ▶️ holder", text, "the selected row on the frame, its state (#15), then the label")
+        self.assertIn("┃  ▶️ holder", text, "the selected row on the frame, its state (#15), then the label")
         self.assertEqual(1, text.count("▶"), "only the selected row has a cursor")
         self.assertRegex(text, r"gate +▪▪▪▪ +waiting #1 ")
         self.assertRegex(text, r"small +▪ +waiting #2 ")
@@ -325,7 +325,7 @@ class UnifiedLaneTests(unittest.TestCase):
         self.assertIn("QUEUE",lines[0])
         self.assertIn("active",lines[2])
         self.assertFalse(lines[3][1:-1].strip())
-        self.assertIn("┃ ⏸️ pending",lines[4])
+        self.assertIn("┃  ⏸️ pending",lines[4])
         column=lines[0].index("cpu use/share")+len("cpu use/share")
         self.assertTrue(lines[4][:column].rstrip().endswith("waiting #1"),lines[4])
         self.assertEqual(1,tool.mouse_action(canvas,("mouse",0,20,4,True),{},0))
@@ -396,8 +396,10 @@ class QueueTableTests(unittest.TestCase):
         for label, style in (("build", "h0"), ("older", "legacy"), ("gate", "text"), ("back", "text")):
             y = self.row(canvas, label)
             cells = canvas.cells[y][3:-3]
-            text = {cell[1] for cell in cells if cell[0] not in (" ", "■", "")}
-            self.assertEqual({style}, text, label)
+            # build is selected and tinted with its colour (#15): its text in the foreground, its cells in h0
+            text = {cell[1] for cell in cells if cell[0] not in (" ", "■", "", "▪", ">")}
+            self.assertEqual({"text"} if label == "build" else {style}, text, label)
+            self.assertTrue(all(cell[1] == style for cell in cells if cell[0] == "▪"), label)
         build = self.row(canvas, "build")
         self.assertEqual({"h0", "track"}, {cell[1] for cell in canvas.cells[build] if cell[0] == "■"},
                          "the CPU bar fills in the row's colour; its empty cells keep the track colour")
@@ -730,7 +732,7 @@ class DetailLayoutTests(unittest.TestCase):
         self.assertLess(header.index("memory"), header.index("pid"))
         row = next(line for line in lines if "worker" in line)
         self.assertEqual(3, row.index("worker"))
-        self.assertTrue(row.rstrip(" │").endswith("12345"))
+        self.assertTrue(row.rstrip(" │┃").endswith("12345"))
         item["tree"] = [(1000+i, 0, 1024, f"worker{i}") for i in range(10)]
         canvas = tool.Canvas(70, 20)
         canvas.scroll = {"details": 1000}
@@ -840,33 +842,55 @@ class MemoryBarTests(unittest.TestCase):
     def test_machine_has_usage_bars_and_a_chart_spanning_the_inner_width(self):
         tool = load_dashboard()
         now = datetime.datetime(2026, 1, 1, 12, tzinfo=datetime.timezone.utc)
-        canvas = tool.Canvas(90, 17)
-        tool.draw_machine(canvas, 0, 0, 17, 90, dict(slots=4, cores=12, averages=(1,2,3),
+        canvas = tool.Canvas(90, tool.MACHINE_HEIGHT)
+        tool.draw_machine(canvas, 0, 0, tool.MACHINE_HEIGHT, 90, dict(slots=4, cores=12, averages=(1,2,3),
                           advice=dict(unleased_load=0, jobs=2), memory_block=None,
                           memory=dict(level=1, used=768, total=1024, swap_total=512, swap_free=128),
                           history=[(now-datetime.timedelta(hours=1), now, 4)]))
         lines = canvas.render(False).splitlines()
+        self.assertEqual(15, len(lines))
         text = "\n".join(lines)
         self.assertIn("used 768 MB of 1.0 GB", text)
         self.assertIn("used 384 MB of 512 MB", text)
         self.assertNotIn("load avg", text)
         self.assertNotIn("pressure", text)
-        self.assertEqual(5,sum("█" in line for line in lines))
+        self.assertEqual(4,sum("█" in line for line in lines), "four chart rows")
         first_chart = next(i for i, line in enumerate(lines) if "█" in line)
         self.assertFalse(lines[first_chart - 1][1:-1].strip(), "gap above chart")
-        self.assertFalse(lines[-4][1:-1].strip(), "one gap row before legend")
+        self.assertFalse(lines[-3][1:-1].strip(), "one gap row before legend")
         chart = lines[first_chart]
         self.assertEqual("█" * 84, chart[3:87])
         self.assertEqual("  ", chart[1:3])
         self.assertEqual("  ", chart[87:89])
-        self.assertIn("held/4", lines[-3])
-        self.assertIn("s/col", lines[-3])
-        self.assertIn("avg 100%", lines[-3])
-        self.assertIn("peak 4/4", lines[-3])
-        self.assertIn("full 100%", lines[-3])
-        self.assertFalse(lines[-2][1:-1].strip(), "one padding row after legend")
-        self.assertIn("╰", lines[-1])
+        self.assertRegex(lines[-2], r"^│  −\d+[smh] +avg 4\.0/4 · peak 4 · full 100% +now  │$")
+        self.assertIn("╰", lines[-1], "the bottom frame right after the legend")
 
+
+    def test_the_legend_is_a_time_axis_with_the_stats_in_slots_between(self):
+        tool=surfaces(load_dashboard())
+        summary=dict(average=0.65,peak=8,full=0.2)
+        for width,kept in ((120,("avg","peak","full")),(80,("avg","peak","full")),(60,("avg","peak","full")),
+                           (34,("avg","peak")),(22,("avg",)),(15,())):
+            with self.subTest(width=width):
+                parts=tool.machine_legend(summary,8,width)
+                line="".join(text for text,_ in parts)
+                self.assertEqual(width,tool.text_width(line),"exactly under the chart")
+                self.assertTrue(line.startswith("−") and line.endswith("now"),line)
+                for word in ("avg","peak","full"):
+                    self.assertEqual(word in kept,f"{word} " in line,line)
+                if kept:
+                    self.assertIn("avg 5.2/8",line,"slots, one decimal, of the total")
+                    stats=line.index("avg")
+                    end=line.rindex("%" if "full" in kept else "8" if "peak" in kept else "/8")+1
+                    left,right=stats-line.index(" "),line.index("now")-end
+                    self.assertLessEqual(abs(left-right),1,"centred between the axis labels")
+                styles={text.strip():style for text,style in parts if text.strip()}
+                self.assertEqual("dim",styles["now"])
+                if kept:
+                    self.assertEqual(("dim","text"),(styles["avg"],styles["5.2/8"]),"labels muted, values in the text colour")
+        for seconds,text in ((45,"−45s"),(61,"−60s"),(900,"−15m"),(3540,"−60m"),(3600,"−60m"),(7300,"−2h"),(400,"−7m")):
+            self.assertEqual(text,tool.window_text(seconds),seconds)
+        self.assertTrue(tool.machine_legend(summary,8,84)[0][0].startswith("−60m"),"84 columns of 43 s: an hour")
 
     def test_memory_bar_colour_reflects_pressure_without_a_separate_pressure_row(self):
         tool = load_dashboard()
@@ -893,7 +917,8 @@ class MemoryBarTests(unittest.TestCase):
                           history=[(now-datetime.timedelta(hours=1),now,4)]))
         rows=[i for i,line in enumerate(canvas.lines(False)) if "█" in line]
         self.assertEqual(1,len(rows))
-        self.assertIn("\x1b[0;31m█",canvas.lines(True)[rows[0]],"a full column is the theme's red")
+        red=tool.current_theme.styles["chart7"][0]  # the ramp's red end: a full column's top, not the warning red
+        self.assertIn("38;2;%d;%d;%dm█"%red,canvas.lines(True)[rows[0]])
 
     def test_resource_bars_follow_the_chart_ramp_and_turn_red_when_critical(self):
         tool=surfaces(load_dashboard())
@@ -924,10 +949,9 @@ class MemoryBarTests(unittest.TestCase):
         chart=[i for i,line in enumerate(canvas.lines(False)) if "█" in line]
         columns=[x for x in range(90) if canvas.cells[chart[0]][x][0]=="█"]  # the columns that reached every slot
         self.assertTrue(columns)
-        for row in chart:
-            self.assertEqual({"bad"},{canvas.cells[row][x][1] for x in columns},"full columns red from the bottom up")
-        partial=[x for x in range(90) if canvas.cells[chart[-1]][x][0]=="█" and x not in columns]
-        self.assertTrue(partial and all(canvas.cells[chart[-1]][x][1]=="chart0" for x in partial),"others the ramp")
+        for step,row in enumerate(chart):  # a full column keeps the height ramp: red only at its top (owner)
+            self.assertEqual({f"chart{round((len(chart)-1-step)/(len(chart)-1)*7)}"},
+                             {canvas.cells[row][x][1] for x in columns})
         calm=machine(averages=(3,3,3),advice=dict(unleased_load=0,jobs=2,capacity=4),
                      memory=dict(level=1,used=512,total=1024,swap_total=1024,swap_free=900))
         canvas=calm

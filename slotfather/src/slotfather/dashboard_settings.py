@@ -671,6 +671,7 @@ class Settings:
                 self.offset = max(self.offset, lines[-1] - self.visible + 1)
             self.reveal = False
         self.offset = max(0, min(self.offset, max(0, len(body) - self.visible)))
+        canvas.scrollbar(y + 1, x + width - 1, height - 2, self.offset, self.visible, self.total)
         if self.offset:
             canvas.right(y, x + width - 2, f" ↑ {self.offset} above ", "dim")
         for line, row in enumerate(body[self.offset:self.offset + self.visible], y + 1):
