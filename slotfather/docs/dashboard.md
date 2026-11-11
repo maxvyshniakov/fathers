@@ -23,6 +23,14 @@ slotfather dashboard --once --width 156 --height 43 --color
 | s | Open Settings. |
 | q | Quit. |
 
+**Any keyboard layout** (#13). Hotkeys are the keys at their US-QWERTY positions:
+on a Russian (ЙЦУКЕН) or Ukrainian layout `ы` opens Settings and `й` quits. Where
+the terminal speaks the kitty keyboard protocol (kitty, WezTerm, Ghostty, recent
+iTerm2) the dashboard asks it to report every key with its base-layout key and
+restores the terminal's mode on exit, also after a failure; elsewhere a table maps
+those layouts to the US positions. Only hotkeys are translated: what you type into
+a Settings field stays as typed. Help keeps showing the Latin letters.
+
 Only the selected request has a triangle and a soft background. The blank separator
 between running and waiting requests is not selectable. Overflow counts appear in
 the tables’ top and bottom padding rows.

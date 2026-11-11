@@ -31,6 +31,7 @@ from typing import Any, NamedTuple, cast
 
 from . import config as _config
 from . import dashboard_settings as _settings
+from . import keys as _keys
 from . import lane_context as _lane_context
 from . import platform as _platform
 from . import query as _query
@@ -1256,6 +1257,7 @@ HELP_CONTENT: list[tuple[str, str]] = [
     ("↑/↓ or j/k: select an running or waiting request. Click a row to select it.", "text"),
     ("Home/End or g/G: first/last request. Wheel: scroll the table under the pointer.", "text"),
     ("p or space: pause updates. r: refresh. m: native text selection; updates freeze while copying. s: settings.", "text"),
+    ("Hotkeys are the keys at these US-QWERTY positions on any layout: on a Russian or Ukrainian layout ы is s and й is q, and a terminal with the kitty keyboard protocol reports each key's position itself. Typed Settings values stay as typed.", "text"),
     ("In this help", "dim"),
     ("↑/↓ or j/k: scroll. PgUp/PgDown or space: page. Home/End or g/G: top/bottom.", "text"),
     ("Wheel: scroll help. ? or Esc: close help. q: quit the dashboard.", "text"),
@@ -1508,8 +1510,8 @@ KEYS = {"\x1b[A": "up", "\x1bOA": "up", "\x1b[B": "down", "\x1bOB": "down", "\x1
         "\x1b[C": "right", "\x1bOC": "right", "\x1b[D": "left", "\x1bOD": "left", "\x1b[Z": "back_tab"}
 KEY_PENDING: dict[int, str] = {}
 MOUSE = re.compile(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])")
-SEQUENCE = re.compile(r"\x1b(\[[0-9;?<]*[ -/]*[@-~]|O.)")
-PARTIAL = re.compile(r"\x1b(\[(?:<[0-9;]*|[0-9;?]*[ -/]*)|O)?$")
+SEQUENCE = re.compile(r"\x1b(\[[0-9;:?<]*[ -/]*[@-~]|O.)")
+PARTIAL = re.compile(r"\x1b(\[(?:<[0-9;]*|[0-9;:?]*[ -/]*)|O)?$")
 
 
 def read_keys(fd: int) -> list[str | tuple[str, int, int, int, bool]]:
@@ -1534,6 +1536,13 @@ def read_keys(fd: int) -> list[str | tuple[str, int, int, int, bool]]:
             found.append(("mouse", int(button), int(x) - 1, int(y) - 1, action == "M"))
             index = mouse.end()
             continue
+        event = _keys.KITTY_KEY.match(data, index)
+        if event:  # the kitty keyboard protocol (#13): a key with its base-layout key, or one this view drops
+            key = _keys.kitty(event)
+            if key is not None:
+                found.append(key)
+            index = event.end()
+            continue
         name = next((KEYS[seq] for seq in KEYS if data.startswith(seq, index)), None)
         sequence = SEQUENCE.match(data, index)
         if name or sequence:
@@ -1556,11 +1565,13 @@ def full_screen(fd_in: int, fd_out: int):
         active = termios.tcgetattr(fd_in)
         active[0] &= ~(termios.IXON | termios.IXOFF)  # Ctrl-S must not freeze the screen by terminal flow control.
         termios.tcsetattr(fd_in, termios.TCSANOW, active)
-        os.write(fd_out, b"\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1006h\x1b[2J")
+        # The kitty keyboard protocol (#13) reports each key's base-layout key, so hotkeys work on any layout; a
+        # terminal without it ignores the request, and the layout table in keys.hotkey() stands in.
+        os.write(fd_out, b"\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1006h\x1b[2J" + _keys.KITTY_ON)
         yield
     finally:
         KEY_PENDING.pop(fd_in, None)
-        os.write(fd_out, b"\x1b[?1006l\x1b[?1000l\x1b[0m\x1b[?7h\x1b[?25h\x1b[?1049l")
+        os.write(fd_out, _keys.KITTY_OFF + b"\x1b[?1006l\x1b[?1000l\x1b[0m\x1b[?7h\x1b[?25h\x1b[?1049l")
         termios.tcsetattr(fd_in, termios.TCSADRAIN, saved)
 
 
@@ -1642,6 +1653,7 @@ def dashboard_live(interval: float) -> None:
                             scroll.pop("details", None)
                         selected_key = keys[index] if items else None
                     continue
+                key = _keys.hotkey(key)  # the hotkey at this key's US-QWERTY position (#13)
                 if help_open:
                     action = help_key(canvas, key, scroll)
                     if action == "quit":

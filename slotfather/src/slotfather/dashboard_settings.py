@@ -17,6 +17,7 @@ import time
 from typing import TYPE_CHECKING, Any, Callable, NamedTuple, cast
 
 from . import cli, config, platform, schedule, state
+from . import keys as _keys
 
 if TYPE_CHECKING:
     from .dashboard import Canvas
@@ -448,6 +449,8 @@ class Settings:
 
     def key(self, key: str) -> str:
         """One key: "close", "quit", "changed" when a setting was saved, else "handled"."""
+        if not self.editing:  # a hotkey by its US-QWERTY position (#13); typed values stay as typed
+            key = _keys.hotkey(key)
         if self.small:  # nothing to see: only the ways out
             return "close" if key in ("esc", "s") else "quit" if key in ("q", "Q") else "handled"
         self.settle_focus()
