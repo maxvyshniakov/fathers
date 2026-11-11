@@ -17,6 +17,7 @@ import os
 import pathlib
 import pty
 import re
+import json
 import select
 import shutil
 import struct
@@ -41,6 +42,33 @@ class DashboardTests(SlotCase):
         result = self.tool("dashboard", "--once", "--width", str(width), "--height", str(height))
         self.assertEqual(0, result.returncode, result.stderr)
         return result.stdout
+
+    def test_an_all_lease_shows_all_above_eight_slots_and_its_cells_when_they_fit(self):
+        def queue_row(label: str) -> tuple[dict[str, Any], str]:
+            with mock.patch.dict(os.environ, self.env, clear=True):
+                tool = load_dashboard()
+                model = tool.dashboard_model()
+                canvas = tool.Canvas(140, 10)
+                tool.draw_requests(canvas, 0, 0, 10, 140, model, 0, datetime.datetime.now(datetime.timezone.utc))
+            item = next(h for h in model["holders"] if h["label"] == label)
+            return item, next(line for line in canvas.render(False).splitlines() if re.search(rf"[ ▶]{label} ", line))
+
+        self.assertEqual(0, self.tool("slots", "10").returncode)
+        whole = self.request("whole", "all")
+        self.started("whole")
+        item, row = queue_row("whole")
+        self.assertEqual((10, True), (item["count"], item["all"]))
+        self.assertRegex(row, r"whole +all +■")
+        self.release("whole")
+        self.finish(whole)
+        self.assertEqual(0, self.tool("slots", "4").returncode)
+        fits = self.request("fits", "all")
+        self.started("fits")
+        item, row = queue_row("fits")
+        self.assertEqual((4, True), (item["count"], item["all"]))
+        self.assertRegex(row, r"fits +▪▪▪▪ +■")
+        self.release("fits")
+        self.finish(fits)
 
     def test_table_headers_share_the_border_and_empty_messages_start_under_them(self):
         text = self.snapshot(width=220, height=50)
@@ -420,15 +448,135 @@ class QueueTableTests(unittest.TestCase):
         self.assertEqual("all", lines[self.row(canvas, "gate")][column:].split("  ")[0])
 
     def test_a_narrow_table_drops_columns_and_keeps_every_row_inside_its_frame(self) -> None:
-        for width in (110, 80, 60, 44):
+        titles = ("slots", "cpu use/share", "time", "pid")
+        for width, kept in ((110, titles), (59, titles), (52, titles[:3]), (44, titles[:2]), (30, titles[:1])):
             with self.subTest(width=width):
                 lines = self.draw(self.model(), width=width).render(False).splitlines()
+                self.assertEqual(kept, tuple(title for title in titles if title in lines[0]),
+                                 "pid goes first, then time, then cpu use/share")
                 for line in lines[:8]:
                     self.assertLessEqual(len(line.rstrip()), width)
                 gate = next(line for line in lines if "gate" in line)
                 self.assertIn("▪▪▪", gate, "the slot cells stay longest after the label")
-                self.assertIn("waiting #1", gate, "the state outlasts the time and pid")
+                if "cpu use/share" in kept:
+                    self.assertIn("waiting #1", gate, "the state outlasts the time and pid")
                 self.assertEqual(gate.rstrip()[-1], "│")
+
+    def test_a_wide_table_shares_its_width_out_in_proportion(self) -> None:
+        model = self.model()
+        model["holders"].append(dict(label="wide", kind="held", count=1, pid=14, style="h1", cpu=1230, since=self.now,
+                                     granted=self.now))
+        for width in (120, 160, 220):
+            with self.subTest(width=width):
+                layout = self.tool.queue_layout(width - 6, model)
+                sizes = {key: size for key, _, _, size, _ in layout.placed}
+                self.assertEqual(width - 6, sum(sizes.values()) + 2 * (len(sizes) - 1), "the table fills the panel")
+                ratios = [sizes[key] / layout.natural[key] for key in sizes]
+                self.assertLess(max(ratios) - min(ratios), 0.25, f"in proportion: {sizes} of {layout.natural}")
+                self.assertTrue(all(sizes[key] >= layout.natural[key] for key in sizes))
+                self.assertTrue(5 <= layout.bar <= 10, "the bar grows with its column, at most twice")
+                canvas = self.draw(model, width=width)
+                lines = canvas.render(False).splitlines()
+                for line in lines[:9]:
+                    self.assertLessEqual(len(line.rstrip()), width)
+                cpu = lines[0].index("cpu use/share")
+                starts = {lines[self.row(canvas, label)].index("■", cpu) for label in ("build", "older", "wide")}
+                self.assertEqual({cpu}, starts, "bars start under the header, on every row")
+                self.assertEqual({cpu}, {lines[self.row(canvas, "gate")].index("waiting #1")})
+                slashes = {lines[self.row(canvas, label)].index("/", cpu) for label in ("build", "older", "wide")}
+                self.assertEqual(1, len(slashes))
+                pid_end = lines[0].index("pid") + len("pid")
+                self.assertTrue(lines[self.row(canvas, "build")][:pid_end].endswith("10"), "pid under its title")
+
+    def test_an_ascii_terminal_gets_pure_ascii_rows(self) -> None:
+        model = self.model(slots=24)
+        model["holders"][0]["count"] = 20
+        for line in self.draw(model).lines(False, ascii_only=True):
+            self.assertTrue(line.isascii(), line)
+
+    def test_a_large_count_is_cut_without_trying_every_count_below_it(self) -> None:
+        item = dict(kind="held", style="h0", count=100000)
+        started = time.perf_counter()
+        self.assertEqual([("▪", "h0"), (" +99999", "h0")], self.tool.slot_cells(item, 11), "at most 8 columns")
+        self.assertLess(time.perf_counter() - started, 0.05)
+        self.assertEqual([("▪▪▪▪", "h0"), (" +16", "h0")], self.tool.slot_cells(dict(item, count=20), 8))
+
+
+class EventDetailTests(unittest.TestCase):
+    """EVENTS' detail column, from the history line of each request (#queue-table review): it was meant to say why a
+    request left (gave up, owner exited) but queue.log alone cannot tell a waiter that gave up from a lease that
+    ended once the log is longer than the part read, so on a long-running queue it was always empty."""
+
+    LOG = ("2026-11-11T02:00:00Z granted 1 to build (pid 101)\n"
+           "2026-11-11T02:00:05Z granted 2 to verify (pid 102)\n"
+           "2026-11-11T02:04:00Z released 1 (0000000001-101.json)\n"
+           "2026-11-11T02:05:00Z released 1 (0000000003-103.json)\n"
+           "2026-11-11T02:06:00Z reaped held lease of 2 for verify (pid 102 exited)\n"
+           "2026-11-11T02:06:30Z granted 1 to live (pid 104)\n")
+
+    def history(self) -> list[dict[str, Any]]:
+        def line(label: str, pid: int, queued: str, granted: str | None, ended: str, outcome: str,
+                 waited: int, ran: int | None, status: int | None) -> dict[str, Any]:
+            return {"v": 2, "label": label, "count": 1, "pid": pid, "queued": queued, "granted": granted,
+                    "ended": ended, "outcome": outcome, "waited": waited, "ran": ran, "status": status}
+        return [line("build", 101, "2026-11-11T01:57:00Z", "2026-11-11T02:00:00Z", "2026-11-11T02:04:00Z",
+                     "released", 180, 240, 1),
+                line("gate", 103, "2026-11-11T01:50:00Z", None, "2026-11-11T02:05:00Z", "left", 900, None, None),
+                line("verify", 102, "2026-11-11T02:00:05Z", "2026-11-11T02:00:05Z", "2026-11-11T02:06:00Z",
+                     "reaped", 0, 355, None)]
+
+    def events(self, padding: int = 0) -> list[dict[str, Any]]:
+        tool = load_dashboard()
+        directory = pathlib.Path(tempfile.mkdtemp(prefix="slotfather-events-"))
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+        filler = "".join(f"2026-11-11T01:00:00Z sweep note {n:06d}\n" for n in range(padding))
+        (directory / "queue.log").write_text(filler + self.LOG)
+        (directory / "history.jsonl").write_text("".join(json.dumps(item) + "\n" for item in self.history()))
+        live = [{"pid": 104, "since": "2026-11-11T02:05:30Z", "granted": "2026-11-11T02:06:30Z", "state": "held"}]
+        events = tool.queue_events(directory)
+        tool.describe_events(events, directory, live)
+        return events
+
+    def test_each_event_says_what_its_history_line_knows(self) -> None:
+        for padding in (0, 20000):  # 20000 lines: longer than the part of queue.log the dashboard reads
+            with self.subTest(padding=padding):
+                found = [(e["verb"], e["label"], e["detail"], e["delta"]) for e in self.events(padding)]
+                self.assertEqual([("granted", "build", "waited 3m00s", 1), ("granted", "verify", "no wait", 2),
+                                  ("released", "build", "exit 1 · ran 4m00s", -1),
+                                  ("left", "gate", "gave up after 15m00s", 0),
+                                  ("reaped", "verify", "owner exited · ran 5m55s", -2),
+                                  ("granted", "live", "waited 1m00s", 1)], found)
+
+    def test_slots_are_cells_filled_when_taken_and_hollow_when_handed_back(self) -> None:
+        tool = load_dashboard()
+        events = self.events()
+        events[1]["count"] = 20  # verify's grant: wider than the column
+        canvas = tool.Canvas(120, 12)
+        tool.draw_events(canvas, 0, 0, 12, 120, {"events": events})
+        lines = canvas.render(False).splitlines()
+        column = lines[0].index("slots")
+        expected = {("granted", "build"): ("▪", "ok"), ("released", "build"): ("▫", "accent"),
+                    ("left", "gate"): ("▫", "dim"), ("reaped", "verify"): ("▫▫", "bad"),
+                    ("granted", "verify"): ("▪▪▪▪ +16", "ok")}
+        for (verb, label), (cells, style) in expected.items():
+            row = next(n for n, line in enumerate(lines) if f" {verb} " in line and f" {label} " in line + " ")
+            self.assertEqual(cells, lines[row][column:].split("  ")[0], (verb, label))
+            self.assertEqual(style, canvas.cells[row][column][1], (verb, label))
+        for line in canvas.lines(False, ascii_only=True):
+            self.assertTrue(line.isascii(), line)
+        self.assertIn("o", canvas.lines(False, ascii_only=True)[next(
+            n for n, line in enumerate(lines) if " released " in line)][column:column + 2])
+
+    def test_the_detail_column_shows_it_dim(self) -> None:
+        tool = load_dashboard()
+        model = {"events": self.events()}
+        canvas = tool.Canvas(120, 12)
+        tool.draw_events(canvas, 0, 0, 12, 120, model)
+        lines = canvas.render(False).splitlines()
+        row = next(n for n, line in enumerate(lines) if "gave up after 15m00s" in line)
+        start = lines[row].index("gave up")
+        self.assertEqual("dim", canvas.cells[row][start][1])
+        self.assertTrue(any("exit 1 · ran 4m00s" in line for line in lines))
 
 
 class MouseInputTests(unittest.TestCase):

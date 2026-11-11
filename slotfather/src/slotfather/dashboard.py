@@ -35,6 +35,7 @@ from . import lane_context as _lane_context
 from . import platform as _platform
 from . import query as _query
 from . import schedule as _schedule
+from . import state as _state
 
 
 # dashboard_model() gathers plain data and dashboard_draw() lays it out on a Canvas of styled cells; the live view
@@ -61,7 +62,7 @@ CHART_COLOURS = [(95, 175, 255), (105, 155, 255), (135, 145, 255), (170, 135, 24
                  (200, 140, 210), (225, 150, 170), (245, 160, 130), (255, 175, 95)]
 STYLES.update({f"chart{i}": (rgb, "") for i, rgb in enumerate(CHART_COLOURS)})
 HOLDER_STYLES = 6
-ASCII = str.maketrans({"🮅": "#", "■": "#", "▶": ">", "▉": "#", "▌": "+", "▐": "|", "█": "#", "▓": "%", "▒": "=", "░": ".", "·": ".", "●": "*", "…": "~", "─": "-", "│": "|",
+ASCII = str.maketrans({"🮅": "#", "■": "#", "▪": "#", "□": "o", "▫": "o", "▶": ">", "▉": "#", "▌": "+", "▐": "|", "█": "#", "▓": "%", "▒": "=", "░": ".", "·": ".", "●": "*", "…": "~", "─": "-", "│": "|",
                        "╭": "+", "╮": "+", "╰": "+", "╯": "+", "↑": "^", "↓": "v", "↗": "/", "↘": "\\", "→": ">",
                        "←": "<", "≈": "~", "×": "x", "—": "-", "⏸": "=", "▁": "_", "▂": "_", "▃": "-", "▄": "-",
                        "▅": "=", "▆": "=", "▇": "#"})
@@ -387,6 +388,60 @@ def queue_events(directory: Path) -> list[dict]:
     return events
 
 
+EVENT_HISTORY = 600  # history lines read to describe the events shown
+EVENT_MATCH = 2.0  # seconds between a queue.log line and the history stamp of the same moment
+
+
+def describe_events(events: list[dict[str, Any]], directory: Path, live: list[dict[str, Any]]) -> None:
+    """Adds each event's `detail` from the history line of its request (state.record() writes it as the request
+    leaves): `waited 3m00s` for a grant (a running lease's from its queue entry), `exit 1 · ran 4m00s` for a release,
+    `gave up after 15m00s` for a waiter that left, `owner exited · ran 5m55s` for a reap. The history line also
+    settles whether a release was a lease ending or a waiter giving up, which queue.log alone cannot say once it is
+    longer than the part queue_events() reads; a waiter that gave up changed no held slots."""
+    by_pid: dict[int, list[dict[str, Any]]] = {}
+    history = cast(list[dict[str, Any]], cast(Any, _state).tail_objects(directory / "history.jsonl", EVENT_HISTORY))
+    for item in history:
+        pid = item.get("pid")
+        if isinstance(pid, int):
+            by_pid.setdefault(pid, []).append(item)
+    running = {entry["pid"]: entry for entry in live if isinstance(entry.get("pid"), int)}
+
+    def near(stamp: Any, when: datetime.datetime) -> bool:
+        moment = parse_utc(stamp)
+        return moment is not None and abs((moment - when).total_seconds()) <= EVENT_MATCH
+
+    for event in events:
+        event["detail"] = ""
+        verb, when = event["verb"], event["when"]
+        if verb == "granted":
+            item = next((i for i in by_pid.get(event["pid"], []) if near(i.get("granted"), when)), None)
+            if item is None and event["pid"] in running and near(running[event["pid"]].get("granted"), when):
+                since, granted = parse_utc(running[event["pid"]].get("since")), when
+                waited = None if since is None else (granted - since).total_seconds()
+            else:
+                waited = item.get("waited") if item else None
+            if isinstance(waited, (int, float)):
+                event["detail"] = f"waited {span(waited)}" if waited >= 1 else "no wait"
+            continue
+        item = next((i for i in by_pid.get(event["pid"], []) if near(i.get("ended"), when)), None)
+        if item is None:
+            event["detail"] = "owner exited" if verb == "reaped" else "gave up" if verb == "left" else ""
+            continue
+        ran = item.get("ran")
+        ran_text = f"ran {span(ran)}" if isinstance(ran, (int, float)) else ""
+        if verb == "reaped":
+            event["detail"] = " · ".join(part for part in ("owner exited", ran_text) if part)
+        elif item.get("outcome") == "left":
+            event.update(verb="left", delta=0, label=event["label"] or str(item.get("label") or ""))
+            waited = item.get("waited")
+            event["detail"] = f"gave up after {span(waited)}" if isinstance(waited, (int, float)) else "gave up"
+        else:
+            status = item.get("status")
+            event["detail"] = " · ".join(part for part in (
+                f"exit {status}" if isinstance(status, int) else "", ran_text) if part)
+            event["label"] = event["label"] or str(item.get("label") or "")
+
+
 def held_history(events: list[dict], held_now: int, now_moment: datetime.datetime,
                  window: float = HISTORY_WINDOW * 2) -> list[tuple[datetime.datetime, datetime.datetime, int]]:
     """Held slots over the last `window` seconds as (start, end, slots) steps, walked back from held_now."""
@@ -500,6 +555,7 @@ def dashboard_model() -> dict:
                 start = datetime.datetime.fromtimestamp(found.start, datetime.timezone.utc)
     memory_block, machine, averages = _platform.memory_short(), _config.cores(), _platform.loads()
     events = queue_events(directory)
+    describe_events(cast(list[dict[str, Any]], events), directory, live)
     moment = datetime.datetime.now(datetime.timezone.utc)
     free = max(0, slots - used)
     admission = dashboard_admission(live_waiters, [e for e in live if e["state"] == "held"], slots,
@@ -720,27 +776,93 @@ SLOT_CELLS = 8  # most cells the QUEUE table's slots column shows before it coun
 # bar: "spaced" puts a space between full squares, "small" uses a small square whose side bearing separates it.
 SLOT_CELL_FORMS = {"spaced": ("■", " "), "small": ("▪", "")}
 SLOT_CELL = "small"  # the owner's pick (2026-11-11)
+HOLLOW = {"■": "□", "▪": "▫"}  # slots handed back or never held: the same size, empty (U+25AB is narrow like U+25AA)
 
 
-def cells_text(count: int) -> str:
+def cells_text(count: int, hollow: bool = False) -> str:
     glyph, gap = SLOT_CELL_FORMS[SLOT_CELL]
-    return gap.join(glyph * count)
+    return gap.join((HOLLOW[glyph] if hollow else glyph) * count)
+
+
+def cell_run(count: int, size: int, style: str, hollow: bool = False, whole: bool = False) -> list[tuple[str, str]]:
+    """`count` countable cells in `style` within `size` columns and at most SLOT_CELLS cells. A count wider than
+    that keeps the cells that fit
+    and counts the rest (`▪▪▪▪ +16` for 20 in 8 columns); a `whole` (-n all) one that does not fit says `all`."""
+    count = max(0, count)
+    size = min(size, text_width(cells_text(SLOT_CELLS)))  # more than SLOT_CELLS cells cannot be counted at a glance
+    if text_width(cells_text(count, hollow)) <= size:
+        return [(cells_text(count, hollow), style)]
+    if whole:
+        return [("all", style)]
+    shown = min(count, size)  # no more cells than the column has cells: at most `size` tries
+    while shown and text_width(cells_text(shown, hollow)) + len(f" +{count - shown}") > size:
+        shown -= 1
+    return [(cells_text(shown, hollow), style), (f" +{count - shown}", style)]
 
 
 def slot_cells(item: dict[str, Any], size: int) -> list[tuple[str, str]]:
-    """A row's slots as countable cells in the row's colour (the colour of its SLOTS blocks for a lease; the plain
-    text colour for a waiting request, whose state the cpu column gives). A count wider than `size` keeps the cells
-    that fit and counts the rest (`▪▪▪▪▪▪ +14`); an `-n all` request that does not fit says `all`."""
+    """A QUEUE row's slots as countable cells in the row's colour (the colour of its SLOTS blocks for a lease; the
+    plain text colour for a waiting request, whose state the cpu column gives); see cell_run()."""
     style = "text" if item["kind"] == "waiting" else item["style"]
-    count = max(0, int(item["count"]))
-    if text_width(cells_text(count)) <= size:
-        return [(cells_text(count), style)]
-    if item.get("all"):
-        return [("all", style)]
-    shown = count
-    while shown and text_width(cells_text(shown)) + len(f" +{count - shown}") > size:
-        shown -= 1
-    return [(cells_text(shown), style), (f" +{count - shown}", style)]
+    return cell_run(int(item["count"]), size, style, whole=bool(item.get("all")))
+
+
+def event_cells(event: dict[str, Any], size: int, style: str) -> list[tuple[str, str]]:
+    """An EVENTS row's slots in its event colour: filled for slots taken (granted), hollow for slots handed back
+    (released, a held lease reaped) or never held (a waiter that left or was reaped)."""
+    return cell_run(int(event["count"]), size, style, hollow=event["verb"] != "granted")
+
+
+QUEUE_LABEL_MAX = 40  # the most cells a label asks for when the table is wide enough to share out its width
+CPU_BAR = 5  # the CPU bar's base length; a wide table lets it grow to twice that
+
+
+class QueueLayout(NamedTuple):
+    placed: list[tuple[str, str, int, int, bool]]  # (key, title, x, width, right-aligned), as columns() gives
+    natural: dict[str, int]  # each column's own width: its widest value (a label at most QUEUE_LABEL_MAX)
+    use_width: int  # the CPU numbers: `use` right-aligned to this, then `/`, then `share` left-aligned to share_width
+    share_width: int
+    bar: int  # the CPU bar's length
+
+
+def queue_layout(inner: int, model: dict[str, Any]) -> QueueLayout:
+    """The QUEUE table's columns in `inner` cells. Each column has a natural width (its widest value). A table wider
+    than the natural widths and their gaps shares the surplus out in proportion to them, so it fills the panel
+    evenly, and the CPU bar grows with its column up to twice CPU_BAR; a narrower one keeps the label flexible: it
+    shrinks first, then pid, time and cpu use/share drop in that order."""
+    holders = cast(list[dict[str, Any]], model["holders"])
+    waiters = cast(list[dict[str, Any]], model["waiters"])
+    items = holders + waiters
+    shares = [share(item, model) for item in holders]
+    use_width = max([3] + [len(f"{used:.1f}") for used, _ in shares])
+    share_width = max([1] + [len(short(allotted)) for _, allotted in shares])
+    natural = {
+        "label": max(10, min(QUEUE_LABEL_MAX, max([0] + [text_width(str(item["label"])) for item in items]))),
+        "slots": max([5] + [text_width(cells_text(min(SLOT_CELLS, int(item["count"])))) for item in items]),
+        "cpu": max(len("cpu use/share"), CPU_BAR + 1 + use_width + 1 + share_width,
+                   max([0] + [len(f"waiting #{n}") for n in range(1, len(waiters) + 1)])),
+        "time": 8, "pid": max([6] + [len(str(item["pid"])) for item in items])}
+    spec = [("label", "label", False), ("slots", "slots", False), ("cpu", "cpu use/share", False),
+            ("time", "time", True), ("pid", "pid", True)]
+    gaps = 2 * (len(spec) - 1)
+    surplus = inner - sum(natural.values()) - gaps
+    if surplus <= 0:  # the label shrinks first, then columns drop: pid, time, cpu use/share
+        placed = cast(list[tuple[str, str, int, int, bool]], columns(inner, [
+            (key, title, 0 if key == "label" else natural[key], right, rank)
+            for rank, (key, title, right) in enumerate(spec)]))
+        return QueueLayout(placed, natural, use_width, share_width, CPU_BAR)
+    total = sum(natural.values())
+    sizes = {key: natural[key] + surplus * natural[key] // total for key in natural}
+    left = inner - gaps - sum(sizes.values())  # what rounding down left over: to the largest remainders
+    for key in sorted(natural, key=lambda key: -(surplus * natural[key] % total))[:left]:
+        sizes[key] += 1
+    placed: list[tuple[str, str, int, int, bool]] = []
+    column = 0
+    for key, title, right in spec:
+        placed.append((key, title, column, sizes[key], right))
+        column += sizes[key] + 2
+    bar_length = min(2 * CPU_BAR, CPU_BAR + sizes["cpu"] - natural["cpu"])
+    return QueueLayout(placed, natural, use_width, share_width, bar_length)
 
 
 def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model: dict, selected: int,
@@ -752,18 +874,12 @@ def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model
     if holders and waiters:
         row_items.append(None)  # visual separator, never a selectable request
     row_items.extend(range(len(holders), len(items)))
-    cells = max([5] + [text_width(cells_text(min(SLOT_CELLS, int(item["count"])))) for item in items])
     # cpu use/share: the bar starts at the column's left edge on every row, then `use` right-aligned and `/share`
     # left-aligned around the slash, padded to the widest on screen; a waiting row's state starts where the bars do.
+    layout = queue_layout(width - 6, cast(dict[str, Any], model))
+    placed, cells = layout.placed, layout.natural["slots"]
     shares = {index: share(item, model) for index, item in enumerate(holders)}
-    use_width = max([3] + [len(f"{used:.1f}") for used, _ in shares.values()])
-    share_width = max([1] + [len(short(allotted)) for _, allotted in shares.values()])
-    cpu_width = max(len("cpu use/share"), 5 + 1 + use_width + 1 + share_width,
-                    max([0] + [len(f"waiting #{n}") for n in range(1, len(waiters) + 1)]))
-    # A request that holds no slots says so where a running one shows its CPU: the cpu column outlasts the time.
-    placed = cast(list[tuple[str, str, int, int, bool]], columns(width - 6, [
-        ("label", "label", 0, False, 0), ("slots", "slots", cells, False, 1), ("cpu", "cpu use/share", cpu_width, False, 2),
-        ("time", "time", 8, True, 3), ("pid", "pid", 6, True, 4)]))
+    use_width, share_width = layout.use_width, layout.share_width
     size = next((column[3] for column in placed if column[0] == "slots"), cells)
     table_header(canvas, y, x, height, width, "QUEUE", placed)
     if not items:
@@ -788,7 +904,7 @@ def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model
         else:
             age = (moment - item["granted"]).total_seconds() if item["granted"] else None
             used, allotted = shares[index]
-            cpu = bar(used / allotted if allotted else 0, 5, share_style(item, model, moment)) + [
+            cpu = bar(used / allotted if allotted else 0, layout.bar, share_style(item, model, moment)) + [
                 (f" {used:.1f}".rjust(use_width + 1) + "/" + short(allotted).ljust(share_width), style)]
         draw_row(canvas, row, x + 3, placed, {
             "label": (str(item["label"]), style), "slots": slot_cells(item, size),
@@ -1103,21 +1219,23 @@ def draw_machine(canvas: Canvas, y: int, x: int, height: int, width: int, model:
 
 
 def draw_events(canvas: Canvas, y: int, x: int, height: int, width: int, model: dict) -> None:
-    placed = columns(width - 6, [("time", "time", 10, False, 0), ("event", "event", 8, False, 1),
-                                 ("slots", "slots", 5, True, 2), ("detail", "detail", 12, False, 3),
-                                 ("label", "label", 0, False, 0), ("pid", "pid", 6, True, 4)])
+    events = cast(list[dict[str, Any]], model["events"])[::-1]
+    cells = max([5] + [text_width(cells_text(min(SLOT_CELLS, int(event["count"])))) for event in events])
+    placed = cast(list[tuple[str, str, int, int, bool]], columns(width - 6, [
+        ("time", "time", 10, False, 0), ("event", "event", 8, False, 1), ("slots", "slots", cells, False, 2),
+        ("detail", "detail", 22, False, 3), ("label", "label", 0, False, 0), ("pid", "pid", 6, True, 4)]))
+    size = next((column[3] for column in placed if column[0] == "slots"), cells)
     table_header(canvas, y, x, height, width, "EVENTS", placed)
     styles = {"granted": "ok", "released": "accent", "left": "dim", "reaped": "bad"}
-    events = model["events"][::-1]
     offset, visible = table_view(canvas, "events", y, x, height, width, y + 2, height - 4, len(events))
     if not events:
         canvas.put(y + 2, x + 3, "No grants, releases or reaps logged yet", "dim", width - 6)
     for row, event in enumerate(events[offset:offset + visible], y + 2):
-        detail = "wait ended" if event["verb"] == "left" else "owner exited" if event["verb"] == "reaped" else ""
+        style = styles[event["verb"]]
         draw_row(canvas, row, x + 3, placed, {
-            "time": (clock(event["when"]), "dim"), "event": (event["verb"], styles[event["verb"]]),
-            "label": event["label"] or "?", "slots": str(event["count"]),
-            "detail": (detail, "dim"), "pid": str(event["pid"])})
+            "time": (clock(event["when"]), "dim"), "event": (event["verb"], style),
+            "label": str(event["label"] or "?"), "slots": event_cells(event, size, style),
+            "detail": (str(event.get("detail") or ""), "dim"), "pid": str(event["pid"])})
 
 
 HELP_CONTENT: list[tuple[str, str]] = [
@@ -1138,7 +1256,7 @@ HELP_CONTENT: list[tuple[str, str]] = [
     ("Each row has one colour: a running request's row is in the colour of its SLOTS blocks (the CPU bar keeps its own colours); a waiting or yielded request's row is white.", "text"),
     ("slots: one cell per slot the request holds or asks for. A count too wide for the column shows the cells that fit and +N for the rest; -n all that does not fit shows all.", "text"),
     ("cpu use/share: observed cores used by a running request / the core budget represented by its slots. A request can exceed its share; it is not a hard limit. A request that holds no slots shows its state there instead: waiting #N, its current place in the waiting queue, or yielded #N for a lease back in the queue after a yield. Bars and states start at one column; the numbers line up around the slash.", "text"),
-    ("time is elapsed run time for running work and elapsed wait time for waiting work. pid is the lease owner. On a narrow terminal pid goes first, then time, then cpu use/share.", "text"),
+    ("time is elapsed run time for running work and elapsed wait time for waiting work. pid is the lease owner. A wide terminal shares the spare width among the columns in proportion to their own widths; on a narrow one pid goes first, then time, then cpu use/share.", "text"),
     ("Yellow CPU indicates nearly idle work holding slots; red means use well above its share.", "text"),
     ("↑ above and ↓ more count rows outside the visible table. Scroll with the wheel or move the selection to reveal them.", "text"),
     ("LEASE DETAILS and REQUEST DETAILS", "title"),
@@ -1158,7 +1276,8 @@ HELP_CONTENT: list[tuple[str, str]] = [
     ("EVENTS", "title"),
     ("Recent queue events, newest first. time is the event time; slots is its slot count; label and pid identify the request. Scroll to read older events.", "text"),
     ("granted: the request received slots. released: it returned them. left: it stopped waiting. reaped: its owner exited and the stale request was removed.", "text"),
-    ("detail adds context such as wait ended or owner exited. It is normally empty for grants and releases.", "text"),
+    ("slots: one cell per slot in the event's colour, filled ▪ for slots taken (granted) and hollow ▫ for slots handed back (released, a held lease reaped) or never held (left, a waiter reaped).", "text"),
+    ("detail comes from the request's history line: waited for a grant, the exit status and run time for a release, gave up after for a waiter that left, owner exited for a reap. It is empty where the history does not reach back.", "text"),
     ("MACHINE", "title"),
     ("The status row summarizes memory, swap, estimated unleased demand and admission. White is normal; red identifies a condition limiting additional work.", "text"),
     ("load 1m: the system load averaged over one minute, shown beside the logical CPU count. The bar compares the two; load is not CPU utilization.", "text"),

@@ -46,11 +46,14 @@ in the colour of its blocks in SLOTS, and only the CPU bar keeps its own colours
 waiting or yielded request's row is white, the normal text colour. The selected
 row keeps its highlight on top. **slots** draws one countable cell per slot
 (`▪▪▪`, small squares whose side bearing keeps them apart). A count too wide for
-the column shows the cells that fit and `+N` for the rest; an `-n all` request
+the column, or above eight, shows the cells that fit and `+N` for the rest; an `-n all` request
 that does not fit shows `all`. A request that holds no slots shows its state in
 **cpu use/share**: `waiting #N` (its place in the order the queue serves) or
 `yielded #N` (a lease back in the queue after a yield). Bars and states start at
-the same column on every row, and the numbers line up around the slash. On a narrow terminal pid
+the same column on every row, and the numbers line up around the slash. On a wide terminal the columns share the
+spare width in proportion to their natural widths (the longest label, up to 40
+cells, the widest slot cells, the bar and numbers, time and pid), and the CPU bar
+grows with its column up to twice its length. On a narrow terminal pid
 is dropped first, then time, then cpu use/share; the label is shortened before
 any of them.
 
@@ -78,6 +81,19 @@ For example, `start est 10:30` and `pass until 10:20` allow a later request at
 10:10 only if it is expected to finish before 10:30 with the safety margin.
 At 10:21 it cannot pass. These are policy deadlines and estimates, not a promised
 start. The help explains them alongside CPU, load, memory, admission and history.
+
+## Events
+
+EVENTS lists the grants, releases, waiters that left and reaped requests at the end
+of `queue.log`, newest first. **slots** uses the same cells as QUEUE in the event's
+colour: filled `▪` for slots taken (granted) and hollow `▫` for slots handed back
+(released, a held lease reaped) or never held (a waiter that left or was reaped).
+**detail** comes from the request's line in `history.jsonl`: `waited 3m00s` (or
+`no wait`) for a grant, `exit 1 · ran 4m00s` for a release, `gave up after 15m00s`
+for a waiter that left and `owner exited · ran 5m55s` for a reap. The history line
+also tells a waiter that gave up from a lease that ended, which `queue.log` alone
+cannot once it is longer than the part the dashboard reads. Detail is empty where
+the history does not reach back.
 
 ## Machine
 
