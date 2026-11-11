@@ -24,6 +24,7 @@
 │   Idle after (s)            300                                              │
 │ THIS DASHBOARD                                                               │
 │   Refresh interval (s)      1                                                │
+│   Colour theme              Auto                                             │
 │ ──────────────────────────────────────────────────────────────────────────── │
 │ Total slots for every client. Applies at the next grant; a shrink drains.    │
 │                                                                              │

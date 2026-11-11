@@ -25,10 +25,13 @@ slotfather run -n 1 --priority interactive -- python3 tools/dashboard-demo.py --
 slotfather run -n 1 --priority interactive -- python3 tools/dashboard-demo.py --screenshot
 ```
 
-Outputs are `assets/dashboard.webp` and `assets/dashboard.png`. Recipes live in
-`tools/screens.mjs`; reusable takes and verification evidence stay under the
-ignored `assets/screens/` directory. The animation is lossless WebP. The palette
-is Ghostty’s built-in default; Screen Kit Mono preserves JetBrains Mono geometry
+Outputs are `assets/dashboard.webp` and `assets/dashboard.png`, each also in a light
+terminal theme (`assets/dashboard-light.*`, which the README shows to a light page).
+Recipes live in `tools/screens.mjs`; reusable takes and verification evidence stay under the
+ignored `assets/screens/` directory. The animation is lossless WebP. The dark palette
+is Ghostty’s built-in default, the light one a warm white with GitHub Light’s ANSI colours.
+screen-kit's terminal does not answer colour queries, so each recipe passes its background
+and foreground as `SLOTFATHER_TERMINAL_BG` / `_FG` (#14). Screen Kit Mono preserves JetBrains Mono geometry
 except for compact-square side bearings, so bar cells remain visibly separate.
 
 The demo uses a short history zoom and five graph rows for six slots, exposing

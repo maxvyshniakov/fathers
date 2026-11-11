@@ -53,7 +53,7 @@ colour: a running request's row (label, slot cells, CPU numbers, time and pid) i
 in the colour of its blocks in SLOTS, the filled part of its CPU bar included (red
 when above 1.5 times its share and yellow while the lease is idle; the empty
 part keeps the frame colour); a
-waiting or yielded request's row is white, the normal text colour. The selected
+waiting or yielded request's row is in the normal text colour. The selected
 row keeps its highlight on top. **slots** draws one countable cell per slot
 (`▪▪▪`, small squares whose side bearing keeps them apart). A count too wide for
 the column, or above eight, shows the cells that fit and `+N` for the rest; an `-n all` request
@@ -117,9 +117,34 @@ also tells a waiter that gave up from a lease that ended, which `queue.log` alon
 cannot once it is longer than the part the dashboard reads. Detail is empty where
 the history does not reach back.
 
+## Colours
+
+The dashboard takes its colours from the terminal's theme (#14), so it reads on light and dark backgrounds alike.
+Text, bold, hotkeys, the cursor and the status line use the terminal's own foreground; muted text and every panel
+frame share one token, ANSI bright black; ok, warn and bad are ANSI green, yellow and red, and the accent is ANSI
+blue. They are palette entries, so they follow a theme change at once.
+
+What a palette lacks is mixed from the terminal's background and foreground, like `color-mix()` in OKLab: the
+selected row's background (10% foreground), a bar's empty track (15%) and a free slot (20%). Selected text keeps its
+colour. At startup the dashboard asks the terminal for its colours (OSC 10, 11 and 4, at most 100 ms, before the
+kitty keyboard push) and subscribes to colour-scheme change notifications (mode 2031): when the terminal switches
+between light and dark, the dashboard asks again and repaints. A terminal that does not answer is taken as light or
+dark by `COLORFGBG`; with neither, the surfaces have no background colour: tracks are `░` in bright black, a free
+slot is an outline and the selected row is bold beside its ▶.
+
+Holder colours are the dashboard's own: twelve pastels of one lightness and chroma in OKLCH, hues a golden angle
+apart starting from the earlier blue, so neighbours differ. On a dark background they are light pastels, on a light
+one deeper ones, each at least 3:1 against the reported background. The load chart runs from the theme's blue to its
+red in OKLab, without the terminal's answer from a fixed blue to red.
+
+Settings → this dashboard → **Colour theme**: `Auto` is the above; `Terminal` uses the palette only, with nothing
+mixed (the chart in palette steps); `Built-in` is the fixed 256-colour palette from before, for themes such as
+Solarized whose bright black is close to the background. `SLOTFATHER_THEME` sets the starting value. `dashboard
+--once` cannot ask the terminal: it reads `SLOTFATHER_TERMINAL_BG` and `_FG` (`#fdfcfa`) when given.
+
 ## Machine
 
-- **memory / swap status:** white is normal, red is a condition that can block
+- **memory / swap status:** the normal text colour is normal, red is a condition that can block
   additional leases. The memory bar also reflects memory health.
 - **unleased load:** estimated load not explained by the CPU share of held slots.
   It uses the lower of the one- and five-minute load averages.
@@ -132,7 +157,7 @@ the history does not reach back.
   as unavailable rather than as zero.
 
 The histogram shows peak occupied slots per fixed time bucket over roughly an
-hour. Blue-to-orange colour follows the capacity scale; `s/col` gives the time
+hour. Blue-to-red colour follows the capacity scale; `s/col` gives the time
 represented by each column. The newest bucket is incomplete. Its legend gives
 average occupancy, peak slots and the share of time capacity was full. Whole
 slots can still produce fractional block heights when graph height and capacity
@@ -152,7 +177,7 @@ and no selection cursor. Below a rule are the editable settings, in three
 groups: shared capacity (mode, and total slots or GiB per slot), queue policy
 (order, safety multiplier, overtaking limit, unknown runtime, overrun factor,
 interactive advance, batch delay, yield delay) and this dashboard's refresh
-interval. The selected setting has ▶, a soft background and a one-line
+interval and colour theme. The selected setting has ▶, a soft background and a one-line
 description under the list.
 
 There is no draft. ←/→ (Space, or Enter, on a choice) shows the next value at
@@ -185,7 +210,7 @@ with the saved file under the lock, so a concurrent CLI change to another knob i
 kept. The panel reads the shared settings again every second, so changes from
 other clients show while it is open. Values tightened by this dashboard's
 environment show `effective here:`. The refresh interval (0.1–60 seconds) is
-never written to the shared queue. Another user's queue stays read-only.
+never written to the shared queue, nor is the colour theme (see Colours). Another user's queue stays read-only.
 
 ## Lane context and details scrolling
 

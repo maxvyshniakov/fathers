@@ -100,20 +100,23 @@ def main():
     if args.screenshot or args.animation:
         tool=shutil.which('screen-kit')
         if not tool:parser.error('Install the screen-kit CLI first (bun link in its checkout).')
-        name='dashboard-navigation' if args.animation else 'dashboard'
-        destination=ROOT/'assets/screens'/name
-        result=subprocess.run([tool,'capture','--config',str(ROOT/'tools/screens.mjs'),'--only',name,
-                        '--out',str(destination)],cwd=ROOT,text=True,capture_output=True)
-        if result.returncode:
-            raise SystemExit(result.stderr)
+        base='dashboard-navigation' if args.animation else 'dashboard'
         extension='webp' if args.animation else 'png'
-        shutil.copyfile(destination/f'{name}.{extension}',ROOT/f'assets/dashboard.{extension}')
-        print(ROOT/f'assets/dashboard.{extension}')
+        for variant in ('','-light'):  # the same scene in a dark and a light terminal theme (#14)
+            name=base+variant
+            destination=ROOT/'assets/screens'/name
+            result=subprocess.run([tool,'capture','--config',str(ROOT/'tools/screens.mjs'),'--only',name,
+                            '--out',str(destination)],cwd=ROOT,text=True,capture_output=True)
+            if result.returncode:
+                raise SystemExit(result.stderr)
+            shutil.copyfile(destination/f'{name}.{extension}',ROOT/f'assets/dashboard{variant}.{extension}')
+            print(ROOT/f'assets/dashboard{variant}.{extension}')
         return
     os.environ['TZ']='Etc/GMT-2'
     time.tzset()
     dashboard,model=load_scene(advance=not args.once)
     if args.once:
+        dashboard.set_theme(dashboard._theme.from_environment())  # SLOTFATHER_THEME, SLOTFATHER_TERMINAL_BG/_FG
         canvas=dashboard.Canvas(args.width,args.height)
         dashboard.dashboard_draw(canvas,model,cwd='~/straylight')
         print(canvas.render(True))

@@ -33,7 +33,10 @@ state location; it is not a distributed scheduler or a sandbox.
 
 ## Dashboard
 
-![Slotfather dashboard: navigating running and waiting requests](assets/dashboard.webp)
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="assets/dashboard-light.webp">
+  <img alt="Slotfather dashboard: navigating running and waiting requests" src="assets/dashboard.webp">
+</picture>
 
 ## Install
 

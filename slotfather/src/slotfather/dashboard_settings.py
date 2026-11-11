@@ -5,7 +5,7 @@ applies at the queue's next grant, busy or not; nothing is drafted. An arrow cha
 the keys have settled for SETTLE_SECONDS (or at once on Enter), so stepping through the choices never applies the
 ones on the way; a typed value is saved on Enter. A capacity change is refused when capacity.json changed since this
 panel read it. A capacity below what running leases hold drains: they keep their slots and nothing more starts until
-enough of them end. The refresh interval belongs to this dashboard alone."""
+enough of them end. The refresh interval and the colour theme belong to this dashboard alone."""
 from __future__ import annotations
 
 import contextlib
@@ -17,6 +17,7 @@ import time
 from typing import TYPE_CHECKING, Any, Callable, NamedTuple, cast
 
 from . import cli, config, platform, schedule, state
+from . import theme as _theme
 from . import keys as _keys
 
 if TYPE_CHECKING:
@@ -30,7 +31,9 @@ KNOBS = {"safety": ("Safety multiplier", 0.5), "limit": ("Overtaking limit (s)",
          "yield_after": ("Yield after (s)", 30), "idle_cpu": ("Idle below (cores)", 0.05),
          "idle_after": ("Idle after (s)", 60)}
 GROUPS = (("SHARED CAPACITY", ("mode", "amount")), ("QUEUE POLICY", ("order", *KNOBS)),
-          ("THIS DASHBOARD", ("interval",)))
+          ("THIS DASHBOARD", ("interval", "theme")))
+LOCAL = ("interval", "theme")  # this dashboard's own settings, never written to the shared queue
+CHOICES = ("mode", "order", "theme")
 FIELDS = tuple(key for _, keys in GROUPS for key in keys)
 DESCRIPTIONS = {
     "mode": "Shared by every client. Automatic: the lower of the CPU and memory budgets.",
@@ -47,6 +50,8 @@ DESCRIPTIONS = {
     "idle_cpu": "A lease below this many cores for the idle time is idle (◌); 0: never.",
     "idle_after": "Seconds below the idle cores before a lease is idle and, if yieldable, asked.",
     "interval": "Seconds between this dashboard's refreshes, 0.1 to 60. Not shared.",
+    "theme": "Auto: the terminal's colours, with mixed surfaces. Terminal: its palette only. Built-in: fixed colours, "
+             "for themes such as Solarized. Not shared.",
 }
 DEFAULT_INTERVAL = 1.0
 FLASH_SECONDS = 4.0  # how long a confirmation shows, and how long a first D stays armed
@@ -80,9 +85,10 @@ def plural(count: int, word: str) -> str:
 
 
 class Settings:
-    def __init__(self, interval: float, clock: Callable[[], float] = time.monotonic):
+    def __init__(self, interval: float, theme: str = _theme.DEFAULT_MODE, clock: Callable[[], float] = time.monotonic):
         self.clock = clock
-        self.interval = interval
+        self.interval: float = interval
+        self.theme: str = _theme.checked_mode(theme)
         self.focus: str = "mode"
         self.editing: bool = False
         self.buffer = ""
@@ -157,6 +163,8 @@ class Settings:
             return self.amount_for(self.mode())
         if key == "interval":
             return self.interval
+        if key == "theme":
+            return self.theme
         return self.saved[key]
 
     def shown_value(self, key: str) -> Any:
@@ -169,6 +177,8 @@ class Settings:
             return MODE_LABELS[value]
         if key == "order":
             return str(value).capitalize()
+        if key == "theme":
+            return _theme.MODE_LABELS[value]
         return number(value)
 
     def label(self, key: str) -> str:
@@ -180,6 +190,8 @@ class Settings:
             return "Queue order"
         if key == "interval":
             return "Refresh interval (s)"
+        if key == "theme":
+            return "Colour theme"
         return KNOBS[key][0]
 
     def description(self, key: str) -> str:
@@ -204,7 +216,7 @@ class Settings:
 
     def check(self, key: str, text: str) -> tuple[Any, str]:
         """(value, "") for typed text that `key` accepts, else (None, why not)."""
-        if key not in self.fields() or key in ("mode", "order"):
+        if key not in self.fields() or key in CHOICES:
             return None, "This setting takes no typed value."
         try:
             value = float(text)
@@ -283,6 +295,9 @@ class Settings:
         if key == "interval":
             self.interval = float(value)
             return f"Refresh interval {number(self.interval)} s · this dashboard only"
+        if key == "theme":
+            self.theme = _theme.checked_mode(value)
+            return f"Colour theme {self.text(key, self.theme)} · this dashboard only"
         if key in ("mode", "amount"):
             mode, amount = self.capacity_of(key, value)
             state.configure({"capacity.json": self.capacity_value(mode, amount)},
@@ -325,6 +340,8 @@ class Settings:
             value: Any = MODES[(MODES.index(current) + direction) % len(MODES)]
         elif key == "order":
             value = "window" if current == "backfill" else "backfill"
+        elif key == "theme":
+            value = _theme.MODES[(_theme.MODES.index(current) + direction) % len(_theme.MODES)]
         elif key == "interval":  # 0.1, 1, 2, 3 ... 60
             value = (1.0 if current < 1 else min(60.0, math.floor(current) + 1.0)) if direction > 0 else \
                 (max(1.0, math.ceil(current) - 1.0) if current > 1 else 0.1)
@@ -391,6 +408,8 @@ class Settings:
             saved = self.apply("mode", "automatic")
         elif key == "interval":
             saved = self.apply(key, DEFAULT_INTERVAL)
+        elif key == "theme":
+            saved = self.apply(key, _theme.DEFAULT_MODE)
         else:
             saved = self.apply(key, config.ORDER_DEFAULTS[key])
         self.settle_focus()
@@ -400,7 +419,7 @@ class Settings:
         self.pending = None
         try:
             state.configure({"capacity.json": None, "order.json": None})
-            self.interval = DEFAULT_INTERVAL
+            self.interval, self.theme = DEFAULT_INTERVAL, _theme.DEFAULT_MODE
             self.read()
         except (config.SlotError, OSError) as error:
             self.say(str(error), "bad")
@@ -466,7 +485,7 @@ class Settings:
             return "close"
         if key in ("q", "Q"):
             return "quit"
-        choice = self.focus in ("mode", "order")
+        choice = self.focus in CHOICES
         saved = False
         if key in ("down", "j", "\t"):
             saved = self.move(1)
@@ -519,7 +538,7 @@ class Settings:
                     return "changed" if self.select(key) else "handled"
                 if self.editing:
                     return "handled"
-                return self.key(" " if key in ("mode", "order") else "\r")
+                return self.key(" " if key in CHOICES else "\r")
         return "handled"
 
     # Drawing
@@ -572,7 +591,7 @@ class Settings:
             return [Row(key, tuple(parts)), Row(key, ((4, note, style),))]
         pending = self.pending is not None and self.pending.key == key
         value = self.text(key, self.shown_value(key))
-        if selected and key in ("mode", "order"):
+        if selected and key in CHOICES:
             value = f"‹ {value} ›"
         parts.append((value_column, value, "cursor" if pending else "accent"))
         after = value_column + len(value) + 2
@@ -586,7 +605,7 @@ class Settings:
             note = self.drain_note(self.basis["slots"])
             if note:
                 parts.append((after, note.replace("will drain", "draining"), "warn"))
-        elif key in self.effective and key != "interval" and self.effective[key] != self.saved[key]:
+        elif key in self.effective and key not in LOCAL and self.effective[key] != self.saved[key]:
             effective = self.effective[key]
             shown = effective.capitalize() if key == "order" else number(effective)
             parts.append((after, f"effective here: {shown}", "dim"))  # this dashboard's environment tightens it
@@ -594,7 +613,7 @@ class Settings:
 
     def rows(self, model: dict[str, Any] | None, inner: int) -> list[Row]:
         rows = self.status_rows(model)
-        rows.append(Row("", ((0, "─" * inner, "frame"),)))
+        rows.append(Row("", ((0, "─" * inner, "dim"),)))
         value_column = min(FIELD_LABEL, max(12, inner // 2))
         shown = self.fields()
         for title, keys in GROUPS:
@@ -663,7 +682,7 @@ class Settings:
                 if row.key == self.focus:
                     canvas.select(line, x + 1, x + width - 1)
         rule = y + height - 6
-        canvas.put(rule, x + 2, "─" * inner, "frame", inner)
+        canvas.put(rule, x + 2, "─" * inner, "dim", inner)
         below = max(0, len(body) - self.offset - self.visible)
         if below:
             canvas.right(rule, x + width - 2, f" ↓ {below} more ", "dim")

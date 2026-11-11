@@ -22,6 +22,7 @@
 │   Idle after (s)            300                                              │
 │ THIS DASHBOARD                                                               │
 │   Refresh interval (s)      1                                                │
+│   Colour theme              Auto                                             │
 │ ──────────────────────────────────────────────────────────────────────────── │
 │ Shared by every client. Automatic: the lower of the CPU and memory budgets.  │
 │                                                                              │

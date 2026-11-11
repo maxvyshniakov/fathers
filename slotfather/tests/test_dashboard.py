@@ -37,6 +37,15 @@ def load_dashboard():
     return importlib.reload(importlib.import_module("slotfather.dashboard"))
 
 
+DARK = {"SLOTFATHER_TERMINAL_BG": "#282c34", "SLOTFATHER_TERMINAL_FG": "#ffffff"}
+
+
+def surfaces(tool: Any) -> Any:
+    """The dashboard drawing with mixed surfaces (#14: a known background), as layout tests read its glyphs."""
+    tool.set_theme(tool._theme.resolve("auto", environ=DARK))
+    return tool
+
+
 class DashboardTests(SlotCase):
     def snapshot(self, width=140, height=40):
         result = self.tool("dashboard", "--once", "--width", str(width), "--height", str(height))
@@ -58,7 +67,7 @@ class DashboardTests(SlotCase):
         self.started("whole")
         item, row = queue_row("whole")
         self.assertEqual((10, True), (item["count"], item["all"]))
-        self.assertRegex(row, r"whole +all +■")
+        self.assertRegex(row, r"whole +all +[■░]")
         self.release("whole")
         self.finish(whole)
         self.assertEqual(0, self.tool("slots", "4").returncode)
@@ -66,7 +75,7 @@ class DashboardTests(SlotCase):
         self.started("fits")
         item, row = queue_row("fits")
         self.assertEqual((4, True), (item["count"], item["all"]))
-        self.assertRegex(row, r"fits +▪▪▪▪ +■")
+        self.assertRegex(row, r"fits +▪▪▪▪ +[■░]")
         self.release("fits")
         self.finish(fits)
 
@@ -339,7 +348,7 @@ class QueueTableTests(unittest.TestCase):
     slot counts are drawn as cells in the row's colour."""
 
     def setUp(self) -> None:
-        self.tool = load_dashboard()
+        self.tool = surfaces(load_dashboard())
         self.now = datetime.datetime.now(datetime.timezone.utc)
 
     def model(self, **extra: Any) -> dict[str, Any]:
@@ -396,8 +405,8 @@ class QueueTableTests(unittest.TestCase):
             text = {cell[1] for cell in cells if cell[0] not in (" ", "■", "")}
             self.assertEqual({style}, text, label)
         build = self.row(canvas, "build")
-        self.assertEqual({"h0", "frame"}, {cell[1] for cell in canvas.cells[build] if cell[0] == "■"},
-                         "the CPU bar fills in the row's colour; its empty cells keep the frame colour")
+        self.assertEqual({"h0", "track"}, {cell[1] for cell in canvas.cells[build] if cell[0] == "■"},
+                         "the CPU bar fills in the row's colour; its empty cells keep the track colour")
         self.assertTrue(all(cell[2] for cell in canvas.cells[build][3:-3]), "the selection highlight stays on top")
 
     def test_bars_and_states_start_at_one_column_and_the_numbers_line_up(self) -> None:
@@ -432,7 +441,7 @@ class QueueTableTests(unittest.TestCase):
         self.assertEqual(["h0", "bad", "warn"], styles, "over its share stays red, an idle lease stays yellow")
         canvas = self.draw(model)
         cpu = canvas.render(False).splitlines()[0].index("cpu use/share")
-        for label, filled in (("fair", {"h0", "frame"}), ("hog", {"bad"})):
+        for label, filled in (("fair", {"h0", "track"}), ("hog", {"bad"})):
             y = self.row(canvas, label)
             self.assertEqual(filled, {cell[1] for cell in canvas.cells[y][cpu:cpu + 10] if cell[0] == "■"}, label)
 
@@ -763,7 +772,7 @@ class QueuePolicyTests(unittest.TestCase):
 
 class SlotBarTests(unittest.TestCase):
     def test_free_label_is_right_aligned_and_leaves_room_for_the_last_owner(self):
-        tool = load_dashboard()
+        tool = surfaces(load_dashboard())
         canvas = tool.Canvas(120, 3)
         tool.draw_slots(canvas, 0, 2, 116, dict(slots=6, used=1, waiters=[],
                         holders=[dict(count=1, kind="held", style="h0", label="lane-624-flows-are-graphs")]))
@@ -772,7 +781,7 @@ class SlotBarTests(unittest.TestCase):
         self.assertEqual(lines[0].rindex("🮅") + 1, lines[1].index("free") + 4)
 
     def test_each_slot_is_solid_with_only_a_gap_between_slots(self):
-        tool = load_dashboard()
+        tool = surfaces(load_dashboard())
         canvas = tool.Canvas(120, 3)
         tool.draw_slots(canvas, 0, 2, 116, dict(slots=3, used=2, waiters=[dict(count=3)],
                         holders=[dict(count=2, kind="held", style="h0", label="build")]))
@@ -827,8 +836,10 @@ class MachineStatusTests(unittest.TestCase):
                 self.assertIn("load 1m",lines[4])
                 self.assertNotIn("advise",canvas.render(False))
                 self.assertNotIn("memory_block",canvas.render(False))
-                self.assertIn("38;5;255m",canvas.lines(True)[2])
-                if not admission:self.assertIn("38;5;167m",canvas.lines(True)[2])
+                # #14: normal status is the terminal's own foreground (no colour code), a block ANSI red
+                self.assertIn("\x1b[0munleased load: 4.5",canvas.lines(True)[2])
+                self.assertNotIn("38;5;255",canvas.lines(True)[2])
+                if not admission:self.assertIn("\x1b[0;31mno admission",canvas.lines(True)[2])
 
 
 class MemoryBarTests(unittest.TestCase):
@@ -866,7 +877,7 @@ class MemoryBarTests(unittest.TestCase):
     def test_memory_bar_colour_reflects_pressure_without_a_separate_pressure_row(self):
         tool = load_dashboard()
         now = datetime.datetime.now(datetime.timezone.utc)
-        for level, colour in ((1,75), (2,167), (4,167)):
+        for level, colour in ((1,34), (2,31), (4,31)):  # #14: ANSI blue (accent) and red (bad)
             with self.subTest(level=level):
                 canvas = tool.Canvas(90,24)
                 tool.draw_machine(canvas,0,0,24,90,dict(slots=4,cores=12,averages=(1,2,3),
@@ -874,10 +885,10 @@ class MemoryBarTests(unittest.TestCase):
                                   memory=dict(level=level,used=768,total=1024,swap_total=512,swap_free=128),
                                   history=[(now-datetime.timedelta(hours=1),now,4)]))
                 row = next(i for i,line in enumerate(canvas.lines(False)) if "memory" in line and "used" in line)
-                self.assertIn(f"\x1b[0;38;5;{colour}m", canvas.lines(True)[row])
+                self.assertIn(f"\x1b[0;{colour}m■", canvas.lines(True)[row])
                 self.assertNotIn("pressure", canvas.render(False))
 
-    def test_full_capacity_is_orange_even_in_a_one_row_histogram(self):
+    def test_full_capacity_is_the_gradients_red_end_even_in_a_one_row_histogram(self):
         tool=load_dashboard()
         now=datetime.datetime.now(datetime.timezone.utc)
         canvas=tool.Canvas(90,11)
@@ -887,7 +898,8 @@ class MemoryBarTests(unittest.TestCase):
                           history=[(now-datetime.timedelta(hours=1),now,4)]))
         rows=[i for i,line in enumerate(canvas.lines(False)) if "█" in line]
         self.assertEqual(1,len(rows))
-        self.assertIn("38;2;255;175;95m",canvas.lines(True)[rows[0]])
+        red=tool._theme.FIXED_HIGH  # #14: the theme's red when the terminal says it; this fixed one without
+        self.assertIn("38;2;%d;%d;%dm"%red,canvas.lines(True)[rows[0]])
 
     def test_macos_memory_counts_active_wired_and_compressor_physical_pages(self):
         tool = load_dashboard()

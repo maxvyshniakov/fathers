@@ -37,6 +37,7 @@ from . import platform as _platform
 from . import query as _query
 from . import schedule as _schedule
 from . import state as _state
+from . import theme as _theme
 
 
 # dashboard_model() gathers plain data and dashboard_draw() lays it out on a Canvas of styled cells; the live view
@@ -48,21 +49,18 @@ MACHINE_HEIGHT = 12 + CHART_ROWS  # status, resource bars, gaps, legend and fram
 HISTORY_WINDOW = 3600  # seconds of queue.log the utilisation strip rebuilds
 LOG_TAIL = 262144  # bytes of queue.log read per refresh
 WIDE = 110  # columns from which the panels sit side by side
-# style -> (256-colour index or RGB foreground, attributes: b bold, d dim, r reverse). None keeps the terminal's own foreground,
-# so text reads on light and dark themes alike.
-STYLES = {
-    "text": (None, ""), "bold": (None, "b"), "dim": (245, "d"), "frame": (239, "d"),
-    "title": (None, "b"), "key": (255, "b"), "accent": (75, ""), "cursor": (255, "b"), "status-normal": (255, ""),
-    "ok": (114, ""), "warn": (179, ""), "bad": (167, ""), "legacy": (176, ""),
-    "badge-ok": (114, "br"), "badge-warn": (179, "br"), "badge-bad": (167, "br"),
-    "h0": (75, ""), "h1": (79, ""), "h2": (216, ""), "h3": (141, ""),
-    "h4": (110, ""), "h5": (186, ""),
-}
-# Fixed colours by chart height, so orange always means near capacity, even for short bars.
-CHART_COLOURS = [(95, 175, 255), (105, 155, 255), (135, 145, 255), (170, 135, 240),
-                 (200, 140, 210), (225, 150, 170), (245, 160, 130), (255, 175, 95)]
-STYLES.update({f"chart{i}": (rgb, "") for i, rgb in enumerate(CHART_COLOURS)})
-HOLDER_STYLES = 6
+# Styles come from the theme (#14, theme.py): style -> (colour, attributes: b bold, d dim, r reverse), where the
+# colour is None for the terminal's default foreground, a palette index or RGB. Frames are drawn in the muted "dim"
+# token, the same as muted text, so the two cannot drift apart.
+current_theme = _theme.resolve(_theme.DEFAULT_MODE, environ={})
+HOLDER_STYLES = _theme.HOLDERS
+
+
+def set_theme(theme: _theme.Theme) -> None:
+    global current_theme
+    current_theme = theme
+
+
 ASCII = str.maketrans({"🮅": "#", "■": "#", "▪": "#", "◌": "o", "□": "o", "▫": "o", "▶": ">", "▉": "#", "▌": "+", "▐": "|", "█": "#", "▓": "%", "▒": "=", "░": ".", "·": ".", "●": "*", "…": "~", "─": "-", "│": "|",
                        "╭": "+", "╮": "+", "╰": "+", "╯": "+", "↑": "^", "↓": "v", "↗": "/", "↘": "\\", "→": ">",
                        "←": "<", "≈": "~", "×": "x", "—": "-", "⏸": "=", "▁": "_", "▂": "_", "▃": "-", "▄": "-",
@@ -219,11 +217,11 @@ class Canvas:
     def box(self, y: int, x: int, height: int, width: int, title: str = "", note: str = "") -> None:
         if height < 2 or width < 6:
             return
-        self.put(y, x, "╭" + "─" * (width - 2) + "╮", "frame")
+        self.put(y, x, "╭" + "─" * (width - 2) + "╮", "dim")
         for row in range(y + 1, y + height - 1):
-            self.put(row, x, "│", "frame")
-            self.put(row, x + width - 1, "│", "frame")
-        self.put(y + height - 1, x, "╰" + "─" * (width - 2) + "╯", "frame")
+            self.put(row, x, "│", "dim")
+            self.put(row, x + width - 1, "│", "dim")
+        self.put(y + height - 1, x, "╰" + "─" * (width - 2) + "╯", "dim")
         after = self.put(y, x + 2, f" {title} ", "title", width - 4) if title else x + 2
         if note and x + width - 2 - text_width(note) - 2 > after:
             self.right(y, x + width - 2, f" {note} ", "dim")
@@ -273,16 +271,16 @@ def safe_link(url: str) -> bool:
 
 
 def sgr(style: str, selected: bool) -> str:
-    fore, flags = STYLES[style]
+    """The SGR sequence for a cell. A selected cell has the theme's selection background, or is bold where the
+    theme has none; its text keeps its colour (builtin: default-foreground text turns 252 over its dark band)."""
+    fore, flags = current_theme.styles[style]
     if selected and fore is None:
-        fore = 252  # readable neutral text over the soft selection background
-    codes = ["0"] + (["1"] if "b" in flags else []) + (["2"] if "d" in flags and fore is None else [])
-    if isinstance(fore, tuple):
-        codes.append("38;2;" + ";".join(str(channel) for channel in fore))
-    elif fore is not None:
-        codes.append(f"38;5;{fore}")
-    if selected:
-        codes.append("48;2;56;62;74")
+        fore = current_theme.selected_text
+    bold = "b" in flags or (selected and current_theme.selection is None)
+    codes = ["0"] + (["1"] if bold else []) + (["2"] if "d" in flags and fore is None else [])
+    codes += _theme.sgr_colour(fore)
+    if selected and current_theme.selection is not None:
+        codes += _theme.sgr_colour(current_theme.selection, 4)
     codes += ["7"] if "r" in flags else []
     return "\x1b[" + ";".join(codes) + "m"
 
@@ -608,7 +606,7 @@ def bar(fraction: float, width: int, style: str) -> list[tuple[str, str]]:
     """Compact squares leave vertical breathing room between adjacent bar rows."""
     width = max(0, width)
     full = max(0, min(width, math.floor(fraction * width + 0.5)))
-    return [("■" * full, style), ("■" * (width - full), "frame")]
+    return [("■" * full, style), (current_theme.track * (width - full), "track")]
 
 
 def share(item: dict, model: dict) -> tuple[float, float]:
@@ -711,9 +709,9 @@ def table_header(canvas: Canvas, y: int, x: int, height: int, width: int, title:
     for index, (key, label, column, size, right) in enumerate(placed):
         value = title if index == 0 else label.lower()
         start = x + 3 + gutter + column + (max(0, size - text_width(value)) if right else 0)
-        canvas.put(y, start - 1, " ", "frame")
+        canvas.put(y, start - 1, " ", "dim")
         canvas.put(y, start, value, "title" if index == 0 else "dim", size)
-        canvas.put(y, min(x + width - 2, start + min(size, text_width(value))), " ", "frame")
+        canvas.put(y, min(x + width - 2, start + min(size, text_width(value))), " ", "dim")
 
 
 def draw_header(canvas: Canvas, model: dict | None, paused: bool, error: str | None, copying: bool = False) -> tuple[int, int]:
@@ -756,7 +754,7 @@ def draw_slots(canvas: Canvas, y: int, x: int, width: int, model: dict) -> None:
             canvas.put(y, starts[index], "🮅" * widths[index], holder["style"])
         filled += count
     for index in range(filled, slots):
-        canvas.put(y, starts[index], "🮅" * widths[index], "frame")
+        canvas.put(y, starts[index], free_slot(widths[index]), "free")
     label_end = x + area
     if filled < slots and area >= 4:
         free_start = x + area - 4
@@ -765,6 +763,14 @@ def draw_slots(canvas: Canvas, y: int, x: int, width: int, model: dict) -> None:
     for index, (label_x, label, style) in enumerate(labels):
         limit = labels[index + 1][0] - 2 if index + 1 < len(labels) else label_end
         canvas.put(y + 1, label_x, label, style, max(0, limit - label_x))
+
+
+def free_slot(width: int) -> str:
+    """A free slot `width` cells wide: a block in the theme's free colour, or outlined where the theme has no surface
+    colours (#14)."""
+    if current_theme.free == "block" or width < 1:
+        return "🮅" * width
+    return "▭" if width == 1 else "╭" + "─" * (width - 2) + "╮"
 
 
 SLOT_CELLS = 8  # most cells the QUEUE table's slots column shows before it counts the rest
@@ -1213,15 +1219,15 @@ def draw_machine(canvas: Canvas, y: int, x: int, height: int, width: int, model:
         row += 1
     if chart_rows:
         row += 1  # gap above the histogram
-    # Eighth-block heights; the same blue-to-orange palette is tied to the capacity scale.
+    # Eighth-block heights; the same blue-to-red gradient is tied to the capacity scale.
     for line in range(chart_rows):
         floor = (chart_rows - 1 - line) * 8
         for column, level in enumerate(buckets):
             eighths = math.ceil(level / slots * chart_rows * 8) - floor if level else 0
             glyph = SPARK[min(8, eighths) - 1] if eighths > 0 else " "
             height_fraction = min(1, level / slots) if chart_rows == 1 else (chart_rows - 1 - line) / (chart_rows - 1)
-            colour = round(height_fraction * (len(CHART_COLOURS) - 1))
-            canvas.put(row, x + 3 + column, glyph, f"chart{colour}" if eighths > 0 else "frame")
+            colour = round(height_fraction * (_theme.CHART_STEPS - 1))
+            canvas.put(row, x + 3 + column, glyph, f"chart{colour}" if eighths > 0 else "dim")
         row += 1
     if chart_rows:
         row += 1  # one gap row between histogram and legend
@@ -1267,7 +1273,7 @@ HELP_CONTENT: list[tuple[str, str]] = [
     ("The header shows machine cores and shared slot capacity. manual means a saved capacity setting; auto means capacity calculated from the machine.", "text"),
     ("QUEUE", "title"),
     ("Running requests come first, followed by a blank separator and waiting requests. ▶ and a soft background identify the selected row. Selection opens its details.", "text"),
-    ("Each row has one colour: a running request's row is in the colour of its SLOTS blocks, its CPU bar too, except that the bar turns red above 1.5 times its share and yellow while the lease is idle; a waiting or yielded request's row is white.", "text"),
+    ("Each row has one colour: a running request's row is in the colour of its SLOTS blocks, its CPU bar too, except that the bar turns red above 1.5 times its share and yellow while the lease is idle; a waiting or yielded request's row is in the normal text colour.", "text"),
     ("slots: one cell per slot the request holds or asks for. A count too wide for the column shows the cells that fit and +N for the rest; -n all that does not fit shows all.", "text"),
     ("cpu use/share: observed cores used by a running request / the core budget represented by its slots. A request can exceed its share; it is not a hard limit. A request that holds no slots shows its state there instead: waiting #N, its current place in the waiting queue, or yielded #N for a lease back in the queue after a yield. Bars and states start at one column; the numbers line up around the slash.", "text"),
     ("time is elapsed run time for running work and elapsed wait time for waiting work. pid is the lease owner. A wide terminal shares the spare width among the columns in proportion to their own widths; on a narrow one pid goes first, then time, then cpu use/share.", "text"),
@@ -1294,15 +1300,16 @@ HELP_CONTENT: list[tuple[str, str]] = [
     ("slots: one cell per slot in the event's colour, filled ▪ for slots taken (granted) and hollow ▫ for slots handed back (released, a held lease reaped) or never held (left, a waiter reaped).", "text"),
     ("detail comes from the request's history line: waited for a grant, the exit status and run time for a release, gave up after for a waiter that left, owner exited for a reap. It is empty where the history does not reach back.", "text"),
     ("MACHINE", "title"),
-    ("The status row summarizes memory, swap, estimated unleased demand and admission. White is normal; red identifies a condition limiting additional work.", "text"),
+    ("The status row summarizes memory, swap, estimated unleased demand and admission. The normal text colour is normal; red identifies a condition limiting additional work.", "text"),
     ("load 1m: the system load averaged over one minute, shown beside the logical CPU count. The bar compares the two; load is not CPU utilization.", "text"),
     ("unleased load: estimated demand outside leased work. This is not the number of free cores.", "text"),
     ("admission: how many slots a generic new request can get now, after the queue and memory checks. It is not a worker count; free slots can still have no admission.", "text"),
     ("memory and swap bars show used capacity. Low memory or swap blocks additional leases; an idle machine may still start its first request.", "text"),
     ("The held chart shows occupied slots over time, newest on the right. Each column preserves its interval's peak; fractional heights show more than whole rows.", "text"),
-    ("held/N is the slot scale; s/col is seconds per column. Blue is the bottom, orange is full capacity. avg is average occupancy; peak is the most held; full is time at capacity.", "text"),
+    ("held/N is the slot scale; s/col is seconds per column. Blue is the bottom, red is full capacity. avg is average occupancy; peak is the most held; full is time at capacity.", "text"),
+    ("Colours follow the terminal's theme, light or dark, and repaint when it switches. Colour theme: Auto mixes the selection, bar tracks and free slots from its background; Terminal uses its palette only; Built-in is a fixed palette for themes whose bright black is close to the background.", "text"),
     ("SETTINGS", "title"),
-    ("s opens Settings: a read-only STATUS of the queue above shared capacity, queue policy and this dashboard's refresh interval. ←/→ shows the next value of the selected setting and saves it once the keys have settled for a second (Enter saves now, Esc cancels); Enter edits a number. A saved setting applies at the next grant, also while requests run or wait. d resets the selected setting, D twice resets them all; Esc closes.", "text"),
+    ("s opens Settings: a read-only STATUS of the queue above shared capacity, queue policy and this dashboard's refresh interval and colour theme. ←/→ shows the next value of the selected setting and saves it once the keys have settled for a second (Enter saves now, Esc cancels); Enter edits a number. A saved setting applies at the next grant, also while requests run or wait. d resets the selected setting, D twice resets them all; Esc closes.", "text"),
     ("A capacity below the held slots drains: running work keeps its slots, nothing more starts until no more than the capacity is held, and SLOTS shows draining N. The dashboard never cancels or kills work.", "dim"),
 ]
 
@@ -1511,12 +1518,13 @@ KEYS = {"\x1b[A": "up", "\x1bOA": "up", "\x1b[B": "down", "\x1bOB": "down", "\x1
 KEY_PENDING: dict[int, str] = {}
 MOUSE = re.compile(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])")
 SEQUENCE = re.compile(r"\x1b(\[[0-9;:?<]*[ -/]*[@-~]|O.)")
-PARTIAL = re.compile(r"\x1b(\[(?:<[0-9;]*|[0-9;:?]*[ -/]*)|O)?$")
+PARTIAL = re.compile(r"\x1b(\[(?:<[0-9;]*|[0-9;:?]*[ -/]*)|O|\][^\x07\x1b]*\x1b?)?$")  # \x1b]: an OSC report
 
 
-def read_keys(fd: int) -> list[str | tuple[str, int, int, int, bool]]:
+def read_keys(fd: int, reports: list[str] | None = None) -> list[str | tuple[str, int, int, int, bool]]:
     """Keys waiting on fd: printable characters, the names in KEYS, or esc. A sequence split across reads is
-    completed first; one this view does not know is dropped rather than read as Esc and its letters."""
+    completed first; one this view does not know is dropped rather than read as Esc and its letters. What the
+    terminal reports (its colours, a colour-scheme change: theme.REPORT) goes to `reports`, never to the keys."""
     data = KEY_PENDING.pop(fd, "") + os.read(fd, 1024).decode("utf-8", "ignore")
     while PARTIAL.search(data) and select.select([fd], [], [], 0.03)[0]:
         chunk = os.read(fd, 1024)
@@ -1530,6 +1538,12 @@ def read_keys(fd: int) -> list[str | tuple[str, int, int, int, bool]]:
     found: list[str | tuple[str, int, int, int, bool]] = []
     index = 0
     while index < len(data):
+        report = _theme.REPORT.match(data, index)
+        if report:
+            if reports is not None:
+                reports.append(report.group())
+            index = report.end()
+            continue
         mouse = MOUSE.match(data, index)
         if mouse:
             button, x, y, action = mouse.groups()
@@ -1558,28 +1572,37 @@ def read_keys(fd: int) -> list[str | tuple[str, int, int, int, bool]]:
 
 
 @contextlib.contextmanager
-def full_screen(fd_in: int, fd_out: int):
+def full_screen(fd_in: int, fd_out: int, answers: _theme.Answers | None = None):
     """The alternate screen with the cursor hidden, line wrap off and keys read one at a time without echo; Ctrl-C
-    still interrupts. Everything is put back on the way out."""
+    still interrupts. With `answers`, the terminal is first asked for its colours (#14), at most
+    theme.QUERY_TIMEOUT, and colour-scheme change notifications are subscribed to. Everything is put back on the way
+    out."""
     saved = termios.tcgetattr(fd_in)
     try:
         tty.setcbreak(fd_in)
         active = termios.tcgetattr(fd_in)
         active[0] &= ~(termios.IXON | termios.IXOFF)  # Ctrl-S must not freeze the screen by terminal flow control.
         termios.tcsetattr(fd_in, termios.TCSANOW, active)
+        if answers is not None:  # before the kitty push, so no reply can be taken for a key event
+            typed = _theme.ask(fd_in, fd_out, answers)
+            if typed:
+                KEY_PENDING[fd_in] = typed  # keys typed meanwhile come with the next read
         # The kitty keyboard protocol (#13) reports each key's base-layout key, so hotkeys work on any layout; a
         # terminal without it ignores the request, and the layout table in keys.hotkey() stands in.
-        os.write(fd_out, b"\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1006h\x1b[2J" + _keys.KITTY_ON)
+        os.write(fd_out, b"\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1006h\x1b[2J"
+                 + (_theme.SCHEME_ON if answers is not None else b"") + _keys.KITTY_ON)
         yield
     finally:
         KEY_PENDING.pop(fd_in, None)
-        os.write(fd_out, _keys.KITTY_OFF + b"\x1b[?1006l\x1b[?1000l\x1b[0m\x1b[?7h\x1b[?25h\x1b[?1049l")
+        os.write(fd_out, _keys.KITTY_OFF + (_theme.SCHEME_OFF if answers is not None else b"")
+                 + b"\x1b[?1006l\x1b[?1000l\x1b[0m\x1b[?7h\x1b[?25h\x1b[?1049l")
         termios.tcsetattr(fd_in, termios.TCSADRAIN, saved)
 
 
-def dashboard_live(interval: float) -> None:
+def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
     fd_in, fd_out = sys.stdin.fileno(), sys.stdout.fileno()
     colour = not os.environ.get("NO_COLOR")
+    answers = _theme.Answers() if colour else None  # what the terminal says about its colours (#14)
     ascii_only = "utf" not in (sys.stdout.encoding or "").lower()
     model = error = selected_key = None
     index, colours, cwds, shown, drawn_size = 0, {}, {}, [], None
@@ -1589,10 +1612,15 @@ def dashboard_live(interval: float) -> None:
     settings: _settings.Settings | None = None
     fetched, drawn, whole, force, dirty = 0.0, 0.0, 0.0, True, True
     canvas = Canvas(0, 0)
-    with full_screen(fd_in, fd_out):
+    with full_screen(fd_in, fd_out, answers):
+        set_theme(_theme.from_environment(answers=answers, mode=theme))
         while True:
             if settings is not None and settings.tick():  # an arrow change settled: saved, so show its effect now
-                interval, force, dirty = settings.interval, True, True
+                interval, force, dirty = float(settings.interval), True, True
+            if settings is not None and settings.theme != theme:  # this dashboard's theme, applied at once
+                theme = str(settings.theme)
+                shown, dirty = [], True
+                set_theme(_theme.from_environment(answers=answers, mode=theme))
             if force or (mouse_enabled and not paused and time.monotonic() - fetched >= interval):
                 try:
                     fresh = dashboard_model()
@@ -1633,14 +1661,23 @@ def dashboard_live(interval: float) -> None:
                 shown, drawn, dirty = lines, time.monotonic(), False
             if not select.select([fd_in], [], [], 0.25)[0]:
                 continue
-            for key in read_keys(fd_in):
+            reports: list[str] = []
+            pressed = read_keys(fd_in, reports)
+            if reports and answers is not None and theme_reports(reports, answers, fd_out):
+                set_theme(_theme.from_environment(answers=answers, mode=theme))
+                shown, dirty = [], True  # every row's colours changed
+            for key in pressed:
                 dirty = True
                 if settings is not None:
                     action = settings.mouse(key) if isinstance(key, tuple) and mouse_enabled else (
                         settings.key(key) if isinstance(key, str) else "handled")
                     if action == "quit":
                         return
-                    interval = settings.interval  # this dashboard's own setting, changed at once like the rest
+                    interval = float(settings.interval)  # this dashboard's own setting, changed at once like the rest
+                    if settings.theme != theme:  # so is its colour theme
+                        theme = str(settings.theme)
+                        shown = []
+                        set_theme(_theme.from_environment(answers=answers, mode=theme))
                     if action == "close":
                         settings = None
                         shown = []
@@ -1677,7 +1714,7 @@ def dashboard_live(interval: float) -> None:
                     draw_help(canvas)
                 elif key == "s":
                     try:
-                        settings = _settings.Settings(interval)
+                        settings = _settings.Settings(interval, theme)
                     except (_config.SlotError, OSError) as failure:
                         error = dashboard_text(failure)
                     if settings is not None:
@@ -1702,6 +1739,17 @@ def dashboard_live(interval: float) -> None:
                     index = len(items) - 1
                 index = max(0, min(index, len(items) - 1))
                 selected_key = keys[index] if items else None
+
+
+def theme_reports(reports: list[str], answers: _theme.Answers, fd_out: int) -> bool:
+    """Takes what the terminal reported; True when a colour changed. A colour-scheme change notification (mode
+    2031) asks for the colours again: their answers arrive with later keys."""
+    changed = False
+    for report in reports:
+        changed = answers.feed(report) or changed
+        if _theme.SCHEME_REPLY.match(report):
+            os.write(fd_out, _theme.QUERY)
+    return changed
 
 
 def dashboard_command(argv: list[str]) -> int:
@@ -1729,6 +1777,11 @@ def dashboard_command(argv: list[str]) -> int:
             argv = argv[2:]
         else:
             raise _config.SlotError("dashboard takes [--interval SECONDS] or --once [--width N] [--height N] [--color]")
+    try:
+        theme = _theme.checked_mode(os.environ.get("SLOTFATHER_THEME"))
+        set_theme(_theme.from_environment())  # --once cannot ask the terminal: SLOTFATHER_TERMINAL_BG/_FG, COLORFGBG
+    except ValueError as error:
+        raise _config.SlotError(str(error)) from None
     if once:
         model = dashboard_model()
         dashboard_colours(model, {})
@@ -1746,7 +1799,7 @@ def dashboard_command(argv: list[str]) -> int:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise _config.SlotError("dashboard needs an interactive terminal; dashboard --once prints one snapshot")
     try:
-        dashboard_live(interval)
+        dashboard_live(interval, theme)
     except KeyboardInterrupt:
         pass
     return 0
