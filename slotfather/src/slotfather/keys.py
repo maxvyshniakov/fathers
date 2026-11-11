@@ -28,6 +28,12 @@ LAYOUT = {**dict(zip(_RU_LOWER, _US_LOWER)), **dict(zip(_RU_UPPER, _US_UPPER)),
 del LAYOUT["."]
 
 
+# The protocol's keypad keys (num lock on: digits and operators) as the ordinary keys they stand for.
+KEYPAD = {**{57399 + n: str(n) for n in range(10)}, 57409: ".", 57410: "/", 57411: "*", 57412: "-", 57413: "+",
+          57414: "\r", 57415: "=", 57416: ",", 57417: "left", 57418: "right", 57419: "up", 57420: "down",
+          57421: "page_up", 57422: "page_down", 57423: "home", 57424: "end", 57426: "\x7f"}
+
+
 class Key(str):
     """A key as typed, with the US-QWERTY key at its position when the terminal said which (`base`)."""
     base: str | None = None
@@ -58,7 +64,9 @@ def kitty(match: re.Match[str]) -> str | None:
     special = {13: "\r", 9: "back_tab" if shift else "\t", 127: "\x7f", 8: "\x7f", 27: "esc"}
     if code in special:
         return special[code]
-    if code >= 57344 or code < 32:  # the protocol's functional keys (private use area) and C0 codes
+    if code in KEYPAD:
+        return KEYPAD[code]
+    if code >= 57344 or code < 32:  # the protocol's other functional keys (private use area) and C0 codes
         return None
     us = chr(base) if base is not None else chr(code) if chr(code).isascii() else LAYOUT.get(chr(code))
     if ctrl:

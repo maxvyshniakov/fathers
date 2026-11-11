@@ -1539,6 +1539,8 @@ def read_keys(fd: int) -> list[str | tuple[str, int, int, int, bool]]:
         event = _keys.KITTY_KEY.match(data, index)
         if event:  # the kitty keyboard protocol (#13): a key with its base-layout key, or one this view drops
             key = _keys.kitty(event)
+            if key == "\x03":  # Ctrl-C reaches the dashboard as a key under the protocol, not as SIGINT
+                raise KeyboardInterrupt
             if key is not None:
                 found.append(key)
             index = event.end()

@@ -56,6 +56,15 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual(["s", "D", "?"], [sf_keys.hotkey(key) for key in found[:3]])
         self.assertEqual("1", sf_keys.hotkey(found[7]))
 
+    def test_keypad_keys_are_the_ordinary_keys_and_ctrl_c_interrupts(self) -> None:
+        self.assertEqual(["1", "0", ".", "-", "+", "\r", "up", "page_down"],
+                         keys_of(b"\x1b[57400u\x1b[57399u\x1b[57409u\x1b[57412u\x1b[57413u\x1b[57414u\x1b[57419u"
+                                 b"\x1b[57422u"))
+        with self.assertRaises(KeyboardInterrupt):
+            keys_of(b"\x1b[99;5u")
+        with self.assertRaises(KeyboardInterrupt):
+            keys_of(b"\x1b[1089:1057:99;5u")  # Ctrl with the Russian с, at the c position
+
     def test_a_kitty_sequence_split_across_reads_is_completed(self) -> None:
         tool = importlib.import_module("slotfather.dashboard")
         read, write = os.pipe()
@@ -134,6 +143,45 @@ class TerminalTests(SlotCase):
             os.close(master)
             if slave >= 0:
                 os.close(slave)
+
+    def test_ctrl_c_under_the_protocol_quits_from_the_dashboard_and_from_settings(self) -> None:
+        for opening in (b"", "ы".encode()):
+            master, slave = pty.openpty()
+            process: subprocess.Popen[bytes] | None = None
+            try:
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+                process = subprocess.Popen([str(ROOT / "slotfather"), "dashboard", "--interval", "60"],
+                                           stdin=slave, stdout=slave, stderr=slave, env=self.env,
+                                           start_new_session=True)
+                os.close(slave)
+                slave = -1
+                screen = b""
+                deadline = time.monotonic() + 8
+                while b"QUEUE" not in screen and time.monotonic() < deadline:
+                    if select.select([master], [], [], 0.1)[0]:
+                        screen += os.read(master, 65536)
+                if opening:
+                    os.write(master, opening)
+                    while b"STATUS" not in screen and time.monotonic() < deadline:
+                        if select.select([master], [], [], 0.1)[0]:
+                            screen += os.read(master, 65536)
+                os.write(master, b"\x1b[99;5u")  # Ctrl-C as the protocol reports it
+                deadline = time.monotonic() + 8
+                while process.poll() is None and time.monotonic() < deadline:
+                    if select.select([master], [], [], 0.1)[0]:
+                        try:
+                            screen += os.read(master, 65536)
+                        except OSError:
+                            break
+                self.assertEqual(0, process.wait(timeout=1), f"Ctrl-C quits ({opening!r})")
+                self.assertIn(sf_keys.KITTY_OFF, screen)
+            finally:
+                if process is not None and process.poll() is None:
+                    os.killpg(process.pid, signal.SIGTERM)
+                    process.wait(timeout=3)
+                os.close(master)
+                if slave >= 0:
+                    os.close(slave)
 
     def test_the_mode_is_restored_when_the_dashboard_fails(self) -> None:
         tool = importlib.import_module("slotfather.dashboard")
