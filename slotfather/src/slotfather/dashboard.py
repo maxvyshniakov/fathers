@@ -779,12 +779,11 @@ def table_header(canvas: Canvas, y: int, x: int, height: int, width: int, title:
         canvas.put(y, min(x + width - 2, start + min(size, text_width(value))), " ", "dim")
 
 
-def draw_header(canvas: Canvas, model: dict | None, paused: bool, error: str | None, copying: bool = False) -> tuple[int, int]:
-    """App/keys on the left; last update followed by live/pause/copy state on the right."""
+def draw_header(canvas: Canvas, model: dict | None, error: str | None) -> tuple[int, int]:
+    """The name on the left, the last update and live or stale on the right; (first free column, last free one)."""
     y = canvas.height - 1
     x = canvas.put(y, 1, "slotfather", "title", max(0, canvas.width - 2))
-    status, style = (("● stale", "bad") if error else ("● text selection", "accent") if copying
-                     else ("⏸ paused", "warn") if paused else ("● live", "ok"))
+    status, style = ("● stale", "bad") if error else ("● live", "ok")
     room = canvas.width - 1 - x - 2
     right = canvas.width - 1
     if text_width(status) <= room:
@@ -1350,7 +1349,7 @@ HELP_CONTENT: list[tuple[str, str]] = [
     ("In the dashboard", "dim"),
     ("↑/↓ or j/k: select an running or waiting request. Click a row to select it.", "text"),
     ("Home/End or g/G: first/last request. Wheel: scroll the table under the pointer.", "text"),
-    ("p or space: pause updates. r: refresh. m: native text selection; updates freeze while copying. s: settings.", "text"),
+    ("s: settings. ?: this help. q: quit. The view refreshes on its own. Shift+drag selects text: the terminal keeps it for itself while the dashboard reads the mouse.", "text"),
     ("Hotkeys are the keys at these US-QWERTY positions on any layout: on a Russian or Ukrainian layout ы is s and й is q, and a terminal with the kitty keyboard protocol reports each key's position itself. Typed Settings values stay as typed.", "text"),
     ("In this help", "dim"),
     ("↑/↓ or j/k: scroll. PgUp/PgDown or space: page. Home/End or g/G: top/bottom.", "text"),
@@ -1513,22 +1512,44 @@ def allocate(available: int, panels: list[tuple[str, int, int]]) -> dict[str, in
     return heights
 
 
-def dashboard_draw(canvas: Canvas, model: dict | None, selected: int = 0, paused: bool = False,
-                   help_open: bool = False, error: str | None = None, cwd: str | None = None,
-                   scroll: dict | None = None, mouse_enabled: bool = True,
+# The footer's hints in their order: navigation, configuration, help, quit last; a narrow footer drops them in
+# DROP_ORDER, quit last to go.
+FOOTER_HINTS: tuple[tuple[str, str], ...] = (("↑↓", "select"), ("s", "settings"), ("?", "help"), ("q", "quit"))
+DROP_ORDER = ("?", "s", "↑↓", "q")
+HINT_GAP = 3
+
+
+def draw_hints(canvas: Canvas, start: int, end: int) -> int:
+    """The hints centred on the footer between columns start and end (the name and the status), never over them;
+    the column after the last hint."""
+    hints: list[tuple[str, str]] = list(FOOTER_HINTS)
+
+    def width() -> int:
+        return sum(text_width(key) + 1 + text_width(action) for key, action in hints) + HINT_GAP * (len(hints) - 1)
+
+    for key in DROP_ORDER:
+        if not hints or width() <= end - start - 2:
+            break
+        hints = [hint for hint in hints if hint[0] != key]
+    if not hints:
+        return start
+    x = max(start + 1, min((canvas.width - width()) // 2, end - 1 - width()))
+    for index, (key, action) in enumerate(hints):
+        x = canvas.segments(canvas.height - 1, x, [(key, "key"), (f" {action}", "dim")])
+        if index < len(hints) - 1:
+            x += HINT_GAP
+    return x
+
+
+def dashboard_draw(canvas: Canvas, model: dict | None, selected: int = 0, help_open: bool = False,
+                   error: str | None = None, cwd: str | None = None, scroll: dict | None = None,
                    settings: _settings.Settings | None = None) -> None:
     canvas.scroll = scroll if scroll is not None else {}
     width, height = canvas.width, canvas.height
-    x, status_end = draw_header(canvas, model, paused, error, copying=not mouse_enabled)
-    keys = [("s", "settings"), ("?", "help"), ("q", "quit"), ("↑↓", "select"),
-            ("p", "resume" if paused else "pause"), ("r", "refresh"),
-            ("m", "select text" if mouse_enabled else "mouse on")]
-    for key, action in keys:
-        if x + text_width(key + action) + 2 > status_end:
-            break
-        x = canvas.segments(height - 1, x, [(key, "key"), (f" {action}  ", "dim")])
+    x, status_end = draw_header(canvas, model, error)
+    x = draw_hints(canvas, x, status_end)
     if error:
-        canvas.put(height - 1, x + 1, f"refresh failed: {error}", "bad", max(0, status_end - x - 1))
+        canvas.put(height - 1, x + 2, f"refresh failed: {error}", "bad", max(0, status_end - x - 2))
     if model is None:
         canvas.put(2, 3, f"Queue unavailable: {error}" if error else "Reading the queue…",
                    "bad" if error else "dim", width - 6)
@@ -1701,8 +1722,7 @@ def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
     model = error = selected_key = None
     index, colours, cwds, shown, drawn_size = 0, {}, {}, [], None
     scroll: dict[str, int] = {}
-    mouse_enabled = True
-    paused = help_open = False
+    help_open = False
     settings: _settings.Settings | None = None
     fetched, drawn, whole, force, dirty = 0.0, 0.0, 0.0, True, True
     canvas = Canvas(0, 0)
@@ -1717,7 +1737,7 @@ def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
                 theme = str(settings.theme)
                 shown, dirty = [], True
                 set_theme(_theme.from_environment(answers=answers, mode=theme))
-            if force or (mouse_enabled and not paused and time.monotonic() - fetched >= interval):
+            if force or time.monotonic() - fetched >= interval:
                 try:
                     fresh = dashboard_model()
                     dashboard_colours(fresh, colours)
@@ -1732,7 +1752,7 @@ def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
             if next_key != selected_key:
                 scroll.pop("details", None)
             selected_key = next_key
-            if items and not paused and mouse_enabled:
+            if items:
                 enrich_details(cast(dict[str, Any], items[index]))
             if items and items[index]["kind"] != "waiting" and items[index]["pid"] not in cwds:
                 cwds[items[index]["pid"]] = process_cwd(items[index]["pid"])
@@ -1741,12 +1761,12 @@ def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
                 # A terminal reflows its own screen on resize: clear it and draw every row.
                 os.write(fd_out, b"\x1b[2J")
                 shown, drawn_size, dirty = [], size, True
-            elif mouse_enabled and time.monotonic() - whole >= 5:
+            elif time.monotonic() - whole >= 5:
                 shown = []  # rewrite every row now and then, in place, so a stray line cannot stay wrong
-            if dirty or (mouse_enabled and time.monotonic() - drawn >= 1) or not shown:
+            if dirty or time.monotonic() - drawn >= 1 or not shown:
                 canvas = Canvas(size.columns, size.lines)
-                dashboard_draw(canvas, model, index, paused, help_open, error,
-                               cwds.get(items[index]["pid"]) if items else None, scroll, mouse_enabled, settings)
+                dashboard_draw(canvas, model, index, help_open, error,
+                               cwds.get(items[index]["pid"]) if items else None, scroll, settings)
                 lines = canvas.lines(colour, ascii_only, place=True)
                 # Only rows that changed are written: a second's tick usually touches the clock and a few ages.
                 frame = "".join(f"\x1b[{row + 1};1H{line}" for row, line in enumerate(lines)
@@ -1765,8 +1785,7 @@ def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
             for key in pressed:
                 dirty = True
                 if settings is not None:
-                    action = settings.mouse(key) if isinstance(key, tuple) and mouse_enabled else (
-                        settings.key(key) if isinstance(key, str) else "handled")
+                    action = settings.mouse(key) if isinstance(key, tuple) else settings.key(key)
                     if action == "quit":
                         return
                     interval = float(settings.interval)  # this dashboard's own setting, changed at once like the rest
@@ -1780,13 +1799,12 @@ def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
                     if action == "changed":
                         force = True  # a saved setting applies at the next grant: show its effect now
                     continue
-                if isinstance(key, tuple):
-                    if mouse_enabled:
-                        previous = index
-                        index = mouse_action(canvas, key, scroll, index)
-                        if index != previous:
-                            scroll.pop("details", None)
-                        selected_key = keys[index] if items else None
+                if isinstance(key, tuple):  # a click or the wheel; Shift+drag stays the terminal's own selection
+                    previous = index
+                    index = mouse_action(canvas, key, scroll, index)
+                    if index != previous:
+                        scroll.pop("details", None)
+                    selected_key = keys[index] if items else None
                     continue
                 key = _keys.hotkey(key)  # the hotkey at this key's US-QWERTY position (#13)
                 if help_open:
@@ -1815,16 +1833,6 @@ def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
                         error = dashboard_text(failure)
                     if settings is not None:
                         settings.draw(canvas, cast(dict[str, Any] | None, model))
-                elif key in ("m", "M"):
-                    mouse_enabled = not mouse_enabled
-                    os.write(fd_out, b"\x1b[?1000h\x1b[?1006h" if mouse_enabled
-                             else b"\x1b[?1006l\x1b[?1000l")
-                    force = mouse_enabled
-                elif key in ("p", " "):
-                    paused = not paused
-                elif key in ("r", "R"):
-                    shown, force = [], True
-                    os.write(fd_out, b"\x1b[2J")
                 elif key in ("j", "down"):
                     index += 1
                 elif key in ("k", "up"):

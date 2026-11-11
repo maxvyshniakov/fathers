@@ -204,7 +204,7 @@ class DashboardTests(SlotCase):
         master, slave = pty.openpty()
         self.addCleanup(os.close, master)
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 160, 0, 0))
-        process = subprocess.Popen([TOOL, "dashboard", "--interval", "60"], stdin=slave, stdout=slave,
+        process = subprocess.Popen([TOOL, "dashboard", "--interval", "1"], stdin=slave, stdout=slave,
                                    stderr=slave, env=self.env, start_new_session=True)
         self.processes.append(process)
         os.close(slave)
@@ -227,16 +227,9 @@ class DashboardTests(SlotCase):
         # QUEUE starts at row 5: holder at 7, gap at 8, waiter at 9 (zero-based).
         os.write(master, b"\x1b[<0;10;10M\x1b[<0;10;10m")
         read_until(lambda text: re.search(r"label\s+click-target",text) and re.search(r"status\s+waiting",text))
-        os.write(master, b"m")
-        read_until(lambda text: "text selection" in text)
-        self.assertIn(b"\x1b[?1006l\x1b[?1000l", screen)
-        os.write(master, b"m")
-        read_until(lambda text: screen.count(b"\x1b[?1000h\x1b[?1006h") >= 2)
-
         self.release("click-owner")
         self.started("click-target")
-        screen.clear()
-        os.write(master, b"r")
+        screen.clear()  # the view refreshes on its own, every second here
         # A split PTY read can contain the details before the selected request row.
         read_until(lambda text: re.search(r"label\s+click-target",text) and re.search(r"status\s+running",text)
                    and "▶️ click-target" in text)

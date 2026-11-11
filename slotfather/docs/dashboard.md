@@ -16,12 +16,15 @@ slotfather dashboard --once --width 156 --height 43 --color
 | Click a request | Select that row. |
 | Mouse wheel | Scroll the table under the pointer. |
 | g / G, Home / End | First or last request. |
-| p or Space | Pause/resume updates. |
-| r | Refresh. |
-| m | Toggle native text selection; copying freezes updates and disables app mouse handling. |
-| ? | Open scrollable help. |
 | s | Open Settings. |
+| ? | Open scrollable help. |
 | q | Quit. |
+| Shift+drag | Select text: the terminal keeps the drag for its own selection while the dashboard reads the mouse (button tracking with SGR reports, modes 1000 and 1006). Kitty, Ghostty, WezTerm, xterm, Alacritty and GNOME Terminal use Shift; iTerm2 uses Option. |
+
+The view refreshes on its own, every second by default (the refresh interval in Settings). The footer has the
+name on the left, the hints in the middle (`↑↓ select   s settings   ? help   q quit`) and the last update and
+`● live` on the right; a narrow terminal drops the hints help first, then settings, then select, quit last, and
+they never cover the status.
 
 **Any keyboard layout** (#13). Hotkeys are the keys at their US-QWERTY positions:
 on a Russian (ЙЦУКЕН) or Ukrainian layout `ы` opens Settings and `й` quits. Where
@@ -194,7 +197,7 @@ average occupancy, peak slots and the share of time capacity was full. Whole
 slots can still produce fractional block heights when graph height and capacity
 differ. Historical over-capacity values are retained in the legend.
 
-Refreshing can reap dead queue entries, like `status`. Selecting, pausing and
+Refreshing can reap dead queue entries, like `status`. Selecting and
 scrolling never grants a lease, cancels work or kills a process.
 
 ## Settings

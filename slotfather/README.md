@@ -98,8 +98,8 @@ Run `slotfather` in a terminal to open the live dashboard.
 | MACHINE | Admission status, load, memory, swap and occupied-slot history. |
 | EVENTS | Recent grants, releases and abandoned requests. |
 
-Use **↑/↓** or click to select, the mouse wheel to scroll a table, **m** to
-freeze updates for native text selection, **?** for help and **q** to quit.
+Use **↑/↓** or click to select, the mouse wheel to scroll a table, **?** for help and **q** to quit;
+Shift+drag selects text. The view refreshes on its own.
 Press **s** for Settings: a read-only status of the queue above shared capacity,
 queue policy and the local refresh interval. A change is saved at once and applies
 at the next grant, also while work runs; Esc closes.
