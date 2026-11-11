@@ -940,6 +940,20 @@ class MemoryBarTests(unittest.TestCase):
         self.assertTrue(all(style.startswith("chart") for style in bar_styles("load 1m")))
         self.assertTrue(all(line.isascii() for line in calm.lines(False,ascii_only=True)),"ASCII: # and the rest")
 
+    def test_the_load_bar_is_critical_by_load_alone_not_by_held_slots(self):
+        tool=surfaces(load_dashboard())
+        now=datetime.datetime.now(datetime.timezone.utc)
+        for load,critical in ((0.5,False),(6.5,False),(7.5,True),(20.3,True)):
+            with self.subTest(load=load):
+                canvas=tool.Canvas(90,24)  # every slot held: the advice has no capacity, whatever the load
+                tool.draw_machine(canvas,0,0,24,90,dict(slots=8,cores=8,averages=(load,0.1,0.1),admission=0,
+                                  advice=dict(unleased_load=0,jobs=1,capacity=0),memory_block=None,
+                                  memory=dict(level=1,used=512,total=1024,swap_total=0,swap_free=None),
+                                  history=[(now-datetime.timedelta(hours=1),now,8)]))
+                row=next(i for i,line in enumerate(canvas.lines(False)) if "  load 1m" in line)
+                styles={cell[1] for cell in canvas.cells[row][13:25] if cell[0]=="■" and cell[1]!="track"}
+                self.assertEqual(critical,styles=={"bad"},f"load {load} on 8 cores, 8 slots: {styles}")
+
     def test_macos_memory_counts_active_wired_and_compressor_physical_pages(self):
         tool = load_dashboard()
         sample = """Mach Virtual Memory Statistics: (page size of 16384 bytes)

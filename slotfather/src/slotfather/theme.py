@@ -311,8 +311,8 @@ class Answers:
             return False
         position = POSITION_REPLY.match(report)
         if position:
-            self.column = int(position[2])
-            return False
+            before, self.column = self.column, int(position[2])
+            return before != self.column
         scheme = SCHEME_REPLY.match(report)
         if scheme:
             before, self.scheme = self.scheme, "dark" if scheme[1] == "1" else "light"

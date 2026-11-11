@@ -71,7 +71,7 @@ class MarkTests(unittest.TestCase):
                 if width >= 60:  # the columns right of the label start in the same cell on every running row
                     starts = {next(x for x in range(5, width) if canvas.cells[y][x][0] in "■░") for y in rows[:6]}
                     self.assertEqual(1, len(starts), starts)
-                line = canvas.lines(True)[rows[5]]  # 👨‍🦳 at cell 2: the cursor is then put on cell 4 (CHA 5)
+                line = canvas.lines(True, place=True)[rows[5]]  # 👨‍🦳 at cell 2, then the cursor on cell 4 (CHA 5)
                 self.assertIn("👨‍🦳\x1b[0m\x1b[5G", line)
 
     def test_a_long_label_is_cut_with_an_ellipsis_after_the_state(self) -> None:
@@ -123,6 +123,62 @@ class MarkTests(unittest.TestCase):
         answers = theme.Answers()
         answers.feed("\x1b[1;5R")  # 👨‍🦳 drawn as 👨 and 🦳: the cursor four cells on
         self.assertEqual(5, answers.column)
+
+
+class PlacementTests(unittest.TestCase):
+    """#15 review: glyph placement apart from colour, overlays over half a wide cell, late width replies."""
+
+    def setUp(self) -> None:
+        self.tool: Any = importlib.reload(importlib.import_module("slotfather.dashboard"))
+        self.tool.set_theme(theme.resolve("auto", environ=DARK))
+
+    def test_the_live_screen_places_every_wide_glyph_with_or_without_colour(self) -> None:
+        canvas = self.tool.Canvas(12, 1)
+        canvas.put(0, 2, "💤 x")
+        for colour in (True, False):
+            line = canvas.lines(colour, place=True)[0]
+            self.assertIn("\x1b[5G", line, f"the cursor is put after 💤, colour {colour}")
+        self.assertIn("\x1b[5G", canvas.lines(True, place=True)[0], "a one-code-point emoji too, not only sequences")
+
+    def test_a_wide_glyph_is_drawn_over_two_styled_spaces(self) -> None:
+        canvas = self.tool.Canvas(12, 1)
+        canvas.put(0, 2, "▶️ x", "h0")
+        canvas.select(0, 0, 12)
+        line = canvas.lines(True, place=True)[0]
+        sgr = self.tool.sgr("h0", True)
+        self.assertIn(sgr + "  \x1b[3G▶️", line, "the background covers both cells, then the glyph is drawn at its cell")
+        self.assertIn("▶️\x1b[0m\x1b[5G", line)
+
+    def test_once_output_has_no_cursor_moves(self) -> None:
+        canvas = self.tool.Canvas(12, 1)
+        canvas.put(0, 2, "👨‍🦳 x")
+        self.assertNotRegex(canvas.render(True), r"\x1b\[\d+G", "files, pipes and less -R get plain text")
+
+    def test_an_overlay_over_half_a_wide_cell_blanks_the_other_half(self) -> None:
+        canvas = self.tool.Canvas(8, 3)
+        for row in range(3):
+            canvas.put(row, 2, "👨‍🦳")
+        canvas.put(0, 3, "x")  # over its second half
+        self.assertEqual([" ", "x"], [canvas.cells[0][2][0], canvas.cells[0][3][0]])
+        canvas.put(1, 1, "ab")  # over its first half
+        self.assertEqual(["a", "b", " "], [cell[0] for cell in canvas.cells[1][1:4]])
+        canvas.fill(2, 3, 1, 3)  # a panel whose edge lands on its second half
+        self.assertEqual(" ", canvas.cells[2][2][0])
+        for row in range(3):
+            self.assertEqual(8, sum(self.tool.cluster_width(cell[0]) or (cell[0] == "") for cell in canvas.cells[row])
+                             - sum(cell[0] == "" for cell in canvas.cells[row]), "every row eight cells")
+
+    def test_a_late_width_reply_switches_to_the_old_man_and_redraws(self) -> None:
+        import os
+        read, write = os.pipe()
+        try:
+            answers = theme.Answers()
+            self.tool.use_marks(False)
+            self.assertTrue(self.tool.theme_reports(["\x1b[1;5R"], answers, write, False), "a redraw")
+            self.assertEqual("👴", self.tool.marks["legacy"])
+        finally:
+            os.close(read)
+            os.close(write)
 
 
 if __name__ == "__main__":

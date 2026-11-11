@@ -568,6 +568,45 @@ class FakeTerminalTests(SlotCase):
             if slave >= 0:
                 os.close(slave)
 
+    def test_without_colour_the_width_probe_still_runs_and_glyphs_are_placed(self) -> None:
+        env = {key: value for key, value in self.env.items() if key != "COLORFGBG"}
+        env["NO_COLOR"] = "1"
+        holder = self.request("probe-owner", 1)
+        self.started("probe-owner")
+        master, slave = pty.openpty()
+        process: subprocess.Popen[bytes] | None = None
+        try:
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+            process = subprocess.Popen([str(ROOT / "slotfather"), "dashboard", "--interval", "60"],
+                                       stdin=slave, stdout=slave, stderr=slave, env=env, start_new_session=True)
+            os.close(slave)
+            slave = -1
+            screen = b""
+            deadline = time.monotonic() + 8
+            while not re.search(rb"\xe2\x96\xb6\xef\xb8\x8f\x1b\[\d+G", screen) and time.monotonic() < deadline:
+                if select.select([master], [], [], 0.1)[0]:
+                    screen += os.read(master, 65536)
+            self.assertIn(b"\x1b[6n", screen, "the width of the joined glyph is measured with colour off too")
+            self.assertRegex(screen, rb"\xe2\x96\xb6\xef\xb8\x8f\x1b\[\d+G", "▶️ is followed by a cursor move")
+            os.write(master, b"q")
+            deadline = time.monotonic() + 8
+            while process.poll() is None and time.monotonic() < deadline:  # read on, so its output never blocks
+                if select.select([master], [], [], 0.1)[0]:
+                    try:
+                        os.read(master, 65536)
+                    except OSError:
+                        break
+            self.assertEqual(0, process.wait(timeout=1))
+        finally:
+            if process is not None and process.poll() is None:
+                os.killpg(process.pid, signal.SIGTERM)
+                process.wait(timeout=3)
+            os.close(master)
+            if slave >= 0:
+                os.close(slave)
+            self.release("probe-owner")
+            self.finish(holder)
+
     def test_the_scheme_mode_is_reset_when_the_dashboard_fails(self) -> None:
         tool = importlib.import_module("slotfather.dashboard")
         master, slave = pty.openpty()

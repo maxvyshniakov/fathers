@@ -192,6 +192,7 @@ class Canvas:
         text = clip(value, width) if width is not None else dashboard_text(value)
         if not 0 <= y < self.height:
             return x
+        start = x
         for char in clusters(text):
             size = cluster_width(char)
             if size == 0:
@@ -205,7 +206,19 @@ class Canvas:
                     self.cells[y][x + 1][:2] = ["", style]
                     self.links.pop((y, x + 1), None)
             x += size
+        if x > start:
+            self.unsplit(y, start, x)
         return x
+
+    def unsplit(self, y: int, start: int, end: int) -> None:
+        """After cells start..end were overwritten: a wide glyph they cut in half loses its other half too, a blank,
+        so no row is ever a cell short or long (#15 review)."""
+        cells = self.cells[y]
+        if 0 < start < self.width and cells[start][0] != "" and cells[start - 1][0] and \
+                cluster_width(str(cells[start - 1][0])) == 2:
+            cells[start - 1][0] = " "
+        if 0 <= end < self.width and cells[end][0] == "":
+            cells[end][0] = " "
 
     def hyperlink(self, y: int, x: int, text: str, url: str, width: int, style: str = "accent") -> None:
         end = self.put(y, x, text, style, width)
@@ -233,6 +246,7 @@ class Canvas:
             for column in range(max(0, x), min(self.width, x + width)):
                 self.cells[row][column] = [" ", "text", False]
                 self.links.pop((row, column), None)
+            self.unsplit(row, max(0, x), min(self.width, x + width))
 
     def select(self, y: int, start: int, end: int) -> None:
         if 0 <= y < self.height:
@@ -261,26 +275,32 @@ class Canvas:
                 found.append([char, style, selected])
         return found
 
-    def lines(self, colour: bool, ascii_only: bool = False) -> list[str]:
-        """Every row at full width, with SGR colour codes when `colour`."""
+    def lines(self, colour: bool, ascii_only: bool = False, place: bool = False) -> list[str]:
+        """Every row at full width, with SGR colour codes when `colour`. `place` (the live screen, never --once): a
+        wide glyph is drawn over two spaces in its style, from its own cell, and the cursor is then put on the cell
+        after it (CHA), so a terminal that draws it one cell or four wide shifts nothing and leaves no gap (#15)."""
         found = []
         for y in range(self.height):
-            if colour:
-                runs: list[list[Any]] = []
-                for column, (char, style, selected) in enumerate(cast(list[tuple[str, str, bool]], self.cells[y])):
-                    url = self.links.get((y, column), "")
-                    # An emoji sequence ends its run with the cursor moved to the cell after it (CHA), so a terminal
-                    # that draws it narrower or wider than two cells shifts nothing after it (#15).
-                    resume = f"\x1b[{column + 3}G" if len(char) > 1 and cluster_width(char) == 2 else ""
-                    if runs and runs[-1][1:4] == [style, selected, url] and not runs[-1][4] and not resume:
-                        runs[-1][0] += char
-                    else:
-                        runs.append([char, style, selected, url, resume])
-                line = "".join(sgr(style, selected) +
-                               (f"\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\" if url else text) + "\x1b[0m" + resume
-                               for text, style, selected, url, resume in runs)
-            else:
-                line = "".join(char for char, _, _ in self.cells[y])
+            runs: list[list[Any]] = []
+            for column, (char, style, selected) in enumerate(cast(list[tuple[str, str, bool]], self.cells[y])):
+                url = self.links.get((y, column), "")
+                wide = place and bool(char) and cluster_width(char) == 2
+                if runs and runs[-1][1:4] == [style, selected, url] and runs[-1][4] is None and not wide:
+                    runs[-1][0] += char
+                else:
+                    runs.append([char, style, selected, url, column if wide else None])
+            parts: list[str] = []
+            for text, style, selected, url, at in runs:
+                if colour:
+                    parts.append(sgr(style, selected))
+                if at is not None:
+                    parts.append(f"  \x1b[{at + 1}G")
+                parts.append(f"\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\" if url and colour else text)
+                if colour:
+                    parts.append("\x1b[0m")
+                if at is not None:
+                    parts.append(f"\x1b[{at + 3}G")
+            line = "".join(parts)
             found.append(line.translate(ASCII) if ascii_only else line)
         return found
 
@@ -1265,8 +1285,9 @@ def draw_machine(canvas: Canvas, y: int, x: int, height: int, width: int, model:
     summary = history_summary(model["history"], slots)
     # (priority, name, parts): the lines a short panel drops first have the highest priority number.
     lines = [
-        # Critical where the load leaves no room for a worker: the advice's capacity (query.size()) is 0
-        (0, "load 1m", ramp_bar(cast(float, load1 / model["cores"]), 12, cast(dict[str, Any], model["advice"]).get("capacity") == 0)
+        # Critical where the one-minute load leaves less than one slot's share of the cores free (#15 review): by
+        # load alone, so a fully leased but quiet machine is not red
+        (0, "load 1m", ramp_bar(cast(float, load1 / model["cores"]), 12, cast(bool, model["cores"] - load1 < model["cores"] / slots))
          + [(f" {load1:.1f} · {model['cores']} cores", "text")]),
         (1, "memory", memory_parts),
         (3, "swap", swap_parts),
@@ -1373,7 +1394,7 @@ HELP_CONTENT: list[tuple[str, str]] = [
     ("unleased load: estimated demand outside leased work. This is not the number of free cores.", "text"),
     ("admission: how many slots a generic new request can get now, after the queue and memory checks. It is not a worker count; free slots can still have no admission.", "text"),
     ("memory and swap bars show used capacity. Low memory or swap blocks additional leases; an idle machine may still start its first request.", "text"),
-    ("Each bar fills in the chart's blue-to-red ramp along its length, so a nearly full bar ends red. A bar is all red while its resource is critical: memory low, swap low, or a load that leaves no room for another worker. A chart column that reached every slot is all red.", "text"),
+    ("Each bar fills in the chart's blue-to-red ramp along its length, so a nearly full bar ends red. A bar is all red while its resource is critical: memory low, swap low, or a one-minute load that leaves less than one slot's share of the cores free. A chart column that reached every slot is all red.", "text"),
     ("The held chart shows occupied slots over time, newest on the right. Each column preserves its interval's peak; fractional heights show more than whole rows.", "text"),
     ("held/N is the slot scale; s/col is seconds per column. Blue is the bottom, red is full capacity. avg is average occupancy; peak is the most held; full is time at capacity.", "text"),
     ("Colours follow the terminal's theme, light or dark, and repaint when it switches. Colour theme: Auto mixes the selection, bar tracks and free slots from its background; Terminal uses its palette only; Built-in is a fixed palette for themes whose bright black is close to the background.", "text"),
@@ -1674,7 +1695,8 @@ def full_screen(fd_in: int, fd_out: int, answers: _theme.Answers | None = None):
 def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
     fd_in, fd_out = sys.stdin.fileno(), sys.stdout.fileno()
     colour = not os.environ.get("NO_COLOR")
-    answers = _theme.Answers() if colour else None  # what the terminal says about its colours (#14)
+    # What the terminal says about its colours (#14) and how wide it draws 👨‍🦳 (#15): asked with colour off too
+    answers = _theme.Answers()
     ascii_only = "utf" not in (sys.stdout.encoding or "").lower()
     model = error = selected_key = None
     index, colours, cwds, shown, drawn_size = 0, {}, {}, [], None
@@ -1687,7 +1709,7 @@ def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
     with full_screen(fd_in, fd_out, answers):
         set_theme(_theme.from_environment(answers=answers, mode=theme))
         # 👨‍🦳 is one glyph where the cursor ended two cells on (column 3); without an answer, assume it is
-        use_marks(ascii_only, joined=answers is None or answers.column in (None, 3))
+        use_marks(ascii_only, joined=answers.column in (None, 3))
         while True:
             if settings is not None and settings.tick():  # an arrow change settled: saved, so show its effect now
                 interval, force, dirty = float(settings.interval), True, True
@@ -1725,7 +1747,7 @@ def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
                 canvas = Canvas(size.columns, size.lines)
                 dashboard_draw(canvas, model, index, paused, help_open, error,
                                cwds.get(items[index]["pid"]) if items else None, scroll, mouse_enabled, settings)
-                lines = canvas.lines(colour, ascii_only)
+                lines = canvas.lines(colour, ascii_only, place=True)
                 # Only rows that changed are written: a second's tick usually touches the clock and a few ages.
                 frame = "".join(f"\x1b[{row + 1};1H{line}" for row, line in enumerate(lines)
                                 if row >= len(shown) or shown[row] != line)
@@ -1737,7 +1759,7 @@ def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
                 continue
             reports: list[str] = []
             pressed = read_keys(fd_in, reports)
-            if reports and answers is not None and theme_reports(reports, answers, fd_out):
+            if reports and theme_reports(reports, answers, fd_out, ascii_only):
                 set_theme(_theme.from_environment(answers=answers, mode=theme))
                 shown, dirty = [], True  # every row's colours changed
             for key in pressed:
@@ -1815,12 +1837,17 @@ def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
                 selected_key = keys[index] if items else None
 
 
-def theme_reports(reports: list[str], answers: _theme.Answers, fd_out: int) -> bool:
-    """Takes what the terminal reported; True when a colour changed. A colour-scheme change notification (mode
-    2031) asks for the colours again: their answers arrive with later keys."""
+def theme_reports(reports: list[str], answers: _theme.Answers, fd_out: int, ascii_only: bool = False) -> bool:
+    """Takes what the terminal reported; True when a colour or the width of 👨‍🦳 changed: everything is drawn
+    again. A colour-scheme change notification (mode 2031) asks for the colours again: their answers arrive with
+    later keys. A width reply later than ask() waited for (a slow link) still picks the glyph (#15)."""
     changed = False
     for report in reports:
+        column = answers.column
         changed = answers.feed(report) or changed
+        if answers.column != column:
+            use_marks(ascii_only, joined=answers.column in (None, 3))
+            changed = True
         if _theme.SCHEME_REPLY.match(report):
             os.write(fd_out, _theme.QUERY)
     return changed

@@ -63,8 +63,10 @@ The QUEUE columns are state, label, slots, cpu use/share, time and pid.
 | ↩️ | `<` | yielded and back in the queue |
 
 A running row shows the first of ❓, 💤, 🔥 and 👨‍🦳 that applies, else ▶️. A terminal that draws an emoji
-narrower or wider than two cells shifts nothing after it: the dashboard puts the cursor on the next cell itself.
-At startup it measures how wide the terminal draws 👨‍🦳 and uses 👴 where that is two glyphs. An ASCII terminal
+narrower or wider than two cells shifts nothing after it: the live dashboard draws it over two spaces in the
+row's style and puts the cursor on the next cell itself, with colour on or off; `--once` never moves the cursor.
+At startup it measures how wide the terminal draws 👨‍🦳 (with colour off too) and uses 👴 where that is two
+glyphs; a reply that arrives late, over a slow link, still switches it. An ASCII terminal
 (and `--once` without UTF-8) gets the one-character tags.
 
 Each row has one
@@ -180,7 +182,8 @@ Solarized whose bright black is close to the background. `SLOTFATHER_THEME` sets
   runs from blue to the middle and a nearly full one ends red. A bar is entirely
   red (the theme's red) while its resource is critical: memory low, swap low
   (the conditions that turn the status word red), or a one-minute load that leaves
-  no room for another worker (the advice's capacity, `slotfather advise`, is 0).
+  less than one slot's share of the cores free (by load alone: a fully leased but
+  quiet machine is not red).
   A chart column that reached every slot, the time the legend's `full` counts, is
   red from the bottom up.
 
