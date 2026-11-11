@@ -45,8 +45,12 @@ QUERY = (b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\"
          + b"".join(f"\x1b]4;{index};?\x1b\\".encode() for index in PALETTE_ASKED))
 DEVICE_ATTRIBUTES = b"\x1b[c"  # every terminal answers it, after the answers before it: the end of the replies
 # A report the terminal sends (never a key): an OSC string, a private DSR (?997;1n) or the device attributes (?…c).
-REPORT = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[\?[0-9;]*[nc]")
-REPORT_PARTIAL = re.compile(r"\x1b(?:\][^\x07\x1b]*\x1b?|\[\?[0-9;]*)?$")
+# An OSC report starts with its number and is short, so a stray ESC ] (Alt+] without the kitty protocol) followed by
+# keys is never taken for one, nor held back waiting for its end.
+OSC_LONGEST = 80
+REPORT = re.compile(r"\x1b\]\d[^\x07\x1b]{0,%d}(?:\x07|\x1b\\)|\x1b\[\?[0-9;]*[nc]" % OSC_LONGEST)
+OSC_PARTIAL = r"\](?:\d[^\x07\x1b]{0,%d}\x1b?)?" % OSC_LONGEST
+REPORT_PARTIAL = re.compile(r"\x1b(?:%s|\[\?[0-9;]*)?$" % OSC_PARTIAL)
 COLOUR_REPLY = re.compile(r"\x1b\](10|11|4;(\d+));([^\x07\x1b]*)")
 SCHEME_REPLY = re.compile(r"\x1b\[\?997;([12])n")
 # xterm's default 16 colours, for COLORFGBG's indices
@@ -332,13 +336,14 @@ def resolve(mode: str, answers: Optional[Answers] = None,
     if background is None and answers.background is not None:
         background, source = answers.background, "terminal"
     foreground = foreground or answers.foreground
-    guessed = colorfgbg(environ.get("COLORFGBG"))
+    # COLORFGBG is fixed when the shell starts: a colour-scheme notification since then says more
+    guessed = colorfgbg(environ.get("COLORFGBG")) if answers.scheme is None else None
     if background is None and guessed is not None:
         foreground, background, source = foreground or guessed[0], guessed[1], "COLORFGBG"
     light = is_light(background) if background else answers.scheme == "light"
     if mode == "builtin":
         styles = dict(BUILTIN)
-        styles.update({f"h{n}": (BUILTIN_HOLDERS[n % len(BUILTIN_HOLDERS)], "") for n in range(HOLDERS)})
+        styles.update({f"h{n}": (colour, "") for n, colour in enumerate(BUILTIN_HOLDERS)})
         styles.update({f"chart{n}": (colour, "") for n, colour in enumerate(BUILTIN_CHART)})
         return Theme(mode, styles, (56, 62, 74), 252, "■", "block", light, background, source)
     styles = dict(TOKENS)

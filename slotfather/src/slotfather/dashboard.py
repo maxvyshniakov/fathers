@@ -53,7 +53,6 @@ WIDE = 110  # columns from which the panels sit side by side
 # colour is None for the terminal's default foreground, a palette index or RGB. Frames are drawn in the muted "dim"
 # token, the same as muted text, so the two cannot drift apart.
 current_theme = _theme.resolve(_theme.DEFAULT_MODE, environ={})
-HOLDER_STYLES = _theme.HOLDERS
 
 
 def set_theme(theme: _theme.Theme) -> None:
@@ -63,7 +62,7 @@ def set_theme(theme: _theme.Theme) -> None:
 
 ASCII = str.maketrans({"🮅": "#", "■": "#", "▪": "#", "◌": "o", "□": "o", "▫": "o", "▶": ">", "▉": "#", "▌": "+", "▐": "|", "█": "#", "▓": "%", "▒": "=", "░": ".", "·": ".", "●": "*", "…": "~", "─": "-", "│": "|",
                        "╭": "+", "╮": "+", "╰": "+", "╯": "+", "↑": "^", "↓": "v", "↗": "/", "↘": "\\", "→": ">",
-                       "←": "<", "≈": "~", "×": "x", "—": "-", "⏸": "=", "▁": "_", "▂": "_", "▃": "-", "▄": "-",
+                       "←": "<", "≈": "~", "×": "x", "—": "-", "⏸": "=", "▭": "o", "▁": "_", "▂": "_", "▃": "-", "▄": "-",
                        "▅": "=", "▆": "=", "▇": "#"})
 GRANTED = re.compile(r"granted (\d+) to (.*) \(pid (\d+)\)$")
 RELEASED = re.compile(r"released (\d+) \(\d+-(\d+)\.json\)$")
@@ -591,13 +590,14 @@ def dashboard_colours(model: dict, assigned: dict) -> None:
     keys = {h["key"] for h in model["holders"]}
     for key in [key for key in assigned if key not in keys]:
         del assigned[key]
+    count = current_theme.holders()  # 12 pastels, or the builtin palette's 6 (#14)
     for holder in model["holders"]:
         if holder["kind"] != "held":
             continue
         if holder["key"] not in assigned:
-            taken = list(assigned.values())
-            assigned[holder["key"]] = min(range(HOLDER_STYLES), key=lambda n: (taken.count(n), n))
-        holder["style"] = f"h{assigned[holder['key']]}"
+            taken = [index % count for index in cast("dict[Any, int]", assigned).values()]
+            assigned[holder["key"]] = min(range(count), key=lambda n: (taken.count(n), n))
+        holder["style"] = f"h{assigned[holder['key']] % count}"
 
 
 # Dashboard layout
@@ -1518,7 +1518,7 @@ KEYS = {"\x1b[A": "up", "\x1bOA": "up", "\x1b[B": "down", "\x1bOB": "down", "\x1
 KEY_PENDING: dict[int, str] = {}
 MOUSE = re.compile(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])")
 SEQUENCE = re.compile(r"\x1b(\[[0-9;:?<]*[ -/]*[@-~]|O.)")
-PARTIAL = re.compile(r"\x1b(\[(?:<[0-9;]*|[0-9;:?]*[ -/]*)|O|\][^\x07\x1b]*\x1b?)?$")  # \x1b]: an OSC report
+PARTIAL = re.compile(r"\x1b(\[(?:<[0-9;]*|[0-9;:?]*[ -/]*)|O|%s)?$" % _theme.OSC_PARTIAL)  # \x1b]: an OSC report
 
 
 def read_keys(fd: int, reports: list[str] | None = None) -> list[str | tuple[str, int, int, int, bool]]:
@@ -1596,7 +1596,8 @@ def full_screen(fd_in: int, fd_out: int, answers: _theme.Answers | None = None):
         KEY_PENDING.pop(fd_in, None)
         os.write(fd_out, _keys.KITTY_OFF + (_theme.SCHEME_OFF if answers is not None else b"")
                  + b"\x1b[?1006l\x1b[?1000l\x1b[0m\x1b[?7h\x1b[?25h\x1b[?1049l")
-        termios.tcsetattr(fd_in, termios.TCSADRAIN, saved)
+        # TCSAFLUSH: unread input goes, so a late colour reply never lands on the shell's command line
+        termios.tcsetattr(fd_in, termios.TCSAFLUSH if answers is not None else termios.TCSADRAIN, saved)
 
 
 def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:

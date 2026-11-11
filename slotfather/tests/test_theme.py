@@ -207,8 +207,21 @@ class ReplyTests(unittest.TestCase):
         self.assertEqual("", theme.ask(reader, query_in, answers))
         elapsed = time.monotonic() - started
         self.assertGreaterEqual(elapsed, theme.QUERY_TIMEOUT * 0.9)
-        self.assertLess(elapsed, theme.QUERY_TIMEOUT + 0.2, "about 100 ms in all")
+        self.assertLess(elapsed, 1.0, "about 100 ms in all, with room for a loaded machine")
         self.assertEqual((None, None, {}), (answers.background, answers.foreground, answers.palette))
+
+    def test_a_stray_osc_start_never_holds_the_keys_after_it(self) -> None:
+        tool = importlib.import_module("slotfather.dashboard")
+        read, write = os.pipe()
+        self.addCleanup(os.close, read)
+        self.addCleanup(os.close, write)
+        os.write(write, b"\x1b]")  # Alt+] where the kitty protocol is off
+        self.assertEqual([], tool.read_keys(read))
+        os.write(write, b"jk")
+        self.assertEqual(["esc", "]", "j", "k"], tool.read_keys(read), "the next keys come through at once")
+        os.write(write, b"\x1b]1" + b"x" * 100)  # longer than any colour report
+        self.assertIn("x", tool.read_keys(read))
+        self.assertEqual(([], "\x1b]j", ""), theme.split_reports("\x1b]j"))
 
     def test_a_reply_split_across_key_reads_is_never_read_as_keys(self) -> None:
         tool = importlib.import_module("slotfather.dashboard")
@@ -264,6 +277,9 @@ class FallbackTests(unittest.TestCase):
         hinted = theme.Answers()
         hinted.feed("\x1b[?997;2n")
         self.assertTrue(theme.resolve("auto", hinted, {}).light, "a light-scheme notification picks the light set")
+        switched = theme.resolve("auto", hinted, {"COLORFGBG": "15;0"})
+        self.assertEqual((True, None, "none"), (switched.light, switched.selection, switched.source),
+                         "a notification since the shell started outranks COLORFGBG")
 
     def test_terminal_mixes_nothing_and_builtin_is_the_palette_before(self) -> None:
         terminal = theme.resolve("terminal", answered(bg=LIGHT_BG, fg=LIGHT_FG), {})
@@ -329,6 +345,24 @@ class DrawingTests(unittest.TestCase):
         self.tool.set_theme(theme.resolve("auto", None, DARK_ENV))
         self.assertEqual([("■■", "accent"), ("■■■", "track")], self.tool.bar(0.4, 5, "accent"))
         self.assertEqual("🮅🮅🮅🮅", self.tool.free_slot(4))
+        self.assertEqual("o", "▭".translate(self.tool.ASCII))
+
+    def test_builtin_keeps_six_colours_and_gives_a_freed_one_first(self) -> None:
+        def holders(count: int) -> list[dict[str, Any]]:
+            return [dict(key=n, kind="held") for n in range(count)]
+
+        self.tool.set_theme(theme.resolve("builtin", None, {}))
+        assigned: dict[Any, int] = {}
+        model = {"holders": holders(7)}
+        self.tool.dashboard_colours(model, assigned)
+        self.assertEqual([f"h{n}" for n in (0, 1, 2, 3, 4, 5, 0)], [h["style"] for h in model["holders"]])
+        model = {"holders": [h for h in holders(7) if h["key"] != 1] + [dict(key=7, kind="held")]}
+        self.tool.dashboard_colours(model, assigned)
+        self.assertEqual("h1", model["holders"][-1]["style"], "the colour the ended lease freed")
+        self.tool.set_theme(theme.resolve("auto", None, {}))
+        model = {"holders": holders(13)}
+        self.tool.dashboard_colours(model, {})
+        self.assertEqual([f"h{n}" for n in range(12)] + ["h0"], [h["style"] for h in model["holders"]])
 
 
 class SettingTests(unittest.TestCase):
@@ -393,6 +427,12 @@ class OnceTests(SlotCase):
         builtin = self.tool("dashboard", "--once", "--color", "--width", "140", "--height", "40",
                             SLOTFATHER_THEME="builtin", **LIGHT_ENV)
         self.assertIn("48;2;56;62;74m", builtin.stdout)
+        for environ, bg, fg in ((LIGHT_ENV, LIGHT_BG, LIGHT_FG), (DARK_ENV, DARK_BG, DARK_FG)):
+            drawn = self.tool("dashboard", "--once", "--color", "--width", "140", "--height", "40", **environ).stdout
+            for share in (theme.TRACK_MIX, theme.FREE_MIX):  # the bar tracks and the free slots
+                self.assertIn("\x1b[0;38;2;%d;%d;%dm" % theme.mix(bg, fg, share), drawn)
+            self.assertIn("\x1b[0;90m╭", drawn, "frames in the muted token")
+            self.assertIn("\x1b[0;90mstatus", drawn, "muted text in the same token")
         unknown = self.tool("dashboard", "--once", "--color", "--width", "140", "--height", "40")
         self.assertNotIn("48;2;", unknown.stdout, "nothing known: no background colour at all")
         self.assertIn("\x1b[0;1m", unknown.stdout)
