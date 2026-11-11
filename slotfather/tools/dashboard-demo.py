@@ -36,7 +36,7 @@ def load_scene(advance=False):
         for key in ('since','granted'):
             item[key]=dt.datetime.fromisoformat(item[key]) if item[key] else None
         item['key']=(item['pid'],item['since'].isoformat())
-        item['style']='warn' if item['kind']=='waiting' else 'accent'
+        item['style']='text' if item['kind']=='waiting' else 'accent'
     for event in model['events']:
         event['when']=dt.datetime.fromisoformat(event['when'])
     model['updated']=dt.datetime.fromisoformat(model['updated'])

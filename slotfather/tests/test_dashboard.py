@@ -113,8 +113,8 @@ class DashboardTests(SlotCase):
         self.assertNotIn("RUNNING", text)
         self.assertIn("│ ▶holder", text)
         self.assertEqual(1, text.count("▶"), "only the selected row has a cursor")
-        self.assertRegex(text, r"gate +waiting #1 +4")
-        self.assertRegex(text, r"small +waiting #2 +1")
+        self.assertRegex(text, r"gate +■ ■ ■ ■ +waiting #1 ")
+        self.assertRegex(text, r"small +■ +waiting #2 ")
         for label in ("holder", "gate", "small"):
             self.release(label)
         for process in (holder, gate, small):
@@ -295,9 +295,8 @@ class UnifiedLaneTests(unittest.TestCase):
         self.assertIn("active",lines[2])
         self.assertFalse(lines[3][1:-1].strip())
         self.assertIn("│ ▶pending",lines[4])
-        self.assertIn("waiting #1",lines[4])
         column=lines[0].index("cpu use/share")+len("cpu use/share")
-        self.assertEqual("—",lines[4][column-1])
+        self.assertTrue(lines[4][:column].rstrip().endswith("waiting #1"),lines[4])
         self.assertEqual(1,tool.mouse_action(canvas,("mouse",0,20,4,True),{},0))
         self.assertEqual(0,tool.mouse_action(canvas,("mouse",0,20,3,True),{},0))
         canvas=tool.Canvas(130,6)
@@ -305,6 +304,99 @@ class UnifiedLaneTests(unittest.TestCase):
         lines=canvas.render(False).splitlines()
         self.assertIn("pending",lines[3],"selection must remain visible beyond the gap")
         self.assertIn("↑ 1 above",lines[1],"counts exclude the group separator")
+
+
+class QueueTableTests(unittest.TestCase):
+    """The QUEUE table (owner request): no status column; a request that holds no slots says so in the cpu column;
+    slot counts are drawn as cells in the row's colour."""
+
+    def setUp(self) -> None:
+        self.tool = load_dashboard()
+        self.now = datetime.datetime.now(datetime.timezone.utc)
+
+    def model(self, **extra: Any) -> dict[str, Any]:
+        now = self.now
+        holders = [dict(label="build", kind="held", count=2, pid=10, style="h0", cpu=150, since=now, granted=now),
+                   dict(label="older", kind="legacy", count=1, pid=11, style="legacy", cpu=0, since=now, granted=now)]
+        waiters = [dict(label="gate", kind="waiting", count=3, pid=12, style="text", cpu=0, since=now, granted=None),
+                   dict(label="back", kind="waiting", count=1, pid=13, style="text", cpu=0, since=now, granted=None,
+                        yields=1)]
+        return {"holders": holders, "waiters": waiters, "slots": 6, "cores": 12, **extra}
+
+    def draw(self, model: dict[str, Any], width: int = 120, height: int = 10) -> Any:
+        canvas = self.tool.Canvas(width, height)
+        self.tool.draw_requests(canvas, 0, 0, height, width, model, 0, self.now)
+        return canvas
+
+    def row(self, canvas: Any, label: str) -> int:
+        return next(n for n, line in enumerate(canvas.render(False).splitlines()) if f" {label} " in line + " "
+                    or f"▶{label}" in line)
+
+    def styles(self, canvas: Any, y: int, text: str) -> set[str]:
+        line = "".join(cell[0] for cell in canvas.cells[y])
+        start = line.index(text)
+        return {canvas.cells[y][x][1] for x in range(start, start + len(text))}
+
+    def test_there_is_no_status_column_and_time_follows_the_cpu_column(self) -> None:
+        canvas = self.draw(self.model())
+        lines = canvas.render(False).splitlines()
+        header = lines[0]
+        self.assertNotIn("status", header)
+        places = [header.index(title) for title in ("QUEUE", "slots", "cpu use/share", "time", "pid")]
+        self.assertEqual(sorted(places), places)
+        self.assertRegex(lines[self.row(canvas, "gate")], r"waiting #1 +0s +12 ")
+        self.assertRegex(lines[self.row(canvas, "build")], r"■ 1\.5/4 +0s +10 ")
+
+    def test_a_request_holding_no_slots_says_why_in_the_cpu_column_in_a_neutral_colour(self) -> None:
+        canvas = self.draw(self.model())
+        lines = canvas.render(False).splitlines()
+        end = lines[0].index("cpu use/share") + len("cpu use/share")
+        for label, state in (("gate", "waiting #1"), ("back", "yielded #2")):
+            y = self.row(canvas, label)
+            self.assertTrue(lines[y][:end].rstrip().endswith(state), lines[y])
+            self.assertEqual({"dim"}, self.styles(canvas, y, state))
+            self.assertEqual({"text"}, self.styles(canvas, y, label), "a waiting label is not yellow")
+            self.assertNotIn("warn", {cell[1] for cell in canvas.cells[y]})
+        build = self.row(canvas, "build")
+        self.assertRegex(lines[build], r"■+ 1\.5/4")
+
+    def test_slots_are_countable_cells_in_the_rows_colour_alike_for_running_and_waiting(self) -> None:
+        for form, two in (("spaced", "■ ■"), ("small", "▪▪")):
+            with self.subTest(form=form), mock.patch.object(self.tool, "SLOT_CELL", form):
+                one, three = two[0], self.tool.cells_text(3)
+                self.assertEqual(3, three.count(one))
+                canvas = self.draw(self.model())
+                lines = canvas.render(False).splitlines()
+                column = lines[0].index("slots")
+                for label, cells, style in (("build", two, "h0"), ("older", one, "legacy"), ("gate", three, "text"),
+                                            ("back", one, "text")):
+                    y = self.row(canvas, label)
+                    self.assertEqual(cells, lines[y][column:].split("  ")[0], label)
+                    self.assertEqual({style}, self.styles(canvas, y, cells), label)
+                self.assertNotRegex(lines[self.row(canvas, "gate")], r"\b3\b", "no digit for the count")
+
+    def test_large_counts_are_capped_with_the_rest_counted_and_all_says_so(self) -> None:
+        model = self.model(slots=24)
+        model["holders"][0]["count"] = 20
+        model["waiters"][0].update(count=24, all=True)
+        canvas = self.draw(model)
+        lines = canvas.render(False).splitlines()
+        column = lines[0].index("slots")
+        build = lines[self.row(canvas, "build")][column:].split("  ")[0]
+        self.assertRegex(build, r"^■( ■)+ \+\d+$")
+        self.assertEqual(20, build.count("■") + int(build.split("+")[1]))
+        self.assertEqual("all", lines[self.row(canvas, "gate")][column:].split("  ")[0])
+
+    def test_a_narrow_table_drops_columns_and_keeps_every_row_inside_its_frame(self) -> None:
+        for width in (110, 80, 60, 44):
+            with self.subTest(width=width):
+                lines = self.draw(self.model(), width=width).render(False).splitlines()
+                for line in lines[:8]:
+                    self.assertLessEqual(len(line.rstrip()), width)
+                gate = next(line for line in lines if "gate" in line)
+                self.assertIn("■ ■ ■", gate, "the slot cells stay longest after the label")
+                self.assertIn("waiting #1", gate, "the state outlasts the time and pid")
+                self.assertEqual(gate.rstrip()[-1], "│")
 
 
 class MouseInputTests(unittest.TestCase):
