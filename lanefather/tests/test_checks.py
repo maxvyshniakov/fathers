@@ -549,6 +549,18 @@ class RedCheckClassificationTests(LaneCase):
             self.assertIn("kind=rerun", lease)
         self.assertIn("native-check: unclassified", output)
 
+    def test_the_environment_sets_the_check_and_rerun_priorities(self):
+        # lanefather#24: an orchestrator demotes its runs to batch while another project measures.
+        self.red_core(LANEFATHER_PRIORITY="batch", LANEFATHER_PRIORITY_RERUN="normal")
+        requests = [json.loads(line) for line in pathlib.Path(str(self.verify_log) + ".requests").read_text().splitlines()]
+        self.assertEqual([(entry["priority"], entry["meta"]["lanefather.priority"]) for entry in requests],
+                         [("batch", "batch (LANEFATHER_PRIORITY)"),
+                          ("normal", "normal (LANEFATHER_PRIORITY_RERUN)"),
+                          ("normal", "normal (LANEFATHER_PRIORITY_RERUN)")])
+        queued = [json.loads(line)["args"] for line in (self.tmp / "slotfather.log").read_text().splitlines()
+                  if json.loads(line)["command"] == "run"]
+        self.assertEqual([argv[argv.index("--priority") + 1] for argv in queued], ["normal", "normal"])
+
     def test_a_rerun_is_one_slot_when_the_lane_check_had_one_and_never_more_than_two(self):
         self.red_core(FAKE_SLOTFATHER_HELD="3")
         leases = pathlib.Path(str(self.verify_log) + ".leases").read_text().splitlines()

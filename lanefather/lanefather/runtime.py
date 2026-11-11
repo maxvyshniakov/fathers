@@ -17,7 +17,7 @@ from .project import Project
 
 MANIFEST = 'INSTALL.json'
 CAPABILITIES = ('project.readiness', 'project.update_queue', 'project-hook', 'canonical-reference-transaction',
-                'promote.step-leases', 'tickets.lifecycle')
+                'promote.step-leases', 'tickets.lifecycle', 'slots.priority')
 
 
 def shipping_files(root: Path) -> dict[str, str]:

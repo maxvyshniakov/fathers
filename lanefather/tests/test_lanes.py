@@ -198,6 +198,19 @@ class AdoptAndListTests(LaneCase):
         for text in ("a", "lib/**", "green", "b", "planned", "docs/**", "disk", "load15"):
             self.assertIn(text, output)
 
+    def test_list_shows_each_runs_effective_slot_priority_and_its_source(self):
+        # lanefather#24: an orchestrator demoted to batch sees it before its runs queue.
+        self.assertIn("slot priorities: check normal, post-merge interactive, gate interactive, rerun interactive, "
+                      "perf batch\n", self.lane("list"))
+        self.env.update(LANEFATHER_PRIORITY="batch", LANEFATHER_PRIORITY_PERF="normal")
+        self.assertIn("slot priorities: check batch (LANEFATHER_PRIORITY), post-merge batch (LANEFATHER_PRIORITY), "
+                      "gate batch (LANEFATHER_PRIORITY), rerun batch (LANEFATHER_PRIORITY), "
+                      "perf normal (LANEFATHER_PRIORITY_PERF)", self.lane("list"))
+        listed = json.loads(self.lane("list", "--json"))
+        self.assertEqual(listed["priorities"]["gate"], {"priority": "batch", "source": "LANEFATHER_PRIORITY"})
+        self.env["LANEFATHER_PRIORITY"] = "urgent"
+        self.assertIn("LANEFATHER_PRIORITY='urgent' is not a Slotfather priority", self.lane("list", ok=False))
+
 
 class QueueTests(LaneCase):
     """#446: a ranked queue in queue/queue.toml beside the lane state, and lanefather next."""

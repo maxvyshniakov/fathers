@@ -9,6 +9,11 @@ lanefather only calls the installed command:
 A verify run queues itself: lanefather hands it the label, priority, optional ticket and metadata of its slot request as
 <slot_env>_LABEL, _PRIORITY, _TICKET, _META (a JSON object) and _YIELDABLE, slot_env from `.lanefather.toml`.
 Without slotfather on PATH a command runs directly, under no lease.
+
+Each run's priority (lanefather#24), first wins: LANEFATHER_PRIORITY_<PHASE> (POST_MERGE for post-merge),
+LANEFATHER_PRIORITY, `[slots.priority]` <phase> and then `default` in `.lanefather.toml`, the built-in below. The
+environment names also read the project's legacy prefix and `[env]` aliases, as every setting does (config.names).
+Each request carries the priority and its source as metadata `lanefather.priority`, which `slotfather status` shows.
 """
 from __future__ import annotations
 
@@ -20,9 +25,16 @@ import subprocess
 from typing import Any
 
 from . import config
+from .errors import LaneError
 
 TIMED_OUT = 75  # slotfather run --wait gave up; the command did not run
-PRIORITIES = ("interactive", "normal", "batch")
+PRIORITIES = config.PRIORITIES
+PHASES = config.SLOT_PHASES
+# Each run's built-in priority (#650). The orchestrator waits on a post-merge smoke, a batch gate and a rerun; a
+# lane check is ordinary work; the perf suite measures, which slotfather ranks batch.
+DEFAULT_PRIORITIES = {"check": "normal", "post-merge": "interactive", "gate": "interactive", "rerun": "interactive",
+                      "perf": "batch"}
+PRIORITY_META = "lanefather.priority"
 META_KEY = re.compile(r"[a-z0-9_.-]{1,32}")
 META_VALUE_LIMIT, META_KEYS_LIMIT = 200, 16  # slotfather's limits
 
@@ -45,6 +57,47 @@ def lease_count() -> int | None:
     """The slots of the lease this process runs under, or None."""
     value = os.environ.get("SLOTFATHER_COUNT", "")
     return int(value) if leased() and value.isdigit() else None
+
+
+def priority_setting(phase: str) -> str:
+    """The setting of a phase's priority: PRIORITY_GATE, PRIORITY_POST_MERGE (LANEFATHER_<setting> in the
+    environment)."""
+    return "PRIORITY_" + phase.upper().replace("-", "_")
+
+
+def phase_priority(phase: str, fallback: str | None = None) -> tuple[str, str]:
+    """The Slotfather priority of a run of `phase` and where it comes from: LANEFATHER_PRIORITY_<PHASE>,
+    LANEFATHER_PRIORITY, `[slots.priority]` <phase>, `[slots.priority]` default, then `fallback` or the built-in.
+    An empty variable is unset; a value that is not a Slotfather priority, or a LANEFATHER_PRIORITY_<NAME> that
+    names no phase, is refused."""
+    if phase not in PHASES:
+        raise ValueError(f"unknown slot phase {phase!r}")
+    known = {"LANEFATHER_" + priority_setting(name) for name in PHASES}
+    stray = sorted(key for key in os.environ if key.startswith("LANEFATHER_PRIORITY_") and key not in known)
+    if stray:
+        raise LaneError(f"{', '.join(stray)} names no phase; the phases are {', '.join(sorted(known))}")
+    cfg = config.current()
+    for setting in (priority_setting(phase), "PRIORITY"):
+        found = cfg.lookup(setting)
+        if found and found[1]:
+            if found[1] not in PRIORITIES:
+                raise LaneError(f"{found[0]}={found[1]!r} is not a Slotfather priority; use {', '.join(PRIORITIES)}")
+            return found[1], found[0]
+    table = dict(cfg.slot_priority)
+    for key in (phase, "default"):
+        if key in table:
+            return table[key], f"{config.CONFIG_NAME} [slots.priority] {key}"
+    return fallback or DEFAULT_PRIORITIES[phase], "built-in"
+
+
+def priority_meta(priority: str, source: str) -> dict[str, str]:
+    """The request's metadata naming its effective priority and where it comes from, for `slotfather status`."""
+    return {PRIORITY_META: f"{priority} ({source})"}
+
+
+def priorities() -> dict[str, dict[str, str]]:
+    """Every phase's effective priority and its source, for `list`."""
+    return {phase: dict(zip(("priority", "source"), phase_priority(phase), strict=True)) for phase in PHASES}
 
 
 def clean_meta(meta: dict[str, Any]) -> dict[str, str]:

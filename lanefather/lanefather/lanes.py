@@ -14,7 +14,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from . import admission, claims, config, host, journal, promote, queue, review, state, tickets, worktrees
+from . import admission, claims, config, host, journal, promote, queue, review, slots, state, tickets, worktrees
 from .errors import LaneError
 from .gitops import common_dir, current_branch, git, git_ok, main_checkout, worktree_list
 from .state import Record
@@ -184,11 +184,13 @@ def list_lanes(args: Any) -> int:
     shown = [r for r in records if args.all or r["status"] != "done"]
     decision = admission.evaluate(config.current(), records)
     cap, source, machine = decision.cap, decision.source, decision.machine
+    # Each run's effective slot priority and its source (lanefather#24).
+    priorities = slots.priorities()
     if args.json:
         # Scripts read lanes here (#577): every record with its worktree (null until adopt) and receipt state.
         print(json.dumps({"lanes": [dict(r, receipt=receipt_state(r)) for r in shown],
                           "active": len(state.occupying(records)), "cap": cap, "cap_source": source,
-                          "host": machine}, indent=2))
+                          "host": machine, "priorities": priorities}, indent=2))
         return 0
     for record in shown:
         print(f"{record['id']}  {record['status']}  #{record['ticket']}  {record['branch']}  "
@@ -198,6 +200,9 @@ def list_lanes(args: Any) -> int:
         if record.get("worktree"):
             print(f"    worktree: {record['worktree']}")
     print(f"{len(state.occupying(records))} of {cap} lanes planned or active (cap {source}); {host.host_line(machine)}")
+    print("slot priorities: " + ", ".join(
+        f"{phase} {found['priority']}" + ("" if found["source"] == "built-in" else f" ({found['source']})")
+        for phase, found in priorities.items()))
     # #666: the repository it runs in, as last fetched; outside a Git checkout there is nothing to compare.
     if git_ok(os.getcwd(), "rev-parse", "--git-dir"):
         for line in promote.ahead_lines(os.getcwd()):

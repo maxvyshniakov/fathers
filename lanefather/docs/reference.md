@@ -37,8 +37,8 @@ on a branch is never planned against another branch it merged.
 
 A red check reruns by itself on the lane and, when it is red again, then on its base (never both at once: two
 copies of a check with a fixed port or path collide), each under a lease of the lane check's own size (one or two
-slots) at interactive priority that waits at most `LANEFATHER_RERUN_WAIT` seconds; only the perf suite asks for the
-whole machine.
+slots) at the rerun's [slot priority](#slot-priorities) (interactive by default) that waits at most
+`LANEFATHER_RERUN_WAIT` seconds; only the perf suite asks for the whole machine.
 
 `review <id> --fix-lane` starts the fix lane from the branch the lane landed on, which holds its merge, and refuses
 when no branch does; the landed lane keeps its own registration.
@@ -64,10 +64,42 @@ self-contained configuration in the README for a Repo-Kit consumer.
 | `[gate]` `stamp_tool`, `stamp_file`, `pre_push_hook` | the verified-tree stamp of the full gate |
 | `[promote]` `install`, `deploy`, `after`, `ship_refuses` | what promote runs after it moved dev |
 | `[gc]` `after_remove`, `after_remove_report` | project cache cleanup after removal (`{worktree}`, `{name}`, `{project}`). Stdout is ignored by default, preserving existing hooks. With `after_remove_report = true`, a successful hook must emit `{"v":1,"freed":123}` to add its actually removed bytes; diagnostics go to stderr. Invalid reports add zero bytes and a report error. |
+| `[slots.priority]` `check`, `post-merge`, `gate`, `rerun`, `perf`, `default` | each run's Slotfather priority; see [slot priorities](#slot-priorities) |
 | `[admission]` `provider` | `legacy` by default; explicit `slotfather` uses the versioned lifetime-admission query, separately from execution jobs. See [rollout contract](../docs/admission.md). |
 | `[tickets]` | the ticket lifecycle below; every rule is off without it |
 | `[hooks]` `process_scan` | legacy process adapter for live lanes; without it `procs` supplies read-only inspection |
 | `[hooks.project]` | named project policy scripts run by `project-hook NAME -- ARGS` in the installed interpreter |
+
+### Slot priorities
+
+Every verification run lanefather starts asks Slotfather for slots at its phase's priority. The built-in
+priorities: `check` normal; `post-merge`, `gate` and `rerun` interactive; `perf` batch. A project lowers or raises
+them in `.lanefather.toml`, and an orchestrator for one invocation in the environment, without code changes:
+
+```toml
+[slots.priority]
+default = "batch"     # every phase this table does not name
+gate = "normal"       # one phase: check, post-merge, gate, rerun or perf
+```
+
+```sh
+LANEFATHER_PRIORITY=batch lanefather land a          # every phase of this invocation
+LANEFATHER_PRIORITY_GATE=normal lanefather promote <sha>
+LANEFATHER_PRIORITY_POST_MERGE=batch lanefather land a   # post-merge: the dash becomes an underscore
+```
+
+The first that is set wins: `LANEFATHER_PRIORITY_<PHASE>`, `LANEFATHER_PRIORITY`, the phase's key in
+`[slots.priority]`, its `default`, the built-in. An empty variable counts as unset. The variables also take the
+project's `legacy_env_prefix` and `[env]` names, as every setting does (`STRAYLIGHT_LANE_PRIORITY`). A value other
+than `interactive`, `normal` or `batch`, a `LANEFATHER_PRIORITY_<NAME>` that names no phase, or an unknown key in
+`[slots.priority]` is an error that names it. An orchestrator that exports `LANEFATHER_PRIORITY=batch` demotes all
+of its runs until it unsets it.
+
+`lanefather list` prints each phase's effective priority, with its source when it is not the built-in
+(`slot priorities: check batch (LANEFATHER_PRIORITY), ...`); `list --json` gives them as `priorities`. Each slot
+request carries the effective priority and its source as metadata `lanefather.priority` (for example
+`batch (.lanefather.toml [slots.priority] default)`), which `slotfather status` shows. This feature advertises
+`slots.priority`; older engines reject the unknown `[slots]` table.
 
 ### Execution leases after promotion
 
@@ -80,8 +112,10 @@ argv = ["./install.sh"]
 lease = { slots = 2, ticket = "42" }
 ```
 
-`slots` is a positive integer or `"all"`; the optional `priority` is `normal`
-by default (`interactive` and `batch` are also supported). `ticket` is optional.
+`slots` is a positive integer or `"all"`; the optional `priority` (`interactive`,
+`normal` or `batch`) is the step's own. Without one the step takes the `gate`
+phase's [slot priority](#slot-priorities) as its environment and `[slots.priority]`
+set it, and `normal` when neither does. `ticket` is optional.
 These are Slotfather request fields, not metadata. Lanefather adds the step's
 phase, candidate SHA and project state directory as metadata. The command still
 runs from the exact promoted gate worktree, in order, and a failure stops later

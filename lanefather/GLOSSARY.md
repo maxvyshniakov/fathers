@@ -46,5 +46,6 @@ terms appear in existing interfaces.
 | Sync | Reconcile local publication branches with their remote references. |
 | Worker budget | The parallelism budget passed to the project's verification runner. |
 | Slot request | An application to Slotfather for machine capacity. |
+| Slot priority | A slot request's Slotfather priority (interactive, normal or batch), set per phase: check, post-merge, gate, rerun, perf. |
 | Slot | A unit of machine work budget managed by Slotfather. |
 | Lease | Permission granted by Slotfather to occupy slots. |

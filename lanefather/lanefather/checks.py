@@ -46,10 +46,6 @@ RERUN_MAX_JOBS = 2
 # A check is red alone when it failed, or its producer failed alone (blocked). On the base only a failure of the
 # check itself is pre-existing.
 RED_ALONE = ("failed", "blocked")
-# Each run's lease priority (#650). The orchestrator waits on a post-merge smoke, a batch gate and a rerun; a
-# lane check is ordinary work; the perf suite measures, which slotfather ranks batch.
-SLOT_PRIORITIES = {"check": "normal", "post-merge": "interactive", "gate": "interactive", "rerun": "interactive",
-                "perf": "batch"}
 
 
 def stamp_result(text: str, full: bool) -> dict[str, Any]:
@@ -70,10 +66,11 @@ def report_of(text: str) -> tuple[list[str], dict[str, Any] | None]:
 
 
 def verify_env(label: str, phase: str, *, ticket: str | None = None, **meta: Any) -> dict[str, str]:
-    """The environment of a verify run lanefather starts: its lease's label, the phase's priority, and metadata naming
-    the phase and what the caller adds (lane, check, sha)."""
-    return dict(os.environ, **slots.queue_environment(label, SLOT_PRIORITIES[phase], ticket=ticket,
-                                                      phase=phase, **meta))
+    """The environment of a verify run lanefather starts: its lease's label, the phase's priority (lanefather#24), and
+    metadata naming the phase, the priority's source and what the caller adds (lane, check, sha)."""
+    priority, source = slots.phase_priority(phase)
+    tags: dict[str, Any] = {"phase": phase, **slots.priority_meta(priority, source), **meta}
+    return dict(os.environ, **slots.queue_environment(label, priority, ticket=ticket, **tags))
 
 
 def lane_meta(record: Record) -> dict[str, str]:
@@ -254,10 +251,11 @@ def rerun_jobs(jobs: int) -> int:
 
 class Rerun:
     """One verify run of red checks in a checkout: `verify --checks <ids> --keep-going --jobs <jobs>`, under a
-    lease of `jobs` slots at interactive priority that waits at most the rerun wait (`slotfather run -n <jobs>
-    --wait`, which exits 75 without running verify when the lease does not come). Without slotfather, or under a
-    lease this process holds, verify runs as the lane check ran. `queued=False` runs verify as it queues itself:
-    the cheap first checks (#639), which on a clean checkout run before the queue and need no slot."""
+    lease of `jobs` slots at the rerun's priority (interactive unless set otherwise) that waits at most the rerun
+    wait (`slotfather run -n <jobs> --wait`, which exits 75 without running verify when the lease does not come).
+    Without slotfather, or under a lease this process holds, verify runs as the lane check ran. `queued=False` runs
+    verify as it queues itself: the cheap first checks (#639), which on a clean checkout run before the queue and
+    need no slot."""
 
     def __init__(self, root: Any, ids: list[str], label: str, jobs: int, queued: bool = True,
                  meta: dict[str, Any] | None = None, ticket: str | None = None):
@@ -266,9 +264,11 @@ class Rerun:
         self.meta = {"check": ",".join(ids), **(meta or {})}
         self.ticket = ticket
         self.verify = [plan.verify_path(root), "--checks", ",".join(ids), "--keep-going", "--jobs", str(jobs)]
+        priority, source = slots.phase_priority("rerun")
         self.argv = slots.wrap(jobs, label, self.verify, wait=rerun_wait(),
-                               meta={"phase": "rerun", "kind": "rerun", **self.meta},
-                               priority=SLOT_PRIORITIES["rerun"], ticket=ticket) if queued else self.verify
+                               meta={"phase": "rerun", "kind": "rerun", **slots.priority_meta(priority, source),
+                                     **self.meta},
+                               priority=priority, ticket=ticket) if queued else self.verify
         self.child: subprocess.Popen[bytes] | None = None
         self.handle: TextIO | None = None
 

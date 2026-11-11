@@ -251,6 +251,15 @@ def substitute(text: str, values: dict[str, str]) -> str:
     return text
 
 
+def step_priority(step: config.Step) -> tuple[str, str]:
+    """A leased install or deploy step's priority and its source: the step's own, else the gate's as
+    slots.phase_priority resolves it, normal when nothing sets it (lanefather#24)."""
+    assert step.lease is not None
+    if step.lease.priority:
+        return step.lease.priority, f"step {step.name} lease"
+    return slots.phase_priority("gate", fallback="normal")
+
+
 def install_and_deploy(common: str, sha: str, deploy: str | None) -> None:
     """After a promotion (#569): the configured install steps from the gate worktree, and with a host the deploy
     steps, each only after the previous succeeded. The steps run without the variables `install_env_drop` names
@@ -270,10 +279,12 @@ def install_and_deploy(common: str, sha: str, deploy: str | None) -> None:
             extra = {key: substitute(value, values) for key, value in step.env}
             print(f"lane: {step.name}: {' '.join(argv)} in {path}", flush=True)
             if step.lease:
+                priority, source = step_priority(step)
                 try:
                     argv = slots.wrap(step.lease.slots, f"promote-{sha[:10]}-{step.name}", argv,
-                                      priority=step.lease.priority, ticket=step.lease.ticket, required=True,
+                                      priority=priority, ticket=step.lease.ticket, required=True,
                                       meta={"phase": step.name, "kind": "promote", "sha": sha[:10],
+                                            **slots.priority_meta(priority, source),
                                             "lanefather.state": str(state.state_dir())})
                 except slots.Unavailable as error:
                     raise LaneError(f"promote of {sha[:10]} went through, but {step.name} cannot run: "
@@ -299,6 +310,10 @@ def promote(args: Any) -> int:
     steps = (*cfg.install, *(cfg.deploy if args.deploy else ())) if args.install else ()
     if any(step.lease for step in steps) and slots.command() is None:
         raise LaneError("promote refused: configured execution leases require slotfather on PATH; nothing published")
+    # An invalid priority refuses before anything moves, not after the promotion (lanefather#24).
+    for step in steps:
+        if step.lease:
+            step_priority(step)
     status = promote_sha(args)
     if status == 0 and args.install:
         cwd = os.getcwd()

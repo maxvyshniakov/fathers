@@ -22,13 +22,18 @@ from typing import Any, cast
 from .errors import LaneError
 
 CONFIG_NAME = ".lanefather.toml"
+# Slotfather's request priorities, and the runs whose priority `[slots.priority]` and LANEFATHER_PRIORITY[_<PHASE>]
+# set (lanefather#24).
+PRIORITIES = ("interactive", "normal", "batch")
+SLOT_PHASES = ("check", "post-merge", "gate", "rerun", "perf")
 
 
 @dataclass(frozen=True)
 class Lease:
-    """An execution's machine budget and request fields; Slotfather owns admission and nested leases."""
+    """An execution's machine budget and request fields; Slotfather owns admission and nested leases. Without a
+    priority of its own the lease takes the gate's (slots.phase_priority("gate"), normal when nothing sets it)."""
     slots: int | str
-    priority: str = "normal"
+    priority: str | None = None
     ticket: str | None = None
 
 
@@ -90,6 +95,8 @@ class Config:
     toolchain_pin: str = ""
     # The variables a verify run that queues itself reads: <slot_env>_LABEL, _PRIORITY, _TICKET, _META, _YIELDABLE.
     slot_env: str = "LANEFATHER_SLOT"
+    # [slots.priority]: a phase's (or `default`) Slotfather priority, below the environment's (lanefather#24).
+    slot_priority: tuple[tuple[str, str], ...] = ()
     cache_name: str = "lanefather"
     lane_targets: tuple[str, ...] = ()
     cache_partitions: str = ""
@@ -169,13 +176,26 @@ def _step_lease(table: dict[str, Any], name: str) -> Lease | None:
     count = lease.get("slots")
     if not ((type(count) is int and count > 0) or count == "all"):
         raise LaneError(f"{CONFIG_NAME}: step {name}: lease slots must be a positive integer or 'all'")
-    priority = _string(lease, "priority", "normal")
-    if priority not in ("interactive", "normal", "batch"):
+    priority = _string(lease, "priority", "") if "priority" in lease else None
+    if priority is not None and priority not in PRIORITIES:
         raise LaneError(f"{CONFIG_NAME}: step {name}: lease priority must be interactive, normal or batch")
     ticket = _string(lease, "ticket", "") if "ticket" in lease else None
     if ticket is not None and (not ticket or len(ticket) > 200 or not ticket.isprintable()):
         raise LaneError(f"{CONFIG_NAME}: step {name}: lease ticket must be a short printable identifier")
     return Lease(count, priority, ticket)
+
+
+def _slot_priority(slots: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    raw = slots.get("priority", {})
+    if not isinstance(raw, dict):
+        raise LaneError(f"{CONFIG_NAME}: [slots.priority] must be a table of phase = priority")
+    table = cast(dict[str, Any], raw)
+    _known(table, "slots.priority", (*SLOT_PHASES, "default"))
+    for key, value in table.items():
+        if value not in PRIORITIES:
+            raise LaneError(f"{CONFIG_NAME}: [slots.priority] {key} = {value!r} is not a Slotfather priority; "
+                            f"use {', '.join(PRIORITIES)}")
+    return tuple(sorted((key, str(value)) for key, value in table.items()))
 
 
 def _steps(data: dict[str, Any], key: str) -> tuple[Step, ...]:
@@ -200,7 +220,7 @@ def _steps(data: dict[str, Any], key: str) -> tuple[Step, ...]:
 
 TOP_KEYS = ("project", "command", "state_dir", "legacy_env_prefix", "shared_env", "report_doc", "queue_name",
             "coding_standards", "rules_dir", "steering", "unclaimed", "merge_config", "checks", "lane", "gate",
-            "promote", "hooks", "env", "gc", "admission", "tickets")
+            "promote", "hooks", "env", "gc", "admission", "tickets", "slots")
 TABLE_KEYS = {
     "admission": ("provider",),
     "checks": ("verify", "plan_module", "triage", "toolchain", "toolchain_pin", "slot_env"),
@@ -210,6 +230,7 @@ TABLE_KEYS = {
     "hooks": ("process_scan", "project"),
     "gc": ("after_remove", "after_remove_report"),
     "tickets": ("integrated_label", "land_comment", "fixes_trailer", "release_comment", "preview", "repo"),
+    "slots": ("priority",),
 }
 
 
@@ -245,15 +266,18 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
     gc: dict[str, Any] = data.get("gc", {})
     admission: dict[str, Any] = data.get("admission", {})
     tickets: dict[str, Any] = data.get("tickets", {})
+    slot_table: dict[str, Any] = data.get("slots", {})
     for name, table in (("checks", checks), ("lane", lane), ("gate", gate), ("promote", promote), ("hooks", hooks),
-                        ("env", env), ("gc", gc), ("admission", admission), ("tickets", tickets)):
+                        ("env", env), ("gc", gc), ("admission", admission), ("tickets", tickets),
+                        ("slots", slot_table)):
         if not isinstance(table, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
             raise LaneError(f"{CONFIG_NAME}: [{name}] must be a table")
     if not all(isinstance(v, str) for v in env.values()):
         raise LaneError(f"{CONFIG_NAME}: [env] maps LANEFATHER_<NAME> to the project's variable name")
     _known(data, "", TOP_KEYS)
     for name, table in (("checks", checks), ("lane", lane), ("gate", gate), ("promote", promote),
-                        ("hooks", hooks), ("gc", gc), ("admission", admission), ("tickets", tickets)):
+                        ("hooks", hooks), ("gc", gc), ("admission", admission), ("tickets", tickets),
+                        ("slots", slot_table)):
         _known(table, name, TABLE_KEYS[name])
     for key in ("install", "deploy"):
         steps: list[Any] = promote.get(key, []) if isinstance(promote.get(key), list) else []
@@ -294,6 +318,7 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         toolchain=_strings(checks, "toolchain", default.toolchain),
         toolchain_pin=_string(checks, "toolchain_pin", default.toolchain_pin),
         slot_env=_string(checks, "slot_env", default.slot_env),
+        slot_priority=_slot_priority(slot_table),
         cache_name=_string(lane, "cache_name", default.cache_name),
         lane_targets=_strings(lane, "targets", default.lane_targets),
         cache_partitions=_string(lane, "cache_partitions", default.cache_partitions),

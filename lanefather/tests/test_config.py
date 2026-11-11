@@ -2,6 +2,7 @@
 process source (lanefather.procs) and the review role of models.toml (lanefather.review)."""
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import shutil
@@ -12,7 +13,7 @@ import unittest.mock
 
 from support import FIXTURE_CONFIG, ROOT  # noqa: F401  (ROOT puts the package on sys.path)
 
-from lanefather import config, procs, reviewer, slots
+from lanefather import checks, config, procs, promote, reviewer, slots
 from lanefather.errors import LaneError
 
 
@@ -131,6 +132,110 @@ class ConfigTests(ConfigCase):
         self.assertEqual(found and found.resolve(), (repo / ".lanefather.toml").resolve())
         os.environ["LANEFATHER_CONFIG"] = str(self.tmp / "elsewhere.toml")
         self.assertEqual(config.find(repo), self.tmp / "elsewhere.toml")
+
+
+class SlotPriorityTests(ConfigCase):
+    """lanefather#24: a project or an orchestrator lowers its runs' Slotfather priority without code changes. First
+    wins: LANEFATHER_PRIORITY_<PHASE>, LANEFATHER_PRIORITY, [slots.priority] <phase>, [slots.priority] default,
+    the built-in."""
+
+    PROJECT = '[slots.priority]\ndefault = "batch"\ngate = "normal"\n'
+
+    def test_the_built_in_priorities_apply_when_nothing_sets_one(self):
+        self.use("")
+        self.assertEqual({phase: found["priority"] for phase, found in slots.priorities().items()},
+                         {"check": "normal", "post-merge": "interactive", "gate": "interactive",
+                          "rerun": "interactive", "perf": "batch"})
+        self.assertEqual({found["source"] for found in slots.priorities().values()}, {"built-in"})
+
+    def test_the_projects_default_applies_to_every_phase_it_does_not_name(self):
+        self.use('[slots.priority]\ndefault = "batch"\n')
+        self.assertEqual(slots.phase_priority("post-merge"), ("batch", ".lanefather.toml [slots.priority] default"))
+
+    def test_the_projects_phase_key_applies_to_that_phase(self):
+        self.use('[slots.priority]\nrerun = "normal"\n')
+        self.assertEqual(slots.phase_priority("rerun"), ("normal", ".lanefather.toml [slots.priority] rerun"))
+        self.assertEqual(slots.phase_priority("gate"), ("interactive", "built-in"))
+
+    def test_lanefather_priority_applies_to_every_phase(self):
+        self.use("")
+        os.environ["LANEFATHER_PRIORITY"] = "batch"
+        self.assertEqual({phase: (found["priority"], found["source"]) for phase, found in slots.priorities().items()},
+                         {phase: ("batch", "LANEFATHER_PRIORITY") for phase in slots.PHASES})
+
+    def test_a_phase_variable_applies_to_that_phase_only(self):
+        self.use("")
+        os.environ.update(LANEFATHER_PRIORITY_GATE="batch", LANEFATHER_PRIORITY_POST_MERGE="normal")
+        self.assertEqual(slots.phase_priority("gate"), ("batch", "LANEFATHER_PRIORITY_GATE"))
+        self.assertEqual(slots.phase_priority("post-merge"), ("normal", "LANEFATHER_PRIORITY_POST_MERGE"))
+        self.assertEqual(slots.phase_priority("check"), ("normal", "built-in"))
+
+    def test_the_legacy_prefix_names_the_same_setting(self):
+        self.use('legacy_env_prefix = "STRAYLIGHT_LANE_"\n')
+        os.environ["STRAYLIGHT_LANE_PRIORITY"] = "batch"
+        self.assertEqual(slots.phase_priority("check"), ("batch", "STRAYLIGHT_LANE_PRIORITY"))
+
+    def test_precedence_is_phase_variable_variable_phase_key_default_built_in(self):
+        self.use(self.PROJECT)
+        os.environ.update(LANEFATHER_PRIORITY_GATE="interactive", LANEFATHER_PRIORITY="batch")
+        steps: list[tuple[str, str]] = []
+        for unset in ("LANEFATHER_PRIORITY_GATE", "LANEFATHER_PRIORITY", None):
+            steps.append(slots.phase_priority("gate"))
+            if unset:
+                del os.environ[unset]
+        steps.append(slots.phase_priority("check"))
+        self.use("")
+        steps.append(slots.phase_priority("check"))
+        self.assertEqual(steps, [("interactive", "LANEFATHER_PRIORITY_GATE"), ("batch", "LANEFATHER_PRIORITY"),
+                                 ("normal", ".lanefather.toml [slots.priority] gate"),
+                                 ("batch", ".lanefather.toml [slots.priority] default"), ("normal", "built-in")])
+
+    def test_an_empty_variable_is_unset(self):
+        self.use(self.PROJECT)
+        os.environ.update(LANEFATHER_PRIORITY="", LANEFATHER_PRIORITY_GATE="")
+        self.assertEqual(slots.phase_priority("gate"), ("normal", ".lanefather.toml [slots.priority] gate"))
+
+    def test_an_invalid_value_or_phase_is_a_clear_error(self):
+        for text, message in (('[slots.priority]\ngate = "urgent"\n', r"gate = 'urgent' is not a Slotfather priority"),
+                              ("[slots.priority]\ngate = 1\n", "is not a Slotfather priority"),
+                              ('[slots.priority]\ngates = "batch"\n', r"\[slots.priority\] has unknown keys gates"),
+                              ('[slots]\npriority = "batch"\n', "must be a table of phase = priority"),
+                              ('[slots]\nprio = {}\n', r"\[slots\] has unknown keys prio")):
+            with self.subTest(text=text), self.assertRaisesRegex(LaneError, message):
+                self.use(text)
+        self.use("")
+        os.environ["LANEFATHER_PRIORITY"] = "low"
+        with self.assertRaisesRegex(LaneError, r"LANEFATHER_PRIORITY='low' is not a Slotfather priority; "
+                                               "use interactive, normal, batch"):
+            slots.phase_priority("check")
+        os.environ["LANEFATHER_PRIORITY"] = "batch"
+        os.environ["LANEFATHER_PRIORITY_SMOKE"] = "batch"
+        with self.assertRaisesRegex(LaneError, "LANEFATHER_PRIORITY_SMOKE names no phase"):
+            slots.phase_priority("check")
+
+    def test_the_request_carries_the_priority_and_its_source(self):
+        self.use('[checks]\nslot_env = "STRAYLIGHT_SLOT"\n[slots.priority]\ndefault = "batch"\n')
+        environment = checks.verify_env("post-merge-a", "post-merge", lane="a")
+        self.assertEqual(environment["STRAYLIGHT_SLOT_PRIORITY"], "batch")
+        self.assertEqual(json.loads(environment["STRAYLIGHT_SLOT_META"]),
+                         {"lane": "a", "phase": "post-merge",
+                          "lanefather.priority": "batch (.lanefather.toml [slots.priority] default)"})
+        os.environ["LANEFATHER_PRIORITY_RERUN"] = "normal"
+        with unittest.mock.patch.object(slots, "command", return_value="/bin/slotfather"):
+            rerun = checks.Rerun(self.tmp, ["native-check"], "lane-a-alone", 2)
+        self.assertEqual(rerun.argv[rerun.argv.index("--priority") + 1], "normal")
+        self.assertIn("lanefather.priority=normal (LANEFATHER_PRIORITY_RERUN)", rerun.argv)
+
+    def test_a_promote_step_lease_takes_the_gates_priority_unless_it_names_its_own(self):
+        current = self.use('[[promote.install]]\nname="build"\nargv=["build.sh"]\nlease={slots=1}\n'
+                           '[[promote.install]]\nname="pinned"\nargv=["pin.sh"]\n'
+                           'lease={slots=1,priority="interactive"}\n')
+        build, pinned = current.install
+        self.assertIsNone(build.lease and build.lease.priority)
+        self.assertEqual(promote.step_priority(build), ("normal", "built-in"))
+        os.environ["LANEFATHER_PRIORITY_GATE"] = "batch"
+        self.assertEqual(promote.step_priority(build), ("batch", "LANEFATHER_PRIORITY_GATE"))
+        self.assertEqual(promote.step_priority(pinned), ("interactive", "step pinned lease"))
 
 
 class SeamTests(ConfigCase):
