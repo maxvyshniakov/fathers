@@ -223,14 +223,14 @@ class TintTests(unittest.TestCase):
             found = theme.resolve("auto", environ=environ)
             background = found.background
             assert background is not None
-            self.assertEqual(10, len(found.tints))
+            self.assertEqual(8, len(found.tints))
             for name, tinted in found.tints.items():
                 ink, fill = found.styles[name][0], found.styles["f" + name[1:]][0]
                 assert isinstance(ink, tuple) and isinstance(fill, tuple)
                 mixes = [theme.mix(background, fill, step / 100) for step in range(1, 19)]
                 self.assertIn(tinted, mixes, f"{name}: its fill in the background, at most 18%")
                 plain = theme.contrast(ink, background)
-                self.assertGreaterEqual(plain, 4.5)
+                self.assertGreaterEqual(plain, 4.6)
                 self.assertGreaterEqual(theme.contrast(ink, tinted), 0.9 * plain - 1e-9, (name, tinted))
                 step = mixes.index(tinted) + 1
                 stronger = theme.mix(background, fill, (step + 1) / 100)

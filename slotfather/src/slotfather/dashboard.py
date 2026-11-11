@@ -706,7 +706,7 @@ def dashboard_colours(model: dict, assigned: dict) -> None:
     keys = {h["key"] for h in model["holders"]}
     for key in [key for key in assigned if key not in keys]:
         del assigned[key]
-    count = current_theme.holders()  # 10 holder colours less any the theme reserves, or the builtin 6 (#14)
+    count = current_theme.holders()  # 8 holder colours less any the theme reserves, or the builtin 6 (#14)
     for holder in model["holders"]:
         if holder["kind"] != "held":
             continue

@@ -34,21 +34,16 @@ MODE_LABELS = {"auto": "Auto", "terminal": "Terminal", "builtin": "Built-in"}
 SELECTION_MIX, TRACK_MIX, FREE_MIX = 0.10, 0.15, 0.20
 TINT_MIX = 0.16  # a selected running row's background: this much of its holder fill in the background (#15)
 TINT_KEEP = 0.9  # the share of its ink's contrast a tint keeps; a fill that would take more is mixed in less
-# Holder colours (owner, 2026-11-11): two tokens per holder. The fill paints what needs no text contrast (SLOTS
-# blocks, slot cells, the CPU bar, the selection marker and tint), a juicy candy colour; the ink, the same hue
-# darker on a light background and lighter on a dark one, paints the label and the numbers at MIN_INK or more.
-# Handed out in this order; anchors (fill, ink) on a light background (the owner's mock) and on a dark one (about
-# Tailwind's 400 and 300 shades). No blue, sky or indigo: the theme's blue marks the focused panel.
-HOLDER_HUES = (("rose", "#f2668b", "#c8264f", "#fb7185", "#fda4af"),
-               ("emerald", "#2ec4a0", "#0b7f63", "#34d399", "#6ee7b7"),
-               ("violet", "#9b7bf4", "#6a45d6", "#a78bfa", "#c4b5fd"),
-               ("tangerine", "#ff9248", "#c2530a", "#fb923c", "#fdba74"),
-               ("teal", "#2bb5b0", "#0f7f7a", "#2dd4bf", "#5eead4"),
-               ("orchid", "#d77ae6", "#9d3bb0", "#e879f9", "#f0abfc"),
-               ("lime", "#9ad94a", "#4a7a12", "#a3e635", "#bef264"),
-               ("pink", "#f06aae", "#b8236f", "#f472b6", "#f9a8d4"),
-               ("cyan", "#23b8d0", "#0a7286", "#22d3ee", "#67e8f9"),
-               ("grape", "#bb76f0", "#8a32c8", "#c084fc", "#d8b4fe"))
+# Holder colours (owner, 2026-11-11, the "Neon" set): two tokens per holder. The fill paints what needs no text
+# contrast (SLOTS blocks, slot cells, the CPU bar, the selection marker and tint): OKLCH chroma FILL_CHROMA, as much
+# as sRGB holds at that hue, at FILL_LIGHT or FILL_DARK lightness. The ink, the same hue at INK_CHROMA at most, starts
+# at the fill's lightness and darkens on a light background, lightens on a dark one, until it reads at MIN_INK; it
+# paints the label and the numbers. Handed out in this order (name, OKLCH hue). No blue, sky or indigo: the theme's
+# blue marks the focused panel.
+HOLDER_HUES = (("hot pink", 350.0), ("orange", 68.0), ("acid green", 138.0), ("spring teal", 172.0),
+               ("cyan", 205.0), ("electric violet", 288.0), ("magenta", 318.0), ("green", 152.0))
+FILL_CHROMA, INK_CHROMA = 0.24, 0.16
+FILL_LIGHT, FILL_DARK = 0.73, 0.80  # a fill's lightness on a light and on a dark background
 HOLDERS = len(HOLDER_HUES)
 
 
@@ -58,11 +53,11 @@ class Holder(NamedTuple):
     ink: RGB
 
 
-MIN_INK = 4.5  # a holder's ink against the background (WCAG AA for text)
+MIN_INK = 4.6  # a holder's ink against the background (WCAG AA for text, with a margin)
 RESERVED_APART = 0.12  # ΔE a holder's fill keeps from the theme's blue (focus), red (over share) and yellow (idle)
 HOLDER_APART = 0.045  # ΔE a holder's fill keeps from the ones handed out before it
 MOST_TURN = 30  # degrees a fill's hue turns at most to keep those apart; a hue with no room left is dropped
-LIGHTNESS_SHIFTS = (0.0, 0.03, -0.03, 0.06, -0.06)  # or the lightness it moves by, lighter first
+LIGHTNESS_SHIFTS = (0.0, -0.03, 0.03, -0.06, 0.06)  # or the lightness it moves by, deeper first (more chroma)
 BLUE_HUES = (225.0, 280.0)  # OKLCH hues no fill turns into, whatever the theme's blue: sky, blue and indigo
 LIGHTNESS_STEP = 0.005
 # The theme's blue, red and yellow where the terminal does not say them: on a light background GitHub Light's
@@ -209,22 +204,20 @@ def lch(rgb: RGB) -> Tuple[float, float, float]:
     return lightness, math.hypot(a, b), math.degrees(math.atan2(b, a)) % 360
 
 
-def ink_for(anchor: RGB, angle: float, background: RGB, shift: float = 0.0) -> RGB:
-    """The ink at the anchor's lightness (moved by `shift`, as its fill was) and chroma in hue `angle`, moved away
-    from the background in lightness until it reads at MIN_INK."""
-    lightness, chroma, _ = lch(anchor)
-    lightness = min(0.97, max(0.2, lightness + shift))
+def ink_for(lightness: float, angle: float, background: RGB) -> RGB:
+    """The ink in hue `angle` at INK_CHROMA (less where sRGB has less), from the fill's lightness away from the
+    background until it reads at MIN_INK."""
     away = -1 if is_light(background) else 1
-    colour = oklch(lightness, chroma, angle)
+    colour = oklch(lightness, INK_CHROMA, angle)
     while contrast(colour, background) < MIN_INK and 0 < lightness < 1:
         lightness += away * LIGHTNESS_STEP
-        colour = oklch(lightness, chroma, angle)
+        colour = oklch(lightness, INK_CHROMA, angle)
     return colour
 
 
 def holder_pairs(background: Optional[RGB], light: bool,
                  reserved: Optional[Sequence[RGB]] = None) -> List[Holder]:
-    """The holders for this background in HOLDER_HUES order: each hue's anchor fill, turned away a few degrees at a
+    """The holders for this background in HOLDER_HUES order: each hue's fill, turned away a few degrees at a
     time from a reserved colour (the theme's blue, red and yellow) it is within RESERVED_APART of, or from an earlier
     holder within HOLDER_APART; a hue that finds no room within MOST_TURN is dropped. The ink keeps the fill's turn
     and reads at MIN_INK on the background (a reference one where it is unknown)."""
@@ -235,22 +228,21 @@ def holder_pairs(background: Optional[RGB], light: bool,
 def _holder_pairs(background: Optional[RGB], light: bool, reserved: Tuple[RGB, ...]) -> Tuple[Holder, ...]:
     surface = background or (LIGHT_REFERENCE if light else DARK_REFERENCE)
     found: List[Holder] = []
-    for name, light_fill, light_ink, dark_fill, dark_ink in HOLDER_HUES:
-        fill, ink = (hex_colour(light_fill), hex_colour(light_ink)) if light else (hex_colour(dark_fill),
-                                                                                 hex_colour(dark_ink))
-        lightness, chroma, angle = lch(fill)
+    level = FILL_LIGHT if light else FILL_DARK
+    for name, angle in HOLDER_HUES:
+        fill = oklch(level, FILL_CHROMA, angle)
         nearest = min(reserved, key=lambda colour: distance(colour, fill))
         away = -1 if (hue(nearest) - angle) % 360 < 180 else 1  # turn away from the nearest reserved colour first
         # The smallest change first: a few degrees of hue, or a little lightness (0.01 costs as much as 2.5°)
-        tries = sorted(((abs(turn) + abs(shift) * 250, turn, shift)
-                        for turn in sorted(range(-MOST_TURN, MOST_TURN + 1, 2), key=lambda turn: (abs(turn), turn != away * abs(turn)))
-                        for shift in LIGHTNESS_SHIFTS), key=lambda item: item[0])
+        turns = sorted(range(-MOST_TURN, MOST_TURN + 1, 2), key=lambda turn: (abs(turn), turn != away * abs(turn)))
+        tries = sorted(((abs(turn) + abs(shift) * 250, turn, shift) for turn in turns for shift in LIGHTNESS_SHIFTS),
+                       key=lambda item: item[0])
         for _, turn, shift in tries:
-            colour = oklch(lightness + shift, chroma, (angle + turn) % 360) if turn or shift else fill
+            colour = oklch(level + shift, FILL_CHROMA, (angle + turn) % 360)
             if (not BLUE_HUES[0] < hue(colour) < BLUE_HUES[1]
                     and all(distance(colour, other) >= RESERVED_APART for other in reserved)
                     and all(distance(colour, earlier.fill) >= HOLDER_APART for earlier in found)):
-                found.append(Holder(name, colour, ink_for(ink, (lch(ink)[2] + turn) % 360, surface, shift)))
+                found.append(Holder(name, colour, ink_for(level + shift, (angle + turn) % 360, surface)))
                 break
     return tuple(found)
 

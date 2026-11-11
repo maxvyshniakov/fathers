@@ -80,9 +80,6 @@ def hexes(text: str) -> list[tuple[int, int, int]]:
     return [(int(code[1:3], 16), int(code[3:5], 16), int(code[5:7], 16)) for code in text.split()]
 
 
-# The owner's mock (2026-11-11): fill and ink on a light background, in the order holders get them
-MOCK_LIGHT = list(zip(hexes("#f2668b #2ec4a0 #9b7bf4 #ff9248 #2bb5b0 #d77ae6 #9ad94a"),
-                      hexes("#c8264f #0b7f63 #6a45d6 #c2530a #0f7f7a #9d3bb0 #4a7a12")))
 REFERENCES = {"light": (0xFD, 0xFC, 0xFA), "dark": (0x1E, 0x1E, 0x1E)}
 # Terminal palettes' (blue, red, yellow): focus, over share and idle
 RESERVED = {"light": [hexes("#0969da #cf222e #4d2d00"), hexes("#0000ee #cd0000 #cdcd00"),
@@ -90,7 +87,9 @@ RESERVED = {"light": [hexes("#0969da #cf222e #4d2d00"), hexes("#0000ee #cd0000 #
             "dark": [hexes("#81a2be #cc6666 #f0c674"), hexes("#61afef #e06c75 #e5c07b"), hexes("#0000ee #cd0000 #cdcd00"),
                      hexes("#bd93f9 #ff5555 #f1fa8c"), hexes("#89b4fa #f38ba8 #f9e2af")]}  # Ghostty, One Dark, xterm,
 # Dracula, Catppuccin Mocha
-ORDER = ["rose", "emerald", "violet", "tangerine", "teal", "orchid", "lime", "pink", "cyan", "grape"]
+# The owner's pick (2026-11-11), "Neon": OKLCH hues in the order holders get them
+ORDER = ["hot pink", "orange", "acid green", "spring teal", "cyan", "electric violet", "magenta", "green"]
+NEON_HUES = [350, 68, 138, 172, 205, 288, 318, 152]
 
 
 def every_theme() -> list[tuple[str, tuple[int, int, int], Any]]:
@@ -107,19 +106,21 @@ class HolderColourTests(unittest.TestCase):
                     self.assertLess(abs((fill[2] - ink[2] + 180) % 360 - 180), 12, f"{holder} keeps its hue")
                     if kind == "light":
                         self.assertLess(ink[0], fill[0] - 0.08, f"{holder}: the ink is darker on a light background")
-                    else:
-                        self.assertGreater(ink[0], fill[0] + 0.04, f"{holder}: and lighter on a dark one")
-                    self.assertGreater(fill[1], 0.1, f"{holder}: a juicy fill, not a muddy one")
-                    self.assertTrue(0.65 <= fill[0] <= 0.86, f"{holder}: a candy lightness")
+                    else:  # from the fill's lightness up: a fill that already reads keeps it
+                        self.assertGreaterEqual(ink[0], fill[0] - 0.005, f"{holder}: never darker on a dark one")
+                    self.assertLessEqual(ink[1], theme.INK_CHROMA + 0.005, f"{holder}: the ink's chroma is capped")
+                    # sRGB's violet is narrow up there: a nudge lighter still keeps a clear tint
+                    self.assertGreater(fill[1], 0.07 if fill[0] > 0.8 else 0.1, f"{holder}: a vivid fill, not a muddy one")
+                    self.assertTrue(0.66 <= fill[0] <= 0.87, f"{holder}: the fill's lightness, or a nudge from it")
 
-    def test_every_ink_reads_at_four_and_a_half_to_one(self) -> None:
+    def test_every_ink_reads_at_four_point_six_to_one(self) -> None:
         for kind, background, reserved in every_theme():
             with self.subTest(kind=kind, background=background, reserved=reserved):
                 for holder in theme.holder_pairs(background, kind == "light", reserved):
-                    self.assertGreaterEqual(theme.contrast(holder.ink, background), 4.5, holder)
+                    self.assertGreaterEqual(theme.contrast(holder.ink, background), 4.6, holder)
         for light, reference in ((True, REFERENCES["light"]), (False, REFERENCES["dark"])):
             for holder in theme.holder_pairs(None, light):  # an unknown background: measured on the reference
-                self.assertGreaterEqual(theme.contrast(holder.ink, reference), 4.5, holder)
+                self.assertGreaterEqual(theme.contrast(holder.ink, reference), 4.6, holder)
 
     def test_no_fill_sits_near_the_focus_blue_the_over_share_red_or_the_idle_yellow(self) -> None:
         for kind, background, reserved in every_theme():
@@ -132,7 +133,7 @@ class HolderColourTests(unittest.TestCase):
                     self.assertGreaterEqual(theme.distance(holder.fill, yellow), theme.RESERVED_APART, f"{holder}: idle")
                 for first, second in itertools.combinations(holders, 2):
                     self.assertGreaterEqual(theme.distance(first.fill, second.fill), theme.HOLDER_APART - 1e-9)
-                self.assertGreaterEqual(len(holders), 7, "a palette takes a few hues at most")
+                self.assertEqual(8, len(holders), "these palettes leave room for every hue")
                 for holder in holders:  # no blue, sky or indigo, whichever way a hue turned
                     self.assertFalse(225 < theme.hue(holder.fill) < 280, holder)
 
@@ -140,18 +141,29 @@ class HolderColourTests(unittest.TestCase):
         self.assertEqual(ORDER, [name for name, *_ in theme.HOLDER_HUES])
         for light in (True, False):
             self.assertEqual(ORDER, [holder.name for holder in theme.holder_pairs(None, light)])
-        dracula = theme.holder_pairs(DARK_BG, False, RESERVED["dark"][3])  # its blue is a violet
-        self.assertEqual([name for name in ORDER if name != "violet"], [holder.name for holder in dracula],
-                         "violet has no room left that is not blue: dropped, the rest keep their order")
+        cyan = theme.oklch(0.73, 0.13, 205)  # a theme whose blue, red and yellow all sit on the cyan
+        self.assertEqual([name for name in ORDER if name != "cyan"],
+                         [holder.name for holder in theme.holder_pairs(LIGHT_BG, True, (cyan, cyan, cyan))],
+                         "cyan has no room left: dropped, the rest keep their order")
 
-    def test_the_light_set_is_the_owners_mock(self) -> None:
-        holders = theme.holder_pairs(REFERENCES["light"], True)
-        for holder, (fill, ink) in zip(holders, MOCK_LIGHT):
-            self.assertLess(theme.distance(holder.fill, fill), 0.02, holder)
-            self.assertLess(theme.distance(holder.ink, ink), 0.03, holder)
+    def test_the_sets_are_neon(self) -> None:
+        for kind, level in (("light", 0.73), ("dark", 0.80)):
+            reserved = RESERVED[kind][0]  # GitHub Light, Ghostty
+            holders = theme.holder_pairs(REFERENCES[kind], kind == "light", reserved)
+            for holder, angle in zip(holders, NEON_HUES):
+                with self.subTest(kind=kind, holder=holder):
+                    nudged = theme.lch(holder.fill)[0] != level and kind == "dark" and holder.name == "orange"
+                    if not nudged:  # Ghostty's yellow moves the dark orange down in lightness
+                        self.assertEqual(theme.oklch(level, 0.24, angle), holder.fill, "chroma 0.24, gamut-clamped")
+                    ink_hue = theme.lch(holder.ink)[2]
+                    self.assertLess(abs((ink_hue - angle + 180) % 360 - 180), 3)
+                    self.assertGreaterEqual(theme.contrast(holder.ink, REFERENCES[kind]), 4.6)
+        light = theme.holder_pairs(REFERENCES["light"], True, RESERVED["light"][0])
+        self.assertGreater(min(theme.distance(first.fill, second.fill)
+                               for first, second in itertools.combinations(light, 2)), 0.06, "well separated")
 
     def test_the_queried_palette_sets_what_is_reserved(self) -> None:
-        blue = theme.hex_colour("#2bb5b0")  # a teal accent: the teal holder must move or go
+        blue = theme.oklch(0.73, 0.15, 172)  # a teal accent: the spring teal holder must move or go
         found = theme.resolve("auto", answered(bg=LIGHT_BG, p4=blue), {})
         fills = [found.styles[f"f{n}"][0] for n in range(found.holders())]
         for fill in fills:
@@ -298,7 +310,7 @@ class FallbackTests(unittest.TestCase):
         self.assertEqual(("■", "block", True, "terminal", None), (found.track, found.free, found.light, found.source,
                                                                   found.selected_text))
         self.assertEqual([(h.fill, h.ink) for h in theme.holder_pairs(LIGHT_BG, True)],
-                         [(found.styles[f"f{n}"][0], found.styles[f"h{n}"][0]) for n in range(10)])
+                         [(found.styles[f"f{n}"][0], found.styles[f"h{n}"][0]) for n in range(8)])
 
     def test_tokens_follow_the_palette_and_the_default_foreground(self) -> None:
         for mode in ("auto", "terminal"):
@@ -317,7 +329,7 @@ class FallbackTests(unittest.TestCase):
         self.assertEqual(("COLORFGBG", True, theme.mix((255, 255, 255), (0, 0, 0), 0.10)),
                          (light.source, light.light, light.selection))
         self.assertEqual([h.ink for h in theme.holder_pairs((255, 255, 255), True)],
-                         [light.styles[f"h{n}"][0] for n in range(10)])
+                         [light.styles[f"h{n}"][0] for n in range(8)])
         dark = theme.resolve("auto", None, {"COLORFGBG": "15;default;0"})
         self.assertEqual(("COLORFGBG", False), (dark.source, dark.light))
 
@@ -327,7 +339,7 @@ class FallbackTests(unittest.TestCase):
             self.assertEqual((None, "░", "outline", "none", False),
                              (found.selection, found.track, found.free, found.source, found.light))
             self.assertEqual((8, 8), (found.styles["track"][0], found.styles["free"][0]))
-            self.assertEqual([h.ink for h in theme.holder_pairs(None, False)], [found.styles[f"h{n}"][0] for n in range(10)])
+            self.assertEqual([h.ink for h in theme.holder_pairs(None, False)], [found.styles[f"h{n}"][0] for n in range(8)])
         hinted = theme.Answers()
         hinted.feed("\x1b[?997;2n")
         self.assertTrue(theme.resolve("auto", hinted, {}).light, "a light-scheme notification picks the light set")
@@ -415,9 +427,9 @@ class DrawingTests(unittest.TestCase):
         self.tool.dashboard_colours(model, assigned)
         self.assertEqual("h1", model["holders"][-1]["style"], "the colour the ended lease freed")
         self.tool.set_theme(theme.resolve("auto", None, {}))
-        model = {"holders": holders(11)}
+        model = {"holders": holders(9)}
         self.tool.dashboard_colours(model, {})
-        self.assertEqual([f"h{n}" for n in range(10)] + ["h0"], [h["style"] for h in model["holders"]])
+        self.assertEqual([f"h{n}" for n in range(8)] + ["h0"], [h["style"] for h in model["holders"]])
 
 
 class SettingTests(unittest.TestCase):
