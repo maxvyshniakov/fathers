@@ -193,13 +193,16 @@ class FocusTests(unittest.TestCase):
 
         canvas = draw()
         top = thumb(canvas)
-        self.assertEqual(1, top[0], "the first content row")
-        for key, expected in (("down", 1), ("j", 2), ("page_down", 13), ("up", 12), ("end", 28), ("home", 0)):
+        self.assertEqual(2, top[0], "the first content row, under the padding row")
+        for key, expected in (("down", 1), ("j", 2), ("page_down", 11), ("up", 10), ("end", 30), ("home", 0)):
             self.assertTrue(view.scroll_panel(canvas, scroll, "events", key))
             self.assertEqual(expected, scroll["events"], key)
             canvas = draw()
-        scroll["events"] = 28
-        self.assertEqual(12, thumb(draw())[-1], "the last page puts the thumb at the bottom")
+        scroll["events"] = 30
+        last = draw()
+        self.assertEqual(11, thumb(last)[-1], "the last page puts the thumb at the bottom of the rows")
+        for padding in (1, 12):  # nothing draws on the padding rows, scrolled or not
+            self.assertEqual(" " * 77, "".join(cell[0] for cell in last.cells[padding][1:78]), padding)
         self.assertFalse(view.scroll_panel(canvas, scroll, "events", "x"))
 
     def test_events_follow_the_newest_at_the_top_and_stay_put_when_scrolled(self) -> None:
@@ -439,7 +442,7 @@ class LiveTests(SlotCase):
             for found in re.finditer(r"\x1b\[(\d+);1H([^\n]*?)(?=\x1b\[\d+;1H|$)",
                                      self.raw.decode("utf-8", "replace"), re.S):
                 rows[int(found[1])] = PLAIN.sub("", found[2])
-            cells = re.split("[│┃]", rows.get(2, ""))
+            cells = re.split("[│┃]", rows.get(3, ""))  # row 2 is the blank padding row
             return len(cells) >= 3 and "priority" in cells[-2]
 
         mark = len(receive(top_row, 3, "the details scrolled two lines"))

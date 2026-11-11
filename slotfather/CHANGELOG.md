@@ -11,8 +11,8 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Changed
 
-- The scrollbar is a thumb alone, moving in half cells; the `↑ N above` and `↓ N more` counts are gone and
-  their lines hold content. EVENTS still shows `↑ N new` while scrolled away from the newest.
+- The scrollbar is a thumb alone, moving in half cells; the `↑ N above` and `↓ N more` counts are gone.
+  EVENTS still shows `↑ N new` while scrolled away from the newest.
 - The focused panel's frame is the terminal's blue, with its title and column headers in the foreground
   colour; the other panels stay muted. Every frame keeps the same light, rounded lines.
 - A selected row keeps its text colour; only its background is tinted, lightly enough that its text keeps
@@ -29,6 +29,11 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   violet, magenta, green), more distinct from one another, with inks at 4.6:1 or more.
 
 ### Fixed
+
+- QUEUE, EVENTS, the details, help, the changelog and Settings keep a blank row over and under their content
+  again, as SLOTS and MACHINE do; the scrollbar runs between them.
+- The load chart no longer shows more slots held than the queue has (`peak 9` of 8): a request that left
+  without ever being granted was counted as a lease that ended once queue.log grew past the part read.
 
 - Muted text and panel frames are readable in themes whose bright black sits close to the background (Seti,
   One Dark, Solarized Dark, Dracula): the dashboard mixes them from the theme's own text and background colours, at
@@ -118,6 +123,11 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 - Smaller requests may pass a blocked waiter for a while.
 
 ### Fixed
+
+- QUEUE, EVENTS, the details, help, the changelog and Settings keep a blank row over and under their content
+  again, as SLOTS and MACHINE do; the scrollbar runs between them.
+- The load chart no longer shows more slots held than the queue has (`peak 9` of 8): a request that left
+  without ever being granted was counted as a lease that ended once queue.log grew past the part read.
 
 - Muted text and panel frames are readable in themes whose bright black sits close to the background (Seti,
   One Dark, Solarized Dark, Dracula): the dashboard mixes them from the theme's own text and background colours, at

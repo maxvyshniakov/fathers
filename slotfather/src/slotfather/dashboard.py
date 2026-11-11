@@ -501,7 +501,9 @@ def queue_events(directory: Path) -> list[dict]:
             count, pid = int(found[1]), int(found[2])
             held = pid in granted or start > 0
             events.append({"when": when, "verb": "released" if held else "left", "count": count,
-                           "label": granted.pop(pid, ""), "pid": pid, "delta": -count if held else 0})
+                           "label": granted.pop(pid, ""), "pid": pid, "delta": -count if held else 0,
+                           # granted before the part read, or never: describe_events() asks its history line
+                           "unsure": held and pid not in granted})
         elif found := REAPED.match(message):
             state, count, label, pid = found[1], int(found[2]), found[3], int(found[4])
             granted.pop(pid, None)
@@ -546,6 +548,12 @@ def describe_events(events: list[dict[str, Any]], directory: Path, live: list[di
                 event["detail"] = f"waited {span(waited)}" if waited >= 1 else "no wait"
             continue
         item = next((i for i in by_pid.get(event["pid"], []) if near(i.get("ended"), when)), None)
+        if item is None and event.get("unsure"):
+            # No grant in the part of queue.log read and no history line that it held slots: a request that left
+            # without one (queue.log has its release, never a grant). Counting it as a lease that ended put slots
+            # back into the chart's past that nothing held (`peak 9` of 8).
+            event.update(verb="left", delta=0, detail="never granted")
+            continue
         if item is None:
             event["detail"] = "owner exited" if verb == "reaped" else "gave up" if verb == "left" else ""
             continue
@@ -795,7 +803,8 @@ def draw_row(canvas: Canvas, y: int, x: int, placed: list, values: dict) -> None
 def table_view(canvas: Canvas, name: str, y: int, x: int, height: int, width: int,
                top: int, room: int, count: int, selected: int | None = None,
                base: int | None = None, row_items: list | None = None) -> tuple[int, int]:
-    """One viewport shared by painting, hit testing and wheel scrolling."""
+    """One viewport shared by painting, hit testing and wheel scrolling: `room` rows from `top`, between a blank
+    padding row under the top border and one over the bottom border; the scrollbar's thumb runs in them too."""
     room = max(0, room)
     visible = room
     automatic = max(0, (selected or 0) - visible + 1) if selected is not None else 0
@@ -1072,15 +1081,15 @@ def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model
     size = next((column[3] for column in placed if column[0] == "slots"), cells)
     table_header(canvas, y, x, height, width, "QUEUE", placed, gutter=6, name="requests")
     if not items:
-        canvas.put(y + 1, x + 3, f"No requests · all {model['slots']} slots free", "dim", width - 6)
+        canvas.put(y + 2, x + 3, f"No requests · all {model['slots']} slots free", "dim", width - 6)
     visual_selected = row_items.index(selected) if selected in row_items else None
-    offset, rows = table_view(canvas, "requests", y, x, height, width, y + 1, height - 2,
+    offset, rows = table_view(canvas, "requests", y, x, height, width, y + 2, height - 4,
                               len(row_items), visual_selected, row_items=row_items)
     for visual, index in enumerate(row_items[offset:offset + rows], offset):
         if index is None:
             continue
         item = items[index]
-        row = y + 1 + visual - offset
+        row = y + 2 + visual - offset
         waiting = index >= len(holders)
         # One colour per row: a running lease's SLOTS colour (its CPU bar too, but for a warning), the text colour for a
         # request that holds no slots.
@@ -1158,9 +1167,9 @@ def draw_detail(canvas: Canvas, y: int, x: int, height: int, width: int, model: 
     canvas.box(y, x, height, width, detail_title(items[selected] if items else None), name="details")
     inner = width - 6
     if not items or canvas.loading is not None:  # drawn, so it can hold the focus, with nothing to scroll yet
-        table_view(canvas, "details", y, x, height, width, y + 1, max(0, height - 2), 0)
+        table_view(canvas, "details", y, x, height, width, y + 2, max(0, height - 4), 0)
     if not items:
-        canvas.put(y + 1, x + 3, "Nothing to select · the queue is idle", "dim", inner)
+        canvas.put(y + 2, x + 3, "Nothing to select · the queue is idle", "dim", inner)
         return
     if canvas.loading is not None:  # loading in the background (#15): a spinner, centred, until they arrive
         middle = y + max(1, (height - 2) // 2)
@@ -1293,11 +1302,11 @@ def draw_detail(canvas: Canvas, y: int, x: int, height: int, width: int, model: 
         for process_row, (pid, cpu, rss, name) in enumerate(item["tree"], row + 3):
             draw_row(document, process_row, 3, placed, {"pid": str(pid), "cpu": f"{cpu:.0f}%",
                      "rss": megabytes(rss / 1024), "name": name})
-    offset, visible = table_view(canvas, "details", y, x, height, width, y + 1,
-                                 max(0, height - 2), content_height)
+    offset, visible = table_view(canvas, "details", y, x, height, width, y + 2,
+                                 max(0, height - 4), content_height)
     for row in range(min(visible, content_height - offset)):
         for column in range(3, max(3, width - 3)):
-            target_y, target_x = y + 1 + row, x + column
+            target_y, target_x = y + 2 + row, x + column
             if 0 <= target_y < canvas.height and 0 <= target_x < canvas.width:
                 canvas.cells[target_y][target_x] = document.cells[offset + row][column][:]
                 url = document.links.get((offset + row, column))
@@ -1468,10 +1477,10 @@ def draw_events(canvas: Canvas, y: int, x: int, height: int, width: int, model: 
     size = next((column[3] for column in placed if column[0] == "slots"), cells)
     table_header(canvas, y, x, height, width, "EVENTS", placed, name="events")
     styles = {"granted": "ok", "released": "accent", "left": "dim", "reaped": "bad"}
-    offset, visible = table_view(canvas, "events", y, x, height, width, y + 1, height - 2, len(events))
+    offset, visible = table_view(canvas, "events", y, x, height, width, y + 2, height - 4, len(events))
     if not events:
-        canvas.put(y + 1, x + 3, "No grants, releases or reaps logged yet", "dim", width - 6)
-    for row, event in enumerate(events[offset:offset + visible], y + 1):
+        canvas.put(y + 2, x + 3, "No grants, releases or reaps logged yet", "dim", width - 6)
+    for row, event in enumerate(events[offset:offset + visible], y + 2):
         style = styles[event["verb"]]
         draw_row(canvas, row, x + 3, placed, {
             "time": (clock(event["when"]), "dim"), "event": (event["verb"], style),
@@ -1653,9 +1662,9 @@ def draw_overlay(canvas: Canvas, title: str, layout: Any, name: str) -> None:
     the frame, scrollbar, counts and centred footer are the same for every one."""
     width = min(max(0, canvas.width - 2), 76)
     lines = cast(list[list[tuple[str, str]]], layout(width - 6))  # two padding cells, the scrollbar in one
-    height = min(max(0, canvas.height - 2), len(lines) + 4)
+    height = min(max(0, canvas.height - 2), len(lines) + 5)  # a blank row above the lines and one below them
     y, x = (canvas.height - height) // 2, (canvas.width - width) // 2
-    visible = max(0, height - 4)
+    visible = max(0, height - 5)
     offset = max(0, min(canvas.scroll.get(name, 0), max(0, len(lines) - visible)))
     canvas.scroll[name] = offset
     canvas.help_view = HelpViewport(x, y, width, height, offset, visible, len(lines), name)
@@ -1665,8 +1674,8 @@ def draw_overlay(canvas: Canvas, title: str, layout: Any, name: str) -> None:
     if height < 6:
         canvas.put(y + 1, x + 2, "Enlarge terminal", "dim", inner)
         return
-    canvas.scrollbar(y + 1, x + width - 2, visible, offset, visible, len(lines), True)
-    for row, parts in enumerate(lines[offset:offset + visible], y + 1):
+    canvas.scrollbar(y + 2, x + width - 2, visible, offset, visible, len(lines), True)
+    for row, parts in enumerate(lines[offset:offset + visible], y + 2):
         canvas.segments(row, x + 2, parts, width - 6)
     shown = f"{round(100 * (offset + visible) / len(lines))}%" if len(lines) > visible else ""
     hints = [("↑↓", "scroll"), ("esc", "close")] + ([("q", "quit")] if name == "help" else [])
@@ -1917,7 +1926,7 @@ def dashboard_draw(canvas: Canvas, model: dict[str, Any] | None, selected: int =
     draw_slots(canvas, 2, 3, left - 6, model)
     top, available = slot_height, height - 1 - slot_height
     holders, waiters = model["holders"], model["waiters"]
-    requests = max(1, len(holders) + len(waiters)) + bool(holders and waiters) + 2
+    requests = max(1, len(holders) + len(waiters)) + bool(holders and waiters) + 4  # the frame and a blank row each
     if width >= WIDE:
         heights = allocate(available, [("requests", min(requests, 10), requests), ("events", 5, available)])
         y = top

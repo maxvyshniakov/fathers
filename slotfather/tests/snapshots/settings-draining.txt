@@ -1,4 +1,5 @@
 ╭─ SETTINGS ─────────────────────── saved at once · applies at the next grant ─╮
+│                                                                              │
 │ STATUS · read-only, live                                                     │
 │   queue        ~/.local/state/slotfather                                     │
 │   slots        2 total · 0 free · 4 held · 3 waiting                         │
@@ -21,6 +22,7 @@
 │   Ask to yield after        120 s                                            │
 │   Refresh every             1 s                                              │
 │   Colour theme              Auto                                             │
+│                                                                              │
 │ ──────────────────────────────────────────────────────────────────────────── │
 │ Total slots for every client. Applies at the next grant; a shrink drains.    │
 │                                                                              │

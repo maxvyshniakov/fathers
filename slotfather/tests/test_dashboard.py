@@ -84,7 +84,8 @@ class DashboardTests(SlotCase):
         lines = text.splitlines()
         for title, message in (("QUEUE", "No requests"), ("EVENTS", "No grants")):
             row = next(i for i, line in enumerate(lines) if title in line)
-            self.assertEqual(lines[row].index(title), lines[row + 1].index(message), "right under the header")
+            self.assertFalse(lines[row + 1][1:lines[row + 1].index("│", 1)].strip(), "a blank padding row first")
+            self.assertEqual(lines[row].index(title), lines[row + 2].index(message), "then the message")
             self.assertIn("╭", lines[row])
             if title != "EVENTS":
                 self.assertIn("pid", lines[row], "column names belong on the top border")
@@ -221,7 +222,7 @@ class DashboardTests(SlotCase):
             self.fail("live terminal did not render the expected selection")
         read_until(lambda text: re.search(r"label\s+click-owner", text) and re.search(r"status\s+running", text))
         # QUEUE starts at row 5: holder at 6, gap at 7, waiter at 8 (zero-based).
-        os.write(master, b"\x1b[<0;10;9M\x1b[<0;10;9m")
+        os.write(master, b"\x1b[<0;10;10M\x1b[<0;10;10m")  # the third row under the padding row
         read_until(lambda text: re.search(r"label\s+click-target",text) and re.search(r"status\s+waiting",text))
         self.release("click-owner")
         self.started("click-target")
@@ -319,17 +320,18 @@ class UnifiedLaneTests(unittest.TestCase):
         tool.draw_requests(canvas,0,0,8,130,model,1,now)
         lines=canvas.render(False).splitlines()
         self.assertIn("QUEUE",lines[0])
-        self.assertIn("active",lines[1])
-        self.assertFalse(lines[2][1:-1].strip())
-        self.assertIn("┃  ⏸️    pending",lines[3])
+        self.assertFalse(lines[1][1:-1].strip(),"a blank padding row")
+        self.assertIn("active",lines[2])
+        self.assertFalse(lines[3][1:-1].strip())
+        self.assertIn("┃  ⏸️    pending",lines[4])
         column=lines[0].index("cpu use/share")+len("cpu use/share")
-        self.assertTrue(lines[3][:column].rstrip().endswith("waiting #1"),lines[3])
-        self.assertEqual(1,tool.mouse_action(canvas,("mouse",0,20,3,True),{},0))
-        self.assertEqual(0,tool.mouse_action(canvas,("mouse",0,20,2,True),{},0))
-        canvas=tool.Canvas(130,4)
-        tool.draw_requests(canvas,0,0,4,130,model,1,now)
+        self.assertTrue(lines[4][:column].rstrip().endswith("waiting #1"),lines[4])
+        self.assertEqual(1,tool.mouse_action(canvas,("mouse",0,20,4,True),{},0))
+        self.assertEqual(0,tool.mouse_action(canvas,("mouse",0,20,3,True),{},0))
+        canvas=tool.Canvas(130,6)
+        tool.draw_requests(canvas,0,0,6,130,model,1,now)
         lines=canvas.render(False).splitlines()
-        self.assertIn("pending",lines[2],"selection must remain visible beyond the gap")
+        self.assertIn("pending",lines[3],"selection must remain visible beyond the gap")
         self.assertNotIn("above",canvas.render(False),"the scrollbar shows overflow, no row counts")
 
 
@@ -555,6 +557,28 @@ class EventDetailTests(unittest.TestCase):
         tool.describe_events(events, directory, live)
         return events
 
+    def test_a_release_never_granted_adds_no_slots_to_the_charts_past(self) -> None:
+        """Max's `peak 9` of 8: a request that left without a grant or a history line (queue.log 06:21:21Z,
+        `released 2` for a pid it never granted) was taken for a lease that ended, once queue.log was longer than
+        the part read, and the chart walked back from the slots held now with 2 more."""
+        tool = load_dashboard()
+        directory = pathlib.Path(tempfile.mkdtemp(prefix="slotfather-events-"))
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+        filler = "".join(f"2026-11-11T01:00:00Z sweep note {n:06d}\n" for n in range(20000))  # past LOG_TAIL
+        (directory / "queue.log").write_text(filler + self.LOG + "2026-11-11T02:07:00Z released 2 (0000000009-109.json)\n")
+        (directory / "history.jsonl").write_text("".join(json.dumps(item) + "\n" for item in self.history()))
+        live = [{"pid": 104, "since": "2026-11-11T02:05:30Z", "granted": "2026-11-11T02:06:30Z", "state": "held"}]
+        events = tool.queue_events(directory)
+        tool.describe_events(events, directory, live)
+        stray = next(event for event in events if event["pid"] == 109)
+        self.assertEqual(("left", 0, "never granted"), (stray["verb"], stray["delta"], stray["detail"]))
+        build = next(event for event in events if event["pid"] == 101 and event["verb"] != "granted")
+        self.assertEqual(("released", -1), (build["verb"], build["delta"]), "a history line still says it held")
+        now = datetime.datetime(2026, 11, 11, 2, 8, tzinfo=datetime.timezone.utc)
+        steps = tool.held_history(events, 1, now, window=600)
+        self.assertLessEqual(max(level for _, _, level in steps), 3, "no more than build, verify and live held")
+        self.assertEqual(1, steps[-1][2], "live holds 1 now")
+
     def test_each_event_says_what_its_history_line_knows(self) -> None:
         for padding in (0, 20000):  # 20000 lines: longer than the part of queue.log the dashboard reads
             with self.subTest(padding=padding):
@@ -586,9 +610,14 @@ class EventDetailTests(unittest.TestCase):
             n for n, line in enumerate(lines) if " released " in line)][column:column + 2])
 
     def test_the_columns_are_time_event_slots_detail_label_pid(self) -> None:
+        events = self.events()
         tool = load_dashboard()
+        when = events[-1]["when"].astimezone().date()
+        patched = mock.patch.object(tool, "today", lambda: when)  # the log's day: times read as times on any day
+        patched.start()
+        self.addCleanup(patched.stop)
         canvas = tool.Canvas(120, 12)
-        tool.draw_events(canvas, 0, 0, 12, 120, {"events": self.events()})
+        tool.draw_events(canvas, 0, 0, 12, 120, {"events": events})
         lines = canvas.render(False).splitlines()
         places = [lines[0].index(title) for title in ("EVENTS", "event", "slots", "detail", "label", "pid")]
         self.assertEqual(sorted(places), places)
@@ -626,16 +655,21 @@ class MouseInputTests(unittest.TestCase):
             tool.draw_requests(canvas, 0, 0, 7, 100, model, 0, now)
             return canvas
         canvas = render()
-        self.assertEqual(1, tool.mouse_action(canvas, ("mouse", 0, 20, 2, True), scroll, 0))
-        self.assertEqual(0, tool.mouse_action(canvas, ("mouse", 65, 20, 2, True), scroll, 0),
+        self.assertEqual(1, tool.mouse_action(canvas, ("mouse", 0, 20, 3, True), scroll, 0))
+        self.assertEqual(0, tool.mouse_action(canvas, ("mouse", 65, 20, 3, True), scroll, 0),
                          "wheel scrolls the viewport without changing selection")
         canvas = render()
         lines = canvas.render(False).splitlines()
-        self.assertIn("job-3", lines[1], "rows start right under the header")
-        self.assertIn("job-7", lines[5], "five rows: the lines the counters held are content now")
+        self.assertIn("job-3", lines[2], "rows start under the blank padding row")
+        self.assertIn("job-5", lines[4], "three rows between the padding rows")
+        self.assertFalse(lines[1][1:-1].strip(), "the top padding row stays blank while scrolled")
+        self.assertFalse(lines[5][1:-2].strip(), "and the bottom one")
         self.assertNotIn("above", canvas.render(False))
         self.assertNotIn("more", canvas.render(False))
-        self.assertEqual(3, tool.mouse_action(canvas, ("mouse", 0, 20, 1, True), scroll, 0))
+        self.assertEqual(3, tool.mouse_action(canvas, ("mouse", 0, 20, 2, True), scroll, 0))
+        for padding in (1, 5):
+            self.assertEqual(0, tool.mouse_action(canvas, ("mouse", 0, 20, padding, True), scroll, 0),
+                             "clicking a padding row selects nothing")
         self.assertEqual(0, tool.mouse_action(canvas, ("mouse", 0, 20, 0, True), scroll, 0),
                          "clicking the border must not select a hidden row")
         self.assertEqual(0, tool.mouse_action(canvas, ("mouse", 0, 20, 1, False), scroll, 0))

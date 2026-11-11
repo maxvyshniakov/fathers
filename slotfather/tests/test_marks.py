@@ -295,7 +295,7 @@ class TintTests(unittest.TestCase):
             model = {"holders": [holder], "waiters": [], "slots": 4, "cores": 12}
             canvas = self.tool.Canvas(80, 5)
             self.tool.draw_requests(canvas, 0, 0, 5, 80, model, 0, now)
-            cell = next(cell for cell in canvas.cells[1] if cell[0] == "h")
+            cell = next(cell for cell in canvas.cells[2] if cell[0] == "h")
             self.assertEqual(f"h{n}", cell[1])
             self.assertEqual(self.tool.sgr(cell[1], False)[:-1], self.tool.sgr(cell[1], cell[2]).split(";48;2")[0])
 
@@ -347,11 +347,63 @@ class FrameTests(unittest.TestCase):
         fits, overflows = self.tool.Canvas(120, 14), self.tool.Canvas(120, 7)
         self.tool.draw_requests(fits, 0, 0, 14, 120, model, 0, self.now)
         self.tool.draw_requests(overflows, 0, 0, 7, 120, model, 0, self.now)
-        self.assertEqual("┃", overflows.cells[1][118][0], "the thumb, in the outer padding cell")
-        self.assertEqual(" ", overflows.cells[1][117][0], "a blank between it and the content")
-        self.assertEqual(" ", fits.cells[1][118][0], "nothing while everything fits")
-        same = ["".join(cell[0] for cell in row[:116]) for row in (fits.cells[1], overflows.cells[1])]
+        self.assertEqual("┃", overflows.cells[2][118][0], "the thumb, in the outer padding cell")
+        self.assertEqual(" ", overflows.cells[2][117][0], "a blank between it and the content")
+        self.assertEqual(" ", fits.cells[2][118][0], "nothing while everything fits")
+        same = ["".join(cell[0] for cell in row[:116]) for row in (fits.cells[2], overflows.cells[2])]
         self.assertEqual(same[0], same[1], "the content does not move when it starts to overflow")
+
+    def test_every_scrollable_panel_keeps_a_blank_row_over_and_under_its_content(self) -> None:
+        now = self.now
+        model = sample(now)
+        model["events"] = [dict(when=now, verb="granted", label=f"job-{n}", pid=100 + n, count=1, detail="")
+                           for n in range(30)]
+        detail = dict(model["holders"][0], tree=[(200 + n, 1.0, 1024, f"worker-{n}") for n in range(30)],
+                      rss=1024, procs=30, queue="", cmd="work")
+        detail_model = {**model, "holders": [detail], "waiters": []}
+
+        def panels() -> list[tuple[str, Any]]:
+            def queue(canvas: Any) -> tuple[int, int, int, int]:
+                self.tool.draw_requests(canvas, 0, 0, 8, 100, model, 0, now)
+                return 0, 0, 8, 100
+
+            def events(canvas: Any) -> tuple[int, int, int, int]:
+                self.tool.draw_events(canvas, 0, 0, 10, 100, model)
+                return 0, 0, 10, 100
+
+            def details(canvas: Any) -> tuple[int, int, int, int]:
+                self.tool.draw_detail(canvas, 0, 0, 12, 100, detail_model, 0, None, now)
+                return 0, 0, 12, 100
+
+            def overlay(draw: Any) -> Any:
+                def drawn(canvas: Any) -> tuple[int, int, int, int]:
+                    draw(canvas)
+                    info = canvas.help_view
+                    return info.y, info.x, info.height - 1, info.width  # as if the footer row were the border
+
+                return drawn
+
+            return [("requests", queue), ("events", events), ("details", details),
+                    ("help", overlay(self.tool.draw_help)), ("changelog", overlay(self.tool.draw_changelog))]
+
+        for name, draw in panels():
+            for offset in (0, 3, 10_000):  # the top, scrolled, the end
+                with self.subTest(panel=name, offset=offset):
+                    canvas = self.tool.Canvas(100, 24)
+                    canvas.scroll = {name: offset}
+                    y, x, height, width = draw(canvas)
+                    for padding in (y + 1, y + height - 2):
+                        inside = "".join(cell[0] for cell in canvas.cells[padding][x + 1:x + width - 1])
+                        self.assertEqual("", inside.strip(), f"row {padding} is padding: nothing on it")
+                    thumb = [row for row in range(y, y + height)
+                             if canvas.cells[row][x + width - 2][0] in "┃╻╹"]
+                    self.assertTrue(thumb, "it overflows: a thumb")
+                    self.assertGreaterEqual(thumb[0], y + 2, "the thumb runs between the padding rows")
+                    self.assertLessEqual(thumb[-1], y + height - 3)
+                    if offset == 0:
+                        self.assertEqual(y + 2, thumb[0], "at the top: the first content row")
+                    if offset == 10_000:
+                        self.assertEqual(y + height - 3, thumb[-1], "at the end: the last content row")
 
     def test_no_thumb_when_everything_fits(self) -> None:
         canvas = self.tool.Canvas(120, 14)
@@ -390,7 +442,7 @@ class FrameTests(unittest.TestCase):
         self.assertEqual(5, len(offsets), offsets)
         self.assertEqual({3}, set(offsets.values()), offsets)
         queue = next(y for y, line in enumerate(canvas.render(False).splitlines()) if " QUEUE " in line)
-        row = canvas.cells[queue + 1]
+        row = canvas.cells[queue + 2]  # under the blank padding row
         self.assertEqual("▶️", row[3][0], "the state starts where every panel's content does")
         self.assertEqual("p", row[9][0], "the label after it and the priority")
 

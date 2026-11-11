@@ -665,7 +665,7 @@ class Settings:
         width = min(max(0, canvas.width - 2), 80)
         inner = max(0, width - 4)
         body = self.rows(model, max(0, inner - 2))  # two padding cells on the right, the scrollbar in one (#15)
-        height = min(max(0, canvas.height - 2), len(body) + 7)
+        height = min(max(0, canvas.height - 2), len(body) + 9)  # a blank row above the list and one below it
         x, y = (canvas.width - width) // 2, (canvas.height - height) // 2
         self.bounds = x, y, width, height
         self.hits = []
@@ -675,7 +675,7 @@ class Settings:
         if self.small:
             canvas.put(y + 1, x + 2, "Enlarge terminal · Esc closes", "dim", inner)
             return
-        self.visible, self.total = height - 7, len(body)
+        self.visible, self.total = height - 9, len(body)
         if self.reveal:
             lines = [n for n, row in enumerate(body) if row.key == self.focus]
             if lines:
@@ -683,8 +683,8 @@ class Settings:
                 self.offset = max(self.offset, lines[-1] - self.visible + 1)
             self.reveal = False
         self.offset = max(0, min(self.offset, max(0, len(body) - self.visible)))
-        canvas.scrollbar(y + 1, x + width - 2, self.visible, self.offset, self.visible, self.total, True)
-        for line, row in enumerate(body[self.offset:self.offset + self.visible], y + 1):
+        canvas.scrollbar(y + 2, x + width - 2, self.visible, self.offset, self.visible, self.total, True)
+        for line, row in enumerate(body[self.offset:self.offset + self.visible], y + 2):
             for column, text, style in row.parts:
                 if column < inner - 2:
                     canvas.put(line, x + 2 + column, text, style, inner - 2 - column)

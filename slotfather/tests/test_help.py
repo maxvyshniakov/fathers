@@ -64,7 +64,8 @@ class HelpTests(unittest.TestCase):
         text = canvas.render(False)
         lines = text.splitlines()
         info = canvas.help_view
-        self.assertIn(lines[info.y + 1][info.x + info.width - 2], "┃╻╹", "the thumb at the top: more below")
+        self.assertEqual(" ", lines[info.y + 1][info.x + info.width - 2], "a blank padding row over the lines")
+        self.assertIn(lines[info.y + 2][info.x + info.width - 2], "┃╻╹", "the thumb at the top: more below")
         self.assertNotRegex(text, r"↓ \d+ more|↑ \d+ above", "no row counts")
         self.assertNotIn("…", text, "help paragraphs wrap instead of truncating")
         for parts in view.help_lines(30):
@@ -73,8 +74,10 @@ class HelpTests(unittest.TestCase):
         view.draw_help(canvas)
         at_end = canvas.render(False)
         info = canvas.help_view
-        self.assertIn(at_end.splitlines()[info.y + info.visible][info.x + info.width - 2], "┃╻╹",
-                      "the thumb at the bottom")
+        self.assertIn(at_end.splitlines()[info.y + 1 + info.visible][info.x + info.width - 2], "┃╻╹",
+                      "the thumb at the bottom of the lines")
+        self.assertFalse(at_end.splitlines()[info.y + 2 + info.visible][info.x + 1:info.x + info.width - 1].strip(),
+                         "a blank padding row under them, also at the end")
         self.assertIn("Built-in.", at_end)
         self.assertIn("esc close", at_end)
         self.assertEqual(4, canvas.scroll["requests"])

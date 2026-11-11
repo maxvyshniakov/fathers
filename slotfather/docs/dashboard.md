@@ -65,8 +65,10 @@ without a known background the row is bold. Every panel that overflows (QUEUE,
 EVENTS, the details, Settings, help, the changelog) shows a scrollbar thumb, no
 track, in the padding cell left of its right frame: muted, or in the foreground on
 the focused panel, as long as the visible share and moving in half cells (`╻` and
-`╹` at its ends). There are no row counts; content starts right under the top
-border. The blank separator between running and waiting requests is not selectable.
+`╹` at its ends). There are no row counts. Like SLOTS and MACHINE, every scrollable
+panel (QUEUE, EVENTS, the details, help, the changelog, Settings) keeps one blank row under
+its top border and one over its bottom border; its content and the thumb run between them.
+The blank separator between running and waiting requests is not selectable.
 
 With help open, arrows / j / k and the wheel scroll its text; PgUp / PgDown or
 Space scroll a page, and Home / End or g / G jump to the ends. `?` / Esc close

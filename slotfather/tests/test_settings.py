@@ -73,6 +73,23 @@ class PanelCase(SlotCase):
 
 
 class RenderTests(PanelCase):
+    def test_the_list_keeps_a_blank_row_over_and_under_it_also_scrolled(self) -> None:
+        dialog = self.dialog()
+        for presses in (0, 30):  # the top, then far down the list
+            for _ in range(presses):
+                dialog.key("down")
+            canvas = self.view.Canvas(90, 20)
+            dialog.draw(canvas, idle())
+            x, y, width, height = dialog.bounds
+            rows = canvas.render(False).split("\n")
+            first, last = y + 2, y + 1 + dialog.visible
+            self.assertFalse(rows[y + 1][x + 1:x + width - 1].strip(), "a blank row under the top border")
+            self.assertFalse(rows[last + 1][x + 1:x + width - 1].strip(), "a blank row under the list")
+            thumb = [row for row in range(y, y + height) if rows[row][x + width - 2] in "┃╻╹"]
+            self.assertTrue(thumb, "the list overflows at this height")
+            self.assertGreaterEqual(thumb[0], first)
+            self.assertLessEqual(thumb[-1], last)
+
     def test_idle(self) -> None:
         self.assert_snapshot("idle", self.panel(self.dialog(), idle()))
 
