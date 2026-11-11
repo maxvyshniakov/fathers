@@ -1,8 +1,9 @@
 """Dashboard colours from the terminal's own theme (#14), like CSS tokens with color-mix() for what it lacks.
 
 Tokens are palette indices or the terminal's default foreground, so they follow the theme live: text, bold, hotkeys,
-cursor and status use the default foreground (SGR 39); muted text and every frame share bright black (8), one token;
-ok, warn, bad and accent are ANSI green, yellow, red and blue. The surfaces the palette lacks (the selected row's
+cursor and status use the default foreground (SGR 39); ok, warn, bad and accent are ANSI green, yellow, red and blue.
+Muted text and every frame share one token: bright black (8), or, where the terminal reports its foreground and
+background, a mix of the two that reads at 4.5:1 and stays dimmer than the text (muted()). The surfaces the palette lacks (the selected row's
 background, a bar's track and a free slot) are mixed in OKLab from the background and foreground the terminal reports
 (OSC 10/11). Without a report COLORFGBG says light or dark; without that either, they are drawn with no background
 colour. Holder colours are ours: per holder a vivid fill (blocks, bars, the selection) and an ink of the same hue that
@@ -32,6 +33,9 @@ MODE_LABELS = {"auto": "Auto", "terminal": "Terminal", "builtin": "Built-in"}
 
 # Surfaces: the share of the foreground mixed into the background.
 SELECTION_MIX, TRACK_MIX, FREE_MIX = 0.10, 0.15, 0.20
+# Muted text and frames (owner, 2026-11-11): this share of the way from the foreground to the background, at least
+# MUTED_FLOOR against the background and at most MUTED_CAP of the foreground's own contrast
+MUTED_MIX, MUTED_FLOOR, MUTED_CAP = 0.42, 4.5, 0.85
 TINT_MIX = 0.16  # a selected running row's background: this much of its holder fill in the background (#15)
 TINT_KEEP = 0.9  # the share of its ink's contrast a tint keeps; a fill that would take more is mixed in less
 # Holder colours (owner, 2026-11-11, the "Neon" set): two tokens per holder. The fill paints what needs no text
@@ -436,6 +440,8 @@ def resolve(mode: str, answers: Optional[Answers] = None,
         ink = foreground or ((0, 0, 0) if light else (255, 255, 255))
         styles["track"] = (mix(background, ink, TRACK_MIX), "")
         styles["free"] = (mix(background, ink, FREE_MIX), "")
+        if foreground is not None:  # muted text and every frame: ours, not bright black, which many themes hide
+            styles["dim"] = (muted(foreground, background), "")
         selection: Optional[RGB] = mix(background, ink, SELECTION_MIX)
         tints = {f"h{n}": tint(background, holder.fill, holder.ink) for n, holder in enumerate(holders)}
     else:
@@ -443,6 +449,26 @@ def resolve(mode: str, answers: Optional[Answers] = None,
     styles.update({f"chart{n}": (colour, "") for n, colour in enumerate(chart_colours(mode, answers, background))})
     return Theme(mode, styles, selection, None, "■" if mixing else "░", "block" if mixing else "outline",
                  light, background, source, tints)
+
+
+def muted(foreground: RGB, background: RGB) -> RGB:
+    """Muted text and frames from the theme's own foreground and background: MUTED_MIX of the way from the foreground
+    to the background, moved back toward the foreground until it reads at MUTED_FLOOR, and toward the background
+    while it keeps more than MUTED_CAP of the foreground's contrast. A theme whose foreground itself reads under the
+    floor (Solarized Light) keeps the cap: dimmer than its text, never stronger."""
+    def reads(step: int) -> float:
+        return contrast(mix(foreground, background, step / 100), background)
+
+    plain = contrast(foreground, background)
+    # The floor wins over the cap where a theme cannot have both (Solarized Dark: its text reads at 4.75:1)
+    floor = MUTED_FLOOR if plain >= MUTED_FLOOR else MUTED_CAP * plain
+    cap = max(MUTED_CAP * plain, floor)
+    step = round(MUTED_MIX * 100)
+    while step > 0 and reads(step) < floor:
+        step -= 1
+    while step < 100 and reads(step) > cap and reads(step + 1) >= floor:
+        step += 1
+    return mix(foreground, background, step / 100)
 
 
 def tint(background: RGB, fill: RGB, ink: RGB) -> RGB:

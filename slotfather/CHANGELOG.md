@@ -25,6 +25,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- Muted text and panel frames are readable in themes whose bright black sits close to the background (Seti,
+  One Dark, Solarized Dark, Dracula): the dashboard mixes them from the theme's own text and background colours, at
+  4.5:1 or more and dimmer than the text, and recomputes them when the terminal switches between light and dark.
 - Settings: an arrow change still waiting to be saved is no longer saved over a capacity change made
   elsewhere meanwhile, nor under another capacity mode; the panel says the capacity changed instead.
 - Settings: a refused save when moving to another setting stays visible, and Esc on a panel too small to
@@ -110,6 +113,10 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 - Smaller requests may pass a blocked waiter for a while.
 
 ### Fixed
+
+- Muted text and panel frames are readable in themes whose bright black sits close to the background (Seti,
+  One Dark, Solarized Dark, Dracula): the dashboard mixes them from the theme's own text and background colours, at
+  4.5:1 or more and dimmer than the text, and recomputes them when the terminal switches between light and dark.
 
 - A swap guard that serialised the whole queue.
 

@@ -172,9 +172,14 @@ the history does not reach back.
 ## Colours
 
 The dashboard takes its colours from the terminal's theme (#14), so it reads on light and dark backgrounds alike.
-Text, bold, hotkeys, the cursor and the status line use the terminal's own foreground; muted text and every panel
-frame share one token, ANSI bright black; ok, warn and bad are ANSI green, yellow and red, and the accent is ANSI
-blue. They are palette entries, so they follow a theme change at once.
+Text, bold, hotkeys, the cursor and the status line use the terminal's own foreground; ok, warn and bad are ANSI
+green, yellow and red, and the accent is ANSI blue. They are palette entries, so they follow a theme change at once.
+Muted text and every panel frame share one token, which the dashboard derives itself where the terminal reports its
+foreground and background: 42% of the way from the foreground to the background in OKLab, moved back toward the
+foreground until it reads at 4.5:1, and kept at no more than 85% of the foreground's own contrast so it stays
+dimmer. Many themes put ANSI bright black close to their background (Seti: 1.5:1; One Dark: 2.3:1). Where the
+foreground itself reads under 4.5:1 (Solarized Light, 4.1:1) the muted token keeps 85% of it, dimmer than the text
+and never stronger. Without both colours, and in `Terminal` mode, it is ANSI bright black.
 
 What a palette lacks is mixed from the terminal's background and foreground, like `color-mix()` in OKLab: the
 selected row's background (10% foreground), a bar's empty track (15%) and a free slot (20%). Selected text keeps its

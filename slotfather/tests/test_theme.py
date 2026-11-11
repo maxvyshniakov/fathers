@@ -180,6 +180,72 @@ def cast_rgb(colour: Any) -> tuple[int, int, int]:
     return colour  # type: ignore[return-value]
 
 
+# Real themes' (foreground, background, bright black): Seti and Pro Light (iTerm2), One Dark, Solarized, Dracula,
+# GitHub Light Default
+MUTED_THEMES = {"Seti": hexes("#cacecd #111213 #323232"), "Pro Light": hexes("#191919 #ffffff #9f9f9f"),
+                "One Dark": hexes("#abb2bf #282c34 #5c6370"), "Solarized Dark": hexes("#839496 #002b36 #002b36"),
+                "Solarized Light": hexes("#657b83 #fdf6e3 #002b36"), "Dracula": hexes("#f8f8f2 #282a36 #6272a4"),
+                "GitHub Light": hexes("#1f2328 #ffffff #57606a")}
+
+
+class MutedTests(unittest.TestCase):
+    def test_muted_text_reads_on_every_theme_and_stays_dimmer_than_its_text(self) -> None:
+        for name, (fg, bg, bright_black) in MUTED_THEMES.items():
+            with self.subTest(name=name):
+                found = theme.resolve("auto", answered(fg=fg, bg=bg, p8=bright_black), {})
+                dim = cast_rgb(found.styles["dim"][0])
+                plain, muted = theme.contrast(fg, bg), theme.contrast(dim, bg)
+                self.assertLess(muted, plain - 0.1, "dimmer than the text")
+                if plain >= 4.5:
+                    self.assertGreaterEqual(muted, 4.5, f"{theme.contrast(bright_black, bg):.2f}:1 with bright black")
+                else:  # Solarized Light: its own text reads at 4.13:1; muted keeps about 85% of that, never more
+                    self.assertGreaterEqual(muted, 0.85 * plain)
+                if 0.85 * plain >= 4.5:
+                    self.assertLessEqual(muted, 0.85 * plain + 0.05, "visibly dimmer")
+                self.assertAlmostEqual(theme.distance(fg, bg), theme.distance(fg, dim) + theme.distance(dim, bg),
+                                       delta=0.01, msg="on the way from the theme's text to its background")
+
+    def test_bright_black_stays_where_a_colour_is_unknown_and_in_terminal_mode(self) -> None:
+        fg, bg, _ = MUTED_THEMES["Seti"]
+        self.assertEqual(8, theme.resolve("auto", answered(bg=bg), {}).styles["dim"][0], "no foreground")
+        self.assertEqual(8, theme.resolve("auto", answered(fg=fg), {}).styles["dim"][0], "no background")
+        self.assertEqual(8, theme.resolve("auto", theme.Answers(), {}).styles["dim"][0])
+        self.assertEqual(8, theme.resolve("terminal", answered(fg=fg, bg=bg), {}).styles["dim"][0])
+        self.assertEqual((245, "d"), theme.resolve("builtin", answered(fg=fg, bg=bg), {}).styles["dim"])
+        explicit = theme.resolve("auto", None, {"SLOTFATHER_TERMINAL_BG": "#111213", "SLOTFATHER_TERMINAL_FG": "#cacecd"})
+        self.assertEqual(theme.muted(fg, bg), explicit.styles["dim"][0], "the environment's colours too")
+
+    def test_a_scheme_switch_recomputes_it(self) -> None:
+        answers = answered(fg=MUTED_THEMES["Seti"][0], bg=MUTED_THEMES["Seti"][1])
+        dark = theme.resolve("auto", answers, {}).styles["dim"][0]
+        answers.feed("\x1b[?997;2n")  # the light scheme: the dashboard asks again and the answers replace these
+        for name, colour in (("10", MUTED_THEMES["Pro Light"][0]), ("11", MUTED_THEMES["Pro Light"][1])):
+            answers.feed(f"\x1b]{name};rgb:{colour[0]:02x}/{colour[1]:02x}/{colour[2]:02x}\x1b\\")
+        light = theme.resolve("auto", answers, {}).styles["dim"][0]
+        self.assertEqual(theme.muted(*MUTED_THEMES["Pro Light"][:2]), light)
+        self.assertNotEqual(dark, light)
+
+    def test_frames_and_muted_text_share_the_token(self) -> None:
+        tool = importlib.import_module("slotfather.dashboard")
+        before = tool.current_theme
+        try:
+            fg, bg, _ = MUTED_THEMES["Seti"]
+            tool.set_theme(theme.resolve("auto", answered(fg=fg, bg=bg), {}))
+            canvas = tool.Canvas(40, 6)
+            canvas.box(0, 0, 6, 40, "QUEUE", name="requests")  # unfocused: QUEUE is not the canvas's focus
+            canvas.focus = "details"
+            canvas.box(0, 0, 6, 40, "QUEUE", name="requests")
+            canvas.put(2, 3, "label", "dim")
+            self.assertEqual("dim", canvas.cells[3][0][1], "the frame")
+            line = canvas.lines(True)[2]
+            dim = cast_rgb(tool.current_theme.styles["dim"][0])
+            code = "\x1b[0;38;2;%d;%d;%dm" % dim
+            self.assertTrue(line.startswith(code + "│"), line[:40])
+            self.assertIn(code + "label", line, "muted text in the same colour")
+        finally:
+            tool.set_theme(before)
+
+
 class GradientTests(unittest.TestCase):
     def test_the_chart_runs_from_the_themes_blue_to_its_red_in_oklab(self) -> None:
         blue, red = (0x7A, 0xA6, 0xDA), (0xD5, 0x4E, 0x53)
@@ -499,8 +565,9 @@ class OnceTests(SlotCase):
             drawn = self.tool("dashboard", "--once", "--color", "--width", "140", "--height", "40", **environ).stdout
             for share in (theme.TRACK_MIX, theme.FREE_MIX):  # the bar tracks and the free slots
                 self.assertIn("\x1b[0;38;2;%d;%d;%dm" % theme.mix(bg, fg, share), drawn)
-            self.assertIn("\x1b[0;90m╭", drawn, "frames in the muted token")
-            self.assertIn("\x1b[0;90mstatus", drawn, "muted text in the same token")
+            muted = "\x1b[0;38;2;%d;%d;%dm" % theme.muted(fg, bg)  # ours, from the theme's own fg and bg
+            self.assertIn(muted + "╭", drawn, "frames in the muted token")
+            self.assertIn(muted + "status", drawn, "muted text in the same token")
         unknown = self.tool("dashboard", "--once", "--color", "--width", "140", "--height", "40")
         self.assertNotIn("48;2;", unknown.stdout, "nothing known: no background colour at all")
         self.assertIn("\x1b[0;1m", unknown.stdout)
