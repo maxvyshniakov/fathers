@@ -57,7 +57,7 @@ class DetailsTests(unittest.TestCase):
         view.mouse_action(canvas, ('mouse', 65, 25, 3, True), scroll, 0)
         canvas = draw()
         self.assertNotIn('compiler', canvas.render(False))
-        self.assertIn('above', canvas.render(False))
+        self.assertNotIn('above', canvas.render(False), 'the scrollbar shows overflow, no row counts')
         for _ in range(20):
             view.mouse_action(canvas, ('mouse', 65, 25, 3, True), scroll, 0)
             canvas = draw()

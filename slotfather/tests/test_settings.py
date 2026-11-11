@@ -149,17 +149,16 @@ class RenderTests(PanelCase):
         dialog = self.dialog()
         text = self.panel(dialog, idle(), width=40, height=18)
         self.assertIn("SETTINGS", text)
-        self.assertRegex(text, r"↓ \d+ more")
+        self.assertRegex(text, r"[┃╻╹]│", "a scrollbar, no row counts")
+        self.assertNotRegex(text, r"↓ \d+ more|↑ \d+ above")
         self.assertEqual("close", dialog.mouse(("mouse", 0, 0, 0, True)), "a click outside closes the panel")
         self.assertEqual("handled", dialog.mouse(("mouse", 65, 0, 0, True)), "the wheel outside does nothing")
         self.assertEqual("mode", dialog.focus)
         for _ in range(12):
             dialog.mouse(("mouse", 65, 10, 5, True))
         text = self.panel(dialog, idle(), width=40, height=18)
-        self.assertRegex(text, r"↑ \d+ above")
         self.assertIn("Refresh every", text)
         self.assertIn("esc close", text.split("\n")[-2], "a narrow footer keeps the way out")
-        self.assertNotRegex(text, r"↓ \d+ more")
         self.assertEqual("close", dialog.key("esc"))
         self.assertFalse(self.state.exists(), "viewing settings creates no queue")
 
@@ -436,6 +435,48 @@ class KeyTests(PanelCase):
         self.assertEqual({"slots": 5}, self.saved_capacity())
         self.assertIn("Capacity changed elsewhere: now 5 slots", self.panel(second, idle()))
 
+    def test_a_pending_change_is_never_saved_over_a_change_made_elsewhere(self) -> None:
+        # The audit's probe: a refresh during the settle took the other client's bytes and mode as its own, and
+        # "5 slots" was saved as 5 GiB per slot over the other client's change.
+        self.assertEqual(0, self.tool("slots", "4").returncode)
+        dialog = self.dialog()
+        dialog.focus = "amount"
+        self.clock.now += 0.5
+        dialog.key("right")  # 5 slots, pending
+        self.assertEqual(0, self.tool("slots", "memory", "8").returncode)  # another client
+        self.clock.now += self.settings.READ_EVERY
+        self.panel(dialog, idle())  # drawing refreshes the panel
+        self.assertFalse(self.settle(dialog), "nothing is saved")
+        saved = self.saved_capacity()
+        assert saved is not None
+        self.assertEqual("memory", saved["mode"], "the other client's change stands")
+        self.assertEqual(8, saved["gib_per_slot"])
+        self.assertIn("changed elsewhere", self.panel(dialog, idle()), "and the panel says so")
+
+    def test_a_refused_save_on_moving_on_stays_visible(self) -> None:
+        self.assertEqual(0, self.tool("slots", "4").returncode)
+        dialog = self.dialog()
+        dialog.focus = "amount"
+        dialog.key("right")
+        self.assertEqual(0, self.tool("slots", "6").returncode)  # elsewhere, not read yet
+        self.assertEqual("handled", dialog.key("down"))
+        self.assertEqual({"slots": 6}, self.saved_capacity())
+        self.assertIn("changed elsewhere", self.panel(dialog, idle()), "the refusal is not wiped by the move")
+
+    def test_esc_on_a_small_panel_cancels_a_pending_change_visibly(self) -> None:
+        self.assertEqual(0, self.tool("slots", "4").returncode)
+        dialog = self.dialog()
+        dialog.focus = "amount"
+        dialog.key("right")
+        self.panel(dialog, idle(), width=20, height=8)  # too small: only the ways out work
+        self.assertTrue(dialog.small)
+        self.assertEqual("handled", dialog.key("esc"), "the first Esc cancels")
+        self.assertIsNone(dialog.pending)
+        self.assertIn("cancelled", (dialog.flash or ("",))[0])
+        self.assertFalse(self.settle(dialog), "and nothing is saved later")
+        self.assertEqual({"slots": 4}, self.saved_capacity())
+        self.assertEqual("close", dialog.key("esc"))
+
     def test_a_refused_change_says_why_and_keeps_the_value(self) -> None:
         dialog = self.dialog()
         dialog.key("right")
@@ -540,7 +581,7 @@ class TerminalTests(SlotCase):
                         return
                 self.fail(f"terminal did not show {fragment!r}: {screen.decode('utf-8', 'replace')!r}")
 
-            receive("─ QUEUE ")
+            receive(" QUEUE ")
             os.write(master, b"s")
             receive("STATUS")
             os.write(master, b"\x1b[C")  # Capacity mode: Automatic -> Fixed, shown at once
@@ -554,7 +595,7 @@ class TerminalTests(SlotCase):
             receive("Edit cancelled")
             self.assertIn("6 slots (saved)", self.tool("slots").stdout)
             os.write(master, b"\x1b")
-            receive("─ QUEUE ")
+            receive(" QUEUE ")
             os.write(master, b"q")
             deadline = time.monotonic() + 5
             while process.poll() is None and time.monotonic() < deadline:

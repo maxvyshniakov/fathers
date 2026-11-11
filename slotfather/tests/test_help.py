@@ -62,15 +62,19 @@ class HelpTests(unittest.TestCase):
         canvas.scroll = {"requests": 4, "processes": 2}
         view.draw_help(canvas)
         text = canvas.render(False)
-        self.assertRegex(text, r"↓ \d+ more")
+        lines = text.splitlines()
+        info = canvas.help_view
+        self.assertIn(lines[info.y + 1][info.x + info.width - 2], "┃╻╹", "the thumb at the top: more below")
+        self.assertNotRegex(text, r"↓ \d+ more|↑ \d+ above", "no row counts")
         self.assertNotIn("…", text, "help paragraphs wrap instead of truncating")
         for parts in view.help_lines(30):
             self.assertLessEqual(view.text_width("".join(text for text, _ in parts)), 30)
         self.assertEqual("scroll", view.help_key(canvas, "end", canvas.scroll))
         view.draw_help(canvas)
         at_end = canvas.render(False)
-        self.assertIn("↑", at_end)
-        self.assertNotRegex(at_end, r"↓ \d+ more")
+        info = canvas.help_view
+        self.assertIn(at_end.splitlines()[info.y + info.visible][info.x + info.width - 2], "┃╻╹",
+                      "the thumb at the bottom")
         self.assertIn("Built-in.", at_end)
         self.assertIn("esc close", at_end)
         self.assertEqual(4, canvas.scroll["requests"])
@@ -89,7 +93,7 @@ class HelpTests(unittest.TestCase):
                 view.dashboard_draw(canvas, contents, help_open=True)
                 text = canvas.render(False)
                 self.assertIn("HELP", text)
-                self.assertRegex(text, r"↓ \d+ more")
+                self.assertRegex(text, r"[┃╻╹]│", "the scrollbar shows there is more")
                 self.assertIn("Slotfather", text.splitlines()[-1])
 
     def test_modal_keyboard_and_wheel_do_not_change_underlying_tables_or_selection(self) -> None:
@@ -161,7 +165,7 @@ class HelpTests(unittest.TestCase):
                             return plain
                     self.fail(f"terminal did not show {fragment!r}: {screen.decode('utf-8', 'replace')!r}")
 
-                receive("─ QUEUE ")
+                receive(" QUEUE ")
                 before = {path.relative_to(state): path.read_bytes() for path in state.rglob("*") if path.is_file()}
                 screen.clear()
                 os.write(master, b"?")
@@ -174,7 +178,7 @@ class HelpTests(unittest.TestCase):
                 receive("next panel")
                 screen.clear()
                 os.write(master, b"\x1b")
-                receive("─ QUEUE ")
+                receive(" QUEUE ")
                 screen.clear()
                 os.write(master, b"?\x1b[F")
                 receive("Built-in.")

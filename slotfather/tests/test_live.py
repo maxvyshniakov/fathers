@@ -131,6 +131,20 @@ class FocusTests(unittest.TestCase):
                     self.assertEqual("text" if name == focus else "dim", cell[1], name)
                 self.assertEqual("\x1b[0m", view.sgr("text", False), "the foreground token: no colour code")
 
+    def test_the_focused_frame_is_heavy_and_the_others_light_with_clean_corners(self) -> None:
+        view = tool()
+        canvas = view.Canvas(80, 20)
+        canvas.focus = "details"
+        canvas.box(0, 0, 10, 40, "QUEUE", name="requests")
+        canvas.box(0, 40, 10, 40, "DETAILS", name="details")
+        canvas.box(10, 0, 10, 80, "EVENTS", name="events")
+        rows = ["".join(cell[0] for cell in row) for row in canvas.cells]
+        self.assertEqual(("╭", "╮", "╰", "╯"), (rows[0][0], rows[0][39], rows[9][0], rows[9][39]), "QUEUE light")
+        self.assertEqual(("┏", "┓", "┗", "┛"), (rows[0][40], rows[0][79], rows[9][40], rows[9][79]), "DETAILS heavy")
+        self.assertEqual(("┃", "━"), (rows[5][40], rows[9][60]))
+        self.assertEqual(("╭", "╮"), (rows[10][0], rows[10][79]), "a light corner under a heavy one, unmixed")
+        self.assertEqual("+=", canvas.lines(False, ascii_only=True)[0][40:42])
+
     def test_a_click_focuses_the_panel_it_lands_in(self) -> None:
         view = tool()
         canvas = view.Canvas(80, 20)
@@ -153,17 +167,17 @@ class FocusTests(unittest.TestCase):
             return canvas
 
         def thumb(canvas: Any) -> list[int]:
-            return [y for y in range(1, 13) if canvas.cells[y][78][0] == "┃"]
+            return [y for y in range(1, 13) if canvas.cells[y][78][0] in "┃╻╹"]
 
         canvas = draw()
         top = thumb(canvas)
-        self.assertEqual(2, top[0], "the first content row")
-        for key, expected in (("down", 1), ("j", 2), ("page_down", 11), ("up", 10), ("end", 30), ("home", 0)):
+        self.assertEqual(1, top[0], "the first content row")
+        for key, expected in (("down", 1), ("j", 2), ("page_down", 13), ("up", 12), ("end", 28), ("home", 0)):
             self.assertTrue(view.scroll_panel(canvas, scroll, "events", key))
             self.assertEqual(expected, scroll["events"], key)
             canvas = draw()
-        scroll["events"] = 30
-        self.assertEqual(11, thumb(draw())[-1], "the last page puts the thumb at the bottom")
+        scroll["events"] = 28
+        self.assertEqual(12, thumb(draw())[-1], "the last page puts the thumb at the bottom")
         self.assertFalse(view.scroll_panel(canvas, scroll, "events", "x"))
 
     def test_events_follow_the_newest_at_the_top_and_stay_put_when_scrolled(self) -> None:
@@ -181,6 +195,69 @@ class FocusTests(unittest.TestCase):
         self.assertIn("↑ 3 new", canvas.render(False))
         scroll["events"] = 0  # Home
         self.assertEqual(0, view.follow_events(scroll, fresh, newest, [event(n) for n in range(15)])[0])
+
+
+def sample_model() -> dict[str, Any]:
+    now = datetime.datetime.now(datetime.timezone.utc)
+    holder = dict(label="build", kind="held", count=1, pid=10, style="h0", cpu=50, since=now, granted=now,
+                  rss=1024, procs=1, queue="", cmd="work", tree=[], key=(10, None), priority="normal", ticket=None,
+                  meta="", context={}, workdir="", yieldable=False, yields=0, asked="", asked_at=None)
+    return dict(holders=[holder], waiters=[], slots=4, cores=12, saved=False, averages=(1.0, 1.0, 1.0),
+                advice=dict(unleased_load=0, jobs=4, capacity=4), admission=3, memory_block=None,
+                memory=dict(level=1, used=512, total=1024, swap_total=0, swap_free=None), history=[],
+                events=[event(n) for n in range(5)], updated=now, order="backfill", start=None, limit=2700, used=1,
+                free=3)
+
+
+class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
+    """The audit's probe: with DETAILS focused while loading (or not drawn), j moved the QUEUE selection."""
+
+    def model(self) -> dict[str, Any]:
+        now = datetime.datetime.now(datetime.timezone.utc)
+
+        def holder(n: int) -> dict[str, Any]:
+            return dict(label=f"row{n}", kind="held", count=1, pid=10 + n, style="h0", cpu=50, since=now,
+                        granted=now, rss=1024, procs=1, queue="", cmd="work", tree=[], key=(10 + n, None),
+                        priority="normal", ticket=None, meta="", context={}, workdir="", yieldable=False, yields=0,
+                        asked="", asked_at=None, idle_since=None)
+
+        return {"holders": [holder(n) for n in range(3)], "waiters": [], "slots": 4, "cores": 12, "free": 1,
+                "used": 3}
+
+    def test_details_loading_or_empty_still_take_their_keys(self) -> None:
+        view = tool()
+        now = datetime.datetime.now(datetime.timezone.utc)
+        empty: dict[str, Any] = {"holders": [], "waiters": [], "slots": 4, "cores": 12}
+        for loading, model in ((1, self.model()), (None, empty)):
+            canvas = view.Canvas(60, 20)
+            canvas.focus, canvas.loading = "details", loading
+            view.draw_detail(canvas, 0, 0, 20, 60, model, 1, None, now)
+            self.assertIn("details", canvas.tables, "drawn, so it can hold the focus")
+            for key in ("j", "k", "down", "page_down", "home"):
+                self.assertTrue(view.panel_key(canvas, {}, "details", key), f"{key} is the panel's")
+
+    def test_tab_goes_by_columns_from_the_layout(self) -> None:
+        view = tool()
+        canvas = view.Canvas(160, 40)
+        view.dashboard_draw(canvas, sample_model())
+        order = ["requests"]
+        for _ in range(3):
+            order.append(view.next_panel(canvas, order[-1], 1))
+        self.assertEqual(["requests", "events", "details", "requests"], order, "left column down, then the right")
+        self.assertEqual("details", view.next_panel(canvas, "requests", -1), "Shift-Tab backwards")
+        narrow = view.Canvas(100, 60)
+        view.dashboard_draw(narrow, sample_model())
+        self.assertEqual("details", view.next_panel(narrow, "requests", 1), "one column: top to bottom")
+        self.assertEqual("events", view.next_panel(narrow, "details", 1))
+
+    def test_tab_skips_panels_that_are_not_drawn(self) -> None:
+        view = tool()
+        canvas = view.Canvas(80, 20)
+        canvas.tables = {"requests": {"x": 0, "y": 0}, "events": {"x": 0, "y": 10}}
+        self.assertEqual("events", view.next_panel(canvas, "requests", 1))
+        self.assertEqual("requests", view.next_panel(canvas, "events", 1))
+        self.assertEqual("events", view.next_panel(canvas, "requests", -1))
+        self.assertEqual("requests", view.next_panel(canvas, "details", 1), "a focus that lost its panel")
 
 
 class ChangelogTests(unittest.TestCase):
@@ -275,6 +352,7 @@ class LiveTests(SlotCase):
                                    stdout=slave, stderr=slave, env=env, start_new_session=True)
         os.close(slave)
         screen = bytearray()
+        self.raw = screen
 
         def receive(check: Callable[[str], object], seconds: float = 8, what: str = "") -> str:
             deadline = time.monotonic() + seconds
@@ -331,11 +409,19 @@ class LiveTests(SlotCase):
         self.started("scroller")
         master, _, receive = self.start(dict(self.env), rows=20)
         receive(lambda text: re.search(r"label\s+scroller", text), 10, "the details")
-        os.write(master, b"\t")
+        os.write(master, b"\t\t")  # by columns: QUEUE, EVENTS, then DETAILS
         receive(lambda text: "↑↓ scroll" in text, 3, "the scroll hint")
         os.write(master, b"\x1b[B\x1b[B")
-        mark = len(receive(lambda text: "↑ 2 above" in text, 3, "the details scrolled two lines"))
-        os.write(master, b"\x1b[Z")  # back-tab: from the details back to QUEUE
+        def top_row(_: str) -> bool:  # the details' first row, as last drawn, is now their third fact
+            rows: dict[int, str] = {}
+            for found in re.finditer(r"\x1b\[(\d+);1H([^\n]*?)(?=\x1b\[\d+;1H|$)",
+                                     self.raw.decode("utf-8", "replace"), re.S):
+                rows[int(found[1])] = PLAIN.sub("", found[2])
+            cells = re.split("[│┃]", rows.get(2, ""))
+            return len(cells) >= 3 and "priority" in cells[-2]
+
+        mark = len(receive(top_row, 3, "the details scrolled two lines"))
+        os.write(master, b"\t")  # Tab: from DETAILS, the last column, back to QUEUE
         receive(lambda text: "↑↓ select" in text[mark:], 3, "QUEUE focused again")
         os.write(master, b"q")
         self.release("scroller")

@@ -64,7 +64,7 @@ def set_theme(theme: _theme.Theme) -> None:
 
 ASCII = str.maketrans({"🮅": "#", "■": "#", "▪": "#", "◌": "o", "□": "o", "▫": "o", "▶": ">", "▉": "#", "▌": "+", "▐": "|", "█": "#", "▓": "%", "▒": "=", "░": ".", "·": ".", "●": "*", "…": "~", "─": "-", "│": "|",
                        "╭": "+", "╮": "+", "╰": "+", "╯": "+", "↑": "^", "↓": "v", "↗": "/", "↘": "\\", "→": ">",
-                       "←": "<", "≈": "~", "×": "x", "—": "-", "⏸": "=", "▭": "o", "−": "-",  "┃": "#", "▁": "_", "▂": "_", "▃": "-", "▄": "-",
+                       "←": "<", "≈": "~", "×": "x", "—": "-", "⏸": "=", "▭": "o", "−": "-", "╻": "#", "╹": "#", "┏": "+", "┓": "+", "┗": "+", "┛": "+", "━": "=",  "┃": "#", "▁": "_", "▂": "_", "▃": "-", "▄": "-",
                        "▅": "=", "▆": "=", "▇": "#"})
 GRANTED = re.compile(r"granted (\d+) to (.*) \(pid (\d+)\)$")
 RELEASED = re.compile(r"released (\d+) \(\d+-(\d+)\.json\)$")
@@ -190,6 +190,7 @@ class Canvas:
         self.loading: int | None = None  # the details' spinner frame while they load in the background, else None
         self.fresh_events = 0  # events that arrived while EVENTS was scrolled down
         self.version_at: tuple[int, int, int] | None = None  # the footer version's row and columns: the changelog
+        self.hint_hits: list[tuple[int, int, int, str]] = []  # (row, from, to, key) of every footer hint drawn
         self.width, self.height = max(0, width), max(0, height)
         self.cells = [[[" ", "text", False] for _ in range(self.width)] for _ in range(self.height)]
 
@@ -267,9 +268,26 @@ class Canvas:
         if right:
             self.right(y, x + width - 2, right, "dim")
         for index, (key, action) in enumerate(hints):
-            start = self.segments(y, start, [(key, "key"), (f" {action}", "dim")], x + width - 2 - start)
+            start = self.hint(y, start, key, action, x + width - 2 - start)
             if index < len(hints) - 1:
                 start += HINT_GAP
+
+    def hint(self, y: int, x: int, key: str, action: str, width: int | None = None) -> int:
+        """One footer hint, key and label, drawn and made a click target that does what its key does (HINT_KEYS):
+        the one registry both drawing and clicks use. The column after it."""
+        end = self.segments(y, x, [(key, "key"), (f" {action}", "dim")], width)
+        presses = HINT_KEYS.get(key)
+        if isinstance(presses, tuple):  # ↑↓, ←→: each arrow its own key; the label does nothing
+            for offset, press in enumerate(presses):
+                self.hint_hits.append((y, x + offset, x + offset + 1, press))
+        elif presses:
+            self.hint_hits.append((y, x, end, presses))
+        return end
+
+    def hint_at(self, mx: int, my: int) -> str | None:
+        """The key a click on a footer hint presses, None between hints."""
+        return next((press for y, start, end, press in reversed(self.hint_hits) if y == my and start <= mx < end),
+                    None)
 
     def scrollbar(self, y: int, x: int, height: int, offset: int, visible: int, total: int,
                   focused: bool = False) -> None:
@@ -280,12 +298,14 @@ class Canvas:
         and at the bottom on the last page. Nothing while everything fits."""
         if total <= visible or height <= 0 or visible <= 0:
             return
-        length = min(height, max(1, round(height * visible / total)))
-        top = round((height - length) * min(offset, total - visible) / (total - visible))
-        for row in range(height):
-            thumb = top <= row < top + length
-            self.put(y + row, x, SCROLL_THUMB if thumb else SCROLL_TRACK,
-                     ("text" if focused else "dim") if thumb else "track")
+        halves = 2 * height  # in half cells, so the thumb moves in half-cell steps (owner)
+        length = min(halves, max(1, round(halves * visible / total)))
+        start = round((halves - length) * min(offset, total - visible) / (total - visible))
+        for row in range(height):  # the thumb alone, no track (owner)
+            upper, lower = start <= 2 * row < start + length, start <= 2 * row + 1 < start + length
+            if upper or lower:
+                glyph = SCROLL_THUMB if upper and lower else THUMB_LOWER if lower else THUMB_UPPER
+                self.put(y + row, x, glyph, "text" if focused else "dim")
 
     def select(self, y: int, start: int, end: int, tint: bool | str = True) -> None:
         """Marks cells start..end of row y selected: True for the neutral background, a holder style for its tint."""
@@ -297,12 +317,16 @@ class Canvas:
         """A frame in the muted token; the focused panel's (`name`, #15) in the foreground."""
         if height < 2 or width < 6:
             return
-        frame = "text" if name and name == self.focus else "dim"
-        self.put(y, x, "╭" + "─" * (width - 2) + "╮", frame)
+        focused = bool(name) and name == self.focus
+        frame = "text" if focused else "dim"
+        # The focused panel's frame is heavy (owner); panels never share an edge, so no junction mixes the two
+        top_left, top_right, bottom_left, bottom_right, across, down = (
+            ("┏", "┓", "┗", "┛", "━", "┃") if focused else ("╭", "╮", "╰", "╯", "─", "│"))
+        self.put(y, x, top_left + across * (width - 2) + top_right, frame)
         for row in range(y + 1, y + height - 1):
-            self.put(row, x, "│", frame)
-            self.put(row, x + width - 1, "│", frame)
-        self.put(y + height - 1, x, "╰" + "─" * (width - 2) + "╯", frame)
+            self.put(row, x, down, frame)
+            self.put(row, x + width - 1, down, frame)
+        self.put(y + height - 1, x, bottom_left + across * (width - 2) + bottom_right, frame)
         after = self.put(y, x + 2, f" {title} ", "title", width - 4) if title else x + 2
         if note and x + width - 2 - text_width(note) - 2 > after:
             self.right(y, x + width - 2, f" {note} ", "dim")
@@ -773,18 +797,12 @@ def table_view(canvas: Canvas, name: str, y: int, x: int, height: int, width: in
     offset = max(0, min(canvas.scroll.get(name, automatic), max(0, count - visible)))
     canvas.tables[name] = dict(x=x, y=y, width=width, height=height, top=top,
                               visible=visible, count=count, offset=offset, base=base, row_items=row_items)
-    if room:
-        above = sum(index is not None for index in row_items[:offset]) if row_items is not None else offset
-        fresh = canvas.fresh_events if name == "events" and offset else 0
-        if fresh:  # EVENTS scrolled down: what arrived since (Home goes back to it)
-            canvas.put(top - 1, x + 3, f"↑ {fresh} new", "dim", width - 6)
-        elif above:
-            canvas.put(top - 1, x + 3, f"↑ {above} above", "dim", width - 6)
-        below = (sum(index is not None for index in row_items[offset + visible:]) if row_items is not None
-                 else max(0, count - offset - visible))
-        if below:
-            canvas.put(top + visible, x + 3, f"↓ {below} more", "dim", width - 6)
+    if room:  # the scrollbar shows what overflows (no row counts)
         canvas.scrollbar(top, x + width - 2, visible, offset, visible, count, canvas.focus == name)
+        fresh = canvas.fresh_events if name == "events" and offset else 0
+        if fresh:  # EVENTS scrolled down: what arrived since, in its bottom border (Home goes back to it)
+            canvas.put(y + height - 1, x + 2, f" ↑ {fresh} new ", "text" if canvas.focus == name else "dim",
+                       width - 4)
     return offset, visible
 
 
@@ -826,7 +844,8 @@ def table_header(canvas: Canvas, y: int, x: int, height: int, width: int, title:
         # The title sits where every panel's does (x + 3); the other headers over their columns, `gutter` in
         start = x + 3 if index == 0 else x + 3 + gutter + column + (max(0, size - text_width(value)) if right else 0)
         canvas.put(y, start - 1, " ", "text")
-        canvas.put(y, start, value, "title" if index == 0 else "dim", size)
+        focused = bool(name) and canvas.focus == name  # a focused panel's labels in the foreground, as its frame
+        canvas.put(y, start, value, "title" if index == 0 else "text" if focused else "dim", size)
         canvas.put(y, min(x + width - 2, start + min(size, text_width(value))), " ", "text")
 
 
@@ -1012,8 +1031,10 @@ def row_state(item: dict[str, Any], model: dict[str, Any]) -> str:
     return "legacy" if item["kind"] == "legacy" else "running"
 
 
-SELECTED_FRAME = "┃"  # the left frame beside a selected row, in the row's colour (#15); # on an ASCII terminal
-SCROLL_THUMB, SCROLL_TRACK = "┃", "│"  # a scrollbar's thumb and track (#15); # and | on an ASCII terminal
+SELECTED_FRAME = "█"  # the left frame beside a selected row, a block in the row's colour (#15); # on ASCII
+# A scrollbar's thumb (#15): a whole cell, a cell's lower half (where it starts), its upper half (where it ends);
+# # on an ASCII terminal
+SCROLL_THUMB, THUMB_LOWER, THUMB_UPPER = "┃", "╻", "╹"
 
 
 def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model: dict, selected: int,
@@ -1034,23 +1055,22 @@ def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model
     size = next((column[3] for column in placed if column[0] == "slots"), cells)
     table_header(canvas, y, x, height, width, "QUEUE", placed, gutter=3, name="requests")
     if not items:
-        canvas.put(y + 2, x + 3, f"No requests · all {model['slots']} slots free", "dim", width - 6)
+        canvas.put(y + 1, x + 3, f"No requests · all {model['slots']} slots free", "dim", width - 6)
     visual_selected = row_items.index(selected) if selected in row_items else None
-    offset, rows = table_view(canvas, "requests", y, x, height, width, y + 2, height - 4,
+    offset, rows = table_view(canvas, "requests", y, x, height, width, y + 1, height - 2,
                               len(row_items), visual_selected, row_items=row_items)
     for visual, index in enumerate(row_items[offset:offset + rows], offset):
         if index is None:
             continue
         item = items[index]
-        row = y + 2 + visual - offset
+        row = y + 1 + visual - offset
         waiting = index >= len(holders)
         # One colour per row: a running lease's SLOTS colour (its CPU bar too, but for a warning), the text colour for a
         # request that holds no slots.
         style = "text" if waiting else str(item["style"])
-        # A selected running row with its own tint: its text in the foreground, which keeps 4.5:1 on the tint, and
-        # its colour in the background, the state, the slot cells, the bar and the frame (#15)
+        # A selected running row keeps its colour and gets its own tint behind it (#15)
         tinted = index == selected and style in current_theme.tints
-        ink = "text" if tinted else style
+        ink = style
         if waiting:
             place = index - len(holders) + 1
             state = f"yielded #{place}" if item.get("yields") else f"waiting #{place}"  # back in the queue to resume
@@ -1119,8 +1139,10 @@ def draw_detail(canvas: Canvas, y: int, x: int, height: int, width: int, model: 
     # one, holding none, REQUEST DETAILS.
     canvas.box(y, x, height, width, detail_title(items[selected] if items else None), name="details")
     inner = width - 6
+    if not items or canvas.loading is not None:  # drawn, so it can hold the focus, with nothing to scroll yet
+        table_view(canvas, "details", y, x, height, width, y + 1, max(0, height - 2), 0)
     if not items:
-        canvas.put(y + 2, x + 3, "Nothing to select · the queue is idle", "dim", inner)
+        canvas.put(y + 1, x + 3, "Nothing to select · the queue is idle", "dim", inner)
         return
     if canvas.loading is not None:  # loading in the background (#15): a spinner, centred, until they arrive
         middle = y + max(1, (height - 2) // 2)
@@ -1252,11 +1274,11 @@ def draw_detail(canvas: Canvas, y: int, x: int, height: int, width: int, model: 
         for process_row, (pid, cpu, rss, name) in enumerate(item["tree"], row + 3):
             draw_row(document, process_row, 3, placed, {"pid": str(pid), "cpu": f"{cpu:.0f}%",
                      "rss": megabytes(rss / 1024), "name": name})
-    offset, visible = table_view(canvas, "details", y, x, height, width, y + 2,
-                                 max(0, height - 4), content_height)
+    offset, visible = table_view(canvas, "details", y, x, height, width, y + 1,
+                                 max(0, height - 2), content_height)
     for row in range(min(visible, content_height - offset)):
         for column in range(3, max(3, width - 3)):
-            target_y, target_x = y + 2 + row, x + column
+            target_y, target_x = y + 1 + row, x + column
             if 0 <= target_y < canvas.height and 0 <= target_x < canvas.width:
                 canvas.cells[target_y][target_x] = document.cells[offset + row][column][:]
                 url = document.links.get((offset + row, column))
@@ -1427,10 +1449,10 @@ def draw_events(canvas: Canvas, y: int, x: int, height: int, width: int, model: 
     size = next((column[3] for column in placed if column[0] == "slots"), cells)
     table_header(canvas, y, x, height, width, "EVENTS", placed, name="events")
     styles = {"granted": "ok", "released": "accent", "left": "dim", "reaped": "bad"}
-    offset, visible = table_view(canvas, "events", y, x, height, width, y + 2, height - 4, len(events))
+    offset, visible = table_view(canvas, "events", y, x, height, width, y + 1, height - 2, len(events))
     if not events:
-        canvas.put(y + 2, x + 3, "No grants, releases or reaps logged yet", "dim", width - 6)
-    for row, event in enumerate(events[offset:offset + visible], y + 2):
+        canvas.put(y + 1, x + 3, "No grants, releases or reaps logged yet", "dim", width - 6)
+    for row, event in enumerate(events[offset:offset + visible], y + 1):
         style = styles[event["verb"]]
         draw_row(canvas, row, x + 3, placed, {
             "time": (clock(event["when"]), "dim"), "event": (event["verb"], style),
@@ -1445,8 +1467,8 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
         ("↑ ↓", "select a row · scroll a panel"),
         ("pgup pgdn", "a page"),
         ("home end", "first · last row, top · bottom"),
-        ("tab", "next panel (shift-tab: back)"),
-        ("click", "select a row, focus its panel"),
+        ("tab", "next panel, by columns (shift-tab: back)"),
+        ("click", "a row, a panel, a footer hint (as its key)"),
         ("wheel", "scroll the panel under the pointer"),
         ("s", "settings"),
         ("?", "help"),
@@ -1607,9 +1629,9 @@ def draw_overlay(canvas: Canvas, title: str, layout: Any, name: str) -> None:
     the frame, scrollbar, counts and centred footer are the same for every one."""
     width = min(max(0, canvas.width - 2), 76)
     lines = cast(list[list[tuple[str, str]]], layout(width - 6))  # two padding cells, the scrollbar in one
-    height = min(max(0, canvas.height - 2), len(lines) + 5)
+    height = min(max(0, canvas.height - 2), len(lines) + 4)
     y, x = (canvas.height - height) // 2, (canvas.width - width) // 2
-    visible = max(0, height - 5)
+    visible = max(0, height - 4)
     offset = max(0, min(canvas.scroll.get(name, 0), max(0, len(lines) - visible)))
     canvas.scroll[name] = offset
     canvas.help_view = HelpViewport(x, y, width, height, offset, visible, len(lines), name)
@@ -1619,14 +1641,9 @@ def draw_overlay(canvas: Canvas, title: str, layout: Any, name: str) -> None:
     if height < 6:
         canvas.put(y + 1, x + 2, "Enlarge terminal", "dim", inner)
         return
-    canvas.scrollbar(y + 2, x + width - 2, visible, offset, visible, len(lines), True)
-    if offset:
-        canvas.put(y + 1, x + 2, f"↑ {offset} above", "dim", inner)
-    for row, parts in enumerate(lines[offset:offset + visible], y + 2):
+    canvas.scrollbar(y + 1, x + width - 2, visible, offset, visible, len(lines), True)
+    for row, parts in enumerate(lines[offset:offset + visible], y + 1):
         canvas.segments(row, x + 2, parts, width - 6)
-    below = max(0, len(lines) - offset - visible)
-    if below:
-        canvas.put(y + height - 3, x + 2, f"↓ {below} more", "dim", inner)
     shown = f"{round(100 * (offset + visible) / len(lines))}%" if len(lines) > visible else ""
     hints = [("↑↓", "scroll"), ("esc", "close")] + ([("q", "quit")] if name == "help" else [])
     canvas.overlay_footer(y + height - 2, x, width, hints, shown)
@@ -1757,6 +1774,9 @@ FOOTER_HINTS: tuple[tuple[str, str], ...] = (("↑↓", "select"), ("tab", "pane
                                              ("q", "quit"))
 DROP_ORDER = ("?", "s", "tab", "↑↓", "q")
 HINT_GAP = 3
+# What a click on a hint presses, by the hint's key: the same key; for a pair of arrows, each arrow its own
+HINT_KEYS: dict[str, str | tuple[str, ...]] = {"s": "s", "?": "?", "q": "q", "tab": "\t", "esc": "esc", "enter": "\r",
+                                              "d": "d", "↑↓": ("up", "down"), "←→": ("left", "right")}
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
@@ -1827,7 +1847,7 @@ def draw_hints(canvas: Canvas, start: int, end: int) -> int:
         return start
     x = max(start + 1, min((canvas.width - width()) // 2, end - 1 - width()))
     for index, (key, action) in enumerate(hints):
-        x = canvas.segments(canvas.height - 1, x, [(key, "key"), (f" {action}", "dim")])
+        x = canvas.hint(canvas.height - 1, x, key, action)
         if index < len(hints) - 1:
             x += HINT_GAP
     return x
@@ -1873,7 +1893,7 @@ def dashboard_draw(canvas: Canvas, model: dict[str, Any] | None, selected: int =
     draw_slots(canvas, 2, 3, left - 6, model)
     top, available = slot_height, height - 1 - slot_height
     holders, waiters = model["holders"], model["waiters"]
-    requests = max(1, len(holders) + len(waiters)) + bool(holders and waiters) + 4
+    requests = max(1, len(holders) + len(waiters)) + bool(holders and waiters) + 2
     if width >= WIDE:
         heights = allocate(available, [("requests", min(requests, 10), requests), ("events", 5, available)])
         y = top
@@ -2115,6 +2135,31 @@ def panel_at(canvas: Canvas, mx: int, my: int) -> str | None:
     return None
 
 
+NAVIGATION = ("up", "k", "down", "j", "page_up", "page_down", "home", "g", "end", "G")
+
+
+def next_panel(canvas: Canvas, focus: str, step: int) -> str:
+    """Tab's next panel (Shift-Tab's with step -1) among those drawn in the last frame, by columns: left to right,
+    each top to bottom, as the layout placed them (wide: QUEUE, EVENTS, DETAILS; narrow: top to bottom). A focus
+    whose panel is no longer drawn starts again from QUEUE."""
+    drawn = sorted((name for name in PANELS if name in canvas.tables),
+                   key=lambda name: (canvas.tables[name].get("x", 0), canvas.tables[name].get("y", 0)))
+    if "requests" not in drawn:
+        drawn.insert(0, "requests")
+    if focus not in drawn:
+        return "requests"
+    return drawn[(drawn.index(focus) + step) % len(drawn)]
+
+
+def panel_key(canvas: Canvas, scroll: dict[str, int], name: str, key: str) -> bool:
+    """A navigation key on a focused DETAILS or EVENTS panel is that panel's, also with nothing to scroll (still
+    loading, empty): it never falls through to QUEUE's selection. True when the key was the panel's."""
+    if key not in NAVIGATION:
+        return False
+    scroll_panel(canvas, scroll, name, key)
+    return True
+
+
 def scroll_panel(canvas: Canvas, scroll: dict[str, int], name: str, key: str) -> bool:
     """A scroll key on the focused DETAILS or EVENTS panel: a line, a page, the top or the bottom (#15)."""
     view = canvas.tables.get(name)
@@ -2240,6 +2285,8 @@ def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
                     canvas = Canvas(size.columns, size.lines)
                     canvas.focus, canvas.loading, canvas.fresh_events = focus, loading, fresh_events
                     dashboard_draw(canvas, model, index, help_open, error, cwd, scroll, settings)
+                    if focus != "requests" and focus not in canvas.tables:  # its panel is not drawn now
+                        focus = canvas.focus = "requests"
                     lines = canvas.lines(colour, ascii_only, place=True)
                     # Only rows that changed are written: a second's tick usually touches the clock and a few ages.
                     frame = "".join(f"\x1b[{row + 1};1H{line}" for row, line in enumerate(lines)
@@ -2260,6 +2307,8 @@ def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
                     shown, dirty = [], True  # every row's colours changed
                 for key in pressed:
                     dirty = True
+                    if isinstance(key, tuple) and key[4] and key[1] & ~28 == 0:  # a click on a footer hint is its key
+                        key = canvas.hint_at(key[2], key[3]) or key
                     if settings is not None:
                         action = settings.mouse(key) if isinstance(key, tuple) else settings.key(key)
                         if action == "quit":
@@ -2306,10 +2355,10 @@ def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
                         continue
                     if key in ("q", "Q"):
                         return
-                    if key in ("\t", "back_tab"):  # Tab and Shift-Tab move between the panels (#15)
-                        focus = PANELS[(PANELS.index(focus) + (1 if key == "\t" else -1)) % len(PANELS)]
+                    if key in ("\t", "back_tab"):  # Tab and Shift-Tab move between the panels drawn (#15)
+                        focus = next_panel(canvas, focus, 1 if key == "\t" else -1)
                         continue
-                    if focus != "requests" and scroll_panel(canvas, scroll, focus, key):
+                    if focus != "requests" and panel_key(canvas, scroll, focus, key):
                         continue
                     if key in ("j", "down", "k", "up", "g", "home", "G", "end", "page_up", "page_down"):
                         scroll.pop("requests", None)

@@ -84,12 +84,8 @@ class DashboardTests(SlotCase):
         lines = text.splitlines()
         for title, message in (("QUEUE", "No requests"), ("EVENTS", "No grants")):
             row = next(i for i, line in enumerate(lines) if title in line)
-            self.assertEqual(lines[row].index(title), lines[row + 2].index(message))
-            self.assertIn("╭", lines[row])
-            left, right = lines[row].index("╭"), lines[row].index("╮")
-            self.assertFalse(lines[row + 1][left + 1:right].strip(), "top content padding")
-            bottom = next(i for i in range(row + 1, len(lines)) if lines[i][left:left + 1] == "╰")
-            self.assertFalse(lines[bottom - 1][left + 1:right].strip(), "bottom content padding")
+            self.assertEqual(lines[row].index(title), lines[row + 1].index(message), "right under the header")
+            self.assertRegex(lines[row], "[╭┏]")
             if title != "EVENTS":
                 self.assertIn("pid", lines[row], "column names belong on the top border")
 
@@ -145,10 +141,10 @@ class DashboardTests(SlotCase):
         self.assertNotIn("next:", text)
         self.assertNotIn("2/4 held", text)
         self.assertIn("no admission",text)
-        self.assertIn("─ QUEUE ", text)
+        self.assertRegex(text, "[─━] QUEUE ")
         self.assertNotIn("REQUESTS", text, "the request table is the QUEUE panel")
         self.assertNotIn("RUNNING", text)
-        self.assertIn("┃  ▶️ holder", text, "the selected row on the frame, its state (#15), then the label")
+        self.assertIn("█  ▶️ holder", text, "the selected row on the frame, its state (#15), then the label")
         self.assertEqual(1, text.count("▶"), "only the selected row has a cursor")
         self.assertRegex(text, r"gate +▪▪▪▪ +waiting #1 ")
         self.assertRegex(text, r"small +▪ +waiting #2 ")
@@ -224,8 +220,8 @@ class DashboardTests(SlotCase):
                     return
             self.fail("live terminal did not render the expected selection")
         read_until(lambda text: re.search(r"label\s+click-owner", text) and re.search(r"status\s+running", text))
-        # QUEUE starts at row 5: holder at 7, gap at 8, waiter at 9 (zero-based).
-        os.write(master, b"\x1b[<0;10;10M\x1b[<0;10;10m")
+        # QUEUE starts at row 5: holder at 6, gap at 7, waiter at 8 (zero-based).
+        os.write(master, b"\x1b[<0;10;9M\x1b[<0;10;9m")
         read_until(lambda text: re.search(r"label\s+click-target",text) and re.search(r"status\s+waiting",text))
         self.release("click-owner")
         self.started("click-target")
@@ -323,18 +319,18 @@ class UnifiedLaneTests(unittest.TestCase):
         tool.draw_requests(canvas,0,0,8,130,model,1,now)
         lines=canvas.render(False).splitlines()
         self.assertIn("QUEUE",lines[0])
-        self.assertIn("active",lines[2])
-        self.assertFalse(lines[3][1:-1].strip())
-        self.assertIn("┃  ⏸️ pending",lines[4])
+        self.assertIn("active",lines[1])
+        self.assertFalse(lines[2][1:-1].strip())
+        self.assertIn("█  ⏸️ pending",lines[3])
         column=lines[0].index("cpu use/share")+len("cpu use/share")
-        self.assertTrue(lines[4][:column].rstrip().endswith("waiting #1"),lines[4])
-        self.assertEqual(1,tool.mouse_action(canvas,("mouse",0,20,4,True),{},0))
-        self.assertEqual(0,tool.mouse_action(canvas,("mouse",0,20,3,True),{},0))
-        canvas=tool.Canvas(130,6)
-        tool.draw_requests(canvas,0,0,6,130,model,1,now)
+        self.assertTrue(lines[3][:column].rstrip().endswith("waiting #1"),lines[3])
+        self.assertEqual(1,tool.mouse_action(canvas,("mouse",0,20,3,True),{},0))
+        self.assertEqual(0,tool.mouse_action(canvas,("mouse",0,20,2,True),{},0))
+        canvas=tool.Canvas(130,4)
+        tool.draw_requests(canvas,0,0,4,130,model,1,now)
         lines=canvas.render(False).splitlines()
-        self.assertIn("pending",lines[3],"selection must remain visible beyond the gap")
-        self.assertIn("↑ 1 above",lines[1],"counts exclude the group separator")
+        self.assertIn("pending",lines[2],"selection must remain visible beyond the gap")
+        self.assertNotIn("above",canvas.render(False),"the scrollbar shows overflow, no row counts")
 
 
 class QueueTableTests(unittest.TestCase):
@@ -398,7 +394,7 @@ class QueueTableTests(unittest.TestCase):
             cells = canvas.cells[y][3:-3]
             # build is selected and tinted with its colour (#15): its text in the foreground, its cells in h0
             text = {cell[1] for cell in cells if cell[0] not in (" ", "■", "", "▪", ">")}
-            self.assertEqual({"text"} if label == "build" else {style}, text, label)
+            self.assertEqual({style}, text, f"{label}: the selected row keeps its colour too")
             self.assertTrue(all(cell[1] == style for cell in cells if cell[0] == "▪"), label)
         build = self.row(canvas, "build")
         self.assertEqual({"h0", "track"}, {cell[1] for cell in canvas.cells[build] if cell[0] == "■"},
@@ -481,7 +477,7 @@ class QueueTableTests(unittest.TestCase):
                 self.assertIn("▪▪▪", gate, "the slot cells stay longest after the label")
                 if "cpu use/share" in kept:
                     self.assertIn("waiting #1", gate, "the state outlasts the time and pid")
-                self.assertEqual(gate.rstrip()[-1], "│")
+                self.assertIn(gate.rstrip()[-1], "│┃")
 
     def test_a_wide_table_shares_its_width_out_in_proportion(self) -> None:
         model = self.model()
@@ -629,20 +625,19 @@ class MouseInputTests(unittest.TestCase):
             tool.draw_requests(canvas, 0, 0, 7, 100, model, 0, now)
             return canvas
         canvas = render()
-        self.assertEqual(1, tool.mouse_action(canvas, ("mouse", 0, 20, 3, True), scroll, 0))
-        self.assertEqual(0, tool.mouse_action(canvas, ("mouse", 65, 20, 3, True), scroll, 0),
+        self.assertEqual(1, tool.mouse_action(canvas, ("mouse", 0, 20, 2, True), scroll, 0))
+        self.assertEqual(0, tool.mouse_action(canvas, ("mouse", 65, 20, 2, True), scroll, 0),
                          "wheel scrolls the viewport without changing selection")
         canvas = render()
         lines = canvas.render(False).splitlines()
-        self.assertIn("job-3", lines[2])
-        self.assertIn("job-5", lines[4], "counters must not take a data row")
-        self.assertIn("↑ 3 above", lines[1])
-        self.assertIn("↓ 2 more", lines[5])
-        self.assertNotIn("more", lines[-1], "overflow belongs inside the table")
-        self.assertEqual(3, tool.mouse_action(canvas, ("mouse", 0, 20, 2, True), scroll, 0))
-        self.assertEqual(0, tool.mouse_action(canvas, ("mouse", 0, 20, 1, True), scroll, 0),
-                         "clicking padding must not select a hidden row")
-        self.assertEqual(0, tool.mouse_action(canvas, ("mouse", 0, 20, 2, False), scroll, 0))
+        self.assertIn("job-3", lines[1], "rows start right under the header")
+        self.assertIn("job-7", lines[5], "five rows: the lines the counters held are content now")
+        self.assertNotIn("above", canvas.render(False))
+        self.assertNotIn("more", canvas.render(False))
+        self.assertEqual(3, tool.mouse_action(canvas, ("mouse", 0, 20, 1, True), scroll, 0))
+        self.assertEqual(0, tool.mouse_action(canvas, ("mouse", 0, 20, 0, True), scroll, 0),
+                         "clicking the border must not select a hidden row")
+        self.assertEqual(0, tool.mouse_action(canvas, ("mouse", 0, 20, 1, False), scroll, 0))
 
     def test_a_delayed_mouse_release_cannot_become_the_copy_shortcut(self):
         tool = load_dashboard()
@@ -740,9 +735,8 @@ class DetailLayoutTests(unittest.TestCase):
                          0, "/project", now)
         text = canvas.render(False)
         self.assertIn("worker9", text)
-        self.assertIn("above", text)
+        self.assertNotIn("above", text, "the scrollbar shows overflow, no row counts")
         self.assertNotIn("more", text)
-        self.assertNotIn("more", text.splitlines()[-1])
 
 
 

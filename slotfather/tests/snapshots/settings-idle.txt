@@ -7,7 +7,7 @@
 │   draining     none                                                          │
 │   environment  SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB                       │
 │ ──────────────────────────────────────────────────────────────────────────   │
-┃ ▶ Capacity                  ‹ Automatic ›                                    │
+█ ▶ Capacity                  ‹ Automatic ›                                    │
 │   Queue order               Backfill                                         │
 │   Backfill margin           3×                                               │
 │   Unknown job runtime       3600 s                                           │

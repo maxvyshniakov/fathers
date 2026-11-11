@@ -19,10 +19,10 @@ const navigation=[
   {at:3.7,input:'j',expect:'label      desktop',settle:.25},
   {at:4,input:'j',expect:'waiting · #1 · wants 6',settle:.25},
   {at:4.3,input:'j',expect:['waiting · #2 · wants 1','ticket     #555','stage      active'],settle:.25},
-  {at:6.8,input:'\x1b[<65;150;12M'.repeat(4),expect:['above','claims'],settle:.25},
+  {at:6.8,input:'\x1b[<65;150;12M'.repeat(4),expect:'claims',settle:.25},
   {at:8.3,input:'g',expect:['label      lane-644-build-once','receipt    in progress'],settle:.25},
   {at:9,input:'j',expect:'label      lane-465-state-definitions-review-fixes',settle:.25},
-  {at:9.4,input:'\x1b[<65;150;12M'.repeat(6),expect:['above','claims'],settle:.25},
+  {at:9.4,input:'\x1b[<65;150;12M'.repeat(6),expect:'claims',settle:.25},
   {at:10.4,input:'g',expect:['label      lane-644-build-once','stage      active'],settle:.25},
 ];
 export default {cwd:'..',recipes:{

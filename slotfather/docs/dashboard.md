@@ -15,8 +15,8 @@ slotfather dashboard --once --width 156 --height 43 --color
 | ↑ / ↓ or j / k | QUEUE: select a request. DETAILS, EVENTS: scroll a line. |
 | PgUp / PgDn | QUEUE: first or last request. DETAILS, EVENTS: a page. |
 | g / G, Home / End | QUEUE: first or last request. DETAILS, EVENTS: top or bottom. |
-| Tab / Shift-Tab | Focus the next or previous panel: QUEUE, DETAILS, EVENTS. |
-| Click | Select a request; focus the panel it lands in. A click on the footer's version opens the changelog. |
+| Tab / Shift-Tab | Focus the next or previous panel, by columns: left to right, each top to bottom (wide: QUEUE, EVENTS, DETAILS). Only panels on screen take the focus. |
+| Click | Select a request; focus the panel it lands in. A footer hint does what its key does (on `↑↓`, each arrow its own); the footer's version opens the changelog. |
 | Mouse wheel | Scroll the panel under the pointer. |
 | s | Open Settings. |
 | ? | Open help. |
@@ -31,9 +31,12 @@ middle (`↑↓ select   tab panel   s settings   ? help   q quit`; `↑↓ scro
 last update and `● live` on the right; a narrow terminal drops the version first, then the hints help,
 settings, tab and select, quit last, and they never cover the status.
 
-**Focus** (#15). One panel has the keys: QUEUE at start, then Tab and Shift-Tab, or a click. Its frame is in the
-foreground colour, the others muted. EVENTS stays on its newest entry while scrolled to the top; scrolled down,
-it keeps showing the same events and counts the new ones (`↑ 3 new`); Home goes back.
+**Focus** (#15). One panel has the keys: QUEUE at start, then Tab and Shift-Tab, or a click. Its frame is heavy
+(`┏━┓┃┗┛`) and, with the labels set into its top border (title, column headers), in the foreground colour; the
+others are light and muted. Arrow keys on a focused DETAILS or EVENTS are always theirs, also while the details
+load or with nothing to scroll. The selected row's marker on the left frame is a block (`█`) in its colour. EVENTS
+stays on its newest entry while scrolled to the top; scrolled down, it keeps showing the same events and counts the
+new ones in its bottom border (`↑ 3 new`); Home goes back.
 
 **Details in the background** (#15). Moving the selection redraws at once; the selected request's lane facts
 (a lanefather call, 150–260 ms) and its holder's directory (`lsof`, about 25 ms) load in a background worker,
@@ -54,14 +57,15 @@ those layouts to the US positions. Only hotkeys are translated: what you type in
 a Settings field stays as typed. Help keeps showing the Latin letters.
 
 Only the selected request has a heavy `┃` on the left frame, in its colour, and a
-tinted background: a running row's mixes 14% of its own colour into the terminal's
-background (less where its text, then in the normal foreground, would fall below
-4.5:1), a waiting row's the neutral selection; without a known background the row
-is bold. Every panel that overflows (QUEUE, EVENTS, the details, Settings, help)
-shows a scrollbar on its right frame: a muted `┃` thumb as long as the visible
-share, at the bottom on the last page. The blank separator
-between running and waiting requests is not selectable. Overflow counts appear in
-the tables’ top and bottom padding rows.
+tinted background; its text keeps its colour. A running row's tint mixes up to 14% of
+its own colour into the terminal's background, less for a colour whose text would
+lose more than a tenth of its contrast; a waiting row's is the neutral selection;
+without a known background the row is bold. Every panel that overflows (QUEUE,
+EVENTS, the details, Settings, help, the changelog) shows a scrollbar thumb, no
+track, in the padding cell left of its right frame: muted, or in the foreground on
+the focused panel, as long as the visible share and moving in half cells (`╻` and
+`╹` at its ends). There are no row counts; content starts right under the top
+border. The blank separator between running and waiting requests is not selectable.
 
 With help open, arrows / j / k and the wheel scroll its text; PgUp / PgDown or
 Space scroll a page, and Home / End or g / G jump to the ends. `?` / Esc close

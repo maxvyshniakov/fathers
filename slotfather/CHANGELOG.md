@@ -4,6 +4,28 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ## Unreleased
 
+### Changed
+
+- The scrollbar is a thumb alone, moving in half cells; the `↑ N above` and `↓ N more` counts are gone and
+  their lines hold content. EVENTS still shows `↑ N new` while scrolled away from the newest.
+- A focused panel's title and column headers are in the foreground colour, like its frame.
+- A selected row keeps its text colour; only its background is tinted, lightly enough that its text keeps
+  most of its contrast.
+- Every footer hint, in the dashboard and in help, Settings and the changelog, is a click target that does
+  what its key does.
+- The focused panel has a heavy frame; the selected row's marker is a block in its colour.
+- Tab goes by columns: QUEUE, EVENTS, then DETAILS (top to bottom in one column), only through panels on
+  screen.
+
+### Fixed
+
+- Settings: an arrow change still waiting to be saved is no longer saved over a capacity change made
+  elsewhere meanwhile, nor under another capacity mode; the panel says the capacity changed instead.
+- Settings: a refused save when moving to another setting stays visible, and Esc on a panel too small to
+  show cancels a pending change visibly instead of dropping it.
+- With DETAILS focused while its details load, or with nothing to show, the arrow keys no longer move the
+  QUEUE selection.
+
 ## 0.1.0 - 2026-11-11
 
 ### Added

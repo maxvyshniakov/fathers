@@ -74,10 +74,15 @@ class Row(NamedTuple):
 
 
 class Pending(NamedTuple):
-    """An arrow change shown but not saved yet: saved at `at` + SETTLE_SECONDS, or at once on Enter."""
+    """An arrow change shown but not saved yet: saved at `at` + SETTLE_SECONDS, or at once on Enter. It keeps
+    capacity.json as it was when the change began (`token`) and the capacity mode its value was chosen in, so a
+    change made elsewhere meanwhile is a conflict, shown and never overwritten, and a value is never saved under
+    another mode than the one it was chosen in."""
     key: str
     value: Any
     at: float
+    token: bytes | None = None
+    mode: str = ""
 
 
 def number(value: float) -> str:
@@ -141,14 +146,21 @@ class Settings:
         self.settle_focus()
 
     def refresh(self) -> None:
-        """Reads the shared settings again, at most once a second, and never under a field being typed."""
+        """Reads the shared settings again, at most once a second, and never under a field being typed. A capacity
+        change pending since before another client changed capacity.json becomes a conflict: dropped, and said."""
         if self.editing or self.clock() - self.read_at < READ_EVERY:
             return
+        pending = self.pending
         try:
             self.read()
         except (config.SlotError, OSError) as error:
             self.say(str(error), "bad")
             self.read_at = self.clock()
+            return
+        if pending and pending.key in ("mode", "amount") and self.capacity_bytes != pending.token:
+            self.pending = None
+            self.say(f"Capacity changed elsewhere: now {self.basis['slots']} slots · your change was not saved",
+                     "bad")
 
     def mode(self) -> str:
         """The capacity mode shown: a pending one, else the saved one."""
@@ -296,9 +308,10 @@ class Settings:
             return "✗ " + problem, "bad"
         return self.effect(self.focus, value) if self.focus == "amount" else ("Enter saves", "dim")
 
-    def save(self, key: str, value: Any) -> str:
+    def save(self, key: str, value: Any, pending: Pending | None = None) -> str:
         """Saves one field and says what it did; local fields change only this dashboard. A capacity change
-        expects capacity.json as this panel read it (state.Conflict otherwise)."""
+        expects capacity.json as this panel read it, or as it was when `pending` began (state.Conflict otherwise),
+        and an amount is saved under the mode it was chosen in."""
         if key == "interval":
             self.interval = float(value)
             return f"Refresh every {number(self.interval)} s · this dashboard only"
@@ -307,8 +320,10 @@ class Settings:
             return f"Colour theme {self.text(key, self.theme)} · this dashboard only"
         if key in ("mode", "amount"):
             mode, amount = self.capacity_of(key, value)
+            if pending is not None and key == "amount":
+                mode = pending.mode
             state.configure({"capacity.json": self.capacity_value(mode, amount)},
-                            expected={"capacity.json": self.capacity_bytes})
+                            expected={"capacity.json": self.capacity_bytes if pending is None else pending.token})
             self.read()
             # Short: what drains is said once in STATUS and once beside the field.
             return f"Saved · capacity {self.basis['slots']} slots"
@@ -316,11 +331,11 @@ class Settings:
         self.read()
         return f"Saved · {self.label(key)} {self.text(key, self.saved_value(key))}"
 
-    def apply(self, key: str, value: Any) -> bool:
+    def apply(self, key: str, value: Any, pending: Pending | None = None) -> bool:
         """save() with its outcome flashed; False when the change was refused."""
         self.pending = None
         try:
-            text = self.save(key, value)
+            text = self.save(key, value, pending)
         except state.Conflict:
             with contextlib.suppress(config.SlotError, OSError):
                 self.read()
@@ -365,7 +380,8 @@ class Settings:
             self.pending = None
             self.say(f"{self.label(key)} back to its saved value", "dim")
         else:
-            self.pending = Pending(key, value, self.clock())
+            self.pending = Pending(key, value, self.clock(), self.capacity_bytes, self.mode() if key == "amount"
+                                   else self.basis["mode"])
             self.say(f"{self.label(key)} {self.text(key, value)} · saves in {number(SETTLE_SECONDS)} s · "
                      f"Enter now · Esc cancels", "accent")
         self.settle_focus()
@@ -374,7 +390,7 @@ class Settings:
         """Saves the pending change now; False when there is none or it was refused."""
         if self.pending is None:
             return False
-        return self.apply(self.pending.key, self.pending.value)
+        return self.apply(self.pending.key, self.pending.value, self.pending)
 
     def tick(self) -> bool:
         """Saves a pending change once the keys have settled; True when something was saved."""
@@ -392,9 +408,9 @@ class Settings:
 
     def move(self, count: int) -> bool:
         """Moves the focus; a pending change is saved first (True when it was)."""
-        saved = self.commit_pending()
         if self.flash and self.flash[1] == "bad":
-            self.flash = None  # a refusal belongs to the field it was about
+            self.flash = None  # an earlier refusal belongs to the field it was about; one from this save stays
+        saved = self.commit_pending()
         keys = self.fields()
         self.focus = keys[(keys.index(self.focus) + count) % len(keys)] if self.focus in keys else keys[0]
         self.editing, self.reveal = False, True
@@ -477,7 +493,10 @@ class Settings:
         """One key: "close", "quit", "changed" when a setting was saved, else "handled"."""
         if not self.editing:  # a hotkey by its US-QWERTY position (#13); typed values stay as typed
             key = _keys.hotkey(key)
-        if self.small:  # nothing to see: only the ways out
+        if self.small:  # nothing to see: only the ways out; a pending change is cancelled first, and said
+            if key in ("esc", "s") and self.pending:
+                self.cancel_pending()
+                return "handled"
             return "close" if key in ("esc", "s") else "quit" if key in ("q", "Q") else "handled"
         self.settle_focus()
         if self.editing:
@@ -665,8 +684,6 @@ class Settings:
             self.reveal = False
         self.offset = max(0, min(self.offset, max(0, len(body) - self.visible)))
         canvas.scrollbar(y + 1, x + width - 2, self.visible, self.offset, self.visible, self.total, True)
-        if self.offset:
-            canvas.right(y, x + width - 2, f" ↑ {self.offset} above ", "dim")
         for line, row in enumerate(body[self.offset:self.offset + self.visible], y + 1):
             for column, text, style in row.parts:
                 if column < inner - 2:
@@ -675,12 +692,9 @@ class Settings:
                 self.hits.append((row.key, x + 1, line, width - 2, 1))
                 if row.key == self.focus:
                     canvas.select(line, x + 1, x + width - 1)
-                    canvas.put(line, x, "┃", "text")  # the selected row on the left frame, as in QUEUE (#15)
+                    canvas.put(line, x, "█", "text")  # the selected row on the left frame, as in QUEUE (#15)
         rule = y + height - 6
         canvas.put(rule, x + 2, "─" * inner, "dim", inner)
-        below = max(0, len(body) - self.offset - self.visible)
-        if below:
-            canvas.right(rule, x + width - 2, f" ↓ {below} more ", "dim")
         notes = [(text, "dim") for text in textwrap.wrap(self.description(self.focus), max(1, inner))[:2]]
         if self.flash and (self.clock() - self.flash[2] < FLASH_SECONDS or self.flash[1] == "bad"
                            or (self.flash[1] == "accent" and self.pending)):

@@ -90,6 +90,61 @@ class FooterTests(unittest.TestCase):
         self.assertIn("shift+drag", terms, "text is selected with Shift+drag")
 
 
+class HintClickTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tool: Any = importlib.reload(importlib.import_module("slotfather.dashboard"))
+
+    def targets(self, canvas: Any, row: int, hints: list[str]) -> dict[str, list[str | None]]:
+        """For each hint text on the row: what a click on each of its cells presses."""
+        line = "".join(cell[0] for cell in canvas.cells[row])
+        found: dict[str, list[str | None]] = {}
+        for hint in hints:
+            start = line.index(hint)
+            found[hint] = [canvas.hint_at(x, row) for x in range(start, start + len(hint))]
+        return found
+
+    def test_every_footer_hint_presses_its_key_and_the_gaps_nothing(self) -> None:
+        canvas = self.tool.Canvas(140, 30)
+        self.tool.dashboard_draw(canvas, model())
+        row = canvas.height - 1
+        found = self.targets(canvas, row, HINTS)
+        self.assertEqual(["up", "down"], found["↑↓ select"][:2], "each arrow its own key")
+        for hint, key in (("tab panel", "\t"), ("s settings", "s"), ("? help", "?"), ("q quit", "q")):
+            self.assertEqual({key}, set(found[hint]), f"the whole of {hint}, key and label")
+        line = "".join(cell[0] for cell in canvas.cells[row])
+        gap = line.index("tab panel") - 2
+        self.assertIsNone(canvas.hint_at(gap, row), "between hints: nothing")
+
+    def test_overlay_footers_are_click_targets_too(self) -> None:
+        for which, hints in ((True, {"esc close": "esc", "q quit": "q"}), ("changelog", {"esc close": "esc"})):
+            canvas = self.tool.Canvas(100, 30)
+            self.tool.dashboard_draw(canvas, model(), help_open=which)
+            info = canvas.help_view
+            row = info.y + info.height - 2
+            found = self.targets(canvas, row, ["↑↓ scroll", *hints])
+            self.assertEqual(["up", "down"], found["↑↓ scroll"][:2])
+            for hint, key in hints.items():
+                self.assertEqual({key}, set(found[hint]), f"{which}: {hint}")
+
+    def test_the_settings_footer_is_a_click_target_too(self) -> None:
+        import os
+        import tempfile
+        from unittest import mock
+        from slotfather import dashboard_settings
+        directory = tempfile.mkdtemp(prefix="slotfather-hints-")
+        with mock.patch.dict(os.environ, {"SLOTFATHER_DIR": directory, "SLOTFATHER_CORES": "12",
+                                          "SLOTFATHER_MEMORY_GIB": "64"}):
+            dialog = dashboard_settings.Settings(1.0)
+            canvas = self.tool.Canvas(100, 44)
+            dialog.draw(canvas, None)
+        _, y, _, height = dialog.bounds
+        found = self.targets(canvas, y + height - 2, ["↑↓ select", "←→ change", "enter edit", "d reset", "esc close"])
+        self.assertEqual(["up", "down"], found["↑↓ select"][:2])
+        self.assertEqual(["left", "right"], found["←→ change"][:2])
+        for hint, key in (("enter edit", "\r"), ("d reset", "d"), ("esc close", "esc")):
+            self.assertEqual({key}, set(found[hint]), hint)
+
+
 class RemovedKeyTests(SlotCase):
     def test_p_r_and_m_do_nothing_in_the_live_view(self) -> None:
         master, slave = pty.openpty()
@@ -136,6 +191,75 @@ class RemovedKeyTests(SlotCase):
             os.close(master)
             if slave >= 0:
                 os.close(slave)
+
+
+class HintClickLiveTests(SlotCase):
+    def test_clicks_on_footer_hints_act_like_their_keys(self) -> None:
+        master, slave = pty.openpty()
+        process: subprocess.Popen[bytes] | None = None
+        try:
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 140, 0, 0))
+            process = subprocess.Popen([str(ROOT / "slotfather"), "dashboard", "--interval", "60"],
+                                       stdin=slave, stdout=slave, stderr=slave, env=self.env, start_new_session=True)
+            os.close(slave)
+            slave = -1
+            screen = bytearray()
+
+            def receive(fragment: str, since: int = 0) -> int:
+                deadline = time.monotonic() + 8
+                while time.monotonic() < deadline:
+                    if select.select([master], [], [], 0.05)[0]:
+                        try:
+                            screen.extend(os.read(master, 65536))
+                        except OSError:
+                            break
+                    plain = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", screen.decode("utf-8", "replace"))
+                    if fragment in plain[since:]:
+                        return len(plain)
+                self.fail(f"terminal did not show {fragment!r}")
+
+            def click(text: str, row: int) -> None:
+                plain_rows = self.rows(bytes(screen))
+                column = plain_rows[row].index(text) + 1  # 1-based for SGR
+                os.write(master, f"\x1b[<0;{column};{row}M\x1b[<0;{column};{row}m".encode())
+
+            mark = receive("q quit")
+            click("? help", 30)
+            mark = receive("esc close", mark)
+            help_row = next(r for r, line in self.rows(bytes(screen)).items() if "esc close" in line)
+            click("esc close", help_row)
+            mark = receive("QUEUE", mark)
+            click("tab panel", 30)
+            mark = receive("↑↓ scroll", mark)
+            click("s settings", 30)
+            mark = receive("enter edit", mark)
+            settings_row = next(r for r, line in self.rows(bytes(screen)).items() if "esc close" in line and "enter" in line)
+            click("esc close", settings_row)
+            mark = receive("QUEUE", mark)
+            click("q quit", 30)
+            deadline = time.monotonic() + 8
+            while process.poll() is None and time.monotonic() < deadline:
+                if select.select([master], [], [], 0.05)[0]:
+                    try:
+                        os.read(master, 65536)
+                    except OSError:
+                        break
+            self.assertEqual(0, process.wait(timeout=1), "a click on q quit quits")
+        finally:
+            if process is not None and process.poll() is None:
+                os.killpg(process.pid, signal.SIGTERM)
+                process.wait(timeout=3)
+            os.close(master)
+            if slave >= 0:
+                os.close(slave)
+
+    @staticmethod
+    def rows(raw: bytes) -> dict[int, str]:
+        """The screen's rows, 1-based, as last written (the dashboard writes whole rows after CSI row;1H)."""
+        found: dict[int, str] = {}
+        for match in re.finditer(r"\x1b\[(\d+);1H(.*?)(?=\x1b\[\d+;1H|$)", raw.decode("utf-8", "replace"), re.S):
+            found[int(match[1])] = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", "", match[2])
+        return found
 
 
 if __name__ == "__main__":

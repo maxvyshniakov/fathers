@@ -33,7 +33,7 @@ MODE_LABELS = {"auto": "Auto", "terminal": "Terminal", "builtin": "Built-in"}
 # Surfaces: the share of the foreground mixed into the background.
 SELECTION_MIX, TRACK_MIX, FREE_MIX = 0.10, 0.15, 0.20
 TINT_MIX = 0.14  # a selected running row's background: this much of its holder colour in the background (#15)
-TINT_CONTRAST = 4.5  # its text, in the foreground, against that tint; a colour that fails gets less of it
+TINT_KEEP = 0.9  # the share of its text's contrast a tint keeps; a colour that would lose more gets less of it
 # Holder colours (owner, 2026-11-11): one vivid colour per hue, handed out in this order, so the first holders
 # are the most distinct. (name, OKLCH hue and the lightness it looks best at on a light background, the same on a
 # dark one), measured from Tailwind's 600 and 400 shades, which the colours land close to on white and near black.
@@ -458,7 +458,7 @@ def resolve(mode: str, answers: Optional[Answers] = None,
         styles["track"] = (mix(background, ink, TRACK_MIX), "")
         styles["free"] = (mix(background, ink, FREE_MIX), "")
         selection: Optional[RGB] = mix(background, ink, SELECTION_MIX)
-        tints = {name: tint(background, colour, ink, selection) for name, (colour, _) in styles.items()
+        tints = {name: tint(background, colour) for name, (colour, _) in styles.items()
                  if name.startswith("h") and isinstance(colour, tuple)}
     else:
         selection, tints = None, {}
@@ -467,14 +467,16 @@ def resolve(mode: str, answers: Optional[Answers] = None,
                  light, background, source, tints)
 
 
-def tint(background: RGB, colour: RGB, ink: RGB, neutral: RGB) -> RGB:
-    """A selected row's background in its own colour: TINT_MIX of it in the background, less where the text (`ink`)
-    would fall below TINT_CONTRAST against it; the neutral selection where even a little fails."""
-    for step in range(round(TINT_MIX * 100), 3, -2):
+def tint(background: RGB, colour: RGB) -> RGB:
+    """A selected row's background in its own colour: TINT_MIX of it in the background, less where the row's text,
+    in that colour, would keep under TINT_KEEP of its contrast against the plain background."""
+    plain = contrast(colour, background)
+    found = background
+    for step in range(round(TINT_MIX * 100), 0, -1):
         found = mix(background, colour, step / 100)
-        if contrast(ink, found) >= TINT_CONTRAST:
+        if contrast(colour, found) >= TINT_KEEP * plain:
             return found
-    return neutral
+    return found
 
 
 def chart_colours(mode: str, answers: Answers, background: Optional[RGB]) -> List[Colour]:
