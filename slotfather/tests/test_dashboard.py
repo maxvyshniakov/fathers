@@ -113,8 +113,8 @@ class DashboardTests(SlotCase):
         self.assertNotIn("RUNNING", text)
         self.assertIn("│ ▶holder", text)
         self.assertEqual(1, text.count("▶"), "only the selected row has a cursor")
-        self.assertRegex(text, r"gate +■ ■ ■ ■ +waiting #1 ")
-        self.assertRegex(text, r"small +■ +waiting #2 ")
+        self.assertRegex(text, r"gate +▪▪▪▪ +waiting #1 ")
+        self.assertRegex(text, r"small +▪ +waiting #2 ")
         for label in ("holder", "gate", "small"):
             self.release(label)
         for process in (holder, gate, small):
@@ -354,11 +354,43 @@ class QueueTableTests(unittest.TestCase):
         for label, state in (("gate", "waiting #1"), ("back", "yielded #2")):
             y = self.row(canvas, label)
             self.assertTrue(lines[y][:end].rstrip().endswith(state), lines[y])
-            self.assertEqual({"dim"}, self.styles(canvas, y, state))
+            self.assertEqual({"text"}, self.styles(canvas, y, state), "white like the rest of the row")
             self.assertEqual({"text"}, self.styles(canvas, y, label), "a waiting label is not yellow")
             self.assertNotIn("warn", {cell[1] for cell in canvas.cells[y]})
         build = self.row(canvas, "build")
         self.assertRegex(lines[build], r"■+ 1\.5/4")
+
+    def test_a_row_is_one_colour_the_slots_colour_running_and_white_waiting_but_for_the_bar(self) -> None:
+        canvas = self.draw(self.model())
+        for label, style in (("build", "h0"), ("older", "legacy"), ("gate", "text"), ("back", "text")):
+            y = self.row(canvas, label)
+            cells = canvas.cells[y][3:-3]
+            text = {cell[1] for cell in cells if cell[0] not in (" ", "■", "")}
+            self.assertEqual({style}, text, label)
+        build = self.row(canvas, "build")
+        self.assertTrue({"accent", "frame"} >= {cell[1] for cell in canvas.cells[build] if cell[0] == "■"},
+                        "the CPU bar keeps its own colours")
+        self.assertTrue(all(cell[2] for cell in canvas.cells[build][3:-3]), "the selection highlight stays on top")
+
+    def test_bars_and_states_start_at_one_column_and_the_numbers_line_up(self) -> None:
+        now = self.now
+        rows = [(1, 0.0, 12), (2, 12.3, 12), (8, 5.1, 24), (1, 0.5, 12), (2, 1.3, 12)]  # shares 1.5, 3, 12 ... 0.5
+        holders = [dict(label=f"run{n}", kind="held", count=count, pid=20 + n, style=f"h{n}", cpu=cpu * 100,
+                        since=now, granted=now) for n, (count, cpu, _) in enumerate(rows)]
+        for slots, cores in ((8, 12), (2, 12), (24, 12), (8, 4)):
+            with self.subTest(slots=slots, cores=cores):
+                model = self.model(slots=slots, cores=cores)
+                model["holders"] = holders
+                canvas = self.draw(model, height=14)
+                lines = canvas.render(False).splitlines()
+                labels = [f"run{n}" for n in range(len(rows))]
+                starts = {lines[self.row(canvas, label)].index("■", lines[0].index("cpu use/share")) for label in labels}
+                self.assertEqual({lines[0].index("cpu use/share")}, starts, "every bar starts where the header does")
+                slashes = {lines[self.row(canvas, label)].index("/", min(starts)) for label in labels}
+                self.assertEqual(1, len(slashes), "use and share line up around the slash")
+                states = {lines[self.row(canvas, label)].index(state) for label, state in (("gate", "waiting #1"),
+                                                                                          ("back", "yielded #2"))}
+                self.assertEqual(starts, states, "a waiting row's state starts where the bars do")
 
     def test_slots_are_countable_cells_in_the_rows_colour_alike_for_running_and_waiting(self) -> None:
         for form, two in (("spaced", "■ ■"), ("small", "▪▪")):
@@ -383,8 +415,8 @@ class QueueTableTests(unittest.TestCase):
         lines = canvas.render(False).splitlines()
         column = lines[0].index("slots")
         build = lines[self.row(canvas, "build")][column:].split("  ")[0]
-        self.assertRegex(build, r"^■( ■)+ \+\d+$")
-        self.assertEqual(20, build.count("■") + int(build.split("+")[1]))
+        self.assertRegex(build, r"^▪+ \+\d+$")
+        self.assertEqual(20, build.count("▪") + int(build.split("+")[1]))
         self.assertEqual("all", lines[self.row(canvas, "gate")][column:].split("  ")[0])
 
     def test_a_narrow_table_drops_columns_and_keeps_every_row_inside_its_frame(self) -> None:
@@ -394,7 +426,7 @@ class QueueTableTests(unittest.TestCase):
                 for line in lines[:8]:
                     self.assertLessEqual(len(line.rstrip()), width)
                 gate = next(line for line in lines if "gate" in line)
-                self.assertIn("■ ■ ■", gate, "the slot cells stay longest after the label")
+                self.assertIn("▪▪▪", gate, "the slot cells stay longest after the label")
                 self.assertIn("waiting #1", gate, "the state outlasts the time and pid")
                 self.assertEqual(gate.rstrip()[-1], "│")
 

@@ -40,15 +40,19 @@ follows the selection: **LEASE DETAILS** for a running request, whose lease hold
 slots, and **REQUEST DETAILS** for a waiting or yielded request, which holds none.
 The rows are the same either way.
 
-The QUEUE columns are label, slots, cpu use/share, time and pid. **slots** draws
-one countable cell per slot (`■ ■ ■`) in the row's colour: a running request's
-colour is the colour of its blocks in SLOTS, a waiting request's is the plain
-text colour. A count too wide for the column shows the cells that fit and `+N`
-for the rest; an `-n all` request that does not fit shows `all`. A request that
-holds no slots shows its state in **cpu use/share**, dim: `waiting #N` (its place
-in the order the queue serves) or `yielded #N` (a lease back in the queue after a
-yield). On a narrow terminal pid is dropped first, then time, then cpu use/share;
-the label is shortened before any of them.
+The QUEUE columns are label, slots, cpu use/share, time and pid. Each row has one
+colour: a running request's row (label, slot cells, CPU numbers, time and pid) is
+in the colour of its blocks in SLOTS, and only the CPU bar keeps its own colours; a
+waiting or yielded request's row is white, the normal text colour. The selected
+row keeps its highlight on top. **slots** draws one countable cell per slot
+(`▪▪▪`, small squares whose side bearing keeps them apart). A count too wide for
+the column shows the cells that fit and `+N` for the rest; an `-n all` request
+that does not fit shows `all`. A request that holds no slots shows its state in
+**cpu use/share**: `waiting #N` (its place in the order the queue serves) or
+`yielded #N` (a lease back in the queue after a yield). Bars and states start at
+the same column on every row, and the numbers line up around the slash. On a narrow terminal pid
+is dropped first, then time, then cpu use/share; the label is shortened before
+any of them.
 
 Time is elapsed run time for a running request and elapsed wait time for a pending
 one. CPU use/share is **cores used / cores represented by the lease’s slots**;

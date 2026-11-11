@@ -719,7 +719,7 @@ SLOT_CELLS = 8  # most cells the QUEUE table's slots column shows before it coun
 # How a slot cell is drawn: (glyph, gap between cells). Each cell must stay countable at a glance, never run into a
 # bar: "spaced" puts a space between full squares, "small" uses a small square whose side bearing separates it.
 SLOT_CELL_FORMS = {"spaced": ("■", " "), "small": ("▪", "")}
-SLOT_CELL = "spaced"
+SLOT_CELL = "small"  # the owner's pick (2026-11-11)
 
 
 def cells_text(count: int) -> str:
@@ -730,7 +730,7 @@ def cells_text(count: int) -> str:
 def slot_cells(item: dict[str, Any], size: int) -> list[tuple[str, str]]:
     """A row's slots as countable cells in the row's colour (the colour of its SLOTS blocks for a lease; the plain
     text colour for a waiting request, whose state the cpu column gives). A count wider than `size` keeps the cells
-    that fit and counts the rest (`■ ■ ■ +17`); an `-n all` request that does not fit says `all`."""
+    that fit and counts the rest (`▪▪▪▪▪▪ +14`); an `-n all` request that does not fit says `all`."""
     style = "text" if item["kind"] == "waiting" else item["style"]
     count = max(0, int(item["count"]))
     if text_width(cells_text(count)) <= size:
@@ -740,7 +740,7 @@ def slot_cells(item: dict[str, Any], size: int) -> list[tuple[str, str]]:
     shown = count
     while shown and text_width(cells_text(shown)) + len(f" +{count - shown}") > size:
         shown -= 1
-    return [(cells_text(shown), style), (f" +{count - shown}", "dim")]
+    return [(cells_text(shown), style), (f" +{count - shown}", style)]
 
 
 def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model: dict, selected: int,
@@ -753,9 +753,16 @@ def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model
         row_items.append(None)  # visual separator, never a selectable request
     row_items.extend(range(len(holders), len(items)))
     cells = max([5] + [text_width(cells_text(min(SLOT_CELLS, int(item["count"])))) for item in items])
+    # cpu use/share: the bar starts at the column's left edge on every row, then `use` right-aligned and `/share`
+    # left-aligned around the slash, padded to the widest on screen; a waiting row's state starts where the bars do.
+    shares = {index: share(item, model) for index, item in enumerate(holders)}
+    use_width = max([3] + [len(f"{used:.1f}") for used, _ in shares.values()])
+    share_width = max([1] + [len(short(allotted)) for _, allotted in shares.values()])
+    cpu_width = max(len("cpu use/share"), 5 + 1 + use_width + 1 + share_width,
+                    max([0] + [len(f"waiting #{n}") for n in range(1, len(waiters) + 1)]))
     # A request that holds no slots says so where a running one shows its CPU: the cpu column outlasts the time.
     placed = cast(list[tuple[str, str, int, int, bool]], columns(width - 6, [
-        ("label", "label", 0, False, 0), ("slots", "slots", cells, False, 1), ("cpu", "cpu use/share", 15, True, 2),
+        ("label", "label", 0, False, 0), ("slots", "slots", cells, False, 1), ("cpu", "cpu use/share", cpu_width, False, 2),
         ("time", "time", 8, True, 3), ("pid", "pid", 6, True, 4)]))
     size = next((column[3] for column in placed if column[0] == "slots"), cells)
     table_header(canvas, y, x, height, width, "QUEUE", placed)
@@ -770,21 +777,22 @@ def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model
         item = items[index]
         row = y + 2 + visual - offset
         waiting = index >= len(holders)
+        # One colour per row: a running lease's SLOTS colour (the CPU bar keeps its own), the text colour for a
+        # request that holds no slots.
+        style = "text" if waiting else str(item["style"])
         if waiting:
             place = index - len(holders) + 1
             state = f"yielded #{place}" if item.get("yields") else f"waiting #{place}"  # back in the queue to resume
             age = (moment - item["since"]).total_seconds() if item["since"] else None
-            cpu: list[tuple[str, str]] = [(state, "dim")]
-            label: tuple[str, str] = (str(item["label"]), "text")
+            cpu: list[tuple[str, str]] = [(state, style)]
         else:
             age = (moment - item["granted"]).total_seconds() if item["granted"] else None
-            used, allotted = share(item, model)
+            used, allotted = shares[index]
             cpu = bar(used / allotted if allotted else 0, 5, share_style(item, model, moment)) + [
-                (f" {used:.1f}/{short(allotted)}", "text")]
-            label = (str(item["label"]), str(item["style"]))
+                (f" {used:.1f}".rjust(use_width + 1) + "/" + short(allotted).ljust(share_width), style)]
         draw_row(canvas, row, x + 3, placed, {
-            "label": label, "slots": slot_cells(item, size),
-            "time": span(age) if age is not None else "—", "cpu": cpu, "pid": str(item["pid"])})
+            "label": (str(item["label"]), style), "slots": slot_cells(item, size),
+            "time": (span(age) if age is not None else "—", style), "cpu": cpu, "pid": (str(item["pid"]), style)})
         if index == selected:
             canvas.put(row, x + 2, "▶", "cursor")
             canvas.select(row, x + 3, x + width - 3)
@@ -1127,8 +1135,9 @@ HELP_CONTENT: list[tuple[str, str]] = [
     ("The header shows machine cores and shared slot capacity. manual means a saved capacity setting; auto means capacity calculated from the machine.", "text"),
     ("QUEUE", "title"),
     ("Running requests come first, followed by a blank separator and waiting requests. ▶ and a soft background identify the selected row. Selection opens its details.", "text"),
-    ("slots: one cell per slot the request holds or asks for, in the row's colour (a running request's colour is the one of its SLOTS blocks). A count too wide for the column shows the cells that fit and +N for the rest; -n all that does not fit shows all.", "text"),
-    ("cpu use/share: observed cores used by a running request / the core budget represented by its slots. A request can exceed its share; it is not a hard limit. A request that holds no slots shows its state there instead: waiting #N, its current place in the waiting queue, or yielded #N for a lease back in the queue after a yield.", "text"),
+    ("Each row has one colour: a running request's row is in the colour of its SLOTS blocks (the CPU bar keeps its own colours); a waiting or yielded request's row is white.", "text"),
+    ("slots: one cell per slot the request holds or asks for. A count too wide for the column shows the cells that fit and +N for the rest; -n all that does not fit shows all.", "text"),
+    ("cpu use/share: observed cores used by a running request / the core budget represented by its slots. A request can exceed its share; it is not a hard limit. A request that holds no slots shows its state there instead: waiting #N, its current place in the waiting queue, or yielded #N for a lease back in the queue after a yield. Bars and states start at one column; the numbers line up around the slash.", "text"),
     ("time is elapsed run time for running work and elapsed wait time for waiting work. pid is the lease owner. On a narrow terminal pid goes first, then time, then cpu use/share.", "text"),
     ("Yellow CPU indicates nearly idle work holding slots; red means use well above its share.", "text"),
     ("↑ above and ↓ more count rows outside the visible table. Scroll with the wheel or move the selection to reveal them.", "text"),
