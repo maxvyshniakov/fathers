@@ -32,20 +32,30 @@ class Tracker:
     def __init__(self) -> None:
         self.last: tuple[float, dict[Any, float]] | None = None
         self.since: float | None = None
+        self.peak = 0.0  # the highest rate of the current low run: a lower threshold than that starts a new run
 
     def observe(self, moment: float, members: Mapping[Any, float], threshold: float) -> float | None:
-        """Takes one sample and returns since when the tree has been low (None: it is not, or not known yet). An
-        interval is low when the tree used less than `threshold` cores in it and kept the same processes: a process
-        that starts or ends is activity even if its CPU fell between two samples. A threshold of 0 finds nothing."""
+        """Takes one sample and returns since when the tree has been low (None: it is not, or not known yet).
+        `members` is each process's CPU seconds, its own and its reaped children's (platform.children_cpu()), so a
+        worker started and reaped between two samples counts. An interval is low when the tree used less than
+        `threshold` cores in it and kept the same processes: a process that starts or ends is activity even if its
+        CPU fell between two samples. A run built under a looser threshold than the one now saved starts again. A
+        threshold of 0 finds nothing."""
         members = dict(members)
         if self.last is not None:
             before, previous = self.last
             elapsed = moment - before
             used = sum(max(0.0, cpu - previous[key]) for key, cpu in members.items() if key in previous)
-            low = (elapsed > 0 and set(members) == set(previous) and threshold > 0
-                   and used / elapsed < threshold)
-            self.since = (self.since if self.since is not None else before) if low else None
             self.rate = used / elapsed if elapsed > 0 else math.inf
+            low = elapsed > 0 and set(members) == set(previous) and threshold > 0 and self.rate < threshold
+            if low and self.since is not None and self.peak >= threshold:
+                self.since = None  # the threshold dropped below what this run allowed
+            if not low:
+                self.since, self.peak = None, 0.0
+            elif self.since is None:
+                self.since, self.peak = before, self.rate
+            else:
+                self.peak = max(self.peak, self.rate)
         self.last = (moment, members)
         return self.since
 
@@ -53,13 +63,17 @@ class Tracker:
 
 
 def record(entry: Path, since: float | None, rate: float, moment: float) -> None:
-    """The holder's record: since when its tree has been low (None: busy), the cores it used last, and when."""
+    """The holder's record: since when its tree has been low (None: busy), the cores it used last, when, and until
+    when the record holds (`expires`, by the holder's own sampling interval, so every reader agrees on it)."""
     found: dict[str, Any] = {"since": None if since is None else round(since, 3),
-                             "cpu": None if not math.isfinite(rate) else round(rate, 3), "at": round(moment, 3)}
+                             "cpu": None if not math.isfinite(rate) else round(rate, 3), "at": round(moment, 3),
+                             "expires": round(moment + stale_after(), 3)}
     cast(Any, _state).write(path(entry), found)
 
 
 def stale_after() -> float:
+    """How long a record holds: three of this process's longest intervals between looks, at least 30 s; written by
+    the holder into its record (`expires`)."""
     try:
         longest = max(0.05, float(_config.setting("SAMPLE_MAX") or _config.SAMPLE_MAX))
     except ValueError:
@@ -77,10 +91,12 @@ def idle_since(entry: Path, settings: Mapping[str, Any], moment: float) -> float
     if not isinstance(found, dict):
         return None
     record = cast(dict[str, Any], found)
-    at, since = record.get("at"), record.get("since")
+    at, since, expires = record.get("at"), record.get("since"), record.get("expires")
     numbers = (int, float)
     if not isinstance(at, numbers) or not isinstance(since, numbers) or isinstance(since, bool):
         return None
-    if moment - at > stale_after() or moment - since < float(settings.get("idle_after", 0.0)):
+    if not isinstance(expires, numbers) or isinstance(expires, bool):
+        expires = at + stale_after()  # a record without its holder's expiry: this reader's interval
+    if moment > expires or moment - since < float(settings.get("idle_after", 0.0)):
         return None
     return float(since)

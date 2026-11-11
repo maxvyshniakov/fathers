@@ -10,6 +10,7 @@ import datetime
 import importlib
 import json
 import os
+import sys
 import time
 import unittest
 from typing import Any
@@ -51,6 +52,72 @@ class TrackerTests(unittest.TestCase):
         tracker = sf_idle.Tracker()
         tracker.observe(0, tree(5.0), 0.0)
         self.assertIsNone(tracker.observe(10, tree(5.0), 0.0))
+
+
+class ReviewTests(unittest.TestCase):
+    """The #12 review: reaped workers count, a tighter threshold restarts the run, the holder's expiry rules."""
+
+    def test_a_lower_threshold_restarts_a_run_built_under_a_looser_one(self) -> None:
+        tracker = sf_idle.Tracker()
+        tracker.observe(0, tree(5.0), 0.1)
+        self.assertEqual(0, tracker.observe(10, tree(5.8), 0.1), "0.08 cores: low under 0.1")
+        self.assertEqual(10, tracker.observe(20, tree(5.85), 0.05), "0.08 was not low under 0.05: a new run")
+        self.assertEqual(10, tracker.observe(30, tree(5.86), 0.05))
+        self.assertEqual(10, tracker.observe(40, tree(5.87), 0.1), "a looser threshold keeps the run")
+
+    def test_workers_reaped_between_samples_keep_a_parent_busy(self) -> None:
+        usage = importlib.import_module("slotfather.usage")
+        import tempfile
+        directory = _Path(tempfile.mkdtemp(prefix="slotfather-idle-watch-"))
+        (directory / "queue").mkdir()
+        entry = directory / "queue" / "0000000001-123.json"
+        entry.write_text("{}")
+        tracked = usage.TreeUsage(123, 0)
+        watch = usage.Watch(tracked, directory, entry=entry)
+        parent = (123, "Mon Nov 11 10:00:00 2026")
+        reaped = [0.0]
+        def children(pid: int) -> float:
+            return reaped[0]
+
+        with mock.patch.object(usage._platform, "children_cpu", side_effect=children):
+            for moment in range(0, 60, 10):
+                tracked.members, tracked.last = {parent: [1.0, True]}, (float(moment), 0)
+                reaped[0] += 5.0  # half a core of short workers, none of them seen in a sample
+                watch.record_idle()
+            self.assertIsNone(json.loads(sf_idle.path(entry).read_text())["since"], "busy: never idle")
+            for moment in range(60, 120, 10):
+                tracked.members, tracked.last = {parent: [1.0, True]}, (float(moment), 0)
+                watch.record_idle()
+            self.assertEqual(50, json.loads(sf_idle.path(entry).read_text())["since"],
+                             "quiet from the last sample with reaped work")
+
+    def test_children_cpu_counts_a_reaped_child(self) -> None:
+        import subprocess
+        platform = importlib.import_module("slotfather.platform")
+        script = ("import subprocess, sys, time; subprocess.run([sys.executable, '-c', 'sum(range(10**7))']); "
+                  "print('reaped', flush=True); time.sleep(5)")
+        parent = subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual("reaped", parent.stdout.readline().strip() if parent.stdout else "")
+            found = platform.children_cpu(parent.pid)
+            self.assertIsNotNone(found)
+            self.assertGreater(found or 0, 0.01)
+        finally:
+            parent.kill()
+            parent.wait()
+            if parent.stdout:
+                parent.stdout.close()
+
+    def test_every_reader_takes_the_holders_expiry(self) -> None:
+        import tempfile
+        queue = _Path(tempfile.mkdtemp(prefix="slotfather-idle-expiry-"))
+        entry = queue / "0000000001-123.json"
+        settings = dict(sf_config.ORDER_DEFAULTS)
+        with mock.patch.dict(os.environ, {"SLOTFATHER_SAMPLE_MAX": "60"}):  # the holder looks every minute
+            sf_idle.record(entry, since=M - 900, rate=0.0, moment=M - 120)
+        with mock.patch.dict(os.environ, {"SLOTFATHER_SAMPLE_MAX": "1"}):  # a reader that would expect 30 s
+            self.assertEqual(M - 900, sf_idle.idle_since(entry, settings, M), "fresh by the holder's interval")
+            self.assertIsNone(sf_idle.idle_since(entry, settings, M + 61), "and stale after it")
 
 
 class ReaderTests(unittest.TestCase):

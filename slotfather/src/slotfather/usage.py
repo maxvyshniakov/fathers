@@ -164,6 +164,10 @@ class Watch(threading.Thread):
             moment = float(usage.last[0])
             known = cast(dict[tuple[int, str], list[Any]], usage.members)
             members = {key: float(value[0]) for key, value in known.items()}
+        for key in members:  # what each process's reaped children used: workers born and gone between looks
+            children = _platform.children_cpu(key[0])
+            if children is not None:
+                members[key] += children
         since = self.idle.observe(moment, members, threshold)
         if self.entry.exists():  # a release removes the entry, and with it the record
             _idle.record(self.entry, since, self.idle.rate, moment)

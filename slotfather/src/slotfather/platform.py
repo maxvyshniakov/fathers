@@ -356,6 +356,20 @@ def proc_cpu_seconds(pid: int, text: str | None = None) -> float | None:
         return None
 
 
+def children_cpu(pid: int) -> float | None:
+    """CPU seconds of the children `pid` has waited for (Linux cutime + cstime; macOS proc_pid_rusage), or None
+    where it cannot be read. A process's own CPU leaves them out: a busy worker started and reaped between two
+    samples shows only here."""
+    if linux():
+        try:
+            fields = proc_path(str(pid), "stat").read_text().rpartition(")")[2].split()
+            return (int(fields[13]) + int(fields[14])) / os.sysconf("SC_CLK_TCK")
+        except (OSError, IndexError, ValueError):
+            return None
+    from . import macos_process
+    return macos_process.children_cpu_seconds(pid)
+
+
 def usage_table() -> dict[int, tuple[int, str, int, int, float]]:
     """Live pid -> (ppid, start, uid, resident KB, CPU seconds of its own), from one ps over the machine (on Linux
     the CPU from /proc/PID/stat where it can be read). Raises SlotError when ps fails or takes longer than

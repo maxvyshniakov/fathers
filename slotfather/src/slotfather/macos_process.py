@@ -231,3 +231,43 @@ def basic_snapshot(required: set[int]) -> dict[int, tuple[int, str]]:
     if os.getpid() not in result or result[os.getpid()][0] != os.getppid():
         raise OSError(errno.EIO, "native identity table did not identify its caller")
     return result
+
+
+class RusageInfoV2(ctypes.Structure):
+    """sys/resource.h rusage_info_v2: times in mach absolute units; the child_ fields count reaped children."""
+    _fields_ = [("ri_uuid", ctypes.c_uint8 * 16)] + [(name, ctypes.c_uint64) for name in (
+        "ri_user_time", "ri_system_time", "ri_pkg_idle_wkups", "ri_interrupt_wkups", "ri_pageins", "ri_wired_size",
+        "ri_resident_size", "ri_phys_footprint", "ri_proc_start_abstime", "ri_proc_exit_abstime",
+        "ri_child_user_time", "ri_child_system_time", "ri_child_pkg_idle_wkups", "ri_child_interrupt_wkups",
+        "ri_child_pageins", "ri_child_elapsed_abstime", "ri_diskio_bytesread", "ri_diskio_byteswritten")]
+
+
+class TimebaseInfo(ctypes.Structure):
+    _fields_ = [("numer", ctypes.c_uint32), ("denom", ctypes.c_uint32)]
+
+
+_rusage: tuple[ctypes.CDLL, float] | None = None
+
+
+def children_cpu_seconds(pid: int) -> float | None:
+    """CPU seconds of the children `pid` has reaped (proc_pid_rusage, RUSAGE_INFO_V2), or None where unavailable:
+    a busy child born and reaped between two looks at the process table shows only here."""
+    global _rusage
+    if sys.platform != "darwin" or ctypes.sizeof(RusageInfoV2) != 160:
+        return None
+    try:
+        if _rusage is None:
+            libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+            libproc.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+            libproc.proc_pid_rusage.restype = ctypes.c_int
+            libc = ctypes.CDLL(None)
+            timebase = TimebaseInfo()
+            libc.mach_timebase_info(ctypes.byref(timebase))
+            _rusage = (libproc, timebase.numer / timebase.denom / 1e9 if timebase.denom else 1e-9)
+        libproc, scale = _rusage
+        info = RusageInfoV2()
+        if libproc.proc_pid_rusage(pid, 2, ctypes.byref(info)) != 0:
+            return None
+        return (info.ri_child_user_time + info.ri_child_system_time) * scale
+    except (OSError, AttributeError):
+        return None
