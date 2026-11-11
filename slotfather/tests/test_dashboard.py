@@ -308,7 +308,8 @@ class SeparationTests(SlotCase):
         self.assertIn(b"\x1b[?1006l\x1b[?1000l", screen)
         self.assertEqual(0, os.waitstatus_to_exitcode(status))
         text = screen.decode("utf-8")  # strict: a stray byte of a multibyte character fails here
-        self.assertIn("■", text)
+        # A bar's multibyte cells come through whole: filled ■ or, at a low load with no surface colours, track ░ (#14)
+        self.assertRegex(text, "[■░]")
         self.assertNotRegex(text, r"\x1b\[\d+b", "no REP: a terminal repeats bytes, not characters")
         self.assertTrue(text.rstrip().endswith("\x1b[?1049l"), "quitting leaves the alternate screen")
 
