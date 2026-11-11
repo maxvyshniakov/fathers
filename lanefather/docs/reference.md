@@ -53,7 +53,7 @@ self-contained configuration in the README for a Repo-Kit consumer.
 
 | Key | What it names |
 | --- | --- |
-| `command` | how messages name the command (`tools/lane` in Straylight) |
+| `command` | how messages name the command, for a project that wraps it (for example `tools/lane`) |
 | `state_dir` | the lane records, receipts and ledger |
 | `legacy_env_prefix`, `[env]` | the variables older tools set, read after `LANEFATHER_*` |
 | `rules_dir`, `coding_standards`, `steering`, `report_doc` | rule/standards inputs and the report-link text |
@@ -164,9 +164,9 @@ identity at the actual signal boundary. Existing configured hooks keep their sup
 
 ### State and its versions
 
-Records are schema 1, the format Straylight's `tools/lane` wrote before the move. lanefather writes nothing an older
-`tools/lane` cannot read, and reads everything it wrote: lanes on older branches, each running its own branch's
-`tools/lane`, share the state directory with an installed lanefather. `tests/test_compat.py` proves it in both
+Records are schema 1, the format written by `tools/lane`, the project-local tool Lanefather was extracted from.
+lanefather writes nothing an older `tools/lane` cannot read, and reads everything it wrote: lanes on older branches,
+each running its own branch's `tools/lane`, share the state directory with an installed lanefather. `tests/test_compat.py` proves it in both
 directions against that tool (`tests/fixtures/legacy-lane`). A record of a newer schema is refused, never rewritten.
 
 Safe to change: messages, the modules' insides. Not without a schema bump and a migration: record and receipt keys,

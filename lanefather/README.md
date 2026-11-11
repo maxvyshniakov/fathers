@@ -169,4 +169,8 @@ The stateless query does not reserve execution slots, and execution `advise.jobs
 
 ## License
 
-[MIT](LICENSE). Historical compatibility fixtures retain their source provenance.
+[MIT](LICENSE). Lanefather has no third-party runtime dependencies and vendors no third-party code. The files under
+`tests/fixtures/` are frozen copies of the older tool Lanefather was extracted from, by the same author and under
+the same license; `tests/fixtures/PROVENANCE.json` records their source.
+
+Security reports: [SECURITY.md](SECURITY.md). Contributions: [CONTRIBUTING.md](CONTRIBUTING.md).

@@ -32,7 +32,7 @@ cgroup budgets are not lifetime overrides.
 The installed `slotfather` is found on PATH; there is no production source path,
 argv-prefix or test-environment fallback. The bounded command is exactly
 `slotfather lane-admission --json`. Lanefather limits request size and combined
-stdout/stderr to65,536 bytes while streaming, and query I/O to5 seconds. On failure
+stdout/stderr to 65,536 bytes while streaming, and query I/O to 5 seconds. On failure
 it kills only its newly created query process group, including children retaining
 pipes; reaping has a separate one-second bound. Unknown versions/policies,
 nonzero exit, malformed or duplicate JSON fields, invalid numeric types, mismatched
@@ -58,15 +58,15 @@ A compatible receiver can add the lifetime query without changing its execution 
 records and in-flight immutable releases, coordinate old callers, then exercise actual readiness/start/next.
 An unavailable or unknown query fails closed after activation; do not substitute execution job advice.
 
-The initial Straylight/Slotfather rollout is completed; its historical project issues are acceptance records,
-not outstanding prerequisites for a new consumer. Each new registration group still owns its own activation.
+The first consumer's rollout is complete; it is not a prerequisite for a new consumer. Each new registration
+group still owns its own activation.
 
 Always-on tests use external executable stand-ins for transport/contract failures,
 concurrent registration, force/claims and the readonly Project interface. Optional
 cross-repository acceptance sets `LANEFATHER_TEST_SLOTFATHER_ARGV` to JSON argv for
-an immutable private Slotfather source CLI. **Only tests** read that variable and
+the CLI of an immutable Slotfather source checkout. **Only tests** read that variable and
 create a fixture PATH launcher; production code does not. Run it explicitly for
 release acceptance and record the exact source identity. Without it, the one
 cross-repository test is explicitly skipped, so a standalone package gate must not
-be described as full integration proof. Private source execution is test evidence,
+be described as full integration proof. Source-checkout execution is test evidence,
 not an installed receiver claim or production fallback.

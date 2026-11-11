@@ -1,4 +1,7 @@
-# Architecture pass: Straylight #667
+# Architecture pass after the extraction
+
+A historical design record. Lanefather was extracted from the lane tool of a private project (Straylight); this
+pass was tracked there as #667, and the issue numbers and project names below refer to that project.
 
 This pass starts at `feef0de`, the reviewed extraction of Straylight's lane engine. It changes no lane,
 receipt, queue or landing-lock representation. Live lanes on older branches keep using those files.
