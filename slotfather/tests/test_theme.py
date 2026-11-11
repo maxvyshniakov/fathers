@@ -1,4 +1,4 @@
-"""Dashboard colours from the terminal's theme (#14): tokens, mixed surfaces, holder pastels and the chart gradient."""
+"""Dashboard colours from the terminal's theme (#14): tokens, mixed surfaces, holder colours and the chart gradient."""
 from __future__ import annotations
 
 import sys as _path_sys
@@ -76,55 +76,98 @@ class ColourTests(unittest.TestCase):
             self.assertAlmostEqual(0.7, theme.oklab(colour)[0], places=1)
 
 
+def hexes(text: str) -> list[tuple[int, int, int]]:
+    return [(int(code[1:3], 16), int(code[3:5], 16), int(code[5:7], 16)) for code in text.split()]
+
+
+# The owner's examples (2026-11-11): Tailwind 600 on white, 400 on near black, in the order holders get them
+TAILWIND_LIGHT = hexes("#2563eb #e11d48 #059669 #7c3aed #ea580c #0891b2 #c026d3 #65a30d #d97706 #4f46e5 #db2777 "
+                       "#0d9488")
+TAILWIND_DARK = hexes("#60a5fa #fb7185 #34d399 #a78bfa #fb923c #22d3ee #e879f9 #a3e635 #fbbf24 #818cf8 #f472b6 #2dd4bf")
+# Terminal palettes' (red, yellow): over share and idle
+WARNINGS = {"light": [((0xCF, 0x22, 0x2E), (0x4D, 0x2D, 0x00)), ((205, 0, 0), (205, 205, 0)),
+                      ((0xE4, 0x56, 0x49), (0xC1, 0x84, 0x01))],  # GitHub Light, xterm, One Light
+            "dark": [((0xCC, 0x66, 0x66), (0xF0, 0xC6, 0x74)), ((0xE0, 0x6C, 0x75), (0xE5, 0xC0, 0x7B)),
+                     ((205, 0, 0), (205, 205, 0))]}  # Ghostty, One Dark, xterm
+
+
+def chroma(colour: tuple[int, int, int]) -> float:
+    _, a, b = theme.oklab(colour)
+    return (a * a + b * b) ** 0.5
+
+
 class HolderColourTests(unittest.TestCase):
-    def test_twelve_distinct_pastels_that_read_on_light_and_dark_backgrounds(self) -> None:
+    def test_twelve_distinct_vivid_colours_that_read_on_light_and_dark_backgrounds(self) -> None:
         for kind, backgrounds in BACKGROUNDS.items():
-            for background in backgrounds:
-                with self.subTest(kind=kind, background=background):
-                    colours = theme.holder_colours(background, kind == "light")
-                    self.assertEqual(12, len(colours))
+            for background, warnings in itertools.product(backgrounds, [None, *WARNINGS[kind]]):
+                with self.subTest(kind=kind, background=background, warnings=warnings):
+                    colours = theme.holder_colours(background, kind == "light", warnings)
                     self.assertEqual(12, len(set(colours)))
                     pairs = list(itertools.combinations(colours, 2))
-                    self.assertGreater(min(theme.distance(a, b) for a, b in pairs), 0.025, "every two differ")
+                    self.assertGreaterEqual(min(theme.distance(a, b) for a, b in pairs), theme.HOLDER_APART - 0.001,
+                                            "every two differ")
                     self.assertGreater(min(theme.distance(a, b) for a, b in itertools.combinations(colours[:6], 2)),
-                                       0.045, "the first six, what a usual queue shows, clearly")
+                                       0.09, "the first six, what a usual queue shows, clearly")
                     for first, second in zip(colours, colours[1:]):
                         self.assertGreater(theme.distance(first, second), 0.1, "neighbours by assignment differ")
                     for colour in colours:
                         self.assertGreaterEqual(theme.contrast(colour, background), 3.0, f"{colour} on {background}")
+                    red, yellow = warnings or (theme.LIGHT_WARNINGS if kind == "light" else theme.DARK_WARNINGS)
                     for colour in colours:
-                        self.assertGreater(theme.distance(colour, RED[kind]), 0.1, "an over-share bar still reads")
+                        self.assertGreaterEqual(theme.distance(colour, red), theme.WARNING_APART - 0.001,
+                                                f"an over-share bar reads against {colour}")
+                        self.assertGreaterEqual(theme.distance(colour, yellow), theme.WARNING_APART - 0.001,
+                                                f"an idle bar is not taken for {colour}")
 
-    def test_pastels_are_light_on_dark_and_deeper_on_light(self) -> None:
-        dark, light = theme.holder_colours(None, False), theme.holder_colours(None, True)
-        self.assertTrue(all(abs(theme.oklab(c)[0] - 0.80) < 0.02 for c in dark))
-        self.assertTrue(all(0.60 <= theme.oklab(c)[0] <= 0.68 for c in light))
-        self.assertGreaterEqual(min(theme.contrast(c, LIGHT_BG) for c in light), 3.0)
+    def test_they_land_close_to_the_examples_on_white_and_near_black(self) -> None:
+        for background, light, examples, band in (((255, 255, 255), True, TAILWIND_LIGHT, theme.LIGHT_BAND),
+                                                 ((30, 30, 30), False, TAILWIND_DARK, theme.DARK_BAND)):
+            colours = theme.holder_colours(background, light, ((205, 0, 0), (205, 205, 0)))
+            near = [theme.distance(colour, example) < 0.05 for colour, example in zip(colours, examples)]
+            self.assertGreaterEqual(sum(near), 10, f"{colours} against {examples}")
+            for colour in colours:
+                self.assertGreater(chroma(colour), 0.1, f"{colour} is vivid, not muddy")
+                self.assertLessEqual(chroma(colour), band.chroma + 0.005, f"{colour} is not neon")
 
-    def test_one_chroma_lowered_only_where_srgb_ends(self) -> None:
-        for light, (_, chroma) in ((False, theme.DARK_PASTEL), (True, theme.LIGHT_PASTEL)):
-            self.assertEqual((0.13, 0.14)[light], chroma, "saturated, not neon (owner, 2026-11-11)")
-            for colour in theme.holder_colours(None, light):
-                _, a, b = theme.oklab(colour)
-                found = (a * a + b * b) ** 0.5
+    def test_each_hue_takes_the_most_chroma_its_lightness_allows(self) -> None:
+        for light, background in ((True, LIGHT_BG), (False, DARK_BG)):
+            band = theme.LIGHT_BAND if light else theme.DARK_BAND
+            for colour in theme.holder_colours(background, light):
+                level = theme.oklab(colour)[0]
                 with self.subTest(light=light, colour=colour):
-                    self.assertLess(found, chroma + 0.004)
-                    if found < chroma - 0.004:  # lowered only where the colour reaches the edge of sRGB
-                        self.assertTrue(any(channel <= 2 or channel >= 253 for channel in colour))
+                    self.assertTrue(band.low - 0.01 <= level <= band.high + 0.01, level)
+                    best = max(theme.most_chroma(band.low + step * 0.005, theme.hue(colour), band.chroma)
+                               for step in range(int((band.high - band.low) / 0.005) + 1)
+                               if theme.contrast(theme.oklch(band.low + step * 0.005, band.chroma, theme.hue(colour)),
+                                                 background) >= 3)
+                    self.assertGreater(chroma(colour), best - theme.CHROMA_SLACK - 0.01)
 
-    def test_the_first_hues_stay_close_to_the_palette_before(self) -> None:
-        hues = [theme.hue(c) for c in theme.holder_colours(DARK_BG, False)]
-        before = {"blue": 250, "peach": 47, "mint": 168, "violet": 297}  # 256-colour 75, 216, 79, 141
+    def test_the_order_hands_out_the_most_distinct_first(self) -> None:
+        self.assertEqual(["blue", "rose", "emerald", "violet", "orange", "cyan", "fuchsia", "lime", "amber", "indigo",
+                          "pink", "teal"], [name for name, *_ in theme.HOLDER_HUES])
+        first = theme.holder_colours(DARK_BG, False)[0]
+        self.assertLess(abs(theme.hue(first) - 255), 6, "the first lease is still blue")
 
-        def gap(a: float, b: float) -> float:
-            return abs((a - b + 180) % 360 - 180)
-
-        self.assertLess(gap(hues[0], before["blue"]), 6, "the first lease is still blue")
-        for name, hue in before.items():
-            self.assertLess(min(gap(hue, found) for found in hues[:4]), 25, f"{name} among the first four")
+    def test_the_terminals_own_red_and_yellow_push_a_holder_away(self) -> None:
+        red, yellow = (0xE0, 0x6C, 0x75), (0xE5, 0xC0, 0x7B)  # One Dark: rose and amber sit on them
+        plain = theme.holder_colours(DARK_BG, False, ((0, 0, 255), (0, 0, 255)))
+        self.assertLess(theme.distance(plain[1], red), theme.WARNING_APART, "the rose would be taken for over share")
+        self.assertLess(theme.distance(plain[8], yellow), theme.WARNING_APART, "the amber would be taken for idle")
+        found = theme.resolve("auto", answered(bg=DARK_BG, p1=red, p3=yellow), {})
+        colours = [found.styles[f"h{n}"][0] for n in range(12)]
+        for colour in colours:
+            assert isinstance(colour, tuple)
+            self.assertGreaterEqual(theme.distance(colour, red), theme.WARNING_APART - 0.001)
+            self.assertGreaterEqual(theme.distance(colour, yellow), theme.WARNING_APART - 0.001)
+        self.assertGreater(chroma(cast_rgb(colours[1])), 0.14, "moved by hue, not dulled")
 
     def test_a_dark_background_known_or_not_gives_the_dark_set(self) -> None:
         self.assertEqual(theme.holder_colours(None, False), theme.holder_colours(DARK_BG, False))
+
+
+def cast_rgb(colour: Any) -> tuple[int, int, int]:
+    assert isinstance(colour, tuple)
+    return colour  # type: ignore[return-value]
 
 
 class GradientTests(unittest.TestCase):

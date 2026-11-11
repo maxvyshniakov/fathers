@@ -132,10 +132,13 @@ between light and dark, the dashboard asks again and repaints. A terminal that d
 dark by `COLORFGBG`; with neither, the surfaces have no background colour: tracks are `░` in bright black, a free
 slot is an outline and the selected row is bold beside its ▶.
 
-Holder colours are the dashboard's own: twelve pastels of one lightness and chroma in OKLCH, hues a golden angle
-apart starting from the earlier blue, so neighbours differ. On a dark background they are light pastels, on a light
-one deeper ones, each at least 3:1 against the reported background. The load chart runs from the theme's blue to its
-red in OKLab, without the terminal's answer from a fixed blue to red.
+Holder colours are the dashboard's own: twelve vivid colours, handed out in an order that makes the first ones
+the most distinct (blue, rose, emerald, violet, orange, cyan, fuchsia, lime, amber, indigo, pink, teal). Each hue
+takes the lightness, within the theme's band (OKLCH 0.52–0.68 on a light background, 0.70–0.82 on a dark one), that
+gives it the most chroma sRGB allows while it stays at least 3:1 against the reported background, so they land close
+to Tailwind's 600 shades on white and its 400 shades on near black. A holder too close to the theme's red (a CPU bar
+over its share) or yellow (an idle lease) turns its hue away from it, or failing that its lightness. The load chart
+runs from the theme's blue to its red in OKLab, without the terminal's answer from a fixed blue to red.
 
 Settings → this dashboard → **Colour theme**: `Auto` is the above; `Terminal` uses the palette only, with nothing
 mixed (the chart in palette steps); `Built-in` is the fixed 256-colour palette from before, for themes such as
