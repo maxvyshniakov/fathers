@@ -8,12 +8,12 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 - The scrollbar is a thumb alone, moving in half cells; the `↑ N above` and `↓ N more` counts are gone and
   their lines hold content. EVENTS still shows `↑ N new` while scrolled away from the newest.
-- A focused panel's title and column headers are in the foreground colour, like its frame.
+- The focused panel's frame is the terminal's blue, with its title and column headers in the foreground
+  colour; the other panels stay muted. Every frame keeps the same light, rounded lines.
 - A selected row keeps its text colour; only its background is tinted, lightly enough that its text keeps
   most of its contrast.
 - Every footer hint, in the dashboard and in help, Settings and the changelog, is a click target that does
   what its key does.
-- The focused panel has a heavy frame; the selected row's marker is a block in its colour.
 - Tab goes by columns: QUEUE, EVENTS, then DETAILS (top to bottom in one column), only through panels on
   screen.
 

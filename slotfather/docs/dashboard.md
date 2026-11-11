@@ -31,10 +31,11 @@ middle (`↑↓ select   tab panel   s settings   ? help   q quit`; `↑↓ scro
 last update and `● live` on the right; a narrow terminal drops the version first, then the hints help,
 settings, tab and select, quit last, and they never cover the status.
 
-**Focus** (#15). One panel has the keys: QUEUE at start, then Tab and Shift-Tab, or a click. Its frame is heavy
-(`┏━┓┃┗┛`) and, with the labels set into its top border (title, column headers), in the foreground colour; the
-others are light and muted. Arrow keys on a focused DETAILS or EVENTS are always theirs, also while the details
-load or with nothing to scroll. The selected row's marker on the left frame is a block (`█`) in its colour. EVENTS
+**Focus** (#15). One panel has the keys: QUEUE at start, then Tab and Shift-Tab, or a click. Every frame has the
+same light, rounded lines; the focused panel's is in the accent blue (the terminal's ANSI blue) and the labels set
+into its top border (title, column headers) in the foreground colour, while the others stay muted. Arrow keys on a
+focused DETAILS or EVENTS are always theirs, also while the details load or with nothing to scroll. The selected
+row's marker is a heavy `┃` on the left frame in its colour. EVENTS
 stays on its newest entry while scrolled to the top; scrolled down, it keeps showing the same events and counts the
 new ones in its bottom border (`↑ 3 new`); Home goes back.
 

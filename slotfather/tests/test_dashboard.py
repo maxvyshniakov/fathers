@@ -85,7 +85,7 @@ class DashboardTests(SlotCase):
         for title, message in (("QUEUE", "No requests"), ("EVENTS", "No grants")):
             row = next(i for i, line in enumerate(lines) if title in line)
             self.assertEqual(lines[row].index(title), lines[row + 1].index(message), "right under the header")
-            self.assertRegex(lines[row], "[╭┏]")
+            self.assertIn("╭", lines[row])
             if title != "EVENTS":
                 self.assertIn("pid", lines[row], "column names belong on the top border")
 
@@ -141,10 +141,10 @@ class DashboardTests(SlotCase):
         self.assertNotIn("next:", text)
         self.assertNotIn("2/4 held", text)
         self.assertIn("no admission",text)
-        self.assertRegex(text, "[─━] QUEUE ")
+        self.assertIn("─ QUEUE ", text)
         self.assertNotIn("REQUESTS", text, "the request table is the QUEUE panel")
         self.assertNotIn("RUNNING", text)
-        self.assertIn("█  ▶️ holder", text, "the selected row on the frame, its state (#15), then the label")
+        self.assertIn("┃  ▶️ holder", text, "the selected row on the frame, its state (#15), then the label")
         self.assertEqual(1, text.count("▶"), "only the selected row has a cursor")
         self.assertRegex(text, r"gate +▪▪▪▪ +waiting #1 ")
         self.assertRegex(text, r"small +▪ +waiting #2 ")
@@ -321,7 +321,7 @@ class UnifiedLaneTests(unittest.TestCase):
         self.assertIn("QUEUE",lines[0])
         self.assertIn("active",lines[1])
         self.assertFalse(lines[2][1:-1].strip())
-        self.assertIn("█  ⏸️ pending",lines[3])
+        self.assertIn("┃  ⏸️ pending",lines[3])
         column=lines[0].index("cpu use/share")+len("cpu use/share")
         self.assertTrue(lines[3][:column].rstrip().endswith("waiting #1"),lines[3])
         self.assertEqual(1,tool.mouse_action(canvas,("mouse",0,20,3,True),{},0))

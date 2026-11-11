@@ -117,7 +117,7 @@ class DetailsPanelTests(unittest.TestCase):
 
 
 class FocusTests(unittest.TestCase):
-    def test_the_focused_frame_is_the_foreground_and_the_rest_muted(self) -> None:
+    def test_the_focused_frame_is_the_accent_and_the_rest_muted(self) -> None:
         view = tool()
         for focus in view.PANELS:
             with self.subTest(focus=focus):
@@ -128,10 +128,10 @@ class FocusTests(unittest.TestCase):
                 canvas.box(10, 0, 10, 80, "EVENTS", name="events")
                 frames = {"requests": canvas.cells[5][0], "details": canvas.cells[5][40], "events": canvas.cells[15][0]}
                 for name, cell in frames.items():
-                    self.assertEqual("text" if name == focus else "dim", cell[1], name)
-                self.assertEqual("\x1b[0m", view.sgr("text", False), "the foreground token: no colour code")
+                    self.assertEqual("accent" if name == focus else "dim", cell[1], name)
+                self.assertEqual("\x1b[0;34m", view.sgr("accent", False), "the terminal's ANSI blue")
 
-    def test_the_focused_frame_is_heavy_and_the_others_light_with_clean_corners(self) -> None:
+    def test_every_frame_is_light_and_rounded_and_focus_shows_by_colour(self) -> None:
         view = tool()
         canvas = view.Canvas(80, 20)
         canvas.focus = "details"
@@ -139,11 +139,33 @@ class FocusTests(unittest.TestCase):
         canvas.box(0, 40, 10, 40, "DETAILS", name="details")
         canvas.box(10, 0, 10, 80, "EVENTS", name="events")
         rows = ["".join(cell[0] for cell in row) for row in canvas.cells]
-        self.assertEqual(("╭", "╮", "╰", "╯"), (rows[0][0], rows[0][39], rows[9][0], rows[9][39]), "QUEUE light")
-        self.assertEqual(("┏", "┓", "┗", "┛"), (rows[0][40], rows[0][79], rows[9][40], rows[9][79]), "DETAILS heavy")
-        self.assertEqual(("┃", "━"), (rows[5][40], rows[9][60]))
-        self.assertEqual(("╭", "╮"), (rows[10][0], rows[10][79]), "a light corner under a heavy one, unmixed")
-        self.assertEqual("+=", canvas.lines(False, ascii_only=True)[0][40:42])
+        for x, name in ((0, "QUEUE"), (40, "DETAILS")):
+            self.assertEqual(("╭", "╮", "╰", "╯"), (rows[0][x], rows[0][x + 39], rows[9][x], rows[9][x + 39]), name)
+            self.assertEqual(("│", "─"), (rows[5][x], rows[9][x + 20]), name)
+        self.assertEqual(("╭", "╮"), (rows[10][0], rows[10][79]))
+        self.assertFalse(set("┏┓┗┛━┃") & set("".join(rows)), "no heavy glyphs")
+        self.assertEqual({"accent"}, {cell[1] for cell in (canvas.cells[0][40], canvas.cells[0][79],
+                                                            canvas.cells[5][40], canvas.cells[9][60])})
+        self.assertEqual({"dim"}, {cell[1] for cell in (canvas.cells[0][0], canvas.cells[5][39], canvas.cells[15][0])})
+        lines = canvas.lines(True)
+        self.assertIn("\x1b[0;34m╭", lines[0], "the focused corner in ANSI blue")
+        self.assertIn("\x1b[0;34m│", lines[5], "and its sides")
+        self.assertEqual("DETAILS", "".join(cell[0] for cell in canvas.cells[0][43:50]))
+        self.assertEqual("title", canvas.cells[0][43][1], "the title in the foreground (bold), as on every panel")
+
+    def test_the_focused_panels_labels_are_in_the_foreground_and_the_others_muted(self) -> None:
+        view = tool()
+        placed = [("label", "label", 0, 10, False), ("pid", "pid", 12, 5, True)]
+        for focus in ("requests", "events"):
+            with self.subTest(focus=focus):
+                canvas = view.Canvas(60, 6)
+                canvas.focus = focus
+                view.table_header(canvas, 0, 0, 6, 60, "QUEUE", placed, name="requests")
+                x = "".join(cell[0] for cell in canvas.cells[0]).index("pid")
+                self.assertEqual("text" if focus == "requests" else "dim", canvas.cells[0][x][1])
+                self.assertEqual("title", canvas.cells[0][3][1])
+                self.assertEqual("accent" if focus == "requests" else "dim", canvas.cells[0][0][1], "the frame")
+        self.assertEqual("\x1b[0m", view.sgr("text", False), "the foreground token: no colour code")
 
     def test_a_click_focuses_the_panel_it_lands_in(self) -> None:
         view = tool()

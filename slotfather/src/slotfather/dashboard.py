@@ -64,7 +64,7 @@ def set_theme(theme: _theme.Theme) -> None:
 
 ASCII = str.maketrans({"🮅": "#", "■": "#", "▪": "#", "◌": "o", "□": "o", "▫": "o", "▶": ">", "▉": "#", "▌": "+", "▐": "|", "█": "#", "▓": "%", "▒": "=", "░": ".", "·": ".", "●": "*", "…": "~", "─": "-", "│": "|",
                        "╭": "+", "╮": "+", "╰": "+", "╯": "+", "↑": "^", "↓": "v", "↗": "/", "↘": "\\", "→": ">",
-                       "←": "<", "≈": "~", "×": "x", "—": "-", "⏸": "=", "▭": "o", "−": "-", "╻": "#", "╹": "#", "┏": "+", "┓": "+", "┗": "+", "┛": "+", "━": "=",  "┃": "#", "▁": "_", "▂": "_", "▃": "-", "▄": "-",
+                       "←": "<", "≈": "~", "×": "x", "—": "-", "⏸": "=", "▭": "o", "−": "-", "╻": "#", "╹": "#",  "┃": "#", "▁": "_", "▂": "_", "▃": "-", "▄": "-",
                        "▅": "=", "▆": "=", "▇": "#"})
 GRANTED = re.compile(r"granted (\d+) to (.*) \(pid (\d+)\)$")
 RELEASED = re.compile(r"released (\d+) \(\d+-(\d+)\.json\)$")
@@ -314,14 +314,12 @@ class Canvas:
                 self.cells[y][column][2] = tint
 
     def box(self, y: int, x: int, height: int, width: int, title: str = "", note: str = "", name: str = "") -> None:
-        """A frame in the muted token; the focused panel's (`name`, #15) in the foreground."""
+        """A rounded light frame in the muted token; the focused panel's (`name`, #15) in the accent blue, the same
+        glyphs: focus shows by colour alone (owner)."""
         if height < 2 or width < 6:
             return
-        focused = bool(name) and name == self.focus
-        frame = "text" if focused else "dim"
-        # The focused panel's frame is heavy (owner); panels never share an edge, so no junction mixes the two
-        top_left, top_right, bottom_left, bottom_right, across, down = (
-            ("┏", "┓", "┗", "┛", "━", "┃") if focused else ("╭", "╮", "╰", "╯", "─", "│"))
+        frame = "accent" if name and name == self.focus else "dim"
+        top_left, top_right, bottom_left, bottom_right, across, down = "╭", "╮", "╰", "╯", "─", "│"
         self.put(y, x, top_left + across * (width - 2) + top_right, frame)
         for row in range(y + 1, y + height - 1):
             self.put(row, x, down, frame)
@@ -844,7 +842,7 @@ def table_header(canvas: Canvas, y: int, x: int, height: int, width: int, title:
         # The title sits where every panel's does (x + 3); the other headers over their columns, `gutter` in
         start = x + 3 if index == 0 else x + 3 + gutter + column + (max(0, size - text_width(value)) if right else 0)
         canvas.put(y, start - 1, " ", "text")
-        focused = bool(name) and canvas.focus == name  # a focused panel's labels in the foreground, as its frame
+        focused = bool(name) and canvas.focus == name  # a focused panel's labels in the foreground, its frame blue
         canvas.put(y, start, value, "title" if index == 0 else "text" if focused else "dim", size)
         canvas.put(y, min(x + width - 2, start + min(size, text_width(value))), " ", "text")
 
@@ -1031,7 +1029,7 @@ def row_state(item: dict[str, Any], model: dict[str, Any]) -> str:
     return "legacy" if item["kind"] == "legacy" else "running"
 
 
-SELECTED_FRAME = "█"  # the left frame beside a selected row, a block in the row's colour (#15); # on ASCII
+SELECTED_FRAME = "┃"  # the left frame beside a selected row, heavy in the row's colour (#15); # on ASCII
 # A scrollbar's thumb (#15): a whole cell, a cell's lower half (where it starts), its upper half (where it ends);
 # # on an ASCII terminal
 SCROLL_THUMB, THUMB_LOWER, THUMB_UPPER = "┃", "╻", "╹"

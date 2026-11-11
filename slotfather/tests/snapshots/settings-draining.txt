@@ -8,7 +8,7 @@
 │   environment  SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB                       │
 │ ──────────────────────────────────────────────────────────────────────────   │
 │   Capacity                  Fixed                                            │
-█ ▶ Slots                     2  draining 2: running work keeps its slots      │
+┃ ▶ Slots                     2  draining 2: running work keeps its slots      │
 │   Queue order               Backfill                                         │
 │   Backfill margin           3×                                               │
 │   Unknown job runtime       3600 s                                           │
