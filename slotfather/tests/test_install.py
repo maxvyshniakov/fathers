@@ -141,11 +141,68 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(old_before, self.contents(backups[0]))
         self.assertIn("preserved", result.stdout)
 
-    def test_live_old_format_current_queue_refuses_before_guards_or_commands_change(self):
+    def test_live_old_format_entries_are_converted_in_place_under_the_lock_with_backups(self):
         pid, start = self.live_process()
-        variants: tuple[dict[str, object], ...] = ({}, {"priority": "normal", "meta": {"class": "normal"}},
-                    {"priority": "normal", "meta": {"priority": "normal"}},
-                    {"priority": "normal", "meta": {"ticket": "42"}})
+        queue = self.new / "queue"
+        queue.mkdir(parents=True)
+        (self.new / ".lock").touch()
+        base = {"pid": pid, "start": start, "label": "lane-480", "cmd": "verify.sh", "cwd": "/w",
+                "since": "2026-11-10T23:28:23Z"}
+        old: dict[str, dict[str, object]] = {
+            # What the installed 08ede50-era client writes: top-level fields plus metadata mirrors.
+            "0000000001-held.json": {**base, "count": 1, "state": "held", "priority": "interactive", "ticket": "337",
+                                     "granted": "2026-11-11T00:18:11Z",
+                                     "meta": {"lane": "337", "class": "interactive", "ticket": "337"}},
+            "0000000002-all.json": {**base, "count": 6, "state": "waiting", "priority": "interactive", "ticket": "697",
+                                    "all": True, "until": "2026-11-11T01:08:44Z", "rank": 1762817000.5, "yields": 1,
+                                    "meta": {"check": "tools/test-janitor.py", "class": "interactive",
+                                             "ticket": "697"}},
+            "0000000003-meta-ticket.json": {**base, "count": 2, "state": "waiting", "priority": "normal",
+                                            "meta": {"lane": "62", "ticket": "#62", "priority": "normal"}},
+            "0000000004-class-only.json": {**base, "count": 1, "state": "waiting", "priority": "batch",
+                                           "meta": {"class": "batch"}},
+            "0000000005-top-ticket-wins.json": {**base, "count": 1, "state": "held", "priority": "normal",
+                                                "ticket": None, "granted": "2026-11-11T00:00:00Z",
+                                                "meta": {"ticket": "99"}},
+        }
+        current = {**base, "count": 1, "state": "waiting", "priority": "normal", "ticket": "5", "meta": {"lane": "x"}}
+        stale = {**base, "start": start + " stale", "count": 1, "state": "held", "priority": "normal",
+                 "meta": {"class": "normal"}}
+        for name, entry in old.items():
+            (queue / name).write_text(json.dumps(entry) + "\n")
+        (queue / "0000000006-current.json").write_text(json.dumps(current) + "\n")
+        (queue / "0000000007-stale.json").write_text(json.dumps(stale) + "\n")
+        untouched = {name: (queue / name).read_bytes() for name in ("0000000006-current.json", "0000000007-stale.json")}
+        originals = {name: (queue / name).read_bytes() for name in old}
+
+        result = self.run_install()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        converted = {name: json.loads((queue / name).read_text()) for name in old}
+        expected: dict[str, dict[str, object]] = {
+            "0000000001-held.json": {**old["0000000001-held.json"], "meta": {"lane": "337"}},
+            "0000000002-all.json": {**old["0000000002-all.json"], "meta": {"check": "tools/test-janitor.py"}},
+            "0000000003-meta-ticket.json": {**old["0000000003-meta-ticket.json"], "ticket": "62", "meta": {"lane": "62"}},
+            "0000000004-class-only.json": {**old["0000000004-class-only.json"], "meta": {}},
+            "0000000005-top-ticket-wins.json": {**old["0000000005-top-ticket-wins.json"], "meta": {}},
+        }
+        self.assertEqual(expected, converted)
+        self.assertEqual(untouched, {name: (queue / name).read_bytes() for name in untouched})
+        self.assertEqual([], [p.name for p in queue.iterdir() if not p.name.endswith(".json")], "no pending files")
+        [backup] = list((self.state / "slotfather-migrations").glob("*/queue"))
+        self.assertEqual(originals, {p.name: p.read_bytes() for p in backup.iterdir()})
+        self.assertIn(str(backup), result.stdout)
+        self.assertTrue((self.bin / "slotfather").exists())
+
+        again = self.run_install()
+        self.assertEqual(0, again.returncode, again.stdout + again.stderr)
+        self.assertEqual(1, len(list((self.state / "slotfather-migrations").glob("*/queue"))), "nothing left to convert")
+
+    def test_a_live_entry_without_a_request_priority_still_refuses(self):
+        # Such an entry comes from a client older than the request fields: it ranks by metadata class alone, so
+        # removing those keys from the queue would change its decisions. It has to drain with its own code.
+        pid, start = self.live_process()
+        variants: tuple[dict[str, object], ...] = ({}, {"meta": {"class": "interactive"}},
+                                                   {"priority": "urgent", "meta": {"class": "batch"}})
         for fields in variants:
             for state in ("held", "waiting"):
                 with self.subTest(fields=fields, state=state):
@@ -158,7 +215,7 @@ class InstallTests(unittest.TestCase):
                     before = self.contents(self.new)
                     result = self.run_install()
                     self.assertEqual(2, result.returncode, result.stdout + result.stderr)
-                    self.assertIn("live old-format", result.stderr)
+                    self.assertIn("no request priority", result.stderr)
                     self.assertIn("drain", result.stderr)
                     self.assertEqual(before, self.contents(self.new))
                     self.assertFalse(self.old.exists())
@@ -603,7 +660,7 @@ class PackageInstallTests(unittest.TestCase):
             before = {p.name: p.read_bytes() for p in (self.new / 'queue').glob('*.json')}
             result = self.run_install('--python', sys.executable)
             self.assertEqual(2, result.returncode, result.stdout + result.stderr)
-            self.assertIn('live old-format', result.stderr)
+            self.assertIn('no request priority', result.stderr)
             self.assertIn('drain', result.stderr)
             self.assertEqual(before, {p.name: p.read_bytes() for p in (self.new / 'queue').glob('*.json')})
             self.assertFalse((self.bin / 'slotfather').exists())

@@ -94,11 +94,32 @@ def require_idle(directory, table):
             raise InstallError(f"live old {state} entry at {path}; let holders and waiters drain before installing")
 
 
-def require_current_format(directory: Path, table: dict[int, str]) -> None:
-    """The caller holds the queue lock: live clients must already use canonical request fields."""
-    for path in (directory / "queue").glob("*.json"):
+RESERVED_META = ("class", "priority", "ticket")
+
+
+def converted_entry(entry: dict[str, Any], meta: dict[str, Any]) -> dict[str, Any]:
+    """A live entry with canonical request fields: the metadata mirrors of priority and ticket removed, a metadata
+    ticket moved to the top level where that has none. Every other field, and key order, stays as it was."""
+    updated = dict(entry)
+    if "ticket" not in entry and "ticket" in meta:
         try:
-            entry: dict[str, Any] = json.loads(path.read_text())
+            ticket = history_ticket(meta["ticket"])
+        except ValueError:
+            ticket = None  # A client reading it would have ignored it as well.
+        if ticket is not None:
+            updated["ticket"] = ticket
+    updated["meta"] = {key: value for key, value in meta.items() if key not in RESERVED_META}
+    return updated
+
+
+def queue_updates(directory: Path, table: dict[int, str]) -> list[tuple[Path, bytes, bytes]]:
+    """The caller holds the queue lock. Plans the in-place conversion of live entries that still carry metadata
+    aliases (#8); refuses a live entry whose client ranks by metadata alone, or whose identity is unknown."""
+    updates: list[tuple[Path, bytes, bytes]] = []
+    for path in sorted((directory / "queue").glob("*.json")):
+        try:
+            original = path.read_bytes()
+            entry: dict[str, Any] = json.loads(original)
             pid, start, state = entry["pid"], entry["start"], entry["state"]
             if type(pid) is not int or pid <= 0 or not isinstance(start, str) or state not in ("held", "waiting"):
                 raise ValueError("unrecognized queue entry")
@@ -117,20 +138,65 @@ def require_current_format(directory: Path, table: dict[int, str]) -> None:
             raise InstallError(f"cannot establish current queue format from {path}: metadata is not a mapping")
         meta = cast(dict[str, Any], raw_meta)
         priority = entry.get("priority")
-        if (not isinstance(priority, str) or priority not in ("interactive", "normal", "batch")
-                or any(key in meta for key in ("class", "priority", "ticket"))):
-            raise InstallError(f"live old-format {state} entry at {path}; update its caller and let old-format "
-                               "holders and waiters drain before installing; no running work was stopped")
+        if not isinstance(priority, str) or priority not in ("interactive", "normal", "batch"):
+            # Only a client older than the request fields writes no top-level priority. It reads metadata class
+            # alone, for its own entry and every other: conversion would change its decisions.
+            raise InstallError(f"live {state} entry at {path} has no request priority; its client predates request "
+                               "fields; let it drain before installing; no running work was stopped")
+        if any(key in meta for key in RESERVED_META):
+            payload = (json.dumps(converted_entry(entry, meta)) + "\n").encode()
+            updates.append((path, original, payload))
+    return updates
 
 
-def reserve_current_queue(directory: Path, locks: ExitStack, created_guards: list[tuple[Path, int]]) -> bool:
-    """Lock an existing queue through publication, or reserve an absent path against concurrent creation."""
+def migrate_queue(updates: list[tuple[Path, bytes, bytes]], backup: Path) -> None:
+    """Back up every original, then replace each entry atomically (`.pending` and rename, as clients write); the
+    queue lock remains held, so no client reads or writes between the check and the replacement."""
+    if not updates:
+        return
+    for path, original, _ in updates:
+        try:
+            unchanged = path.read_bytes() == original
+        except OSError:
+            unchanged = False
+        if not unchanged:
+            raise InstallError(f"queue entry changed during installation at {path}; retry")
+    saved = backup / "queue"
+    try:
+        saved.mkdir(parents=True, mode=0o700)
+        for path, original, _ in updates:
+            with (saved / path.name).open("xb") as handle:
+                os.fchmod(handle.fileno(), 0o600)
+                handle.write(original)
+                handle.flush()
+                os.fsync(handle.fileno())
+        for path, _, payload in updates:
+            pending = path.with_name(path.name + ".pending")
+            try:
+                with pending.open("wb") as handle:
+                    os.fchmod(handle.fileno(), path.stat().st_mode & 0o777)
+                    handle.write(payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(pending, path)
+            finally:
+                pending.unlink(missing_ok=True)
+    except OSError as error:
+        raise InstallError(f"queue conversion stopped; original entries are preserved at {saved}: {error}") from None
+    print(f"Converted request fields of {len(updates)} live queue entr{'y' if len(updates) == 1 else 'ies'} in place; "
+          f"originals saved at {saved}")
+
+
+def reserve_current_queue(directory: Path, locks: ExitStack, created_guards: list[tuple[Path, int]],
+                          updates: list[tuple[Path, bytes, bytes]]) -> bool:
+    """Lock an existing queue through publication, or reserve an absent path against concurrent creation. Adds the
+    planned conversion of its live entries to `updates`."""
     while True:
         if directory.is_symlink():
             raise InstallError(f"new queue must be a real directory: {directory}")
         if directory.is_dir():
             locks.enter_context(lock(directory / ".lock"))
-            require_current_format(directory, live_processes())
+            updates.extend(queue_updates(directory, live_processes()))
             return False
         if directory.exists():
             raise InstallError(f"new queue path is not a directory; preserve it and recover before retrying: {directory}")
@@ -483,7 +549,8 @@ def install(home: Path, source: Path, python: str, bin_dir: Path | None = None,
     changing = False
     with lock(state / ".slotfather-install.lock"), ExitStack() as locks:
         try:
-            new_guard = reserve_current_queue(destination, locks, created_guards)
+            entry_updates: list[tuple[Path, bytes, bytes]] = []
+            new_guard = reserve_current_queue(destination, locks, created_guards, entry_updates)
             old_directories = []
             # Reserve absent old paths before checking idleness. An old client can
             # no longer create a queue while the other paths are being checked.
@@ -535,6 +602,8 @@ def install(home: Path, source: Path, python: str, bin_dir: Path | None = None,
                 changing = True
                 empty.unlink()  # This is now the temporary guard, never queue data.
             changing = True
+            # Before the new commands exist, so that every client they start finds canonical entries.
+            migrate_queue(entry_updates, backup)
             migrate_history(destination, updates, backup)
             # The companions (dashboard, stats, sweep) first: an executable that names a missing one is the shorter-lived
             # mismatch.

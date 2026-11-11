@@ -69,9 +69,10 @@ keyword arguments. Priority and ticket are not accepted as metadata.
 
 The retired `--class`, `meta.class`, `meta.priority` and `meta.ticket` inputs are
 rejected. Request JSON uses version 2 with `priority` and optional `ticket`;
-there is no duplicate `class` field. Installation requires old clients to drain
-and converts persisted history once, outside ordinary reads. No runtime fallback
-interprets the retired fields.
+there is no duplicate `class` field. Installation converts live queue entries
+that carry the retired fields as mirrors and persisted history, outside ordinary
+reads; clients that predate the request fields must drain first. No runtime
+fallback interprets the retired fields.
 
 The dashboard shows known caller fields individually: phase, kind, check,
 revision (`sha`), run on (`on`) and session. The remaining custom keys stay in

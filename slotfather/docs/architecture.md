@@ -64,8 +64,9 @@ not a reason to rewrite queue state. Derived caches may be rebuilt rather than m
   change code underneath an already running old client. Releases are retained while old
   clients may still use them.
 - `slotfather version` identifies the installed source so local and remote installations can
-  be compared. Installation does not take over queue admission or cancel running work. Breaking request-format
-  installation refuses live old-format clients and proceeds only after they have drained.
+  be compared. Installation does not take over queue admission or cancel running work. Installation converts
+  live entries of clients that already write request fields in place and refuses live clients
+  older than them until they have drained (#8).
 
 Executable-file internals are not the package API. External tools should use documented JSON
 commands; Python integrations should import the module that owns the behavior they use.
