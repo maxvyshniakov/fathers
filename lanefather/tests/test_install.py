@@ -1,6 +1,7 @@
 """Tests of install.py: releases beside each other, `current` swapped in one rename, the command on its interpreter."""
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import shutil
@@ -35,6 +36,15 @@ class InstallTests(unittest.TestCase):
         current = (self.tmp / "share" / "current").resolve()
         self.assertTrue((current / "lanefather" / "cli.py").is_file())
         self.assertFalse(list(current.rglob("__pycache__")))
+        # fathers#104: the release ships its changelog, and `changelog --json` reads that copy.
+        self.assertEqual((current / "lanefather" / "CHANGELOG.md").read_text(), (ROOT / "CHANGELOG.md").read_text())
+        news = subprocess.run([str(command), "changelog", "--json"], capture_output=True, text=True, env=env,
+                              cwd=self.tmp)
+        answer = json.loads(news.stdout)
+        self.assertEqual((answer["tool"], answer["source"]),
+                         ("lanefather", str((current / "lanefather" / "CHANGELOG.md").resolve())))
+        unreleased = [e for e in answer["entries"] if e.get("unreleased")]
+        self.assertTrue(unreleased and all(e["source"] == head and e["version"] is None for e in unreleased))
 
     def test_old_releases_beyond_three_go(self):
         releases = self.tmp / "share" / "releases"

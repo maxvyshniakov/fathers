@@ -25,6 +25,9 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   is in the parent lane's diff, otherwise the plan of both diffs; either way the parent's passed results stand for
   each check no change since the parent's head selects. The receipt says which (`fix_of`). Land, the smoke and
   promote's batch gate are unchanged.
+- `lanefather changelog --json [--since VERSION]` gives the installed release's changelog as entries for
+  Godfather's what's new (fathers#104), the Unreleased ones first with the installed commit; install.py ships the
+  changelog in the release ([docs/api.md](docs/api.md)).
 
 ### Changed
 

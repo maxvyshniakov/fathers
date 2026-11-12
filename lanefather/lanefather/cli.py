@@ -1,5 +1,6 @@
 """The lanefather command line.
 
+  changelog [--json] [--since V]     the installed release's changelog entries (Godfather's what's new)
   start <id> --ticket N --claims GLOB... [--base REF] [--after ID...] [--create]
   next [--start] [--base REF]        the first ready entry of the ranked queue: its brief header;
                                      --start registers it as start would
@@ -43,6 +44,7 @@ import sys
 
 from . import (
     __version__,
+    changelog,
     checks,
     config,
     done,
@@ -82,6 +84,11 @@ def parser() -> argparse.ArgumentParser:
     p = commands.add_parser("capabilities", help="versioned capabilities and verified installed source identity")
     p.add_argument("--json", action="store_true")
     p.set_defaults(run=runtime.capabilities)
+    p = commands.add_parser("changelog", help="the installed release's changelog entries, Unreleased first "
+                                              "(docs/api.md)")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--since", metavar="VERSION", help="only releases newer than VERSION, and Unreleased")
+    p.set_defaults(run=changelog.command)
     p = commands.add_parser("project-hook", help="run one configured project policy in the installed runtime")
     p.add_argument("name")
     p.add_argument("arguments", nargs=argparse.REMAINDER)
