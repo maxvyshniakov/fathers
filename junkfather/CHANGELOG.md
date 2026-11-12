@@ -14,6 +14,11 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   quit), and the hourly sweep reports booted simulators, running containers and serve routes no one owns, without
   stopping them.
 
+### Changed
+
+- junkfather lives in the `fathers` repository: install it with `python3 install.py junkfather` from a `fathers`
+  checkout.
+
 ## 0.1.0 - 2026-11-12
 
 ### Added

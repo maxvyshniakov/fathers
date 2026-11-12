@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT.parent / "common"))  # eventcheck: common/eventcheck.py, the shared validator
 
 from junkfather import procs  # noqa: E402
 from junkfather.state import Store  # noqa: E402

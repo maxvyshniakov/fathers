@@ -2,8 +2,8 @@
 
 Owns the long-lived processes agents start (preview servers, browsers, drivers, watchers), and the resources that
 outlive them (booted simulators, containers, `tailscale serve` routes, Safari Technology Preview), and ends them when
-their owner ends or their time is up. It keeps [Slotfather](https://github.com/maxvyshniakov/slotfather) (machine
-capacity) and [Lanefather](https://github.com/maxvyshniakov/lanefather) (lanes) out of process cleanup.
+their owner ends or their time is up. It keeps [Slotfather](../slotfather) (machine
+capacity) and [Lanefather](../lanefather) (lanes) out of process cleanup.
 
 Why: a subagent started a headless Firefox through Marionette with a profile in its session scratchpad. The
 Firefox ran unowned for 11 hours; neither `slotfather sweep` nor `lanefather done` covered it, because it never went
@@ -63,7 +63,7 @@ Copy this into an agent brief:
 | `sweep [--dry-run] [--json] [--quiet]` | reaps expired and orphaned entries, reports unowned agent processes and unowned simulators, containers and serve routes |
 | `sweep --plist` | the hourly launchd agent |
 | `hook` | the Claude Code / Codex lifecycle hook (JSON on stdin) |
-| `status --json`, `capabilities --json` | the snapshot and capabilities for [Godfather](https://github.com/maxvyshniakov/godfather)'s dashboard |
+| `status --json`, `capabilities --json` | the snapshot and capabilities for [Godfather](../godfather)'s dashboard |
 
 The owner is the Claude Code session (`CLAUDE_CODE_SESSION_ID`, its process `CLAUDE_PID`), the subagent that ran
 the command when the PreToolUse hook saw it, and the lane (`LANEFATHER_LANE`, `JUNKFATHER_LANE`, or the lane
@@ -74,8 +74,8 @@ Lanefather are in [docs/reference.md](docs/reference.md).
 ## Install
 
 ```sh
-git clone https://github.com/maxvyshniakov/junkfather ~/junkfather
-python3 ~/junkfather/install.py --launchd --mastack
+git clone https://github.com/maxvyshniakov/fathers ~/fathers
+python3 ~/fathers/install.py junkfather --launchd --mastack
 ```
 
 `install.py` puts the command in `~/.local/bin/junkfather` (a release under `~/.local/share/junkfather`), and with

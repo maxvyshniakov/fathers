@@ -15,7 +15,8 @@
   ],
   "extraPaths": [
     "src",
-    "tests"
+    "tests",
+    "../common"
   ],
   "pythonVersion": "3.9",
   "typeCheckingMode": "strict"

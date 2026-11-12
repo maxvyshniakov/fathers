@@ -124,7 +124,7 @@ def committed_baseline() -> dict[str, int] | None:
         return None  # exported source tree without Git metadata
     history: list[dict[str, int]] = []
     for revision in commits.stdout.splitlines():
-        result = subprocess.run(["git", "show", f"{revision}:tools/type-baseline.json"], cwd=ROOT,
+        result = subprocess.run(["git", "show", f"{revision}:./tools/type-baseline.json"], cwd=ROOT,
                                 capture_output=True, text=True)
         # A committed deletion after adoption is an empty budget, not missing evidence.
         # The path's log includes its first addition, so earlier unrelated commits are absent.

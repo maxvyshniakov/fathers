@@ -1,7 +1,20 @@
 {
-  "include": ["src", "install.py", "tests", "tools"],
-  "exclude": ["**/__pycache__", "assets", ".venv"],
-  "extraPaths": ["src", "tests"],
+  "include": [
+    "src",
+    "install.py",
+    "tests",
+    "tools"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "assets",
+    ".venv"
+  ],
+  "extraPaths": [
+    "src",
+    "tests",
+    "../common"
+  ],
   "pythonVersion": "3.9",
   "typeCheckingMode": "strict"
 }

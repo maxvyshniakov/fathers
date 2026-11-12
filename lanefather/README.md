@@ -27,7 +27,7 @@ opinionated `dev`/`main` branch policy. Full lane verification requires your pro
 a plain `bun run verify` or `make test` command alone does not implement that contract.
 
 [Repo-Kit](https://github.com/maxvyshniakov/repo-kit) can supply the verification adapter for configured Bun
-libraries. [Slotfather](https://github.com/maxvyshniakov/slotfather) coordinates expensive executions across the
+libraries. [Slotfather](../slotfather) coordinates expensive executions across the
 machine. They solve different problems: a lane can live for hours while acquiring execution leases only for its
 checks or builds. You can also use protected-branch promotion with your own pre-push gate before adopting lanes.
 
@@ -47,9 +47,9 @@ filesystem**; cap and load checks also apply. This can exclude small disks even 
 ## Install
 
 ```sh
-git clone https://github.com/maxvyshniakov/lanefather.git
-cd lanefather
-python3 install.py
+git clone https://github.com/maxvyshniakov/fathers.git
+cd fathers
+python3 install.py lanefather    # or: python3 lanefather/install.py
 ```
 
 Put `~/.local/bin` on `PATH`, then run `lanefather --version` and `lanefather capabilities --json`.

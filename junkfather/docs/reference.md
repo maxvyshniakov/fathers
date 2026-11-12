@@ -24,7 +24,7 @@ Finished entries and their logs are pruned after 7 days.
 
 ## Events
 
-`events.jsonl` in the state directory follows Godfather's event schema version 1 (`~/godfather/SPEC.md`, Event
+`events.jsonl` in the state directory follows Godfather's event schema version 1 ([`godfather/SPEC.md`](../../godfather/SPEC.md), Event
 schema): `v`, `time` (RFC 3339 UTC, milliseconds), `host`, `source: "junkfather"`, `kind`, `subject`, `actor`,
 `details`, `level` when not `info`. One `write` per line on an `O_APPEND` file of mode 0600; past 4 MiB it becomes
 `events.jsonl.1` under an flock on `events.lock`. Strings carry no control characters and are cut to 400

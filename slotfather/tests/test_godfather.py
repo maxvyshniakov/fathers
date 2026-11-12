@@ -20,7 +20,7 @@ import unittest
 from test_slotfather import ROOT, TOOL, SlotCase
 
 MISSING = ("slotfather: the dashboard is part of godfather now; install it from "
-           "https://github.com/maxvyshniakov/godfather\n")
+           "https://github.com/maxvyshniakov/fathers/tree/main/godfather (python3 install.py godfather)\n")
 TERMINAL = ("termios", "tty", "pty", "curses", "readline", "slotfather.dashboard", "slotfather.dashboard_settings",
             "slotfather.theme", "slotfather.keys")
 

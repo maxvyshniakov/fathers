@@ -33,6 +33,8 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Changed
 
+- Slotfather lives in the `fathers` repository with Lanefather, junkfather and Godfather: install it with
+  `python3 install.py slotfather` from a `fathers` checkout. `slotfather dashboard` without Godfather points there.
 - A memory-pressure warning (macOS level 2, Linux PSI `some` at its limit) no longer stops every new lease: one
   1-slot lease at a time starts beside running ones; larger requests and `-n all` wait, and critical pressure, low
   swap or low available memory still stop. `slotfather order --warning-admits 0` (or `SLOTFATHER_WARNING_ADMITS=0`)

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/maxvyshniakov/godfather/schema/event-v1.schema.json",
   "title": "Tool event, version 1",
-  "description": "One line of a tool's events.jsonl. src/godfather/eventcheck.py is the reference validator; it also checks what JSON Schema cannot: control characters in every string, details nested at most four levels, a real date, and the 16 KiB line limit. Readers ignore unknown fields; strict validation (additionalProperties false at the top level) is for the tools' own tests.",
+  "description": "One line of a tool's events.jsonl. common/eventcheck.py (in the fathers repository) is the reference validator; it also checks what JSON Schema cannot: control characters in every string, details nested at most four levels, a real date, and the 16 KiB line limit. Readers ignore unknown fields; strict validation (additionalProperties false at the top level) is for the tools' own tests.",
   "type": "object",
   "required": ["v", "time", "host", "source", "kind", "subject", "actor", "details"],
   "additionalProperties": false,

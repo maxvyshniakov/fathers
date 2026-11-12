@@ -1,27 +1,25 @@
 #!/usr/bin/env python3
 """events.jsonl in Godfather's event schema (slotfather#29): real commands in a temporary queue, every line valid in
-the vendored validator's strict mode, one event for each queue.log line, and queue.log as it always was."""
+the shared validator's (common/eventcheck.py) strict mode, one event for each queue.log line, and queue.log as it always was."""
 from __future__ import annotations
 import sys as _path_sys
 from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from slotfather import events as sf_events
 
-import hashlib
 import json
 import os
 import re
 import stat
 import time
-import unittest
 from typing import Any
 from unittest import mock
 
-from vendor import eventcheck  # tests/vendor/eventcheck.py, Godfather's validator, vendored unchanged
+_path_sys.path.insert(0, str(_Path(__file__).resolve().parents[2] / "common"))
+import eventcheck  # common/eventcheck.py, the shared event validator
 from test_classes import YIELDER
 from test_slotfather import TOOL, SlotCase
 
-VENDOR = _Path(__file__).resolve().parent / "vendor"
 # queue.log's lines, by their first words, and the event kinds that mirror them
 MIRROR = (("granted ", ("lease.granted",)), ("released ", ("lease.released", "request.left")),
           ("reaped ", ("lease.reaped", "request.reaped")), ("reprioritized ", ("request.reprioritized",)),
@@ -32,18 +30,6 @@ QUEUE_LOG = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ (granted \d+ to .* \(p
                        r"reaped (held|waiting) lease of \d+ for .* \(pid \d+ exited\)|reprioritized .* \(pid \d+\) "
                        r"from \w+ to \w+|waiting long: .*|asked .* \(pid \d+\) to yield \d+ for .*|withdrew the yield "
                        r"request to .* \(pid \d+\)|yielded \d+ \(\d+-\d+\.json\) to .*)$")
-
-
-class VendoredValidatorTests(unittest.TestCase):
-    def test_the_vendored_validator_is_the_recorded_file(self) -> None:
-        data = (VENDOR / "eventcheck.py").read_bytes()
-        self.assertEqual((VENDOR / "eventcheck.py.sha256").read_text().strip(), hashlib.sha256(data).hexdigest())
-
-    @unittest.skipUnless(os.environ.get("GODFATHER_DIR"), "GODFATHER_DIR names no Godfather checkout")
-    def test_the_vendored_validator_is_godfathers(self) -> None:
-        canonical = _Path(os.environ["GODFATHER_DIR"]) / "src" / "godfather" / "eventcheck.py"
-        self.assertEqual(canonical.read_bytes(), (VENDOR / "eventcheck.py").read_bytes(),
-                         "copy it again and record its new SHA-256 in tests/vendor/eventcheck.py.sha256")
 
 
 class EventLogTests(SlotCase):

@@ -1,10 +1,9 @@
 """The event log (lanefather.events, lanefather.journal): every ledger entry once more as an event in Godfather's
-schema, checked in strict mode by its vendored validator (tests/vendor/eventcheck.py)."""
+schema, checked in strict mode by the shared validator (common/eventcheck.py)."""
 from __future__ import annotations
 
 import ast
 import fcntl
-import hashlib
 import json
 import os
 import pathlib
@@ -16,28 +15,14 @@ from unittest import mock
 
 from support import ROOT, LaneCase
 
-sys.path.insert(0, str(ROOT / "tests" / "vendor"))
-import eventcheck  # pyright: ignore[reportMissingImports]  vendored, unchanged
+sys.path.insert(0, str(ROOT.parent / "common"))
+import eventcheck  # pyright: ignore[reportMissingImports]  common/eventcheck.py, the shared validator
 
 from lanefather import config, events, journal
-
-VENDOR = ROOT / "tests" / "vendor"
 
 
 def validate_file(path: pathlib.Path) -> list[str]:
     return eventcheck.validate_file(str(path), strict=True)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-
-
-class VendoredValidatorTests(unittest.TestCase):
-    def test_the_vendored_validator_has_the_recorded_sha256(self):
-        recorded = (VENDOR / "eventcheck.py.sha256").read_text().split()[0]
-        self.assertEqual(hashlib.sha256((VENDOR / "eventcheck.py").read_bytes()).hexdigest(), recorded)
-
-    @unittest.skipUnless(os.environ.get("GODFATHER_DIR"), "GODFATHER_DIR names no Godfather checkout")
-    def test_the_vendored_validator_is_the_canonical_one(self):
-        canonical = pathlib.Path(os.environ["GODFATHER_DIR"]) / "src" / "godfather" / "eventcheck.py"
-        self.assertEqual((VENDOR / "eventcheck.py").read_bytes(), canonical.read_bytes(),
-                         "copy the canonical eventcheck.py again and record its SHA-256")
 
 
 class EventLogTests(LaneCase):

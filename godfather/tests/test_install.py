@@ -40,7 +40,7 @@ class InstallTests(unittest.TestCase):
         self.assertTrue(text.startswith("#!" + sys.executable + "\n"))
         self.assertIn(repr(str(release)), text)
         self.assertEqual(self.home / ".local/lib/godfather/releases", release.parent)
-        for name in ("app.py", "eventcheck.py", "tui.py", "views/overview.py", "adapters/slotfather.py",
+        for name in ("app.py", "tui.py", "views/overview.py", "adapters/slotfather.py",
                      "version.json", "CHANGELOG.md"):
             self.assertTrue((release / "godfather" / name).is_file(), name)
         self.assertFalse(any(release.rglob("__pycache__")))

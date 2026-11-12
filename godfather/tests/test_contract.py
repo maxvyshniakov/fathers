@@ -1,6 +1,7 @@
 """Godfather against the real Slotfather CLI in an isolated SLOTFATHER_DIR: its capabilities, snapshot and settings
-decode as docs/contracts/slotfather.md says. Skipped where Slotfather is not installed or lacks SF-1 / SF-2
-(slotfather#26, #27); SLOTFATHER_BIN names another executable, such as a checkout's `slotfather`."""
+decode as docs/contracts/slotfather.md says. It runs the sibling checkout's ../slotfather/slotfather in the fathers
+repository, so both packages are tested at the same commit; SLOTFATHER_BIN names another executable. Outside the
+repository it falls back to the installed `slotfather`, and is skipped where that lacks SF-1 / SF-2 (slotfather#26, #27)."""
 from __future__ import annotations
 
 import json
@@ -19,7 +20,8 @@ from godfather import app, sources
 from godfather.adapters import slotfather as adapter
 from godfather.views import settings as settings_view
 
-EXECUTABLE = os.environ.get("SLOTFATHER_BIN") or shutil.which("slotfather")
+SIBLING = Path(__file__).resolve().parents[2] / "slotfather" / "slotfather"
+EXECUTABLE = os.environ.get("SLOTFATHER_BIN") or (str(SIBLING) if SIBLING.is_file() else shutil.which("slotfather"))
 
 
 def capabilities(environ: dict[str, str]) -> Any:

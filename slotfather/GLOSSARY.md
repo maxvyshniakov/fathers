@@ -2,6 +2,8 @@
 
 One context: scheduling shared work capacity on a machine. Caller workflow lanes
 belong to their own context; the relationship is recorded in [terminology](docs/terminology.md#relationship-to-lanefather).
+Terms shared with the other tools (owner, reap, orphan, session, process identity) are in the
+[fathers glossary](../GLOSSARY.md).
 
 | Term | Meaning |
 | --- | --- |
@@ -9,7 +11,8 @@ belong to their own context; the relationship is recorded in [terminology](docs/
 | Capacity | The total slot budget shared by requests on the machine. |
 | Request | An attempt to acquire a slot budget for some work. It remains the same request while waiting, running or yielding. |
 | Lease | Permission for a request to use an allocated slot budget. A held lease consumes slots; yielding temporarily returns them. |
-| Owner | The process responsible for a request and its lease. It may launch the command in a separate process. |
+| Holder | The process that holds or waits for a request's lease (`slotfather run` or the `acquire()` caller); its process identity identifies the request. It may launch the command in a separate process. _Avoid_: owner (see the [fathers glossary](../GLOSSARY.md)). |
+| Queue user | The account that owns a queue's state directory; other accounts read it only. Code calls it `owner`. |
 | Command | The executable and arguments supplied for the work. Its process tree can include several processes and workers. |
 | Label | The caller-supplied display name of a request. It need not be unique. |
 | Metadata | Caller-supplied context attached to a request, such as a ticket or phase. |
@@ -21,15 +24,16 @@ belong to their own context; the relationship is recorded in [terminology](docs/
 | Runtime estimate | A prediction of how long work will run, based on comparable completed requests or the scheduling fallback. |
 | Queue head | The waiting request whose expected start is protected by the scheduling policy. |
 | Reserved start | The start a queue head is promised: the earliest its looks have projected since it became the head. Nothing that passes the head may be expected to end after it. |
-| Ageing | A waiting request moving up a class (batch to normal, normal to interactive) after waiting a set time, keeping its arrival. |
+| Ageing | A waiting request moving up a priority (batch to normal, normal to interactive) after waiting a set time, keeping its arrival. |
 | Whole-machine request | A request for every slot: `-n all`, or a count of at least the capacity. A batch one starts only while no normal or interactive request waits, until it has aged to normal. |
-| Priority | A request's scheduling priority: interactive, normal or batch. |
+| Priority | A request's scheduling priority: interactive, normal or batch. _Avoid_: class. |
+| Served priority | The priority a waiting request is scheduled at now, after ageing. Wire: `effective_priority`. |
 | Overtaking | A later request starting before an earlier waiting request. |
 | Overtaking window | The initial period in which later requests that fit may start ahead of a waiting request. |
 | Overtaking limit | How long a protected request may wait before later requests in the queue stop passing it. |
 | Backfill | Overtaking allowed because later work is predicted to finish before the protected request needs its slots, or uses slots that request will not need. |
-| Yield request | A cooperative request for an owner to return slots temporarily so waiting work can start. |
-| Reap | Remove a request whose owner is no longer the same live process, returning any slots it held. |
+| Yield ask | Slotfather's notice to a yieldable holder to return slots temporarily so waiting work can start. Wire: `yield_asked`, `ask-yield`. _Avoid_: yield request. |
+| Reap | Remove a request (or its lease) whose holder is no longer the same live process, returning any slots it held; no signals. The shared meaning is in the [fathers glossary](../GLOSSARY.md). |
 | Yield | Voluntarily returning slots while keeping the request pending until it can resume. |
 | Admission capacity | The slot budget a generic new request could receive immediately, after queue order and memory checks. |
 | Queue space | The slot budget a generic new request could receive based on queue order, before memory checks. |
@@ -43,5 +47,6 @@ belong to their own context; the relationship is recorded in [terminology](docs/
 | Idle lease | A running request whose command's process tree has used less than the idle cores (0.1 by default) for the idle time (5 minutes) or more, with no process starting or ending, by its holder's samples. A yieldable one is asked to yield while a request waits that its slots would start; none is stopped. |
 | Idle duration | How long a lease has been idle: since its idle run began, once it has lasted the idle time. |
 | Process identity | A PID together with its process start time, so reuse of a PID does not imply the same process. |
-| Session | An active terminal or agent-controlled work context. |
-| Sweep | Inspection of leftover processes, optionally stopping only those eligible under the cleanup policy. |
+| Session process | A process that marks interactive work for the sweep: a terminal, an agent CLI, tmux, sshd or a CI runner. A session alone is an agent session ([fathers glossary](../GLOSSARY.md)). |
+| Sweep | Slotfather's inspection of leftover processes and containers, optionally stopping only those eligible under the cleanup policy. |
+| Orphan class | A sweep class: a process adopted by launchd or init, of a known development kind and older than the orphan age. The settings key stays `orphan`. |

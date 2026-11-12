@@ -1,8 +1,8 @@
 # godfather
 
 One terminal dashboard for the tools that share a development machine:
-[Slotfather](https://github.com/maxvyshniakov/slotfather) (capacity leases),
-[Lanefather](https://github.com/maxvyshniakov/lanefather) (parallel agent lanes) and junkfather (the long-lived
+[Slotfather](../slotfather) (capacity leases),
+[Lanefather](../lanefather) (parallel agent lanes) and junkfather (the long-lived
 processes agents start).
 
 <picture>
@@ -19,9 +19,9 @@ name and version. Lanes, processes, the merged event feed and row actions come i
 Python 3.9 or later on macOS or Linux, standard library only.
 
 ```sh
-git clone https://github.com/maxvyshniakov/godfather.git
-cd godfather
-python3 install.py          # ~/.local/bin/godfather, an entry point into an immutable release
+git clone https://github.com/maxvyshniakov/fathers.git
+cd fathers
+python3 install.py godfather # ~/.local/bin/godfather, an entry point into an immutable release
 godfather                   # the live dashboard: ? lists the keys, q quits
 godfather --once --width 156 --height 43    # one frame as text (--color for escape sequences)
 ```
@@ -47,11 +47,11 @@ runs their CLIs. A tool that is not installed simply has no panels; one without 
 
 [docs/contracts/slotfather.md](docs/contracts/slotfather.md) is the exact shape read from Slotfather.
 The event schema is [docs/events.md](docs/events.md), with a JSON Schema and
-[`src/godfather/eventcheck.py`](src/godfather/eventcheck.py), one MIT-licensed standard-library file the tools
-vendor into their tests:
+[`common/eventcheck.py`](../common/eventcheck.py), one MIT-licensed standard-library file every tool's tests
+import:
 
 ```sh
-python3 src/godfather/eventcheck.py --strict ~/.local/state/slotfather/events.jsonl
+python3 common/eventcheck.py --strict ~/.local/state/slotfather/events.jsonl
 ```
 
 ## Develop
@@ -63,9 +63,6 @@ python3 tools/goldens.py                            # rewrite tests/goldens/ aft
 python3 tools/dashboard-demo.py                     # the README scene, live; --screenshot / --animation: media
 python3 tools/compare_media.py OLD.png NEW.png OUT.png  # cell-by-cell screenshot diff, side by side (needs Pillow)
 ```
-
-[docs/slice-1/](docs/slice-1) holds the side-by-side screenshots that checked the move (Slotfather's dashboard and
-Godfather on the README scene, Seti and Pro Light: no cell differs above the footer) and the EVENTS change.
 
 `GODFATHER_FIXTURES=DIR` replaces every tool call with recorded replies (`tests/fixtures/scene/` is the README
 scene) and records writes instead of making them. `tests/test_parity.py` compares Godfather, cell by cell but the

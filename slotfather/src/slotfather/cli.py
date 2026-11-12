@@ -100,7 +100,7 @@ from . import config as _config
 
 
 GODFATHER_MISSING = ("the dashboard is part of godfather now; install it from "
-                     "https://github.com/maxvyshniakov/godfather")
+                     "https://github.com/maxvyshniakov/fathers/tree/main/godfather (python3 install.py godfather)")
 
 
 def companion(name: str, argv: list[str], title: str) -> int:

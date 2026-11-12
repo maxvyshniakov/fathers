@@ -147,8 +147,7 @@ agent) that changes that queue leaves its queue.log line without an event. `subj
 entry's name as `status --json` gives it, `label`, `pid`) unless said otherwise; `actor` is the holder process
 (with `lane` from its metadata) for what a lease's own client does, `type: tool` (`name: slotfather`) for what a
 look at the queue decides, the command's process otherwise, with `via: godfather` when `GODFATHER_ACTOR` names
-Godfather. The tests validate every line with Godfather's `eventcheck.py`, vendored in `tests/vendor/` with its
-SHA-256 (compared with `$GODFATHER_DIR/src/godfather/eventcheck.py` when that is set).
+Godfather. The tests validate every line with the shared `common/eventcheck.py`.
 
 | Kind | When | `details` |
 | --- | --- | --- |

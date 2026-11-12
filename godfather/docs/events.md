@@ -28,7 +28,7 @@ Also:
 
 ## Validator
 
-[`src/godfather/eventcheck.py`](../src/godfather/eventcheck.py) is one standard-library file with an MIT header.
+[`common/eventcheck.py`](../../common/eventcheck.py) is one standard-library file with an MIT header.
 [`schema/event-v1.schema.json`](../schema/event-v1.schema.json) is the same contract as JSON Schema, minus the
 checks JSON Schema cannot express.
 
@@ -46,10 +46,7 @@ python3 eventcheck.py [--strict] FILE...   # prints FILE:LINE: problem; exit 0 c
 Lenient mode is what a reader accepts. Strict mode, for the tools' own tests, also refuses unknown top-level fields.
 A file that does not end in a newline is a problem (a torn or partial last write).
 
-### Vendoring
+### Sharing
 
-Copy the file into the tool's tests unchanged and record its SHA-256 beside it (for example
-`tests/vendor/eventcheck.py` and `tests/vendor/eventcheck.py.sha256`). A test compares the copy with
-`$GODFATHER_DIR/src/godfather/eventcheck.py` when `GODFATHER_DIR` points at a Godfather checkout and is skipped
-otherwise; the tool's CI cannot read this private repository. A new schema rule changes the file and its hash, and
-each tool picks it up by copying it again.
+The tools in this repository import the one file from `common/`, so a new schema rule reaches every tool's tests at
+once. A project outside this repository copies the file unchanged and records its SHA-256 beside the copy.

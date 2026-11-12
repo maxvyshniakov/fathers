@@ -1,0 +1,17 @@
+# Alerts only: the packages are standard library at run time, and the workflows pin actions by SHA. Version-update
+# PRs stay off (open-pull-requests-limit 0); the weekly check keeps the alerts current.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+  - package-ecosystem: pip
+    directories:
+      - /slotfather
+      - /junkfather
+      - /godfather
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0

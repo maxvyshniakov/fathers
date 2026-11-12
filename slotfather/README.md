@@ -22,7 +22,7 @@ does not require a specific build system, repository layout or AI agent.
 
 ## How the tools fit
 
-Slotfather coordinates **execution capacity**. [Lanefather](https://github.com/maxvyshniakov/lanefather) coordinates
+Slotfather coordinates **execution capacity**. [Lanefather](../lanefather) coordinates
 repository tasks, path claims, integration and cleanup. [Repo-Kit](https://github.com/maxvyshniakov/repo-kit) runs
 configured checks and package releases. Slotfather works on its own; the others can use its leases for heavy phases.
 A long-lived lane is not a long-lived machine reservation.
@@ -38,7 +38,7 @@ state location; it is not a distributed scheduler or a sandbox.
   <img alt="Godfather showing Slotfather's queue: navigating running and waiting requests" src="assets/dashboard.webp">
 </picture>
 
-The live dashboard is [Godfather](https://github.com/maxvyshniakov/godfather), which reads Slotfather through its
+The live dashboard is [Godfather](../godfather), which reads Slotfather through its
 [JSON contracts](docs/api.md#dashboard-contracts). Install it beside Slotfather; `slotfather` in a terminal (or
 `slotfather dashboard ARGS`) then runs `godfather ARGS`. [More](docs/dashboard.md).
 
@@ -48,9 +48,9 @@ Requires Git for source installation and Python 3.9+ on macOS or Linux. The inst
 standard library; Linux needs procps-compatible `ps`.
 
 ```sh
-git clone https://github.com/maxvyshniakov/slotfather.git
-cd slotfather
-python3 install.py
+git clone https://github.com/maxvyshniakov/fathers.git
+cd fathers
+python3 install.py slotfather    # or: python3 slotfather/install.py
 ```
 
 Put `~/.local/bin` on your `PATH`. Re-running the installer updates the commands

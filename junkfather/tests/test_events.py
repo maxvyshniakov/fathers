@@ -1,10 +1,8 @@
 """events.jsonl in Godfather's schema v1, from real commands; status --json and capabilities --json."""
 from __future__ import annotations
 
-import hashlib
 import json
 import os
-from pathlib import Path
 import stat
 import unittest
 
@@ -92,18 +90,6 @@ class EventLogTests(Case):
         events.write(self.state, "sweep.finished", {"type": "sweep", "id": "x"}, events.tool("sweep"), {})
         self.assertTrue((self.state / "events.jsonl.1").exists())
         self.assertEqual(1, len(self.lines()))
-
-    def test_the_vendored_validator_is_the_recorded_copy(self):
-        here = Path(__file__).resolve().parent
-        recorded = (here / "eventcheck.py.sha256").read_text().split()[0]
-        self.assertEqual(recorded, hashlib.sha256((here / "eventcheck.py").read_bytes()).hexdigest())
-
-    @unittest.skipUnless(os.path.isfile(os.path.join(os.environ.get("GODFATHER_DIR", "/nonexistent"), "src",
-                                                     "godfather", "eventcheck.py")), "GODFATHER_DIR is not set")
-    def test_the_vendored_validator_matches_godfathers(self):
-        canonical = Path(os.environ["GODFATHER_DIR"], "src", "godfather", "eventcheck.py").read_bytes()
-        self.assertEqual(canonical, (Path(__file__).resolve().parent / "eventcheck.py").read_bytes(),
-                         "godfather's eventcheck.py changed: vendor it again and record its SHA-256")
 
 
 class DashboardContractTests(Case):

@@ -298,11 +298,9 @@ First kinds per tool (each tool documents and owns its list):
   `sweep.finished`, `unowned.reported`, `hook.failed`.
 
 **Validator.** `eventcheck.validate(obj, strict=False) -> list[str]` returns the problems, empty when valid;
-`python3 eventcheck.py [--strict] FILE...` checks logs and exits 1 on any problem. The tools vendor this one file
-into their tests with its SHA-256 recorded beside it; a test compares it with the canonical file when `GODFATHER_DIR`
-points at a checkout and is skipped otherwise, as Repo-Kit does with `LANEFATHER_DIR` **(chosen here: the tools'
-CI runs on GitHub-hosted runners that cannot read a private repository)**. The file carries an MIT header, since it
-will be published inside the public tools.
+`python3 eventcheck.py [--strict] FILE...` checks logs and exits 1 on any problem. The tools' tests import this one
+file from `common/eventcheck.py` in the fathers repository (until the move they vendored it with its SHA-256). The
+file carries an MIT header, so another project may copy it unchanged.
 
 ### Capabilities contract
 

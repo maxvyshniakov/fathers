@@ -307,8 +307,7 @@ The writer appends each line with one `write` on the file opened with `O_APPEND`
 shorter strings; control characters become spaces. An event that cannot be written is dropped and never fails the
 action. A project whose state directory is in a temporary directory writes no machine-wide event unless
 `LANEFATHER_EVENTS` is set, so test runs stay out of the machine's feed. The tests validate every line in strict
-mode with Godfather's validator, vendored unchanged as `tests/vendor/eventcheck.py` with its SHA-256 beside it;
-with `GODFATHER_DIR` set, a test compares it with the canonical copy.
+mode with the shared validator, `common/eventcheck.py`.
 
 ## Machine-wide status
 

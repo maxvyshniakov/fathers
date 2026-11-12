@@ -13,9 +13,9 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT.parent / "common"))
 
-from godfather import eventcheck  # noqa: E402
+import eventcheck  # noqa: E402  common/eventcheck.py, the shared validator
 
 FIXTURES = ROOT / "tests" / "fixtures" / "events"
 VALID = {
@@ -189,14 +189,14 @@ class Cli(unittest.TestCase):
 
     def test_runs_as_a_standalone_script(self) -> None:
         path = self.write("events.jsonl", json.dumps(dict(VALID, v=3)) + "\n")
-        script = ROOT / "src" / "godfather" / "eventcheck.py"
+        script = ROOT.parent / "common" / "eventcheck.py"
         result = subprocess.run([sys.executable, "-I", str(script), "--strict", path],
                                 capture_output=True, text=True, cwd=self.tmp.name)
         self.assertEqual(result.returncode, 1)
         self.assertIn(":1: v: must be 1", result.stdout)
 
     def test_standalone_imports_only_the_standard_library(self) -> None:
-        source = (ROOT / "src" / "godfather" / "eventcheck.py").read_text(encoding="utf-8")
+        source = (ROOT.parent / "common" / "eventcheck.py").read_text(encoding="utf-8")
         imports = set(re.findall(r"^(?:from|import) (\w+)", source, re.M))
         self.assertLessEqual(imports, {"__future__", "datetime", "json", "re", "sys", "typing"})
         self.assertTrue(source.startswith("# MIT License"))

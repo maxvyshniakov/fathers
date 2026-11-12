@@ -17,8 +17,8 @@
 # SOFTWARE.
 """Validator for the shared tool event schema, version 1 (Godfather, docs/events.md).
 
-One file, standard library only, Python 3.9+, meant to be vendored into a tool's tests with its SHA-256 recorded
-beside it. The canonical copy is src/godfather/eventcheck.py in the Godfather repository.
+One file, standard library only, Python 3.9+. It lives in common/ of the fathers repository, and every tool's tests
+load it from there; another project may copy it unchanged and record its SHA-256 beside the copy.
 
     validate(obj, strict=False) -> list[str]        problems with one decoded event, empty when valid
     validate_line(line, strict=False) -> list[str]  the same for one log line (bytes or str), JSON and size included
