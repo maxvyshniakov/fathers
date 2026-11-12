@@ -20,6 +20,7 @@ lanefather perf <sha>
 lanefather released <version> --since REF [--head REF]   comment a published version on the issues it fixes
 lanefather list [--all] [--json]
 lanefather show <id> [--state-dir DIR] [--project-dir DIR] [--json]   read-only lane context
+lanefather status [--json]                every registered project's lanes on this machine, read-only
 ```
 
 A claim is a glob relative to the repository: `*` and `?` stay within a path segment and `**` spans segments. A
@@ -215,6 +216,7 @@ disable external review. Set `LANEFATHER_REVIEW_START=manual` during setup to de
 | `reviewer` | configured reviewer, real CLI adapters, fallback and interpreted answer |
 | `land`, `review`, `done`, `promote` | land and the smoke; the review; finishing a lane; gate, perf, promote, sync |
 | `lanes`, `cli` | start, next, adopt, list; the command line |
+| `registry`, `status` | the machine's project registry; the machine-wide status snapshot |
 
 The [architecture pass](../docs/architecture-667.md) records the survey, alternative interfaces and deployment order.
 
@@ -306,11 +308,51 @@ action. A project whose state directory is in a temporary directory writes no ma
 mode with Godfather's validator, vendored unchanged as `tests/vendor/eventcheck.py` with its SHA-256 beside it;
 with `GODFATHER_DIR` set, a test compares it with the canonical copy.
 
+## Machine-wide status
+
+Every command that loads a project configuration, except the read-only `capabilities`, `status`, `settings` and
+`show`, records the project in a registry beside the default state directory: `~/.local/state/lanefather/projects.json`
+(`LANEFATHER_REGISTRY` names another), one entry per state directory with its config path, GitHub repository,
+project name and when a command last saw it. The entry is refreshed at most every ten minutes, under an `flock` on
+`projects.lock` with an atomic rename. A project whose state directory is in a temporary directory is not registered
+unless `LANEFATHER_REGISTRY` is set.
+
+`lanefather status --json` reports every registered project from any directory, for Godfather's Lanes page:
+
+```json
+{"v": 1, "host": "mbp", "time": "2026-11-12T04:26:00Z", "registry": "/Users/me/.local/state/lanefather/projects.json",
+ "projects": [
+   {"project": "Straylight", "state_dir": "/Users/me/.local/state/straylight-orchestration/lanes",
+    "config": "/Users/me/straylight/.lanefather.toml", "repository": "maxvyshniakov/straylight",
+    "cap": 4, "cap_source": "slotfather derived; derived: 4", "active": 3, "planned": 0,
+    "gate": {"sha": "cedf8b97...", "status": "red", "at": "2026-11-12T04:06:19Z"},
+    "lanes": [{"id": "710-speech-paste-phase", "status": "active",
+               "ticket": {"number": "710", "url": "https://github.com/maxvyshniakov/straylight/issues/710"},
+               "branch": "lane/710-speech-paste-phase", "base": "integrate/queue-347", "worktree": "/...",
+               "claims": ["desktop/src/**"], "after": [], "created": "2026-11-12T03:10:00Z",
+               "receipt": {"status": "green", "tree_match": true, "path": "/.../710-speech-paste-phase.receipt.json"},
+               "post_merge": null, "review": {"status": "running", "open": 2, "findings": 3},
+               "logs": {"check": "/.../logs/lane-710-speech-paste-phase-20261112T040619.log"},
+               "outcome": null}]},
+   {"project": "data-grid", "state_dir": "/...", "error": "config not found at /.../.lanefather.toml"}]}
+```
+
+The lanes are those not done. `receipt.tree_match` compares the receipt's tree with the lane branch's, null when
+either is unknown; `review.status` is the review receipt's, `stopped` for a running review whose process is gone;
+`logs` holds the newest run log of each phase (`check`, `rerun`, `base`, `post-merge`, `review`); `gate` is the newest
+batch gate; `outcome` stays null until parking records one (#19). `cap` is the project's lifetime admission answer,
+or its derived cap with the reason when admission is unavailable. A project that cannot be read gives
+`{"project", "state_dir", "error"}`, never a failed snapshot; one whose configuration file is missing and that no
+command has seen for 7 days is left out, and the next registration drops it. The command takes no locks, writes
+nothing, runs no project hook and makes no network call. `capabilities --json` advertises it as
+`dashboard.snapshot`: `{"argv": ["status", "--json"], "versions": [1], "poll": 5}`.
+
 ## Installed runtime contract
 
 `lanefather capabilities --json` returns version 1, the state schema, supported
 Slotfather query versions and the installed source commit and payload SHA-256, and a
-`dashboard` block for Godfather: `{"v": 1, "tag": "lane", "events": {"path", "versions": [1]}}`.
+`dashboard` block for Godfather: `{"v": 1, "tag": "lane", "events": {"path", "versions": [1]},
+"snapshot": {"argv", "versions", "poll"}}`.
 An installed release verifies its package and canonical hook against its
 manifest; a changed or missing manifest refuses verification. A checkout reports
 `installed: false`, so a project launcher can require the installed artifact.

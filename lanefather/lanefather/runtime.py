@@ -17,7 +17,8 @@ from .project import Project
 
 MANIFEST = 'INSTALL.json'
 CAPABILITIES = ('project.readiness', 'project.update_queue', 'project-hook', 'canonical-reference-transaction',
-                'promote.step-leases', 'tickets.lifecycle', 'slots.priority', 'dashboard.events')
+                'promote.step-leases', 'tickets.lifecycle', 'slots.priority', 'dashboard.events',
+                'dashboard.status')
 # The dashboard contract versions Godfather reads (its SPEC.md, "Capabilities contract").
 DASHBOARD = 1
 
@@ -64,9 +65,11 @@ def installed_identity(root: Path) -> dict[str, Any]:
 
 
 def dashboard() -> dict[str, Any]:
-    """What a dashboard reads from Lanefather: its EVENTS tag and the machine-wide event log."""
+    """What a dashboard reads from Lanefather: its EVENTS tag, the machine-wide event log and status snapshot."""
+    from . import status  # the snapshot module reads every other module; install.py imports only this one
     return {'v': DASHBOARD, 'tag': events.TAG,
-            'events': {'path': str(events.path().absolute()), 'versions': [events.SCHEMA]}}
+            'events': {'path': str(events.path().absolute()), 'versions': [events.SCHEMA]},
+            'snapshot': {'argv': ['status', '--json'], 'versions': [status.VERSION], 'poll': status.POLL}}
 
 
 def capabilities(args: argparse.Namespace) -> int:

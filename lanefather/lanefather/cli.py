@@ -20,6 +20,7 @@
   released <version> --since REF     after a release publish: comment the version on each issue a Fixes #N line
                                      in REF..HEAD names (lanefather.tickets, [tickets] release_comment)
   list [--all] [--json]
+  status [--json]                    every registered project's lanes on this machine (lanefather.status)
 
 --config PATH (or LANEFATHER_CONFIG) names the project's .lanefather.toml; by default it is read from the top of the
 repository the command runs in. State: one JSON file per lane in the configured state directory (LANEFATHER_STATE
@@ -32,7 +33,22 @@ import argparse
 from pathlib import Path
 import sys
 
-from . import __version__, checks, config, done, gc, land, lanes, promote, review, runtime, show, tickets
+from . import (
+    __version__,
+    checks,
+    config,
+    done,
+    gc,
+    land,
+    lanes,
+    promote,
+    registry,
+    review,
+    runtime,
+    show,
+    status,
+    tickets,
+)
 from .errors import LaneError
 from .host import CHECK_MAX_JOBS
 
@@ -163,6 +179,10 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--state-dir", metavar="DIR", help="explicit lane-state directory, without creating it")
     p.add_argument("--project-dir", metavar="DIR", help="resolve project config and verify lane repository identity")
     p.set_defaults(run=show.show)
+    p = commands.add_parser("status", help="every registered project's lanes on this machine, read-only, for "
+                                           "dashboards")
+    p.add_argument("--json", action="store_true", help="the version-1 snapshot")
+    p.set_defaults(run=status.status)
     p = commands.add_parser("list", help="lanes that are not done, with claims, receipts, disk and load")
     p.add_argument("--all", action="store_true", help="include done lanes")
     p.add_argument("--json", action="store_true", help="the lane records with their worktree and receipt state, the "
@@ -190,6 +210,8 @@ def main(argv: list[str] | None = None) -> int:
         given = config_option(argv)
         config.use(config.load(Path(given)) if given else None)
         args = parser().parse_args(argv)
+        if args.command not in registry.READ_ONLY:
+            registry.note(config.current())
         return args.run(args)
     except LaneError as error:
         print(f"lane: {error}", file=sys.stderr)

@@ -38,8 +38,10 @@ ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 class Store:
     """A project's state directory. Instances keep one project's reads and locks together, independently of the CLI."""
 
-    def __init__(self, project: config.Config):
-        self.directory = Path(os.path.expanduser(project.env("STATE") or project.state_dir))
+    def __init__(self, project: config.Config, directory: Path | None = None):
+        """`directory` names the state directory explicitly (the registry's, for status); by default it is the
+        environment's LANEFATHER_STATE, else the project's state_dir."""
+        self.directory = directory or Path(os.path.expanduser(project.env("STATE") or project.state_dir))
 
     def lanes(self, *, strict: bool = False) -> list[Record]:
         found: list[Record] = []

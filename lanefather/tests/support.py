@@ -35,11 +35,11 @@ FIXTURES = ROOT / "tests" / "fixtures"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# Lanefather's machine-wide files (the event log, lanefather.events) never reach this machine's in a test: the
+# Lanefather's machine-wide files (the event log, lanefather.events; the project registry, lanefather.registry) never reach this machine's in a test: the
 # in-process tests write to a scratch directory, and each command test to its own (LaneCase.setUp).
 MACHINE = pathlib.Path(tempfile.mkdtemp(prefix="lanefather-machine-"))
 atexit.register(shutil.rmtree, MACHINE, True)
-MACHINE_FILES = {"LANEFATHER_EVENTS": "events.jsonl"}
+MACHINE_FILES = {"LANEFATHER_EVENTS": "events.jsonl", "LANEFATHER_REGISTRY": "projects.json"}
 for _name, _file in MACHINE_FILES.items():
     os.environ[_name] = str(MACHINE / _file)
 
