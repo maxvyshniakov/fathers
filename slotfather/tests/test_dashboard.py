@@ -1030,7 +1030,7 @@ class MemoryBarTests(unittest.TestCase):
                 for label in ("load","mem","swap"):
                     at=text.index(label+" ")
                     styles={cell[1] for cell in cells[at+len(label)+1:at+len(label)+7] if cell[0] not in (" ","")}
-                    self.assertIn("bad",styles,f"{label}: critical in red ({red})")
+                    self.assertIn("chart7" if red=="bar" else "bad",styles,f"{label}: critical in red ({red})")
                     self.assertEqual("dim",cells[at][1],"labels muted")
                     self.assertEqual("🔥",cells[at-3][0],"the critical mark before it")
 
@@ -1042,7 +1042,8 @@ class MemoryBarTests(unittest.TestCase):
         self.assertEqual([f"chart{round(k/11*7)}" for k in range(12)],styles,"each cell at its place on the ramp")
         half=[style for text,style in tool.ramp_bar(0.5,12) if style!="track" for _ in text]
         self.assertEqual(["chart0","chart1","chart1","chart2","chart3","chart3"],half,"half full runs blue to mid")
-        self.assertEqual({"bad"},{style for _,style in tool.ramp_bar(0.5,12,True) if style!="track"})
+        self.assertEqual({"chart7"},{style for _,style in tool.ramp_bar(0.5,12,True) if style!="track"},
+                         "critical: all the ramp's red, the red a full bar ends on")
         now=datetime.datetime.now(datetime.timezone.utc)
         def machine(**extra: Any) -> Any:
             model=dict(slots=4,cores=12,averages=(20.3,20,20),admission=0,advice=dict(unleased_load=20,jobs=1,capacity=0),
@@ -1057,8 +1058,8 @@ class MemoryBarTests(unittest.TestCase):
         def bar_styles(name: str) -> set[str]:
             row=next(i for i,line in enumerate(canvas.lines(False)) if f" {name} " in line)
             return {cell[1] for cell in canvas.cells[row][13:25] if cell[0]=="■" and cell[1]!="track"}
-        self.assertEqual({"bad"},bar_styles("load 1m"),"20.3 on 12 cores leaves no room: all red")
-        self.assertEqual({"bad"},bar_styles("swap"),"swap low: all red")
+        self.assertEqual({"chart7"},bar_styles("load 1m"),"20.3 on 12 cores leaves no room: all red")
+        self.assertEqual({"chart7"},bar_styles("swap"),"swap low: all red")
         self.assertTrue(all(style.startswith("chart") for style in bar_styles("memory")),"memory ok: the ramp")
         chart=[i for i,line in enumerate(canvas.lines(False)) if "█" in line]
         columns=[x for x in range(90) if canvas.cells[chart[0]][x][0]=="█"]  # the columns that reached every slot
@@ -1084,7 +1085,7 @@ class MemoryBarTests(unittest.TestCase):
                                   history=[(now-datetime.timedelta(hours=1),now,8)]))
                 row=next(i for i,line in enumerate(canvas.lines(False)) if " load 1m " in line)
                 styles={cell[1] for cell in canvas.cells[row][13:25] if cell[0]=="■" and cell[1]!="track"}
-                self.assertEqual(critical,styles=={"bad"},f"load {load} on 8 cores, 8 slots: {styles}")
+                self.assertEqual(critical,styles=={"chart7"},f"load {load} on 8 cores, 8 slots: {styles}")
 
     def test_macos_memory_counts_active_wired_and_compressor_physical_pages(self):
         tool = load_dashboard()

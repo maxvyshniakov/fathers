@@ -196,7 +196,7 @@ background (moved in lightness where a background needs it):
 | accent | `#4da3ff` | `#1f6feb` | the focused frame, links, `released` |
 | ok | `#3ddc84` | `#15803d` | `granted`, "ok" status words |
 | warn | `#ffc23d` | `#a16207` | an idle bar, warnings |
-| bad | `#ff3b4e` | `#d1203a` | an over-share or critical bar, errors, `no admission` |
+| bad | `#ff3b3b` | `#d1203a` | an over-share CPU bar, errors, `no admission` |
 | legacy | `#b48cff` | `#6d3fd8` | a lease of an older client |
 
 `Terminal` mode keeps the theme's ANSI colours for these, as the opt-out.
@@ -227,9 +227,9 @@ that already reads is its own ink. Eight hues are handed out in order: hot pink 
 (138), spring teal (172), cyan (205), electric violet (288), magenta (318), green (152). No fill may sit within
 OKLab ΔE 0.12 of our accent (the focused panel's frame), bad (a CPU bar over its share) or warn (an idle lease): a fill too close turns away a few degrees at a time (at most
 30°) or moves a little in lightness, the smallest change first, and one with no room left is dropped. No fill
-turns into blue, sky or indigo (OKLCH hues 225–280). The load chart and MACHINE's bars use our ramp, in OKLab
-between `#00c2e0`, `#7b6cff`, `#e05cf0`, `#ff4f8b` and `#ff5a36`, each stop 0.08 deeper in lightness on a light
-background; `Terminal` mode keeps palette steps.
+turns into blue, sky or indigo (OKLCH hues 225–280). The load chart and MACHINE's bars use our ramp from indigo
+to red, `#5b5cf0`, `#8b5cf6`, `#c44fe0`, `#ee4a8c`, `#ff3b3b`, in OKLCH the short way round through purple and
+magenta, each stop 0.06 deeper in lightness on a light background; `Terminal` mode keeps palette steps.
 
 Settings → this dashboard → **Colour theme**: `Auto` is the above; `Terminal` uses the palette only, with nothing
 mixed (the chart in palette steps); `Built-in` is the fixed 256-colour palette from before, for themes such as
@@ -251,8 +251,8 @@ Solarized whose bright black is close to the background. `SLOTFATHER_THEME` sets
   as unavailable rather than as zero.
 - **bar colours:** each filled cell of the load, memory and swap bars takes the
   history chart's ramp at its place along the bar, so a half-full bar
-  runs from cyan to the middle and a nearly full one ends red-orange. A bar is entirely
-  red (the bad token) while its resource is critical: memory low, swap low
+  runs from indigo to the middle and a nearly full one ends red. A bar is entirely
+  the ramp's red, the red a full bar ends on, while its resource is critical: memory low, swap low
   (the conditions that put 🔥 before the row), or a one-minute load that leaves
   less than one slot's share of the cores free (by load alone: a fully leased but
   quiet machine is not red).

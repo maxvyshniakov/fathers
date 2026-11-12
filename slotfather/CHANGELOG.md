@@ -44,8 +44,8 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 - Help and the changelog start their text under their title's first letter, with two blank lines before each
   section or release and one after its title.
 - Every chromatic colour is the dashboard's own, in a dark and a light variant that reads on either background:
-  the focus blue, ok, warn, bad and legacy, and the MACHINE chart and bars, a cyan to red-orange ramp. Terminal
-  mode keeps the theme's ANSI colours.
+  the focus blue, ok, warn, bad and legacy, and the MACHINE chart and bars, a smooth indigo-to-red ramp through
+  purple and magenta whose red is also a critical bar's. Terminal mode keeps the theme's ANSI colours.
 - Unfocused frames are a little paler than muted text.
 - MACHINE starts right under its top border, with the chart's axis right under the chart; short of rows, the
   chart shrinks to two rows and then goes before load, memory and swap share one compact line, and memory and

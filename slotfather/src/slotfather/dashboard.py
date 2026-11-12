@@ -765,14 +765,14 @@ def bar(fraction: float, width: int, style: str) -> list[tuple[str, str]]:
 
 
 def ramp_bar(fraction: float, width: int, critical: bool = False) -> list[tuple[str, str]]:
-    """A MACHINE resource bar: each filled cell in the load chart's blue-to-red ramp at its place along the bar, so a
-    nearly full bar reaches red at its tip; a critical one (its status word is bad) entirely in the theme's red."""
+    """A MACHINE resource bar: each filled cell in the load chart's indigo-to-red ramp at its place along the bar, so
+    a nearly full bar reaches red at its tip; a critical one (🔥) entirely in that red, so full and critical match."""
     width = max(0, width)
     full = max(0, min(width, math.floor(fraction * width + 0.5)))
     parts: list[tuple[str, str]] = []
     for cell in range(full):
         step = round(cell / (width - 1) * (_theme.CHART_STEPS - 1)) if width > 1 else _theme.CHART_STEPS - 1
-        style = "bad" if critical else f"chart{step}"
+        style = f"chart{_theme.CHART_STEPS - 1}" if critical else f"chart{step}"  # all the ramp's red: full = critical
         if parts and parts[-1][1] == style:
             parts[-1] = (parts[-1][0] + "■", style)
         else:

@@ -261,7 +261,7 @@ class GradientTests(unittest.TestCase):
             self.assertEqual(theme.mix(blue, red, index / 7), colour)
 
 
-RAMP_DARK = hexes("#00c2e0 #7b6cff #e05cf0 #ff4f8b #ff5a36")
+RAMP_DARK = hexes("#5b5cf0 #8b5cf6 #c44fe0 #ee4a8c #ff3b3b")  # indigo, violet, orchid, crimson-pink, red
 
 
 class RampTests(unittest.TestCase):
@@ -273,10 +273,16 @@ class RampTests(unittest.TestCase):
         light = theme.chart_ramp(True, 5)
         for stop, deep in zip(RAMP_DARK, light):
             (level, _, angle), (deeper, _, turned) = theme.lch(stop), theme.lch(deep)
-            self.assertAlmostEqual(level - 0.08, deeper, delta=0.01, msg=f"{stop}: 0.08 deeper")
+            self.assertAlmostEqual(level - 0.06, deeper, delta=0.01, msg=f"{stop}: 0.06 deeper")
             self.assertLess(abs((angle - turned + 180) % 360 - 180), 4, f"{stop} keeps its hue")
         eight = theme.chart_ramp(False)
         self.assertEqual((RAMP_DARK[0], RAMP_DARK[-1]), (eight[0], eight[-1]))
+        hues = [theme.lch(colour)[2] for colour in theme.chart_ramp(False, 25)]
+        turns = [(after - before + 180) % 360 - 180 for before, after in zip(hues, hues[1:])]
+        self.assertTrue(all(0 <= turn < 12 for turn in turns), "one way round: indigo, purple, magenta, red")
+        self.assertFalse(any(150 < hue < 260 or 40 < hue < 120 for hue in hues), "no cyan, no orange")
+        levels = [theme.lch(colour)[0] for colour in theme.chart_ramp(False, 25)]
+        self.assertLess(max(levels) - min(levels), 0.12, "lightness roughly even: no muddy or washed-out band")
         palette = answered(bg=DARK_BG, p4=(0, 0, 238), p1=(205, 0, 0), p12=(92, 92, 255), p9=(255, 0, 0))
         for mode, environ in (("auto", {}), ("auto", DARK_ENV), ("builtin", {})):
             found = theme.resolve(mode, palette, environ)
@@ -301,7 +307,9 @@ class RampTests(unittest.TestCase):
         self.assertEqual((found.styles["ok"][0], "br"), found.styles["badge-ok"])
 
     def test_the_critical_red_is_ours_and_terminal_mode_keeps_the_palette(self) -> None:
-        self.assertEqual(theme.hex_colour("#ff3b4e"), theme.resolve("auto", None, {}).styles["bad"][0])
+        found = theme.resolve("auto", None, {})
+        self.assertEqual(theme.hex_colour("#ff3b3b"), found.styles["bad"][0], "the chart's red on dark")
+        self.assertEqual(theme.hex_colour("#ff3b3b"), found.styles["chart7"][0], "the chart's top: full")
         self.assertEqual(theme.hex_colour("#d1203a"), theme.resolve("auto", None, LIGHT_ENV).styles["bad"][0])
         terminal = theme.resolve("terminal", answered(bg=DARK_BG), {})
         self.assertEqual([4, 4, 4, 5, 5, 1, 1, 1], [terminal.styles[f"chart{n}"][0] for n in range(8)])

@@ -71,13 +71,13 @@ SEMANTIC: Dict[str, Tuple[str, str]] = {
     "accent": ("#4da3ff", "#1f6feb"),  # the focused frame, links, released
     "ok": ("#3ddc84", "#15803d"),  # granted, "ok" status words
     "warn": ("#ffc23d", "#a16207"),  # an idle bar, warnings
-    "bad": ("#ff3b4e", "#d1203a"),  # an over-share or critical bar, errors, no admission
+    "bad": ("#ff3b3b", "#d1203a"),  # an over-share bar, errors, no admission; on dark, the chart's red
     "legacy": ("#b48cff", "#6d3fd8"),  # a lease of an older client
 }
 TOKEN_INK = 4.5
 # The load chart and MACHINE's bars, low to high, in OKLab between the stops; a light background deepens each stop
-CHART_STOPS = ("#00c2e0", "#7b6cff", "#e05cf0", "#ff4f8b", "#ff5a36")
-CHART_LIGHT_DEEPEN = 0.08
+CHART_STOPS = ("#5b5cf0", "#8b5cf6", "#c44fe0", "#ee4a8c", "#ff3b3b")  # indigo, violet, orchid, crimson-pink, red
+CHART_LIGHT_DEEPEN = 0.06
 # Where the background is unknown, inks are measured against these
 LIGHT_REFERENCE, DARK_REFERENCE = (253, 252, 250), (30, 30, 30)
 CHART_STEPS = 8
@@ -247,15 +247,21 @@ def reserved_for(background: Optional[RGB], light: bool) -> Tuple[RGB, RGB, RGB]
 
 
 def chart_ramp(light: bool, steps: int = 8) -> List[RGB]:
-    """`steps` colours along CHART_STOPS in OKLab, each stop deepened by CHART_LIGHT_DEEPEN on a light background."""
-    stops = [hex_colour(stop) for stop in CHART_STOPS]
+    """`steps` colours along CHART_STOPS in OKLCH, the hue the short way round (indigo, through purple and magenta,
+    to red), each stop deepened by CHART_LIGHT_DEEPEN on a light background. The last is the chart's top and a full
+    bar's end; a critical bar is all of it."""
+    stops = [lch(hex_colour(stop)) for stop in CHART_STOPS]
     if light:
-        stops = [oklch(lch(stop)[0] - CHART_LIGHT_DEEPEN, lch(stop)[1], lch(stop)[2]) for stop in stops]
+        stops = [(level - CHART_LIGHT_DEEPEN, chroma, angle) for level, chroma, angle in stops]
     found: List[RGB] = []
     for step in range(steps):
         where = step / (steps - 1) * (len(stops) - 1)
         index = min(int(where), len(stops) - 2)
-        found.append(mix(stops[index], stops[index + 1], where - index))
+        (low_l, low_c, low_h), (high_l, high_c, high_h) = stops[index], stops[index + 1]
+        part = where - index
+        turn = (high_h - low_h + 180) % 360 - 180
+        found.append(oklch(low_l + (high_l - low_l) * part, low_c + (high_c - low_c) * part,
+                           (low_h + turn * part) % 360))
     return found
 
 
