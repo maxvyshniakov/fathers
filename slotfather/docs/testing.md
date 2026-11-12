@@ -21,4 +21,4 @@ slotfather run -n 1 -- docker run --rm --user 1000:1000 -e HOME=/tmp/h \
 ```
 
 The dashboard's rendering, demo and media live in
-[Godfather](https://github.com/maxvyshniakov/godfather) (#28).
+[Godfather](https://github.com/maxvyshniakov/fathers/tree/main/godfather) (#28).

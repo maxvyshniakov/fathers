@@ -52,7 +52,7 @@ full pages one key away.
    exits, as `slotfather dashboard --once` does today. `--interval S` sets Refresh every for this run.
 3. `slotfather dashboard [ARGS]`, and a bare `slotfather` in a terminal, exec `godfather` with the same arguments
    when `godfather` is on `PATH`. Without it they print
-   `slotfather: the dashboard is part of godfather now; install it from https://github.com/maxvyshniakov/godfather`
+   `slotfather: the dashboard is part of godfather now; install it from https://github.com/maxvyshniakov/fathers/tree/main/godfather`
    and exit 2. **(Chosen here: a message, not a fallback copy.)** The Slotfather release that makes this switch ships
    only after Godfather is installed on the Mac, so no machine where someone looks at a dashboard loses it, and no
    second copy of the TUI has to be kept in step. VM 110 gets the message, which nobody there reads.

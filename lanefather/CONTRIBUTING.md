@@ -14,7 +14,7 @@ For a pull request:
 - Keep the state formats compatible; see [State and its versions](docs/reference.md#state-and-its-versions).
 - Run `python3 tools/check.py`: Ruff and strict Pyright at pinned versions through
   [uv](https://docs.astral.sh/uv/)'s `uvx`, then the tests. The pyright baseline only shrinks. The tests use
-  [Slotfather](https://github.com/maxvyshniakov/slotfather) when it is on `PATH` and run without it otherwise.
+  [Slotfather](https://github.com/maxvyshniakov/fathers/tree/main/slotfather) when it is on `PATH` and run without it otherwise.
 
 Security reports go through [SECURITY.md](SECURITY.md), not issues. Contributions are licensed under the
 [MIT License](LICENSE).

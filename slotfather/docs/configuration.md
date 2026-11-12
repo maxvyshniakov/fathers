@@ -51,7 +51,7 @@ A saved value persists across shells and process restarts in `capacity.json` und
 | `SLOTFATHER_PROC` | Linux test seam: a directory read as `/proc` for `meminfo`, `pressure/memory` and `PID/environ` (and the Linux paths then run on any host). |
 
 The dashboard's colours are Godfather's: `GODFATHER_THEME`, `GODFATHER_TERMINAL_BG` and `_FG`; see
-[its README](https://github.com/maxvyshniakov/godfather#install-and-run) for those and the `SLOTFATHER_` names it
+[its README](https://github.com/maxvyshniakov/fathers/tree/main/godfather#install-and-run) for those and the `SLOTFATHER_` names it
 still reads.
 
 A command receives `SLOTFATHER_LEASE` and `SLOTFATHER_COUNT` for its existing lease, and a yieldable lease's command `SLOTFATHER_YIELD`, the path of its yield request (see Polite preemption). Do not fabricate these values to skip queue admission.

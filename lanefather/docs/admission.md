@@ -1,7 +1,7 @@
 # Lifetime lane admission
 
 Existing configurations retain `legacy` admission. Opt in only after the installed
-Slotfather receiver supports the [v1 lifetime contract](https://github.com/maxvyshniakov/slotfather/blob/445be5826346e94163238420b687baa3c9a646d2/docs/lane-admission.md):
+Slotfather receiver supports the [v1 lifetime contract](https://github.com/maxvyshniakov/fathers/blob/5c6939f/slotfather/docs/lane-admission.md):
 
 ```toml
 [admission]
