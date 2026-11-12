@@ -19,6 +19,54 @@ keep the outer request's fields. Built-in fields cannot be passed through metada
 
 **`status --json`** is the queue for programs, such as a guard that must not kill another holder's lease: `{"v": 2, "slots", "held", "free", "draining", "entries": [...], "legacy": [...]}` (`draining`: slots held above a capacity that shrank under running leases, 0 otherwise; older readers ignore it), each entry `{"id", "lease", "state", "count", "label", "pid", "pgid", "start", "since", "granted", "cmd", "cwd", "meta", "tree", "priority", "ticket", "yieldable", "yields", "yield_asked", "position", "idle_since", "effective_priority", "aged", "reprioritized", "est_start", "head", "reserved", "waited", "long_wait"}` (yieldable to position: see Polite preemption; `idle_since`: since when a held lease has been idle, epoch seconds, or `null`; see Idle leases in scheduling; `effective_priority` to `long_wait`: the class it is served in and whether ageing moved it there, the class it asked before `slotfather reprioritize` or `null`, and for a waiter its expected start, whether it is the head and its reserved start (UTC stamps or `null`), how long it has waited in seconds and whether that is past the warn time; see Ageing in scheduling). `id` is the entry's name, `lease` its path (the value of `SLOTFATHER_LEASE` in the lease's command), `pid` the holder (`slotfather run`, or the process that called `acquire()`), `pgid` its process group, `tree` the holder and its live descendants. `status --json --pid PID` keeps only the entries PID belongs to, each with `via`: `"tree"` (the holder or one of its descendants) or `"env"` (it left the tree, by a double fork or `setsid` and launchd adopting it, but its environment carries the lease's `SLOTFATHER_LEASE`; macOS shows the environment only of the user's own processes that are not Apple platform binaries), and adds `"query": {"pid", "start"}`, the process's start time as `ps -o lstart=` prints it (`null`: not running), so a guard can check that the pid was not reused before it acts. An empty list means the process belongs to no lease of this queue as far as can be seen. The extracted version also reads leases in Straylight's earlier queue during migration; old clients do not see new leases, so retire old wrappers before relying on mutual isolation.
 
+## Dashboard contracts
+
+[Godfather](https://github.com/maxvyshniakov/godfather), the shared terminal dashboard, reads Slotfather only through
+these commands; it never imports Slotfather or reads its state files. Each reply carries its own version, and a
+reader treats a version it does not know as unsupported.
+
+**`slotfather capabilities --json`** says which contracts this release supports; a feature it does not name is
+not there:
+
+```json
+{"v": 1, "tool": "slotfather", "version": "0.1.0",
+ "dashboard": {"v": 1, "tag": "slot",
+   "snapshot": {"argv": ["status", "--json", "--full"], "versions": [2], "poll": 1},
+   "actions": ["reprioritize"],
+   "changelog": "/Users/me/.local/lib/slotfather/releases/<release>/slotfather/CHANGELOG.md"}}
+```
+
+`argv` runs after the `slotfather` executable; `versions` are the `status --json` versions it prints; `poll` is a
+hint in seconds; `changelog` is the CHANGELOG.md shipped with the running package (absent when there is none).
+
+**`slotfather status --json --full`** is `status --json` (version 2, every field as above, nothing added to an
+entry) plus three top-level fields: `host` (the short host name, lowercase), `time` (RFC 3339 UTC with
+milliseconds) and `dashboard`, the in-tree dashboard's model (`board.dashboard_model()`) as JSON. The status and
+the block come from one look at the queue under its lock (`query.look()`), so each entry's `yield_asked` and
+`idle_since` agree with its row's `asked` and `idle_since`; like `status`, it may reap dead entries and changes
+nothing else. The block:
+
+- every datetime is an RFC 3339 UTC string with milliseconds or `null`; tuples are arrays;
+- `v` (1), `directory`, `slots`, `cores`, `saved`, `basis` (the capacity basis as `slotfather slots` reads it),
+  `averages` (`[l1, l5, l15]`), `draining`, `advice` (as `slotfather advise` computes it), `holders` and `waiters`
+  (rows, in the order the dashboard shows them), `used`, `free`, `memory_block` (why new leases wait for memory,
+  or `null`), `admission`, `order`, `start` and `reserved` (the head's expected and reserved start), `limit`,
+  `memory` (the memory facts, plus `low`: `true`/`false`, `null` when unknown, and `swap_low`), `history`
+  (`[[start, end, slots]]`, the occupancy steps of the last two hours), `events` (the last 60 described events
+  of queue.log, oldest first; transitional, removed in the first release after a Godfather that reads
+  `events.jsonl` is installed), `updated` and `overtake_window` (seconds);
+- a row: `key` (`[pid, since]`, `since` as stored), `kind` (`held`, `legacy`, `waiting`), `count`, `pid`, `procs`,
+  `cpu` (percent), `rss` (KB), `tree` (`[[pid, cpu, rss_kb, name]]`, highest CPU first), `queue` (an earlier
+  queue's directory), `label`, `cmd`, `meta`, `workdir`, `context` (the metadata), `priority`, `ticket`,
+  `served` (the class it is served in), `reprioritized`, `yieldable`, `yields`, `asked` (the label of the waiter
+  that asked it to yield, `""` when none) and `asked_at`, `idle_since`, `est_start`, `since`, `granted`,
+  `passable`, `all`. Strings have their control characters blanked;
+- an event: `when`, `verb` (`granted`, `released`, `left`, `reaped`, `priority`, `waiting`), `count`, `pid`,
+  `delta` (the change to held slots), `label`, `detail`, and `state` or `unsure` where queue.log alone cannot say.
+
+Presentation stays with the reader: holder colours, the lane of a request (Lanefather) and a holder's working
+directory are not in the block.
+
 ## Process queries
 
 Use `procs` for process ownership checks and worktree inspection:

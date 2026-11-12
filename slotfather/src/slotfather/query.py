@@ -5,7 +5,7 @@ import math
 import time
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from . import config as _config
 from . import idle as _idle
@@ -26,19 +26,44 @@ def snapshot(directory: Path | None = None) -> tuple[list[dict[str, Any]], list[
     return live, _leases.legacy_holders(table), table
 
 
-def locked_snapshot(directory: Path | None = None) -> tuple[list[dict[str, Any]], list[tuple[Path, dict[str, Any], int]],
-                                                           dict[int, tuple[int, str]], dict[str, Any]]:
-    """snapshot() and the capacity basis (config.capacity_basis()) read under the same lock, as a plan reads them:
-    a capacity saved meanwhile counts for the next look, never for half of this one."""
+class Look(NamedTuple):
+    """One look at the queue under its lock (#20): the process table, the live entries with their paths (reaped as
+    every look reaps them), the capacity basis and each entry's yield request read under that same lock, then the
+    earlier queues' holders and each held lease's idle mark. `live` are the entries as `status` and the dashboard
+    read them: a held one with `idle_since` (epoch seconds or None)."""
+    directory: Path
+    table: dict[int, tuple[int, str]]
+    found: list[tuple[Path, dict[str, Any]]]
+    live: list[dict[str, Any]]
+    basis: dict[str, Any]
+    legacy: list[tuple[Path, dict[str, Any], int]]
+    asks: dict[int, dict[str, Any] | None]  # id() of an entry in `live` -> its yield request
+
+    def asked_of(self, entry: dict[str, Any]) -> dict[str, Any] | None:
+        return self.asks.get(id(entry))
+
+
+def look(directory: Path | None = None) -> Look:
+    """Look at the queue once, under its lock, as a plan reads it: a capacity saved meanwhile counts for the next
+    look, never for half of this one."""
     directory = directory or _config.state_dir()
     with _state.locked(directory):
         table = _platform.processes()
         found = _leases.reap(directory, table)
         basis: dict[str, Any] = _config.capacity_basis()
+        requests = [_state.asked(path) for path, _ in found]
     marked = idle_of(directory, found)
     live = [dict(entry, idle_since=marked.get(id(entry))) if entry.get("state") == "held" else entry
             for _, entry in found]
-    return live, _leases.legacy_holders(table), table, basis
+    return Look(directory, table, found, live, basis, _leases.legacy_holders(table),
+                {id(entry): request for entry, request in zip(live, requests)})
+
+
+def locked_snapshot(directory: Path | None = None) -> tuple[list[dict[str, Any]], list[tuple[Path, dict[str, Any], int]],
+                                                           dict[int, tuple[int, str]], dict[str, Any]]:
+    """look() as (live entries, earlier queues' holders, process table, capacity basis)."""
+    found = look(directory)
+    return found.live, found.legacy, found.table, found.basis
 
 
 def idle_of(directory: Path, live: list[tuple[Path, dict[str, Any]]]) -> dict[int, float | None]:
@@ -222,7 +247,7 @@ def status_processes(directory: Path, pid: int | None = None) -> dict[int, tuple
     return _platform.processes()
 
 
-def status_json(directory: Path | None = None, pid: int | None = None) -> dict:
+def status_json(directory: Path | None = None, pid: int | None = None, look: Look | None = None) -> dict[str, Any]:
     """The queue for programs (`status --json`): every live entry with its lease id (the entry's name), the lease
     path (what SLOTFATHER_LEASE holds), holder pid and process group, its live process tree and its metadata. With
     `pid`, only the entries that process belongs to, each with `via`: "tree" (the holder or a descendant) or "env"
@@ -230,12 +255,19 @@ def status_json(directory: Path | None = None, pid: int | None = None) -> dict:
     SLOTFATHER_LEASE; macOS shows that only for the user's own processes that are not Apple platform binaries), and
     `query`: the pid and its start time as `ps -o lstart=` gives it (None: not running), for a guard to check again
     that it is the same process before it acts."""
-    directory = directory or _config.state_dir()
-    with _state.locked(directory):
-        table = status_processes(directory, pid)
-        live = _leases.reap(directory, table)
-        slots = _config.total()
-    marked = idle_of(directory, live)
+    asks: dict[int, dict[str, Any] | None] | None = None
+    if look is not None:  # status --json --full: the look the dashboard block reads too (#20)
+        directory, table, slots = look.directory, look.table, int(look.basis["slots"])
+        live = look.found
+        marked = {id(entry): item.get("idle_since") for (_, entry), item in zip(look.found, look.live)}
+        asks = {id(entry): look.asked_of(item) for (_, entry), item in zip(look.found, look.live)}
+    else:
+        directory = directory or _config.state_dir()
+        with _state.locked(directory):
+            table = status_processes(directory, pid)
+            live = _leases.reap(directory, table)
+            slots = _config.total()
+        marked = idle_of(directory, live)
     entries_found: list[dict[str, Any]] = []
     for path, entry in live:
         tree = _platform.descendants(table, entry.get("pid"))
@@ -246,7 +278,8 @@ def status_json(directory: Path | None = None, pid: int | None = None) -> dict:
                 "cmd": entry.get("cmd"), "cwd": entry.get("cwd"), "meta": _config.meta_of(entry), "tree": tree,
                 "priority": priority, "ticket": _config.ticket_of(entry),
                 "yieldable": bool(entry.get("yieldable")),
-                "yields": int(entry.get("yields") or 0), "yield_asked": _state.asked(path), "position": None,
+                "yields": int(entry.get("yields") or 0),
+                "yield_asked": _state.asked(path) if asks is None else asks.get(id(entry)), "position": None,
                 "idle_since": marked.get(id(entry))}
         entries_found.append(item)
     settings = _schedule.order_settings(directory)

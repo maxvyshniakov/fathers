@@ -32,6 +32,9 @@ from typing import Any, NamedTuple, cast
 
 
 from . import config as _config
+from .board import (HISTORY_WINDOW, JOINER, dashboard_admission, dashboard_model, dashboard_text,  # noqa: F401
+                    describe_events, held_history, macos_used_memory, memory_facts, memory_low, parse_utc,
+                    process_tree, process_usage, queue_events, span, swap_low)
 from . import dashboard_settings as _settings
 from . import keys as _keys
 from . import lane_context as _lane_context
@@ -56,8 +59,6 @@ MACHINE_GAP, MACHINE_CHART_MIN = 2, 24  # between the rows and a chart beside th
 # The width from which the chart sits beside the rows: frame and padding (6), the rows with a 9-cell value
 # column, the gap and the chart's least width (owner, 2026-11-12: picked by rendering)
 MACHINE_SIDE_WIDTH = 6 + MACHINE_LABEL + MACHINE_BAR_SIDE + 1 + 9 + MACHINE_GAP + MACHINE_CHART_MIN
-HISTORY_WINDOW = 3600  # seconds of queue.log the utilisation strip rebuilds
-LOG_TAIL = 262144  # bytes of queue.log read per refresh
 WIDE = 110  # columns from which the panels sit side by side
 # Styles come from the theme (#14, theme.py): style -> (colour, attributes: b bold, d dim, r reverse), where the
 # colour is None for the terminal's default foreground, a palette index or RGB. Frames are drawn in the muted "dim"
@@ -74,20 +75,11 @@ ASCII = str.maketrans({"▀": "#", "🆗": "+", "🔥": "!", "🮅": "#", "■":
                        "╭": "+", "╮": "+", "╰": "+", "╯": "+", "↑": "^", "↓": "v", "↗": "/", "↘": "\\", "→": ">",
                        "←": "<", "≈": "~", "×": "x", "—": "-", "⏸": "=", "▭": "o", "−": "-", "╻": "#", "╹": "#",  "┃": "#", "▁": "_", "▂": "_", "▃": "-", "▄": "-",
                        "▅": "=", "▆": "=", "▇": "#"})
-GRANTED = re.compile(r"granted (\d+) to (.*) \(pid (\d+)\)$")
-RELEASED = re.compile(r"released (\d+) \(\d+-(\d+)\.json\)$")
-REAPED = re.compile(r"reaped (\S+) lease of (\d+) for (.*) \(pid (\d+) exited\)$")
-REPRIORITIZED = re.compile(r"reprioritized (.*) \(pid (\d+)\) from (\w+) to (\w+)$")
-WAITING_LONG = re.compile(r"waiting long: (.*) \(pid (\d+), [^)]*\) waiting (\S+) behind .*: est\. start (\S+)")
 
 
-JOINER, TEXT_STYLE, EMOJI_STYLE = "\u200d", "\ufe0e", "\ufe0f"  # zero-width joiner, variation selectors 15 and 16
+TEXT_STYLE, EMOJI_STYLE = "\ufe0e", "\ufe0f"  # variation selectors 15 and 16; JOINER: board's zero-width joiner
 
 
-def dashboard_text(value) -> str:
-    """A label or command as plain text: any process writes queue entries, so control bytes are blanked. The
-    zero-width joiner of an emoji sequence (👨‍🦳) stays."""
-    return "".join(char if char.isprintable() or char == JOINER else " " for char in str(value))
 
 
 def cell_width(char: str) -> int:
@@ -136,15 +128,6 @@ def clip(value, width: int) -> str:
     return "".join(kept) + "…" if width > 0 else ""
 
 
-def span(seconds: float) -> str:
-    seconds = max(0, int(seconds))
-    if seconds < 60:
-        return f"{seconds}s"
-    if seconds < 3600:
-        return f"{seconds // 60}m{seconds % 60:02}s"
-    if seconds < 86400:
-        return f"{seconds // 3600}h{seconds // 60 % 60:02}m"
-    return f"{seconds // 86400}d{seconds // 3600 % 24:02}h"
 
 
 def minutes(seconds: float) -> str:
@@ -181,11 +164,6 @@ def tilde(path: str) -> str:
     return "~" + path[len(home):] if path == home or path.startswith(home + os.sep) else path
 
 
-def parse_utc(value) -> datetime.datetime | None:
-    try:
-        return datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
-    except (TypeError, ValueError):
-        return None
 
 
 class Canvas:
@@ -409,35 +387,7 @@ def sgr(style: str, selected: bool | str) -> str:
     return "\x1b[" + ";".join(codes) + "m"
 
 
-# Dashboard data
-
-def process_usage() -> tuple[dict, dict]:
-    """pid -> (CPU percent, resident KB, command name) for every process, and ppid -> its child pids."""
-    result = subprocess.run(["ps", "-axo", "pid=,ppid=,%cpu=,rss=,comm="], capture_output=True, text=True)
-    if result.returncode:
-        raise OSError(f"CPU process sample failed: ps exited {result.returncode}")
-    own, children = {}, {}
-    for line in result.stdout.splitlines():
-        parts = line.split(None, 4)
-        if len(parts) == 5 and parts[0].isdigit() and parts[1].isdigit():
-            with contextlib.suppress(ValueError):
-                own[int(parts[0])] = (float(parts[2].replace(",", ".")), int(parts[3]), os.path.basename(parts[4]))
-                children.setdefault(int(parts[1]), []).append(int(parts[0]))
-    return own, children
-
-
-def process_tree(pid, own: dict, children: dict) -> list[tuple[int, float, int, str]]:
-    """(pid, CPU percent, resident KB, name) for pid and all its descendants: a lease's whole command."""
-    found, stack, seen = [], [pid], set()
-    while stack:
-        current = stack.pop()
-        if current in seen or current not in own:
-            continue
-        seen.add(current)
-        found.append((current, *own[current]))
-        stack.extend(children.get(current, ()))
-    return found
-
+# Dashboard data: board.py gathers it (the same model `status --json --full` prints)
 
 def process_cwd(pid) -> str | None:
     """The directory a holder was started in, which names its project better than most labels."""
@@ -450,160 +400,6 @@ def process_cwd(pid) -> str | None:
         return None
     return next((line[1:] for line in result.stdout.splitlines() if line.startswith("n")), None)
 
-
-def macos_used_memory(text: str) -> float | None:
-    """Physical MB in active, wired and compressor pages; inactive cache is excluded."""
-    page = re.search(r"page size of (\d+) bytes", text)
-    fields = dict(re.findall(r"^(Pages [^:]+):\s+(\d+)\.", text, re.MULTILINE))
-    names = ("Pages active", "Pages wired down", "Pages occupied by compressor")
-    if not page or any(name not in fields for name in names):
-        return None
-    return sum(int(fields[name]) for name in names) * int(page[1]) / (1024 * 1024)
-
-
-def memory_facts() -> dict:
-    """Free and total swap in MB and the kernel's memory-pressure level, as far as this host reports them."""
-    seam = _config.setting("MEMORY_FILE")
-    if seam:
-        with contextlib.suppress(OSError, ValueError):
-            free, level = (float(v) for v in Path(seam).read_text().split()[:2])
-            return {"swap_free": free, "swap_total": None, "level": level}
-        return {"swap_free": None, "swap_total": None, "level": None}
-    if _platform.linux():  # no pressure level: MemAvailable and PSI, as the memory policy reads them
-        facts = _platform.linux_memory()
-        return {"swap_total": facts["swap_total"], "swap_free": facts["swap_free"], "level": None,
-                "available": facts["available"], "total": facts["total"], "psi_some": facts["psi_some"],
-                "psi_full": facts["psi_full"], "cgroup_available": facts.get("cgroup_available"),
-                "cgroup": facts.get("cgroup")}
-    total, free = _platform.swap_usage() or (None, None)
-    facts = {"swap_total": total, "swap_free": free, "level": _platform.pressure_level()}
-    with contextlib.suppress(OSError, ValueError, subprocess.TimeoutExpired):
-        physical = _platform.sysctl("hw.memsize")
-        stats = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=2)
-        facts.update(total=int(physical) / (1024 * 1024), used=macos_used_memory(stats.stdout))
-    return facts
-
-
-def queue_events(directory: Path) -> list[dict]:
-    """The grants, releases and reaps at the end of queue.log, oldest first. Each event carries `delta`, the change
-    it made to held slots. A release whose grant precedes the part read is taken to end a held lease; one whose
-    pid was never granted in a fully read log is a waiter that gave up."""
-    try:
-        with open(directory / "queue.log", "rb") as handle:
-            start = max(0, handle.seek(0, os.SEEK_END) - LOG_TAIL)
-            handle.seek(start)
-            lines = handle.read().decode("utf-8", "replace").splitlines()[1 if start else 0:]
-    except OSError:
-        return []
-    events: list[dict[str, Any]] = []
-    granted: dict[int, str] = {}
-    for line in lines:
-        moment, _, message = line.partition(" ")
-        when = parse_utc(moment)
-        if when is None:
-            continue
-        if found := GRANTED.match(message):
-            count, label, pid = int(found[1]), found[2], int(found[3])
-            granted[pid] = label
-            events.append({"when": when, "verb": "granted", "count": count, "label": label, "pid": pid,
-                           "delta": count})
-        elif found := RELEASED.match(message):
-            count, pid = int(found[1]), int(found[2])
-            held = pid in granted or start > 0
-            events.append({"when": when, "verb": "released" if held else "left", "count": count,
-                           "label": granted.pop(pid, ""), "pid": pid, "delta": -count if held else 0,
-                           # granted before the part read, or never: describe_events() asks its history line
-                           "unsure": held and pid not in granted})
-        elif found := REAPED.match(message):
-            state, count, label, pid = found[1], int(found[2]), found[3], int(found[4])
-            granted.pop(pid, None)
-            events.append({"when": when, "verb": "reaped", "count": count, "label": label, "pid": pid,
-                           "delta": -count if state == "held" else 0, "state": state})
-        elif found := REPRIORITIZED.match(message):  # slotfather reprioritize: a class, not slots
-            events.append({"when": when, "verb": "priority", "count": 0, "label": found[1], "pid": int(found[2]),
-                           "delta": 0, "detail": f"{found[3]} → {found[4]}"})
-        elif found := WAITING_LONG.match(message):  # a long wait, said by the waiter itself
-            events.append({"when": when, "verb": "waiting", "count": 0, "label": found[1], "pid": int(found[2]),
-                           "delta": 0, "detail": f"{found[3]}, est. {found[4]}"})
-    return events
-
-
-EVENT_HISTORY = 600  # history lines read to describe the events shown
-EVENT_MATCH = 2.0  # seconds between a queue.log line and the history stamp of the same moment
-
-
-def describe_events(events: list[dict[str, Any]], directory: Path, live: list[dict[str, Any]]) -> None:
-    """Adds each event's `detail` from the history line of its request (state.record() writes it as the request
-    leaves): `waited 3m00s` for a grant (a running lease's from its queue entry), `exit 1, ran 4m00s` for a release,
-    `gave up after 15m00s` for a waiter that left, `owner exited, ran 5m55s` for a reap. The history line also
-    settles whether a release was a lease ending or a waiter giving up, which queue.log alone cannot say once it is
-    longer than the part queue_events() reads; a waiter that gave up changed no held slots."""
-    by_pid: dict[int, list[dict[str, Any]]] = {}
-    history = cast(list[dict[str, Any]], cast(Any, _state).tail_objects(directory / "history.jsonl", EVENT_HISTORY))
-    for item in history:
-        pid = item.get("pid")
-        if isinstance(pid, int):
-            by_pid.setdefault(pid, []).append(item)
-    running = {entry["pid"]: entry for entry in live if isinstance(entry.get("pid"), int)}
-
-    def near(stamp: Any, when: datetime.datetime) -> bool:
-        moment = parse_utc(stamp)
-        return moment is not None and abs((moment - when).total_seconds()) <= EVENT_MATCH
-
-    for event in events:
-        if event["verb"] in ("priority", "waiting"):  # their detail is their own line's
-            continue
-        event["detail"] = ""
-        verb, when = event["verb"], event["when"]
-        if verb == "granted":
-            item = next((i for i in by_pid.get(event["pid"], []) if near(i.get("granted"), when)), None)
-            if item is None and event["pid"] in running and near(running[event["pid"]].get("granted"), when):
-                since, granted = parse_utc(running[event["pid"]].get("since")), when
-                waited = None if since is None else (granted - since).total_seconds()
-            else:
-                waited = item.get("waited") if item else None
-            if isinstance(waited, (int, float)):
-                event["detail"] = f"waited {span(waited)}" if waited >= 1 else "no wait"
-            continue
-        item = next((i for i in by_pid.get(event["pid"], []) if near(i.get("ended"), when)), None)
-        if item is None and event.get("unsure"):
-            # No grant in the part of queue.log read and no history line that it held slots: a request that left
-            # without one (queue.log has its release, never a grant). Counting it as a lease that ended put slots
-            # back into the chart's past that nothing held (`peak 9` of 8).
-            event.update(verb="left", delta=0, detail="never granted")
-            continue
-        if item is None:
-            event["detail"] = "owner exited" if verb == "reaped" else "gave up" if verb == "left" else ""
-            continue
-        ran = item.get("ran")
-        ran_text = f"ran {span(ran)}" if isinstance(ran, (int, float)) else ""
-        if verb == "reaped":
-            event["detail"] = ", ".join(part for part in ("owner exited", ran_text) if part)
-        elif item.get("outcome") == "left":
-            event.update(verb="left", delta=0, label=event["label"] or str(item.get("label") or ""))
-            waited = item.get("waited")
-            event["detail"] = f"gave up after {span(waited)}" if isinstance(waited, (int, float)) else "gave up"
-        else:
-            status = item.get("status")
-            event["detail"] = ", ".join(part for part in (
-                f"exit {status}" if isinstance(status, int) else "", ran_text) if part)
-            event["label"] = event["label"] or str(item.get("label") or "")
-
-
-def held_history(events: list[dict], held_now: int, now_moment: datetime.datetime,
-                 window: float = HISTORY_WINDOW * 2) -> list[tuple[datetime.datetime, datetime.datetime, int]]:
-    """Held slots over the last `window` seconds as (start, end, slots) steps, walked back from held_now."""
-    begin = now_moment - datetime.timedelta(seconds=window)
-    steps, level, end = [], held_now, now_moment
-    for event in reversed(events):
-        if event["when"] <= begin:
-            break
-        if event["delta"] and event["when"] < end:
-            steps.append((event["when"], end, max(0, level)))
-            end = event["when"]
-        level -= event["delta"]
-    steps.append((begin, end, max(0, level)))
-    return steps[::-1]
 
 
 def history_buckets(steps: list, columns: int) -> list[int]:
@@ -636,106 +432,6 @@ def history_summary(steps: list, slots: int) -> dict:
     full = sum((stop - start).total_seconds() for start, stop, level in steps if level >= slots)
     return {"average": held / total_seconds / slots, "full": full / total_seconds,
             "peak": max((level for _, _, level in steps), default=0)}
-
-
-def dashboard_admission(waiters: list[dict[str, Any]], held: list[dict[str, Any]], slots: int, other: int,
-                        memory_block: str | None, estimate: _schedule.Estimate | None, settings: dict[str, Any]) -> int:
-    """Largest generic request grant() would admit, including earlier grants consuming the memory exemption."""
-    used = sum(_schedule.holds(entry, slots) for entry in held) + other
-    free = max(0, slots - used)
-    if not free or memory_block and used:
-        return 0
-    if not waiters:
-        return free
-    if memory_block:
-        # On an idle host only the first planned grant bypasses the memory gate.
-        # A new generic request may rank ahead of a lower-priority existing waiter.
-        probe: dict[str, Any] = dict(count=free, label="", cmd="", since=_config.now())
-        found = _schedule.plan(waiters + [probe], held, slots, time.time(), estimate=estimate,
-                        other=other, settings=settings)
-        return free if found.grants and found.grants[0] is probe else 0
-    return _schedule.room(waiters, free, held, estimate, other, settings=settings, slots=slots)
-
-
-def dashboard_model() -> dict:
-    directory = _config.state_dir()
-    live, legacy, _, basis = _query.locked_snapshot(directory)  # the capacity under the queue's lock
-    slots: int = basis["slots"]
-    saved: bool = basis["saved"]
-    own, children = process_usage()
-    asks: dict[int, tuple[str, datetime.datetime | None]] = {}  # holder pid -> (waiter that asked it to yield, when)
-    for place in (directory / "queue").glob("*.yield"):
-        with contextlib.suppress(OSError, ValueError, AttributeError):
-            request = json.loads(place.read_text())
-            asks[int(place.stem.split("-")[-1])] = (str(request.get("label") or "?"), parse_utc(request.get("at")))
-
-    def item(entry: dict[str, Any], kind: str, count: int, queue: str = "") -> dict[str, Any]:
-        tree = process_tree(entry.get("pid"), own, children) if kind != "waiting" else []
-        foreseen: dict[str, Any] = expected.get(id(entry)) or {}  # query.outlook(): its class and expected start
-        return {"tree": sorted(tree, key=lambda process: -process[1]), "cpu": sum(p[1] for p in tree),
-                "rss": sum(p[2] for p in tree), "procs": len(tree),"key": (entry.get("pid"), entry.get("since")), "kind": kind, "count": count, "queue": queue,
-                "label": dashboard_text(entry.get("label", "")), "pid": entry.get("pid"),
-                "cmd": dashboard_text(entry.get("cmd", "")), "since": parse_utc(entry.get("since")),
-                "meta": dashboard_text(_config.meta_text(_config.meta_of(entry))),
-                "context": _config.meta_of(entry), "workdir": entry.get("cwd") or "",
-                "priority": _config.priority_of(entry), "ticket": _config.ticket_of(entry),
-                "yieldable": bool(entry.get("yieldable")), "yields": int(entry.get("yields") or 0),
-                "asked": dashboard_text(asks.get(int(entry.get("pid") or 0), ("", None))[0]),
-                "asked_at": asks.get(int(entry.get("pid") or 0), ("", None))[1],
-                # #12: since when the holder's record says the lease has been idle (query.locked_snapshot()).
-                "idle_since": datetime.datetime.fromtimestamp(entry["idle_since"], datetime.timezone.utc)
-                if isinstance(entry.get("idle_since"), (int, float)) else None,
-                "served": foreseen.get("priority") or
-                (entry.get("aged") if entry.get("aged") in _config.PRIORITIES else None),
-                "reprioritized": entry.get("reprioritized") if entry.get("reprioritized") in _config.PRIORITIES else None,
-                "est_start": datetime.datetime.fromtimestamp(foreseen["est_start"], datetime.timezone.utc)
-                if foreseen.get("est_start") is not None else None,
-                "granted": parse_utc(entry.get("granted")), "passable": kind == "waiting" and _schedule.overtakable(entry),
-                "all": bool(entry.get("all")),
-                "style": "text" if kind == "waiting" else "legacy"}
-
-    # The class each waiter is served in and its expected start (query.outlook(); nothing when it cannot be read).
-    expected: dict[int, dict[str, Any]] = {}
-    with contextlib.suppress(Exception):
-        expected = _query.outlook(directory, live, slots, sum(count for _, _, count in legacy))
-    # An `-n all` lease holds the whole capacity, also one grown under it (#7).
-    holders = [item(e, "held", _schedule.holds(e, slots)) for e in live if e["state"] == "held"]
-    holders += [item(e, "legacy", count, str(path.parent.parent)) for path, e, count in legacy]
-    settings, start, reserved = _schedule.order_settings(directory), None, None
-    order = settings["order"]
-    live_waiters = [e for e in live if e["state"] != "held"]
-    _schedule.fit(live_waiters, slots)  # as the queue grants them when the capacity shrank under them
-    if order == "backfill":
-        live_waiters = _schedule.ranked(live_waiters, settings, time.time())  # the order the queue serves them in
-    waiters = [item(e, "waiting", e["count"]) for e in live_waiters]
-    used = sum(h["count"] for h in holders)
-    if order == "backfill" and live_waiters:
-        with contextlib.suppress(Exception):  # an estimate that cannot be read leaves the sentence without a time
-            found = _schedule.plan(live_waiters, [e for e in live if e["state"] == "held"], slots, time.time(), order,
-                            _schedule.estimator(directory), sum(count for _, _, count in legacy), reserve_head=True,
-                            settings=settings)
-            if found.head is not None and found.start is not None:
-                start = datetime.datetime.fromtimestamp(found.start, datetime.timezone.utc)
-            if found.head is not None and found.reserved is not None:
-                reserved = datetime.datetime.fromtimestamp(found.reserved, datetime.timezone.utc)
-    memory_block, machine, averages = _platform.memory_short(), _config.cores(), _platform.loads()
-    events = queue_events(directory)
-    describe_events(cast(list[dict[str, Any]], events), directory, live)
-    moment = datetime.datetime.now(datetime.timezone.utc)
-    free = max(0, slots - used)
-    admission = dashboard_admission(live_waiters, [e for e in live if e["state"] == "held"], slots,
-                    sum(count for _, _, count in legacy), memory_block,
-                    _schedule.estimator(directory) if live_waiters else None, settings)
-    own_held = sum(h["count"] for h in holders if h["kind"] == "held")
-    return {"directory": str(directory), "slots": slots, "saved": saved, "basis": basis, "cores": machine,
-            "averages": averages, "draining": _query.draining(used, slots),
-            "advice": _query.size(slots, machine, slots, averages, min(used, slots),
-                              bool(waiters) and admission == 0),
-            "holders": holders, "waiters": waiters, "used": used, "free": free, "memory_block": memory_block,
-            "admission": admission,
-            "order": order, "start": start, "reserved": reserved, "limit": settings["limit"],
-            "memory": memory_facts(), "history": held_history(events, own_held, moment), "events": events[-60:],
-            "updated": moment}
 
 
 def dashboard_colours(model: dict, assigned: dict) -> None:
@@ -1367,16 +1063,11 @@ def enrich_details(item: dict[str, Any]) -> None:
 
 
 def machine_memory_status(memory: dict) -> tuple[str, str]:
-    """RAM/pressure health only; swap has a separate status and never colours RAM by itself."""
-    level = memory.get("level")
-    if level is not None:
-        return ("memory low", "bad") if level > _config.MAX_PRESSURE_LEVEL else ("memory ok", "status-normal")
-    if any(memory.get(key) is not None for key in ("available", "cgroup_available", "psi_some", "psi_full")):
-        facts = dict(memory, swap_total=0, swap_free=None)
-        for key in ("available", "psi_some", "psi_full"):
-            facts.setdefault(key, None)
-        return ("memory low", "bad") if _platform.linux_short(facts) else ("memory ok", "status-normal")
-    return "memory unknown", "dim"
+    """RAM/pressure health only; swap has a separate status and never colours RAM by itself (board.memory_low())."""
+    low = memory_low(memory)
+    if low is None:
+        return "memory unknown", "dim"
+    return ("memory low", "bad") if low else ("memory ok", "status-normal")
 
 
 def machine_note(model: dict[str, Any]) -> list[tuple[str, str]]:
@@ -1435,9 +1126,8 @@ def machine_resources(model: dict[str, Any]) -> list[Resource]:
     swap_total = float(memory.get("swap_total") or 0)
     if swap_total and memory.get("swap_free") is not None:
         swap_used = max(0.0, swap_total - float(memory["swap_free"]))
-        swap_low = float(memory["swap_free"]) < _config.number_setting("MIN_FREE_SWAP_MB", _config.MIN_FREE_SWAP_MB)
         found.append(Resource("swap", swap_used / swap_total, f"{gigabytes(swap_used)}/{gigabytes(swap_total, True)}G",
-                              f"{round(swap_used / 1024)}/{round(swap_total / 1024)}G", swap_low))
+                              f"{round(swap_used / 1024)}/{round(swap_total / 1024)}G", swap_low(memory)))
     else:
         found.append(Resource("swap", None, "off" if memory.get("swap_total") == 0 else "?",
                               "off" if memory.get("swap_total") == 0 else "?", False))

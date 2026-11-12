@@ -6,6 +6,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- `slotfather capabilities --json` says which dashboard contracts this release supports, and `slotfather status
+  --json --full` adds the host, the time and the dashboard's own model to `status --json`, from the same look at
+  the queue, so a separate dashboard (Godfather) can draw today's screen; `status --json` is unchanged.
 - A waiting request ages: a batch one is served as normal after 30 minutes, a normal one as interactive after 60
   more, keeping its arrival. `slotfather order --aging-batch 30m --aging-normal 60m` sets the steps (0: never;
   `SLOTFATHER_AGING_BATCH`, `_AGING_NORMAL` can only age less); Settings shows them as Batch promoted after and

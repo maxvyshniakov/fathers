@@ -3,7 +3,8 @@
   slotfather run [-n N|all] [--label L] [--meta K=V]... [--priority P] [--ticket ID] [--yieldable] [--wait S] [--] COMMAND...
                                                                      run COMMAND holding N slots (default 1)
   slotfather yield                                                   inside a yieldable lease: yield if asked
-  slotfather status [--json [--pid PID]]                             running and waiting requests, in queue order
+  slotfather status [--json [--pid PID | --full]]                    running and waiting requests, in queue order
+  slotfather capabilities --json                                     what a dashboard (Godfather) can read and run here
   slotfather reprioritize PID|LABEL interactive|normal|batch         move a request to another class, keeping its place
   slotfather procs --json [--cwd PATH] [--pid PID]                  read-only process, lease and session ancestry
   slotfather lane-admission --json                                    stateless lifetime lane policy, stdin JSON
@@ -113,7 +114,7 @@ def dashboard(argv: list[str]) -> int:
 USAGE = ("usage: slotfather                     (in a terminal: the live dashboard)\n"
          "       slotfather run [-n N|all] [--label L] [--meta KEY=VALUE]... [--priority interactive|normal|batch] [--ticket ID]\n"
          "                      [--yieldable] [--wait SECONDS] [--] COMMAND...      (inside a lease: slotfather yield)\n"
-         "       slotfather status [--json [--pid PID]] | history [N] | available [--label L] [-- COMMAND...]\n"
+         "       slotfather status [--json [--pid PID | --full]] | history [N] | available [--label L] [-- COMMAND...]\n"
          "       slotfather reprioritize PID|LABEL interactive|normal|batch\n"
          "       slotfather lane-admission --json                         (one lifetime request on stdin)\n"
          "       slotfather advise [--max N] [--exclusive] [--label L] [-- COMMAND...]\n"
@@ -122,7 +123,7 @@ USAGE = ("usage: slotfather                     (in a terminal: the live dashboa
          "                        [--aging-batch S] [--aging-normal S] [--warn-wait S] | reset   (S: 90, 90s, 30m, 1.5h)\n"
          "       slotfather stats [--since WHEN] [--label GLOB] [--by both|label|kind] [--top N] [--json]\n"
          "       slotfather slots [N|memory GIB|lower GIB|reset]\n"
-         "       slotfather procs --json [--cwd PATH] [--pid PID] | version [--json]\n"
+         "       slotfather procs --json [--cwd PATH] [--pid PID] | version [--json] | capabilities --json\n"
          "       slotfather sweep [--live [--dev-servers]] [--json] [--quiet] [--pid PID]... | sweep config [KEY VALUE]...\n"
          "                        | sweep --plist [--live [--dev-servers]] [--interval SECONDS]\n"
          "       slotfather dashboard [--interval SECONDS] | dashboard --once [--width N] [--height N] [--color]")
@@ -210,13 +211,17 @@ def yield_command(argv: list[str]) -> int:
 
 
 def status_command(argv: list[str]) -> int:
-    """`status --json [--pid PID]`."""
+    """`status --json [--pid PID | --full]`."""
     from . import query as _query
     pid = None
+    if argv == ["--full"]:
+        from . import board as _board
+        print(json.dumps(_board.full_status(), sort_keys=True))
+        return 0
     if argv[:1] == ["--pid"] and len(argv) == 2 and argv[1].isdigit():
         pid = int(argv[1])
     elif argv:
-        raise _config.SlotError("status takes --json and then optionally --pid PID")
+        raise _config.SlotError("status takes --json and then optionally --pid PID or --full")
     print(json.dumps(_query.status_json(pid=pid), sort_keys=True))
     return 0
 
@@ -370,6 +375,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(text())
             else:
                 raise _config.SlotError("version takes only --json")
+            return 0
+        if command == "capabilities":
+            if rest != ["--json"]:
+                raise _config.SlotError("capabilities takes --json")
+            from .capabilities import capabilities
+            print(json.dumps(capabilities(), sort_keys=True))
             return 0
         if command == "procs":
             from .procs import command as procs_command
