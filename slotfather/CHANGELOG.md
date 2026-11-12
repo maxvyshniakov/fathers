@@ -12,6 +12,8 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 - `slotfather settings --json`, `settings check`, `settings set [--revision R]` and `settings reset` read, check and
   save every Settings row through the queue's own validation and lock, with the panel's previews, conflicts and
   read-only queues.
+- events.jsonl beside the queue records every grant, release, give-up, reap, reprioritize, long wait, yield, capacity
+  and order change and sweep stop in Godfather's shared event schema; queue.log and history.jsonl stay as they are.
 - A waiting request ages: a batch one is served as normal after 30 minutes, a normal one as interactive after 60
   more, keeping its arrival. `slotfather order --aging-batch 30m --aging-normal 60m` sets the steps (0: never;
   `SLOTFATHER_AGING_BATCH`, `_AGING_NORMAL` can only age less); Settings shows them as Batch promoted after and

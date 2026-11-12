@@ -180,6 +180,13 @@ def long_wait(directory: Path, path: Path) -> str | None:
     """The line a waiter that has waited the warn time says (its client's stderr; queue.log, which EVENTS shows):
     how long it has waited, what it waits behind, when it is expected to start, and how to move it up. None when
     it no longer waits."""
+    report = long_wait_report(directory, path)
+    return report[0] if report else None
+
+
+def long_wait_report(directory: Path, path: Path) -> tuple[str, dict[str, Any]] | None:
+    """long_wait()'s line and its facts for the request.waiting_long event: {"waited" (seconds), "est_start" (UTC
+    stamp or None), "behind": {"earlier", "running"}, "priority" (served), "aged"}."""
     with _state.locked(directory):
         table = _platform.processes()
         live = _leases.reap(directory, table)
@@ -204,8 +211,11 @@ def long_wait(directory: Path, path: Path) -> str | None:
     up = {"batch": "normal", "normal": "interactive"}.get(expect["priority"])
     hint = f"; reprioritize with: slotfather reprioritize {mine.get('pid')} {up}" if up else ""
     served = expect["priority"] + (f", aged from {_config.priority_of(mine)}" if expect["aged"] else "")
-    return (f"{mine.get('label')} (pid {mine.get('pid')}, {served}) waiting {_config.duration(expect['waited'] or 0)} "
+    line = (f"{mine.get('label')} (pid {mine.get('pid')}, {served}) waiting {_config.duration(expect['waited'] or 0)} "
             f"behind {' and '.join(behind) or 'nothing'}: est. start {when}{hint}")
+    return line, {"waited": round(expect["waited"] or 0), "est_start": iso(start),
+                  "behind": {"earlier": ahead, "running": running}, "priority": expect["priority"],
+                  "aged": bool(expect["aged"])}
 
 
 def held_slots(live: list[dict[str, Any]], legacy: list[tuple[Path, dict[str, Any], int]], slots: int) -> int:

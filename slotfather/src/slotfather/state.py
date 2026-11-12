@@ -105,9 +105,11 @@ def write(path: Path, entry: Any) -> None:
     pending.replace(path)
 
 
-def record(directory: Path, entry: dict, outcome: str, status: int | None = None, usage: dict | None = None) -> None:
+def record(directory: Path, entry: dict, outcome: str, status: int | None = None,
+           usage: dict | None = None) -> dict[str, Any]:
     """Add a request that left the queue to history.jsonl: released (it ran), left (it gave up waiting) or reaped
-    (its holder died), with what its process tree used where the holder measured it. Callers hold the queue lock."""
+    (its holder died), with what its process tree used where the holder measured it. Callers hold the queue lock.
+    Returns the line's fields (the events of events.py read them)."""
     ended = time.time()
     queued, granted = _config.seconds(entry.get("since")), _config.seconds(entry.get("granted"))
     item = {"v": _config.HISTORY_VERSION, "label": entry.get("label"), "cmd": entry.get("cmd"), "cwd": entry.get("cwd"),
@@ -138,6 +140,7 @@ def record(directory: Path, entry: dict, outcome: str, status: int | None = None
         item["meta"] = meta
     with contextlib.suppress(OSError):
         append_bounded(directory / "history.jsonl", json.dumps(item) + "\n", _config.HISTORY_MAX)
+    return item
 
 
 def append_bounded(path: Path, line: str, limit: int) -> None:
@@ -342,6 +345,16 @@ def configure(changes: dict[str, dict[str, Any] | None], *,
                     pending.write_bytes(original)
                     pending.replace(path)
             raise _config.SlotError(f"cannot save settings: {error}") from None
+        from . import events
+        for name in changed:
+            if name == "capacity.json":
+                with contextlib.suppress(_config.SlotError, OSError):
+                    basis = _config.capacity_basis()
+                    events.emit(directory, "capacity.changed", {"type": "capacity", "id": "capacity"},
+                                {"saved": values[name], "mode": basis["mode"], "slots": basis["slots"]})
+            else:
+                events.emit(directory, "order.changed", {"type": "order", "id": "order"},
+                            {"reset": True} if values[name] is None else {"saved": values[name]})
         # Grant now what the new settings start, as a release does: waiters look less often the longer they wait.
         with contextlib.suppress(_config.SlotError, OSError):
             cast(Any, leases).grant(directory, platform.processes())

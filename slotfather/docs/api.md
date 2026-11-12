@@ -32,6 +32,7 @@ not there:
 {"v": 1, "tool": "slotfather", "version": "0.1.0",
  "dashboard": {"v": 1, "tag": "slot",
    "snapshot": {"argv": ["status", "--json", "--full"], "versions": [2], "poll": 1},
+   "events": {"path": "/Users/me/.local/state/slotfather/events.jsonl", "versions": [1]},
    "settings": {"versions": [1]},
    "actions": ["reprioritize"],
    "changelog": "/Users/me/.local/lib/slotfather/releases/<release>/slotfather/CHANGELOG.md"}}
@@ -124,6 +125,35 @@ slotfather settings reset (KEY | --all) [--revision R] --json
 - Exit codes: 0 done; 2 invalid, with `{"ok": false, "error"}`; 3 a stale revision, with the whole current
   settings object, `ok: false`, `conflict: true` and `error`; 4 another user's queue, with `{"ok": false,
   "error"}` (`settings --json` there has `writable: false`, its `reason`, and every row `writable: false`).
+
+**`events.jsonl`** (beside the queue; `capabilities` gives its absolute path under `dashboard.events`) holds
+the queue's events in Godfather's shared event schema, version 1: one JSON object per line with `v`, `time` (RFC 3339
+UTC with milliseconds), `host`, `source` (`slotfather`), `kind`, `subject`, `actor`, `details` and, for a warning,
+`level`. Each site that writes a queue.log line also appends its event, after the change; queue.log and
+history.jsonl are unchanged, and an event that cannot be written never fails or alters the operation. Lines are
+appended with one write (O_APPEND, mode 0600), carry no control characters, and stay under 16 KiB (a larger
+event keeps `details: {"truncated": true}`); past 4 MiB the log becomes `events.jsonl.1` under an flock on
+`events.lock`. Nothing is written into another user's queue. `subject` is the request (`type: request`, `id` its
+entry's name as `status --json` gives it, `label`, `pid`) unless said otherwise; `actor` is the holder process
+(with `lane` from its metadata) for what a lease's own client does, `type: tool` (`name: slotfather`) for what a
+look at the queue decides, the command's process otherwise, with `via: godfather` when `GODFATHER_ACTOR` names
+Godfather. The tests validate every line with Godfather's `eventcheck.py`, vendored in `tests/vendor/` with its
+SHA-256 (compared with `$GODFATHER_DIR/src/godfather/eventcheck.py` when that is set).
+
+| Kind | When | `details` |
+| --- | --- | --- |
+| `lease.granted` | a request is granted, or a yielded lease again (`resumed`) | `count`, `priority`, `waited`, `served` when ageing moved it, `meta` |
+| `lease.released` | a lease ends | `count`, `exit`, `ran`, `cpu`, `rss_peak_mb` |
+| `request.left` | a waiter gives up (`--wait`, a signal) | `count`, `gave_up_after` |
+| `lease.reaped`, `request.reaped` | a holder that died is reaped (level warn) | `count`, `ran`, `waited`, `reason` |
+| `request.reprioritized` | `slotfather reprioritize` | `from`, `to`, `state` |
+| `request.waiting_long` | a waiter says it has waited the warn time (level warn) | `waited`, `est_start`, `behind` (`earlier`, `running`), `priority`, `aged` |
+| `lease.yield_asked` | a waiter asks a lease to yield | `count`, `for` (`id`, `label`, `priority`) |
+| `lease.yield_withdrawn` | that request is withdrawn | — |
+| `lease.yielded` | the lease yields | `count`, `to` (`id`, `label`), `yields` |
+| `capacity.changed` | a capacity is saved or reset (subject `capacity`) | `saved` (capacity.json, `null` for reset), `mode`, `slots` |
+| `order.changed` | order settings are saved or reset (subject `order`) | `saved` (the changed keys) or `reset: true` |
+| `process.swept` | `sweep --live` stops a leftover process (subject `process`, level warn) | `action`, `class`, `kind`, `age`, `processes`, `cmd` |
 
 ## Process queries
 

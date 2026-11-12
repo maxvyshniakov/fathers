@@ -50,6 +50,7 @@ from typing import NamedTuple
 
 
 from . import config as _config
+from . import events as _events
 from . import leases as _leases
 from . import platform as _platform
 from . import state as _state
@@ -1043,6 +1044,11 @@ def sweep(directory: Path, live: bool = False, dev_servers: bool = False, only: 
                 _state.log(directory, f"sweep {item['action']} {item['class']} pid {item['pid']} ({item['kind']}, "
                                   f"age {_config.duration(item['age'])}, {len(item['tree'])} process(es)): "
                                   f"{item['cmd'][:120]}")
+                _events.emit(directory, "process.swept", {"type": "process", "id": str(item["pid"]), "pid": item["pid"]},
+                             {"action": item["action"], "class": item["class"], "kind": item["kind"],
+                              "age": round(item["age"]), "processes": len(item["tree"]),
+                              "cmd": _events.command(item["cmd"])},
+                             dict(_events.actor(kind="tool"), via="sweep"), level="warn")
     enabled = set(found_settings["classes"])
     docker = containers(found_settings) if "container" in enabled and only is None else \
         {"available": None, "items": []}

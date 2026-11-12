@@ -14,6 +14,7 @@ import time
 from typing import Any
 
 from . import config as _config
+from . import events as _events
 from . import idle as _idle
 from . import platform as _platform
 from . import query as _query
@@ -38,7 +39,11 @@ def reap(directory: Path, table: Table) -> list[tuple[Path, dict[str, Any]]]:
             _idle.path(path).unlink(missing_ok=True)
             _state.log(directory, f"reaped {entry.get('state')} lease of {entry.get('count')} for "
                            f"{entry.get('label')} (pid {entry.get('pid')} exited)")
-            _state.record(directory, entry, "reaped")
+            item = _state.record(directory, entry, "reaped")
+            _events.emit(directory, "lease.reaped" if entry.get("state") == "held" else "request.reaped",
+                         _events.request(entry, path),
+                         {"count": entry.get("count"), "ran": item.get("ran"), "waited": item.get("waited"),
+                          "reason": "owner exited"}, _events.actor(kind="tool"), level="warn")
     return live
 
 
@@ -97,9 +102,15 @@ def ask(directory: Path, live: list[tuple[Path, dict[str, Any]]], held: list[dic
                           "count": who["count"], "at": _config.now()})
             _state.log(directory, f"asked {entry['label']} (pid {entry['pid']}) to yield {entry['count']} for "
                            f"{who.get('label')}")
+            _events.emit(directory, "lease.yield_asked", _events.request(entry, path),
+                         {"count": entry["count"], "for": {"id": paths[id(who)].stem, "label": who.get("label"),
+                                                           "priority": _config.priority_of(who)}},
+                         _events.actor(kind="tool"))
         elif place.exists():
             place.unlink(missing_ok=True)
             _state.log(directory, f"withdrew the yield request to {entry['label']} (pid {entry['pid']})")
+            _events.emit(directory, "lease.yield_withdrawn", _events.request(entry, path), {},
+                         _events.actor(kind="tool"))
     for place in [*(directory / "queue").glob("*.yield"), *(directory / "queue").glob("*" + _idle.SUFFIX)]:
         if not place.with_suffix(".json").exists():  # requests and idle records left by entries gone meanwhile
             place.unlink(missing_ok=True)
@@ -133,6 +144,7 @@ def yield_lease(path: Path, out=sys.stderr) -> bool:
         if asker is None:  # it started, left or would still not start; the next look would withdraw the request
             _state.marker(path).unlink(missing_ok=True)
             _state.log(directory, f"withdrew the yield request to {entry.get('label')} (pid {entry.get('pid')})")
+            _events.emit(directory, "lease.yield_withdrawn", _events.request(entry, path), {}, _events.holder(entry))
             return False
         entry.update(state="waiting", yields=int(entry.get("yields") or 0) + 1, yielded_at=round(time.time(), 3),
                      first_granted=entry.get("granted"), rank=behind)
@@ -140,6 +152,9 @@ def yield_lease(path: Path, out=sys.stderr) -> bool:
         _state.write(path, entry)
         _state.marker(path).unlink(missing_ok=True)
         _state.log(directory, f"yielded {entry['count']} ({path.name}) to {asker.get('label')}")
+        _events.emit(directory, "lease.yielded", _events.request(entry, path),
+                     {"count": entry["count"], "to": {"id": request.get("by"), "label": asker.get("label")},
+                      "yields": entry["yields"]}, _events.holder(entry))
         grant(directory, _platform.processes())
     print(f"slot: {entry.get('label')} yielded {entry['count']} slot(s) to {asker.get('label')}; it resumes when "
           f"they are free", file=out, flush=True)
@@ -192,6 +207,8 @@ def reprioritize(target: str, priority: str, directory: Path | None = None) -> l
             _state.write(path, entry)
             _state.log(directory, f"reprioritized {entry.get('label')} (pid {entry.get('pid')}) from {before} to "
                                   f"{priority}")
+            _events.emit(directory, "request.reprioritized", _events.request(entry, path),
+                         {"from": before, "to": priority, "state": entry.get("state")})
             changed.append(entry)
         grant(directory, _platform.processes())
     return changed
@@ -256,13 +273,28 @@ def grant(directory: Path, table: Table) -> str | None:
             if short:
                 return short
         served = _schedule.effective_priority(entry, settings, moment)
+        back = _state.epoch(entry.get("yielded_at"))  # a yielded lease waited from when it went back
+        waited_from = back if back is not None else _config.seconds(entry.get("since"))
         entry.update(state="held", granted=_config.now())
+        began = _config.seconds(entry["granted"]) or time.time()  # resume() puts a yielded lease's first grant back
         if served != _config.priority_of(entry):
             entry["aged"] = served  # the class ageing moved it to by its grant; status and the history show it
         resume(entry, time.time())
         _state.write(paths[id(entry)], entry)
         used += entry["count"]
         _state.log(directory, f"granted {entry['count']} to {entry['label']} (pid {entry['pid']})")
+        details: dict[str, Any] = {"count": entry["count"], "priority": _config.priority_of(entry),
+                                   "waited": None if waited_from is None else
+                                   round(max(0.0, began - waited_from))}
+        if served != _config.priority_of(entry):
+            details["served"] = served
+        if back is not None:
+            details["resumed"] = True
+        meta = _config.meta_of(entry)
+        if meta:
+            details["meta"] = meta
+        _events.emit(directory, "lease.granted", _events.request(entry, paths[id(entry)]), details,
+                     _events.holder(entry))
     rest = [e for e in waiters if not any(e is g for g in found.grants)]
     with contextlib.suppress(OSError, _config.SlotError):
         ask(directory, live, held + found.grants, rest, estimate, other, _schedule.order_settings(directory, environment=False))
@@ -314,7 +346,18 @@ class Lease:
                 _idle.path(self.path).unlink(missing_ok=True)
                 if isinstance(entry, dict):
                     ran = entry.get("state") == "held" or bool(entry.get("yields"))  # a yielded lease ran
-                    _state.record(directory, entry, "released" if ran else "left", self.status, self.usage)
+                    item = _state.record(directory, entry, "released" if ran else "left", self.status, self.usage)
+                    if ran:
+                        _events.emit(directory, "lease.released", _events.request(entry, self.path),
+                                     {"count": self.count, "exit": item.get("status"), "ran": item.get("ran"),
+                                      "cpu": item.get("cpu"), "rss_peak_mb": item.get("rss_peak_mb")},
+                                     _events.holder(entry))
+                    else:
+                        _events.emit(directory, "request.left", _events.request(entry, self.path),
+                                     {"count": self.count, "gave_up_after": item.get("waited")}, _events.holder(entry))
+                else:  # the entry was gone already: queue.log has its release, nothing more is known
+                    _events.emit(directory, "lease.released", {"type": "request", "id": self.path.stem},
+                                 {"count": self.count})
                 # Hand the slots on now: waiters look at the queue less often the longer they wait.
                 with contextlib.suppress(_config.SlotError, OSError):
                     grant(directory, _platform.processes())
@@ -454,11 +497,14 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
                                                               time.monotonic() - warned >= _config.WARN_REPEAT):
                 warned = time.monotonic()
                 with contextlib.suppress(Exception):  # a display must never cost the request its place
-                    line = _query.long_wait(directory, path)
-                    if line:  # the client's own stderr, and queue.log (EVENTS): a long wait does not go unnoticed
+                    report = _query.long_wait_report(directory, path)
+                    if report:  # the client's own stderr, and queue.log (EVENTS): a long wait does not go unnoticed
+                        line, facts = report
                         print(f"slot: {line}", file=out, flush=True)
                         with _state.locked(directory):
                             _state.log(directory, f"waiting long: {line}")
+                            _events.emit(directory, "request.waiting_long", _events.request(entry, path), facts,
+                                         _events.holder(entry), level="warn")
             if waiting != said:
                 print(f"slot: {label} waits for {count} slot(s): {waiting or 'earlier requests first'}",
                       file=out, flush=True)

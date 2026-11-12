@@ -7,6 +7,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from . import config as _config
+from . import events as _events
 from . import version as _version
 from .settings import VERSION as SETTINGS_VERSION
 
@@ -28,6 +30,7 @@ def capabilities() -> dict[str, Any]:
     dashboard: dict[str, Any] = {
         "v": DASHBOARD_VERSION, "tag": "slot",
         "snapshot": {"argv": ["status", "--json", "--full"], "versions": STATUS_VERSIONS, "poll": 1},
+        "events": {"path": str(_events.path(_config.state_dir()).absolute()), "versions": [_events.VERSION]},
         "settings": {"versions": [SETTINGS_VERSION]}, "actions": ["reprioritize"]}
     found = changelog()
     if found is not None:

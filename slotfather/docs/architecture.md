@@ -20,6 +20,7 @@ Definitions: [glossary](../GLOSSARY.md). Naming and wire aliases: [terminology](
 | `query` | Compatible queue snapshots and status output; `look()`, one look under the queue lock that `status --json --full` and the dashboard share (#20). |
 | `board` | The dashboard's model from one look, for the in-tree dashboard and `status --json --full` (its JSON block). |
 | `settings` | `settings --json/check/set/reset`: the shared settings as data; labels, checks and previews the Settings panel shares. |
+| `events` | events.jsonl in Godfather's shared event schema, appended beside each queue.log line; never fails an operation. |
 | `capabilities` | `capabilities --json`: the dashboard contracts this release supports. |
 | `procs` | Read-only process queries for guards and other tools. |
 | `cli` | Argument validation and command dispatch. |
