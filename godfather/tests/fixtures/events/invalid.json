@@ -1,0 +1,767 @@
+[
+ {
+  "name": "v missing",
+  "field": "v",
+  "event": {
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "v not 1",
+  "field": "v",
+  "event": {
+   "v": 2,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "v boolean",
+  "field": "v",
+  "event": {
+   "v": true,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "time missing",
+  "field": "time",
+  "event": {
+   "v": 1,
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "time without milliseconds",
+  "field": "time",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "time with an offset",
+  "field": "time",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204+00:00",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "time not a real date",
+  "field": "time",
+  "event": {
+   "v": 1,
+   "time": "2026-02-30T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "host missing",
+  "field": "host",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "host uppercase",
+  "field": "host",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "MBP",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "host with domain",
+  "field": "host",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp.local",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "source missing",
+  "field": "source",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "source bad",
+  "field": "source",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "Slot_father",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "kind missing",
+  "field": "kind",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "kind uppercase",
+  "field": "kind",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "Lease.Granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "kind too long",
+  "field": "kind",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "a.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "kind empty segment",
+  "field": "kind",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease..granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "subject missing",
+  "field": "subject",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "subject not object",
+  "field": "subject",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": "request",
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "subject without id",
+  "field": "subject.id",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "subject id not string",
+  "field": "subject.id",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": 5,
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "subject without type",
+  "field": "subject.type",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "subject pid string",
+  "field": "subject.pid",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": "51587"
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "subject nested value",
+  "field": "subject.extra",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587,
+    "extra": {
+     "a": 1
+    }
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "actor missing",
+  "field": "actor",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "actor unknown type",
+  "field": "actor.type",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "robot",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "actor without type",
+  "field": "actor.type",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "actor via not string",
+  "field": "actor.via",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587,
+    "via": 3
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "details missing",
+  "field": "details",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   }
+  }
+ },
+ {
+  "name": "details not object",
+  "field": "details",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": []
+  }
+ },
+ {
+  "name": "details too deep",
+  "field": "details",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {
+    "a": {
+     "b": {
+      "c": {
+       "d": {
+        "e": 1
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ {
+  "name": "level unknown",
+  "field": "level",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {},
+   "level": "debug"
+  }
+ },
+ {
+  "name": "id too long",
+  "field": "id",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {},
+   "id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  }
+ },
+ {
+  "name": "id empty",
+  "field": "id",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {},
+   "id": ""
+  }
+ },
+ {
+  "name": "control character in a string",
+  "field": "event.subject.label",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "red\u001b[31m",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {}
+  }
+ },
+ {
+  "name": "control character in details",
+  "field": "event.details.note",
+  "event": {
+   "v": 1,
+   "time": "2026-11-12T02:24:16.204Z",
+   "host": "mbp",
+   "source": "slotfather",
+   "kind": "lease.granted",
+   "subject": {
+    "type": "request",
+    "id": "0000009701-51587",
+    "label": "x",
+    "pid": 51587
+   },
+   "actor": {
+    "type": "process",
+    "pid": 51587
+   },
+   "details": {
+    "note": "a\nb"
+   }
+  }
+ }
+]
