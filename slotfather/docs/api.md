@@ -34,7 +34,7 @@ not there:
    "snapshot": {"argv": ["status", "--json", "--full"], "versions": [2], "poll": 1},
    "events": {"path": "/Users/me/.local/state/slotfather/events.jsonl", "versions": [1]},
    "settings": {"versions": [1]},
-   "actions": ["reprioritize"],
+   "actions": ["reprioritize", "ask-yield"],
    "changelog": "/Users/me/.local/lib/slotfather/releases/<release>/slotfather/CHANGELOG.md"}}
 ```
 
@@ -148,12 +148,24 @@ SHA-256 (compared with `$GODFATHER_DIR/src/godfather/eventcheck.py` when that is
 | `lease.reaped`, `request.reaped` | a holder that died is reaped (level warn) | `count`, `ran`, `waited`, `reason` |
 | `request.reprioritized` | `slotfather reprioritize` | `from`, `to`, `state` |
 | `request.waiting_long` | a waiter says it has waited the warn time (level warn) | `waited`, `est_start`, `behind` (`earlier`, `running`), `priority`, `aged` |
-| `lease.yield_asked` | a waiter asks a lease to yield | `count`, `for` (`id`, `label`, `priority`) |
+| `lease.yield_asked` | a waiter, or `ask-yield` (`by_hand`), asks a lease to yield | `count`, `for` (`id`, `label`, `priority`) |
 | `lease.yield_withdrawn` | that request is withdrawn | — |
 | `lease.yielded` | the lease yields | `count`, `to` (`id`, `label`), `yields` |
 | `capacity.changed` | a capacity is saved or reset (subject `capacity`) | `saved` (capacity.json, `null` for reset), `mode`, `slots` |
 | `order.changed` | order settings are saved or reset (subject `order`) | `saved` (the changed keys) or `reset: true` |
 | `process.swept` | `sweep --live` stops a leftover process (subject `process`, level warn) | `action`, `class`, `kind`, `age`, `processes`, `cmd` |
+
+**Dashboard actions** (`capabilities.dashboard.actions`): `reprioritize` and `ask-yield`, each identity-checked
+with the start time the caller saw (`status --json`'s `start`):
+
+- `slotfather reprioritize PID CLASS --start START` refuses (exit 2) when PID is now another process; `--start`
+  takes a pid, not a label.
+- `slotfather ask-yield PID --start START` asks the yieldable lease that PID holds to yield for the first waiter, in
+  the queue's order, of a higher class that its slots would start. It writes the marker an interactive waiter
+  writes (`SLOTFATHER_YIELD`), with `asker` recorded; the request stands while that waiter waits, `status` shows
+  `asked-to-yield-for=`, and the holder yields at its next check (`slotfather yield`). Nothing stops a holder. It
+  refuses a pid whose start differs, a pid that holds no lease, a lease that did not take `--yieldable` or has
+  yielded `YIELDS_MAX` times, and a queue with no such waiter; asked twice, it says it was already asked.
 
 ## Process queries
 

@@ -107,6 +107,8 @@ def ask(directory: Path, live: list[tuple[Path, dict[str, Any]]], held: list[dic
                                                            "priority": _config.priority_of(who)}},
                          _events.actor(kind="tool"))
         elif place.exists():
+            if entry.get("state") == "held" and asked_by_hand(_state.asked(path), live):
+                continue  # `slotfather ask-yield` asked it: it stands while the waiter it names still waits
             place.unlink(missing_ok=True)
             _state.log(directory, f"withdrew the yield request to {entry['label']} (pid {entry['pid']})")
             _events.emit(directory, "lease.yield_withdrawn", _events.request(entry, path), {},
@@ -114,6 +116,78 @@ def ask(directory: Path, live: list[tuple[Path, dict[str, Any]]], held: list[dic
     for place in [*(directory / "queue").glob("*.yield"), *(directory / "queue").glob("*" + _idle.SUFFIX)]:
         if not place.with_suffix(".json").exists():  # requests and idle records left by entries gone meanwhile
             place.unlink(missing_ok=True)
+
+
+def asked_by_hand(request: dict[str, Any] | None, live: list[tuple[Path, dict[str, Any]]]) -> bool:
+    """Whether a yield request came from `slotfather ask-yield` and the waiter it names still waits."""
+    return bool(request and request.get("asker") and
+                any(p.stem == request.get("by") and e.get("state") != "held" for p, e in live))
+
+
+def same_process(table: Table, pid: int, start: str) -> bool:
+    """Whether `pid` is still the process the caller saw, started at `start` (as `status --json` gives it)."""
+    return pid in table and " ".join(str(table[pid][1]).split()) == " ".join(start.split())
+
+
+CLASS_RANK = {"batch": 0, "normal": 1, "interactive": 2}
+
+
+def ask_yield(pid: int, start: str, directory: Path | None = None) -> tuple[dict[str, Any], dict[str, Any], bool]:
+    """Asks the yieldable lease held by `pid`, started at `start`, to yield for the first waiter of a higher class
+    that its slots would start, writing the marker a waiting interactive request writes, with the asker recorded.
+    Nothing is stopped: the holder yields between its own steps. Returns (the lease, the request, whether it was
+    asked before); raises SlotError for a pid that is now another process, holds no lease here, or a lease that
+    cannot yield."""
+    directory = directory or _config.state_dir()
+    _state.require_own(directory, "a yield request")
+    with _state.locked(directory):
+        table = _platform.processes()
+        live = reap(directory, table)
+        if not same_process(table, pid, start):
+            raise _config.SlotError(f"pid {pid} is not the process started at {start!r} any more: nothing was asked")
+        found = next(((p, e) for p, e in live if e.get("pid") == pid and e.get("state") == "held"), None)
+        if found is None:
+            raise _config.SlotError(f"pid {pid} holds no lease of this queue")
+        path, entry = found
+        if not entry.get("yieldable"):
+            raise _config.SlotError(f"{entry.get('label')} (pid {pid}) did not take --yieldable: it cannot yield")
+        if int(entry.get("yields") or 0) >= _config.YIELDS_MAX:
+            raise _config.SlotError(f"{entry.get('label')} (pid {pid}) has yielded {_config.YIELDS_MAX} times, the most")
+        before = _state.asked(path)
+        if before is not None:
+            return entry, before, True
+        settings = _schedule.order_settings(directory, environment=False)
+        moment = time.time()
+        own = CLASS_RANK[entry.get("aged") if entry.get("aged") in _config.PRIORITIES else _config.priority_of(entry)]
+        waiters = [(p, e) for p, e in live if e.get("state") != "held"]
+        ranked = _schedule.ranked([e for _, e in waiters], settings, moment)
+        paths = {id(e): p for p, e in waiters}
+        held = [e for p, e in live if e.get("state") == "held" and p != path]
+        chosen = None
+        for waiter in ranked:
+            if CLASS_RANK[_schedule.effective_priority(waiter, settings, moment)] <= own:
+                continue
+            behind = _schedule.rank_time(waiter, settings, moment) + _config.YIELD_BEHIND
+            trial = _schedule.plan([*(e for e in ranked), dict(entry, state="waiting", rank=behind)], held,
+                                   _config.total(), moment, estimate=_schedule.estimator(directory),
+                                   other=legacy_used(table), settings=settings)
+            if any(g is waiter for g in trial.grants):
+                chosen = waiter
+                break
+        if chosen is None:
+            raise _config.SlotError(f"no waiting request of a higher class than {entry.get('label')} would start in "
+                                    f"its slots: nothing was asked")
+        asker = _events.actor()
+        request = {"by": paths[id(chosen)].stem, "label": chosen.get("label"),
+                   "priority": _schedule.effective_priority(chosen, settings, moment), "count": chosen["count"],
+                   "at": _config.now(), "asker": asker.get("via") or f"pid {asker['pid']}"}
+        _state.write(_state.marker(path), request)
+        _state.log(directory, f"asked {entry['label']} (pid {entry['pid']}) to yield {entry['count']} for "
+                              f"{chosen.get('label')}")
+        _events.emit(directory, "lease.yield_asked", _events.request(entry, path),
+                     {"count": entry["count"], "for": {"id": request["by"], "label": chosen.get("label"),
+                                                       "priority": request["priority"]}, "by_hand": True}, asker)
+    return entry, request, False
 
 
 def yield_lease(path: Path, out=sys.stderr) -> bool:
@@ -163,12 +237,14 @@ def yield_lease(path: Path, out=sys.stderr) -> bool:
     return True
 
 
-def reprioritize(target: str, priority: str, directory: Path | None = None) -> list[dict[str, Any]]:
+def reprioritize(target: str, priority: str, directory: Path | None = None,
+                 start: str | None = None) -> list[dict[str, Any]]:
     """Moves the requests `target` names (a pid, or the label of exactly one request) to class `priority`, keeping
     their arrival (`since`): a waiter keeps its place among the requests that came before and after it, now ranked
     by its new class. Only the owner of a request may move it (the same uid as its holder). Records it on the entry
     (`reprioritized`: the class it asked first), in queue.log and in the history line, then grants at once. Returns
-    the entries as they are now; raises SlotError for a target that names none, or several, or another user's."""
+    the entries as they are now; raises SlotError for a target that names none, or several, or another user's.
+    With `start`, the target is a pid that must still be the process started then (as `status --json` gives it)."""
     if priority not in _config.PRIORITIES:
         raise _config.SlotError(f"priority is one of {', '.join(_config.PRIORITIES)}, not {priority!r}")
     directory = directory or _config.state_dir()
@@ -177,6 +253,9 @@ def reprioritize(target: str, priority: str, directory: Path | None = None) -> l
     with _state.locked(directory):
         table = _platform.processes()
         live = reap(directory, table)
+        if start is not None and not (target.isdigit() and same_process(table, int(target), start)):
+            raise _config.SlotError(f"pid {target} is not the process started at {start!r} any more: nothing changed"
+                                    if target.isdigit() else "--start takes the request's pid, not its label")
         if target.isdigit():
             chosen = [(p, e) for p, e in live if e.get("pid") == int(target)]
         else:

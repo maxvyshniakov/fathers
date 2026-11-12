@@ -14,6 +14,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   read-only queues.
 - events.jsonl beside the queue records every grant, release, give-up, reap, reprioritize, long wait, yield, capacity
   and order change and sweep stop in Godfather's shared event schema; queue.log and history.jsonl stay as they are.
+- `slotfather ask-yield PID --start START` asks a yieldable lease to yield for a waiting request of a higher class,
+  as a waiting interactive request would, and `reprioritize ... --start START` refuses a pid that is now another
+  process; capabilities offer both as dashboard actions.
 - A waiting request ages: a batch one is served as normal after 30 minutes, a normal one as interactive after 60
   more, keeping its arrival. `slotfather order --aging-batch 30m --aging-normal 60m` sets the steps (0: never;
   `SLOTFATHER_AGING_BATCH`, `_AGING_NORMAL` can only age less); Settings shows them as Batch promoted after and

@@ -6,7 +6,8 @@
   slotfather status [--json [--pid PID | --full]]                    running and waiting requests, in queue order
   slotfather capabilities --json                                     what a dashboard (Godfather) can read and run here
   slotfather settings [check|set|reset ...] --json                   the shared settings as data, and changes to them
-  slotfather reprioritize PID|LABEL interactive|normal|batch         move a request to another class, keeping its place
+  slotfather reprioritize PID|LABEL interactive|normal|batch [--start START]  move a request to another class, keeping its place
+  slotfather ask-yield PID --start START                             ask a yieldable lease to yield for a higher class
   slotfather procs --json [--cwd PATH] [--pid PID]                  read-only process, lease and session ancestry
   slotfather lane-admission --json                                    stateless lifetime lane policy, stdin JSON
   slotfather version [--json]                                        identify this runtime source
@@ -116,7 +117,7 @@ USAGE = ("usage: slotfather                     (in a terminal: the live dashboa
          "       slotfather run [-n N|all] [--label L] [--meta KEY=VALUE]... [--priority interactive|normal|batch] [--ticket ID]\n"
          "                      [--yieldable] [--wait SECONDS] [--] COMMAND...      (inside a lease: slotfather yield)\n"
          "       slotfather status [--json [--pid PID | --full]] | history [N] | available [--label L] [-- COMMAND...]\n"
-         "       slotfather reprioritize PID|LABEL interactive|normal|batch\n"
+         "       slotfather reprioritize PID|LABEL interactive|normal|batch [--start START] | ask-yield PID --start START\n"
          "       slotfather lane-admission --json                         (one lifetime request on stdin)\n"
          "       slotfather advise [--max N] [--exclusive] [--label L] [-- COMMAND...]\n"
          "       slotfather order [backfill|window] [--safety X] [--limit S] [--fallback S] [--overrun X]\n"
@@ -229,16 +230,41 @@ def status_command(argv: list[str]) -> int:
     return 0
 
 
+def start_option(argv: list[str]) -> tuple[list[str], str | None]:
+    """`--start START` (a process start time as `status --json` gives it) taken out of argv."""
+    if "--start" not in argv:
+        return argv, None
+    at = argv.index("--start")
+    if at + 1 >= len(argv) or not argv[at + 1].strip():
+        raise _config.SlotError("--start takes the process's start time, as status --json gives it")
+    return argv[:at] + argv[at + 2:], argv[at + 1]
+
+
 def reprioritize_command(argv: list[str]) -> int:
-    """`slotfather reprioritize PID|LABEL interactive|normal|batch`: the request keeps its arrival."""
+    """`slotfather reprioritize PID|LABEL interactive|normal|batch [--start START]`: the request keeps its
+    arrival."""
     from . import leases as _leases
+    argv, start = start_option(argv)
     if len(argv) != 2 or argv[1] not in _config.PRIORITIES:
         raise _config.SlotError(f"reprioritize takes a pid or label and then one of {', '.join(_config.PRIORITIES)}")
-    for entry in _leases.reprioritize(argv[0], argv[1]):
+    for entry in _leases.reprioritize(argv[0], argv[1], start=start):
         first = entry.get("reprioritized")
         print(f"{entry.get('label')} (pid {entry.get('pid')}, {entry.get('state')}): {argv[1]}" +
               (f", asked {first} first" if first and first != argv[1] else "") +
               f"; queued since {entry.get('since')}")
+    return 0
+
+
+def ask_yield_command(argv: list[str]) -> int:
+    """`slotfather ask-yield PID --start START`: ask a yieldable lease to yield for a waiter of a higher class."""
+    from . import leases as _leases
+    argv, start = start_option(argv)
+    if len(argv) != 1 or not argv[0].isdigit() or start is None:
+        raise _config.SlotError("ask-yield takes the holder's pid and --start START")
+    entry, request, before = _leases.ask_yield(int(argv[0]), start)
+    print(f"{entry.get('label')} (pid {entry.get('pid')}): " +
+          (f"already asked to yield for {request.get('label')}" if before else
+           f"asked to yield {entry.get('count')} slot(s) for {request.get('label')}; it yields at its next check"))
     return 0
 
 
@@ -405,6 +431,8 @@ def main(argv: list[str] | None = None) -> int:
             return yield_command(rest)
         if command == "reprioritize":
             return reprioritize_command(rest)
+        if command == "ask-yield":
+            return ask_yield_command(rest)
         if command == "history" and (not rest or (len(rest) == 1 and rest[0].isdigit())):
             from . import state as _state
             print("\n".join(_state.history_lines(int(rest[0]) if rest else 20)))

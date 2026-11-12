@@ -31,7 +31,7 @@ def capabilities() -> dict[str, Any]:
         "v": DASHBOARD_VERSION, "tag": "slot",
         "snapshot": {"argv": ["status", "--json", "--full"], "versions": STATUS_VERSIONS, "poll": 1},
         "events": {"path": str(_events.path(_config.state_dir()).absolute()), "versions": [_events.VERSION]},
-        "settings": {"versions": [SETTINGS_VERSION]}, "actions": ["reprioritize"]}
+        "settings": {"versions": [SETTINGS_VERSION]}, "actions": ["reprioritize", "ask-yield"]}
     found = changelog()
     if found is not None:
         dashboard["changelog"] = found
