@@ -28,6 +28,8 @@ OPUS_TOOLS = "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
 MAX_INLINE_DIFF = 400_000
 MAX_FINDINGS = 8
 SEVERITIES = ("P1", "P2", "P3")
+# package-misuse: a use of a dependency package against its documented API; the friction journal counts these.
+CATEGORIES = ("bug", "standards", "docs", "package-misuse")
 DEFAULT_MODELS = {"sol": "gpt-6.1-sol", "sol_effort": "medium", "sol_min_left": 15,
                   "opus": "claude-opus-5-5", "opus_effort": "medium"}
 
@@ -263,12 +265,18 @@ def _review_prompt(cfg: Config, request: Request, diff: str | None) -> str:
         "## Answer",
         "",
         f"List at most {MAX_FINDINGS} findings, most severe first: P1 a bug, P2 a risk, P3 minor. For each give",
-        "file:line, the concrete failure scenario and the fix. End the answer with one fenced json block that holds",
+        "file:line, the concrete failure scenario and the fix, and a category: bug (wrong behavior), standards (a",
+        "break of the coding standards), docs (a stale or wrong doc or changelog) or package-misuse (a use of a",
+        "dependency package against its documented API: a selector or DOM query into its internals such as",
+        "data-slot or data-dg-* parts, a restyle its lint forbids, an invented or wrong prop or export, or a",
+        "workaround for something the package already provides; name the package). End the answer with one",
+        "fenced json block that holds",
         "the same findings in the same order:",
         "",
         "```json",
-        '{"findings": [{"severity": "P1", "file": "path/in/repo", "line": 123, "title": "one line",',
-        '               "detail": "the failure scenario and the fix"}]}',
+        '{"findings": [{"severity": "P1", "category": "bug", "file": "path/in/repo", "line": 123,',
+        '               "title": "one line", "detail": "the failure scenario and the fix",',
+        '               "package": "only for package-misuse: the npm name"}]}',
         "```",
         "",
         'With nothing to report, end with {"findings": []}.',
@@ -293,8 +301,14 @@ def _parse_findings(text: str) -> list[dict[str, Any]]:
             for item in cast(list[Any], items):
                 entry = cast(dict[str, Any], item)
                 severity = str(entry.get("severity", "")).upper()
+                category = str(entry.get("category") or "").strip().lower()
+                package = entry.get("package") if category == "package-misuse" else None
                 line = entry.get("line")
                 found.append({"n": len(found) + 1, "severity": severity if severity in SEVERITIES else "P2",
+                              "category": category if category in CATEGORIES else None,
+                              # An npm name is at most 214 characters.
+                              "package": (package.strip()[:214] if isinstance(package, str) and package.strip()
+                                          else None),
                               "file": entry.get("file") if isinstance(entry.get("file"), str) else None,
                               "line": line if isinstance(line, int) else None,
                               "title": str(entry.get("title") or "").strip()[:300],
@@ -307,7 +321,7 @@ def _parse_findings(text: str) -> list[dict[str, Any]]:
 
 
 def _unreadable_answer(text: str) -> list[dict[str, Any]]:
-    return [{"n": 1, "severity": "P2", "file": None, "line": None, "mark": None,
+    return [{"n": 1, "severity": "P2", "category": None, "package": None, "file": None, "line": None, "mark": None,
              "title": "the review answer has no readable findings block: read it and mark it",
              "detail": text.strip()[:4000]}]
 

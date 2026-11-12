@@ -224,7 +224,8 @@ def review_lines(receipt: dict[str, Any]) -> list[str]:
         mark = f.get("mark")
         marked = ("" if not mark else f"  [fixed: {mark['merge'][:10]}]" if mark["kind"] == "fixed"
                   else f"  [rejected: {mark['reason']}]")
-        lines.append(f"  {f['n']}. {f['severity']} {where} {f['title']}{marked}")
+        category = f" [{f['category']}]" if f.get("category") else ""
+        lines.append(f"  {f['n']}. {f['severity']}{category} {where} {f['title']}{marked}")
         lines += [f"     {line}" for line in f.get("detail", "").splitlines()[:6]]
     if receipt.get("issue"):
         lines.append(f"Ticket: {receipt['issue']}")
@@ -534,7 +535,8 @@ def file_ticket(receipt: dict[str, Any], common: str) -> None:
     for f in findings:
         where = (f" `{f['file']}:{f['line']}`" if f.get("file") and f.get("line")
                  else f" `{f['file']}`" if f.get("file") else "")
-        items.append(f"- [ ] **{f['severity']}**{where} {f['title']}")
+        category = f" `{f['category']}`" if f.get("category") else ""
+        items.append(f"- [ ] **{f['severity']}**{category}{where} {f['title']}")
         items += [f"  {line}" for line in f.get("detail", "").splitlines() if line.strip()]
     body = (f"Found by the overall review before main (`{config.prog()} promote --ship`) of "
             f"{receipt['base'][:10]}..{receipt['tip'][:10]}, by {receipt.get('model')} at {receipt.get('effort')} "

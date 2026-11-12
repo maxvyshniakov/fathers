@@ -32,6 +32,9 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   tip's tree does not run again, as the lane's receipt already stands for what the integration did not change; and
   `[checks] gate_only = ["tools/test-*"]` leaves the matching checks (tooling self-tests) to the batch gate. The
   land output, the post-merge receipt (`skipped`) and the ledger give each skip's reason.
+- A review finding can carry a category (bug, standards, docs, package-misuse), and a package-misuse finding names
+  the package it misuses (`package`), for the agent-friction journal; the reviewer is asked for both, `review`
+  shows the category, and receipts without it read as before.
 
 ### Changed
 

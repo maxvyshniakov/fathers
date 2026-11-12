@@ -662,7 +662,7 @@ class LaneCase(unittest.TestCase):
     def verify_runs(self):
         return self.verify_log.read_text().splitlines()
 
-    def review(self, label):
+    def review(self, label: str) -> dict[str, Any]:
         return json.loads((self.state / f"{label}.review.json").read_text())
 
     def wait_review(self, label, timeout=60):

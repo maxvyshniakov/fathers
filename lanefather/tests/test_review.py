@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import shutil
+from typing import Any
 import unittest
 
 from support import NO_FINDINGS, SPREAD_FINDINGS, TWO_FINDINGS, LaneCase
@@ -14,7 +15,8 @@ class LaneReviewTests(LaneCase):
     """#570: one independent review per lane, Sol 6.1 at medium effort unless Codex has under 15% of its weekly limit
     left or cannot run the model, then Opus 5.5 at medium effort."""
 
-    def landed(self, lane_id, path="lib/api.txt", text="foo\nbaz\n", extra=()):
+    def landed(self, lane_id: str, path: str = "lib/api.txt", text: str = "foo\nbaz\n",
+               extra: tuple[str, ...] = ()) -> str:
         worktree = self.created(lane_id, path)
         self.commit(worktree, {path: text})
         self.lane("check", lane_id)
@@ -113,6 +115,21 @@ class LaneReviewTests(LaneCase):
         self.assertEqual(len(findings), 1)
         self.assertIn("read it and mark it", findings[0]["title"])
         self.assertIn("baz is dead", findings[0]["detail"])
+
+    def test_findings_keep_a_known_category_and_a_package_misuse_names_its_package(self):
+        self.review_text.write_text(
+            '```json\n{"findings": ['
+            '{"severity": "P2", "category": "package-misuse", "package": "@acme/kit", "file": "a.css", "line": 3,'
+            ' "title": "selector into the kit checkbox internals", "detail": "use the documented target"},'
+            '{"severity": "P3", "category": "style", "package": "@acme/kit", "file": "b.ts", "line": 1,'
+            ' "title": "t", "detail": "d"},'
+            '{"severity": "P1", "file": "c.ts", "line": 2, "title": "old answer shape", "detail": "d"}]}\n```\n')
+        self.landed("a")
+        output = self.lane("review", "a")
+        findings: list[dict[str, Any]] = self.review("a")["findings"]
+        self.assertEqual([(f["category"], f["package"]) for f in findings],
+                         [("package-misuse", "@acme/kit"), (None, None), (None, None)])
+        self.assertIn("P2 [package-misuse] a.css:3", output)
 
     def test_a_stale_answer_of_an_earlier_run_never_stands_in_for_sol(self):
         self.review_text.write_text(TWO_FINDINGS)

@@ -30,10 +30,10 @@
   },
   "tests/support.py": {
     "reportDeprecated": 1,
-    "reportMissingParameterType": 9,
+    "reportMissingParameterType": 8,
     "reportUnknownArgumentType": 5,
     "reportUnknownMemberType": 6,
-    "reportUnknownParameterType": 7,
+    "reportUnknownParameterType": 6,
     "reportUnknownVariableType": 1,
     "reportUnusedImport": 1
   },
@@ -42,9 +42,6 @@
     "reportUnknownArgumentType": 1,
     "reportUnknownMemberType": 22,
     "reportUnknownParameterType": 6
-  },
-  "tests/test_compat.py": {
-    "reportUnknownMemberType": 1
   },
   "tests/test_config.py": {
     "reportDeprecated": 1,
@@ -62,9 +59,6 @@
     "reportUnknownMemberType": 28,
     "reportUnknownParameterType": 5
   },
-  "tests/test_landing.py": {
-    "reportUnknownMemberType": 2
-  },
   "tests/test_lanes.py": {
     "reportMissingParameterType": 2,
     "reportUnknownArgumentType": 1,
@@ -78,9 +72,9 @@
     "reportUnknownParameterType": 7
   },
   "tests/test_review.py": {
-    "reportMissingParameterType": 9,
-    "reportUnknownArgumentType": 9,
-    "reportUnknownMemberType": 46,
-    "reportUnknownParameterType": 6
+    "reportMissingParameterType": 5,
+    "reportUnknownArgumentType": 5,
+    "reportUnknownMemberType": 20,
+    "reportUnknownParameterType": 4
   }
 }
