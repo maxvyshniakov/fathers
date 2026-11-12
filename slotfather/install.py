@@ -38,6 +38,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import uuid
 from typing import Any, Iterator, cast
 
@@ -56,14 +57,32 @@ class InstallError(Exception):
     pass
 
 
+LOCK_WAIT = 15.0  # seconds the installer retries a queue lock that a client holds (SLOTFATHER_INSTALL_LOCK_WAIT)
+
+
+def lock_wait() -> float:
+    try:
+        return max(0.0, float(os.environ.get("SLOTFATHER_INSTALL_LOCK_WAIT", LOCK_WAIT)))
+    except ValueError:
+        return LOCK_WAIT
+
+
 @contextmanager
 def lock(path: Path) -> Iterator[None]:
+    """Takes the lock at `path`, retrying for lock_wait() seconds: queue clients hold it for moments at a time, and
+    dozens of them share a busy queue. Refuses before anything changed when it stays held."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as handle:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise InstallError(f"queue operation in progress at {path}; retry after it finishes") from None
+        deadline = time.monotonic() + lock_wait()
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise InstallError(f"queue operation in progress at {path} for {lock_wait():g} s; nothing was "
+                                       f"changed: retry after it finishes") from None
+                time.sleep(0.05)
         yield
 
 

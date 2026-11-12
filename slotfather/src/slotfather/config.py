@@ -178,6 +178,7 @@ META_VALUE_MAX = 200
 
 
 META_KEYS_MAX = 16
+CACHE_VALUES = ("hit", "miss", "partial")  # --meta cache=: whether the work reused a cache (fathers#97)
 
 
 class SlotError(Exception):
@@ -348,6 +349,16 @@ def number_setting(name: str, default: float) -> float:
 _host_port = None
 
 
+def lease_id(stem: str, entry: Mapping[str, object]) -> str:
+    """An entry's unique id (fathers#101): the one its client wrote, else, for an entry of an older client, one made
+    of its name, its holder's start time and its arrival, the same from one look to the next."""
+    found = entry.get("lease_id")
+    if isinstance(found, str) and found:
+        return found
+    import hashlib
+    return "old-" + hashlib.sha256(f"{stem}|{entry.get('start')}|{entry.get('since')}".encode()).hexdigest()[:24]
+
+
 def checked_meta(meta: object) -> dict[str, str]:
     """Lease metadata, validated: raises SlotError for a key that is not a short lowercase word, a value that is
     not short printable text, or too many keys."""
@@ -377,6 +388,8 @@ def parse_meta(pairs: list[str]) -> dict[str, str]:
         key, equals, value = pair.partition("=")
         if not equals:
             raise SlotError(f"--meta takes key=value, not {pair!r}")
+        if key == "cache" and value not in CACHE_VALUES:  # the command line only: library callers keep any value
+            raise SlotError(f"--meta cache takes {', '.join(CACHE_VALUES[:-1])} or {CACHE_VALUES[-1]}, not {value!r}")
         found[key] = value
     return checked_meta(found)
 

@@ -5,7 +5,7 @@ it does not use execution job budgets or reserve slots.
 
 [Domain definitions](../GLOSSARY.md) · [Compatibility aliases](terminology.md)
 
-State lives in `~/.local/state/slotfather/`; `queue.log` records grants, releases, and reaping. `history.jsonl` has one JSON line per request that left the queue: label, command, directory, slots, queue, grant and end times, seconds waited and run, the outcome (`released`, `left` after giving up, or `reaped`), `until` for a request with `--wait` (when it would give up) and, for `run`, the exit status and what the command used (see Statistics). Past 4 MB it becomes `history.jsonl.1`, replacing the previous one, so at most two files' worth is kept; readers take `.1` first. `history [N]` lists the last N (default 20). `status` lists holders and waiters.
+State lives in `~/.local/state/slotfather/`; `queue.log` records grants, releases, and reaping. `history.jsonl` has one JSON line per request that left the queue: label, command, directory, slots, queue, grant and end times, seconds waited and run, the outcome (`released`, `left` after giving up, or `reaped`), `until` for a request with `--wait` (when it would give up) and, for `run`, the exit status and what the command used (see Statistics). A request in a git checkout adds `git`: `head` and `tree` (HEAD's commit and tree) and `dirty` (tracked files differ from HEAD; untracked ones are not looked at), so repeated checks of one tree can be found; `SLOTFATHER_GIT_FACTS=0` turns it off. `--meta cache=hit|miss|partial` records whether the work reused a cache (other values are refused). A [session](sessions.md)'s line adds `session`. Lines carry `lease_id`, the entry's unique id (fathers#101), as `status --json` entries and the `subject` of every request event give it (capacity, order and sweep events have no lease) (an older client's entry has none in the history; `status` then gives a stable `old-…` id). `label_derived` is the label the request's project, command and lane metadata give (fathers#100; `run` uses it when `--label` is missing, and appends it after a label that says little), and `label_given` the `--label` where the request runs under another label. `history export` prints both files as JSON lines, oldest first; `history import HOST [FILE]` merges another host's lines (stdin without FILE) into `hosts/HOST/history.jsonl`, where `stats --host HOST` reads them. Past 4 MB it becomes `history.jsonl.1`, replacing the previous one, so at most two files' worth is kept; readers take `.1` first. `history [N]` lists the last N (default 20). `status` lists holders and waiters.
 
 **Request fields.** `run --priority interactive|normal|batch` (library:
 `acquire(..., priority="interactive")`) sets scheduling priority; omitted priority
@@ -163,6 +163,35 @@ Godfather. The tests validate every line with the shared `common/eventcheck.py`.
 | `capacity.changed` | a capacity is saved or reset (a save that changes nothing is no event, as for order) (subject `capacity`) | `saved` (capacity.json, `null` for reset), `mode`, `slots` |
 | `order.changed` | order settings are saved or reset (subject `order`) | `saved` (the keys the change named) or `reset: true` |
 | `process.swept` | `sweep --live` stops a leftover process (subject `process`, level warn) | `action`, `class`, `kind`, `age`, `processes`, `cmd` |
+| `session.run_started`, `session.run_ended` | a `run --session` starts or ends inside a session (subject the session's request) | `session`, `run` (`pid`, `label`, `cmd`; at the end `exit`, `ran`, `cpu`, and `meta` and `git` where it has them) |
+| `run.outlier` | a run above its run type's p90 is settled as an outlier (subject `run_type`, `id` the key; level warn) | `lease_id`, `ran`, `p50`, `p90`, `ended`, `later` |
+| `run.trend` | a run type's trend changes (subject `run_type`; level warn when slower) | `verdict`, `p50_recent`, `p50_before`, `ratio`, `recent`, `before`, `plan_change`, `why` |
+| `session.ended` | a session releases its lease ([sessions](sessions.md)) | `reason` (`idle`, `stopped`), `runs`, `busy`, `held` |
+
+**Run types** (fathers#106, for agents). A run type is the project, `phase` and `plan` meta where a request
+carries a phase (Lanefather passes `phase`, `plan` and `checks`), else its label and command kind. `status --json`
+(and `--full`; not `--pid`) gives each entry `expected`: `key`, `p50`, `p90`, `runs` (the last 20 released runs of the most specific key
+with at least 3: project, phase and plan; project and phase; label and kind; label) and `fallback` (a broader key
+than the first), or null; a held entry also gets `overrun: true` once it has run past that p90 (by more than 10% and
+2 s). A released run's history line adds `run_key` and `verdict` (`normal`, or `pending` above the p90). A pending
+run is settled once 3 later runs of its key land: `outlier` when most of them are normal, `slower` when not; the
+settled verdict goes to `verdicts.jsonl` (`lease_id`, `verdict`, `key`, `ran`, `at`; history lines are never
+rewritten) and an outlier to EVENTS as `run.outlier`. A trend compares the median of a key's last 10 runs with the
+30 before: `slower` or `faster` beyond a factor of 1.25, else `steady`; a changed trend is a `run.trend` event.
+
+`slotfather stats --trend [--project P] [--phase X] [--since WHEN] --json` prints `{"v": 1, "keys": [{"key",
+"project", "phase", "plan", "checks", "runs", "weeks": [{"week": "2026-W46", "count", "p50", "p90"}],
+"plan_changes": [{"at", "from", "to", "checks_from", "checks_to", "checks"}], "trend": {"verdict", "p50_recent",
+"p50_before", "ratio", "recent", "before", "plan_change", "why"} or null, "verdicts": {verdict: count}}]}`; `why` is
+`plan grew: +2 checks`, `plan shrank: ...`, `plan changed`, `same plan` or `no plan recorded`. Without `--json` it
+prints a line per key.
+
+**Changelog** (fathers#103): `slotfather changelog --json [--since VERSION]` prints the installed release's
+CHANGELOG.md as `{"v": 1, "tool": "slotfather", "version", "source": its path or null, "entries": [{"version",
+"date", "section", "text", "unreleased"}]}`, one entry per bullet in file order with wrapped lines joined, newest
+first. Installs come from main, so the `## Unreleased` entries are what is installed: they come first, with
+`version` and `date` null, `unreleased: true` and `source`, the installed commit. `--since VERSION` keeps releases
+newer than VERSION, and Unreleased. It reads the changelog and the release's version.json, nothing else.
 
 **Dashboard actions** (`capabilities.dashboard.actions`): `reprioritize` and `ask-yield`, each identity-checked
 with the start time the caller saw (`status --json`'s `start`):

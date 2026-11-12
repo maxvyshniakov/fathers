@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -315,9 +316,22 @@ class InstallTests(unittest.TestCase):
         self.assertFalse(self.legacy.parent.exists())
         self.assertFalse((self.bin / "slotfather").exists())
 
+    def test_a_queue_lock_released_within_the_wait_lets_the_install_go_on(self):
+        self.queue(self.new)
+        self.env["SLOTFATHER_INSTALL_LOCK_WAIT"] = "10"
+        handle = (self.new / ".lock").open("a")
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        timer = threading.Timer(0.5, handle.close)  # a client's look ends
+        timer.start()
+        self.addCleanup(timer.cancel)
+        result = self.run_install()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertTrue((self.bin / "slotfather").exists())
+
     def test_a_locked_current_queue_refuses_before_touching_retired_paths(self):
         self.queue(self.new)
         before = self.contents(self.new)
+        self.env["SLOTFATHER_INSTALL_LOCK_WAIT"] = "0.3"
         with (self.new / ".lock").open("a") as handle:
             fcntl.flock(handle, fcntl.LOCK_EX)
             result = self.run_install()
@@ -443,6 +457,7 @@ class InstallTests(unittest.TestCase):
     def test_a_locked_old_queue_refuses_without_changing_its_contents(self):
         self.queue(self.old)
         before = self.contents(self.old)
+        self.env["SLOTFATHER_INSTALL_LOCK_WAIT"] = "0.3"
         with (self.old / ".lock").open("a") as handle:
             fcntl.flock(handle, fcntl.LOCK_EX)
             result = self.run_install()

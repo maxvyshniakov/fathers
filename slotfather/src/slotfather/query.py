@@ -1,6 +1,7 @@
 """Slotfather query responsibilities."""
 from __future__ import annotations
 
+import contextlib
 import math
 import time
 import sys
@@ -151,6 +152,9 @@ def status_lines(directory: Path | None = None) -> list[str]:
             request = _state.asked(path) if e.get("state") == "held" else None
             tags += " yieldable" + (f" asked-to-yield-for={request.get('label')}" if request else "") + \
                 (f" yielded={e['yields']}" if e.get("yields") else "")
+        if isinstance(e.get("session"), dict):
+            from .session import tags as session_tags
+            tags += session_tags(path, e)
         tags += waiter_tags(e, expect.get(id(e)))
         lines.append(f"{e['state']}: {e['count']} slot(s) {e['label']} pid={e['pid']} since={e['since']}{tags} "
                      f"cmd={e['cmd']}")
@@ -292,7 +296,7 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
     for path, entry in live:
         tree = _platform.descendants(table, entry.get("pid"))
         priority = _config.priority_of(entry)
-        item: dict[str, Any] = {"id": path.stem, "lease": str(path), "state": entry.get("state"), "count": entry.get("count"),
+        item: dict[str, Any] = {"id": path.stem, "lease_id": _config.lease_id(path.stem, entry), "lease": str(path), "state": entry.get("state"), "count": entry.get("count"),
                 "label": entry.get("label"), "pid": entry.get("pid"), "pgid": _platform.process_group(entry.get("pid")),
                 "start": entry.get("start"), "since": entry.get("since"), "granted": entry.get("granted"),
                 "cmd": entry.get("cmd"), "cwd": entry.get("cwd"), "meta": _config.meta_of(entry), "tree": tree,
@@ -301,6 +305,9 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
                 "yields": int(entry.get("yields") or 0),
                 "yield_asked": _state.asked(path) if asks is None else asks.get(id(entry)), "position": None,
                 "idle_since": marked.get(id(entry))}
+        if isinstance(entry.get("session"), dict):
+            from .session import view
+            item["session"] = view(path, entry)
         entries_found.append(item)
     settings = _schedule.order_settings(directory)
     moment = time.time()
@@ -311,7 +318,16 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
     # A guard asking about one process (--pid) needs no forecast.
     expect = outlook(directory, [e for _, e in live], slots, sum(c for _, _, c in earlier), moment) \
         if pid is None else {}
+    known = None
+    if pid is None:  # expected runs per run type (fathers#106); not for a guard asking about one process
+        with contextlib.suppress(Exception):
+            from . import runtype as _runtype
+            known = _runtype.cached(directory)
     for (path, entry), item in zip(live, entries_found):
+        if known is not None:
+            with contextlib.suppress(Exception):  # the dashboard's poll never fails for it
+                from . import runtype as _runtype
+                item.update(_runtype.entry_view(entry, known, moment))
         item["position"] = places.get(id(entry))  # waiters: their place in the order the queue serves them
         found = expect.get(id(entry))
         aged_to = entry.get("aged") if entry.get("aged") in _config.PRIORITIES else None

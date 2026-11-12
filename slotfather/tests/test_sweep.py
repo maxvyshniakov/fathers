@@ -637,7 +637,7 @@ class LiveTests(SweepCase):
         found = self.report("--live", "--pid", str(pid), "--pid", str(holder.pid))
         self.assertEqual({pid: "spared", holder.pid: "spared"}, {i["pid"]: i["action"] for i in found["items"]},
                          found)
-        self.assertIn("inside the live lease leased", found["items"][0]["reason"])
+        self.assertIn("inside the live lease leased · echo", found["items"][0]["reason"])
         self.assertTrue(self.alive(pid) and self.alive(holder.pid))
         lease = json.loads(self.tool("status", "--json").stdout)["entries"][0]["lease"]
         orphan = self.orphan("leased-orphan", {"SLOTFATHER_LEASE": lease})
@@ -645,7 +645,7 @@ class LiveTests(SweepCase):
             self.skipTest("this host does not show the orphan's environment (an Apple platform python)")
         found = self.report("--live", "--pid", str(orphan))
         self.assertEqual([(orphan, "spared")], [(i["pid"], i["action"]) for i in found["items"]], found)
-        self.assertIn("inside the live lease leased", found["items"][0]["reason"])
+        self.assertIn("inside the live lease leased · echo", found["items"][0]["reason"])
         self.assertTrue(self.alive(orphan))
 
 

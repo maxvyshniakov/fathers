@@ -3,6 +3,8 @@
   slotfather run [-n N|all] [--label L] [--meta K=V]... [--priority P] [--ticket ID] [--yieldable] [--wait S] [--] COMMAND...
                                                                      run COMMAND holding N slots (default 1)
   slotfather yield                                                   inside a yieldable lease: yield if asked
+  slotfather session start --label NAME [-n N|all] [--idle S] [--expect S] ...  hold the machine for a series of
+                                                                     `run --session NAME -- COMMAND`; session stop NAME
   slotfather status [--json [--pid PID | --full]]                    running and waiting requests, in queue order
   slotfather capabilities --json                                     what a dashboard (Godfather) can read and run here
   slotfather settings [check|set|reset ...] --json                   the shared settings as data, and changes to them
@@ -11,7 +13,9 @@
   slotfather procs --json [--cwd PATH] [--pid PID]                  read-only process, lease and session ancestry
   slotfather lane-admission --json                                    stateless lifetime lane policy, stdin JSON
   slotfather version [--json]                                        identify this runtime source
-  slotfather history [N]                                             the last N requests that left the queue
+  slotfather changelog --json [--since VERSION]                      the installed release's changelog as data
+  slotfather history [N] | export | import HOST [FILE]               the last N requests that left the queue; all of
+                                                                     them as JSON lines; another host's kept here
   slotfather stats [--since W] [--label L] [--by B] [--json]         request resource use and machine occupancy
   slotfather slots [N|memory G|lower G|reset]                        show, save or reset shared capacity
   slotfather available [--label L] [-- COMMAND...]                   queue space before memory checks
@@ -139,7 +143,10 @@ def dashboard(argv: list[str]) -> int:
 USAGE = ("usage: slotfather                     (in a terminal: the live dashboard, godfather)\n"
          "       slotfather run [-n N|all] [--label L] [--meta KEY=VALUE]... [--priority interactive|normal|batch] [--ticket ID]\n"
          "                      [--yieldable] [--wait SECONDS] [--] COMMAND...      (inside a lease: slotfather yield)\n"
-         "       slotfather status [--json [--pid PID | --full]] | history [N] | available [--label L] [-- COMMAND...]\n"
+         "       slotfather session start --label NAME [-n N|all] [--idle S] [--expect S] [--priority P] [--ticket ID]\n"
+         "                      [--meta K=V]... [--wait S] | session stop NAME | run --session NAME [--label L] -- COMMAND...\n"
+         "       slotfather status [--json [--pid PID | --full]] | available [--label L] [-- COMMAND...]\n"
+         "       slotfather history [N] | history export | history import HOST [FILE]\n"
          "       slotfather reprioritize PID|LABEL interactive|normal|batch [--start START] | ask-yield PID --start START\n"
          "       slotfather lane-admission --json                         (one lifetime request on stdin)\n"
          "       slotfather advise [--max N] [--exclusive] [--label L] [-- COMMAND...]\n"
@@ -147,11 +154,12 @@ USAGE = ("usage: slotfather                     (in a terminal: the live dashboa
          "                        [--interactive S] [--batch S] [--yield-after S] [--idle-cpu C] [--idle-after S]\n"
          "                        [--aging-batch S] [--aging-normal S] [--warn-wait S] [--warning-admits 1|0]\n"
          "                        | reset   (S: 90, 90s, 30m, 1.5h)\n"
-         "       slotfather stats [--since WHEN] [--label GLOB] [--by both|label|kind] [--top N] [--json]\n"
+         "       slotfather stats [--since WHEN] [--label GLOB] [--by both|label|kind|family] [--host HOST] [--top N] [--json]\n"
          "       slotfather slots [N|memory GIB|lower GIB|reset]\n"
          "       slotfather settings --json | settings check KEY VALUE --json | settings set KEY VALUE [--revision R] --json\n"
          "                           | settings reset (KEY|--all) [--revision R] --json\n"
          "       slotfather procs --json [--cwd PATH] [--pid PID] | version [--json] | capabilities --json\n"
+         "       slotfather changelog --json [--since VERSION]\n"
          "       slotfather sweep [--live [--dev-servers]] [--json] [--quiet] [--pid PID]... | sweep config [KEY VALUE]...\n"
          "                        | sweep --plist [--live [--dev-servers]] [--interval SECONDS]\n"
          "       slotfather dashboard [ARGS...]                          (runs godfather ARGS...)")
@@ -167,14 +175,21 @@ def parse_count(value: str) -> int:
 
 def run_command(argv: list[str]) -> int:
     from . import leases as _leases
-    count, label, wait, pairs, yieldable = 1, os.path.basename(os.getcwd()), None, [], False
+    count, label, wait, yieldable = 1, os.path.basename(os.getcwd()), None, False
+    pairs: list[str] = []
     priority: str | None = None
     ticket: str | None = None
+    session: str | None = None
+    labelled = counted = False
     while argv:
         if argv[0] in ("-n", "--slots") and len(argv) > 1:
             count, argv = ("all" if argv[1] == "all" else parse_count(argv[1])), argv[2:]
+            counted = True
+        elif argv[0] == "--session" and len(argv) > 1:
+            session, argv = argv[1], argv[2:]
         elif argv[0] in ("-l", "--label") and len(argv) > 1:
             label, argv = argv[1], argv[2:]
+            labelled = True
         elif argv[0] == "--meta" and len(argv) > 1:
             pairs, argv = pairs + [argv[1]], argv[2:]
         elif argv[0] == "--priority" and len(argv) > 1:
@@ -200,24 +215,37 @@ def run_command(argv: list[str]) -> int:
             break
     if not argv:
         raise _config.SlotError("no command to run")
-    return _leases.run(count, label, argv, wait, _config.parse_meta(pairs), yieldable, priority=priority, ticket=ticket)
+    if session is not None:
+        if counted or priority or ticket or yieldable or wait is not None:
+            raise _config.SlotError("run --session takes only --label and --meta: the session's lease is already held")
+        from .session import run_inside
+        return run_inside(session, argv, label if labelled else None, _config.parse_meta(pairs))
+    return _leases.run(count, label, argv, wait, _config.parse_meta(pairs), yieldable, priority=priority, ticket=ticket,
+                       labelled=labelled)
 
 
 def request_options(argv: list[str], what: str, flags: dict) -> tuple[dict, str, str]:
     """`flags` (option -> takes a value) and then `[--label L] [-- COMMAND...]`: (options, label, command). The
-    label defaults to the directory's name, as for run."""
+    label defaults to the one run would derive (labels.py), else the directory's name."""
     found, label, command = {}, os.path.basename(os.getcwd()), ""
+    labelled = False
     while argv:
         if argv[0] == "--":
             command = " ".join(argv[1:])
             break
         if argv[0] in ("-l", "--label") and len(argv) > 1:
-            label, argv = argv[1], argv[2:]
+            label, argv, labelled = argv[1], argv[2:], True
         elif argv[0] in flags and (not flags[argv[0]] or len(argv) > 1):
             found[argv[0]] = argv[1] if flags[argv[0]] else True
             argv = argv[2:] if flags[argv[0]] else argv[1:]
         else:
             raise _config.SlotError(f"unknown {what} option {argv[0]}")
+    if command and not labelled:
+        import contextlib
+        import shlex
+        with contextlib.suppress(Exception):
+            from .labels import choose
+            label = choose(None, os.getcwd(), shlex.split(command))["label"] or label
     return found, label, command
 
 
@@ -432,6 +460,9 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 raise _config.SlotError("version takes only --json")
             return 0
+        if command == "changelog":
+            from .changelog import command as changelog_command
+            return changelog_command(rest)
         if command == "capabilities":
             if rest != ["--json"]:
                 raise _config.SlotError("capabilities takes --json")
@@ -446,6 +477,9 @@ def main(argv: list[str] | None = None) -> int:
             return procs_command(rest)
         if command == "run":
             return run_command(rest)
+        if command == "session":
+            from .session import command as session_command
+            return session_command(rest)
         if command == "slots":
             return slots_command(rest)
         if command == "status" and not rest:
@@ -460,6 +494,9 @@ def main(argv: list[str] | None = None) -> int:
             return reprioritize_command(rest)
         if command == "ask-yield":
             return ask_yield_command(rest)
+        if command == "history" and rest and not rest[0].isdigit():
+            from .archive import command as history_command
+            return history_command(rest)
         if command == "history" and (not rest or (len(rest) == 1 and rest[0].isdigit())):
             from . import state as _state
             print("\n".join(_state.history_lines(int(rest[0]) if rest else 20)))

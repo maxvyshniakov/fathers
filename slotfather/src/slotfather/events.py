@@ -7,7 +7,7 @@ events.jsonl.1, replacing the previous one, under an flock on events.lock beside
 
 Kinds: lease.granted, lease.released, request.left, lease.reaped, request.reaped, request.reprioritized,
 request.waiting_long, lease.yield_asked, lease.yield_withdrawn, lease.yielded, capacity.changed, order.changed,
-process.swept.
+process.swept, session.run_started, session.run_ended, session.ended, run.outlier, run.trend.
 """
 from __future__ import annotations
 
@@ -30,7 +30,8 @@ COMMAND_MAX = 400  # characters of a command line kept
 CONTROL = re.compile("[\x00-\x1f\x7f-\x9f]")
 KINDS = ("lease.granted", "lease.released", "request.left", "lease.reaped", "request.reaped", "request.reprioritized",
          "request.waiting_long", "lease.yield_asked", "lease.yield_withdrawn", "lease.yielded", "capacity.changed",
-         "order.changed", "process.swept")
+         "order.changed", "process.swept", "session.run_started", "session.run_ended", "session.ended",
+         "run.outlier", "run.trend")
 
 
 def path(directory: Path) -> Path:
@@ -73,6 +74,9 @@ def request(entry: dict[str, Any], entry_path: Path | None = None) -> dict[str, 
                                "id": entry_path.stem if entry_path is not None else f"pid-{entry.get('pid')}"}
     if entry.get("label") is not None:
         subject["label"] = str(entry.get("label"))
+    if entry_path is not None or isinstance(entry.get("lease_id"), str):
+        # unique (fathers#101), as status --json gives it; `id` stays the entry's name
+        subject["lease_id"] = _config.lease_id(entry_path.stem if entry_path is not None else "", entry)
     if isinstance(entry.get("pid"), int) and entry["pid"] > 0:
         subject["pid"] = entry["pid"]
     return subject

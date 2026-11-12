@@ -11,7 +11,7 @@ from pathlib import Path
 import pwd
 import stat
 import time
-from typing import Any, cast
+from typing import Any, Iterable, Iterator, cast
 
 from . import config as _config
 
@@ -106,7 +106,8 @@ def write(path: Path, entry: Any) -> None:
 
 
 def record(directory: Path, entry: dict[str, Any], outcome: str, status: int | None = None,
-           usage: dict[str, Any] | None = None) -> dict[str, Any]:
+           usage: dict[str, Any] | None = None, path: Path | None = None,
+           expected: dict[str, Any] | None = None) -> dict[str, Any]:
     """Add a request that left the queue to history.jsonl: released (it ran), left (it gave up waiting) or reaped
     (its holder died), with what its process tree used where the holder measured it. Callers hold the queue lock.
     Returns the line's fields (the events of events.py read them)."""
@@ -138,6 +139,24 @@ def record(directory: Path, entry: dict[str, Any], outcome: str, status: int | N
     meta = _config.meta_of(entry)
     if meta:
         item["meta"] = meta
+    if path is not None or isinstance(entry.get("lease_id"), str):
+        # the entry's unique id, as status --json and EVENTS give it (an older client's entry: the same fallback)
+        item["lease_id"] = _config.lease_id(path.stem if path is not None else "", entry)
+    if expected is not None and outcome == "released" and isinstance(item.get("ran"), (int, float)) \
+            and not entry.get("session"):
+        # the run type it is judged by and its verdict against that series (runtype.py, fathers#106)
+        item["run_key"] = expected["key"]
+        from .runtype import above
+        item["verdict"] = "pending" if above(float(item["ran"]), expected.get("p90")) else "normal"
+    elif expected is None and outcome == "released" and entry.get("run_key"):
+        item["run_key"] = entry["run_key"]
+    for key in ("label_given", "label_derived", "project"):
+        if isinstance(entry.get(key), str):
+            item[key] = entry[key]  # the derived label, and the --label as given where it differs
+    if isinstance(entry.get("session"), dict):
+        item["session"] = entry["session"]  # a measurement session: its name, runs, busy seconds, how it ended
+    if isinstance(entry.get("git"), dict):
+        item["git"] = entry["git"]  # head, tree, dirty of its directory (fathers#97)
     with contextlib.suppress(OSError):
         append_bounded(directory / "history.jsonl", json.dumps(item) + "\n", _config.HISTORY_MAX)
     return item
@@ -158,18 +177,18 @@ def append_bounded(path: Path, line: str, limit: int) -> None:
         path.replace(path.with_name(path.name + ".1"))
 
 
-def objects(lines) -> list[dict]:
+def objects(lines: Iterable[str | bytes]) -> list[dict[str, Any]]:
     """The JSON objects among lines; lines that do not parse (a torn write, a foreign line) are skipped."""
-    found = []
+    found: list[dict[str, Any]] = []
     for line in lines:
         with contextlib.suppress(ValueError, UnicodeDecodeError):
-            item = json.loads(line)
+            item: object = json.loads(line)
             if isinstance(item, dict):
-                found.append(item)
+                found.append(cast(dict[str, Any], item))
     return found
 
 
-def journal(path: Path):
+def journal(path: Path) -> Iterator[dict[str, Any]]:
     """The JSON objects of a bounded file and its rotated predecessor, oldest first."""
     for part in (path.with_name(path.name + ".1"), path):
         try:
@@ -179,7 +198,7 @@ def journal(path: Path):
         yield from objects(data.splitlines())
 
 
-def tail_objects(path: Path, limit: int) -> list[dict]:
+def tail_objects(path: Path, limit: int) -> list[dict[str, Any]]:
     """The last `limit` JSON objects of one file, read backwards from its end in blocks."""
     try:
         handle = open(path, "rb")
@@ -199,7 +218,7 @@ def tail_objects(path: Path, limit: int) -> list[dict]:
             block *= 4
 
 
-def history_items(directory: Path | None = None) -> list[dict]:
+def history_items(directory: Path | None = None) -> list[dict[str, Any]]:
     """Every request in history.jsonl (and its rotated part), oldest first. Version-1 lines read as they are: they
     lack "v" and the usage fields."""
     return list(journal((directory or _config.state_dir()) / "history.jsonl"))

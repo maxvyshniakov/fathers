@@ -6,6 +6,28 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- `run` without `--label` names the request after its project (the git repository of its directory, never a temporary
+  one), the part of the command that names the work and its lane, ticket and phase: `godfather · measure_cpu`,
+  `straylight · lane 743 · node --test · check`; a label that says little (`scratchpad`, `tmp`, the project's name
+  alone) gets those parts appended, with a hint. The history keeps `label_derived` and, where it differs,
+  `label_given`; `stats --by derived` groups by it.
+- Expected run times per run type (project, phase, plan): `status --json --full` gives each request `expected` p50,
+  p90 and run count, and `overrun` once a running one passes its p90; the history records each run's `run_key` and
+  `verdict`, settled outliers are EVENTS (`run.outlier`), and `slotfather stats --trend --json` gives weekly
+  p50/p90, plan changes and whether a run type got slower and why (`run.trend`).
+- Every request has a unique `lease_id` in `status --json` (and `--full`), the history and its events' subject.
+- `slotfather changelog --json [--since VERSION]` gives the installed changelog as data for Godfather's what's
+  new, Unreleased entries first with the installed commit.
+- Measurement sessions: `slotfather session start --label NAME` drains the queue once and holds it (all slots by
+  default) for a series of `slotfather run --session NAME -- COMMAND`, until `session stop NAME`, `--idle` seconds
+  without a run (default 2 minutes) or its holder's death; waiters see its `--expect` run, and it is one holder in
+  `status` and the dashboard.
+- The history records the git `head`, `tree` and `dirty` of a request's directory, and `--meta cache=hit|miss|partial`.
+- `run -n N` hints when its label family's recent runs used far fewer cores than N slots hold; `slotfather stats`
+  lists those families (`asks`) and groups by them with `--by family`.
+- `slotfather history export` and `history import HOST` keep another host's history (a CI runner's) beside this
+  one's; `slotfather stats --host HOST` reads it.
+
 - `slotfather capabilities --json` says which dashboard contracts this release supports, and `slotfather status
   --json --full` adds the host, the time and the dashboard's own model to `status --json`, from the same look at
   the queue, so a separate dashboard (Godfather) can draw today's screen; `status --json` is unchanged.
@@ -33,6 +55,7 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Changed
 
+- The installer retries a held queue lock for up to 15 seconds (`SLOTFATHER_INSTALL_LOCK_WAIT`) before it refuses.
 - Slotfather lives in the `fathers` repository with Lanefather, junkfather and Godfather: install it with
   `python3 install.py slotfather` from a `fathers` checkout. `slotfather dashboard` without Godfather points there.
 - A memory-pressure warning (macOS level 2, Linux PSI `some` at its limit) no longer stops every new lease: one

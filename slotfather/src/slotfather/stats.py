@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """slotfather-stats: request resource use and machine occupancy; `slotfather stats` runs it.
 
-  slotfather stats [--since WHEN] [--label GLOB] [--by both|label|kind|priority|ticket|meta.KEY] [--top N] [--json]
+  slotfather stats [--since WHEN] [--label GLOB] [--by both|label|kind|priority|ticket|family|meta.KEY] [--host HOST]
+                   [--top N] [--json]
 
 Reads history.jsonl (one line per request that left the queue; version 2 lines carry what a `run` used) and
 machine.jsonl (samples of the machine while leases ran), each with its rotated .1 part. WHEN is an age (90m, 36h,
@@ -11,7 +12,9 @@ or by one key of the lease metadata (`--by ticket` or `--by meta.KEY`; requests 
 per group the median and 90th percentile of wait and run, and the cores used per slot held, CPU seconds over wall
 seconds times slots. The machine part gives the share of sampled time the one-minute load stood over the cores
 (more runnable threads than cores) and under them, the CPU busy share, and how often a slot's worth of cores sat
-idle. The sweeps (sweep.jsonl, `slotfather sweep`) add what was found and stopped. It only reads; it lives apart from the queue and loads the slotfather beside it.
+idle. The sweeps (sweep.jsonl, `slotfather sweep`) add what was found and stopped. `asks` compares, per label
+family, the slots asked with the cores used (askuse.py); `--by family` groups by it. `--host HOST` reads the history
+imported from HOST (`slotfather history import HOST`). It only reads; it lives apart from the queue and loads the slotfather beside it.
 """
 from __future__ import annotations
 
@@ -25,13 +28,16 @@ import time
 from typing import Any, Iterable, cast
 
 
+from . import askuse as _askuse
+from . import runtype as _runtype
 from . import config as _config
 from . import schedule as _schedule
 from . import state as _state
 
 
 GAP = 60.0  # seconds; a longer gap between machine samples means no lease ran, and counts as this long
-USAGE = "usage: slotfather stats [--since WHEN] [--label GLOB] [--by both|label|kind|priority|ticket|meta.KEY] [--top N] [--json]"
+USAGE = ("usage: slotfather stats [--since WHEN] [--label GLOB] [--by both|label|kind|priority|ticket|family|derived|meta.KEY] "
+         "[--host HOST] [--top N] [--json]\n       slotfather stats --trend [--project P] [--phase X] [--since WHEN] [--json]")
 
 
 class StatsError(Exception):
@@ -213,8 +219,15 @@ def sweeps(items: list[dict]) -> dict:
 
 
 def summarize(directory: Path | None = None, since: float | None = None, label: str | None = None,
-              by: str = "both", moment: float | None = None) -> dict[str, Any]:
+              by: str = "both", moment: float | None = None, host: str | None = None) -> dict[str, Any]:
+    """With `host`, the history another host's lines were imported into (`history import HOST`), its cores and
+    capacity those the lines recorded; its machine samples and sweeps are not kept here."""
     directory = directory or _config.state_dir()
+    if host is not None:
+        from .archive import host_dir
+        directory = host_dir(host, directory)
+        if not (directory / "history.jsonl").exists():
+            raise StatsError(f"no history of {host} was imported here (slotfather history import {host})")
     moment = time.time() if moment is None else moment
     items: list[dict[str, Any]] = []
     for item in cast(Iterable[dict[str, Any]], _state.history_items(directory)):
@@ -226,10 +239,12 @@ def summarize(directory: Path | None = None, since: float | None = None, label: 
         items.append(item)
     groups: dict[tuple[Any, Any], list[dict[str, Any]]] = {}
     meta_key = by[5:] if by.startswith("meta.") else None
-    field = by if by in ("priority", "ticket") else None
+    field = by if by in ("priority", "ticket", "family", "derived") else None
     for item in items:
         if field:
-            value = _config.priority_of(item) if field == "priority" else _config.ticket_of(item)
+            value = _config.priority_of(item) if field == "priority" else _config.ticket_of(item) \
+                if field == "ticket" else _schedule.family(item.get("label")) if field == "family" \
+                else item.get("label_derived") or item.get("label")
             key = (value, None)
         elif meta_key:
             key = (_config.meta_of(item).get(meta_key), None)
@@ -248,6 +263,11 @@ def summarize(directory: Path | None = None, since: float | None = None, label: 
     except _config.SlotError:
         capacity, saved = _config.automatic_capacity(), False
     cores = _config.cores()
+    automatic = _config.automatic_capacity()
+    if host is not None:
+        capacity = automatic = recorded_capacity(items, capacity)
+        seen = [i["cores"] for i in items if isinstance(i.get("cores"), int) and i["cores"] > 0]
+        cores, saved = (int(percentile(seen, 50) or cores) if seen else cores), False
     samples = [s for s in _state.journal(directory / "machine.jsonl")
                if since is None or (isinstance(s.get("at"), (int, float)) and s["at"] >= since)]
     overall = usage_of(items)
@@ -256,7 +276,7 @@ def summarize(directory: Path | None = None, since: float | None = None, label: 
              if since is None or (isinstance(i.get("at"), (int, float)) and i["at"] >= since)]
     return {
         "since": since, "label": label, "by": by, "cores": cores, "capacity": capacity, "saved": saved,
-        "automatic": _config.automatic_capacity(),
+        "automatic": automatic, "host": host,
         "first": items[0].get("ended") if items else None, "last": items[-1].get("ended") if items else None,
         "versions": {str(v): sum((i.get("v") or 1) == v for i in items)
                      for v in sorted({i.get("v") or 1 for i in items})},
@@ -264,6 +284,7 @@ def summarize(directory: Path | None = None, since: float | None = None, label: 
         "machine": machine(samples, cores, capacity),
         "fill_slots": round(cores / per_slot, 1) if per_slot else None,
         "sweeps": sweeps(swept),
+        "asks": _askuse.by_family(items, cores / max(1, capacity)),
         "groups": rows,
     }
 
@@ -287,7 +308,7 @@ def local(stamp) -> str:
 
 def report(summary: dict[str, Any], top: int = 25) -> str:
     o, h, m = summary["overall"], summary["held"], summary["machine"]
-    lines = [f"slotfather stats · {o['requests']} requests"
+    lines = [f"slotfather stats{' of ' + summary['host'] if summary.get('host') else ''} · {o['requests']} requests"
              + (f" ended {local(summary['first'])} to {local(summary['last'])}" if summary["first"] else "")
              + f" · {summary['cores']} cores, {summary['capacity']} slots "
              + ("(saved; automatic " + str(summary["automatic"]) + ")" if summary["saved"] else "(automatic)")]
@@ -299,7 +320,7 @@ def report(summary: dict[str, Any], top: int = 25) -> str:
                      f"every slot held {share(h['all_held'])} of the time")
     meta_key = summary["by"][5:] if summary["by"].startswith("meta.") else None
 
-    field: str | None = str(summary["by"]) if summary["by"] in ("priority", "ticket") else None
+    field: str | None = str(summary["by"]) if summary["by"] in ("priority", "ticket", "family", "derived") else None
     grouped = bool(meta_key or field)
     def first(row: dict[str, Any]) -> str:
         if field:
@@ -354,6 +375,13 @@ def report(summary: dict[str, Any], top: int = 25) -> str:
                         else f"; least available memory {m['memory_available_mb_min']} MB"))
     else:
         lines.append("no machine samples in range")
+    over = [r for r in cast(list[dict[str, Any]], summary.get("asks") or []) if r["over_ask"]]
+    if over:
+        lines.append("asks far above use (median slots asked, cores used of the cores asked, slots that use needs):")
+        for row in over[:top]:
+            lines.append(f"  {row['family']}: {number(row['slots_p50'], 0)} slots, {number(row['cores_p50'])} of "
+                         f"{number(row['cores_asked_p50'])} cores over {row['measured']} runs; -n "
+                         f"{row['slots_needed']} would hold it")
     w = cast(dict[str, Any], summary.get("sweeps") or {})
     if w.get("runs"):
         found = cast(dict[str, Any], w.get("last_found") or {})
@@ -368,7 +396,8 @@ def report(summary: dict[str, Any], top: int = 25) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    since = label = None
+    since = label = host = project = phase = None
+    trend = False
     by, top, as_json = "both", 25, False
     try:
         while argv:
@@ -377,10 +406,18 @@ def main(argv: list[str] | None = None) -> int:
                 since = parse_since(argv.pop(0))
             elif option == "--label" and argv:
                 label = argv.pop(0)
-            elif option == "--by" and argv and (argv[0] in ("both", "label", "kind", "priority", "ticket") or (
+            elif option == "--by" and argv and (argv[0] in ("both", "label", "kind", "priority", "ticket", "family", "derived") or (
                     argv[0].startswith("meta.") and argv[0][5:] not in ("class", "priority", "ticket")
                     and _config.META_KEY.fullmatch(argv[0][5:]))):
                 by = argv.pop(0)
+            elif option == "--trend":
+                trend = True
+            elif option == "--project" and argv:
+                project = argv.pop(0)
+            elif option == "--phase" and argv:
+                phase = argv.pop(0)
+            elif option == "--host" and argv:
+                host = argv.pop(0)
             elif option == "--top" and argv and argv[0].isdigit():
                 top = int(argv.pop(0))
             elif option == "--json":
@@ -390,7 +427,11 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             else:
                 raise StatsError(f"unknown or incomplete option {option}")
-        summary = summarize(since=since, label=label, by=by)
+        if trend:
+            found = _runtype.report(since=since, project=project, phase=phase)
+            print(json.dumps(found, sort_keys=True) if as_json else _runtype.report_text(found))
+            return 0
+        summary = summarize(since=since, label=label, by=by, host=host)
     except (StatsError, _config.SlotError) as error:
         print(f"slotfather stats: {error}\n{USAGE}", file=sys.stderr)
         return 2

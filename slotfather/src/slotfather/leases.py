@@ -12,9 +12,11 @@ import sys
 import threading
 import time
 from typing import Any, cast
+import uuid
 
 from . import config as _config
 from . import events as _events
+from . import facts as _facts
 from . import idle as _idle
 from . import platform as _platform
 from . import query as _query
@@ -37,9 +39,10 @@ def reap(directory: Path, table: Table) -> list[tuple[Path, dict[str, Any]]]:
             path.unlink(missing_ok=True)
             _state.marker(path).unlink(missing_ok=True)
             _idle.path(path).unlink(missing_ok=True)
+            path.with_suffix(".session").unlink(missing_ok=True)  # a session's runs (session.py)
             _state.log(directory, f"reaped {entry.get('state')} lease of {entry.get('count')} for "
                            f"{entry.get('label')} (pid {entry.get('pid')} exited)")
-            item = _state.record(directory, entry, "reaped")
+            item = _state.record(directory, entry, "reaped", path=path)
             _events.emit(directory, "lease.reaped" if entry.get("state") == "held" else "request.reaped",
                          _events.request(entry, path),
                          {"count": entry.get("count"), "ran": item.get("ran"), "waited": item.get("waited"),
@@ -113,7 +116,8 @@ def ask(directory: Path, live: list[tuple[Path, dict[str, Any]]], held: list[dic
             _state.log(directory, f"withdrew the yield request to {entry['label']} (pid {entry['pid']})")
             _events.emit(directory, "lease.yield_withdrawn", _events.request(entry, path), {},
                          _events.actor(kind="tool"))
-    for place in [*(directory / "queue").glob("*.yield"), *(directory / "queue").glob("*" + _idle.SUFFIX)]:
+    for place in [*(directory / "queue").glob("*.yield"), *(directory / "queue").glob("*" + _idle.SUFFIX),
+                  *(directory / "queue").glob("*.session")]:
         if not place.with_suffix(".json").exists():  # requests and idle records left by entries gone meanwhile
             place.unlink(missing_ok=True)
 
@@ -260,7 +264,8 @@ def reprioritize(target: str, priority: str, directory: Path | None = None,
         if target.isdigit():
             chosen = [(p, e) for p, e in live if e.get("pid") == int(target)]
         else:
-            chosen = [(p, e) for p, e in live if e.get("label") == target]
+            # the label, or the --label it was given before a derived one replaced it (labels.py)
+            chosen = [(p, e) for p, e in live if target in (e.get("label"), e.get("label_given"))]
             if len(chosen) > 1:
                 waiting = [(p, e) for p, e in chosen if e.get("state") != "held"]
                 if len(waiting) != 1:
@@ -379,6 +384,8 @@ def grant(directory: Path, table: Table) -> str | None:
         meta = _config.meta_of(entry)
         if meta:
             details["meta"] = meta
+        if isinstance(entry.get("session"), dict):
+            details["session"] = entry["session"].get("name")
         _events.emit(directory, "lease.granted", _events.request(entry, paths[id(entry)]), details,
                      _events.holder(entry))
     if short:  # memory holds a request back: no yield is asked, since the slots it frees might not start it
@@ -394,8 +401,9 @@ class Lease:
 
     def __init__(self, count: int, path: Path | None = None, inherited: bool = False, yieldable: bool = False):
         self.count, self.path, self.inherited, self.yieldable = count, path, inherited, yieldable
-        self.status = None  # the command's exit status, for the history, where the holder knows it
-        self.usage = None  # what the command's process tree used (TreeUsage.result), where the holder measured it
+        self.status: int | None = None  # the command's exit status, for the history, where the holder knows it
+        # what the command's process tree used (TreeUsage.result), where the holder measured it
+        self.usage: dict[str, Any] | None = None
 
     def environment(self) -> dict[str, str]:
         if self.path is None:
@@ -423,6 +431,11 @@ class Lease:
     def release(self) -> None:
         if self.path is not None and not self.inherited:
             directory = self.path.parent.parent
+            expected = None
+            with contextlib.suppress(Exception):  # before the lock: the series may need reading (runtype.py)
+                from . import runtype as _runtype
+                expected = _runtype.expected_of(json.loads(self.path.read_text()), _runtype.cached(directory))
+            item = None
             with _state.locked(directory):
                 try:
                     entry = json.loads(self.path.read_text())
@@ -435,7 +448,8 @@ class Lease:
                 if isinstance(entry, dict):
                     entry = cast(dict[str, Any], entry)
                     ran = entry.get("state") == "held" or bool(entry.get("yields"))  # a yielded lease ran
-                    item = _state.record(directory, entry, "released" if ran else "left", self.status, self.usage)
+                    item = _state.record(directory, entry, "released" if ran else "left", self.status, self.usage,
+                                         path=self.path, expected=expected)
                     if ran:
                         _events.emit(directory, "lease.released", _events.request(entry, self.path),
                                      {"count": self.count, "exit": item.get("status"), "ran": item.get("ran"),
@@ -450,6 +464,9 @@ class Lease:
                 # Hand the slots on now: waiters look at the queue less often the longer they wait.
                 with contextlib.suppress(_config.SlotError, OSError):
                     grant(directory, _platform.processes())
+            if item is not None and item.get("run_key"):
+                from . import runtype as _runtype
+                _runtype.after_release(directory, item)  # outliers and trends, outside the queue lock
             self.path = None
 
     def __enter__(self):
@@ -493,12 +510,15 @@ def policy() -> str:
 
 def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wait: float | None = None,
             note: str = "", meta: dict[str, str] | None = None, yieldable: bool = False, *,
-            priority: str | None = None, ticket: str | int | None = None) -> Lease:
+            priority: str | None = None, ticket: str | int | None = None,
+            session: dict[str, Any] | None = None, naming: dict[str, str] | None = None) -> Lease:
     """Wait in the queue for `count` slots (at most the total); the lease is held by this process until released.
     Raises SlotTimeout, having left the queue, when `wait` seconds pass first. `note` follows the first word that
     the request waits. `meta` (key -> text) goes on the queue entry and the history line; a process that inherits
     a lease keeps that lease's metadata and adds none. A `yieldable` lease may be asked to yield for interactive
-    waiters (see Lease.yield_slots(); the README's client protocol); it never is otherwise."""
+    waiters (see Lease.yield_slots(); the README's client protocol); it never is otherwise. `session` makes the
+    lease a measurement session's (session.py): {"name", "idle", and "expect" where given}; a live request of the
+    same session name refuses it."""
     if count != "all" and (type(count) is not int or count < 1):
         raise _config.SlotError("count must be a positive integer or all")
     meta = _config.checked_meta(meta)
@@ -521,8 +541,20 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
     except OSError:
         cwd = ""
     _state.require_own(directory, "a lease")
+    git = _facts.git(cwd)  # before the queue lock: git may take a moment in a large repository
     with _state.locked(directory):
         # Admission and capacity changes share this lock; resolve all only now (and again at the grant: plan()).
+        if session is not None:
+            fresh = _platform.processes()
+            for _, other in _state.entries(directory):
+                spec = other.get("session")
+                same = isinstance(spec, dict) and cast(dict[str, Any], spec).get("name") == session["name"]
+                pid = other.get("pid")
+                holder = fresh.get(pid) if isinstance(pid, int) else None  # platform.alive(), spelled out
+                if same and holder is not None and other.get("start") in ("", holder[1]):
+                    raise _config.SlotError(f"session {session['name']} exists (pid {other.get('pid')}, "
+                                            f"{other.get('state')}): stop it first (slotfather session stop "
+                                            f"{session['name']})")
         whole = count == "all"
         count = _config.total() if whole else min(count, _config.total())
         sequence_file = directory / "sequence"
@@ -533,13 +565,21 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
         sequence_file.write_text(str(sequence))
         path = directory / "queue" / f"{sequence:010d}-{me}.json"
         entry: dict[str, Any] = {"pid": me, "start": table.get(me, (0, ""))[1], "count": count, "label": label, "cmd": command,
-                 "cwd": cwd, "since": _config.now(), "state": "waiting", "priority": selected_priority}
+                 "cwd": cwd, "since": _config.now(), "state": "waiting", "priority": selected_priority,
+                 "lease_id": uuid.uuid4().hex}  # unique across queues and restarts (fathers#101)
         if selected_ticket is not None:
             entry["ticket"] = selected_ticket
         if whole:
             entry["all"] = True  # the capacity at the grant; older clients read past fields they do not know
         if meta:
             entry["meta"] = meta  # older clients read past fields they do not know
+        for key, value in (naming or {}).items():
+            # label_given, label_derived, and project: the git repository (labels.py); older clients read past them
+            entry["project" if key == "project" else "label_" + key] = value
+        if session is not None:
+            entry["session"] = dict(session)  # older clients read past it: to them it is a lease like any other
+        if git:
+            entry["git"] = git  # the tree it checks (fathers#97), copied to the history line
         if yieldable:
             entry["yieldable"] = True
         if wait is not None:
@@ -612,19 +652,91 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
             signal.signal(signal.SIGTERM, previous_term)
 
 
+def execute(argv: list[str], environment: dict[str, str], background: bool = False, marker: Path | None = None,
+            directory: Path | None = None) -> tuple[int, dict[str, Any] | None]:
+    """Runs argv with `environment` added and waits for it, forwarding SIGTERM and SIGHUP: (its exit status, 128 +
+    the signal when one ended it; what its process tree used, where measured). With `marker`, a held lease's entry,
+    its tree is measured with the processes that carry that lease and its idleness recorded beside the entry; with
+    only `directory`, the tree alone is measured (a run inside a session, which shares its lease with others)."""
+    from . import usage as _usage
+    if background:
+        prefix = ["/usr/sbin/taskpolicy", "-b", "/usr/bin/nice", "-n", "10"] if os.access(
+            "/usr/sbin/taskpolicy", os.X_OK) else ["/usr/bin/nice", "-n", "10"]
+        argv = prefix + argv
+    try:
+        child = subprocess.Popen(argv, env={**os.environ, **environment})
+    except OSError as error:
+        print(f"slot: {error}", file=sys.stderr)
+        return 127, None
+    began = time.monotonic()
+    watch = None
+    if marker is not None:
+        text = str(marker)
+        def carrying(pids: list[int]) -> set[int]:
+            return _platform.carrying(pids, text)
+        watch = _usage.Watch(_usage.TreeUsage(child.pid, time.time() - 1, carrying), marker.parent.parent, entry=marker)
+    elif directory is not None:
+        watch = _usage.Watch(_usage.TreeUsage(child.pid, time.time() - 1), directory)
+    if watch is not None:
+        with contextlib.suppress(RuntimeError):
+            watch.start()
+    reaped: list[bool] = []
+
+    def forward(signum: int, _frame: Any) -> None:
+        # os.kill rather than child.send_signal, which polls and could reap the child before wait4 sees it;
+        # until wait4 returns the child (a zombie at worst) keeps its pid.
+        if not reaped:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(child.pid, signum)
+    # The terminal sends SIGINT to the child's process group itself; the lease outlives the child.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, forward)
+    try:
+        _, raw, rusage = os.wait4(child.pid, 0)  # the rusage holds every descendant reaped inside the tree
+        status = os.waitstatus_to_exitcode(raw)
+    except ChildProcessError:
+        status, rusage = child.wait(), None
+    reaped.append(True)
+    if watch is not None:
+        watch.usage.root_gone = True  # before any later look: the pid may be reused from now on
+    child.returncode = status
+    usage: dict[str, Any] | None = None
+    if watch is not None and watch.is_alive():
+        usage = cast("dict[str, Any] | None", watch.finish(rusage, time.monotonic() - began))
+    return (128 - status if status < 0 else status), usage
+
+
 def terminate(signum, _frame):
     raise SystemExit(128 + signum)
 
 
 def run(count: int | str, label: str, argv: list[str], wait: float | None = None, meta: dict[str, str] | None = None,
-        yieldable: bool = False, *, priority: str | None = None, ticket: str | int | None = None) -> int:
-    """Run argv under a lease of `count` slots; the command's exit status."""
-    from . import usage as _usage
+        yieldable: bool = False, *, priority: str | None = None, ticket: str | int | None = None,
+        labelled: bool = True) -> int:
+    """Run argv under a lease of `count` slots; the command's exit status. Without `labelled` (no --label), `label`
+    (the directory's name) gives way to one derived from the project, the command and the metadata (labels.py); a
+    label that says little gets the derived parts appended, with a hint."""
+    naming: dict[str, Any] = {}
+    if policy() != "bypass" and not _config.setting("LEASE"):  # a nested run takes no lease and names none
+        with contextlib.suppress(Exception):  # a name must never cost the run
+            from . import labels as _labels
+            try:
+                cwd = os.getcwd()
+            except OSError:
+                cwd = ""
+            naming = _labels.choose(label if labelled else None, cwd, argv, meta,
+                                    None if ticket is None else str(ticket))
+            label = naming["label"] or label
+            if naming.get("hint"):
+                print(f"slot: {naming['hint']}", file=sys.stderr, flush=True)
     try:
         background = policy() == "background"
         note = _config.BATCH_NOTE if priority == "batch" else _config.ALL_NOTE if count == "all" else ""
         lease = acquire(count, label, " ".join(argv), wait=wait, note=note, meta=meta,
-                        yieldable=yieldable, priority=priority, ticket=ticket)
+                        yieldable=yieldable, priority=priority, ticket=ticket,
+                        naming={k: naming[k] for k in ("given", "derived", "project")
+                                if naming.get(k) and (k != "given" or naming[k] != label)} if naming else None)
     except _config.SlotTimeout as error:
         print(f"slot: {label}: {error}", file=sys.stderr)
         return _config.TIMED_OUT
@@ -632,46 +744,13 @@ def run(count: int | str, label: str, argv: list[str], wait: float | None = None
         return 130
     except SystemExit as stop:
         return int(stop.code or 1)
+    if count != "all" and lease.path is not None and not lease.inherited:
+        with contextlib.suppress(Exception):  # a hint must never cost the run
+            from . import askuse as _askuse
+            found = _askuse.hint(lease.path.parent.parent, label, lease.count)
+            if found:
+                print(f"slot: {found}", file=sys.stderr, flush=True)
     with lease:
-        if background:
-            prefix = ["/usr/sbin/taskpolicy", "-b", "/usr/bin/nice", "-n", "10"] if os.access(
-                "/usr/sbin/taskpolicy", os.X_OK) else ["/usr/bin/nice", "-n", "10"]
-            argv = prefix + argv
-        try:
-            child = subprocess.Popen(argv, env={**os.environ, **lease.environment()})
-        except OSError as error:
-            print(f"slot: {error}", file=sys.stderr)
-            return 127
-        began = time.monotonic()
-        watch = None
-        if lease.path is not None and not lease.inherited:
-            marker = str(lease.path)
-            watch = _usage.Watch(_usage.TreeUsage(child.pid, time.time() - 1, lambda pids: _platform.carrying(pids, marker)),
-                          lease.path.parent.parent, entry=lease.path)
-            with contextlib.suppress(RuntimeError):
-                watch.start()
-        reaped = []
-
-        def forward(signum, _frame):
-            # os.kill rather than child.send_signal, which polls and could reap the child before wait4 sees it;
-            # until wait4 returns the child (a zombie at worst) keeps its pid.
-            if not reaped:
-                with contextlib.suppress(ProcessLookupError):
-                    os.kill(child.pid, signum)
-        # The terminal sends SIGINT to the child's process group itself; the lease outlives the child.
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
-        for signum in (signal.SIGTERM, signal.SIGHUP):
-            signal.signal(signum, forward)
-        try:
-            _, raw, rusage = os.wait4(child.pid, 0)  # the rusage holds every descendant reaped inside the tree
-            status = os.waitstatus_to_exitcode(raw)
-        except ChildProcessError:
-            status, rusage = child.wait(), None
-        reaped.append(True)
-        if watch is not None:
-            watch.usage.root_gone = True  # before any later look: the pid may be reused from now on
-        child.returncode = status
-        if watch is not None and watch.is_alive():
-            lease.usage = watch.finish(rusage, time.monotonic() - began)
-        lease.status = 128 - status if status < 0 else status
+        marker = lease.path if lease.path is not None and not lease.inherited else None
+        lease.status, lease.usage = execute(argv, lease.environment(), background, marker)
     return lease.status

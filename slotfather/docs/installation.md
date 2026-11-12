@@ -15,6 +15,9 @@ remain available to processes that started before an update.
 
 The installed commands run on the interpreter that ran the installer: their `#!/usr/bin/env python3` line becomes that interpreter's path, as invoked, so an agent inside a project's virtual environment does not run slotfather on the project's Python. The installer refuses an interpreter inside a virtual environment, and one older than 3.9; name another with `python3 install.py --python /usr/bin/python3`. Re-run it to switch interpreters.
 
+The installer takes the queue's lock for the swap. Clients hold it for moments at a time, so a held lock is retried
+for 15 seconds (`SLOTFATHER_INSTALL_LOCK_WAIT`) before the installer refuses, having changed nothing.
+
 ## Request-format cutover
 
 Update callers before replacing the installed runtime: priority is a top-level

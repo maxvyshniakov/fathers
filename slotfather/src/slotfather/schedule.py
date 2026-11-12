@@ -122,7 +122,8 @@ def queue_order() -> str:
 def family(label: str | None) -> str:
     """A label without its ticket or agent id: lane-636-measure and lane-640-smoke-skip are both lane,
     agent-a17b708a4e705e421 is agent, sid-kit-wt-646 is sid-kit-wt."""
-    words = (label or "").split("-")
+    label = (label or "").split(" · ")[0]  # a derived label (labels.py): its project, then the old rule
+    words = label.split("-")
     for at, word in enumerate(words):
         if at and any(c.isdigit() for c in word):
             return "-".join(words[:at])
@@ -825,5 +826,15 @@ def estimator(directory: Path) -> Estimate:
     """estimate(entry) from cached_estimates(), read only when plan() first asks (a head waits and a later
     request fits)."""
     def estimate(entry: Entry) -> float | None:
+        spec = entry.get("session")
+        expect = cast(dict[str, Any], spec).get("expect") if isinstance(spec, dict) else None
+        if isinstance(expect, (int, float)) and not isinstance(expect, bool) and expect > 0:
+            return float(expect)  # a session's own estimate (`session start --expect`) before its kind's history
+        if _config.meta_of(entry).get("phase"):  # a run type (fathers#106): its project, phase and plan
+            with contextlib.suppress(Exception):
+                from . import runtype as _runtype
+                found = _runtype.expected_of(entry, _runtype.peek(directory))  # under the lock: never rebuilt
+                if found is not None and found["p50"] is not None and not found["fallback"]:
+                    return float(found["p50"])
         return cached_estimates(directory).of(entry.get("label"), entry.get("cmd"))
     return estimate

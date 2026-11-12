@@ -18,5 +18,27 @@ While leases run, holders also append a machine sample to `machine.jsonl` at mos
 
 **Choosing capacity.** `slotfather slots N` should make the slots' use fill the cores without holding the load over them: with *c* cores used per slot held, *cores / c* slots fill the machine. Check the machine part too: much time over the cores with all slots held means fewer slots; a slot's cores often idle while requests wait means more.
 
+**Asks against use.** `stats` also lists, per label family (the label without its ticket or agent id:
+`lane-636-measure` is `lane`), the median slots asked, the median cores used and the cores those slots hold, and the
+slots that median use needs; families whose use is at most half of what they ask, in fewer slots, are printed under
+"asks far above use" (`--json`: `asks`, every family with `over_ask`). `run -n N` (N above 1, not `all`) prints a
+one-line hint when the family's last 20 measured runs (at least 5) used that little: `slot: hint: lane requests
+used a median 1.6 cores over their last 12 runs; 3 slots hold 9 cores, 1 would hold that use (-n 1)`. `--by family`
+groups the table by family, and `--by derived` by the label the project, command and lane give (`label_derived`,
+else the label), whatever `--label` said.
+
+**Another host.** A runner host's history rotates and its CI logs expire; keep it here:
+
+```sh
+ssh RUNNER 'cat ~/.local/state/slotfather/history.jsonl.1 ~/.local/state/slotfather/history.jsonl 2>/dev/null' \
+  | slotfather history import RUNNER
+slotfather stats --host RUNNER --since 30d
+```
+
+`cat` works with any slotfather on the runner, since the history is JSON lines (`slotfather history export` prints
+the same on this release). Import adds only lines it does not have, ordered by their end, and never rotates; the
+runner user's state directory replaces `~/.local/state/slotfather` for a pinned install (`--user`). `stats --host`
+takes the cores and capacity the lines recorded; machine samples and sweeps stay on the runner.
+
 Use `--by ticket` or `--by priority` to group by request fields. `--by meta.KEY`
 groups only custom caller tags; the retired built-in metadata names are refused.

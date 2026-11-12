@@ -69,8 +69,10 @@ slotfather run -n all -- ./benchmark.sh
 
 A request waits until it can start, holds its slots while the command runs, then
 returns the command’s exit status. Nested calls reuse the ancestor’s lease.
-Use `--wait 60` to give up after a minute with exit code 75.
-`--priority` is `interactive`, `normal` (the default) or `batch`; `--ticket ID`
+Use `--wait 60` to give up after a minute with exit code 75. A measurement series drains the queue once with a
+[session](docs/sessions.md): `slotfather session start --label perf`, then `slotfather run --session perf -- ...`.
+Without `--label` the request is named after its project, command and lane, such as `straylight · lane 743 ·
+check` (`SLOTFATHER_GIT_FACTS=0` leaves git out). `--priority` is `interactive`, `normal` (the default) or `batch`; `--ticket ID`
 optionally associates the request with an issue.
 
 A slot is a scheduling budget, **not a CPU or memory limit**. By default, capacity
