@@ -227,7 +227,7 @@ class ReviewGateTests(ReviewGateCase):
         output = self.lane("promote", tip, "--no-push", "--wait", "0", ok=False)
         # fathers#109: unmarked P1/P2 findings of a finished review hold the batch gate too, naming the commands.
         self.assertNotIn("batch gate green", output)
-        self.assertIn("unmarked P1/P2 review findings hold the batch gate and dev", output)
+        self.assertIn("P1/P2 review findings unmarked (or marked fixed outside the SHA) hold the batch gate and dev", output)
         self.assertIn("lane a (#404): finding #1 P1 lib/api.txt:2 baz is defined but nothing calls it", output)
         self.assertIn("lane a (#404): finding #2 P2", output)
         self.assertNotIn("lane clean", output)

@@ -3,6 +3,7 @@ states and severities, the override, and the `findings` command a publish (Repo-
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 import unittest
 
@@ -20,14 +21,14 @@ class ReviewGateTableTests(LaneCase):
         self.lane("review", "a")
         self.sha = self.tip()
 
-    def findings(self, *found: dict[str, Any], status: str = "finished") -> None:
+    def findings(self, *found: dict[str, Any], status: str = "finished", pid: int = 999999999) -> None:
         """Lane a's review, finished (or not) with these findings."""
         path = self.state / "a.review.json"
         receipt = json.loads(path.read_text())
         receipt.update(status=status, findings=[{"n": n, "title": f"finding {n}", "file": "lib/extra.txt",
                                                  "line": 1, "mark": None, **f} for n, f in enumerate(found, 1)])
         if status == "running":
-            receipt["pid"] = 999999999  # a process that is gone: the review died
+            receipt["pid"] = pid  # by default a process that is gone: the review died
         path.write_text(json.dumps(receipt))
 
     def answer(self, *extra: str) -> dict[str, Any]:
@@ -43,6 +44,7 @@ class ReviewGateTableTests(LaneCase):
             ([{"severity": "P1", "mark": {"kind": "rejected", "reason": "out of scope"}}], "finished", False, 0, 0),
             ([{"severity": "P2", "mark": {"kind": "fixed", "merge": self.sha}}], "finished", False, 0, 0),
             ([{"severity": "P2", "mark": {"kind": "fixed", "merge": outside}}], "finished", True, 1, 0),
+            ([{"severity": "P3", "mark": {"kind": "fixed", "merge": outside}}], "finished", False, 0, 1),
             ([{"severity": "P3"}, {"severity": "P2"}], "finished", True, 1, 1),
             ([{"severity": "P1"}], "running", True, 0, 0),
             ([], "exempt", False, 0, 0),
@@ -60,7 +62,7 @@ class ReviewGateTableTests(LaneCase):
     def test_a_blocking_finding_holds_the_batch_gate_with_its_mark_commands_and_the_override_is_logged(self):
         self.findings({"severity": "P1"}, {"severity": "P3"})
         output = self.lane("promote", self.sha, "--no-push", "--wait", "0", ok=False)
-        self.assertIn("unmarked P1/P2 review findings hold the batch gate and dev", output)
+        self.assertIn("P1/P2 review findings unmarked (or marked fixed outside the SHA) hold the batch gate and dev", output)
         self.assertIn("lanefather review a --mark 1 fixed:<merge> | lanefather review a --mark 1 rejected:<reason>",
                       output)
         self.assertIn("reported, does not block: lane a (#404): finding #2 P3", output)
@@ -69,6 +71,21 @@ class ReviewGateTableTests(LaneCase):
         self.assertEqual(self.git(self.repo, "rev-parse", "dev"), self.sha)
         self.assertRegex((self.state / "ledger.log").read_text(),
                          rf"override promote {self.sha}: owner accepted the risk \(lane a \(#404\): finding #1 P1")
+
+    def test_a_running_review_lets_the_batch_gate_run_and_holds_dev(self):
+        self.findings(status="running", pid=os.getpid())
+        output = self.lane("promote", self.sha, "--no-push", "--wait", "0", ok=False)
+        self.assertIn("batch gate green", output, "the gate runs while reviews finish (#570)")
+        self.assertIn("dev waits for the review of every lane landed since dev", output)
+        self.assertIn("lane a (#404): review running since", output)
+        self.assertNotEqual(self.git(self.repo, "rev-parse", "dev"), self.sha)
+
+    def test_a_state_that_knows_no_lane_of_the_range_holds_rather_than_clears(self):
+        self.env["LANEFATHER_STATE"] = str(self.tmp / "elsewhere" / "lanes")
+        answer = self.answer()
+        self.assertTrue(answer["held"])
+        self.assertEqual(answer["unknown"][0]["merge"], self.sha)
+        self.assertIn("no lane state here knows it", self.lane("findings", self.sha, ok=False))
 
     def test_p3_alone_does_not_block_unless_the_project_says_so(self):
         self.findings({"severity": "P3"})

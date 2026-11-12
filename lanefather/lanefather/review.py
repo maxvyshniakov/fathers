@@ -634,11 +634,15 @@ def gate_report(cwd: str, common: str, sha: str, since: str | None = None) -> di
     - blocking: an unmarked finding whose severity `[review] blocks` names (P1 and P2 by default), and a finding
       marked fixed by a merge that is not in the SHA;
     - reported: an unmarked finding of another severity, shown and not blocking.
-    Each finding entry names the lane, its ticket and severity, and `line` the two commands that mark it."""
+    - unknown: merges in the range when this state knows no lane landed there (another machine or state directory
+      ran them): the report cannot say, so it holds.
+    Each finding entry names the lane, its ticket, severity, file and line, and `text` the two commands that mark
+    it."""
     base = since or git(cwd, "rev-parse", "--verify", "--quiet", "refs/heads/dev^{commit}", check=False) or None
     blocks = config.current().review_blocks
     report: dict[str, Any] = {"v": 1, "sha": sha, "since": base, "blocks": list(blocks), "unfinished": [],
-                              "blocking": [], "reported": []}
+                              "blocking": [], "reported": [], "unknown": []}
+    known = 0
     for record in state.lanes():
         merge = (record.get("landed") or {}).get("merge")
         if not merge or record.get("common_dir") != common:
@@ -647,11 +651,12 @@ def gate_report(cwd: str, common: str, sha: str, since: str | None = None) -> di
             continue
         if base and git_ok(cwd, "merge-base", "--is-ancestor", merge, base):
             continue
+        known += 1
         receipt = state.read_json(state.receipt_path(record["id"], "review"))
         complete, words = review_state(record["id"])
         if receipt is None or receipt.get("status") not in ("finished", "exempt"):
             report["unfinished"].append({"lane": record["id"], "ticket": record["ticket"],
-                                         "line": f"lane {record['id']} (#{record['ticket']}): {words}"})
+                                         "text": f"lane {record['id']} (#{record['ticket']}): {words}"})
             continue
         if complete and receipt.get("status") == "exempt":
             continue
@@ -659,14 +664,19 @@ def gate_report(cwd: str, common: str, sha: str, since: str | None = None) -> di
             mark = finding.get("mark") or {}
             entry = {"lane": record["id"], "ticket": record["ticket"], "n": finding.get("n"),
                      "severity": finding.get("severity", "P2"), "title": finding.get("title", ""),
-                     "file": finding.get("file"), "line": finding_line(record, finding)}
+                     "file": finding.get("file"), "line": finding.get("line"), "text": finding_line(record, finding)}
+            held = entry["severity"] in blocks
             if not mark:
-                report["blocking" if entry["severity"] in blocks else "reported"].append(entry)
+                report["blocking" if held else "reported"].append(entry)
             elif mark.get("kind") == "fixed" and not git_ok(cwd, "merge-base", "--is-ancestor", mark["merge"], sha):
                 # A finding marked fixed is fixed in what moves only when its follow-up merge is in the SHA.
-                report["blocking"].append(dict(entry, line=(
+                report["blocking" if held else "reported"].append(dict(entry, text=(
                     f"lane {record['id']} (#{record['ticket']}): finding #{finding.get('n')} is marked fixed by "
                     f"{mark['merge'][:10]}, which is not in {sha[:10]}")))
+    if not known:
+        merges = git(cwd, "rev-list", "--merges", f"{base}..{sha}" if base else sha, check=False).split()
+        report["unknown"] = [{"merge": m, "text": f"merge {m[:10]}: no lane state here knows it; run where the lanes' "
+                                                  "state lives"} for m in merges[:20]]
     return report
 
 
@@ -674,7 +684,7 @@ def review_refusals(cwd: str, common: str, sha: str) -> list[str]:
     """What holds the move of dev: each lane whose review is unfinished, and each blocking finding with its mark
     commands (fathers#109)."""
     report = gate_report(cwd, common, sha)
-    return [e["line"] for e in report["unfinished"]] + [e["line"] for e in report["blocking"]]
+    return [e["text"] for e in report["unfinished"]] + [e["text"] for e in report["blocking"]]
 
 
 def findings(args: Any) -> int:
@@ -691,7 +701,7 @@ def findings(args: Any) -> int:
         if not since:
             raise LaneError(f"findings: --since {args.since} is not a commit here")
     report = gate_report(cwd, common_dir(cwd), sha, since)
-    held = [e["line"] for e in report["unfinished"] + report["blocking"]]
+    held = [e["text"] for e in report["unfinished"] + report["blocking"] + report["unknown"]]
     if held and args.force_reason:
         journal.ledger(f"override findings {sha}: {args.force_reason} ({'; '.join(held)})", kind="override",
                        level="warn", subject={"type": "commit", "id": sha},
@@ -700,10 +710,10 @@ def findings(args: Any) -> int:
     if args.json:
         print(json.dumps(report, sort_keys=True))
     else:
-        for entry in report["unfinished"] + report["blocking"]:
-            print(f"held: {entry['line']}")
+        for entry in report["unfinished"] + report["blocking"] + report["unknown"]:
+            print(f"held: {entry['text']}")
         for entry in report["reported"]:
-            print(f"reported ({entry['severity']}, does not block): {entry['line']}")
+            print(f"reported ({entry['severity']}, does not block): {entry['text']}")
         if not held:
             print(f"lane: no review holds {sha[:10]}")
         elif args.force_reason:

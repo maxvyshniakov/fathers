@@ -46,15 +46,18 @@ ledger.log.
 
 ```json
 {"v": 1, "sha": "<sha>", "since": "<sha or null>", "blocks": ["P1", "P2"], "held": true,
- "unfinished": [{"lane": "a", "ticket": "12", "line": "lane a (#12): review running since ..."}],
- "blocking": [{"lane": "a", "ticket": "12", "n": 1, "severity": "P1", "title": "...", "file": "src/x.ts",
-               "line": "lane a (#12): finding #1 P1 src/x.ts:3 ...: lanefather review a --mark 1 fixed:<merge> | ..."}],
- "reported": [{"severity": "P3", "...": "..."}]}
+ "unfinished": [{"lane": "a", "ticket": "12", "text": "lane a (#12): review running since ..."}],
+ "blocking": [{"lane": "a", "ticket": "12", "n": 1, "severity": "P1", "title": "...", "file": "src/x.ts", "line": 3,
+               "text": "lane a (#12): finding #1 P1 src/x.ts:3 ...: lanefather review a --mark 1 fixed:<merge> | ..."}],
+ "reported": [{"severity": "P3", "...": "..."}], "unknown": []}
 ```
 
-- `unfinished`: a review missing, running or failed. `blocking`: an unmarked finding of a severity `[review] blocks`
-  names (P1 and P2 by default), or one marked fixed by a merge that is not in the SHA. `reported`: other unmarked
-  findings, shown, never blocking. `line` is the text to print, with the two commands that mark the finding.
+- `unfinished`: a review missing, running or failed. `blocking`: a finding of a severity `[review] blocks` names (P1
+  and P2 by default) that is unmarked or marked fixed by a merge not in the SHA. `reported`: the same of other
+  severities, shown, never blocking. `text` is what to print, with the two commands that mark the finding; `line` is
+  the finding's line in its file.
+- `unknown`: merges in the range when this state directory knows no lane landed there. Run the command where the
+  lanes' state lives (the machine and `state_dir` that landed them); a CI clone without it is held, not cleared.
 - `promote` refuses the batch gate on `blocking` (a running review does not hold the gate) and the move of dev on
   both.
 

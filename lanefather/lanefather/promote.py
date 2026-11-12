@@ -569,10 +569,11 @@ def promote_sha(args: Any) -> int:
     # running does not (#570: the gate runs while reviews finish).
     report = review.gate_report(cwd, common, sha)
     for entry in report["reported"]:
-        print(f"lane: reported, does not block: {entry['line']}", flush=True)
-    blocking = [e["line"] for e in report["blocking"]]
+        print(f"lane: reported, does not block: {entry['text']}", flush=True)
+    blocking = [e["text"] for e in report["blocking"]]
     if blocking and not args.force_reason:
-        raise LaneError(f"promote refused: unmarked {'/'.join(report['blocks'])} review findings hold the batch "
+        raise LaneError(f"promote refused: {'/'.join(report['blocks'])} review findings unmarked (or marked fixed "
+                        "outside the SHA) hold the batch "
                         "gate and dev:\n- " + "\n- ".join(blocking) + f"\nThen rerun {prog} promote {sha[:10]}. "
                         "--force-reason overrides, logged")
     # Only fully gated trees are promoted. Repositories without the stamp tooling have their own pre-push gate.
