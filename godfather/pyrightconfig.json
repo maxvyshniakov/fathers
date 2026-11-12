@@ -1,0 +1,21 @@
+{
+  "include": [
+    "src",
+    "install.py",
+    "tests",
+    "tools"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "assets",
+    ".venv",
+    "tools/slotfather_reference.py",
+    "tests/parity_reference.py"
+  ],
+  "extraPaths": [
+    "src",
+    "tests"
+  ],
+  "pythonVersion": "3.9",
+  "typeCheckingMode": "strict"
+}

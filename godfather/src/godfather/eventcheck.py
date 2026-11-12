@@ -35,7 +35,7 @@ import datetime
 import json
 import re
 import sys
-from typing import Any, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 SCHEMA_VERSION = 1
 MAX_LINE_BYTES = 16 * 1024  # with its newline
@@ -58,6 +58,14 @@ _CONTROL = re.compile("[\x00-\x1f\x7f-\x9f]")
 Problems = List[str]
 
 
+def _mapping(value: Any) -> Dict[Any, Any]:
+    return cast(Dict[Any, Any], value)
+
+
+def _sequence(value: Any) -> List[Any]:
+    return cast(List[Any], value)
+
+
 def _is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
@@ -72,20 +80,20 @@ def _control(path: str, value: Any, problems: Problems) -> None:
         if _CONTROL.search(value):
             problems.append(f"{path}: contains a control character")
     elif isinstance(value, dict):
-        for key, item in value.items():
+        for key, item in _mapping(value).items():
             if isinstance(key, str) and _CONTROL.search(key):
                 problems.append(f"{path}: key {key!r} contains a control character")
             _control(f"{path}.{key}", item, problems)
     elif isinstance(value, list):
-        for index, item in enumerate(value):
+        for index, item in enumerate(_sequence(value)):
             _control(f"{path}[{index}]", item, problems)
 
 
 def _depth(value: Any) -> int:
     if isinstance(value, dict):
-        return 1 + max((_depth(item) for item in value.values()), default=0)
+        return 1 + max((_depth(item) for item in _mapping(value).values()), default=0)
     if isinstance(value, list):
-        return 1 + max((_depth(item) for item in value), default=0)
+        return 1 + max((_depth(item) for item in _sequence(value)), default=0)
     return 0
 
 
@@ -93,10 +101,10 @@ def _finite(path: str, value: Any, problems: Problems) -> None:
     if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
         problems.append(f"{path}: must be a finite number")
     elif isinstance(value, dict):
-        for key, item in value.items():
+        for key, item in _mapping(value).items():
             _finite(f"{path}.{key}", item, problems)
     elif isinstance(value, list):
-        for index, item in enumerate(value):
+        for index, item in enumerate(_sequence(value)):
             _finite(f"{path}[{index}]", item, problems)
 
 
@@ -110,10 +118,11 @@ def _check_time(value: Any, problems: Problems) -> None:
         problems.append(f"time: {value!r} is not a real date and time")
 
 
-def _check_subject(value: Any, problems: Problems) -> None:
-    if not isinstance(value, dict):
+def _check_subject(found: Any, problems: Problems) -> None:
+    if not isinstance(found, dict):
         problems.append("subject: must be an object")
         return
+    value = _mapping(found)
     for key in ("type", "id"):
         if key not in value:
             problems.append(f"subject.{key}: missing")
@@ -129,10 +138,11 @@ def _check_subject(value: Any, problems: Problems) -> None:
             problems.append(f"subject.{key}: must be a scalar (string, number, boolean or null)")
 
 
-def _check_actor(value: Any, problems: Problems) -> None:
-    if not isinstance(value, dict):
+def _check_actor(found: Any, problems: Problems) -> None:
+    if not isinstance(found, dict):
         problems.append("actor: must be an object")
         return
+    value = _mapping(found)
     if "type" not in value:
         problems.append("actor.type: missing")
     elif value["type"] not in ACTOR_TYPES:
@@ -147,10 +157,11 @@ def _check_actor(value: Any, problems: Problems) -> None:
             problems.append(f"actor.{key}: must be a scalar (string, number, boolean or null)")
 
 
-def validate(obj: Any, strict: bool = False) -> Problems:
+def validate(found: Any, strict: bool = False) -> Problems:
     """The problems with one decoded event; an empty list when it is valid."""
-    if not isinstance(obj, dict):
+    if not isinstance(found, dict):
         return ["event: must be a JSON object"]
+    obj = _mapping(found)
     problems: Problems = []
     for key in REQUIRED:
         if key not in obj:
@@ -164,7 +175,7 @@ def validate(obj: Any, strict: bool = False) -> Problems:
     if "source" in obj and (not isinstance(obj["source"], str) or not _SOURCE.match(obj["source"])):
         problems.append("source: must match [a-z][a-z0-9-]{0,31}")
     if "kind" in obj:
-        kind = obj["kind"]
+        kind: Any = obj["kind"]
         if not isinstance(kind, str) or len(kind) > 64 or not _KIND.match(kind):
             problems.append("kind: must be lowercase noun.verb, dotted, at most 64 characters")
     if "subject" in obj:
@@ -172,7 +183,7 @@ def validate(obj: Any, strict: bool = False) -> Problems:
     if "actor" in obj:
         _check_actor(obj["actor"], problems)
     if "details" in obj:
-        details = obj["details"]
+        details: Any = obj["details"]
         if not isinstance(details, dict):
             problems.append("details: must be an object")
         elif _depth(details) > MAX_DETAILS_DEPTH:
@@ -180,7 +191,7 @@ def validate(obj: Any, strict: bool = False) -> Problems:
     if "level" in obj and obj["level"] not in LEVELS:
         problems.append(f"level: must be one of {', '.join(LEVELS)}")
     if "id" in obj:
-        ident = obj["id"]
+        ident: Any = obj["id"]
         if not isinstance(ident, str) or not ident or len(ident) > 64:
             problems.append("id: must be a non-empty string of at most 64 characters")
     if strict:
@@ -192,8 +203,8 @@ def validate(obj: Any, strict: bool = False) -> Problems:
     return problems
 
 
-def _no_duplicates(pairs: list) -> dict:
-    seen: dict = {}
+def _no_duplicates(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
+    seen: Dict[str, Any] = {}
     for key, value in pairs:
         if key in seen:
             raise ValueError(f"duplicate key {key!r}")

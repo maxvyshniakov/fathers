@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""A stand-in for Slotfather's SF-1 commands, built from a Slotfather checkout, for tests and media only.
+
+    SLOTFATHER_SRC=~/slotfather/src python3 tools/slotfather_reference.py capabilities --json
+    SLOTFATHER_SRC=~/slotfather/src python3 tools/slotfather_reference.py status --json --full
+
+It imports the in-tree dashboard (slotfather.dashboard.dashboard_model()) and prints its model serialised as
+docs/contracts/slotfather.md says, so Godfather can be checked against Slotfather's own model before slotfather#26
+lands, and so the parity tests can render one model with both. Any other command goes to the real `slotfather`.
+Godfather itself never imports Slotfather; only this tool does.
+"""
+from __future__ import annotations
+
+import datetime
+import json
+import os
+import socket
+import sys
+from pathlib import Path
+from typing import Any
+
+SOURCE = os.path.expanduser(os.environ.get("SLOTFATHER_SRC") or "~/slotfather/src")
+
+
+def load() -> Any:
+    sys.path.insert(0, SOURCE)
+    import slotfather.dashboard as dashboard  # noqa: PLC0415 - from the checkout named above
+
+    return dashboard
+
+
+def stamp(value: datetime.datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.astimezone(datetime.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def plain(value: Any) -> Any:
+    """JSON values for the model: times as RFC 3339 UTC strings, tuples as arrays."""
+    if isinstance(value, datetime.datetime):
+        return stamp(value)
+    if isinstance(value, dict):
+        return {str(key): plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [plain(item) for item in value]
+    return value
+
+
+def block(dashboard: Any, model: dict[str, Any]) -> dict[str, Any]:
+    """The `dashboard` block of `status --json --full` for one in-tree model."""
+    found = plain({key: value for key, value in model.items() if key not in ("installed",)})
+    for item in found["holders"] + found["waiters"]:
+        item.pop("style", None)
+        item.pop("lane", None)
+    memory = dict(found["memory"])
+    status = dashboard.machine_memory_status(model["memory"])[1]
+    memory["low"] = None if status == "dim" else status == "bad"
+    swap = [r for r in dashboard.machine_resources(model) if r.label == "swap"]
+    memory["swap_low"] = bool(swap and swap[0].critical)
+    found["memory"] = memory
+    found["overtake_window"] = dashboard._config.overtake_window()
+    found["v"] = 1
+    return found
+
+
+def snapshot(dashboard: Any, model: dict[str, Any]) -> dict[str, Any]:
+    return {"v": 2, "host": socket.gethostname().split(".")[0].lower(),
+            "time": stamp(datetime.datetime.now(datetime.timezone.utc)),
+            "slots": model["slots"], "free": model["free"], "held": model["used"], "draining": model.get("draining", 0),
+            "dashboard": block(dashboard, model)}
+
+
+def capabilities(dashboard: Any) -> dict[str, Any]:
+    changelog = Path(SOURCE).resolve().parent / "CHANGELOG.md"
+    return {"v": 1, "tool": "slotfather", "version": dashboard._version.VERSION,
+            "dashboard": {"v": 1, "tag": "slot",
+                          "snapshot": {"argv": ["status", "--json", "--full"], "versions": [2], "poll": 1},
+                          "actions": [], "changelog": str(changelog)}}
+
+
+def main(argv: list[str]) -> int:
+    if argv == ["capabilities", "--json"]:
+        print(json.dumps(capabilities(load())))
+        return 0
+    if argv == ["status", "--json", "--full"]:
+        dashboard = load()
+        print(json.dumps(snapshot(dashboard, dashboard.dashboard_model())))
+        return 0
+    os.execvp("slotfather", ["slotfather", *argv])
+    return 127
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

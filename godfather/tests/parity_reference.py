@@ -1,0 +1,74 @@
+"""Slotfather's side of the parity test, run in a subprocess with a Slotfather checkout on sys.path.
+
+    SLOTFATHER_SRC=~/slotfather/src python3 tests/parity_reference.py OUT
+
+Loads Slotfather's own demo scene (tools/dashboard-demo.py, frozen at its moment), renders it with Slotfather's
+in-tree dashboard at every size the test compares, and writes, from that same model:
+
+    OUT/frames.json            {"WxH colour ascii": text}
+    OUT/scene.json             the moment, the chart window and the lanes the scene froze
+    OUT/slotfather/replies.json  capabilities and the `status --json --full` reply (tools/slotfather_reference.py)
+
+Godfather never imports Slotfather; only this script does.
+"""
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE = Path(os.path.expanduser(os.environ.get("SLOTFATHER_SRC") or "~/slotfather/src")).resolve()
+SIZES = ((156, 43), (176, 50), (120, 40), (100, 40), (82, 30), (60, 24), (40, 12))
+
+
+def load(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def main(out: Path) -> int:
+    os.environ["TZ"] = "Etc/GMT-2"
+    time.tzset()
+    sys.path.insert(0, str(SOURCE))
+    demo = load(SOURCE.parent / "tools" / "dashboard-demo.py", "slotfather_demo")
+    reference = load(ROOT / "tools" / "slotfather_reference.py", "slotfather_reference")
+    dashboard, model = demo.load_scene(advance=False)
+    dashboard.set_theme(dashboard._theme.from_environment(environ=dict(os.environ)))
+    frames: dict[str, str] = {}
+    for ascii_only in (False, True):
+        dashboard.use_marks(ascii_only)
+        for width, height in SIZES:
+            for colour in (False, True):
+                for selected in (0, 3):
+                    canvas = dashboard.Canvas(width, height)
+                    dashboard.dashboard_draw(canvas, model, selected, cwd="~/straylight")
+                    frames[f"{width}x{height} {int(colour)} {int(ascii_only)} {selected}"] = \
+                        canvas.render(colour, ascii_only)
+    dashboard.use_marks(False)
+    for width, height in ((156, 43), (60, 30)):
+        canvas = dashboard.Canvas(width, height)
+        dashboard.dashboard_draw(canvas, model, 0, True, cwd="~/straylight")
+        frames[f"{width}x{height} 0 0 0 help"] = canvas.render(False)
+    lanes = {json.dumps(list(item["key"])): item.get("lane") for item in model["holders"] + model["waiters"]}
+    snapshot = reference.snapshot(dashboard, model)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "frames.json").write_text(json.dumps(frames))
+    (out / "scene.json").write_text(json.dumps({
+        "moment": reference.stamp(model["updated"]), "history_window": dashboard.HISTORY_WINDOW, "lanes": lanes,
+        "styles": {json.dumps(list(item["key"])): item["style"] for item in model["holders"]}}))
+    (out / "slotfather").mkdir(exist_ok=True)
+    (out / "slotfather" / "replies.json").write_text(json.dumps({
+        "capabilities --json": {"code": 0, "json": reference.capabilities(dashboard)},
+        "status --json --full": {"code": 0, "json": snapshot}}))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(Path(sys.argv[1])))

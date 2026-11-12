@@ -1,0 +1,43 @@
+╭─ SLOTS ───────────────────────────────────────────────────── 12 cores · 6 slots (manual) ─╮ ╭─ LEASE DETAILS ────────────────────────────────────────────╮
+│                                                                                           │ │                                                            │
+│  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅╭─ CHANGELOG ──────────────────────────────────────────────────────────────╮-build-once                            │
+│  lane-644-bui…  lane-465-sta…  desktop│                                                                          │· 1 slot                               │
+╰───────────────────────────────────────│  0.1.0 · 2026-11-12  installed                                           │                                       │
+╭─ QUEUE ───────────────────────────────│                                                                          │                                       │
+│                                       │    Added                                                                 │                                       │
+┃  ▶️    lane-644-build-once            │      • godfather opens Slotfather's dashboard, moved here unchanged:     │░░ 0.9 of 2 cores                      │
+│  ▶️    lane-465-state-definitions-revi│        SLOTS, QUEUE, DETAILS, EVENTS and MACHINE in the wide and         │ · waited 19m34s · running 35m10s      │
+│  ▶️    desktop                        │        one-column layouts, focus and Tab order, scrollbars, emoji and    │ 1 processes                           │
+│                                       │        ASCII marks, the theme modes, help, Settings, mouse and the       │                                       │
+│  ⏸️    prof51                         │        kitty keyboard protocol on any layout. Only the footer's name     │ight/.claude/worktrees/agent-afa3816b  │
+│  ⏸️    lane-555-host-rename-names     │        and version differ.                                               │2                                      │
+│                                       │      • It reads Slotfather through its CLI alone: slotfather             │ight/.claude/worktrees/agent-afa3816b  │
+╰───────────────────────────────────────│        capabilities --json, status --json --full every Refresh every,    │2/verify.sh --checks desktop-tests     │
+╭─ EVENTS ──── event ─── slots ─ detail │        and settings --json, check, set and reset for Settings. It        │oing --jobs 1                          │
+│                                       │        never imports Slotfather and never reads its state files.         │ight                                   │
+│  11:59:35    released  ▫              │      • A Slotfather snapshot that fails, takes over 5 s or has an        │                                       │
+│  11:58:33    released  ▫              │        unknown version leaves the last good screen, dimmed, with stale   │d-once                                 │
+│  11:57:20    granted   ▪              │        since HH:MM in SLOTS' border and the reason in Settings'          │ht                                     │
+│  11:57:15    released  ▫              │        STATUS. Without Slotfather, or with one that has no dashboard     │                                       │
+│  11:55:44    granted   ▪▪             │        contract, one panel says what was looked for and why.             │-build-once                            │
+│  11:55:41    granted   ▪              │      • The changelog overlay has a tab per tool whose capabilities       │e/queue-347                            │
+│  11:55:31    released  ▫              │        name a changelog (← → switch them).                               │ess                                    │
+│  11:55:26    released  ▫              │      • Refresh every and Colour theme are kept in                        │ted                                    │
+│  11:55:24    granted   ▪              │        ~/.config/godfather/settings.json. GODFATHER_THEME,               │rification_plan.py, tools/verify.py,   │
+│  11:55:00    released  ▫              │        GODFATHER_TERMINAL_BG and _FG set the theme inputs; the           │main-module.sh, tools/test-build-      │
+│  11:54:54    granted   ▪              │        SLOTFATHER_ names still work where they are unset.                │odule.py, tools/app-build.py,          │
+│  11:54:06    granted   ▪              │      • GODFATHER_FIXTURES=DIR replaces every tool call with recorded     │st-app-build.py, tools/cargo-test.py,  │
+│  11:54:02    released  ▫              │        replies and records writes instead of making them; the tests,     │elopment.md, tools/test-cargo-build-   │
+│  11:53:54    granted   ▪              │        goldens and README media use it.                                  │, tools/test-heavy.py,                 │
+│  11:53:08    granted   ▪              │      • The shared event schema, version 1: docs/events.md,               │rgo_build_cache.py                     │
+│  11:52:53    released  ▫              │        schema/event-v1.schema.json and eventcheck.py, one MIT-licensed   │                                       │
+│  11:52:30    released  ▫              │        standard-library file the tools vendor into their tests           │                                       │
+│  11:52:25    granted   ▪              │        (python3 eventcheck.py [--strict] FILE...).                       │───────────────────────────────────────╯
+│  11:51:40    granted   ▪              │      • python3 install.py installs godfather into ~/.local/bin as an     │───────── unleased 0.4 · no admission ─╮
+│  11:51:40    released  ▫              │        entry point into an immutable release; a running dashboard        │                                       │
+│  11:51:24    released  ▫              │        shows ↻ once a newer one is installed.                            │░   9.3/12  ▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
+│  11:49:34    released  ▫▫             │                                                                          │░ 19.5/32G  ███▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
+│  11:48:31    granted   ▪▪             │                          ↑↓ scroll   esc close                           │░   4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
+│                                       ╰──────────────────────────────────────────────────────────────────────────╯            −75s    avg 4.4/6     now  │
+╰───────────────────────────────────────────────────────────────────────────────────────────╯ ╰────────────────────────────────────────────────────────────╯
+ Godfather 0.1.0                                    ↑↓ select   tab panel   s settings   ? help   q quit                           updated 11:59:39  ● live

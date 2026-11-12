@@ -5,36 +5,68 @@ One terminal dashboard for the tools that share a development machine:
 [Lanefather](https://github.com/maxvyshniakov/lanefather) (parallel agent lanes) and junkfather (the long-lived
 processes agents start).
 
-**Status: planned, not built.** [SPEC.md](SPEC.md) is the agreed design; the issues carry the slices.
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="assets/dashboard-light.webp">
+  <img alt="Godfather: Slotfather's dashboard, navigating running and waiting requests" src="assets/dashboard.webp">
+</picture>
 
-## What it will do
+**Status: 0.1.0.** The main screen is Slotfather's dashboard, moved here with no visible change but the footer's
+name and version. Lanes, processes, the merged event feed and row actions come in the next slices of
+[SPEC.md](SPEC.md), each as its tool supports the contract.
 
-- Keep Slotfather's dashboard as the main screen, with its layout, colours, keys and mouse unchanged: the TUI
-  framework moves here, and `slotfather dashboard` opens Godfather.
-- Show lanes and processes as summaries on that screen, linked from each lease's details, with full Lanes and
-  Processes pages on `2` and `3`.
-- Merge the tools' events into one feed with a source column and a filter.
-- Edit each tool's settings through that tool's own `settings` CLI, so the tool keeps its validation.
-- Offer a few safe row actions (reprioritize, ask to yield, reap an orphan, extend a TTL, open a lane's ticket, log
-  or worktree, park a lane), each run by the owner tool's CLI; irreversible ones ask first.
+## Install and run
 
-Godfather reads; the tools own their state. A tool that is not installed simply has no panels.
+Python 3.9 or later on macOS or Linux, standard library only.
+
+```sh
+git clone https://github.com/maxvyshniakov/godfather.git
+cd godfather
+python3 install.py          # ~/.local/bin/godfather, an entry point into an immutable release
+godfather                   # the live dashboard: ? lists the keys, q quits
+godfather --once --width 156 --height 43    # one frame as text (--color for escape sequences)
+```
+
+Re-running the installer replaces the entry point atomically; a dashboard already running keeps its release and
+shows `↻` in the footer. It is meant for workstations, not CI runners.
+
+Refresh every and Colour theme (Settings, `s`) are kept in `~/.config/godfather/settings.json`.
+`GODFATHER_THEME` (`auto`, `terminal`, `builtin`), `GODFATHER_TERMINAL_BG` and `_FG` set the theme inputs; the
+`SLOTFATHER_` names still work where the new ones are unset.
 
 ## How the tools talk to it
+
+Godfather reads; the tools own their state. It never imports a tool's code and never reads a tool's state files: it
+runs their CLIs. A tool that is not installed simply has no panels; one without the contract is named in one panel.
 
 | Contract | Command or file |
 | --- | --- |
 | Discovery | `<tool> capabilities --json` |
-| Snapshot | `<tool> status --json`, polled in the background |
+| Snapshot | `slotfather status --json --full`, polled every Refresh every |
+| Settings | `slotfather settings --json`, `settings check`, `settings set`, `settings reset` |
 | Events | `events.jsonl` in the tool's state directory, one shared versioned schema |
-| Settings | `<tool> settings --json`, `settings check`, `settings set` |
 
-The event schema and a vendorable validator for the tools' tests live in this repository.
+[docs/contracts/slotfather.md](docs/contracts/slotfather.md) is the exact shape read from Slotfather.
+The event schema is [docs/events.md](docs/events.md), with a JSON Schema and
+[`src/godfather/eventcheck.py`](src/godfather/eventcheck.py), one MIT-licensed standard-library file the tools
+vendor into their tests:
 
-## Install
+```sh
+python3 src/godfather/eventcheck.py --strict ~/.local/state/slotfather/events.jsonl
+```
 
-Not yet. It will be `python3 install.py` from a checkout, standard library only, Python 3.9 or later, like
-Slotfather. It is meant for workstations, not CI runners.
+## Develop
+
+```sh
+python3 -m unittest discover -s tests -t tests     # unit, golden, fixture and live PTY tests
+python3 tools/check.py                              # Ruff and strict Pyright against tools/type-baseline.json
+python3 tools/goldens.py                            # rewrite tests/goldens/ after a deliberate visible change
+python3 tools/dashboard-demo.py                     # the README scene, live; --screenshot / --animation: media
+```
+
+`GODFATHER_FIXTURES=DIR` replaces every tool call with recorded replies (`tests/fixtures/scene/` is the README
+scene) and records writes instead of making them. `tests/test_parity.py` renders Slotfather's own demo scene with
+Slotfather's in-tree dashboard and with Godfather from the same model and compares every row but the footer; it
+runs where a Slotfather checkout is (`SLOTFATHER_SRC`, default `~/slotfather/src`).
 
 ## Versions
 
