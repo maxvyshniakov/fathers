@@ -200,6 +200,8 @@ def installed_lines(news: _news.News) -> list[Line]:
             line.append((f"  versions only — update {name}", "warn"))
         elif row.state in INSTALLED_STATES:
             note, style = INSTALLED_STATES[row.state]
+            if row.state == "failed" and row.problem:
+                note = f"no answer ({row.problem})"
             line.append((("  " if row.version else "") + note, style))
         lines.append(line)
     return lines

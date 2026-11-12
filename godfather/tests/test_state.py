@@ -140,7 +140,7 @@ class ModeTableTests(Case):
             "right": ({"overlay"}, [], overlay("changelog", tab=1, scroll=0)),
             "l": ({"overlay"}, [], overlay("changelog", tab=1, scroll=0)),
             "\t": ({"overlay"}, [], overlay("changelog", tab=1, scroll=0)),
-            "q": quit_, "Q": quit_})
+            "q": ({"read"}, ["save-read", "quit"], nothing), "Q": ({"read"}, ["save-read", "quit"], nothing)})
         return {"main": main, "panel": panel, "help": help_, "changelog": changelog}
 
     def start(self, mode: str) -> Any:
@@ -372,6 +372,24 @@ class WhatsNewTests(Case):
                 self.assertFalse(self.tool.unread(state))
                 state, _ = self.keys(state, "v")
                 self.assertEqual([], self.keys(state, "esc")[1], "nothing new: nothing to save")
+
+    def test_quitting_from_whats_new_saves_it_read_first(self) -> None:
+        state = dataclasses.replace(self.screen(), news=self.news())
+        state, _ = self.keys(state, "v")
+        state, effects = self.keys(state, "q")
+        self.assertEqual(["save-read", "quit"], effects)
+        self.assertFalse(self.tool.unread(state))
+
+    def test_news_arriving_keeps_the_filter_on_its_tool(self) -> None:
+        from godfather import news
+        state = dataclasses.replace(self.screen(), news=self.news())
+        state, _ = self.keys(state, "v", "right", "right")
+        self.assertEqual(2, state.overlay.tab, "Junkfather")
+        fewer = news.News((), tuple(item for item in self.news().items if item.tool == "junkfather"))
+        state, _ = self.send(state, self.tool.NewsLoaded(fewer))
+        self.assertEqual(1, state.overlay.tab, "still Junkfather, now the second filter")
+        state, _ = self.send(state, self.tool.NewsLoaded(news.News((), ())))
+        self.assertEqual(0, state.overlay.tab, "gone: back to all")
 
     def test_a_click_outside_closes_and_marks_read_too(self) -> None:
         state = dataclasses.replace(self.screen(), news=self.news())

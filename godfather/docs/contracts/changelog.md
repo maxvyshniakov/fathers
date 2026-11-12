@@ -21,7 +21,8 @@ tool's files. Its own entries come from the CHANGELOG.md it ships with.
   history.
 - `v` is 1. A reply without `v` is read as 1; another `v`, a `tool` other than the one asked, or a malformed
   `entries` is no reply. An entry missing a string field is skipped.
-- It is read-only and fast: Godfather runs it when it starts and each time the overlay opens, with a 2 s timeout.
+- It is read-only and fast: Godfather runs it when it starts and each time the overlay opens, in the background,
+  with a 2 s timeout per call (a tool that times out on every fallback costs up to 6 s before its row settles).
 
 Who provides it: junkfather (fathers#105), slotfather (fathers#103), lanefather (fathers#104).
 
@@ -30,7 +31,7 @@ Who provides it: junkfather (fathers#105), slotfather (fathers#103), lanefather 
 A tool that does not answer (a non-zero exit, no JSON, a timeout) shows its version only, from the first of these
 that answers: `<tool> version --json` (`{"version": …}`), then `<tool> capabilities --json` (`version`). Its row
 in the overlay says `versions only — update <tool>`, highlighted, and it adds nothing to the timeline. A tool not
-on PATH is `not installed`. A tool that answers neither is shown with its problem.
+on PATH is `not installed`. A tool that answers none of them says `no answer` and why.
 
 Godfather's own row says `↻ restart to update` while a newer install waits for a restart (the footer's `↻`).
 
@@ -43,5 +44,6 @@ Godfather's own row says `↻ restart to update` while a newer install waits for
 ```
 
 An entry is unread while its version is newer than its tool's `read` version; with no file, or no version for a
-tool, all of that tool's entries are unread. Closing the overlay sets each tool's `read` to its newest entry. The
-file is written atomically; one that cannot be read or written leaves everything as it was.
+tool, all of that tool's entries are unread. Closing the overlay, `q` while it is open included, sets each tool's
+`read` to its newest entry. The file is written atomically; one that cannot be read or written leaves everything as
+it was.

@@ -490,10 +490,12 @@ class WhatsNewLayoutTests(unittest.TestCase):
         from godfather import news
         found = news.News((news.Installed("godfather", "0.1.0", "stale"), news.Installed("slotfather", "0.2.0", "ok"),
                            news.Installed("lanefather", None, "absent"),
-                           news.Installed("junkfather", "0.1.0", "versions")), ())
+                           news.Installed("junkfather", "0.1.0", "versions"),
+                           news.Installed("nofather", None, "failed", "nofather changelog --json exited 1")), ())
         text = ["".join(part[0] for part in parts) for parts in tool().news_lines(70, found)]
         self.assertEqual(["Godfather   0.1.0  ↻ restart to update", "Slotfather  0.2.0", "Lanefather  not installed",
-                          "Junkfather  0.1.0  versions only — update Junkfather", "", "",
+                          "Junkfather  0.1.0  versions only — update Junkfather",
+                          "Nofather    no answer (nofather changelog --json exited 1)", "", "",
                           "Nothing in the changelogs yet."], text)
 
     def test_whats_new_in_the_footer_is_the_click_target_and_the_dialog_closes(self) -> None:

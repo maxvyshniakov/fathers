@@ -20,6 +20,7 @@ def entries(text: str, since: Optional[str] = None) -> List[Dict[str, str]]:
     found: List[Dict[str, str]] = []
     release: Optional[Tuple[str, str]] = None
     section: Optional[str] = None
+    bulleted = False  # an entry started under the current section: continuation lines join it
     floor = version_key(since) if since else None
     for line in text.splitlines():
         if line.startswith("## "):
@@ -27,14 +28,15 @@ def entries(text: str, since: Optional[str] = None) -> List[Dict[str, str]]:
             release = (heading[1], heading[2]) if heading else None
             if release and floor is not None and version_key(release[0]) <= floor:
                 release = None
-            section = None
+            section, bulleted = None, False
         elif release is None:
             continue
         elif line.startswith("### "):
-            section = line[4:].strip()
+            section, bulleted = line[4:].strip(), False
         elif line.startswith("- ") and section:
             found.append({"version": release[0], "date": release[1], "section": section, "text": line[2:].strip()})
-        elif line.startswith("  ") and line.strip() and section and found and found[-1]["version"] == release[0]:
+            bulleted = True
+        elif line.startswith("  ") and line.strip() and bulleted:
             found[-1]["text"] += " " + line.strip()
     return found
 

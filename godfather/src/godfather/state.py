@@ -226,9 +226,23 @@ def unread(state: AppState) -> bool:
     return bool(_news.unread(state.news, state.read))
 
 
-def closed_news(before: AppState, state: AppState) -> Result:
-    """What's new closed, however (Esc, v, ?, a click outside): everything it showed is read, and saved."""
-    if isinstance(before.overlay, Changelog) and not isinstance(state.overlay, Changelog):
+def news_loaded(state: AppState, news: Any) -> AppState:
+    """New news: an open what's new keeps its tool filter by name (the filters are the tools with entries)."""
+    overlay = state.overlay
+    if isinstance(overlay, Changelog):
+        before = _overlays.filters(_overlays.shown_news(state.news))
+        tool = before[overlay.tab % len(before)]
+        after = _overlays.filters(_overlays.shown_news(news))
+        tab = after.index(tool) if tool in after else 0
+        if tab != overlay.tab:
+            overlay = Changelog(tab)
+    return dataclasses.replace(state, news=news, overlay=overlay)
+
+
+def closed_news(before: AppState, state: AppState, quitting: bool = False) -> Result:
+    """What's new closed, however (Esc, v, ?, a click outside, q while it is open): everything it showed is read,
+    and saved."""
+    if isinstance(before.overlay, Changelog) and (quitting or not isinstance(state.overlay, Changelog)):
         read = _news.mark_read(state.news, state.read)
         if read != state.read:
             return dataclasses.replace(state, read=read), [SAVE_READ]
@@ -400,8 +414,8 @@ def reduce(state: AppState, event: Event, now: float) -> Result:
     if isinstance(event, (Key, Mouse)):  # only these scroll: a refresh that moves EVENTS down is no flash
         old, before, panels = state, offsets(state), offsets(state, False)  # Settings' offset before it moves
         state, effects = _modes.dispatch(state, event)
-        state, marked = closed_news(old, state)
-        effects += marked
+        state, marked = closed_news(old, state, QUIT in effects)
+        effects = marked + effects  # saved before the app quits
         same = overlay_identity(state) == overlay_identity(old)  # an overlay opened or switched is not scrolled
         moved = scrolled(before if same else panels, offsets(state, same))
         if moved:
@@ -416,7 +430,7 @@ def reduce(state: AppState, event: Event, now: float) -> Result:
     elif isinstance(event, SettingsOpened):
         state = dataclasses.replace(state, overlay=SettingsOverlay(event.panel))
     elif isinstance(event, NewsLoaded):
-        state = dataclasses.replace(state, news=event.news)
+        state = news_loaded(state, event.news)
     elif isinstance(event, SettingsFailed):
         state = dataclasses.replace(state, notice=Notice(dashboard_text(event.error), now))
     elif isinstance(event, Drawn):

@@ -123,7 +123,7 @@ def own(text: Optional[str] = None, stale: Optional[bool] = None) -> tuple[Insta
     for release in parse_changelog(text):
         for section, entries in release.sections:
             for entry in entries:
-                if released(release.version):
+                if released(release.version) and release.date:  # a dated release, as `changelog --json` says
                     items.append(Item("godfather", release.version, release.date, section, entry))
                 elif release.version.lower() == "unreleased":
                     unreleased.append(Item("godfather", "", "", section, entry))

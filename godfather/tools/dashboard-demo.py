@@ -133,9 +133,15 @@ def scene_news(app: Any) -> tuple[Any, dict[str, str]]:
     read = news.mark_read(found, {})
     if os.environ.get("GODFATHER_DEMO_UNREAD"):
         read["slotfather"] = "0.1.0"
-    app.load_news = lambda _=None: found
+    def load_news(_: Any = None) -> Any:
+        return found
+
+    def save_read(_: dict[str, str]) -> None:
+        pass  # the demo never writes the real read state
+
+    app.load_news = load_news
     news.load_read = lambda: dict(read)  # type: ignore[assignment]
-    news.save_read = lambda _: None  # type: ignore[assignment]
+    news.save_read = save_read  # type: ignore[assignment]
     app.scene_news = (found, read)
     return found, read
 

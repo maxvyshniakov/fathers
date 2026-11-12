@@ -30,6 +30,7 @@ Versions and release rules: somewhere.
 
 ### Fixed
 
+  not a continuation: no entry under Fixed yet
 - A fix.
 
 ## 0.9.1 - 2026-11-20
