@@ -89,6 +89,11 @@ class RenderTests(PanelCase):
             self.assertTrue(thumb, "the list overflows at this height")
             self.assertGreaterEqual(thumb[0], first)
             self.assertLessEqual(thumb[-1], last)
+            self.assertEqual({"dim"}, {canvas.cells[row][x + width - 2][1] for row in thumb}, "muted at rest")
+            lit = self.view.Canvas(90, 20)
+            lit.glow = {"settings"}
+            dialog.draw(lit, idle())
+            self.assertEqual({"text"}, {lit.cells[row][x + width - 2][1] for row in thumb}, "the foreground scrolling")
 
     def test_idle(self) -> None:
         self.assert_snapshot("idle", self.panel(self.dialog(), idle()))

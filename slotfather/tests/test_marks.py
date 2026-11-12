@@ -348,11 +348,12 @@ class FrameTests(unittest.TestCase):
                 canvas.scrollbar(1, 18, 10, offset, 30, 100)
                 self.assertEqual(drawn, self.column(canvas, 18, 1, 10))
                 self.assertEqual({"dim"}, {canvas.cells[row][18][1] for row in range(1, 11)
-                                           if canvas.cells[row][18][0] != " "}, "unfocused: muted")
+                                           if canvas.cells[row][18][0] != " "}, "at rest: muted")
                 self.assertEqual({"│"}, {canvas.cells[row][19][0] for row in range(1, 11)}, "the frame is unbroken")
         canvas = self.tool.Canvas(20, 12)
-        canvas.scrollbar(1, 18, 10, 15, 30, 100, True)
-        self.assertEqual({"text"}, {canvas.cells[row][18][1] for row in (2, 3, 4, 5)}, "focused: the foreground")
+        canvas.glow = {"events"}
+        canvas.scrollbar(1, 18, 10, 15, 30, 100, "events")
+        self.assertEqual({"text"}, {canvas.cells[row][18][1] for row in (2, 3, 4, 5)}, "while scrolling: the foreground")
         self.assertEqual(" #### ", "".join(canvas.lines(False, ascii_only=True)[row][18] for row in range(1, 7)),
                          "ASCII: whole cells")
         for offset, drawn in ((0, "╹         "), (2970, "         ╻")):  # the shortest thumb: half a cell
@@ -434,7 +435,7 @@ class FrameTests(unittest.TestCase):
         self.tool.draw_requests(canvas, 0, 0, 7, 120, model, 0, self.now)
         selected = [y for y in range(7) if any(cell[2] for cell in canvas.cells[y])]
         self.assertEqual(["┃", "f0"], canvas.cells[selected[0]][0][:2], "left: the row's fill")
-        self.assertEqual(["┃", "text"], canvas.cells[selected[0]][118][:2], "right: the thumb, same row (QUEUE has focus)")
+        self.assertEqual(["┃", "dim"], canvas.cells[selected[0]][118][:2], "right: the thumb, same row, muted at rest")
         self.assertEqual(["┃", "f0"], canvas.cells[selected[0]][119][:2], "right: the row's fill on the frame too")
         self.assertEqual(["│", "accent"], canvas.cells[selected[0] + 1][119][:2], "the focused frame: light, in blue")
         self.assertNotIn("↓", canvas.render(False), "no row counts: the scrollbar shows it")

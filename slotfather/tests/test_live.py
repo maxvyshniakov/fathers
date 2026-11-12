@@ -323,24 +323,26 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
                 self.assertEqual(height - 1 - 5 - queue["height"] - view.MACHINE_HEIGHT, details["height"],
                                  "the details take what QUEUE and MACHINE leave")
 
-    def test_a_scrolled_thumb_glows_for_a_second_then_fades_with_one_wake(self) -> None:
+    def test_a_scrolled_thumb_flashes_and_fades_with_one_wake(self) -> None:
         view = tool()
+        self.assertAlmostEqual(0.28, view.SCROLL_GLOW)
         now = [100.0]
         glow = view.ScrollGlow(lambda: now[0])
         self.assertEqual((set(), None), (glow.bright(), glow.fade()), "nothing scrolled: no wake")
         glow.touch(view.scrolled({"events": 0, "details": 4}, {"events": 3, "details": 4}))
         self.assertEqual({"events"}, glow.bright())
+        now[0] = 100.2
+        glow.touch({"events"})  # still scrolling: the flash runs on from the last scroll
         now[0] = 100.4
-        glow.touch({"events"})  # still scrolling: the glow runs on from the last scroll
-        now[0] = 101.0
         self.assertEqual({"events"}, glow.bright())
-        self.assertAlmostEqual(0.4, cast(float, glow.fade()), places=6, msg="one wake, at the fade")
-        now[0] = 101.4
-        self.assertEqual(set(), glow.bright(), "a second after the last scroll: back to its colour")
+        self.assertAlmostEqual(0.08, cast(float, glow.fade()), places=6, msg="one wake, at the fade")
+        now[0] = 100.48
+        self.assertEqual(set(), glow.bright(), "0.28 s after the last scroll: back to muted")
         self.assertIsNone(glow.fade(), "and no more wakes")
         self.assertEqual(set(), view.scrolled({"details": 5}, {}), "an offset dropped is no scroll")
         model = {"events": [event(n) for n in range(40)]}
-        cases: list[tuple[set[str], bool, str]] = [(set(), False, "dim"), ({"events"}, False, "text"), (set(), True, "text")]
+        cases: list[tuple[set[str], bool, str]] = [(set(), False, "dim"), (set(), True, "dim"),
+                                                   ({"events"}, False, "text"), ({"events"}, True, "text")]
         for lit, focused, style in cases:
             with self.subTest(lit=lit, focused=focused):
                 canvas = view.Canvas(80, 14)
@@ -348,11 +350,18 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
                 canvas.focus = "events" if focused else "requests"
                 view.draw_events(canvas, 0, 0, 14, 80, model)
                 thumb = {canvas.cells[y][78][1] for y in range(14) if canvas.cells[y][78][0] in ("┃", "╻", "╹")}
-                self.assertEqual({style}, thumb)
+                self.assertEqual({style}, thumb, "muted at rest, focused or not; the foreground while scrolling")
         for draw, name in ((view.draw_help, "help"), (view.draw_changelog, "changelog")):
-            canvas = view.Canvas(80, 20)
-            canvas.glow = {name}
-            draw(canvas)  # an overlay's thumb is in the foreground anyway: it has the keys
+            for lit, style in ((set[str](), "dim"), ({name}, "text")):
+                with self.subTest(overlay=name, lit=lit):
+                    canvas = view.Canvas(80, 20)
+                    canvas.glow = lit
+                    draw(canvas)
+                    info = canvas.help_view
+                    column = info.x + info.width - 2
+                    thumb = {canvas.cells[y][column][1] for y in range(20)
+                             if canvas.cells[y][column][0] in ("┃", "╻", "╹")}
+                    self.assertEqual({style}, thumb, f"{name}: muted at rest, the foreground while scrolling")
 
     def test_tab_skips_panels_that_are_not_drawn(self) -> None:
         view = tool()

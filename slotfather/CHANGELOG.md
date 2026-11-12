@@ -54,7 +54,8 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   after the chart and before the rows compress.
 - Under 110 columns EVENTS and MACHINE sit side by side below the details, EVENTS on the left, in MACHINE's own
   height, with the details taking the rest; under 83, EVENTS goes.
-- A scrollbar's thumb is drawn in the text colour while its panel scrolls and for a second after.
+- A scrollbar's thumb is muted at rest everywhere, also on the focused panel and in help, the changelog and
+  Settings, and flashes in the text colour while its panel scrolls.
 - The holder palette is "Neon": eight saturated hues (hot pink, orange, acid green, spring teal, cyan, electric
   violet, magenta, green), more distinct from one another, with inks at 4.6:1 or more.
 

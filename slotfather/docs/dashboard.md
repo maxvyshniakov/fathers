@@ -63,9 +63,9 @@ its fill into the terminal's background, less where its ink would lose more than
 tenth of its contrast; a waiting row's is the neutral selection;
 without a known background the row is bold. Every panel that overflows (QUEUE,
 EVENTS, the details, Settings, help, the changelog) shows a scrollbar thumb, no
-track, in the padding cell left of its right frame: muted, or in the foreground on
-the focused panel or for a second after the panel last scrolled (by the wheel, keys or an overlay's own
-scrolling; the dashboard wakes once to draw it back), as long as the visible share and moving in half cells (`╻` and
+track, in the padding cell left of its right frame: muted at rest, focused or not, and in the
+foreground for a flash, 0.28 s after the panel last scrolled (by the wheel, keys or an overlay's own scrolling;
+the dashboard wakes once to draw it back), as long as the visible share and moving in half cells (`╻` and
 `╹` at its ends). There are no row counts. Like SLOTS and MACHINE, every scrollable
 panel (QUEUE, EVENTS, the details, help, the changelog, Settings) keeps one blank row under
 its top border and one over its bottom border; its content and the thumb run between them.

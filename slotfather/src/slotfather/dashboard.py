@@ -294,13 +294,11 @@ class Canvas:
         return next((press for y, start, end, press in reversed(self.hint_hits) if y == my and start <= mx < end),
                     None)
 
-    def scrollbar(self, y: int, x: int, height: int, offset: int, visible: int, total: int,
-                  focused: bool = False, name: str = "") -> None:
+    def scrollbar(self, y: int, x: int, height: int, offset: int, visible: int, total: int, name: str = "") -> None:
         """A scrollable panel's scrollbar in column x, the outer of the two padding cells left of its right frame, so
         a blank cell stays between it and the content (a right-aligned pid touched the inner one) and nothing moves
-        (#15): a quiet `│` track in the bar-track
-        token and a heavy `┃` thumb, muted or, on the focused panel, in the foreground, as long as the visible share
-        and at the bottom on the last page. Nothing while everything fits."""
+        (#15): a thumb as long as the visible share, at the bottom on the last page, in the muted token at rest and in
+        the foreground for a flash while panel `name` scrolls (owner). Nothing while everything fits."""
         if total <= visible or height <= 0 or visible <= 0:
             return
         halves = 2 * height  # in half cells, so the thumb moves in half-cell steps (owner)
@@ -310,7 +308,7 @@ class Canvas:
             upper, lower = start <= 2 * row < start + length, start <= 2 * row + 1 < start + length
             if upper or lower:
                 glyph = SCROLL_THUMB if upper and lower else THUMB_LOWER if lower else THUMB_UPPER
-                self.put(y + row, x, glyph, "text" if focused or name in self.glow else "dim")
+                self.put(y + row, x, glyph, "text" if name in self.glow else "dim")  # fg only while scrolling
 
     def select(self, y: int, start: int, end: int, tint: bool | str = True) -> None:
         """Marks cells start..end of row y selected: True for the neutral background, a holder style for its tint."""
@@ -838,7 +836,7 @@ def table_view(canvas: Canvas, name: str, y: int, x: int, height: int, width: in
     canvas.tables[name] = dict(x=x, y=y, width=width, height=height, top=top,
                               visible=visible, count=count, offset=offset, base=base, row_items=row_items)
     if room:  # the scrollbar shows what overflows (no row counts)
-        canvas.scrollbar(top, x + width - 2, visible, offset, visible, count, canvas.focus == name, name)
+        canvas.scrollbar(top, x + width - 2, visible, offset, visible, count, name)
         fresh = canvas.fresh_events if name == "events" and offset else 0
         if fresh:  # EVENTS scrolled down: what arrived since, in its bottom border (Home goes back to it)
             canvas.put(y + height - 1, x + 2, f" ↑ {fresh} new ", "text" if canvas.focus == name else "dim",
@@ -1776,7 +1774,7 @@ def draw_overlay(canvas: Canvas, title: str, layout: Any, name: str) -> None:
     if height < 6:
         canvas.put(y + 1, x + 2, "Enlarge terminal", "dim", inner)
         return
-    canvas.scrollbar(y + 2, x + width - 2, visible, offset, visible, len(lines), True, name)
+    canvas.scrollbar(y + 2, x + width - 2, visible, offset, visible, len(lines), name)
     for row, parts in enumerate(lines[offset:offset + visible], y + 2):
         canvas.segments(row, x + 3, parts, width - 7)
     shown = f"{round(100 * (offset + visible) / len(lines))}%" if len(lines) > visible else ""
@@ -2356,7 +2354,7 @@ def follow_events(scroll: dict[str, int], fresh: int, newest: Any, events: list[
     return fresh, ids[0] if ids else None
 
 
-SCROLL_GLOW = 1.0  # seconds a scrolled panel's thumb stays in the foreground after its last scroll (owner)
+SCROLL_GLOW = 0.28  # seconds a scrolled panel's thumb stays in the foreground after its last scroll: a flash
 
 
 class ScrollGlow:
