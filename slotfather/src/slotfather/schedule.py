@@ -107,6 +107,8 @@ def checked_order(data: Any) -> dict[str, Any]:
             least = _config.ORDER_KNOBS[key][1]
             if type(value) not in (int, float) or not math.isfinite(value) or value < least:
                 raise ValueError(f"{key} must be a number of at least {least:g}, not {value!r}")
+            if key == "warning_admits" and value not in (0, 1):
+                raise ValueError(f"warning_admits must be 1 or 0, not {value!r}")
         found[key] = value
     return found
 
@@ -670,6 +672,36 @@ def idle_asks(waiters: list[Entry], held: list[Entry], idle: list[Entry], slots:
         if started:
             found.append((lease, started[0]))
             holding = [h for h in holding if h is not lease]
+    return found
+
+
+WARNING_WAIT = "memory pressure warning: one 1-slot lease at a time"
+
+PRESSED = "pressed"  # on an entry granted while memory was not normal (memory_level()); read under warning
+
+
+def memory_gate(grants: list[Entry], held: list[Entry], used: int, memory: tuple[str, str | None],
+                settings: dict[str, Any]) -> list[tuple[Entry, str | None]]:
+    """Which of plan()'s `grants` memory lets start now beside `held` (`used` slots held in all), in their order:
+    (entry, None) starts, (entry, why) waits. Normal memory starts them all. While memory is short nothing starts
+    beside a running lease. Under warning, with `warning_admits` on, a 1-slot request starts when no running lease
+    was granted while memory was not normal (PRESSED), so one such lease runs at a time; others wait. An idle machine
+    (nothing used) always starts its first request."""
+    kind, why = memory
+    allowance = kind == "warning" and float(settings.get("warning_admits", 1)) >= 1
+    pressed = any(e.get(PRESSED) for e in held)
+    found: list[tuple[Entry, str | None]] = []
+    for entry in grants:
+        reason = None
+        if used and kind != "normal":
+            if not allowance:
+                reason = why
+            elif entry["count"] != 1 or entry.get("all") or pressed:
+                reason = WARNING_WAIT
+        if reason is None:
+            used += max(1, int(entry["count"]))
+            pressed = pressed or kind != "normal"
+        found.append((entry, reason))
     return found
 
 

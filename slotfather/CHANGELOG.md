@@ -33,6 +33,12 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Changed
 
+- A memory-pressure warning (macOS level 2, Linux PSI `some` at its limit) no longer stops every new lease: one
+  1-slot lease at a time starts beside running ones; larger requests and `-n all` wait, and critical pressure, low
+  swap or low available memory still stop. `slotfather order --warning-admits 0` (or `SLOTFATHER_WARNING_ADMITS=0`)
+  restores the stop. `status` says why memory holds a request back (`memory-wait=`, JSON `memory_wait`), `advise`
+  adds `memory_level`, and the reasons now read `memory pressure level 2 (warning)` or `... 4 (critical)` instead of
+  `(warning or critical)`.
 - The head's start is reserved and only ever moves earlier: a later request, of any class, passes a head only if
   three times its expected run ends before that reserved start, or in slots the head will not need. Short work keeps
   flowing beside a waiting `-n all` request, and the request starts once the leases it waited for end. The head's

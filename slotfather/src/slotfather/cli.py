@@ -57,10 +57,13 @@ checks between steps (SLOTFATHER_YIELD) before it runs
 that already runs under a lease (SLOTFATHER_LEASE, or a holder among its ancestors) runs without a second lease, so
 nested wrappers neither deadlock nor count twice. A lease whose holder died (its pid gone, or reused by a process
 with another start time) is reaped by the next queue operation. While memory is short (free swap under SLOTFATHER_MIN_FREE_SWAP_MB, default 512, where swap is on; on
-macOS the kernel's memory-pressure level at warning or above; on Linux MemAvailable under SLOTFATHER_MIN_AVAILABLE_MB,
-default 1024, or the queue's cgroup's memory.max less its working set under that, or PSI memory avg10, the cgroup's
-or else the machine's, at SLOTFATHER_MAX_PSI_SOME percent, default 10, or _FULL, default 5), new leases
-wait for running ones; with nothing running they start. A waiter checks its own entry every SLOTFATHER_POLL seconds (default 2) but looks over the queue, which runs
+macOS the kernel's memory-pressure level at critical; on Linux MemAvailable under SLOTFATHER_MIN_AVAILABLE_MB,
+default 1024, or the queue's cgroup's memory.max less its working set under that, or PSI memory full avg10, the
+cgroup's or else the machine's, at SLOTFATHER_MAX_PSI_FULL percent, default 5), new leases wait for running ones.
+Under a memory-pressure warning (macOS level 2; Linux PSI some avg10 at SLOTFATHER_MAX_PSI_SOME percent, default
+10) one 1-slot lease at a time starts beside them: another waits until it ends or the pressure is normal again,
+and larger requests wait (`order --warning-admits 0`: none start). With nothing running a request starts.
+A waiter checks its own entry every SLOTFATHER_POLL seconds (default 2) but looks over the queue, which runs
 ps, less often the longer nothing changes, up to SLOTFATHER_POLL_MAX (default 10); a release hands its slots on at
 once. `--wait S` gives up after S seconds with exit 75 and leaves the queue. `run` exits with the command's status
 (128 + the signal when a signal ended it).
@@ -122,7 +125,8 @@ USAGE = ("usage: slotfather                     (in a terminal: the live dashboa
          "       slotfather advise [--max N] [--exclusive] [--label L] [-- COMMAND...]\n"
          "       slotfather order [backfill|window] [--safety X] [--limit S] [--fallback S] [--overrun X]\n"
          "                        [--interactive S] [--batch S] [--yield-after S] [--idle-cpu C] [--idle-after S]\n"
-         "                        [--aging-batch S] [--aging-normal S] [--warn-wait S] | reset   (S: 90, 90s, 30m, 1.5h)\n"
+         "                        [--aging-batch S] [--aging-normal S] [--warn-wait S] [--warning-admits 1|0]\n"
+         "                        | reset   (S: 90, 90s, 30m, 1.5h)\n"
          "       slotfather stats [--since WHEN] [--label GLOB] [--by both|label|kind] [--top N] [--json]\n"
          "       slotfather slots [N|memory GIB|lower GIB|reset]\n"
          "       slotfather settings --json | settings check KEY VALUE --json | settings set KEY VALUE [--revision R] --json\n"
@@ -290,13 +294,15 @@ def order_line(found: dict) -> str:
             f"{found['fallback']:g} s, overrun {found['overrun']:g}; interactive {found['interactive']:g} s ahead, "
             f"batch {found['batch']:g} s behind, yield after {found['yield_after']:g} s; idle below "
             f"{found['idle_cpu']:g} cores for {found['idle_after']:g} s; batch ages {ages('aging_batch')}, normal "
-            f"{ages('aging_normal')}; warn after {found['warn_wait']:g} s waiting "
+            f"{ages('aging_normal')}; warn after {found['warn_wait']:g} s waiting; memory pressure warning admits "
+            f"{'one 1-slot lease at a time' if found['warning_admits'] >= 1 else 'nothing'} "
             f"({'saved' if found['saved'] else 'default'})")
 
 
 def order_command(argv: list[str]) -> int:
     """`slotfather order [backfill|window] [--safety X] [--limit S] [--fallback S] [--overrun X] [--idle-cpu C]
-    [--idle-after S] [--aging-batch S] [--aging-normal S] [--warn-wait S] | reset`; S is seconds or 30m, 1.5h."""
+    [--idle-after S] [--aging-batch S] [--aging-normal S] [--warn-wait S] [--warning-admits 1|0] | reset`; S is
+    seconds or 30m, 1.5h."""
     from . import schedule as _schedule
     from . import state as _state
     directory = _config.state_dir()
@@ -319,7 +325,7 @@ def order_command(argv: list[str]) -> int:
         else:
             raise _config.SlotError(f"order takes backfill or window, --safety, --limit, --fallback, --overrun, "
                             f"--interactive, --batch, --yield-after, --idle-cpu, --idle-after, --aging-batch, "
-                            f"--aging-normal, --warn-wait, or reset; not {word!r}")
+                            f"--aging-normal, --warn-wait, --warning-admits, or reset; not {word!r}")
     if reset and changes:
         raise _config.SlotError("order reset takes nothing else")
     if changes or reset:
@@ -329,7 +335,8 @@ def order_command(argv: list[str]) -> int:
              and saved[k] != _config.ORDER_DEFAULTS[k]]  # every slotfather knows `limit`
     if (changes or reset) and moved:
         print(f"slotfather: note: order.json now holds {', '.join(moved)}, which an older slotfather may not know "
-              f"(3e3a621 and older know no classes, those before ageing no aging or warn settings): their looks fall "
+              f"(3e3a621 and older know no classes, those before ageing no aging or warn settings, those before "
+              f"the memory warning allowance no warning_admits): their looks fall "
               f"back to the window order until they are updated", file=sys.stderr)
     print(order_line(_schedule.order_settings(directory)))
     return 0

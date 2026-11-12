@@ -403,7 +403,8 @@ class CommandTests(SlotCase):
     def test_order_takes_the_ageing_and_warn_settings_as_durations(self):
         saved = self.tool("order", "--aging-batch", "10m", "--aging-normal", "1h", "--warn-wait", "45m")
         self.assertEqual(0, saved.returncode, saved.stderr)
-        self.assertIn("batch ages after 600 s, normal after 3600 s; warn after 2700 s waiting (saved)", saved.stdout)
+        self.assertIn("batch ages after 600 s, normal after 3600 s; warn after 2700 s waiting; memory pressure warning admits one "
+                      "1-slot lease at a time (saved)", saved.stdout)
         self.assertEqual({"aging_batch": 600.0, "warn_wait": 2700.0},
                          {k: v for k, v in json.loads((self.state / "order.json").read_text()).items()
                           if k in ("aging_batch", "aging_normal", "warn_wait")},

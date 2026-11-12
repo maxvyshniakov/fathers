@@ -89,7 +89,23 @@ class LinuxGuardTests(unittest.TestCase):
         self.assertEqual("memory pressure: PSI full avg10 4.1% (limit 4%)",
                          self.short("stalled", SLOTFATHER_MAX_PSI_SOME="30", SLOTFATHER_MAX_PSI_FULL="4"))
         self.assertIsNone(self.short("stalled", SLOTFATHER_MAX_PSI_SOME="0"), "0 turns a limit off")
-        self.assertIn("some avg10 40%", self.short("thrashing"))
+        self.assertIn("full avg10 12%", self.short("thrashing"), "full at its limit decides, before some")
+
+    def level(self, case: str, **values: str) -> tuple[str, str | None]:
+        environment: dict[str, str] = {k: v for k, v in os.environ.items() if not k.startswith("SLOTFATHER_")}
+        environment.update(SLOTFATHER_PROC=str(PROC / case), **values)
+        with mock.patch.dict(os.environ, environment, clear=True):
+            return sf_platform.memory_level()
+
+    def test_psi_some_is_a_warning_and_full_or_little_memory_stops(self):
+        self.assertEqual(("warning", "memory pressure: PSI some avg10 23.5% (limit 10%)"), self.level("stalled"))
+        self.assertEqual(("short", "memory pressure: PSI full avg10 12% (limit 5%)"), self.level("thrashing"))
+        self.assertEqual(("short", "memory pressure: PSI full avg10 4.1% (limit 4%)"),
+                         self.level("stalled", SLOTFATHER_MAX_PSI_FULL="4"))
+        self.assertEqual(("normal", None), self.level("stalled", SLOTFATHER_MAX_PSI_SOME="30"))
+        self.assertEqual(("short", "available memory 700 MB is under 1024 MB"), self.level("tight"))
+        self.assertEqual(("short", "free swap 100 MB is under 512 MB"), self.level("zram"))
+        self.assertEqual(("normal", None), self.level("calm"))
 
     def test_swap_counts_only_where_it_is_on(self):
         self.assertEqual("free swap 100 MB is under 512 MB", self.short("zram"))
@@ -169,7 +185,7 @@ class CgroupTests(unittest.TestCase):
     def test_the_guard_reads_the_slices_headroom_and_pressure(self):
         cases = {"calm": None, "cached": None,
                  "full": f"memory left under {SLICE}'s limit, 612 MB, is under 1024 MB",
-                 "stalled": "memory pressure: PSI some avg10 31.2% (limit 10%)"}
+                 "stalled": "memory pressure: PSI full avg10 6.4% (limit 5%)"}
         for case, reason in cases.items():
             with self.subTest(case=case), mock.patch.dict(os.environ, self.environment(case), clear=True):
                 self.assertEqual(reason, sf_platform.memory_short())
@@ -320,11 +336,19 @@ class LinuxGuardProcessTests(SlotCase):
         guarded = self.request("guarded", 1)
         self.wait_for(lambda: "waiting: 1 slot(s) guarded" in self.status(), "the request to wait")
         self.assertIn("available memory 700 MB is under 1024 MB", self.output_line(guarded))
+        self.use("thrashing")
+        self.wait_for(lambda: "PSI full avg10 12%" in self.output_line(guarded, timeout=5), "the stall reason")
+        # PSI some alone is a warning: one 1-slot lease at a time starts beside the running ones.
         self.use("stalled")
-        self.wait_for(lambda: "PSI some avg10 23.5%" in self.output_line(guarded, timeout=5), "the stall reason")
-        self.use("calm")
         self.started("guarded")
-        for label, process in (("holder", holder), ("guarded", guarded)):
+        second = self.request("second", 1)
+        self.wait_for(lambda: 'memory-wait="memory pressure warning: one 1-slot lease at a time"' in self.status(),
+                      "the second request to wait for the first under warning")
+        self.release("guarded")
+        self.finish(guarded)
+        self.started("second")
+        self.use("calm")
+        for label, process in (("holder", holder), ("second", second)):
             self.release(label)
             self.finish(process)
 

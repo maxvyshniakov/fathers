@@ -526,7 +526,8 @@ class OrderTests(SlotCase):
 
     def test_the_order_is_saved_for_every_client_and_reset(self):
         classes = ("interactive 1800 s ahead, batch 1800 s behind, yield after 120 s; idle below 0.1 cores for 300 s; "
-                   "batch ages after 1800 s, normal after 3600 s; warn after 1800 s waiting")
+                   "batch ages after 1800 s, normal after 3600 s; warn after 1800 s waiting; memory pressure warning "
+                   "admits one 1-slot lease at a time")
         self.assertEqual(f"backfill: safety 3, limit 0 s, fallback 3600 s, overrun 0.5; {classes} (default)",
                          self.tool("order").stdout.strip())
         self.assertEqual(f"window: safety 3, limit 0 s, fallback 3600 s, overrun 0.5; {classes} (saved)",
@@ -535,7 +536,8 @@ class OrderTests(SlotCase):
                          self.tool("order", "backfill", "--safety", "4", "--limit", "1800").stdout.strip())
         self.assertEqual({"order": "backfill", "safety": 4.0, "limit": 1800.0, "fallback": 3600.0, "overrun": 0.5},
                          json.loads((self.state / "order.json").read_text()))
-        for bad in (("--safety", "0.5"), ("--limit", "-1"), ("--overrun", "x"), ("fifo",), ("--limit",)):
+        for bad in (("--safety", "0.5"), ("--limit", "-1"), ("--overrun", "x"), ("fifo",), ("--limit",),
+                    ("--warning-admits", "2"), ("--warning-admits", "0.5")):
             with self.subTest(bad=bad):
                 refused = self.tool("order", *bad)
                 self.assertEqual(2, refused.returncode, refused.stdout)

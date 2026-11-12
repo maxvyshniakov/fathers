@@ -93,7 +93,8 @@ def expected(directory: Path, entries: list[dict[str, Any]], slots: int, other: 
              moment: float | None = None) -> dict[int, dict[str, Any]]:
     """What the queue expects of each waiter in `entries` (live queue entries) at `moment`: id(entry) ->
     {"priority" (the class it is served in), "aged", "est_start" (epoch seconds, None where the forecast does not
-    reach it), "head", "reserved" (the head's promised start), "waited", "long_wait"}. Read only: the forecast
+    reach it or memory holds it back), "head", "reserved" (the head's promised start), "waited", "long_wait",
+    "memory_wait" (why memory holds back a request the order would start now, else None)}. Read only: the forecast
     works on copies (schedule.forecast())."""
     moment = time.time() if moment is None else moment
     settings = _schedule.order_settings(directory)
@@ -108,6 +109,11 @@ def expected(directory: Path, entries: list[dict[str, Any]], slots: int, other: 
         if settings["order"] == "backfill" else {}
     found = _schedule.plan(waiters, held, slots, moment, estimate=estimate, other=other, reserve_head=True,
                            settings=settings)
+    # The order would start these now; memory may hold them back (grant()'s gate), with no start a forecast can tell.
+    memory = _platform.memory_level() if found.grants else ("normal", None)
+    used = sum(_schedule.holds(e, slots) for e in held) + other
+    shared = _schedule.order_settings(directory, environment=False)  # the queue's rule, not this reader's
+    held_back = {id(e): why for e, why in _schedule.memory_gate(found.grants, held, used, memory, shared) if why}
     warn = float(settings.get("warn_wait") or 0)
     result: dict[int, dict[str, Any]] = {}
     for copy in waiters:
@@ -118,7 +124,8 @@ def expected(directory: Path, entries: list[dict[str, Any]], slots: int, other: 
             "priority": _schedule.effective_priority(copy, settings, moment) if settings["order"] == "backfill"
             else _config.priority_of(copy),
             "aged": settings["order"] == "backfill" and _schedule.aged(copy, settings, moment),
-            "est_start": starts.get(id(copy)), "head": is_head,
+            "est_start": None if id(copy) in held_back else starts.get(id(copy)), "head": is_head,
+            "memory_wait": held_back.get(id(copy)),
             "reserved": found.reserved if is_head else None,
             "waited": waited, "long_wait": bool(warn and waited is not None and waited >= warn)}
     return result
@@ -156,7 +163,7 @@ def status_lines(directory: Path | None = None) -> list[str]:
 def waiter_tags(entry: dict[str, Any], expected: dict[str, Any] | None) -> str:
     """`status`' words for a waiter: its class when not normal (`priority=batch`, and `aged-from=batch` when ageing
     moved it up), `head` with its promised start, `est-start=` (UTC; `?` where the forecast does not reach it),
-    and `long-wait=` once it has waited the warn time; for a lease granted after ageing, `aged-from=`."""
+    `memory-wait="..."` while memory holds it back, and `long-wait=` once it has waited the warn time; for a lease granted after ageing, `aged-from=`."""
     if entry.get("state") == "held":
         served = entry.get("aged")
         return f" priority={served} aged-from={_config.priority_of(entry)}" if served in _config.PRIORITIES else ""
@@ -171,6 +178,8 @@ def waiter_tags(entry: dict[str, Any], expected: dict[str, Any] | None) -> str:
     if expected["head"]:
         tags += " head" + (f" reserved={iso(expected['reserved'])}" if expected["reserved"] is not None else "")
     tags += f" est-start={iso(expected['est_start']) or '?'}"
+    if expected.get("memory_wait"):
+        tags += f' memory-wait="{expected["memory_wait"]}"'
     if expected["long_wait"]:
         tags += f" long-wait={_config.duration(expected['waited'])}"
     return tags
@@ -211,8 +220,9 @@ def long_wait_report(directory: Path, path: Path) -> tuple[str, dict[str, Any]] 
     up = {"batch": "normal", "normal": "interactive"}.get(expect["priority"])
     hint = f"; reprioritize with: slotfather reprioritize {mine.get('pid')} {up}" if up else ""
     served = expect["priority"] + (f", aged from {_config.priority_of(mine)}" if expect["aged"] else "")
+    memory = f"; {expect['memory_wait']}" if expect.get("memory_wait") else ""
     line = (f"{mine.get('label')} (pid {mine.get('pid')}, {served}) waiting {_config.duration(expect['waited'] or 0)} "
-            f"behind {' and '.join(behind) or 'nothing'}: est. start {when}{hint}")
+            f"behind {' and '.join(behind) or 'nothing'}: est. start {when}{memory}{hint}")
     return line, {"waited": round(expect["waited"] or 0), "est_start": iso(start),
                   "behind": {"earlier": ahead, "running": running}, "priority": expect["priority"],
                   "aged": bool(expect["aged"])}
@@ -312,7 +322,7 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
                     est_start=iso(found["est_start"]) if found else None, head=bool(found and found["head"]),
                     reserved=iso(found["reserved"]) if found else None,
                     waited=None if not found or found["waited"] is None else round(found["waited"]),
-                    long_wait=bool(found and found["long_wait"]))
+                    long_wait=bool(found and found["long_wait"]), memory_wait=found["memory_wait"] if found else None)
     legacy = []
     for path, entry, count in earlier:
         legacy.append({"id": path.stem, "lease": str(path), "state": "held", "count": count,
@@ -387,8 +397,10 @@ def advise(maximum: int | None = None, exclusive: bool = False, cores_now: int |
     found = size(maximum or slots, cores_now or _config.cores(), slots, averages or _platform.loads(), min(held, slots), waiting,
                  exclusive)
     found["run_estimate"] = estimate({"label": label, "cmd": command}) if command else None
-    # How the capacity was found (#653), and why new leases would wait for memory now (None: they would not); the
-    # job count does not shrink for it: a caller that starts memory-heavy workers should.
+    # How the capacity was found (#653), and why memory holds new leases back now, at warning or worse (None: it
+    # does not), with the level ("normal", "warning": one 1-slot lease at a time, "short"); the job count does not
+    # shrink for it: a caller that starts memory-heavy workers should.
+    memory_kind, memory_why = _platform.memory_level()
     found.update(capacity_mode=basis["mode"], gib_per_slot=basis["gib_per_slot"], memory_gib=basis["memory_gib"],
-                 memory_short=_platform.memory_short())
+                 memory_short=memory_why, memory_level=memory_kind)
     return found

@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import time
+from typing import Any, cast
 
 from . import config as _config
 
@@ -102,30 +103,37 @@ def alive(entry: dict, table: dict) -> bool:
 
 
 def memory_short() -> str | None:
-    """Why new leases should wait for memory, or None. macOS: the kernel's memory-pressure level, with a
-    free-swap fallback when pressure is unavailable (allocated swap can grow while pressure is normal);
-    Linux: free swap, MemAvailable and PSI (linux_short())."""
+    """Why new leases should wait for memory, or None: memory_level()'s reason, at warning or above."""
+    return memory_level()[1]
+
+
+def memory_level() -> tuple[str, str | None]:
+    """How tight memory is for new leases: ("normal", None), ("warning", why) or ("short", why). macOS: the kernel's
+    memory-pressure level (2 warning, 4 critical, which is short), with a free-swap fallback when pressure is
+    unavailable (allocated swap can grow while pressure is normal); Linux: linux_level(). Free swap under its floor
+    is short."""
     seam = _config.setting("MEMORY_FILE")  # test seam: "<free swap MB> <pressure level>"
     if seam:
         try:
             free, level = (float(v) for v in Path(seam).read_text().split()[:2])
         except (OSError, ValueError):
-            return None
+            return "normal", None
     elif linux():
-        return linux_short(linux_memory())
+        return linux_level(cast(dict[str, Any], linux_memory()))
     else:
         free, level = swap_free_mb(), pressure_level()
-    if not seam and sys.platform == "darwin" and level is not None:
-        if level > _config.MAX_PRESSURE_LEVEL:
-            return f"memory pressure level {level:.0f} (warning or critical)"
-        if level == 1:  # vm.swapusage is the current allocation, not macOS's expandable swap limit.
-            return None
+    pressed = None
+    if level is not None and level >= _config.CRITICAL_PRESSURE_LEVEL:
+        return "short", f"memory pressure level {level:.0f} (critical)"
+    if level is not None and level > _config.MAX_PRESSURE_LEVEL:
+        pressed = f"memory pressure level {level:.0f} (warning)"
+    if not seam and sys.platform == "darwin" and level is not None and level >= 1:
+        # vm.swapusage is the current allocation, not macOS's expandable swap limit.
+        return ("warning", pressed) if pressed else ("normal", None)
     floor = _config.number_setting("MIN_FREE_SWAP_MB", _config.MIN_FREE_SWAP_MB)
     if free is not None and free < floor:
-        return f"free swap {free:.0f} MB is under {floor:.0f} MB"
-    if level is not None and level > _config.MAX_PRESSURE_LEVEL:
-        return f"memory pressure level {level:.0f} (warning or critical)"
-    return None
+        return "short", f"free swap {free:.0f} MB is under {floor:.0f} MB"
+    return ("warning", pressed) if pressed else ("normal", None)
 
 
 def linux() -> bool:
@@ -267,22 +275,32 @@ def linux_memory(info: dict[str, int] | None = None, pressure: dict | None = Non
 
 
 def linux_short(facts: dict) -> str | None:
-    """Why new leases should wait, from linux_memory(): free swap under its floor (where swap is on), MemAvailable
-    under SLOTFATHER_MIN_AVAILABLE_MB, or PSI avg10 at SLOTFATHER_MAX_PSI_SOME / _FULL percent or above."""
+    """Why new leases should wait, from linux_memory(), at warning or above (linux_level())."""
+    return linux_level(cast(dict[str, Any], facts))[1]
+
+
+def linux_level(facts: dict[str, Any]) -> tuple[str, str | None]:
+    """memory_level() from linux_memory(): short for free swap under its floor (where swap is on), MemAvailable (or
+    the cgroup's headroom) under SLOTFATHER_MIN_AVAILABLE_MB, or PSI full avg10 at SLOTFATHER_MAX_PSI_FULL percent
+    or above; warning for PSI some avg10 at SLOTFATHER_MAX_PSI_SOME or above."""
     floor = _config.number_setting("MIN_FREE_SWAP_MB", _config.MIN_FREE_SWAP_MB)
     if facts["swap_total"] and facts["swap_free"] is not None and facts["swap_free"] < floor:
-        return f"free swap {facts['swap_free']:.0f} MB is under {floor:.0f} MB"
+        return "short", f"free swap {facts['swap_free']:.0f} MB is under {floor:.0f} MB"
     least = _config.number_setting("MIN_AVAILABLE_MB", _config.MIN_AVAILABLE_MB)
     if facts["available"] is not None and facts["available"] < least:
-        return f"available memory {facts['available']:.0f} MB is under {least:.0f} MB"
+        return "short", f"available memory {facts['available']:.0f} MB is under {least:.0f} MB"
     if facts.get("cgroup_available") is not None and facts["cgroup_available"] < least:
-        return (f"memory left under {facts['cgroup']}'s limit, {facts['cgroup_available']:.0f} MB, is under "
-                f"{least:.0f} MB")
-    for kind, name, default in (("some", "MAX_PSI_SOME", _config.MAX_PSI_SOME), ("full", "MAX_PSI_FULL", _config.MAX_PSI_FULL)):
+        return "short", (f"memory left under {facts['cgroup']}'s limit, {facts['cgroup_available']:.0f} MB, is under "
+                         f"{least:.0f} MB")
+    found: tuple[str, str | None] = ("normal", None)
+    for kind, name, default, level in (("full", "MAX_PSI_FULL", _config.MAX_PSI_FULL, "short"),
+                                       ("some", "MAX_PSI_SOME", _config.MAX_PSI_SOME, "warning")):
         value, limit = facts["psi_" + kind], _config.number_setting(name, default)
         if value is not None and limit > 0 and value >= limit:
-            return f"memory pressure: PSI {kind} avg10 {value:g}% (limit {limit:g}%)"
-    return None
+            if level == "short":
+                return level, f"memory pressure: PSI {kind} avg10 {value:g}% (limit {limit:g}%)"
+            found = (level, f"memory pressure: PSI {kind} avg10 {value:g}% (limit {limit:g}%)")
+    return found
 
 
 def sysctl(name: str) -> str | None:

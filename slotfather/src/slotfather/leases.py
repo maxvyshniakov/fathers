@@ -223,6 +223,7 @@ def yield_lease(path: Path, out=sys.stderr) -> bool:
         entry.update(state="waiting", yields=int(entry.get("yields") or 0) + 1, yielded_at=round(time.time(), 3),
                      first_granted=entry.get("granted"), rank=behind)
         entry.pop("reserved", None)  # a reservation an older client granted it with is no promise now
+        entry.pop(_schedule.PRESSED, None)  # back in the queue it is no lease of a warning; its next grant decides
         _state.write(path, entry)
         _state.marker(path).unlink(missing_ok=True)
         _state.log(directory, f"yielded {entry['count']} ({path.name}) to {asker.get('label')}")
@@ -324,7 +325,7 @@ def held_again(path: Path) -> None:
 
 
 def grant(directory: Path, table: Table) -> str | None:
-    """Grant the waiters plan() starts, in their order, while memory allows; then ask yieldable holders to yield for
+    """Grant the waiters plan() starts, in their order, that memory lets start (schedule.memory_gate()); then ask yieldable holders to yield for
     interactive waiters that still wait (yield_asks()). Returns why the first that does not start still waits."""
     live = reap(directory, table)
     held = [e for _, e in live if e["state"] == "held"]
@@ -341,21 +342,27 @@ def grant(directory: Path, table: Table) -> str | None:
     # Every client keeps it by the shared settings, whatever its environment (shared_plan()).
     keeper = _schedule.shared_plan(found, waiters, held, slots, moment, estimate, other, settings,
                                    _schedule.order_settings(directory, environment=False))
-    for entry in _schedule.reservations(waiters, keeper):
-        if not any(entry is g for g in found.grants):  # a grant is written below
-            _state.write(paths[id(entry)], entry)
     used = sum(_schedule.holds(e, slots) for e in held) + other
+    memory = _platform.memory_level() if found.grants else ("normal", None)
+    gated = _schedule.memory_gate(found.grants, held, used, memory, settings)
+    starting = [entry for entry, why in gated if not why]
+    for entry in _schedule.reservations(waiters, keeper):
+        if not any(entry is g for g in starting):  # a grant is written below; one memory holds back keeps its own
+            _state.write(paths[id(entry)], entry)
     short = None
-    for entry in found.grants:
-        if used:
-            short = short or _platform.memory_short()
-            if short:
-                return short
+    for entry, why in gated:
+        if why:
+            short = short or why
+            continue
         served = _schedule.effective_priority(entry, settings, moment)
         back = _state.epoch(entry.get("yielded_at"))  # a yielded lease waited from when it went back
         waited_from = back if back is not None else _config.seconds(entry.get("since"))
         entry.update(state="held", granted=_config.now())
         began = _config.seconds(entry["granted"]) or time.time()  # resume() puts a yielded lease's first grant back
+        if memory[0] == "normal":
+            entry.pop(_schedule.PRESSED, None)
+        else:
+            entry[_schedule.PRESSED] = True  # under warning, the one lease at a time until it releases
         if served != _config.priority_of(entry):
             entry["aged"] = served  # the class ageing moved it to by its grant; status and the history show it
         resume(entry, time.time())
@@ -374,6 +381,8 @@ def grant(directory: Path, table: Table) -> str | None:
             details["meta"] = meta
         _events.emit(directory, "lease.granted", _events.request(entry, paths[id(entry)]), details,
                      _events.holder(entry))
+    if short:  # memory holds a request back: no yield is asked, since the slots it frees might not start it
+        return short
     rest = [e for e in waiters if not any(e is g for g in found.grants)]
     with contextlib.suppress(OSError, _config.SlotError):
         ask(directory, live, held + found.grants, rest, estimate, other, _schedule.order_settings(directory, environment=False))

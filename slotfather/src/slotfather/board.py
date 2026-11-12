@@ -278,10 +278,18 @@ def held_history(events: list[dict[str, Any]], held_now: int, now_moment: dateti
 
 
 def dashboard_admission(waiters: list[dict[str, Any]], held: list[dict[str, Any]], slots: int, other: int,
-                        memory_block: str | None, estimate: _schedule.Estimate | None, settings: dict[str, Any]) -> int:
-    """Largest generic request grant() would admit, including earlier grants consuming the memory exemption."""
+                        memory_block: str | None, estimate: _schedule.Estimate | None, settings: dict[str, Any],
+                        memory_kind: str = "short") -> int:
+    """Largest generic request grant() would admit, including earlier grants consuming the memory exemption; under a
+    memory-pressure warning (`memory_kind`) at most one slot, none beside a lease granted under pressure."""
     used = sum(_schedule.holds(entry, slots) for entry in held) + other
     free = max(0, slots - used)
+    if free and memory_block and used and memory_kind == "warning" and \
+            float(settings.get("warning_admits", 1)) >= 1:  # schedule.memory_gate()
+        if any(entry.get(_schedule.PRESSED) for entry in held):
+            return 0
+        return min(1, _schedule.room(waiters, free, held, estimate, other, settings=settings, slots=slots)
+                   if waiters else free)
     if not free or memory_block and used:
         return 0
     if not waiters:
@@ -361,14 +369,16 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
                 start = datetime.datetime.fromtimestamp(found.start, datetime.timezone.utc)
             if found.head is not None and found.reserved is not None:
                 reserved = datetime.datetime.fromtimestamp(found.reserved, datetime.timezone.utc)
-    memory_block, machine, averages = _platform.memory_short(), _config.cores(), _platform.loads()
+    (memory_kind, memory_block), machine, averages = _platform.memory_level(), _config.cores(), _platform.loads()
+    if memory_kind == "warning" and float(settings.get("warning_admits", 1)) >= 1:
+        memory_block = _schedule.WARNING_WAIT
     events = queue_events(directory)
     describe_events(events, directory, live)
     moment = datetime.datetime.now(datetime.timezone.utc)
     free = max(0, slots - used)
     admission = dashboard_admission(live_waiters, [e for e in live if e["state"] == "held"], slots,
                                     sum(count for _, _, count in legacy), memory_block,
-                                    _schedule.estimator(directory) if live_waiters else None, settings)
+                                    _schedule.estimator(directory) if live_waiters else None, settings, memory_kind)
     own_held = sum(h["count"] for h in holders if h["kind"] == "held")
     return {"directory": str(directory), "slots": slots, "saved": saved, "basis": look.basis, "cores": machine,
             "averages": averages, "draining": _query.draining(used, slots),

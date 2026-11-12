@@ -41,6 +41,9 @@ MIN_FREE_SWAP_MB = 512
 MAX_PRESSURE_LEVEL = 1  # kern.memorystatus_vm_pressure_level: 1 normal, 2 warning, 4 critical
 
 
+CRITICAL_PRESSURE_LEVEL = 4  # at or above: no new lease beside running ones; between: memory_level() warning
+
+
 MIN_AVAILABLE_MB = 1024
 
 
@@ -67,7 +70,7 @@ QUEUE_ORDERS = ("backfill", "window")  # `slotfather order`; the first is the de
 
 ORDER_DEFAULTS = {"order": "backfill", "safety": 3.0, "limit": 0.0, "fallback": 3600.0, "overrun": 0.5,
                   "interactive": 1800.0, "batch": 1800.0, "yield_after": 120.0, "idle_cpu": 0.1, "idle_after": 300.0,
-                  "aging_batch": 1800.0, "aging_normal": 3600.0, "warn_wait": 1800.0}
+                  "aging_batch": 1800.0, "aging_normal": 3600.0, "warn_wait": 1800.0, "warning_admits": 1.0}
 
 
 ORDER_KNOBS = {"safety": ("BACKFILL_SAFETY", 1.0, "up"), "limit": ("BACKFILL_LIMIT", 0.0, "limit"),
@@ -83,7 +86,10 @@ ORDER_KNOBS = {"safety": ("BACKFILL_SAFETY", 1.0, "up"), "limit": ("BACKFILL_LIM
                "aging_batch": ("AGING_BATCH", 0.0, "delay"), "aging_normal": ("AGING_NORMAL", 0.0, "delay"),
                # How long a waiter waits before its client says so (stderr, queue.log) and status flags it; 0: never.
                # It decides nothing for other clients, so a client's environment sets it either way.
-               "warn_wait": ("WARN_WAIT", 0.0, "own")}
+               "warn_wait": ("WARN_WAIT", 0.0, "own"),
+               # Under memory-pressure warning, 1: one 1-slot lease at a time starts beside running ones; 0: none (the
+               # rule before it). A client's environment can only turn it off.
+               "warning_admits": ("WARNING_ADMITS", 0.0, "down")}
 
 
 DURATION_KNOBS = ("limit", "fallback", "interactive", "batch", "yield_after", "idle_after", "aging_batch",

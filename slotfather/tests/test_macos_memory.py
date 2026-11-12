@@ -32,12 +32,29 @@ class MacosMemoryGuardTests(unittest.TestCase):
         self.assertIsNone(self.short("1"))
         self.assertIsNone(self.short("1", free=0))
 
+    def level(self, level: str | None, free: float = 460.81) -> tuple[str, str | None]:
+        environment = {k: v for k, v in os.environ.items() if not k.startswith("SLOTFATHER_")}
+
+        def sysctl(name: str) -> str | None:
+            return {
+                "vm.swapusage": f"total = 3072.00M  used = 2611.19M  free = {free}M  (encrypted)",
+                "kern.memorystatus_vm_pressure_level": level,
+            }.get(name)
+
+        with mock.patch.dict(os.environ, environment, clear=True), \
+                mock.patch.object(sys, "platform", "darwin"), \
+                mock.patch.object(platform, "sysctl", side_effect=sysctl):
+            return platform.memory_level()
+
     def test_warning_and_critical_still_block_even_with_free_swap(self):
-        for level in ("2", "4"):
+        for level, kind, word in (("2", "warning", "warning"), ("4", "short", "critical")):
             for free in (0, 460.81, 8000):
                 with self.subTest(level=level, free=free):
-                    self.assertEqual(f"memory pressure level {level} (warning or critical)",
-                                     self.short(level, free))
+                    reason = f"memory pressure level {level} ({word})"
+                    self.assertEqual(reason, self.short(level, free))
+                    self.assertEqual((kind, reason), self.level(level, free),
+                                     "allocated swap neither stops nor eases a known pressure level")
+        self.assertEqual(("normal", None), self.level("1", free=0))
 
     def test_unknown_pressure_keeps_the_conservative_swap_fallback(self):
         for level in (None, "unavailable", "0"):
@@ -52,6 +69,14 @@ class MacosMemoryGuardTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"SLOTFATHER_MEMORY_FILE": str(memory)}), \
                     mock.patch.object(sys, "platform", "darwin"):
                 self.assertEqual("free swap 461 MB is under 512 MB", platform.memory_short())
+                memory.write_text("460.81 2\n")
+                self.assertEqual(("short", "free swap 461 MB is under 512 MB"), platform.memory_level(),
+                                 "a swap floor under warning stops")
+                for text, found in (("8000 2", ("warning", "memory pressure level 2 (warning)")),
+                                    ("8000 4", ("short", "memory pressure level 4 (critical)")),
+                                    ("8000 1", ("normal", None)), ("garbage", ("normal", None))):
+                    memory.write_text(text + "\n")
+                    self.assertEqual(found, platform.memory_level(), text)
 
 
 if __name__ == "__main__":
