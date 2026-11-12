@@ -13,31 +13,31 @@
 │  ⏸️    lane-555-host-rename-names   │   environment  SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB                       │                                     │
 │                                     │ ──────────────────────────────────────────────────────────────────────────   │ht/.claude/worktrees/agent-afa3816b  │
 ╰─────────────────────────────────────┃ ▶ Capacity                  ‹ Fixed ›                                        ┃verify.sh --checks desktop-tests     │
-╭─ EVENTS ──── event ─── slots ─ detai│   Slots                     6                                                │ng --jobs 1                          │
+╭─ EVENTS ──── slots ─ label ─────────│   Slots                     6                                                │ng --jobs 1                          │
 │                                     │   Queue order               Backfill                                         │ht                                   │
-│  11:59:35    released  ▫            │   Backfill margin           3×                                               │                                     │
-│  11:58:33    released  ▫            │   Unknown job runtime       3600 s                                           │once                                 │
-│  11:57:20    granted   ▪            │   Overrun estimate          0.5×                                             │                                     │
-│  11:57:15    released  ▫            │   Overtaking stops after    never                                            │                                     │
-│  11:55:44    granted   ▪▪           │   Interactive head start    1800 s                                           │uild-once                            │
-│  11:55:41    granted   ▪            │   Batch held back           1800 s                                           │queue-347                            │
-│  11:55:31    released  ▫            │   Batch promoted after      1800 s                                           │s                                    │
-│  11:55:26    released  ▫            │   Normal promoted after     3600 s                                           │d                                    │
-│  11:55:24    granted   ▪            │   Warn after waiting        1800 s                                           │fication_plan.py, tools/verify.py,   │
-│  11:55:00    released  ▫            │   Idle when below           0.1 cores                                        │in-module.sh, tools/test-build-      │
-│  11:54:54    granted   ▪            │   Idle for                  300 s                                            │ule.py, tools/app-build.py,          │
-│  11:54:06    granted   ▪            │   Ask to yield after        120 s                                            │-app-build.py, tools/cargo-test.py,  │
-│  11:54:02    released  ▫            │   Refresh every             1 s                                              │opment.md, tools/test-cargo-build-   │
-│  11:53:54    granted   ▪            │   Colour theme              Auto                                             │tools/test-heavy.py,                 │
-│  11:53:08    granted   ▪            │                                                                              │o_build_cache.py                     │
-│  11:52:53    released  ▫            │ ──────────────────────────────────────────────────────────────────────────── │                                     │
-│  11:52:30    released  ▫            │ Shared by every client. Automatic: the lower of the CPU and memory budgets.  │                                     │
-│  11:52:25    granted   ▪            │                                                                              │─────────────────────────────────────╯
-│  11:51:40    granted   ▪            │                                                                              │─────── unleased 0.4 · no admission ─╮
-│  11:51:40    released  ▫            │           ↑↓ select   ←→ change   enter edit   d reset   esc close           │                                     │
-│  11:51:24    released  ▫            ╰──────────────────────────────────────────────────────────────────────────────╯  9.3/12  ▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
-│  11:49:34    released  ▫▫                              data-grid                   21191  │ │  🆗 mem  ■■■■■■■░░░░░ 19.5/32G  ███▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
-│  11:48:31    granted   ▪▪                              data-grid                   21191  │ │  🆗 swap ■■■■■■■■■░░░   4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
+│  11:59:35    ▫       agent-ae72d94be│   Backfill margin           3×                                               │                                     │
+│  11:58:33    ▫       agent-a1c75285b│   Unknown job runtime       3600 s                                           │once                                 │
+│  11:57:20    ▪       agent-a1c75285b│   Overrun estimate          0.5×                                             │                                     │
+│  11:57:15    ▫       agent-a1c75285b│   Overtaking stops after    never                                            │                                     │
+│  11:55:44    ▪▪      desktop        │   Interactive head start    1800 s                                           │uild-once                            │
+│  11:55:41    ▪       agent-a1c75285b│   Batch held back           1800 s                                           │queue-347                            │
+│  11:55:31    ▫       desktop        │   Batch promoted after      1800 s                                           │s                                    │
+│  11:55:26    ▫       agent-a1c75285b│   Normal promoted after     3600 s                                           │d                                    │
+│  11:55:24    ▪       desktop        │   Warn after waiting        1800 s                                           │fication_plan.py, tools/verify.py,   │
+│  11:55:00    ▫       desktop        │   Idle when below           0.1 cores                                        │in-module.sh, tools/test-build-      │
+│  11:54:54    ▪       desktop        │   Idle for                  300 s                                            │ule.py, tools/app-build.py,          │
+│  11:54:06    ▪       agent-a1c75285b│   Ask to yield after        120 s                                            │-app-build.py, tools/cargo-test.py,  │
+│  11:54:02    ▫       agent-a1c75285b│   Refresh every             1 s                                              │opment.md, tools/test-cargo-build-   │
+│  11:53:54    ▪       agent-ae72d94be│   Colour theme              Auto                                             │tools/test-heavy.py,                 │
+│  11:53:08    ▪       agent-a1c75285b│                                                                              │o_build_cache.py                     │
+│  11:52:53    ▫       agent-a1c75285b│ ──────────────────────────────────────────────────────────────────────────── │                                     │
+│  11:52:30    ▫       desktop        │ Shared by every client. Automatic: the lower of the CPU and memory budgets.  │                                     │
+│  11:52:25    ▪       desktop        │                                                                              │─────────────────────────────────────╯
+│  11:51:40    ▪       agent-a1c75285b│                                                                              │─────── unleased 0.4 · no admission ─╮
+│  11:51:40    ▫       post-merge-456-│           ↑↓ select   ←→ change   enter edit   d reset   esc close           │                                     │
+│  11:51:24    ▫       agent-a1c75285b╰──────────────────────────────────────────────────────────────────────────────╯  9.3/12  ▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
+│  11:49:34    ▫▫      data-grid                                                            │ │  🆗 mem  ■■■■■■■░░░░░ 19.5/32G  ███▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
+│  11:48:31    ▪▪      data-grid                                                            │ │  🆗 swap ■■■■■■■■■░░░   4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                                                                                           │ │                                 −75s    avg 4.4/6     now  │
 ╰───────────────────────────────────────────────────────────────────────────────────────────╯ ╰────────────────────────────────────────────────────────────╯
  Godfather 0.1.0                                    ↑↓ select   tab panel   s settings   ? help   q quit                           updated 11:59:39  ● live

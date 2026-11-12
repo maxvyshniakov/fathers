@@ -258,10 +258,59 @@ def slot_cells(item: dict[str, Any], size: int) -> list[tuple[str, str]]:
     return cell_run(int(item["count"]), size, fill(style), whole=bool(item.get("all")), text=style)
 
 
-def event_cells(event: dict[str, Any], size: int, style: str) -> list[tuple[str, str]]:
-    """An EVENTS row's slots in its event colour: filled for slots taken (granted), hollow for slots handed back
-    (released, a held lease reaped) or never held (a waiter that left or was reaped)."""
+def event_cells(event: dict[str, Any], size: int, style: str = "text") -> list[tuple[str, str]]:
+    """An EVENTS row's slots, in the text colour (owner, 2026-11-12): filled for slots taken (granted), hollow for
+    slots handed back (released, a held lease reaped) or never held (a waiter that left or was reaped). The cells
+    carry what happened; the event's name is not a column."""
     return cell_run(int(event["count"]), size, style, hollow=event["verb"] != "granted")
+
+
+SPAN = re.compile(r"(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?")
+
+
+def span_seconds(text: str) -> float | None:
+    """A span as span() writes it (45s, 3m25s, 1h05m, 2d03h) back in seconds; None for anything else."""
+    found = SPAN.fullmatch(text.strip())
+    if not text.strip() or found is None or not any(found.groups()):
+        return None
+    days, hours, mins, secs = (int(part or 0) for part in found.groups())
+    return float(((days * 24 + hours) * 60 + mins) * 60 + secs)
+
+
+def event_result(event: dict[str, Any]) -> tuple[str, str]:
+    """EVENTS' result column (owner, 2026-11-12), short, from what Slotfather says of the event (its `detail`):
+    `wait 32s` or `no wait` for a grant; `ok 3m25s` (muted) for a lease that ended well, `exit 1 · 26s` (red) for
+    one that did not; `gave up 5m` for a waiter that left; `owner died · 12m` for a reap, red where it held slots,
+    yellow where it only waited. (text, style)."""
+    verb, detail = str(event.get("verb")), str(event.get("detail") or "")
+    if verb == "granted":
+        waited = re.fullmatch(r"waited (\S+)", detail)
+        if waited:
+            return f"wait {waited[1]}", "text"
+        return (detail, "dim") if detail else ("", "dim")
+    if verb == "released":
+        ended = re.fullmatch(r"exit (-?\d+)(?:, ran (\S+))?", detail)
+        if ended is None:
+            ran = re.fullmatch(r"ran (\S+)", detail)
+            return (f"ended {ran[1]}" if ran else detail, "dim")
+        status, ran = int(ended[1]), ended[2]
+        if status == 0:
+            return ("ok " + ran if ran else "ok"), "dim"
+        return f"exit {status}" + (f" · {ran}" if ran else ""), "bad"
+    if verb == "left":
+        after = re.fullmatch(r"gave up after (\S+)", detail)
+        seconds = span_seconds(after[1]) if after else None
+        return ("gave up" + (f" {minutes(seconds)}" if seconds is not None else "")), "dim"
+    if verb == "reaped":
+        ran = re.search(r"ran (\S+)", detail)
+        seconds = span_seconds(ran[1]) if ran else None
+        return ("owner died" + (f" · {minutes(seconds)}" if seconds is not None else ""),
+                "bad" if event.get("state") == "held" or int(event.get("delta") or 0) < 0 else "warn")
+    if verb == "waiting":  # a long wait, said by the waiter: `12m, est. 10:30`
+        waited = re.match(r"(\S+?),", detail)
+        seconds = span_seconds(waited[1]) if waited else None
+        return (f"waiting {minutes(seconds)}" if seconds is not None else detail), "warn"
+    return detail, "dim"  # reprioritized: `batch → interactive`
 
 
 QUEUE_LABEL_MAX = 40  # the most cells a label asks for when the table is wide enough to share out its width
@@ -892,25 +941,29 @@ def machine_legend(summary: dict[str, Any], slots: int, chart_width: int) -> lis
             + [(" " * (gap - before), "text"), (right, "dim")])
 
 
+RESULT_MIN = 6  # the result column's least width ("result"); it grows to its longest value
+
+
 def draw_events(canvas: Canvas, y: int, x: int, height: int, width: int, model: dict) -> None:
+    """EVENTS (owner, 2026-11-12): time · slots · label · result. The slot cells say what happened (filled: taken,
+    hollow: handed back), the label takes every cell the other columns leave, and the result, right-aligned, says
+    how it went. The pid is in an event's details from slice 3, where its rows become selectable."""
     events = cast(list[dict[str, Any]], model["events"])[::-1]
     cells = max([5] + [text_width(cells_text(min(SLOT_CELLS, int(event["count"])))) for event in events])
+    results = [event_result(event) for event in events]
+    result = max([RESULT_MIN] + [text_width(text) for text, _ in results])
     placed = cast(list[tuple[str, str, int, int, bool]], columns(width - 6, [
-        ("time", "time", 10, False, 0), ("event", "event", 8, False, 1), ("slots", "slots", cells, False, 2),
-        ("detail", "detail", 22, False, 3), ("label", "label", 0, False, 0), ("pid", "pid", 6, True, 4)]))
+        ("time", "time", 10, False, 0), ("slots", "slots", cells, False, 1), ("label", "label", 0, False, 0),
+        ("result", "result", result, True, 2)]))
     size = next((column[3] for column in placed if column[0] == "slots"), cells)
     table_header(canvas, y, x, height, width, "EVENTS", placed, name="events")
-    styles = {"granted": "ok", "released": "accent", "left": "dim", "reaped": "bad", "priority": "accent",
-              "waiting": "warn"}
     offset, visible = table_view(canvas, "events", y, x, height, width, y + 2, height - 4, len(events))
     if not events:
         canvas.put(y + 2, x + 3, "No grants, releases or reaps logged yet", "dim", width - 6)
-    for row, event in enumerate(events[offset:offset + visible], y + 2):
-        style = styles[event["verb"]]
+    for row, (event, outcome) in enumerate(list(zip(events, results))[offset:offset + visible], y + 2):
         draw_row(canvas, row, x + 3, placed, {
-            "time": (clock(event["when"]), "dim"), "event": (event["verb"], style),
-            "label": str(event["label"] or "?"), "slots": event_cells(event, size, style),
-            "detail": (str(event.get("detail") or ""), "dim"), "pid": str(event["pid"])})
+            "time": (clock(event["when"]), "dim"), "label": str(event["label"] or "?"),
+            "slots": event_cells(event, size), "result": outcome})
 
 
 # The help (#15): sections of term → description rows and short notes. A row is (term, description); a note is
@@ -967,10 +1020,12 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
         ("", "Estimates, not promises."),
     ]),
     ("EVENTS", [
-        ("granted ▪", "got slots"),
-        ("released ▫", "gave them back"),
-        ("left", "stopped waiting"),
-        ("reaped", "owner exited; entry removed"),
+        ("▪", "slots taken: granted"),
+        ("▫", "slots handed back: released, reaped, or a waiter that left"),
+        ("wait · no wait", "how long it waited for them"),
+        ("ok · exit N", "how a lease ended, and how long it ran"),
+        ("gave up", "a waiter stopped waiting, after so long"),
+        ("owner died", "its process exited; Slotfather reaped the entry"),
     ]),
     ("MACHINE", [
         ("load", "the 1-minute load average / cores (not CPU %)"),

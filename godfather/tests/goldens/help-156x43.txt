@@ -13,31 +13,31 @@
 │  ⏸️    lane-555-host-rename-names     │    ?           help                                                     ┃│2                                      │
 │                                       │    v           changelog (or click the version)                         ┃│ight/.claude/worktrees/agent-afa3816b  │
 ╰───────────────────────────────────────│    esc         close an overlay                                         ┃│2/verify.sh --checks desktop-tests     │
-╭─ EVENTS ──── event ─── slots ─ detail │    q           quit                                                     ┃│oing --jobs 1                          │
-│                                       │    shift+drag  select text                                              ┃│ight                                   │
-│  11:59:35    released  ▫              │    Hotkeys work on any keyboard layout.                                  │                                       │
-│  11:58:33    released  ▫              │                                                                          │d-once                                 │
-│  11:57:20    granted   ▪              │                                                                          │ht                                     │
-│  11:57:15    released  ▫              │  STATES                                                                  │                                       │
-│  11:55:44    granted   ▪▪             │                                                                          │-build-once                            │
-│  11:55:41    granted   ▪              │    ▶️  running                                                           │e/queue-347                            │
-│  11:55:31    released  ▫              │    ⏸️  waiting                                                           │ess                                    │
-│  11:55:26    released  ▫              │    ↩️  yielded, back in the queue                                        │ted                                    │
-│  11:55:24    granted   ▪              │    ❓  asked to yield its slots                                          │rification_plan.py, tools/verify.py,   │
-│  11:55:00    released  ▫              │    💤  idle: under 0.1 core for 5 min                                    │main-module.sh, tools/test-build-      │
-│  11:54:54    granted   ▪              │    🔥  above 1.5× its CPU share                                          │odule.py, tools/app-build.py,          │
-│  11:54:06    granted   ▪              │    👨‍🦳  lease of an older client                                          │st-app-build.py, tools/cargo-test.py,  │
-│  11:54:02    released  ▫              │                                                                          │elopment.md, tools/test-cargo-build-   │
-│  11:53:54    granted   ▪              │                                                                          │, tools/test-heavy.py,                 │
-│  11:53:08    granted   ▪              │  PRIORITY                                                                │rgo_build_cache.py                     │
-│  11:52:53    released  ▫              │                                                                          │                                       │
-│  11:52:30    released  ▫              │    ⚡  interactive: someone is waiting on it                             │                                       │
-│  11:52:25    granted   ▪              │    🐢  batch: unattended work, after the rest                            │───────────────────────────────────────╯
-│  11:51:40    granted   ▪              │    Normal has no mark.                                                   │───────── unleased 0.4 · no admission ─╮
-│  11:51:40    released  ▫              │                                                                          │                                       │
-│  11:51:24    released  ▫              │                                                                          │░   9.3/12  ▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
-│  11:49:34    released  ▫▫             │  SLOTS                                                                   │░ 19.5/32G  ███▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
-│  11:48:31    granted   ▪▪             │                                                                          │░   4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
-│                                       │                      ↑↓ scroll   esc close   q quit                  39% │            −75s    avg 4.4/6     now  │
+╭─ EVENTS ──── slots ─ label ───────────│    q           quit                                                     ┃│oing --jobs 1                          │
+│                                       │    shift+drag  select text                                              ╹│ight                                   │
+│  11:59:35    ▫       agent-ae72d94beb6│    Hotkeys work on any keyboard layout.                                  │                                       │
+│  11:58:33    ▫       agent-a1c75285bdf│                                                                          │d-once                                 │
+│  11:57:20    ▪       agent-a1c75285bdf│                                                                          │ht                                     │
+│  11:57:15    ▫       agent-a1c75285bdf│  STATES                                                                  │                                       │
+│  11:55:44    ▪▪      desktop          │                                                                          │-build-once                            │
+│  11:55:41    ▪       agent-a1c75285bdf│    ▶️  running                                                           │e/queue-347                            │
+│  11:55:31    ▫       desktop          │    ⏸️  waiting                                                           │ess                                    │
+│  11:55:26    ▫       agent-a1c75285bdf│    ↩️  yielded, back in the queue                                        │ted                                    │
+│  11:55:24    ▪       desktop          │    ❓  asked to yield its slots                                          │rification_plan.py, tools/verify.py,   │
+│  11:55:00    ▫       desktop          │    💤  idle: under 0.1 core for 5 min                                    │main-module.sh, tools/test-build-      │
+│  11:54:54    ▪       desktop          │    🔥  above 1.5× its CPU share                                          │odule.py, tools/app-build.py,          │
+│  11:54:06    ▪       agent-a1c75285bdf│    👨‍🦳  lease of an older client                                          │st-app-build.py, tools/cargo-test.py,  │
+│  11:54:02    ▫       agent-a1c75285bdf│                                                                          │elopment.md, tools/test-cargo-build-   │
+│  11:53:54    ▪       agent-ae72d94beb6│                                                                          │, tools/test-heavy.py,                 │
+│  11:53:08    ▪       agent-a1c75285bdf│  PRIORITY                                                                │rgo_build_cache.py                     │
+│  11:52:53    ▫       agent-a1c75285bdf│                                                                          │                                       │
+│  11:52:30    ▫       desktop          │    ⚡  interactive: someone is waiting on it                             │                                       │
+│  11:52:25    ▪       desktop          │    🐢  batch: unattended work, after the rest                            │───────────────────────────────────────╯
+│  11:51:40    ▪       agent-a1c75285bdf│    Normal has no mark.                                                   │───────── unleased 0.4 · no admission ─╮
+│  11:51:40    ▫       post-merge-456-re│                                                                          │                                       │
+│  11:51:24    ▫       agent-a1c75285bdf│                                                                          │░   9.3/12  ▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
+│  11:49:34    ▫▫      data-grid        │  SLOTS                                                                   │░ 19.5/32G  ███▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
+│  11:48:31    ▪▪      data-grid        │                                                                          │░   4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
+│                                       │                      ↑↓ scroll   esc close   q quit                  38% │            −75s    avg 4.4/6     now  │
 ╰───────────────────────────────────────╰──────────────────────────────────────────────────────────────────────────╯───────────────────────────────────────╯
  Godfather 0.1.0                                    ↑↓ select   tab panel   s settings   ? help   q quit                           updated 11:59:39  ● live

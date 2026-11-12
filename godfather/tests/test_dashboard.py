@@ -277,56 +277,89 @@ class EventDetailTests(unittest.TestCase):
                 dict(when=at("02:06:30"), verb="granted", count=1, label="live", pid=104, delta=1,
                      detail="waited 1m00s")]
 
-    def test_slots_are_cells_filled_when_taken_and_hollow_when_handed_back(self) -> None:
+    def draw(self, width: int, events: list[dict[str, Any]] | None = None) -> tuple[Any, list[str]]:
         tool = load_dashboard()
-        events = self.events()
-        events[1]["count"] = 20  # verify's grant: wider than the column
-        canvas = tool.Canvas(120, 12)
-        tool.draw_events(canvas, 0, 0, 12, 120, {"events": events})
-        lines = canvas.render(False).splitlines()
-        column = lines[0].index("slots")
-        expected = {("granted", "build"): ("▪", "ok"), ("released", "build"): ("▫", "accent"),
-                    ("left", "gate"): ("▫", "dim"), ("reaped", "verify"): ("▫▫", "bad"),
-                    ("granted", "verify"): ("▪▪▪▪ +16", "ok")}
-        for (verb, label), (cells, style) in expected.items():
-            row = next(n for n, line in enumerate(lines) if f" {verb} " in line and f" {label} " in line + " ")
-            self.assertEqual(cells, lines[row][column:].split("  ")[0], (verb, label))
-            self.assertEqual(style, canvas.cells[row][column][1], (verb, label))
-        for line in canvas.lines(False, ascii_only=True):
-            self.assertTrue(line.isascii(), line)
-        self.assertIn("o", canvas.lines(False, ascii_only=True)[next(
-            n for n, line in enumerate(lines) if " released " in line)][column:column + 2])
-
-    def test_the_columns_are_time_event_slots_detail_label_pid(self) -> None:
-        events = self.events()
-        tool = load_dashboard()
-        when = events[-1]["when"].astimezone().date()
+        found = self.events() if events is None else events
+        when = found[-1]["when"].astimezone().date()
         patched = mock.patch.object(tool, "today", lambda: when)  # the log's day: times read as times on any day
         patched.start()
         self.addCleanup(patched.stop)
-        canvas = tool.Canvas(120, 12)
-        tool.draw_events(canvas, 0, 0, 12, 120, {"events": events})
-        lines = canvas.render(False).splitlines()
-        places = [lines[0].index(title) for title in ("EVENTS", "event", "slots", "detail", "label", "pid")]
-        self.assertEqual(sorted(places), places)
-        row = next(line for line in lines if " gate " in line)
-        self.assertRegex(row, r"\d\d:\d\d:\d\d +left +▫ +gave up after 15m00s +gate +103")
-        narrow = tool.Canvas(48, 12)
-        tool.draw_events(narrow, 0, 0, 12, 48, {"events": self.events()})
-        header = narrow.render(False).splitlines()[0]
-        self.assertEqual(["event", "slots"], [t for t in ("event", "slots", "detail", "pid") if t in header],
-                         "pid and detail drop first, the event and the cells stay")
+        canvas = tool.Canvas(width, 12)
+        tool.draw_events(canvas, 0, 0, 12, width, {"events": found})
+        return canvas, canvas.render(False).splitlines()
 
-    def test_the_detail_column_shows_it_dim(self) -> None:
+    def test_the_columns_are_time_slots_label_result(self) -> None:
+        for width in (156, 120, 92, 64):  # wide, the one-column layout's EVENTS beside MACHINE, narrow
+            with self.subTest(width=width):
+                _, lines = self.draw(width)
+                header = lines[0]
+                places = [header.index(title) for title in ("EVENTS", "slots", "label", "result")]
+                self.assertEqual(sorted(places), places)
+                for gone in (" event ", " detail ", " pid "):
+                    self.assertNotIn(gone, header, "no event, detail or pid column")
+                row = next(line for line in lines if " gate " in line)
+                self.assertRegex(row, r"^│  \d\d:\d\d:\d\d +▫ +gate +gave up 15m  │$")
+                self.assertNotIn("103", row, "no pid")
+                self.assertEqual(header.index("result") + len("result"), row.index("15m") + 3, "right-aligned")
+
+    def test_a_very_narrow_panel_drops_the_result_and_keeps_the_cells(self) -> None:
+        _, lines = self.draw(44)
+        self.assertEqual(["slots", "label"], [t for t in ("slots", "label", "result") if t in lines[0]])
+        self.assertRegex(next(line for line in lines if " gate " in line), r"▫ +gate")
+
+    def test_the_label_takes_the_width_the_event_and_pid_columns_left(self) -> None:
+        long = dict(self.events()[0], label="lane-710-speech-paste-phase-review-fixes-and-the-follow-up-checks")
+        _, lines = self.draw(92, [long])
+        label = lines[0].index("label")
+        self.assertEqual(label, lines[2].index("lane-710"))
+        shown = lines[2][label:].split("  ")[0]
+        self.assertGreaterEqual(len(shown), 92 - 6 - 10 - 5 - len("wait 3m00s") - 6, "every freed cell")
+        # Before: time 10, event 8, slots 5, detail 22, pid 6 and five gaps left the label 25 of these 86 cells.
+        self.assertGreater(len(shown), 25 + 8)
+
+    def test_slot_cells_are_filled_when_taken_hollow_when_handed_back_and_never_coloured(self) -> None:
+        events = self.events()
+        events[1]["count"] = 20  # verify's grant: wider than the column
+        canvas, lines = self.draw(120, events)
+        column = lines[0].index("slots")
+        expected = {("granted", "build"): "▪", ("released", "build"): "▫", ("left", "gate"): "▫",
+                    ("reaped", "verify"): "▫▫", ("granted", "verify"): "▪▪▪▪ +16"}
+        rows = {(event["verb"], event["label"]): 2 + index for index, event in enumerate(events[::-1])}
+        for (verb, label), cells in expected.items():
+            row = rows[verb, label]
+            self.assertEqual(cells, lines[row][column:].split("  ")[0], (verb, label))
+            styles = {canvas.cells[row][column + n][1] for n in range(len(cells))}
+            self.assertEqual({"text"}, styles, f"{verb} {label}: cells in the text colour")
+        for line in canvas.lines(False, ascii_only=True):
+            self.assertTrue(line.isascii(), line)
+
+    def test_each_kind_has_a_short_result(self) -> None:
         tool = load_dashboard()
-        model = {"events": self.events()}
-        canvas = tool.Canvas(120, 12)
-        tool.draw_events(canvas, 0, 0, 12, 120, model)
-        lines = canvas.render(False).splitlines()
-        row = next(n for n, line in enumerate(lines) if "gave up after 15m00s" in line)
-        start = lines[row].index("gave up")
-        self.assertEqual("dim", canvas.cells[row][start][1])
-        self.assertTrue(any("exit 1, ran 4m00s" in line for line in lines))
+
+        def result(verb: str, detail: str, **extra: Any) -> tuple[str, str]:
+            return tool.event_result(dict(dict(verb=verb, detail=detail, count=1, delta=0), **extra))
+
+        self.assertEqual(("wait 32s", "text"), result("granted", "waited 32s"))
+        self.assertEqual(("no wait", "dim"), result("granted", "no wait"))
+        self.assertEqual(("ok 3m25s", "dim"), result("released", "exit 0, ran 3m25s"))
+        self.assertEqual(("exit 1 · 26s", "bad"), result("released", "exit 1, ran 26s"))
+        self.assertEqual(("exit 137", "bad"), result("released", "exit 137"))
+        self.assertEqual(("gave up 5m", "dim"), result("left", "gave up after 5m12s"))
+        self.assertEqual(("gave up", "dim"), result("left", "never granted"))
+        self.assertEqual(("owner died · 12m", "bad"), result("reaped", "owner exited, ran 12m40s", state="held"))
+        self.assertEqual(("owner died", "warn"), result("reaped", "owner exited", state="waiting"))
+        self.assertEqual(("waiting 30m", "warn"), result("waiting", "30m00s, est. 10:30:00"))
+        self.assertEqual(("batch → interactive", "dim"), result("priority", "batch → interactive"))
+        self.assertEqual(("owner died · 1h05m", "bad"), result("reaped", "owner exited, ran 1h05m", delta=-2))
+        self.assertEqual(3725.0, tool.span_seconds("1h02m05s"))
+        self.assertIsNone(tool.span_seconds("soon"))
+
+    def test_results_are_in_their_colours(self) -> None:
+        canvas, lines = self.draw(120)
+        for text, style in (("wait 3m00s", "text"), ("exit 1 · 4m00s", "bad"), ("gave up 15m", "dim"),
+                            ("owner died · 5m", "bad"), ("no wait", "dim")):
+            row = next(n for n, line in enumerate(lines) if text in line)
+            self.assertEqual(style, canvas.cells[row][lines[row].index(text)][1], text)
 
 
 class MouseInputTests(unittest.TestCase):

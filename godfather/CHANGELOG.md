@@ -26,3 +26,10 @@ Versions and release rules: [README.md](README.md#versions).
   MIT-licensed standard-library file the tools vendor into their tests (`python3 eventcheck.py [--strict] FILE...`).
 - `python3 install.py` installs `godfather` into `~/.local/bin` as an entry point into an immutable release; a
   running dashboard shows `↻` once a newer one is installed.
+
+### Changed
+
+- EVENTS has four columns, time · slots · label · result, where Slotfather's had six. The slot cells say what
+  happened, filled `▪` for slots taken and hollow `▫` for slots handed back, in the text colour; the event and pid
+  columns are gone, and the label gets their width. The result is short and right-aligned: `wait 32s` or
+  `no wait`, `ok 3m25s` (muted), `exit 1 · 26s` (red), `gave up 5m`, `owner died · 12m`. Help explains them.

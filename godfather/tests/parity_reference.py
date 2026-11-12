@@ -5,7 +5,9 @@
 Loads Slotfather's own demo scene (tools/dashboard-demo.py, frozen at its moment), renders it with Slotfather's
 in-tree dashboard at every size the test compares, and writes, from that same model:
 
-    OUT/frames.json            {"WxH colour ascii": text}
+    OUT/frames.json            {"WxH colour ascii selected": text}
+    OUT/cells.json             {"WxH ascii selected": [[character, style, selected]...]}, every cell
+    OUT/help.json              Slotfather's help sections
     OUT/scene.json             the moment, the chart window and the lanes the scene froze
     OUT/slotfather/replies.json  capabilities and the `status --json --full` reply (tools/slotfather_reference.py)
 
@@ -42,6 +44,7 @@ def main(out: Path) -> int:
     dashboard, model = demo.load_scene(advance=False)
     dashboard.set_theme(dashboard._theme.from_environment(environ=dict(os.environ)))
     frames: dict[str, str] = {}
+    cells: dict[str, list[list[list[object]]]] = {}
     for ascii_only in (False, True):
         dashboard.use_marks(ascii_only)
         for width, height in SIZES:
@@ -51,6 +54,7 @@ def main(out: Path) -> int:
                     dashboard.dashboard_draw(canvas, model, selected, cwd="~/straylight")
                     frames[f"{width}x{height} {int(colour)} {int(ascii_only)} {selected}"] = \
                         canvas.render(colour, ascii_only)
+                    cells[f"{width}x{height} {int(ascii_only)} {selected}"] = canvas.cells
     dashboard.use_marks(False)
     for width, height in ((156, 43), (60, 30)):
         canvas = dashboard.Canvas(width, height)
@@ -60,6 +64,8 @@ def main(out: Path) -> int:
     snapshot = reference.snapshot(dashboard, model)
     out.mkdir(parents=True, exist_ok=True)
     (out / "frames.json").write_text(json.dumps(frames))
+    (out / "cells.json").write_text(json.dumps(cells))
+    (out / "help.json").write_text(json.dumps(dashboard.HELP))
     (out / "scene.json").write_text(json.dumps({
         "moment": reference.stamp(model["updated"]), "history_window": dashboard.HISTORY_WINDOW, "lanes": lanes,
         "styles": {json.dumps(list(item["key"])): item["style"] for item in model["holders"]}}))
