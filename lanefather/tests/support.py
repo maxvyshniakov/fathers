@@ -203,6 +203,7 @@ for index, (id, suite) in enumerate(run_checks):
         break
     script = root / "checks" / (suite + ".sh")
     check_log = run / (id + ".log")
+    began = time.monotonic()
     with open(check_log, "w") as out:
         code = subprocess.call(["bash", str(script)], cwd=root, stdout=out, stderr=subprocess.STDOUT) if script.exists() else 0
     sys.stdout.write(check_log.read_text())
@@ -212,7 +213,9 @@ for index, (id, suite) in enumerate(run_checks):
     if environment and suite == "native":
         # The run's Rust changed under it and the native check failed with it (#571).
         code = 1
-    rows.append({"id": id, "status": "passed" if code == 0 else "failed", "exit": code, "log": str(check_log)})
+    # Like verify.py, each row carries its duration (fathers#92).
+    rows.append({"id": id, "status": "passed" if code == 0 else "failed", "exit": code, "log": str(check_log),
+                 "seconds": round(time.monotonic() - began, 6)})
     status = status or code
     # Like verify.py (#639), the structure check is the cheap tier: red, it stops the run before the other checks.
     if id == "structure-check" and code and run_checks[index + 1:]:

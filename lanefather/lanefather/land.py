@@ -207,6 +207,7 @@ def land(args: Any) -> int:
                             "narrowing": narrowing, "skipped": skips,
                             "check_results": {**lane_verified, **tree_verified, **check_results},
                             "results": results, "triage": triaged, "status": status, "verified_tree": stamp,
+                            "leases": checks.leases_of(results),
                             "host": info, "finished": journal.now()})
     result_store.record(merge_tree, checks.recordable({**lane_verified, **tree_verified, **check_results}),
                    source="post-merge", toolchain=toolchain, lane=args.id, sha=merge, receipt=str(post),

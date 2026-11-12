@@ -169,6 +169,12 @@ land's comment as the lane's evidence. The capability is `tickets.lifecycle`.
 The plan module (`plan_module`) answers `SUITES`, `checks(...)` and `smoke(root)`; `PERF = "<suite>"` names the perf
 suite. A project without one gets whole suites.
 
+The report is `{checks: [{id, status, log, blocked_by}], stopped, environment}`. Optional row fields feed the run
+history (fathers#92): `seconds` (the check's duration; without it `stats` has no p50/p90 for the check), `started`
+and `finished` (ISO times), `junit` (a JUnit XML file whose failed test cases a flake names) and `lease` (the slot
+lease id, also allowed at the report's top level). Lanefather hands each run its run id and tree in the slot meta
+(`run`, `tree`) with `plan` and `checks` (fathers#107).
+
 ## Reviewer configuration
 
 Authenticate the reviewer CLIs you intend to use according to their own documentation. The current source

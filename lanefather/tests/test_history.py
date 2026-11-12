@@ -41,6 +41,11 @@ class HistoryTests(LaneCase):
         self.assertEqual(stats["v"], 1)
         row = next(r for r in stats["checks"] if r["check"] == "lib-check")
         self.assertEqual((row["runs"], row["failed"], row["flakes"]), (1, 0, 0))
+        self.assertIsNotNone(row["p50"])
+        self.assertIsNotNone(row["p90"])
+        self.assertTrue(all(isinstance(line.get("seconds"), float) for line in checks))
+        post = json.loads((self.state / "a.post-merge.json").read_text())
+        self.assertIn("leases", post)
 
     def test_a_check_red_then_green_on_one_tree_is_one_flake(self):
         flag = self.tmp / "flake-once"
@@ -57,6 +62,11 @@ class HistoryTests(LaneCase):
         stats = json.loads(self.lane("stats", "--json", "--lane", "a"))
         self.assertEqual(next(r for r in stats["checks"] if r["check"] == "lib-check")["flakes"], 1)
         self.assertIn("lib-check:", self.lane("stats"))
+        # The receipt names the rerun's run too, so its slot lease finds the receipt.
+        self.assertEqual([lease.get("rerun") for lease in self.receipt("a")["leases"]], [None, "alone"])
+        # The smoke passes lib-check on the same tree again: still one flake (review of fathers#92).
+        self.lane("land", "a")
+        self.assertEqual(len(self.lines("flake")), 1)
 
     def test_a_later_pass_after_a_red_check_on_the_same_tree_is_a_flake(self):
         flag = self.tmp / "flake-once"

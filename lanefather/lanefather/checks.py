@@ -463,15 +463,17 @@ def classify(record: Record, worktree: str, base: str, fresh: Rows,
         c: {"check": c, "class": "unclassified", "reason": f"only the first {cap} red checks rerun"}
         for c in candidates[cap:]}
     present: list[str] = []
+    runs: list[dict[str, str]] = []  # each rerun's run id, which its slot lease names (fathers#92)
     if rerun and first:
         for check_id in rerun:
             entries[check_id] = {"check": check_id, "alone": {
                 "status": "not rerun", "reason": "a first check (#639): static, so load does not make it red"}}
     still_red: list[str] = list(rerun) if first else []
     if rerun and not first:
-        alone_report, log, _, problem = run_rerun(Rerun(worktree, rerun, f"lane-{record['id']}-alone",
-                                                        rerun_jobs(jobs), meta=lane_meta(record),
-                                                        ticket=lane_ticket(record), toolchain=toolchain))
+        alone = Rerun(worktree, rerun, f"lane-{record['id']}-alone", rerun_jobs(jobs), meta=lane_meta(record),
+                      ticket=lane_ticket(record), toolchain=toolchain)
+        runs.append({"run": alone.run_id, "rerun": "alone"})
+        alone_report, log, _, problem = run_rerun(alone)
         load["alone"] = host.load_averages()
         for check_id in rerun:
             row = report_row(alone_report, check_id)
@@ -502,9 +504,11 @@ def classify(record: Record, worktree: str, base: str, fresh: Rows,
             if present:
                 base_label = f"lane-{record['id']}-base"
                 # The cheap first checks rerun as verify queues them; others under a lease like the lane's rerun.
-                base_side = run_rerun(Rerun(path, present, base_label, 1 if first else rerun_jobs(jobs),
+                on_base = Rerun(path, present, base_label, 1 if first else rerun_jobs(jobs),
                                             queued=not first, meta={**lane_meta(record), "on": "base"},
-                                            ticket=lane_ticket(record)))
+                                            ticket=lane_ticket(record))
+                runs.append({"run": on_base.run_id, "rerun": "base"})
+                base_side = run_rerun(on_base)
                 kept = keep_run(base_side[2], base_label)
         for check_id in still_red:
             if check_id not in present:
@@ -529,7 +533,7 @@ def classify(record: Record, worktree: str, base: str, fresh: Rows,
                                           "reason": f"the base did not run it ({not_run(row)})"})
     checks = [entries[c] for c in candidates]
     green = bool(checks) and not unaccounted and all(e["class"] in LANDABLE for e in checks)
-    return {"base": base, "checks": checks, "load": load, "unaccounted": unaccounted, "green": green,
+    return {"base": base, "checks": checks, "load": load, "unaccounted": unaccounted, "green": green, "runs": runs,
             **({"first": True} if first else {})}
 
 
@@ -788,7 +792,7 @@ def check(args: Any) -> int:
                             "classification": classification, "first": first, "changed_red_tests": changed_tests,
                             "stopped": stopped, "status": status, "host": info, "started": started,
                             "paths": lane_plan["paths"], **({"fix_of": fix_of} if fix_of else {}),
-                            "leases": leases_of(fresh),
+                            "leases": leases_of(fresh, classification),
                             "finished": journal.now()})
     # fathers#91: what ran, and what was reused for this tree, is on record for any later run of the tree. A check
     # that failed and passed rerun by itself stays failed here: the merge runs it again (#640); the history marks it
@@ -829,13 +833,16 @@ def check(args: Any) -> int:
     return 0 if status == "green" else 1
 
 
-def leases_of(fresh: Rows) -> list[dict[str, Any]]:
-    """The verify runs of a receipt: each one's run id and, when its report named one, its slot lease (fathers#92)."""
+def leases_of(fresh: Rows, classification: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """The verify runs of a receipt: each one's run id and, when its report named one, its slot lease, then its
+    reruns' (fathers#92)."""
     found: dict[str, dict[str, Any]] = {}
     for result in fresh:
         if result.get("run"):
             found.setdefault(result["run"], {"run": result["run"], **({"lease": result["lease"]}
                                                                       if result.get("lease") else {})})
+    for run in (classification or {}).get("runs", []):
+        found.setdefault(run["run"], dict(run))
     return list(found.values())
 
 

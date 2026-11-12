@@ -109,7 +109,8 @@ def record(tree: str, checks: dict[str, str], *, source: str, toolchain: Any = N
     from . import history
     for check, given in checks.items():
         prior = before.get(check)
-        if given == PASSED and prior and prior["status"] == "failed" and check not in (reused or ()):
+        if (given == PASSED and prior and prior["status"] == "failed" and check not in (reused or ())
+                and not history.has_flake(check, tree)):
             history.flake(check, lane=lane, tree=tree, failed_at=prior.get("at"), how="later-run", phase=phase)
     return entry
 

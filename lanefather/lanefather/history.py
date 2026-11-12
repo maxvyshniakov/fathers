@@ -81,6 +81,12 @@ def read(days: float | None = None) -> list[dict[str, Any]]:
     return found
 
 
+def has_flake(check: str, tree: str, days: float = 60) -> bool:
+    """Whether the history already marks the check a flake on the tree: one red-to-green is one flake."""
+    return any(line["kind"] == "flake" and line.get("check") == check and line.get("tree") == tree
+               for line in read(days))
+
+
 def junit_failures(path: Any) -> list[str]:
     """The failed or errored test cases a JUnit XML report names, as classname.name; [] without a readable one."""
     if not path:
@@ -108,8 +114,9 @@ def record_run(report: dict[str, Any] | None, *, lane: str | None, phase: str, t
         return
     for row in rows:
         append("check", lane=lane, phase=phase, tree=tree, check=row["id"], status=row.get("status"),
-               seconds=row.get("seconds"), started=row.get("started") or started, finished=finished, run=run,
-               lease=row.get("lease") or lease, junit=row.get("junit"))
+               seconds=row.get("seconds"), started=row.get("started") or started,
+               finished=row.get("finished") or finished, run=run, lease=row.get("lease") or lease,
+               junit=row.get("junit"))
 
 
 def flake(check: str, *, lane: str | None, tree: str, failed_at: str | None, how: str, junit: Any = None,
@@ -133,10 +140,13 @@ def stats(days: float | None = 7, lane: str | None = None) -> dict[str, Any]:
         check = line.get("check")
         if not isinstance(check, str) or not check:
             continue
+        if line["kind"] == "check" and (line.get("status") not in ("passed", "failed") or check.startswith(
+                "environment:")):
+            continue  # not run, blocked, a run without a report, or the environment's pseudo-check
         row = table.setdefault(check, {"check": check, "runs": 0, "failed": 0, "flakes": 0, "seconds": []})
         if line["kind"] == "check":
             row["runs"] += 1
-            row["failed"] += line.get("status") in ("failed", "blocked")
+            row["failed"] += line.get("status") == "failed"
             if isinstance(line.get("seconds"), (int, float)):
                 row["seconds"].append(float(line["seconds"]))
         elif line["kind"] == "flake":
