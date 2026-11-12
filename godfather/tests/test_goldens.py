@@ -25,7 +25,7 @@ class GoldenTests(unittest.TestCase):
     def test_every_screen_matches_its_golden(self) -> None:
         tool = goldens_tool()
         found = tool.goldens()
-        self.assertEqual(36, len(found))
+        self.assertEqual(42, len(found))
         for name, text in found.items():
             with self.subTest(name):
                 self.assertEqual((ROOT / "tests" / "goldens" / name).read_text(), text,

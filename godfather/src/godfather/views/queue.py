@@ -8,7 +8,7 @@ from typing import NamedTuple, Optional, cast
 from .. import layout as _layout
 from .. import tui as _tui
 from ..layout import Rect
-from ..tui import Canvas, short, span, text_width
+from ..tui import Canvas, minutes, short, span, text_width
 from ..widgets import Panel, Part, Table, Value
 from . import common as _common
 from .common import Item, Model, cell_run, fill, share, share_style
@@ -79,7 +79,7 @@ QUEUE_COLUMNS = [("label", "label", False), ("slots", "slots", False), ("cpu", "
                  ("time", "time", True), ("pid", "pid", True)]
 
 
-def queue_layout(inner: int, model: Model) -> QueueLayout:
+def queue_layout(inner: int, model: Model, moment: Optional[datetime.datetime] = None) -> QueueLayout:
     """The QUEUE table's columns in `inner` cells, shared out by their natural widths (Table.share): a wide table
     lets the CPU bar grow with its column up to twice CPU_BAR; a narrow one shrinks the label first, then drops pid,
     time and cpu use/share in that order."""
@@ -93,8 +93,9 @@ def queue_layout(inner: int, model: Model) -> QueueLayout:
         "label": max(10, min(QUEUE_LABEL_MAX, max([0] + [text_width(str(item["label"])) for item in items]))),
         "slots": _common.cells_width([int(item["count"]) for item in items]),
         "cpu": max(len("cpu use/share"), CPU_BAR + 1 + use_width + 1 + share_width,
-                   max([0] + [len(f"waiting #{n}") for n in range(1, len(waiters) + 1)])),
-        "time": 8, "pid": max([6] + [len(str(item["pid"])) for item in items])}
+                   max([0] + [text_width(waiting_text(item, n)) for n, item in enumerate(waiters, 1)])),
+        "time": max([8] + [text_width(time_cell(item, moment)[0]) for item in items if moment is not None]),
+        "pid": max([6] + [len(str(item["pid"])) for item in items])}
     table = Table.share(inner, QUEUE_COLUMNS, natural, "label")
     grown = table.width("cpu", natural["cpu"]) - natural["cpu"]
     surplus = inner - sum(natural.values()) - 2 * (len(QUEUE_COLUMNS) - 1)
@@ -117,6 +118,27 @@ def row_state(item: Item, model: Model) -> str:
     return "legacy" if item["kind"] == "legacy" else "running"
 
 
+def time_cell(item: Item, moment: datetime.datetime) -> tuple[str, bool]:
+    """A QUEUE row's time and whether it is past its expected run's p90 (fathers#108): a waiter's wait; a lease's
+    run, `12m / ~18m` against its run type's p50 where Slotfather knows one. The time is since the grant, as the
+    time column always was; the highlight is Slotfather's `overrun`, which leaves out time spent yielded."""
+    started = item.get("since") if item["kind"] == "waiting" else item.get("granted")
+    if started is None:
+        return "—", False
+    age = (moment - started).total_seconds()
+    expected = _common.expected_run(item)
+    if item["kind"] == "waiting" or expected is None:
+        return span(age), False
+    return f"{minutes(age)} / ~{minutes(expected['p50'])}", bool(item.get("overrun"))
+
+
+def waiting_text(item: Item, place: int) -> str:
+    """A waiting row's state in the cpu column, with the run it expects once granted: `waiting #1 · ~18m`."""
+    state = f"yielded #{place}" if item.get("yields") else f"waiting #{place}"  # back in the queue to resume
+    expected = _common.expected_run(item)
+    return state + (f" · ~{minutes(expected['p50'])}" if expected else "")
+
+
 def queue_rows(model: Model) -> int:
     """QUEUE's table rows: every request (at least one row, for the empty note) and a gap between running and
     waiting."""
@@ -135,7 +157,7 @@ def draw_requests(canvas: Canvas, rect: Rect, model: Model, selected: int, momen
     panel = Panel(canvas, rect, "requests")
     # cpu use/share: the bar starts at the column's left edge on every row, then `use` right-aligned and `/share`
     # left-aligned around the slash, padded to the widest on screen; a waiting row's state starts where the bars do.
-    layout = queue_layout(panel.inner.width - MARK_COLUMNS, model)
+    layout = queue_layout(panel.inner.width - MARK_COLUMNS, model, moment)
     size = layout.table.width("slots", layout.natural["slots"])
     table = layout.table.shifted(MARK_COLUMNS)
     table.header(panel, "QUEUE")
@@ -152,13 +174,10 @@ def draw_requests(canvas: Canvas, rect: Rect, model: Model, selected: int, momen
         # One colour per row: a running lease's SLOTS colour (its CPU bar too, but for a warning), the text colour for a
         # request that holds no slots.
         style = "text" if waiting else str(item["style"])
+        when, overrun = time_cell(item, moment)
         if waiting:
-            place = index - len(holders) + 1
-            state = f"yielded #{place}" if item.get("yields") else f"waiting #{place}"  # back in the queue to resume
-            age = (moment - item["since"]).total_seconds() if item["since"] else None
-            cpu: list[Part] = [(state, style)]
+            cpu: list[Part] = [(waiting_text(item, index - len(holders) + 1), style)]
         else:
-            age = (moment - item["granted"]).total_seconds() if item["granted"] else None
             used, allotted = share(item, model)
             cpu = _common.bar(used / allotted if allotted else 0, layout.bar, queue_bar_style(item, model)) + [
                 (f" {used:.1f}".rjust(layout.use_width + 1) + "/" + short(allotted).ljust(layout.share_width), style)]
@@ -168,7 +187,7 @@ def draw_requests(canvas: Canvas, rect: Rect, model: Model, selected: int, momen
                                                      "priority": (_common.priority_mark(item), style)})
         values: dict[str, Value] = {
             "label": (str(item["label"]), style), "slots": slot_cells(item, size),
-            "time": (span(age) if age is not None else "—", style), "cpu": cpu, "pid": (str(item["pid"]), style)}
+            "time": (when, "warn" if overrun else style), "cpu": cpu, "pid": (str(item["pid"]), style)}
         table.row(canvas, row, panel.inner.x, values)
         if index == selected:  # a selected running row keeps its colour and gets its own tint behind it (#15)
             panel.mark(row, fill(style), style if style in _tui.current_theme.tints else True)

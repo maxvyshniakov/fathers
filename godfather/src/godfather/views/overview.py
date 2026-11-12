@@ -9,7 +9,6 @@ import datetime
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 from .. import layout as _layout
-from .. import news as _news
 from .. import version as _version
 from ..tui import Canvas, clock
 from ..widgets import Footer, Panel, Part
@@ -36,16 +35,14 @@ def footer_hints(focus: str) -> list[Part]:
 WHATS_NEW = "what's new?"
 
 
-def draw_footer(canvas: Canvas, model: Optional[Model], error: Optional[str], message: Optional[str],
-                unread: bool = False) -> None:
-    """`Godfather  what's new?` (fathers#102: the name in the title style; what's new? in the text colour while any
-    tool has unread entries, else muted like the hints, never the accent; ↻ after it
+def draw_footer(canvas: Canvas, model: Optional[Model], error: Optional[str], message: Optional[str]) -> None:
+    """`Godfather what's new?` (fathers#102: the name in the title style; what's new? always muted like the key
+    hints, unread or not, which only the overlay marks (owner, 2026-11-13); ↻ after it
     while a newer install waits for a restart; a click opens what's new), the hints, then the refresh failure or a
     notice (fathers#24: a notice never says the refresh failed, nor makes the status stale), then the last update and
     the status."""
     installed = _common.stale_install(model)
-    Footer(canvas).draw([(_version.NAME, "title"), ("  " + WHATS_NEW + (" ↻" if installed else ""),
-                                                      "text" if unread else "dim")],
+    Footer(canvas).draw([(_version.NAME, "title"), (" " + WHATS_NEW + (" ↻" if installed else ""), "dim")],
                         footer_hints(canvas.focus), ("● stale", "bad") if error else ("● live", "ok"),
                         clock(model["updated"]) if model else "",
                         (message, "bad") if message else (f"refresh failed: {error}", "bad") if error else ("", ""))
@@ -60,7 +57,7 @@ def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, ov
     `failure` is why the selected request's details did not load. A stale model (`stale_since`) is drawn dimmed, with
     the time it went stale in SLOTS' border. `news` and `read` are what's new and its read versions."""
     canvas.scroll = scroll if scroll is not None else {}
-    draw_footer(canvas, model, error, message, bool(_news.unread(news, read or {})))
+    draw_footer(canvas, model, error, message)
     if notice:
         draw_notice(canvas, notice)
         model = None

@@ -5,36 +5,36 @@
 [0;38;2;90;92;93m╰│[0m[0m                                                                       [0m[0;38;2;122;125;125m┃[0m[0;38;2;90;92;93m│╯[0m
 [0;38;2;77;163;255m╭[0m[0;38;2;90;92;93m│[0m[0m  [0m[0;38;2;122;125;125mADDED[0m[0m                                                                [0m[0;38;2;122;125;125m┃[0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m╮[0m
 [0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m                                                                       [0m[0;38;2;122;125;125m┃[0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
-[0;38;2;255;152;202m┃[0m[0;38;2;90;92;93m│[0m[0m  [0m[0;38;2;122;125;125m• [0m[0mThe footer says Godfather  what's new?, what's new? in the text    [0m[0;38;2;122;125;125m┃[0m[0;38;2;90;92;93m│[0m[0;38;2;255;152;202m┃[0m
-[0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m    colour while any tool has changelog entries not read yet and       [0m[0;38;2;122;125;125m┃[0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
-[0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m    muted like the key hints otherwise; a click or v opens what's       [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
-[0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m    new: one timeline of every tool's changelog, newest first,          [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
+[0;38;2;255;152;202m┃[0m[0;38;2;90;92;93m│[0m[0m  [0m[0;38;2;122;125;125m• [0m[0mThe footer says Godfather what's new?; a click or v opens what's   [0m[0;38;2;122;125;125m┃[0m[0;38;2;90;92;93m│[0m[0;38;2;255;152;202m┃[0m
+[0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m    new: one timeline of every tool's changelog, newest first,         [0m[0;38;2;122;125;125m╹[0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
 [0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m    filtered by tool with ← → or a click on a tool's name. An install   [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
 [0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m    from main shows its Unreleased entries, which are what it runs,     [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
 [0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m    under Slotfather · unreleased · installed 81abd86. Closing it       [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
-[0;38;2;77;163;255m╰[0m[0;38;2;90;92;93m│[0m[0m    marks everything read (~/.local/state/godfather/news.json). Each    [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m╯[0m
-[0;38;2;90;92;93m╭│[0m[0m    tool is asked through its changelog --json; one without it adds     [0m[0;38;2;90;92;93m│╮[0m
-[0;38;2;90;92;93m││[0m[0m    nothing.[0m[0;38;2;122;125;125m  fathers#102[0m[0m                                               [0m[0;38;2;90;92;93m││[0m
+[0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m    marks everything read (~/.local/state/godfather/news.json). Each    [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
+[0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m    tool is asked through its changelog --json; one without it adds     [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
+[0;38;2;77;163;255m╰[0m[0;38;2;90;92;93m│[0m[0m    nothing.[0m[0;38;2;122;125;125m  fathers#102[0m[0m                                               [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m╯[0m
+[0;38;2;90;92;93m╭│[0m[0m                                                                        [0m[0;38;2;90;92;93m│╮[0m
+[0;38;2;90;92;93m││[0m[0m  [0m[0;38;2;122;125;125m• [0m[0mExpected durations from Slotfather's run types (fathers#108): a     [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    running QUEUE row shows 12m / ~18m, its time against the expected   [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    run, in yellow once it is past the p90; a waiting row shows the     [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    run it expects (waiting #1 · ~18m); DETAILS says expected 18m ·     [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    p90 31m · 23 runs. In EVENTS a finished run that was an outlier     [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    ends in ▲ (^ in ASCII) and the run that turned its run type's       [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    trend slower in ↗ (/); each trend change is a row of its own,       [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    Straylight gate · slower +32% · same plan, read from Slotfather's   [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    event log.                                                          [0m[0;38;2;90;92;93m││[0m
 [0;38;2;90;92;93m││[0m[0m                                                                        [0m[0;38;2;90;92;93m││[0m
 [0;38;2;90;92;93m││[0m[0m  [0m[0;38;2;122;125;125mCHANGED[0m[0m                                                               [0m[0;38;2;90;92;93m││[0m
 [0;38;2;90;92;93m││[0m[0m                                                                        [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m  [0m[0;38;2;122;125;125m• [0m[0mThe footer's key hints are centred between its left and right       [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    content at every width, and a narrow footer drops tab panel and s   [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    settings before ? help.[0m[0;38;2;122;125;125m  fathers#102[0m[0m                                [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m  [0m[0;38;2;122;125;125m• [0m[0mwhat's new? in the footer has one muted style, the key hints',      [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    whether or not anything is unread, and one space after Godfather;   [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    what's new itself still marks unread entries (owner, 2026-11-13).   [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m╰│[0m[0m                                                                        [0m[0;38;2;90;92;93m│╯[0m
+[0;38;2;90;92;93m╭│[0m[0m  [0m[0;38;2;122;125;125m• [0m[0mA request is known by Slotfather's lease_id (fathers#101) for its   [0m[0;38;2;90;92;93m│╮[0m
+[0;38;2;90;92;93m││[0m[0m    selection, colour and details, and by its pid and start only with   [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    an older Slotfather that gives none.                                [0m[0;38;2;90;92;93m││[0m
 [0;38;2;90;92;93m││[0m[0m                                                                        [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m  [0m[0;38;2;122;125;125m• [0m[0mThe changelog overlay became what's new: one left column, caps      [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    section headings, ticket references dimmed at the end of an         [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    entry.[0m[0;38;2;122;125;125m  fathers#102[0m[0m                                                 [0m[0;38;2;90;92;93m││[0m
 [0;38;2;90;92;93m││[0m[0m                                                                        [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m  [0m[0;38;2;122;125;125m• [0m[0mThe batch priority mark is 🐌 instead of 🐢; the ASCII mark stays   [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    ~.                                                                  [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m                                                                        [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m╰│[0m[0m  [0m[0;38;2;122;125;125mFIXED[0m[0m                                                                 [0m[0;38;2;90;92;93m│╯[0m
-[0;38;2;90;92;93m╭│[0m[0m                                                                        [0m[0;38;2;90;92;93m│╮[0m
-[0;38;2;90;92;93m││[0m[0m  [0m[0;38;2;122;125;125m• [0m[0m? and v switch between help and the changelog instead of closing    [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    one, and keys typed right after v scroll the changelog.             [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m  [0m[0;38;2;122;125;125m  fathers#17[0m[0m                                                          [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m                                                                        [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m                    [0m[0;1m←→[0m[0;38;2;122;125;125m tool[0m[0m   [0m[0;1m↑↓[0m[0;38;2;122;125;125m scroll[0m[0m   [0m[0;1mesc[0m[0;38;2;122;125;125m close[0m[0m                 [0m[0;38;2;122;125;125m18%[0m[0m [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m                    [0m[0;1m←→[0m[0;38;2;122;125;125m tool[0m[0m   [0m[0;1m↑↓[0m[0;38;2;122;125;125m scroll[0m[0m   [0m[0;1mesc[0m[0;38;2;122;125;125m close[0m[0m                 [0m[0;38;2;122;125;125m17%[0m[0m [0m[0;38;2;90;92;93m││[0m
 [0;38;2;90;92;93m╰╰────────────────────────────────────────────────────────────────────────╯╯[0m
-[0m [0m[0;1mGodfather[0m[0m  what's new?    [0m[0;1m↑↓[0m[0;38;2;122;125;125m select[0m[0m   [0m[0;1m?[0m[0;38;2;122;125;125m help[0m[0m   [0m[0;1mq[0m[0;38;2;122;125;125m quit[0m[0m     [0m[0;38;2;122;125;125m11:59:39[0m[0m  [0m[0;38;2;61;220;132m● live[0m[0m [0m
+[0m [0m[0;1mGodfather[0m[0;38;2;122;125;125m what's new?[0m[0m     [0m[0;1m↑↓[0m[0;38;2;122;125;125m select[0m[0m   [0m[0;1m?[0m[0;38;2;122;125;125m help[0m[0m   [0m[0;1mq[0m[0;38;2;122;125;125m quit[0m[0m     [0m[0;38;2;122;125;125m11:59:39[0m[0m  [0m[0;38;2;61;220;132m● live[0m[0m [0m

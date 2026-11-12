@@ -1,7 +1,7 @@
 # What Godfather reads from Slotfather
 
-Godfather 0.1.0 renders today's Slotfather dashboard from three Slotfather commands and nothing else: it never
-imports a Slotfather module and never reads a file in Slotfather's state directory. This page is the exact shape
+Godfather renders today's Slotfather dashboard from Slotfather's commands and its event log: it never imports a
+Slotfather module and reads no file in Slotfather's state directory but the event log at the path capabilities give. This page is the exact shape
 Godfather's adapter (`src/godfather/adapters/slotfather.py`) decodes. Slotfather owns the contract
 (slotfather#26 SF-1, slotfather#27 SF-2); where this page and Slotfather's own API docs disagree, Slotfather's
 docs win and this page and the adapter follow.
@@ -14,8 +14,11 @@ docs win and this page and the adapter follow.
    "snapshot": {"argv": ["status", "--json", "--full"], "versions": [2], "poll": 1},
    "settings": {"versions": [1]},
    "actions": ["reprioritize"],
+   "events": {"path": "/Users/me/.local/state/slotfather/events.jsonl", "versions": [1]},
    "changelog": "/Users/me/.local/lib/slotfather/releases/<release>/CHANGELOG.md"}}
 ```
+
+`events` is optional: without it, or without version 1, EVENTS shows no outliers or trends.
 
 Godfather needs `dashboard.v == 1`, a snapshot whose `versions` include 2 and whose dashboard block `v` is 1.
 Missing `settings` hides Settings' Slotfather rows (the panel then shows only Refresh every and Colour theme).
@@ -81,6 +84,35 @@ event:
   label, detail      str
   state, unsure      optional, as queue_events() sets them
 ```
+
+### `entries`: lease ids and expected runs
+
+`status --json`'s own `entries` (Slotfather's [docs/api.md](../../../slotfather/docs/api.md)) carry what the
+dashboard block's rows do not. Godfather pairs each `held` or `waiting` row with the first entry not yet taken whose
+`pid` and `since` equal the row's `key` (rows and entries come from one look at the queue), and reads from it:
+
+```text
+entry:
+  lease_id           str           the entry's unique id (fathers#101); Godfather's identity of the row (selection,
+                                   colour, details). Without it (an older Slotfather) the row's `key` is its identity.
+  expected           object | null {"key": run type, "p50": s, "p90": s, "runs": int, "fallback": bool}
+                                   (fathers#106); a malformed one is read as null
+  overrun            bool          a held entry past its p90 (Slotfather's margin applied); absent: false
+```
+
+A row that carries `lease_id`, `expected` or `overrun` itself is read from the row first.
+
+### The event log: outliers and trends
+
+Godfather reads the last 256 KiB of `events.jsonl` ([docs/events.md](../events.md)) again whenever it changes, and
+takes from it only `run.outlier` and `run.trend` (`subject.id` the run type; details as Slotfather's api.md lists
+them). An outlier marks the release in `dashboard.events` that ended within 2 s of its `details.ended`. A trend newer
+than the oldest event shown is a row of its own; a `slower` one also marks the release within 2 s before it, the run
+whose release turned the trend. Other kinds wait for the merged EVENTS (SPEC slice 3).
+
+### `slotfather changelog --json`
+
+What's new reads it as every tool's: [changelog.md](changelog.md).
 
 Godfather fills in what is presentation: the holder colours (`style`), the lane facts for the selected request
 (`lanefather show ID --state-dir DIR --json`, in the background loader as today) and the holder's working

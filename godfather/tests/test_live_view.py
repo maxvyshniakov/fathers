@@ -152,7 +152,7 @@ class VersionTests(LiveCase):
         entry(first)
         command = [sys.executable, str(root / "godfather"), "--interval", "0.3"]
         screen = self.start(rows=30, columns=140, argv=command)
-        screen.until(lambda _: "Godfather  what's new? " in screen.rows().get(30, ""), 8, "the footer's what's new")
+        screen.until(lambda _: "Godfather what's new? " in screen.rows().get(30, ""), 8, "the footer's what's new")
         self.assertNotIn("↻", screen.rows().get(30, ""))
         entry(second)  # a reinstall replaces the entry point; this process keeps its release
         screen.until(lambda _: "what's new? ↻" in screen.rows().get(30, ""), 8, "↻ after the reinstall")

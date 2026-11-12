@@ -276,7 +276,7 @@ FOOTER_PAD = 2  # the least blank cells between the hints and what is left and r
 
 
 class Footer:
-    """The screen's last row: `Godfather  what's new?` on the left (a click opens what's new), the status on the
+    """The screen's last row: `Godfather what's new?` on the left (a click opens what's new), the status on the
     right (the last update, live or stale), and the key hints centred between the two at every width, the least
     needed dropped first when narrow; a failure or notice after them. Clicks on the hints press their keys."""
 

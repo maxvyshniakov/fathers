@@ -37,4 +37,4 @@
 │  11:55:31    ▫       desktop                   │ │  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                                                │ │  −85s   avg 4.4/6 · peak 6 · full 10%    now  │
 ╰────────────────────────────────────────────────╯ ╰───────────────────────────────────────────────╯
- Godfather  what's new?      ↑↓ select   s settings   ? help   q quit      updated 11:59:39  ● live
+ Godfather what's new?      ↑↓ select   s settings   ? help   q quit       updated 11:59:39  ● live

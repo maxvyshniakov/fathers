@@ -160,7 +160,7 @@ def press(state: AppState, key: str) -> Result:
 def click(state: AppState, event: Mouse) -> Result:
     """The mouse in the current mode. In an overlay the wheel scrolls it, a click on one of what's new's tool filters
     shows that tool and a click outside closes it; on the main
-    screen the footer's `Godfather  what's new?` opens what's new, a click focuses the panel it lands in and selects a QUEUE row,
+    screen the footer's `Godfather what's new?` opens what's new, a click focuses the panel it lands in and selects a QUEUE row,
     and the wheel scrolls the panel under the pointer. Shift+drag stays the terminal's own selection."""
     overlay, code = state.overlay, event.button & ~28  # Shift / Alt / Ctrl do not change the button
     if isinstance(overlay, SettingsOverlay):

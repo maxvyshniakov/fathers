@@ -6,15 +6,23 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Added
 
-- The footer says `Godfather  what's new?`, `what's new?` in the text colour while any tool has changelog entries
-  not read yet and muted like the key hints otherwise; a click or `v` opens what's new: one timeline of every
+- The footer says `Godfather what's new?`; a click or `v` opens what's new: one timeline of every
   tool's changelog, newest first, filtered by tool with ← → or a click on a tool's name. An install from main
   shows its Unreleased entries, which are what it runs, under `Slotfather · unreleased · installed 81abd86`. Closing it marks
   everything read (`~/.local/state/godfather/news.json`). Each tool is asked through its `changelog --json`; one
   without it adds nothing (fathers#102).
+- Expected durations from Slotfather's run types (fathers#108): a running QUEUE row shows `12m / ~18m`, its time
+  against the expected run, in yellow once it is past the p90; a waiting row shows the run it expects
+  (`waiting #1 · ~18m`); DETAILS says `expected 18m · p90 31m · 23 runs`. In EVENTS a finished run that was an
+  outlier ends in `▲` (`^` in ASCII) and the run that turned its run type's trend slower in `↗` (`/`); each trend
+  change is a row of its own, `Straylight gate · slower +32% · same plan`, read from Slotfather's event log.
 
 ### Changed
 
+- `what's new?` in the footer has one muted style, the key hints', whether or not anything is unread, and one space
+  after `Godfather`; what's new itself still marks unread entries (owner, 2026-11-13).
+- A request is known by Slotfather's `lease_id` (fathers#101) for its selection, colour and details, and by its pid
+  and start only with an older Slotfather that gives none.
 - The footer's key hints are centred between its left and right content at every width, and a narrow footer drops
   `tab panel` and `s settings` before `? help` (fathers#102).
 - The changelog overlay became what's new: one left column, caps section headings, ticket references dimmed at

@@ -12,7 +12,7 @@ from ..layout import Rect
 from ..tui import SPINNER, Canvas, clip, clock, dashboard_text, megabytes, minutes, safe_link, short, span, text_width, \
     tilde
 from ..widgets import Panel, Part, Table, label_column
-from .common import Item, Model, bar, meta_text, priority_mark, priority_of, share, share_style, ticket_of
+from .common import Item, Model, bar, expected_run, meta_text, priority_mark, priority_of, share, share_style, ticket_of
 
 Fact = tuple[str, list[Part]]
 BUILTIN_CONTEXT = {"class", "priority", "ticket", "lane", "phase", "kind", "check", "sha", "on", "session",
@@ -106,6 +106,7 @@ def request_facts(item: Item, model: Model, position: int, moment: datetime.date
                                      "text")]))
             if item.get("est_start") is not None:  # schedule.forecast(): if nothing more comes
                 facts.append(("start est", [(clock(item["est_start"]), "text")]))
+        facts.extend(expected_facts(item))
     else:
         used, allotted = share(item, model)
         style = share_style(item, model)
@@ -116,6 +117,7 @@ def request_facts(item: Item, model: Model, position: int, moment: datetime.date
             waited = f" · waited {span((item['granted'] - item['since']).total_seconds())}" if item["since"] else ""
             facts.append(("granted", [(f"{clock(item['granted'])}{waited} · running "
                                        f"{span((moment - item['granted']).total_seconds())}", "text")]))
+        facts.extend(expected_facts(item))
         facts.append(("memory", [(f"{megabytes(item['rss'] / 1024)} in {item['procs']} processes", "text")]))
     if item["kind"] != "waiting" and item.get("idle_since") is not None:  # #12: one definition (idle.idle_since())
         idle = cast(datetime.datetime, item["idle_since"])
@@ -130,6 +132,17 @@ def request_facts(item: Item, model: Model, position: int, moment: datetime.date
                                                                        if item.get("yields") else ""), "dim")]))
     facts.append(("owner pid", [(str(item["pid"]), "text")]))
     return facts
+
+
+def expected_facts(item: Item) -> list[Fact]:
+    """`expected 18m · p90 31m · 23 runs` (fathers#108): its run type's p50 and p90 over its last runs, as Slotfather
+    gives them; yellow once a lease has run past that p90."""
+    found = expected_run(item)
+    if found is None:
+        return []
+    runs = int(found["runs"])
+    text = f"{minutes(found['p50'])} · p90 {minutes(found['p90'])} · {runs} run{'s' if runs != 1 else ''}"
+    return [("expected", [(text, "warn" if item.get("overrun") else "text")])]
 
 
 def lane_facts(context: dict[str, str], lane: dict[str, Any], value_width: int) -> list[Fact]:

@@ -1,6 +1,6 @@
 # What Godfather reads for what's new
 
-The footer's `Godfather  what's new?` and the what's new overlay (fathers#102) show one timeline of the changelog
+The footer's `Godfather what's new?` and the what's new overlay (fathers#102) show one timeline of the changelog
 entries of every tool. Godfather gets them from each tool's CLI alone: it never imports a tool and never reads a
 tool's files. Its own entries come from the CHANGELOG.md it ships with.
 

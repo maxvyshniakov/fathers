@@ -514,7 +514,7 @@ class WhatsNewLayoutTests(unittest.TestCase):
         view.dashboard_draw(canvas, None)
         row, start, end = canvas.version_at
         footer = "".join(cell[0] for cell in canvas.cells[row])
-        self.assertEqual("Godfather  what's new?", footer[start:end])
+        self.assertEqual("Godfather what's new?", footer[start:end])
         for x in (start, end - 1):
             state, _ = view.reduce(drawn_state(canvas), view.Mouse(0, x, row, True), 0.0)
             self.assertEqual(view.Changelog(), state.overlay, "a click on what's new opens it")

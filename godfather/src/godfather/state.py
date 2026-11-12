@@ -227,7 +227,7 @@ def overlay_box(state: AppState, overlay: Union[Help, Changelog]) -> OverlayView
 
 
 def unread(state: AppState) -> bool:
-    """Any tool has entries not read yet: the footer's what's new? is in the text colour, not muted."""
+    """Any tool has entries not read yet (what's new marks them; the footer looks the same either way)."""
     return bool(_news.unread(state.news, state.read))
 
 

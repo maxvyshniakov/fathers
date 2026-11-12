@@ -8,7 +8,8 @@ the renderers moved from Slotfather expect: times into aware datetimes, arrays b
 from __future__ import annotations
 
 import datetime
-from typing import Any, Optional
+import json
+from typing import Any, Iterable, Optional, cast
 
 TAG = "slot"
 CAPABILITIES_VERSIONS = (1,)  # the capabilities object's `v`
@@ -49,6 +50,20 @@ def changelog(capabilities: Optional[dict[str, Any]]) -> Optional[str]:
     return path if isinstance(path, str) and path.startswith("/") else None
 
 
+def events_log(capabilities: Optional[dict[str, Any]]) -> Optional[str]:
+    """The event log's absolute path when the capabilities name one of a version this Godfather reads."""
+    block: Any = (capabilities or {}).get("dashboard") or {}
+    events: Any = cast(dict[str, Any], block).get("events") if isinstance(block, dict) else None
+    if not isinstance(events, dict):
+        return None
+    log = cast(dict[str, Any], events)
+    versions: Any = log.get("versions")
+    if not isinstance(versions, list) or 1 not in cast(list[Any], versions):
+        return None
+    path: Any = log.get("path")
+    return path if isinstance(path, str) and path.startswith("/") else None
+
+
 def parse_time(value: Any) -> Optional[datetime.datetime]:
     """An RFC 3339 time (`2026-11-12T04:25:56Z`, with or without fractions, `Z` or an offset) as an aware UTC
     datetime; None for null or anything else."""
@@ -72,14 +87,54 @@ def parse_time(value: Any) -> Optional[datetime.datetime]:
     return moment.astimezone(datetime.timezone.utc)
 
 
-def _item(raw: Any) -> dict[str, Any]:
+def _number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def expected_of(raw: Any) -> Optional[dict[str, Any]]:
+    """A status entry's `expected` (fathers#106) when it is the documented shape: `key`, `p50` and `p90` seconds and
+    `runs`, `fallback`; None for null or anything else."""
+    if not isinstance(raw, dict):
+        return None
+    value = cast(dict[str, Any], raw)
+    if not _number(value.get("p50")) or not _number(value.get("p90")) \
+            or not isinstance(value.get("runs"), int) or isinstance(value.get("runs"), bool):
+        return None
+    return {"key": str(value.get("key") or ""), "p50": float(value["p50"]), "p90": float(value["p90"]),
+            "runs": int(value["runs"]), "fallback": bool(value.get("fallback"))}
+
+
+def _entries(snapshot: dict[str, Any]) -> dict[tuple[Any, Any], list[dict[str, Any]]]:
+    """`status --json`'s entries by the dashboard rows' old key, [pid, since], each key's in the order given: the rows
+    take their `lease_id`, `expected` and `overrun` from them (the dashboard block does not carry them)."""
+    found: dict[tuple[Any, Any], list[dict[str, Any]]] = {}
+    entries: Any = snapshot.get("entries")
+    for raw in cast(list[Any], entries) if isinstance(entries, list) else []:
+        if isinstance(raw, dict):
+            entry = cast(dict[str, Any], raw)
+            found.setdefault((entry.get("pid"), entry.get("since")), []).append(entry)
+    return found
+
+
+def _item(raw: Any, entries: Optional[dict[tuple[Any, Any], list[dict[str, Any]]]] = None) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise Unsupported("a request is not an object")
-    item = dict(raw)
+    item: dict[str, Any] = dict(cast(dict[str, Any], raw))
     for key in TIMES:
-        item[key] = parse_time(raw.get(key))
-    key = raw.get("key")
-    item["key"] = tuple(key) if isinstance(key, list) else (raw.get("pid"), raw.get("since"))
+        item[key] = parse_time(item.get(key))
+    given: Any = item.get("key")
+    old: tuple[Any, ...] = tuple(cast(list[Any], given)) if isinstance(given, list) else (item.get("pid"),
+                                                                                          item.get("since"))
+    # The entry's facts in `status --json` (fathers#101, fathers#106): the first not yet taken with this row's old key
+    same = (entries or {}).get((old[0], old[1]) if len(old) == 2 else (None, None)) \
+        if item.get("kind") != "legacy" else None
+    entry: dict[str, Any] = same.pop(0) if same else {}
+    lease: Any = item.get("lease_id", entry.get("lease_id"))
+    item["lease_id"] = lease if isinstance(lease, str) and lease else None
+    item["expected"] = expected_of(item.get("expected", entry.get("expected")))
+    item["overrun"] = item.get("overrun", entry.get("overrun")) is True and item["expected"] is not None
+    # Identity (fathers#21, fathers#101): the lease id, else, from an older Slotfather, [pid, since]
+    item["key"] = item["lease_id"] or old
     tree = raw.get("tree") or []
     if not isinstance(tree, list) or not all(isinstance(row, list) and len(row) == 4 for row in tree):
         raise Unsupported("a request's process tree is not [[pid, cpu, rss, name]]")
@@ -124,8 +179,9 @@ def decode(snapshot: Any) -> dict[str, Any]:
         raise Unsupported(f"dashboard block version {block.get('v')!r}; needs a newer godfather")
     model = dict(block)
     try:
-        model["holders"] = [_item(raw) for raw in block.get("holders") or []]
-        model["waiters"] = [_item(raw) for raw in block.get("waiters") or []]
+        entries = _entries(cast(dict[str, Any], snapshot))
+        model["holders"] = [_item(raw, entries) for raw in block.get("holders") or []]
+        model["waiters"] = [_item(raw, entries) for raw in block.get("waiters") or []]
         model["events"] = [_event(raw) for raw in block.get("events") or []]
         history = []
         for step in block.get("history") or []:
@@ -165,6 +221,72 @@ def decode(snapshot: Any) -> dict[str, Any]:
     model.setdefault("directory", "")
     model["host"] = snapshot.get("host")
     return model
+
+
+RUN_KINDS = ("run.outlier", "run.trend")  # the run events EVENTS shows (fathers#106, fathers#108)
+RUN_MATCH = 2.0  # seconds between a release in queue.log and the run event of the same moment
+
+
+def run_events(lines: Iterable[str]) -> list[dict[str, Any]]:
+    """The `run.outlier` and `run.trend` events among event-log lines (docs/events.md), oldest first, as
+    {"when", "kind", "key", "details"}; any other line, a malformed one included, is skipped."""
+    found: list[dict[str, Any]] = []
+    for line in lines:
+        try:
+            raw = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(raw, dict):
+            continue
+        event = cast(dict[str, Any], raw)
+        if event.get("v") != 1 or event.get("kind") not in RUN_KINDS:
+            continue
+        subject: Any = event.get("subject")
+        details: Any = event.get("details")
+        when = parse_time(event.get("time"))
+        if not isinstance(subject, dict) or not isinstance(details, dict) or when is None:
+            continue
+        name: Any = cast(dict[str, Any], subject).get("id")
+        if isinstance(name, str):
+            found.append({"when": when, "kind": event["kind"], "key": name, "details": cast(dict[str, Any], details)})
+    return found
+
+
+def merge_runs(events: list[dict[str, Any]], runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """EVENTS' rows with what the run events say (fathers#108): a release the outlier was (by its end) gets
+    `run: "outlier"`, a release a slower trend came with `run: "slower"`, and each trend since the oldest event
+    shown is a row of its own (`verb: "trend"`, its key as the label). Oldest first; the given events are not
+    changed."""
+    merged = [dict(event) for event in events]
+    releases = [event for event in merged if event.get("verb") == "released"]
+    since = min((event["when"] for event in merged), default=None)
+
+    def nearest(moment: Optional[datetime.datetime], before: bool = False) -> Optional[dict[str, Any]]:
+        """The one release within RUN_MATCH of `moment` (at or before it with `before`); None when there is none
+        or more than one, which a time alone cannot tell apart (queue.log's releases carry no lease id)."""
+        if moment is None:
+            return None
+        close = [event for event in releases if abs((event["when"] - moment).total_seconds()) <= RUN_MATCH
+                 and (not before or event["when"] <= moment)]
+        return close[0] if len(close) == 1 else None
+
+    rows: list[dict[str, Any]] = []
+    for run in runs:
+        details = run["details"]
+        if run["kind"] == "run.outlier":
+            found = nearest(parse_time(details.get("ended")))
+            if found is not None:
+                found["run"] = "outlier"
+            continue
+        if since is None or run["when"] < since:  # nothing shown yet, or older than what is: not a row
+            continue
+        if details.get("verdict") == "slower":
+            found = nearest(run["when"], before=True)
+            if found is not None and found.get("run") != "outlier":
+                found["run"] = "slower"
+        rows.append({"when": run["when"], "verb": "trend", "count": 0, "pid": 0, "delta": 0, "label": run["key"],
+                     "trend": details})
+    return sorted(merged + rows, key=lambda event: event["when"])  # stable: a trend after its release
 
 
 class SettingsError(Exception):

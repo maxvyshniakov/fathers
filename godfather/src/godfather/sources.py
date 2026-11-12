@@ -108,6 +108,40 @@ def run_json(tool: str, argv: list[str], timeout: float, executable: Optional[st
     return reply.code, value, problem
 
 
+LOG_TAIL = 256 * 1024  # bytes of an event log read from its end
+
+
+def tail_log(tool: str, path: str, size: int = LOG_TAIL) -> tuple[str, ...]:
+    """The last lines of a tool's event log (`capabilities --json` gives its path; docs/events.md), at most `size`
+    bytes from its end, a line cut by that start dropped; () when it cannot be read. In fixture mode the log is
+    DIR/<tool>/events.jsonl. The one file of a tool Godfather reads, and only by the path the tool gives."""
+    root = fixtures()
+    target = root / tool / "events.jsonl" if root is not None else Path(path)
+    try:
+        info = target.stat()
+        stamp = (str(target), size, info.st_ino, info.st_size, info.st_mtime_ns)
+        if stamp in _tails:  # polled every second: read again only when the log changed (the same tuple)
+            return _tails[stamp]
+        with open(target, "rb") as handle:
+            start = max(0, handle.seek(0, os.SEEK_END) - size)
+            handle.seek(max(0, start - 1))
+            data = handle.read()
+    except OSError:
+        return ()
+    if start:  # the byte before the part read says whether its first line is whole
+        cut, data = data[:1] != b"\n", data[1:]
+    else:
+        cut = False
+    lines = data.decode("utf-8", "replace").splitlines()
+    found = tuple(line for line in lines[1 if cut else 0:] if line.strip())
+    _tails.clear()
+    _tails[stamp] = found
+    return found
+
+
+_tails: dict[tuple[Any, ...], tuple[str, ...]] = {}  # the last log read, by what its stat said
+
+
 def process_cwd(pid: Any) -> Optional[str]:
     """The directory a holder was started in, which names its project better than most labels (moved from
     Slotfather: /proc where there is one, else lsof)."""

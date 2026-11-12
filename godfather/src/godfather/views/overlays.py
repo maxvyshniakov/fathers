@@ -43,7 +43,7 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
         ("wheel", "scroll the panel under the pointer"),
         ("s", "settings"),
         ("?", "help"),
-        ("v", "what's new (or click Godfather  what's new?)"),
+        ("v", "what's new (or click Godfather what's new?)"),
         ("esc", "close an overlay"),
         ("q", "quit"),
         ("shift+drag", "select text"),

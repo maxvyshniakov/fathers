@@ -437,7 +437,7 @@ class WhatsNewTests(Case):
     def test_a_click_on_the_footers_whats_new_opens_it(self) -> None:
         state = dataclasses.replace(self.screen(), news=self.news())
         row, begin, end = state.frame.version_at
-        self.assertEqual((42, 1, 1 + len("Godfather  what's new?")), (row, begin, end))
+        self.assertEqual((42, 1, 1 + len("Godfather what's new?")), (row, begin, end))
         for x in (begin, end - 1):
             opened, effects = self.send(state, self.tool.Mouse(0, x, row, True))
             self.assertEqual((self.tool.Changelog(), ["load-news"]), (opened.overlay, effects))

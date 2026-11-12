@@ -40,4 +40,4 @@
 │  11:48:31    ▪▪      data-grid                                                            │ │  🆗 swap ■■■■■■■■■░░░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                                                                                           │ │                               −80s     avg 4.4/6      now  │
 ╰───────────────────────────────────────────────────────────────────────────────────────────╯ ╰────────────────────────────────────────────────────────────╯
- Godfather  what's new?                            ↑↓ select   tab panel   s settings   ? help   q quit                            updated 11:59:39  ● live
+ Godfather what's new?                            ↑↓ select   tab panel   s settings   ? help   q quit                             updated 11:59:39  ● live

@@ -96,6 +96,8 @@ class Screen:
 
     def __init__(self, source: Source | None = None) -> None:
         self.source = source or Source("slotfather", _slotfather)
+        self.lines: tuple[str, ...] = ()
+        self.runs: list[dict[str, Any]] = []
 
     def load(self, _: Any = None) -> tuple[dict[str, Any] | None, str | None]:
         """(the model to draw, the refresh error for the footer); discovery first when it is due."""
@@ -111,6 +113,12 @@ class Screen:
         if source.snapshot is None:
             return None, source.problem
         model = dict(source.snapshot, installed=_version.installed_source())
+        log = _slotfather.events_log(source.capabilities)
+        if log:  # outliers and trends (fathers#108): marks on the releases and rows of their own in EVENTS
+            lines = _sources.tail_log("slotfather", log)
+            if lines is not self.lines:  # the log is parsed again only when it changed (tail_log's same tuple)
+                self.lines, self.runs = lines, _slotfather.run_events(lines)
+            model["events"] = _slotfather.merge_runs(model["events"], self.runs)
         for name in ("holders", "waiters"):  # this frame's colours and lanes stay off the cached snapshot
             model[name] = [dict(item) for item in source.snapshot[name]]
         if source.state == "stale" and source.failed_at is not None:

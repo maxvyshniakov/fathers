@@ -28,6 +28,9 @@ priority_marks = {key: emoji for key, (emoji, _) in PRIORITY_MARKS.items()}
 # A MACHINE resource's health (owner, 2026-11-12): ok, or critical by the rules that turn its bar red
 HEALTH_MARKS = {"ok": ("🆗", "+"), "hot": ("🔥", "!")}
 health_marks = {key: emoji for key, (emoji, _) in HEALTH_MARKS.items()}
+# A finished run in EVENTS (fathers#108): an outlier above its run type's p90, or one of a run type turning slower
+RUN_MARKS = {"outlier": ("▲", "^"), "slower": ("↗", "/")}
+run_marks = {key: mark for key, (mark, _) in RUN_MARKS.items()}
 
 
 def use_marks(ascii_only: bool, joined: bool = True) -> None:
@@ -35,14 +38,15 @@ def use_marks(ascii_only: bool, joined: bool = True) -> None:
     marks.update({key: plain if ascii_only else emoji for key, (emoji, plain) in MARKS.items()})
     priority_marks.update({key: plain if ascii_only else emoji for key, (emoji, plain) in PRIORITY_MARKS.items()})
     health_marks.update({key: plain if ascii_only else emoji for key, (emoji, plain) in HEALTH_MARKS.items()})
+    run_marks.update({key: plain if ascii_only else mark for key, (mark, plain) in RUN_MARKS.items()})
     if not ascii_only and not joined:
         marks["legacy"] = OLD_FALLBACK
 
 
 def entry_ids(items: list[Item]) -> list[tuple[Any, int]]:
-    """Each entry's identity on screen (fathers#21): its key, and which of the entries sharing that key it is, so two
-    entries of one pid created in the same second (Slotfather's `[pid, since]`) never share a colour, a selection or
-    their details."""
+    """Each entry's identity on screen (fathers#21): its key, the lease id (fathers#101), and which of the entries
+    sharing that key it is, so two entries of an older Slotfather's (keyed `[pid, since]`) of one pid created in the
+    same second never share a colour, a selection or their details."""
     seen: dict[Any, int] = {}
     found: list[tuple[Any, int]] = []
     for item in items:
@@ -181,6 +185,15 @@ def meta_text(meta: dict[str, str]) -> str:
     holds a space, comma, quote or equals sign."""
     plain = re.compile(r'[^\s,="]+')
     return ",".join(f"{k}={v if plain.fullmatch(v) else json.dumps(v)}" for k, v in meta.items())
+
+
+def expected_run(item: Item) -> Optional[dict[str, Any]]:
+    """A request's expected run as Slotfather gives it (fathers#106): {"key", "p50", "p90", "runs", "fallback"}."""
+    found: Any = item.get("expected")
+    if not isinstance(found, dict):
+        return None
+    expected = cast(dict[str, Any], found)
+    return expected if expected.get("p50") is not None else None
 
 
 def priority_mark(item: Item) -> str:
