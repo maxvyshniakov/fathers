@@ -115,7 +115,7 @@ class FailingTests(FixtureCase):
         self.assertIn(f"stale since {before}", text.split("\n")[0])
         footer = text.split("\n")[-1]
         self.assertIn("● stale", footer)
-        self.assertIn("refresh failed: slot…", footer, "the reason, cut to the footer's room")
+        self.assertRegex(footer, r"refresh failed: slot\w*…", "the reason, cut to the footer's room")
         self.assertEqual("slotfather: queue unreadable", screen.source.problem)
         self.assertEqual({"dim"}, {cell[1] for row in self.canvas.cells[:-1] for cell in row if cell[0].strip()},
                          "every panel dimmed")
@@ -261,21 +261,23 @@ class ChoicesTests(unittest.TestCase):
             self.assertEqual({"v": 1, "interval": 5.0, "theme": "builtin"}, saved)
 
 
-class ChangelogTabTests(FixtureCase):
-    def test_a_tool_that_names_its_changelog_gets_a_tab(self) -> None:
-        changelog = self.tmp / "CHANGELOG.md"
-        changelog.write_text("# Slotfather Changelog\n\n## 0.2.0 - 2026-11-12\n\n### Added\n\n- Capabilities.\n")
-        found = replies(self.root)["capabilities --json"]
-        found["json"]["dashboard"]["changelog"] = str(changelog)
-        self.reply("capabilities --json", found)
-        app.Screen().load()
-        self.assertEqual(["Godfather", "Slotfather"], [tab.name for tab in overlays.tabs()])
+class WhatsNewTests(FixtureCase):
+    def test_a_tools_changelog_json_is_in_the_overlay_and_one_without_shows_its_version(self) -> None:
+        from godfather import news
+        self.reply("changelog --json", {"code": 0, "json": {"v": 1, "tool": "slotfather", "version": "0.2.0",
+                                                           "source": None, "entries": [
+            {"version": "0.2.0", "date": "2026-11-12", "section": "Added", "text": "`capabilities --json`."}]}})
+        (self.root / "junkfather").mkdir()
+        (self.root / "junkfather" / "replies.json").write_text(json.dumps(
+            {"capabilities --json": {"code": 0, "json": {"v": 1, "tool": "junkfather", "version": "0.1.0"}}}))
         canvas = tui.Canvas(120, 40)
-        overlays.draw_changelog(canvas, tab=1)
+        overlays.draw_changelog(canvas, news=news.load("", stale=False))
         text = canvas.render(False)
-        self.assertIn("Godfather · Slotfather", text.split("\n")[canvas.help_view.y])  # type: ignore[union-attr]
-        self.assertRegex(text, r"0\.2\.0 · 2026-11-12  installed")
-        self.assertIn("Capabilities.", text)
+        self.assertIn("All · Slotfather", text.split("\n")[canvas.help_view.y])  # type: ignore[union-attr]
+        self.assertRegex(text, r"Slotfather 0\.2\.0 · 2026-11-12 · installed · new")
+        self.assertIn("• capabilities --json.", text)
+        self.assertRegex(text, r"Lanefather +not installed")
+        self.assertRegex(text, r"Junkfather +0\.1\.0  versions only — update Junkfather")
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ The terms the four tools share: the words that appear in more than one package, 
 shared event schema. Each package keeps its own terms in its own glossary and links here:
 [Slotfather](slotfather/GLOSSARY.md), [Lanefather](lanefather/GLOSSARY.md), [junkfather](junkfather/GLOSSARY.md),
 [Godfather](godfather/GLOSSARY.md). Wire spellings (JSON keys, event kinds, settings keys) stay as published even where
-the prose word differs; each entry says so.
+the prose word differs; each entry says so. Tool names are capitalised as names (Junkfather) and lowercase only as commands, paths and code (`junkfather`).
 
 ## The tools
 
@@ -16,6 +16,7 @@ the prose word differs; each entry says so.
 | Capabilities | A tool's answer saying which contracts and versions it supports (`capabilities --json`). |
 | Contract | A versioned interface a tool offers the dashboard: capabilities, snapshot, events, settings, actions. |
 | Snapshot | One versioned JSON reply describing a tool's current state, read without changing it. |
+| What's new | Godfather's combined timeline of every tool's changelog entries, read through each tool's `changelog --json` ([godfather/docs/contracts/changelog.md](godfather/docs/contracts/changelog.md)). |
 | Action | A mutation a tool advertises for a row, run by that tool's own CLI. |
 | Adapter | A project-supplied command at a fixed seam (Lanefather ADR-0001, Repo-Kit). Godfather's internal per-tool modules are not adapters in this sense. |
 

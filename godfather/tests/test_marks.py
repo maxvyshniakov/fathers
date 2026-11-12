@@ -73,7 +73,7 @@ class MarkTests(unittest.TestCase):
                     cells = canvas.cells[y]
                     self.assertEqual("", cells[4][0], "the glyph takes two cells")
                     self.assertEqual(" ", cells[5][0], "then a gap")
-                    self.assertIn((cells[6][0], cells[7][0]), (("⚡", ""), ("🐢", ""), (" ", " ")),
+                    self.assertIn((cells[6][0], cells[7][0]), (("⚡", ""), ("🐌", ""), (" ", " ")),
                                   "the priority: two cells, blank for normal")
                     self.assertEqual(" ", cells[8][0], "then a gap")
                     self.assertNotEqual(" ", cells[9][0], "the label starts in the same cell on every row")
@@ -97,10 +97,10 @@ class MarkTests(unittest.TestCase):
                           if text.startswith(label + " ")), None)
             if label:
                 found[label] = tuple(cell[0] for cell in canvas.cells[y][6:9])
-        self.assertEqual({"plain": (" ", " ", " "), "everything": ("⚡", "", " "), "sleepy": ("🐢", "", " "),
+        self.assertEqual({"plain": (" ", " ", " "), "everything": ("⚡", "", " "), "sleepy": ("🐌", "", " "),
                           "next": ("⚡", "", " "), "again": (" ", " ", " ")}, found, "a waiting request has one too")
         self.assertEqual(2, self.tool.text_width("⚡"))
-        self.assertEqual(2, self.tool.text_width("🐢"))
+        self.assertEqual(2, self.tool.text_width("🐌"))
         self.tool.use_marks(True)
         ascii_lines = self.tool.Canvas(120, 14)
         self.tool.draw_requests(ascii_lines, Rect(0, 0, 14, 120), model, 0, self.now)
@@ -112,7 +112,7 @@ class MarkTests(unittest.TestCase):
     def test_the_details_put_the_mark_before_the_priority(self) -> None:
         now = self.now
         for priority, shown, ascii_shown in (("interactive", "⚡ interactive", "! interactive"),
-                                             ("batch", "🐢 batch", "~ batch"), ("normal", "normal", "normal"),
+                                             ("batch", "🐌 batch", "~ batch"), ("normal", "normal", "normal"),
                                              (None, "normal", "normal")):
             for ascii_only in (False, True):
                 with self.subTest(priority=priority, ascii_only=ascii_only):

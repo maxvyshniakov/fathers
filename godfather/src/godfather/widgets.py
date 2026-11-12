@@ -265,51 +265,53 @@ class Table:
             canvas.segments(y, start, parts, x + column + size - start)
 
 
-FOOTER_DROP = ("?", "s", "tab", "↑↓", "q")  # the main footer's hints in the order a narrow one drops them, quit last
+# How a narrow main footer gives way (fathers#102): (the hints dropped, the right side's stamp) in order, so `? help`
+# stays while lower hints go, and quit is the last hint left.
+FOOTER_STEPS: tuple[tuple[tuple[str, ...], str], ...] = (
+    ((), "updated"), (("tab",), "updated"), (("tab", "s"), "updated"), (("tab", "s"), "time"),
+    (("tab", "s", "↑↓"), "time"), (("tab", "s", "↑↓"), ""), (("tab", "s", "↑↓", "?"), ""),
+    (("tab", "s", "↑↓", "?", "q"), ""))
+FOOTER_PAD = 2  # the least blank cells between the hints and what is left and right of them
 
 
 class Footer:
-    """The screen's last row: the name on the left, then the version (a click opens the changelog), the key hints
-    centred between the name and the status and dropped when narrow, a failure or notice after them, and on the
-    right the last update and live or stale. Clicks on the hints press their keys (Canvas.hint)."""
+    """The screen's last row: `Godfather · what's new?` on the left (a click opens what's new), the status on the
+    right (the last update, live or stale), and the key hints centred between the two at every width, the least
+    needed dropped first when narrow; a failure or notice after them. Clicks on the hints press their keys."""
 
     def __init__(self, canvas: Canvas) -> None:
         self.canvas, self.row = canvas, canvas.height - 1
 
-    def draw(self, name: str, version: str, hints: list[Part], status: Part, stamp: str = "",
-             message: Part = ("", "")) -> None:
+    def draw(self, label: Part, hints: list[Part], status: Part, stamp: str = "", message: Part = ("", "")) -> None:
         canvas, y = self.canvas, self.row
-        x = canvas.put(y, 1, name, "title", max(0, canvas.width - 2))
-        room = canvas.width - 1 - x - 2
-        right = canvas.width - 1
-        if text_width(status[0]) <= room:
-            right = canvas.right(y, right, *status)
-            if stamp:
-                stamp = "updated " + stamp if text_width("updated " + stamp) + text_width(status[0]) + 2 <= room \
-                    else stamp
-                if text_width(stamp) + text_width(status[0]) + 2 <= room:
-                    right = canvas.right(y, right - 2, stamp, "dim")
-        start, end = x + 3, right - 2
-        if version and end - start - text_width(version) - 1 >= hints_width(hints) + 2:
-            after = canvas.put(y, start - 2, version, "dim")  # the version goes before any hint on a narrow footer
-            canvas.version_at = (y, start - 2, after)
-            start = after + 3
-        start = self.hints(hints, start, end)
+        left = canvas.put(y, 1, label[0], label[1], max(0, canvas.width - 2))
+        if left > 1:
+            canvas.version_at = (y, 1, left)
+        end = canvas.width - 1
+        shown, right, tail = [], end, ""
+        for dropped, form in FOOTER_STEPS:
+            shown = [hint for hint in hints if hint[0] not in dropped]
+            tail = ("updated " + stamp if form == "updated" else stamp) if stamp and form else ""
+            right = end - text_width(status[0]) - (text_width(tail) + 2 if tail else 0)
+            if right - left >= hints_width(shown) + 2 * FOOTER_PAD and right >= left + 2:
+                break
+        if right >= left + 2:
+            at = canvas.right(y, end, *status)
+            if tail:
+                canvas.right(y, at - 2, tail, "dim")
+        else:
+            right, shown = end, []
+        after = self.hints(shown, left, right)
         if message[0]:
-            canvas.put(y, start + 2, message[0], message[1], max(0, end - start - 2))
+            canvas.put(y, after + 2, message[0], message[1], max(0, right - after - 4))
 
     def hints(self, hints: list[Part], start: int, end: int) -> int:
-        """The hints centred on the row between columns start and end, never over them; the column after them."""
-        canvas = self.canvas
-        for key in FOOTER_DROP:
-            if not hints or hints_width(hints) <= end - start - 2:
-                break
-            hints = [hint for hint in hints if hint[0] != key]
+        """The hints centred between columns start and end; the column after them."""
         if not hints:
             return start
-        x = max(start + 1, min((canvas.width - hints_width(hints)) // 2, end - 1 - hints_width(hints)))
+        x = start + (end - start - hints_width(hints)) // 2
         for index, (key, action) in enumerate(hints):
-            x = canvas.hint(self.row, x, key, action)
+            x = self.canvas.hint(self.row, x, key, action)
             if index < len(hints) - 1:
                 x += HINT_GAP
         return x

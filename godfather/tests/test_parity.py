@@ -124,6 +124,12 @@ class ParityTests(unittest.TestCase):
         ours = {title: [list(entry) for entry in entries] for title, entries in overlays.HELP}
         theirs = {title: entries for title, entries in self.help}
         self.assertEqual(list(theirs), list(ours), "the same sections in the same order")
+        what = ["v", "what's new (or click Godfather · what's new?)"]  # fathers#102: the changelog became what's new
+        self.assertIn(what, ours["KEYS"])
+        ours["KEYS"][ours["KEYS"].index(what)] = ["v", "changelog (or click the version)"]
+        snail = ["🐌", "batch: unattended work, after the rest"]  # owner, 2026-11-12: batch is a snail, not a turtle
+        self.assertIn(snail, ours["PRIORITY"])
+        ours["PRIORITY"][ours["PRIORITY"].index(snail)] = ["🐢", snail[1]]
         for title in theirs:
             if title != "EVENTS":
                 self.assertEqual(theirs[title], ours[title], title)
@@ -136,13 +142,13 @@ class ParityTests(unittest.TestCase):
         self.assertTrue(old[-1].lstrip().startswith("Slotfather"), old[-1])
         self.assertTrue(new[-1].lstrip().startswith("Godfather"), new[-1])
 
-    def test_the_footer_differs_only_in_the_name_and_version(self) -> None:
+    def test_the_footer_differs_only_in_the_name_and_where_the_hints_centre(self) -> None:
         old = self.frames["156x43 0 0 0"].split("\n")[-1]
         new = self.render(156, 43, False, False, 0).split("\n")[-1]
         hints = "↑↓ select   tab panel   s settings   ? help   q quit"
         self.assertIn(hints, old)
         self.assertIn(hints, new)
-        self.assertTrue(new.startswith(" Godfather 0.1.0"), new)
+        self.assertTrue(new.startswith(" Godfather · what's new? "), new)  # fathers#102
         self.assertEqual(old[old.index("updated"):], new[new.index("updated"):])
 
 

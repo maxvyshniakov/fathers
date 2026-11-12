@@ -1,0 +1,37 @@
+{
+ "changelog --json": {
+  "code": 0,
+  "json": {
+   "v": 1,
+   "tool": "slotfather",
+   "version": "0.2.0",
+   "source": "/Users/me/.local/lib/slotfather/releases/0.2.0-4d5e6f/CHANGELOG.md",
+   "entries": [
+    {
+     "version": "0.2.0",
+     "date": "2026-11-12",
+     "section": "Added",
+     "text": "`slotfather capabilities --json` and `status --json --full` give Godfather's dashboard its contract and snapshot (fathers#26)."
+    },
+    {
+     "version": "0.2.0",
+     "date": "2026-11-12",
+     "section": "Removed",
+     "text": "The in-tree dashboard: `slotfather dashboard` points at Godfather."
+    },
+    {
+     "version": "0.1.0",
+     "date": "2026-11-03",
+     "section": "Added",
+     "text": "`slotfather run -n K -- CMD` leases K machine slots for a command, in priority order, and hands them back when it ends."
+    },
+    {
+     "version": "0.1.0",
+     "date": "2026-11-03",
+     "section": "Fixed",
+     "text": "A lease whose owner died is reaped within a second (fathers#12)."
+    }
+   ]
+  }
+ }
+}

@@ -9,7 +9,10 @@ adapter reads it, capabilities and a `settings --json` reply, with scene.json ho
 summaries the scene recorded, and CHANGELOG.md the changelog the changelog screen shows, so a new entry in the real
 one changes no golden. tests/goldens/ holds, for each screen, the plain text (`.txt`) and the exact escape
 sequences in the owner's two themes (`.seti.ansi`, Seti dark; `.prolight.ansi`, Pro Light): the overview wide
-(156×43), at 100 and at 76 columns (one column), short (156×20), and the help, changelog and Settings overlays.
+(156×43), at 100 and at 76 columns (one column), short (156×20), the help and Settings overlays, and what's new
+(fathers#102). tests/fixtures/news/ is what the tools answer for what's new (`changelog --json`, or only their
+version); the overview screens have everything read (the footer muted), the `unread-` ones and what's new have
+Slotfather's newest release unread.
 """
 from __future__ import annotations
 
@@ -27,13 +30,26 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 SCENE = ROOT / "tests" / "fixtures" / "scene"
+NEWS = ROOT / "tests" / "fixtures" / "news"
 GOLDENS = ROOT / "tests" / "goldens"
 THEMES = {"seti": ("#111213", "#cacecd"), "prolight": ("#ffffff", "#191919")}  # tools/screens.mjs
-SCREENS = {  # name: (width, height, overlay)
+SCREENS = {  # name: (width, height, overlay); what's new's filter after a colon
     "overview-156x43": (156, 43, None), "overview-100x40": (100, 40, None), "overview-76x40": (76, 40, None),
-    "overview-156x20": (156, 20, None), "help-156x43": (156, 43, "help"),
-    "changelog-156x43": (156, 43, "changelog"), "settings-156x43": (156, 43, "settings"),
+    "overview-156x20": (156, 20, None), "help-156x43": (156, 43, "help"), "settings-156x43": (156, 43, "settings"),
+    "unread-156x43": (156, 43, None), "unread-100x40": (100, 40, None), "unread-76x40": (76, 40, None),
+    "whatsnew-156x43": (156, 43, "changelog"), "whatsnew-76x40": (76, 40, "changelog"),
+    "whatsnew-godfather-156x43": (156, 43, "changelog:godfather"),
 }
+
+
+def scene_news() -> tuple[Any, dict[str, str], dict[str, str]]:
+    """What's new as the fixture tools answer it, with everything read, and with Slotfather's newest unread."""
+    from godfather import news
+
+    with mock.patch.dict(os.environ, {"GODFATHER_FIXTURES": str(NEWS)}):
+        found = news.load((SCENE / "CHANGELOG.md").read_text(), stale=False)
+    read = news.mark_read(found, {})
+    return found, read, dict(read, slotfather="0.1.0")
 
 
 def load(path: Path, name: str) -> Any:
@@ -110,6 +126,8 @@ def render(name: str, theme: str | None) -> str:
     from godfather.views import common, machine, overlays, overview
 
     width, height, overlay = SCREENS[name]
+    found, everything, unread = scene_news()
+    read = everything if name.startswith(("overview-", "help-", "settings-")) else unread
     scene = json.loads((SCENE / "scene.json").read_text())
     with environment(theme):
         tui.set_theme(themes.from_environment())
@@ -128,16 +146,18 @@ def render(name: str, theme: str | None) -> str:
         shown: object = None
         with mock.patch.object(tui, "datetime", clock), mock.patch.object(overview, "datetime", clock), \
                 mock.patch.object(machine, "HISTORY_WINDOW", scene["history_window"]), \
-                mock.patch.object(overlays, "changelog_tabs", []), \
                 mock.patch.object(version, "changelog_text", (SCENE / "CHANGELOG.md").read_text):
             if overlay == "settings":
                 settings = screen.settings(1.0, "auto")
                 settings.location = lambda: "~/.local/state/slotfather"  # type: ignore[method-assign]
                 shown = state.SettingsOverlay(settings)
+            elif overlay and overlay.startswith("changelog"):
+                tool = overlay.partition(":")[2] or "all"
+                shown = state.Changelog(tab=overlays.filters(found).index(tool))
             elif overlay:
-                shown = state.Changelog() if overlay == "changelog" else state.Help()
+                shown = state.Help()
             canvas = tui.Canvas(width, height)
-            overview.dashboard_draw(canvas, model, 0, shown, cwd="~/straylight")
+            overview.dashboard_draw(canvas, model, 0, shown, cwd="~/straylight", news=found, read=read)
             return canvas.render(theme is not None)
 
 

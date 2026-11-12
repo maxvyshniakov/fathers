@@ -13,7 +13,7 @@ NAMES = ("godfather.views.overview", "godfather.views.queue", "godfather.views.d
          "godfather.views.machine", "godfather.views.overlays", "godfather.views.common", "godfather.views.settings",
          "godfather.views.settings_draw", "godfather.widgets",
          "godfather.layout", "godfather.state", "godfather.modes", "godfather.tui", "godfather.app",
-         "godfather.sources", "godfather.version", "godfather.adapters.slotfather")
+         "godfather.sources", "godfather.version", "godfather.news", "godfather.adapters.slotfather")
 
 
 class View:
@@ -50,10 +50,10 @@ class View:
 
 
 def fresh() -> Any:
-    """Every module reloaded, in import order, so module state (theme, marks, changelog tabs) starts over."""
+    """Every module reloaded, in import order, so module state (theme, marks, what's new) starts over."""
     modules = []
     for name in ("godfather.theme", "godfather.keys", "godfather.tui", "godfather.layout", "godfather.widgets",
-                 "godfather.views.common", "godfather.views.queue", "godfather.views.events", "godfather.views.details",
+                 "godfather.news", "godfather.views.common", "godfather.views.queue", "godfather.views.events", "godfather.views.details",
                  "godfather.views.machine", "godfather.views.overlays", "godfather.views.settings_draw",
                  "godfather.views.settings", "godfather.views.overview", "godfather.state", "godfather.modes",
                  "godfather.app"):

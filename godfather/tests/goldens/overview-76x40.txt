@@ -37,4 +37,4 @@
 │  🆗 swap ■■■■■■■■■░░░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                               −80s  avg 4.4/6 · peak 6 · full 10%   now  │
 ╰──────────────────────────────────────────────────────────────────────────╯
- Godfather        ↑↓ select   tab panel   q quit   updated 11:59:39  ● live
+ Godfather · what's new?    ↑↓ select   ? help   q quit    11:59:39  ● live

@@ -32,7 +32,8 @@ class HintClickLiveTests(LiveCase):
         def click(text: str, row: int) -> None:
             screen.click(screen.rows()[row].index(text) + 1, row)
 
-        screen.receive("q quit")
+        # The hints are centred between the left and right content: wait for the right side's last update
+        screen.until(lambda _: "updated" in screen.rows().get(30, ""), what="the footer's last update")
         mark = screen.mark()
         click("? help", 30)
         screen.receive("esc close", since=mark)

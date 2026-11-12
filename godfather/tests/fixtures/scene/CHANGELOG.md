@@ -4,6 +4,34 @@ Versions and release rules: [README.md](README.md#versions).
 
 ## Unreleased
 
+### Added
+
+- The footer says `Godfather · what's new?`, in the accent colour while any tool has changelog entries not read
+  yet and muted otherwise; a click or `v` opens what's new: the installed versions of Godfather, Slotfather,
+  Lanefather and Junkfather (a stale one with what to do), then one timeline of every tool's releases, newest
+  first, filtered by tool with ← →. Closing it marks everything read (`~/.local/state/godfather/news.json`). Each
+  tool is asked through its `changelog --json`; one without it shows its version only (fathers#102).
+
+### Changed
+
+- The footer's key hints are centred between its left and right content at every width, and a narrow footer drops
+  `tab panel` and `s settings` before `? help` (fathers#102).
+- The changelog overlay became what's new: one left column, caps section headings, ticket references dimmed at
+  the end of an entry; Godfather's own view keeps its unreleased entries under `not released yet` (fathers#102).
+- The batch priority mark is 🐌 instead of 🐢; the ASCII mark stays `~`.
+
+### Fixed
+
+- `?` and `v` switch between help and the changelog instead of closing one, and keys typed right after `v`
+  scroll the changelog (fathers#17).
+- The selection follows its request through reorders, grants and yields; when it ends, the selection moves to its
+  neighbour among the running or the waiting, never across to the other group; two requests of one pid started in
+  the same second are two rows; a lease that yields keeps its colour when it resumes (fathers#21).
+- Details that fail to load say why and are tried again, and a grant or a yield loads them again at once
+  instead of showing the other kind's facts for up to 5 s (fathers#23).
+- Settings that cannot open say so in the footer for a few seconds; the status stays `● live` and nothing claims
+  the refresh failed (fathers#24).
+
 ## 0.1.0 - 2026-11-12
 
 ### Added

@@ -1,0 +1,10 @@
+{
+ "capabilities --json": {
+  "code": 0,
+  "json": {
+   "v": 1,
+   "tool": "lanefather",
+   "version": "0.3.0"
+  }
+ }
+}

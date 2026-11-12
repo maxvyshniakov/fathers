@@ -9,6 +9,7 @@ import datetime
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 from .. import layout as _layout
+from .. import news as _news
 from .. import version as _version
 from ..tui import Canvas, clock
 from ..widgets import Footer, Panel, Part
@@ -24,7 +25,7 @@ if TYPE_CHECKING:
     from ..state import AppState
 
 # The footer's hints in their order: navigation, panels, configuration, help, quit last; a narrow footer drops them
-# (widgets.FOOTER_DROP), quit last to go. On a scrollable panel the arrows scroll.
+# (widgets.FOOTER_STEPS), help and quit last to go. On a scrollable panel the arrows scroll.
 FOOTER_HINTS: tuple[Part, ...] = (("↑↓", "select"), ("tab", "panel"), ("s", "settings"), ("?", "help"), ("q", "quit"))
 
 
@@ -32,11 +33,17 @@ def footer_hints(focus: str) -> list[Part]:
     return [("↑↓", "select" if focus == "requests" else "scroll"), *FOOTER_HINTS[1:]]
 
 
-def draw_footer(canvas: Canvas, model: Optional[Model], error: Optional[str], message: Optional[str]) -> None:
-    """Name, version (a click opens the changelog), hints, then the refresh failure or a notice (fathers#24: a
-    notice never says the refresh failed, nor makes the status stale), then the last update and the status."""
+WHATS_NEW = f"{_version.NAME} · what's new?"
+
+
+def draw_footer(canvas: Canvas, model: Optional[Model], error: Optional[str], message: Optional[str],
+                unread: bool = False) -> None:
+    """`Godfather · what's new?` (fathers#102: the accent while any tool has unread entries, else muted; ↻ after it
+    while a newer install waits for a restart; a click opens what's new), the hints, then the refresh failure or a
+    notice (fathers#24: a notice never says the refresh failed, nor makes the status stale), then the last update and
+    the status."""
     installed = _common.stale_install(model)
-    Footer(canvas).draw(_version.NAME, _version.running_version() + (" ↻" if installed else ""),
+    Footer(canvas).draw((WHATS_NEW + (" ↻" if installed else ""), "accent" if unread else "dim"),
                         footer_hints(canvas.focus), ("● stale", "bad") if error else ("● live", "ok"),
                         clock(model["updated"]) if model else "",
                         (message, "bad") if message else (f"refresh failed: {error}", "bad") if error else ("", ""))
@@ -45,13 +52,13 @@ def draw_footer(canvas: Canvas, model: Optional[Model], error: Optional[str], me
 def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, overlay: Any = None,
                    error: Optional[str] = None, cwd: Optional[str] = None, scroll: Optional[dict[str, int]] = None,
                    notice: Optional[list[str]] = None, message: Optional[str] = None,
-                   failure: Optional[str] = None) -> None:
+                   failure: Optional[str] = None, news: Any = None, read: Optional[dict[str, str]] = None) -> None:
     """The whole screen. `overlay` is the one open (state.Help, Changelog or SettingsOverlay); `error` the refresh's
     failure, `message` a passing notice; `notice` stands in for the panels when Slotfather is absent or unsupported;
     `failure` is why the selected request's details did not load. A stale model (`stale_since`) is drawn dimmed, with
-    the time it went stale in SLOTS' border."""
+    the time it went stale in SLOTS' border. `news` and `read` are what's new and its read versions."""
     canvas.scroll = scroll if scroll is not None else {}
-    draw_footer(canvas, model, error, message)
+    draw_footer(canvas, model, error, message, bool(_news.unread(news, read or {})))
     if notice:
         draw_notice(canvas, notice)
         model = None
@@ -61,7 +68,7 @@ def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, ov
     if model is not None:
         draw_panels(canvas, model, selected, cwd, failure)
     if overlay is not None:
-        draw_overlay(canvas, overlay, model)
+        draw_overlay(canvas, overlay, model, news, read)
 
 
 def draw_panels(canvas: Canvas, model: Model, selected: int, cwd: Optional[str], failure: Optional[str]) -> None:
@@ -88,12 +95,13 @@ def draw_panels(canvas: Canvas, model: Model, selected: int, cwd: Optional[str],
         dim_panels(canvas)
 
 
-def draw_overlay(canvas: Canvas, overlay: Any, model: Optional[Model]) -> None:
+def draw_overlay(canvas: Canvas, overlay: Any, model: Optional[Model], news: Any = None,
+                 read: Optional[dict[str, str]] = None) -> None:
     kind = str(overlay.kind)
     if kind == "settings":
         overlay.panel.draw(canvas, model)
     elif kind == "changelog":
-        _overlays.draw_changelog(canvas, _common.stale_install(model), int(overlay.tab), int(overlay.scroll))
+        _overlays.draw_changelog(canvas, int(overlay.tab), int(overlay.scroll), news, read)
     else:
         _overlays.draw_help(canvas, int(overlay.scroll))
 
@@ -133,4 +141,4 @@ def render(canvas: Canvas, state: AppState, now: float, notice: Optional[list[st
                 item["lane"] = known.lane
             cwd, failure = known.cwd, known.error
     dashboard_draw(canvas, state.model, index, state.overlay, state.refresh.error, cwd, state.scroll, notice,
-                   state.notice.text if state.notice else None, failure)
+                   state.notice.text if state.notice else None, failure, state.news, state.read)

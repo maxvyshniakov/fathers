@@ -22,12 +22,14 @@ import time
 import types
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 FIXTURE = ROOT / "tools/fixtures/navigation.json"
 METRICS = ROOT / "tools/fixtures/metrics.json"
 CHART_HISTORY = ROOT / "tools/fixtures/chart-history.json"
+NEWS = ROOT / "tests/fixtures/news"  # what the tools answer for what's new (tools/goldens.py uses it too)
 MIN_FREE_SWAP_MB, MAX_PRESSURE_LEVEL = 512, 1  # Slotfather's defaults, for its judgement of the recorded memory
 
 
@@ -117,7 +119,25 @@ def load_scene(advance: bool = False) -> tuple[Any, dict[str, Any]]:
     holders = [holder["pid"] for holder in model["holders"]]
     sources.process_cwd = lambda pid: "~/straylight" if pid in holders else None  # type: ignore[assignment]
     app.Scene = Scene  # type: ignore[attr-defined]
+    scene_news(app)
     return app, sample()
+
+
+def scene_news(app: Any) -> tuple[Any, dict[str, str]]:
+    """What's new from the recorded tool replies, never the real tools or read state: everything read, or with
+    GODFATHER_DEMO_UNREAD=1 Slotfather's newest release unread (the footer in the accent colour)."""
+    from godfather import news
+
+    with mock.patch.dict(os.environ, {"GODFATHER_FIXTURES": str(NEWS)}):
+        found = news.load(stale=False)
+    read = news.mark_read(found, {})
+    if os.environ.get("GODFATHER_DEMO_UNREAD"):
+        read["slotfather"] = "0.1.0"
+    app.load_news = lambda _=None: found
+    news.load_read = lambda: dict(read)  # type: ignore[assignment]
+    news.save_read = lambda _: None  # type: ignore[assignment]
+    app.scene_news = (found, read)
+    return found, read
 
 
 def main() -> None:
@@ -154,7 +174,8 @@ def main() -> None:
     tui.set_theme(theme.from_environment())  # GODFATHER_THEME, GODFATHER_TERMINAL_BG/_FG
     if args.once:
         canvas = tui.Canvas(args.width, args.height)
-        overview.dashboard_draw(canvas, model, cwd="~/straylight")
+        found, read = app.scene_news
+        overview.dashboard_draw(canvas, model, cwd="~/straylight", news=found, read=read)
         print(canvas.render(True))
     else:
         app.dashboard_live(1, screen=app.Scene())

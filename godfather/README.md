@@ -10,8 +10,9 @@ processes agents start).
   <img alt="Godfather: Slotfather's dashboard, navigating running and waiting requests" src="assets/dashboard.webp">
 </picture>
 
-**Status: 0.1.0.** The main screen is Slotfather's dashboard, moved here with no visible change but the footer's
-name and version. Lanes, processes, the merged event feed and row actions come in the next slices of
+**Status: 0.1.0.** The main screen is Slotfather's dashboard, moved here with no visible change but the footer:
+`Godfather · what's new?` (`v` or a click) opens every tool's installed version and one timeline of their
+changelogs. Lanes, processes, the merged event feed and row actions come in the next slices of
 [SPEC.md](SPEC.md), each as its tool supports the contract.
 
 ## Install and run
@@ -45,7 +46,8 @@ runs their CLIs. A tool that is not installed simply has no panels; one without 
 | Settings | `slotfather settings --json`, `settings check`, `settings set`, `settings reset` |
 | Events | `events.jsonl` in the tool's state directory, one shared versioned schema |
 
-[docs/contracts/slotfather.md](docs/contracts/slotfather.md) is the exact shape read from Slotfather.
+[docs/contracts/slotfather.md](docs/contracts/slotfather.md) is the exact shape read from Slotfather;
+[docs/contracts/changelog.md](docs/contracts/changelog.md) is what every tool answers for what's new.
 The event schema is [docs/events.md](docs/events.md), with a JSON Schema and
 [`common/eventcheck.py`](../common/eventcheck.py), one MIT-licensed standard-library file every tool's tests
 import:

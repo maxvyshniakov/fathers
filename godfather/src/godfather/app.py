@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 from typing import Any, cast
 
+from . import news as _news
 from . import sources as _sources
 from . import theme as _theme
 from . import version as _version
@@ -32,7 +33,6 @@ from . import state as _state
 from .tui import Canvas, Loader, full_screen, read_keys, set_theme
 from .views import common as _common
 from .views import details as _details
-from .views import overlays as _overlays
 from .views import overview as _overview
 from .views import settings as _settings
 
@@ -102,7 +102,6 @@ class Screen:
         source = self.source
         if source.due():
             source.discover()
-            self.tabs()
         if source.state in ("absent", "unsupported"):
             return None, None
         try:
@@ -117,16 +116,6 @@ class Screen:
         if source.state == "stale" and source.failed_at is not None:
             model["stale_since"] = datetime.datetime.fromtimestamp(source.failed_at, datetime.timezone.utc)
         return model, source.problem if source.state == "stale" else None
-
-    def tabs(self) -> None:
-        """The changelog overlay's Slotfather tab, from the changelog its capabilities name."""
-        path = _slotfather.changelog(self.source.capabilities)
-        tabs: list[_overlays.ChangelogTab] = []
-        if path:
-            with contextlib.suppress(OSError, UnicodeDecodeError):
-                tabs.append(_overlays.ChangelogTab("Slotfather", Path(path).read_text(encoding="utf-8"),
-                                                   str(self.source.version or "")))
-        _overlays.changelog_tabs[:] = tabs
 
     def notice(self) -> list[str] | None:
         """What the screen says instead of the overview: the tools looked for, or why Slotfather is unsupported."""
@@ -160,6 +149,11 @@ def load_details(item: dict[str, Any]) -> tuple[Any, str | None]:
     return found.get("lane"), cwd
 
 
+def load_news(_: Any = None) -> _news.News:
+    """What's new from every tool, off the main thread."""
+    return _news.load()
+
+
 class Live:
     """The live view's loop around the one state and its reducer (state.py): what the terminal, the loaders and the
     clock say goes in as events; what reduce() asks for is carried out here; the screen is drawn from the state,
@@ -171,7 +165,7 @@ class Live:
         # What the terminal says about its colours (#14) and how wide it draws 👨‍🦳 (#15): asked with colour off too
         self.answers = _theme.Answers()
         self.ascii_only = "utf" not in (sys.stdout.encoding or "").lower()
-        self.state = _state.AppState(interval=interval, theme=theme)
+        self.state = _state.AppState(interval=interval, theme=theme, read=_news.load_read())
         self.saved = (interval, theme)  # Refresh every and Colour theme as saved; a change is written back
         self.shown: list[str] = []
         self.drawn_size: Any = None
@@ -182,6 +176,7 @@ class Live:
         # Everything slow runs in the background, so a key moves the selection within one frame (#15)
         self.models = Loader(screen.load, self.wake_write)
         self.details = Loader(load_details, self.wake_write)
+        self.news = Loader(load_news, self.wake_write)  # what's new: on start and each time it opens
         self.fetched = 0.0
 
     def close(self) -> None:
@@ -208,6 +203,10 @@ class Live:
         elif kind == "load-details":
             if not self.details.wants(effect.key):
                 self.details.request(effect.key, effect.item)
+        elif kind == "load-news":
+            self.news.request("news")
+        elif kind == "save-read":
+            _news.save_read(self.state.read)
         elif kind == "apply-theme":
             self.apply_theme()
         elif kind == "repaint":
@@ -239,6 +238,9 @@ class Live:
             else:
                 model, problem = value
                 self.send(_state.ModelLoaded(model, problem))
+        for _, value, failure in self.news.take():
+            if failure is None:  # a failed load leaves what's new as it was
+                self.send(_state.NewsLoaded(value))
         for key, value, failure in self.details.take():
             lane, cwd = value if failure is None and value else (None, None)
             self.send(_state.DetailsLoaded(key, lane, cwd, None if failure is None else str(failure) or
@@ -311,6 +313,7 @@ class Live:
             # 👨‍🦳 is one glyph where the cursor ended two cells on (column 3); without an answer, assume it is
             _common.use_marks(self.ascii_only, joined=self.answers.column in (None, 3))
             self.load_model()
+            self.news.request("news")
             while not self.done:
                 self.take()
                 loading = self.draw()

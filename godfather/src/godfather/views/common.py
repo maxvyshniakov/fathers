@@ -23,7 +23,7 @@ MARKS = {"asked": ("❓", "?"), "idle": ("💤", "z"), "hot": ("🔥", "!"), "le
 OLD_FALLBACK = "👴"  # for a terminal that draws 👨‍🦳 as two glyphs (theme.ask() measures it)
 marks = {key: emoji for key, (emoji, _) in MARKS.items()}  # what this terminal is drawn with
 # A request's priority (owner, 2026-11-11): its own column after the state; normal has none, so the column is blank
-PRIORITY_MARKS = {"interactive": ("⚡", "!"), "batch": ("🐢", "~")}
+PRIORITY_MARKS = {"interactive": ("⚡", "!"), "batch": ("🐌", "~")}
 priority_marks = {key: emoji for key, (emoji, _) in PRIORITY_MARKS.items()}
 # A MACHINE resource's health (owner, 2026-11-12): ok, or critical by the rules that turn its bar red
 HEALTH_MARKS = {"ok": ("🆗", "+"), "hot": ("🔥", "!")}
@@ -184,6 +184,6 @@ def meta_text(meta: dict[str, str]) -> str:
 
 
 def priority_mark(item: Item) -> str:
-    """⚡ for an interactive request, 🐢 for a batch one (! and ~ in ASCII), nothing for normal: the class it is
+    """⚡ for an interactive request, 🐌 for a batch one (! and ~ in ASCII), nothing for normal: the class it is
     served in, aged (`served`), else the one it asked."""
     return priority_marks.get(priority_of({"priority": item.get("served") or item.get("priority")}), "")

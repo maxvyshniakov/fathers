@@ -5,8 +5,9 @@ the state and returns the new state and its effects; a key a mode does not list 
     main     QUEUE focused: ↑↓ and the page keys move the selection; Tab moves the focus; ? v s open an overlay
     panel    DETAILS or EVENTS focused: the same, but ↑↓ and the page keys scroll the panel, also with nothing to
              scroll, so they never fall through to QUEUE (the audit's focus-while-loading case)
-    help     ↑↓ and the page keys scroll; ? and Esc close, v switches to the changelog; q quits
-    changelog  the same, v and Esc close, ? switches to help; ←→ and Tab switch the tools' tabs
+    help     ↑↓ and the page keys scroll; ? and Esc close, v switches to what's new; q quits
+    changelog  what's new: the same, v and Esc close, ? switches to help; ←→ and Tab switch its tool filter;
+             opening it asks every tool again, closing it marks everything read (state.closed_news())
     settings the Settings panel's own keys (views/settings.py); typed values are not taken as hotkeys
 
 A key is a hotkey by its US-QWERTY position (#13) everywhere but while a Settings value is typed. A click on a footer
@@ -18,7 +19,7 @@ from typing import Any, Callable, Union, cast
 
 from . import keys as _keys
 from . import layout as _layout
-from .state import (OPEN_SETTINGS, QUIT, AppState, Changelog, Help, Key, Mouse, Result, SettingsOverlay, items, move,
+from .state import (LOAD_NEWS, OPEN_SETTINGS, QUIT, AppState, Changelog, Help, Key, Mouse, Result, SettingsOverlay, items, move,
                     overlay_box, settings_effects)
 from .views import overlays as _overlays
 
@@ -61,7 +62,8 @@ def open_help(state: AppState, _: str) -> Result:
 
 
 def open_changelog(state: AppState, _: str) -> Result:
-    return dataclasses.replace(state, overlay=Changelog()), []
+    """What's new, all tools, at its top; the tools are asked again for their news."""
+    return dataclasses.replace(state, overlay=Changelog()), [LOAD_NEWS]
 
 
 def open_settings(state: AppState, _: str) -> Result:
@@ -111,10 +113,10 @@ def close(state: AppState, _: str) -> Result:
 
 
 def changelog_tab(step: int) -> Handler:
-    """←→, h l, Tab and Shift-Tab in the changelog: the next tool's changelog, from its top."""
+    """←→, h l, Tab and Shift-Tab in what's new: the next tool filter, from its top."""
     def handler(state: AppState, _: str) -> Result:
         overlay = cast(Changelog, state.overlay)
-        tab = (overlay.tab + step) % len(_overlays.tabs())
+        tab = (overlay.tab + step) % len(_overlays.filters(_overlays.shown_news(state.news)))
         return dataclasses.replace(state, overlay=Changelog(tab)), []
     return handler
 
@@ -157,7 +159,7 @@ def press(state: AppState, key: str) -> Result:
 
 def click(state: AppState, event: Mouse) -> Result:
     """The mouse in the current mode. In an overlay the wheel scrolls it and a click outside closes it; on the main
-    screen the footer's version opens the changelog, a click focuses the panel it lands in and selects a QUEUE row,
+    screen the footer's `Godfather · what's new?` opens what's new, a click focuses the panel it lands in and selects a QUEUE row,
     and the wheel scrolls the panel under the pointer. Shift+drag stays the terminal's own selection."""
     overlay, code = state.overlay, event.button & ~28  # Shift / Alt / Ctrl do not change the button
     if isinstance(overlay, SettingsOverlay):
@@ -177,7 +179,7 @@ def click(state: AppState, event: Mouse) -> Result:
         return state, []
     at = state.frame.version_at
     if code == LEFT and at and event.y == at[0] and at[1] <= event.x < at[2]:
-        return open_changelog(state, "")  # the footer's version opens what changed
+        return open_changelog(state, "")  # the footer's what's new opens it
     if code == LEFT:
         state = dataclasses.replace(state, focus=panel_at(state, event.x, event.y) or state.focus)
     for name, view in reversed(list(state.frame.tables.items())):

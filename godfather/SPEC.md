@@ -327,8 +327,10 @@ Every tool answers `<tool> capabilities --json` with an object that has a `dashb
   Slotfather, 5–10 for the others).
 - Missing `events`, `settings`, `actions` or `changelog` means unsupported; the matching feature is hidden for that
   tool.
-- The changelog overlay gets one tab per tool that names a changelog, after Godfather's own **(chosen here: the
-  footer now says Godfather, and Slotfather's release notes stay one key away)**.
+- The changelog overlay became what's new (fathers#102, owner 2026-11-12): the footer says `Godfather · what's
+  new?`, and the overlay shows every tool's installed version and one timeline of their changelogs, read through
+  each tool's `changelog --json` ([docs/contracts/changelog.md](docs/contracts/changelog.md)), not the
+  capabilities' `changelog` path.
 
 ### Snapshot contract
 

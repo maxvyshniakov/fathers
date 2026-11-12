@@ -37,4 +37,4 @@
 │  11:55:31    ▫       desktop                   │ │  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                                                │ │  −85s   avg 4.4/6 · peak 6 · full 10%    now  │
 ╰────────────────────────────────────────────────╯ ╰───────────────────────────────────────────────╯
- Godfather 0.1.0    ↑↓ select   tab panel   s settings   ? help   q quit   updated 11:59:39  ● live
+ Godfather · what's new?     ↑↓ select   s settings   ? help   q quit      updated 11:59:39  ● live

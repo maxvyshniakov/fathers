@@ -1,0 +1,43 @@
+╭─ SLOTS ───────────────────────────────────────────────────── 12 cores · 6 slots (manual) ─╮ ╭─ LEASE DETAILS ────────────────────────────────────────────╮
+│                                       ╭─ WHAT'S NEW ───────────────── All · Godfather · Slotfather · Junkfather ─╮                                       │
+│  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅│                                                                          │-build-once                            │
+│  lane-644-bui…  lane-465-sta…  desktop│  Godfather   0.1.0                                                      ┃│· 1 slot                               │
+╰───────────────────────────────────────│  Slotfather  0.2.0                                                      ┃│                                       │
+╭─ QUEUE ───────────────────────────────│  Lanefather  0.3.0  versions only — update Lanefather                   ┃│                                       │
+│                                       │  Junkfather  0.1.0                                                      ┃│                                       │
+┃  ▶️    lane-644-build-once            │                                                                         ┃│░░ 0.9 of 2 cores                      │
+│  ▶️    lane-465-state-definitions-revi│                                                                         ┃│ · waited 19m34s · running 35m10s      │
+│  ▶️    desktop                        │  Godfather 0.1.0 · 2026-11-12 · installed                               ┃│ 1 processes                           │
+│                                       │                                                                         ┃│                                       │
+│  ⏸️    prof51                         │  ADDED                                                                  ┃│ight/.claude/worktrees/agent-afa3816b  │
+│  ⏸️    lane-555-host-rename-names     │                                                                         ┃│2                                      │
+│                                       │  • godfather opens Slotfather's dashboard, moved here unchanged:        ╹│ight/.claude/worktrees/agent-afa3816b  │
+╰───────────────────────────────────────│    SLOTS, QUEUE, DETAILS, EVENTS and MACHINE in the wide and             │2/verify.sh --checks desktop-tests     │
+╭─ EVENTS ──── slots ─ label ───────────│    one-column layouts, focus and Tab order, scrollbars, emoji and        │oing --jobs 1                          │
+│                                       │    ASCII marks, the theme modes, help, Settings, mouse and the kitty     │ight                                   │
+│  11:59:35    ▫       agent-ae72d94beb6│    keyboard protocol on any layout, as of slotfather 346db8e (the        │                                       │
+│  11:58:33    ▫       agent-a1c75285bdf│    details' floor in one column, MACHINE's padding without its chart,    │d-once                                 │
+│  11:57:20    ▪       agent-a1c75285bdf│    mem showing memory pressure). Only the footer's name and version      │ht                                     │
+│  11:57:15    ▫       agent-a1c75285bdf│    differ.                                                               │                                       │
+│  11:55:44    ▪▪      desktop          │                                                                          │-build-once                            │
+│  11:55:41    ▪       agent-a1c75285bdf│  • It reads Slotfather through its CLI alone: slotfather capabilities    │e/queue-347                            │
+│  11:55:31    ▫       desktop          │    --json, status --json --full every Refresh every, and settings        │ess                                    │
+│  11:55:26    ▫       agent-a1c75285bdf│    --json, check, set and reset for Settings. It never imports           │ted                                    │
+│  11:55:24    ▪       desktop          │    Slotfather and never reads its state files.                           │rification_plan.py, tools/verify.py,   │
+│  11:55:00    ▫       desktop          │                                                                          │main-module.sh, tools/test-build-      │
+│  11:54:54    ▪       desktop          │  • A Slotfather snapshot that fails, takes over 5 s or has an unknown    │odule.py, tools/app-build.py,          │
+│  11:54:06    ▪       agent-a1c75285bdf│    version leaves the last good screen, dimmed, with stale since HH:MM   │st-app-build.py, tools/cargo-test.py,  │
+│  11:54:02    ▫       agent-a1c75285bdf│    in SLOTS' border and the reason in Settings' STATUS. Without          │elopment.md, tools/test-cargo-build-   │
+│  11:53:54    ▪       agent-ae72d94beb6│    Slotfather, or with one that has no dashboard contract, one panel     │, tools/test-heavy.py,                 │
+│  11:53:08    ▪       agent-a1c75285bdf│    says what was looked for and why.                                     │rgo_build_cache.py                     │
+│  11:52:53    ▫       agent-a1c75285bdf│                                                                          │                                       │
+│  11:52:30    ▫       desktop          │  • The changelog overlay has a tab per tool whose capabilities name a    │                                       │
+│  11:52:25    ▪       desktop          │    changelog (← → switch them).                                          │───────────────────────────────────────╯
+│  11:51:40    ▪       agent-a1c75285bdf│                                                                          │───────── unleased 0.4 · no admission ─╮
+│  11:51:40    ▫       post-merge-456-re│  • Refresh every and Colour theme are kept in                            │                                       │
+│  11:51:24    ▫       agent-a1c75285bdf│    ~/.config/godfather/settings.json. GODFATHER_THEME,                   │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
+│  11:49:34    ▫▫      data-grid        │    GODFATHER_TERMINAL_BG and _FG set the theme inputs; the SLOTFATHER_   │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
+│  11:48:31    ▪▪      data-grid        │                                                                          │░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
+│                                       │                     ←→ tool   ↑↓ scroll   esc close                  29% │          −80s     avg 4.4/6      now  │
+╰───────────────────────────────────────╰──────────────────────────────────────────────────────────────────────────╯───────────────────────────────────────╯
+ Godfather · what's new?                           ↑↓ select   tab panel   s settings   ? help   q quit                            updated 11:59:39  ● live

@@ -7,6 +7,7 @@ import view as _view
 
 import datetime
 import os
+import re
 import unittest
 from typing import Any
 
@@ -20,7 +21,8 @@ def judged(memory: dict[str, Any]) -> dict[str, Any]:
 
 
 HINTS = ["↑↓ select", "tab panel", "s settings", "? help", "q quit"]
-DROPS = ["? help", "s settings", "tab panel", "↑↓ select"]  # the order a narrow footer drops them in
+DROPS = ["tab panel", "s settings", "↑↓ select", "? help"]  # the order a narrow footer drops them in
+LABEL = "Godfather · what's new?"
 
 
 def model() -> dict[str, Any]:
@@ -40,34 +42,53 @@ class FooterTests(unittest.TestCase):
         self.tool.dashboard_draw(canvas, dict(model(), **extra))
         return canvas.render(False).splitlines()[-1].ljust(width)
 
-    def test_the_hints_are_centred_in_order_between_the_name_and_the_status(self) -> None:
-        for width in (120, 80, 60):
+    def styled(self, width: int, **draw: Any) -> list[Any]:
+        canvas = self.tool.Canvas(width, 30)
+        self.tool.dashboard_draw(canvas, model(), **draw)
+        return canvas.cells[-1]
+
+    def test_the_hints_are_centred_between_the_left_and_right_content_at_every_width(self) -> None:
+        for width in (156, 120, 100, 76, 60, 44):
             with self.subTest(width=width):
                 line = self.footer(width)
-                self.assertTrue(line.startswith(" Godfather"), line)
-                self.assertRegex(line.rstrip(), r"updated \d\d:\d\d:\d\d  ● live$")
-                status = line.index("updated")
+                self.assertTrue(line.startswith(" " + LABEL), line)
+                self.assertRegex(line.rstrip(), r"(updated )?(\d\d:\d\d:\d\d  )?● live$")
                 shown = [hint for hint in HINTS if hint in line]
-                self.assertIn("q quit", shown, "quit is the last to go")
-                self.assertEqual(set(HINTS) - set(shown), set(DROPS[:len(HINTS) - len(shown)]), "help goes first")
+                self.assertEqual(set(HINTS) - set(shown), set(DROPS[:len(HINTS) - len(shown)]),
+                                 "tab, settings and the arrows go before help")
+                if not shown:
+                    continue
                 hints = "   ".join(shown)
                 self.assertIn(hints, line, "navigation, panels, settings, help, quit last")
                 start = line.index(hints)
-                self.assertLess(start + len(hints), status - 1, "never over the status")
-                if width == 120:
+                before = start - (1 + len(LABEL))
+                right = re.search(r"(updated )?(\d\d:\d\d:\d\d  )?● live", line)
+                assert right
+                after = right.start() - (start + len(hints))
+                self.assertGreaterEqual(min(before, after), 2, "never against the label or the status")
+                self.assertLessEqual(abs(before - after), 1, f"centred between them: {before} and {after}")
+                if width >= 120:
                     self.assertEqual(HINTS, shown)
-                    self.assertLessEqual(abs(start + len(hints) / 2 - width / 2), 1, "centred on the footer")
 
-    def test_the_version_follows_the_name_and_goes_before_any_hint(self) -> None:
-        version = self.tool.running_version()
-        self.assertTrue(version, "a commit or semver")
-        self.assertIn(f" Godfather {version} ", self.footer(120))
-        self.assertIn(f" Godfather {version} ↻ ", self.footer(120, installed="another release"),
+    def test_help_stays_at_medium_widths(self) -> None:
+        self.assertIn("↑↓ select   s settings   ? help   q quit", self.footer(100))
+        self.assertIn("↑↓ select   ? help   q quit", self.footer(76))
+        self.assertIn("updated", self.footer(100))
+
+    def test_whats_new_is_the_accent_while_anything_is_unread_else_muted(self) -> None:
+        from godfather import news as _news
+        news = _news.News((), (_news.Item("slotfather", "0.2.0", "2026-11-12", "Added", "x"),))
+        for read, style in (({}, "accent"), ({"slotfather": "0.1.0"}, "accent"), ({"slotfather": "0.2.0"}, "dim")):
+            with self.subTest(read=read):
+                cells = self.styled(120, news=news, read=read)
+                self.assertEqual({style}, {cell[1] for cell in cells[1:1 + len(LABEL)]})
+        self.assertEqual("dim", self.styled(120)[1][1], "nothing loaded yet: muted")
+
+    def test_no_counter_and_the_restart_mark_after_it(self) -> None:
+        self.assertNotRegex(self.footer(120)[:30], r"\d")
+        self.assertIn(f" {LABEL} ↻ ", self.footer(120, installed="another release"),
                       "installed after this dashboard started: it runs older code until it restarts")
         self.assertNotIn("↻", self.footer(120, installed=self.tool.running_source()))
-        narrow = self.footer(80)
-        self.assertNotIn(version, narrow, "the version goes first")
-        self.assertIn("↑↓ select", narrow)
 
     def test_a_scrollable_panel_has_the_arrows_scroll(self) -> None:
         canvas = self.tool.Canvas(120, 30)

@@ -11,6 +11,7 @@ import dataclasses
 from dataclasses import dataclass, field
 from typing import Any, Optional, Union, cast
 
+from . import news as _news
 from .tui import dashboard_text
 from .views import common as _common
 from .views import overlays as _overlays
@@ -37,6 +38,8 @@ class Help:
 
 @dataclass(frozen=True)
 class Changelog:
+    """What's new (fathers#102): `tab` is its filter, 0 for every tool, then each tool with entries
+    (overlays.filters()); closing it marks everything read."""
     tab: int = 0
     scroll: int = 0
     kind: str = "changelog"
@@ -115,6 +118,8 @@ class AppState:
     newest: Any = None  # the newest event's identity
     interval: float = 1.0  # Refresh every
     theme: str = "auto"  # Colour theme
+    news: Any = None  # news.News: what's new, once the tools answered
+    read: dict[str, str] = field(default_factory=lambda: cast(dict[str, str], {}))  # news.Read: newest read, by tool
     frame: Frame = Frame()
 
 
@@ -163,6 +168,11 @@ class SettingsFailed:
 
 
 @dataclass(frozen=True)
+class NewsLoaded:
+    news: Any  # news.News
+
+
+@dataclass(frozen=True)
 class Drawn:
     frame: Frame
 
@@ -172,22 +182,24 @@ class Tick:
     """The loop's pass: a Settings change settles and is saved, a notice expires."""
 
 
-Event = Union[Key, Mouse, ModelLoaded, ModelFailed, DetailsLoaded, SettingsOpened, SettingsFailed, Drawn, Tick]
+Event = Union[Key, Mouse, ModelLoaded, ModelFailed, DetailsLoaded, SettingsOpened, SettingsFailed, NewsLoaded, Drawn,
+              Tick]
 
 
 # Effects, for the app to carry out
 
 @dataclass(frozen=True)
 class Effect:
-    """quit · load-model · load-details (key, item) · open-settings · apply-theme · remember · repaint (every row)."""
+    """quit · load-model · load-details (key, item) · open-settings · apply-theme · remember · repaint (every row) ·
+    load-news (what's new, from every tool) · save-read (the read versions, state.read)."""
     kind: str
     key: Any = None
     item: Any = None
 
 
-QUIT, LOAD_MODEL, OPEN_SETTINGS, APPLY_THEME, REMEMBER, REPAINT = (
+QUIT, LOAD_MODEL, OPEN_SETTINGS, APPLY_THEME, REMEMBER, REPAINT, LOAD_NEWS, SAVE_READ = (
     Effect("quit"), Effect("load-model"), Effect("open-settings"), Effect("apply-theme"), Effect("remember"),
-    Effect("repaint"))
+    Effect("repaint"), Effect("load-news"), Effect("save-read"))
 Result = tuple[AppState, list[Effect]]
 
 
@@ -206,7 +218,21 @@ def overlay_box(state: AppState, overlay: Union[Help, Changelog]) -> OverlayView
     """Where an overlay is on this screen and how much of it shows: the geometry its keys and the wheel use."""
     tab = overlay.tab if isinstance(overlay, Changelog) else 0
     return _overlays.overlay_view(overlay.kind, state.frame.width, state.frame.height, overlay.scroll, tab,
-                                  _common.stale_install(state.model))[0]
+                                  state.news, state.read)[0]
+
+
+def unread(state: AppState) -> bool:
+    """Any tool has entries not read yet: the footer's what's new is in the accent colour."""
+    return bool(_news.unread(state.news, state.read))
+
+
+def closed_news(before: AppState, state: AppState) -> Result:
+    """What's new closed, however (Esc, v, ?, a click outside): everything it showed is read, and saved."""
+    if isinstance(before.overlay, Changelog) and not isinstance(state.overlay, Changelog):
+        read = _news.mark_read(state.news, state.read)
+        if read != state.read:
+            return dataclasses.replace(state, read=read), [SAVE_READ]
+    return state, []
 
 
 # Transitions shared by the modes
@@ -374,6 +400,8 @@ def reduce(state: AppState, event: Event, now: float) -> Result:
     if isinstance(event, (Key, Mouse)):  # only these scroll: a refresh that moves EVENTS down is no flash
         old, before, panels = state, offsets(state), offsets(state, False)  # Settings' offset before it moves
         state, effects = _modes.dispatch(state, event)
+        state, marked = closed_news(old, state)
+        effects += marked
         same = overlay_identity(state) == overlay_identity(old)  # an overlay opened or switched is not scrolled
         moved = scrolled(before if same else panels, offsets(state, same))
         if moved:
@@ -387,6 +415,8 @@ def reduce(state: AppState, event: Event, now: float) -> Result:
             now, event.lane, event.cwd, None if event.error is None else dashboard_text(event.error))})
     elif isinstance(event, SettingsOpened):
         state = dataclasses.replace(state, overlay=SettingsOverlay(event.panel))
+    elif isinstance(event, NewsLoaded):
+        state = dataclasses.replace(state, news=event.news)
     elif isinstance(event, SettingsFailed):
         state = dataclasses.replace(state, notice=Notice(dashboard_text(event.error), now))
     elif isinstance(event, Drawn):

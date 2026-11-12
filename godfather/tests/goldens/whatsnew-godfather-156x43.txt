@@ -1,0 +1,43 @@
+╭─ SLOTS ───────────────────────────────────────────────────── 12 cores · 6 slots (manual) ─╮ ╭─ LEASE DETAILS ────────────────────────────────────────────╮
+│                                       ╭─ WHAT'S NEW ───────────────── All · Godfather · Slotfather · Junkfather ─╮                                       │
+│  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅│                                                                          │-build-once                            │
+│  lane-644-bui…  lane-465-sta…  desktop│  Godfather   0.1.0                                                      ┃│· 1 slot                               │
+╰───────────────────────────────────────│  Slotfather  0.2.0                                                      ┃│                                       │
+╭─ QUEUE ───────────────────────────────│  Lanefather  0.3.0  versions only — update Lanefather                   ┃│                                       │
+│                                       │  Junkfather  0.1.0                                                      ┃│                                       │
+┃  ▶️    lane-644-build-once            │                                                                         ┃│░░ 0.9 of 2 cores                      │
+│  ▶️    lane-465-state-definitions-revi│                                                                         ┃│ · waited 19m34s · running 35m10s      │
+│  ▶️    desktop                        │  not released yet                                                       ┃│ 1 processes                           │
+│                                       │                                                                         ┃│                                       │
+│  ⏸️    prof51                         │  ADDED                                                                  ┃│ight/.claude/worktrees/agent-afa3816b  │
+│  ⏸️    lane-555-host-rename-names     │                                                                         ┃│2                                      │
+│                                       │  • The footer says Godfather · what's new?, in the accent colour while  ┃│ight/.claude/worktrees/agent-afa3816b  │
+╰───────────────────────────────────────│    any tool has changelog entries not read yet and muted otherwise; a   ┃│2/verify.sh --checks desktop-tests     │
+╭─ EVENTS ──── slots ─ label ───────────│    click or v opens what's new: the installed versions of Godfather,     │oing --jobs 1                          │
+│                                       │    Slotfather, Lanefather and Junkfather (a stale one with what to       │ight                                   │
+│  11:59:35    ▫       agent-ae72d94beb6│    do), then one timeline of every tool's releases, newest first,        │                                       │
+│  11:58:33    ▫       agent-a1c75285bdf│    filtered by tool with ← →. Closing it marks everything read           │d-once                                 │
+│  11:57:20    ▪       agent-a1c75285bdf│    (~/.local/state/godfather/news.json). Each tool is asked through      │ht                                     │
+│  11:57:15    ▫       agent-a1c75285bdf│    its changelog --json; one without it shows its version only.          │                                       │
+│  11:55:44    ▪▪      desktop          │    fathers#102                                                           │-build-once                            │
+│  11:55:41    ▪       agent-a1c75285bdf│                                                                          │e/queue-347                            │
+│  11:55:31    ▫       desktop          │  CHANGED                                                                 │ess                                    │
+│  11:55:26    ▫       agent-a1c75285bdf│                                                                          │ted                                    │
+│  11:55:24    ▪       desktop          │  • The footer's key hints are centred between its left and right         │rification_plan.py, tools/verify.py,   │
+│  11:55:00    ▫       desktop          │    content at every width, and a narrow footer drops tab panel and s     │main-module.sh, tools/test-build-      │
+│  11:54:54    ▪       desktop          │    settings before ? help.  fathers#102                                  │odule.py, tools/app-build.py,          │
+│  11:54:06    ▪       agent-a1c75285bdf│                                                                          │st-app-build.py, tools/cargo-test.py,  │
+│  11:54:02    ▫       agent-a1c75285bdf│  • The changelog overlay became what's new: one left column, caps        │elopment.md, tools/test-cargo-build-   │
+│  11:53:54    ▪       agent-ae72d94beb6│    section headings, ticket references dimmed at the end of an entry;    │, tools/test-heavy.py,                 │
+│  11:53:08    ▪       agent-a1c75285bdf│    Godfather's own view keeps its unreleased entries under not           │rgo_build_cache.py                     │
+│  11:52:53    ▫       agent-a1c75285bdf│    released yet.  fathers#102                                            │                                       │
+│  11:52:30    ▫       desktop          │                                                                          │                                       │
+│  11:52:25    ▪       desktop          │  • The batch priority mark is 🐌 instead of 🐢; the ASCII mark stays …   │───────────────────────────────────────╯
+│  11:51:40    ▪       agent-a1c75285bdf│                                                                          │───────── unleased 0.4 · no admission ─╮
+│  11:51:40    ▫       post-merge-456-re│  FIXED                                                                   │                                       │
+│  11:51:24    ▫       agent-a1c75285bdf│                                                                          │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
+│  11:49:34    ▫▫      data-grid        │  • ? and v switch between help and the changelog instead of closing      │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
+│  11:48:31    ▪▪      data-grid        │                                                                          │░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
+│                                       │                     ←→ tool   ↑↓ scroll   esc close                  34% │          −80s     avg 4.4/6      now  │
+╰───────────────────────────────────────╰──────────────────────────────────────────────────────────────────────────╯───────────────────────────────────────╯
+ Godfather · what's new?                           ↑↓ select   tab panel   s settings   ? help   q quit                            updated 11:59:39  ● live

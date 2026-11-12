@@ -1,14 +1,14 @@
-"""The scrollable overlays, help and the changelog: their text laid out at a width, and their frame, scrollbar and
+"""The scrollable overlays, help and what's new: their text laid out at a width, and their frame, scrollbar and
 footer. Where one goes and how much of it shows (overlay_view()) is what both drawing and the keys use, so the keys
 right after one opens scroll it before it was ever drawn (fathers#17)."""
 from __future__ import annotations
 
 import re
 import textwrap
-from typing import Any, NamedTuple, Optional
+from typing import Any, Optional
 
 from .. import layout as _layout
-from .. import version as _version
+from .. import news as _news
 from ..tui import Canvas, text_width
 from ..widgets import OverlayView, Panel, Part
 
@@ -43,7 +43,7 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
         ("wheel", "scroll the panel under the pointer"),
         ("s", "settings"),
         ("?", "help"),
-        ("v", "changelog (or click the version)"),
+        ("v", "what's new (or click Godfather · what's new?)"),
         ("esc", "close an overlay"),
         ("q", "quit"),
         ("shift+drag", "select text"),
@@ -60,7 +60,7 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
     ]),
     ("PRIORITY", [
         ("⚡", "interactive: someone is waiting on it"),
-        ("🐢", "batch: unattended work, after the rest"),
+        ("🐌", "batch: unattended work, after the rest"),
         ("", "Normal has no mark."),
     ]),
     ("SLOTS", [
@@ -141,133 +141,164 @@ def help_lines(width: int) -> list[Line]:
     return lines
 
 
-# The changelog: CHANGELOG.md shipped with the installed package, as titles and bullet rows
+# What's new (fathers#102): the installed versions, then one timeline of every tool's releases, newest first, or one
+# tool's (its filter). Owner's layout of 2026-11-12: one left column for the release title, the section heading and
+# the bullet; wrapped lines hang two cells in; a ticket reference dimmed at the bullet's end.
 
-RELEASE = re.compile(r"^## \[?([^\]\s]+)\]?(?: - (\d{4}-\d\d-\d\d))?(?: \((\w+)\))?")
-MARKUP = re.compile(r"\*\*|`|\[([^\]]*)\]\([^)]*\)")
-
-
-class Release(NamedTuple):
-    version: str
-    date: str
-    commit: str
-    sections: list[tuple[str, list[str]]]  # (Added, [entries])
+TEXT_MOST = 72  # the text's most cells, in any overlay width
+REFERENCE = re.compile(r"\s*\(((?:[\w.-]+)?#\d+(?:,\s*(?:[\w.-]+)?#\d+)*)\)(\.?)\s*$")
+UNRELEASED = "not released yet"
+INSTALLED_STATES = {"stale": ("↻ restart to update", "warn"), "absent": ("not installed", "dim"),
+                    "failed": ("no answer", "bad"), "reading": ("…", "dim")}
 
 
-def plain(text: str) -> str:
-    """Markdown taken out of a changelog entry: bold, code and links."""
-    return MARKUP.sub(lambda found: found[1] or "", text)
+def reference(text: str) -> tuple[str, str]:
+    """An entry and the ticket reference at its end, `(fathers#17).` → (`….`, `fathers#17`); no reference: ''."""
+    found = REFERENCE.search(text)
+    if found is None:
+        return text, ""
+    return text[:found.start()] + found[2], found[1]
 
 
-def parse_changelog(text: str) -> list[Release]:
-    """The releases of a Keep a Changelog file, newest first, with markdown taken out of the entries; an entry's
-    continuation lines join it."""
-    found: list[Release] = []
-    for line in text.splitlines():
-        heading = RELEASE.match(line)
-        if heading:
-            found.append(Release(heading[1], heading[2] or "", heading[3] or "", []))
-        elif not found:
-            continue
-        elif line.startswith("### "):
-            found[-1].sections.append((line[4:].strip(), []))
-        elif line.startswith("- ") and found[-1].sections:
-            found[-1].sections[-1][1].append(plain(line[2:].strip()))
-        elif line.startswith("  ") and line.strip() and found[-1].sections and found[-1].sections[-1][1]:
-            entries = found[-1].sections[-1][1]
-            entries[-1] += " " + plain(line.strip())
-    return found
+def bullet(lines: list[Line], text: str, width: int) -> None:
+    """One entry: `• ` and its text, wrapped lines two cells in, its reference dimmed two cells after it."""
+    body, ref = reference(text)
+    wrapped = wrap(body, width - 2)
+    rows: list[Line] = [[("• ", "dim"), (wrapped[0], "text")]] + [[("  " + more, "text")] for more in wrapped[1:]]
+    if ref:
+        last = rows[-1]
+        if sum(text_width(part[0]) for part in last) + 2 + text_width(ref) <= width:
+            last.append(("  " + ref, "dim"))
+        else:
+            rows.append([("  " + ref, "dim")])
+    lines.extend(rows)
 
 
-def version_key(version: str) -> tuple[int, ...]:
-    return tuple(int(part) for part in re.findall(r"\d+", version)) or (-1,)
+def sections(lines: list[Line], items: list[_news.Item], width: int) -> None:
+    """A release's entries under their section headings (ADDED, FIXED: caps, the dim label colour), one blank line
+    after each heading and between entries."""
+    section: Optional[str] = None
+    for item in items:
+        if item.section != section:
+            section = item.section
+            lines.extend([[], [(section.upper(), "dim")], []])
+        else:
+            lines.append([])
+        bullet(lines, item.text, width)
 
 
-def changelog_lines(width: int, releases: Optional[list[Release]] = None, running: Optional[str] = None,
-                    stale: bool = False) -> list[Line]:
-    """The changelog laid out at `width`: a release title (version · date · commit), the running one marked
-    installed and, when a newer install waits for a restart, newer ones marked new; then each section's entries as
-    bullets with a hanging indent. An empty release (Unreleased) goes."""
-    releases = parse_changelog(_version.changelog_text()) if releases is None else releases
-    running = _version.VERSION if running is None else running
+def installed_lines(news: _news.News) -> list[Line]:
+    """The versions: one row per tool, a stale or old one highlighted with what to do."""
+    column = max(text_width(_news.title(row.tool)) for row in news.installed) + 2 if news.installed else 0
     lines: list[Line] = []
-    for release in releases:
-        if not any(entries for _, entries in release.sections):
-            continue
-        title: Line = [(release.version, "title")]
-        title += [(f" · {part}", "dim") for part in (release.date, release.commit) if part]
-        if release.version == running:
-            title.append(("  installed", "ok"))
-        elif stale and release.version[:1].isdigit() and version_key(release.version) > version_key(running):
-            title.append(("  new — restart to get these", "warn"))
+    for row in news.installed:
+        name = _news.title(row.tool)
+        line: Line = [(name, "bold"), (" " * (column - text_width(name)), "text")]
+        if row.version:
+            line.append((row.version, "text"))
+        if row.state == "versions":
+            line.append((f"  versions only — update {name}", "warn"))
+        elif row.state in INSTALLED_STATES:
+            note, style = INSTALLED_STATES[row.state]
+            line.append((("  " if row.version else "") + note, style))
+        lines.append(line)
+    return lines
+
+
+def filters(news: _news.News) -> list[str]:
+    """The overlay's filters: all, then each tool with entries, in TOOLS order."""
+    tools: set[str] = {item.tool for item in news.items}
+    if news.unreleased:
+        tools.add("godfather")
+    return ["all", *(tool for tool in _news.TOOLS if tool in tools)]
+
+
+def news_lines(width: int, news: _news.News, read: Optional[_news.Read] = None, tool: str = "all") -> list[Line]:
+    """What's new at `width` (at most TEXT_MOST): the versions, then the releases of every tool or of `tool`, newest
+    first, each titled `Tool version · date`, `installed` on the one installed and `new` on one with unread entries;
+    a single tool's view starts with its Unreleased entries, if any, under `not released yet`."""
+    width = min(width, TEXT_MOST)
+    read = {} if read is None else read
+    lines = installed_lines(news)
+    versions = {row.tool: row.version for row in news.installed}
+    unread = set(_news.unread(news, read))
+    items = [item for item in news.items if tool in ("all", item.tool)]
+    if tool == "godfather" and news.unreleased:
+        add_heading(lines, [(UNRELEASED, "dim")])
+        del lines[-1]  # sections() puts the one blank line after the title
+        sections(lines, list(news.unreleased), width)
+    releases: dict[tuple[str, str], list[_news.Item]] = {}
+    for item in items:
+        releases.setdefault((item.tool, item.version), []).append(item)
+    for (name, version), entries in releases.items():
+        title: Line = [(_news.title(name) + " ", "text"), (version, "bold")]
+        if entries[0].date:
+            title += [(" · ", "dim"), (entries[0].date, "dim")]
+        if versions.get(name) == version:
+            title += [(" · ", "dim"), ("installed", "accent")]
+        if any(entry in unread for entry in entries):
+            title += [(" · ", "dim"), ("new", "ok")]
         add_heading(lines, title)
-        for heading, entries in release.sections:
-            if not entries:
-                continue
-            lines.append([("  " + heading, "bold")])
-            for entry in entries:
-                wrapped = wrap(entry, width - 6)
-                lines.append([("    • ", "dim"), (wrapped[0], "text")])
-                lines.extend([[(" " * 6 + more, "text")] for more in wrapped[1:]])
-    return lines or [[("No changelog in this installation.", "dim")]]
+        del lines[-1]  # sections() puts the one blank line after the title
+        sections(lines, entries, width)
+    if not items and not (tool == "godfather" and news.unreleased):
+        add_heading(lines, [("Nothing in the changelogs yet.", "dim")])
+        del lines[-1]
+    return lines
 
 
-class ChangelogTab(NamedTuple):
-    """One tab of the changelog overlay: Godfather's own first, then each tool whose capabilities name a changelog
-    (SPEC: the footer says Godfather, and a tool's release notes stay one key away)."""
-    name: str
-    text: str
-    running: str  # the version running or installed, marked "installed"
+_waiting: list[_news.News] = []  # Godfather's own news, the tools being read: what shows before they answer
 
 
-changelog_tabs: list[ChangelogTab] = []  # the tools' tabs after Godfather's, set by the app from their capabilities
-
-
-def tabs() -> list[ChangelogTab]:
-    return [ChangelogTab("Godfather", _version.changelog_text(), _version.VERSION), *changelog_tabs]
+def shown_news(news: Optional[_news.News]) -> _news.News:
+    if news is not None:
+        return news
+    if not _waiting:
+        _waiting.append(_news.placeholder())
+    return _waiting[0]
 
 
 LAID_OUT: dict[tuple[Any, ...], list[Line]] = {}  # an overlay's text by what it was laid out from: keys reuse it
 
 
-def overlay_lines(kind: str, width: int, tab: int = 0, stale: bool = False) -> tuple[str, list[Line], list[ChangelogTab]]:
-    """An overlay's title, its text at `width`, and the changelog's tabs: help, or the changelog's `tab` (the
-    Godfather one marks newer releases while a newer install waits for a restart). Laid out once per text and
-    width, so scrolling never wraps it again."""
+def overlay_lines(kind: str, width: int, tab: int = 0, news: Optional[_news.News] = None,
+                  read: Optional[_news.Read] = None) -> tuple[str, list[Line], list[str]]:
+    """An overlay's title, its text at `width`, and what's new's filters: help, or what's new filtered by `tab`
+    (0: all). Laid out once per text and width, so scrolling never wraps it again."""
     if kind == "help":
         key: tuple[Any, ...] = (kind, width)
-        shown: list[ChangelogTab] = []
+        shown: list[str] = []
     else:
-        shown = tabs()
-        current = shown[tab % len(shown)]
-        key = (kind, width, current, stale)
+        found = shown_news(news)
+        shown = filters(found)
+        key = (kind, width, shown[tab % len(shown)], found, tuple(sorted((read or {}).items())))
     if key not in LAID_OUT:
         if len(LAID_OUT) > 16:
             LAID_OUT.clear()
         if kind == "help":
             LAID_OUT[key] = help_lines(width)
         else:
-            current = shown[tab % len(shown)]
-            LAID_OUT[key] = changelog_lines(width, parse_changelog(current.text), current.running,
-                                            stale=stale and current.name == "Godfather")
-    return ("HELP" if kind == "help" else "CHANGELOG"), LAID_OUT[key], shown
+            LAID_OUT[key] = news_lines(width, shown_news(news), read, shown[tab % len(shown)])
+    return ("HELP" if kind == "help" else "WHAT'S NEW"), LAID_OUT[key], shown
 
 
 def overlay_view(kind: str, width: int, height: int, offset: int = 0, tab: int = 0,
-                 stale: bool = False) -> tuple[OverlayView, list[Line], str, list[ChangelogTab]]:
+                 news: Optional[_news.News] = None, read: Optional[_news.Read] = None
+                 ) -> tuple[OverlayView, list[Line], str, list[str]]:
     """Where an overlay goes on a screen this size and what of it shows from `offset` (kept in range): the one
-    geometry painting, the keys and the wheel share; its lines, title and the changelog's tabs too."""
-    title, lines, shown = overlay_lines(kind, _layout.overlay_text(width, OVERLAY_WIDTH, TEXT_INSET), tab, stale)
+    geometry painting, the keys and the wheel share; its lines, title and what's new's filters too."""
+    title, lines, shown = overlay_lines(kind, _layout.overlay_text(width, OVERLAY_WIDTH, TEXT_INSET), tab, news, read)
     box = _layout.centred(width, height, OVERLAY_WIDTH, len(lines), OVERLAY_CHROME)
     visible = max(0, box.height - OVERLAY_CHROME)
     offset = max(0, min(offset, max(0, len(lines) - visible)))
     return OverlayView(box.x, box.y, box.width, box.height, offset, visible, len(lines), kind), lines, title, shown
 
 
-def draw_overlay(canvas: Canvas, kind: str, offset: int = 0, tab: int = 0, stale: bool = False) -> None:
-    """A centred, scrollable overlay (help, the changelog): the frame, scrollbar, counts and centred footer are the
+def draw_overlay(canvas: Canvas, kind: str, offset: int = 0, tab: int = 0, news: Optional[_news.News] = None,
+                 read: Optional[_news.Read] = None) -> None:
+    """A centred, scrollable overlay (help, what's new): the frame, scrollbar, counts and centred footer are the
     same for every one."""
-    view, lines, title, tool_tabs = overlay_view(kind, canvas.width, canvas.height, offset, tab, stale)
+    view, lines, title, shown = overlay_view(kind, canvas.width, canvas.height, offset, tab, news, read)
     canvas.help_view = view
     panel = Panel(canvas, _layout.Rect(view.y, view.x, view.height, view.width), kind, right=4, footer=True)
     panel.overlay(title)
@@ -277,27 +308,29 @@ def draw_overlay(canvas: Canvas, kind: str, offset: int = 0, tab: int = 0, stale
     panel.scrollbar(view.offset, view.visible, view.total)
     for row, parts in enumerate(lines[view.offset:view.offset + view.visible], panel.inner.y):
         canvas.segments(row, panel.inner.x, parts, panel.inner.width)
-    shown = f"{round(100 * (view.offset + view.visible) / view.total)}%" if view.total > view.visible else ""
-    hints = [("↑↓", "scroll"), ("esc", "close")] + ([("q", "quit")] if kind == "help" else [])
-    panel.footer(hints, shown)
+    percent = f"{round(100 * (view.offset + view.visible) / view.total)}%" if view.total > view.visible else ""
+    hints = ([("←→", "tool")] if len(shown) > 1 else []) + [("↑↓", "scroll"), ("esc", "close")] \
+        + ([("q", "quit")] if kind == "help" else [])
+    panel.footer(hints, percent)
     if kind == "changelog":
-        changelog_tabs_border(panel, tool_tabs, tab)
+        filters_border(panel, shown, tab)
 
 
-def changelog_tabs_border(panel: Panel, shown: list[ChangelogTab], tab: int) -> None:
-    """With more than one tab, their names in the changelog's top border, the shown one bright; ←/→ switch them."""
+def filters_border(panel: Panel, shown: list[str], tab: int) -> None:
+    """With more than one filter, their names in the top border, the shown one bright; ←/→ switch them."""
     if len(shown) < 2:
         return
-    current = shown[tab % len(shown)]
+    current = tab % len(shown)
     parts: list[Part] = []
-    for index, item in enumerate(shown):
-        parts += ([(" · ", "dim")] if index else []) + [(item.name, "title" if item is current else "dim")]
-    panel.border(parts, "CHANGELOG", margin=3)
+    for index, name in enumerate(shown):
+        parts += ([(" · ", "dim")] if index else []) + [(_news.title(name), "title" if index == current else "dim")]
+    panel.border(parts, "WHAT'S NEW", margin=3)
 
 
 def draw_help(canvas: Canvas, offset: int = 0) -> None:
     draw_overlay(canvas, "help", offset)
 
 
-def draw_changelog(canvas: Canvas, stale: bool = False, tab: int = 0, offset: int = 0) -> None:
-    draw_overlay(canvas, "changelog", offset, tab, stale)
+def draw_changelog(canvas: Canvas, tab: int = 0, offset: int = 0, news: Optional[_news.News] = None,
+                   read: Optional[_news.Read] = None) -> None:
+    draw_overlay(canvas, "changelog", offset, tab, news, read)

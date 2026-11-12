@@ -103,7 +103,7 @@ class ModeTableTests(Case):
         main: dict[str, Row] = {
             "q": quit_, "Q": quit_,
             "\t": ({"focus"}, [], focus("events")), "back_tab": ({"focus"}, [], focus("details")),
-            "?": ({"overlay"}, [], overlay("help")), "v": ({"overlay"}, [], overlay("changelog")),
+            "?": ({"overlay"}, [], overlay("help")), "v": ({"overlay"}, ["load-news"], overlay("changelog")),
             "s": (set[str](), ["open-settings"], nothing),
             "j": ({"selection"}, [], selected(3)), "down": ({"selection"}, [], selected(3)),
             "k": ({"selection"}, [], selected(1)), "up": ({"selection"}, [], selected(1)),
@@ -126,13 +126,14 @@ class ModeTableTests(Case):
                  **overlay_scroll, "G": ({"overlay", "glow"}, [], scrolled_far),
                  "end": ({"overlay", "glow"}, [], scrolled_far),
                  "?": ({"overlay"}, [], overlay(None)), "esc": ({"overlay"}, [], overlay(None)),
-                 "v": ({"overlay"}, [], overlay("changelog", scroll=0)), "q": quit_, "Q": quit_,
+                 "v": ({"overlay"}, ["load-news"], overlay("changelog", scroll=0)), "q": quit_, "Q": quit_,
                  "s": none, "\t": none, "x": none}
         changelog: dict[str, Row] = {key: (fields, effects, in_changelog if fields else check)
                                      for key, (fields, effects, check) in help_.items()}
-        changelog.update({
-            "v": ({"overlay"}, [], overlay(None)), "esc": ({"overlay"}, [], overlay(None)),
-            "?": ({"overlay"}, [], overlay("help", scroll=0)),
+        changelog.update({  # closing what's new, to help too, marks everything read
+            "v": ({"overlay", "read"}, ["save-read"], overlay(None)),
+            "esc": ({"overlay", "read"}, ["save-read"], overlay(None)),
+            "?": ({"overlay", "read"}, ["save-read"], overlay("help", scroll=0)),
             "left": ({"overlay"}, [], overlay("changelog", tab=1, scroll=0)),
             "h": ({"overlay"}, [], overlay("changelog", tab=1, scroll=0)),
             "back_tab": ({"overlay"}, [], overlay("changelog", tab=1, scroll=0)),
@@ -144,7 +145,7 @@ class ModeTableTests(Case):
 
     def start(self, mode: str) -> Any:
         """Each mode's state: QUEUE focused on the middle of five entries; EVENTS focused, scrolled to 3 of 40
-        events; help and the changelog scrolled to 3 (the changelog with a second tool's tab)."""
+        events; help and what's new scrolled to 3 (what's new with one tool's entries: two filters)."""
         tool = self.tool
         events = [dict(when=datetime.datetime(2026, 11, 12, tzinfo=datetime.timezone.utc)
                        + datetime.timedelta(seconds=n), verb="granted", count=1, label=f"e{n}", pid=n, delta=1)
@@ -152,7 +153,9 @@ class ModeTableTests(Case):
         state = self.screen(model([entry(n) for n in range(3)], [entry(n, "waiting") for n in range(3, 5)],
                                   events=events), 156, 43)
         state = tool.move(state, 2)
-        tool.changelog_tabs[:] = [tool.ChangelogTab("Slotfather", "## 1.0.0 - 2026-11-01\n### Added\n- a\n", "1.0.0")]
+        from godfather import news
+        state = dataclasses.replace(state, news=news.News((), (news.Item("slotfather", "1.0.0", "2026-11-01", "Added",
+                                                                         "a"),)))
         if mode == "panel":
             state = dataclasses.replace(state, focus="events", scroll={"events": 3})
         elif mode == "help":
@@ -289,7 +292,7 @@ class MouseTableTests(Case):
              lambda state: state.scroll.get("events") == 0),
             ("Ctrl+wheel is the wheel", base, (65 | 16, 10, evs["y"] + 3, True),
              lambda state: state.scroll.get("events") == 3),
-            ("the version opens the changelog", base, (0, version[1], version[0], True),
+            ("what's new in the footer opens it", base, (0, version[1], version[0], True),
              lambda state: state.overlay == tool.Changelog()),
             ("the wheel in help scrolls it", help_, (65, *inside, True), lambda state: state.overlay.scroll == 6),
             ("a click in help does nothing", help_, (0, *inside, True), lambda state: state == help_),
@@ -322,9 +325,68 @@ class OverlayTests(Case):
                 state, _ = self.keys(self.screen(), opener, "j", "j")  # never drawn between them
                 self.assertEqual((kind, 2), (state.overlay.kind, state.overlay.scroll))
 
-    def test_with_one_changelog_tab_the_tab_keys_go_back_to_its_top(self) -> None:
-        state, _ = self.keys(self.screen(), "v", "j", "j", "right")
+    def test_with_one_filter_the_tab_keys_go_back_to_its_top(self) -> None:
+        from godfather import news
+        state = dataclasses.replace(self.screen(), news=news.News((), ()))
+        state, _ = self.keys(state, "v", "j", "j", "right")
         self.assertEqual(self.tool.Changelog(tab=0, scroll=0), state.overlay)
+
+
+class WhatsNewTests(Case):
+    """fathers#102: what's new opens (asking every tool again), filters by tool, and closing it marks it read."""
+
+    def news(self) -> Any:
+        from godfather import news
+        return news.News((news.Installed("slotfather", "0.2.0", "ok"),), (
+            news.Item("slotfather", "0.2.0", "2026-11-12", "Added", "s2"),
+            news.Item("junkfather", "0.1.0", "2026-11-12", "Added", "j1"),
+            news.Item("slotfather", "0.1.0", "2026-11-01", "Added", "s1")))
+
+    def test_opening_asks_for_the_news_and_a_reply_replaces_it(self) -> None:
+        state, effects = self.keys(self.screen(), "v")
+        self.assertEqual((self.tool.Changelog(), ["load-news"]), (state.overlay, effects))
+        found = self.news()
+        state, effects = self.send(state, self.tool.NewsLoaded(found))
+        self.assertEqual((found, [], self.tool.Changelog()), (state.news, effects, state.overlay))
+        self.assertTrue(self.tool.unread(state), "nothing read yet")
+
+    def test_the_filter_steps_through_all_and_each_tool_with_entries(self) -> None:
+        state = dataclasses.replace(self.screen(), news=self.news())
+        tabs: list[int] = []
+        for key in ("v", "right", "right", "right", "left"):
+            state, _ = self.keys(state, key)
+            tabs.append(state.overlay.tab)
+        self.assertEqual([0, 1, 2, 0, 2], tabs, "all, slotfather, junkfather, then round")
+        state, _ = self.keys(state, "j")
+        state, _ = self.keys(state, "\t")
+        self.assertEqual(self.tool.Changelog(tab=0, scroll=0), state.overlay, "a new filter starts at its top")
+
+    def test_closing_marks_everything_read_and_saves_it_once(self) -> None:
+        for close in ("esc", "v", "?"):
+            with self.subTest(close=close):
+                state = dataclasses.replace(self.screen(), news=self.news(), read={"lanefather": "0.3.0"})
+                state, _ = self.keys(state, "v")
+                state, effects = self.keys(state, close)
+                self.assertEqual(["save-read"], effects)
+                self.assertEqual({"slotfather": "0.2.0", "junkfather": "0.1.0", "lanefather": "0.3.0"}, state.read)
+                self.assertFalse(self.tool.unread(state))
+                state, _ = self.keys(state, "v")
+                self.assertEqual([], self.keys(state, "esc")[1], "nothing new: nothing to save")
+
+    def test_a_click_outside_closes_and_marks_read_too(self) -> None:
+        state = dataclasses.replace(self.screen(), news=self.news())
+        state, _ = self.keys(state, "v")
+        state, effects = self.send(state, self.tool.Mouse(0, 0, 0, True))
+        self.assertEqual((None, ["save-read"]), (state.overlay, effects))
+        self.assertFalse(self.tool.unread(state))
+
+    def test_news_arriving_after_it_closed_is_unread_again(self) -> None:
+        from godfather import news
+        state = dataclasses.replace(self.screen(), news=self.news())
+        state, _ = self.keys(state, "v", "esc")
+        newer = news.News((), (news.Item("slotfather", "0.3.0", "2026-11-13", "Fixed", "s3"), *self.news().items))
+        state, _ = self.send(state, self.tool.NewsLoaded(newer))
+        self.assertEqual(["s3"], [item.text for item in news.unread(state.news, state.read)])
 
     def test_a_refresh_that_moves_events_down_does_not_flash_its_thumb(self) -> None:
         tool = self.tool

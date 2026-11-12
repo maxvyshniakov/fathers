@@ -1,5 +1,5 @@
 """The live view (#15 batch): details load in the background, panels take keyboard focus and scroll, EVENTS stays
-put while scrolled, the footer's version opens the changelog."""
+put while scrolled, the footer's what's new opens it."""
 from __future__ import annotations
 
 import helpers  # noqa: F401 - src/ on sys.path
@@ -409,17 +409,30 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
                          "and a frame that no longer draws it gives the focus back to QUEUE")
 
 
-class ChangelogTests(unittest.TestCase):
+class WhatsNewLayoutTests(unittest.TestCase):
+    """The owner's layout for what's new (2026-11-12): `Tool version · date · installed`, one left column, caps
+    section headings, a blank line after each heading and between entries, two between releases, dimmed ticket
+    references, at most 72 cells; Unreleased only in Godfather's own view."""
     TEXT = """# Godfather Changelog
 
 ## Unreleased
+
+### Fixed
+
+- Not out yet.
 
 ## 0.2.0 - 2026-12-01
 
 ### Added
 
 - A **new** thing with `code` and a [link](https://example.com),
-  continued here.
+  continued here (fathers#17).
+- Second.
+
+### Fixed
+
+- A long entry that has to wrap because it says a great deal more than one line of the overlay can hold at all
+  (fathers#21).
 
 ## 0.1.0 - 2026-11-11
 
@@ -428,44 +441,74 @@ class ChangelogTests(unittest.TestCase):
 - An old key.
 """
 
+    def news(self) -> Any:
+        from godfather import news
+        _, items, unreleased = news.own(self.TEXT, stale=False)
+        return news.News((news.Installed("godfather", "0.1.0", "ok"),), news.ordered(items), tuple(unreleased))
+
+    def lines(self, width: int, tool_filter: str = "all", read: Any = None) -> list[list[tuple[str, str]]]:
+        return tool().news_lines(width, self.news(), read, tool_filter)
+
     def test_parsing_takes_markdown_out_and_joins_continuations(self) -> None:
-        releases = tool().parse_changelog(self.TEXT)
+        from godfather import news
+        releases = news.parse_changelog(self.TEXT)
         self.assertEqual([("Unreleased", "", ""), ("0.2.0", "2026-12-01", ""), ("0.1.0", "2026-11-11", "")],
                          [(r.version, r.date, r.commit) for r in releases])
-        self.assertEqual([("Added", ["A new thing with code and a link, continued here."])], releases[1].sections)
-        self.assertTrue((ROOT / "CHANGELOG.md").is_file())
-        view = tool()
-        shipped = view.parse_changelog((ROOT / "CHANGELOG.md").read_text())
-        self.assertIn(view._version.VERSION, [r.version for r in shipped], "the running release has its section")
+        self.assertEqual("A new thing with code and a link, continued here (fathers#17).",
+                         releases[1].sections[0][1][0])
+        shipped = news.parse_changelog((ROOT / "CHANGELOG.md").read_text())
+        from godfather import version
+        self.assertIn(version.VERSION, [r.version for r in shipped], "the running release has its section")
 
-    def test_the_running_release_is_installed_and_newer_ones_new_when_stale(self) -> None:
-        view = tool()
-        releases = view.parse_changelog(self.TEXT)
-        lines = ["".join(text for text, _ in parts) for parts in view.changelog_lines(60, releases, "0.1.0", True)]
-        self.assertIn("0.2.0 · 2026-12-01  new — restart to get these", lines)
-        self.assertIn("0.1.0 · 2026-11-11  installed", lines)
-        self.assertFalse(any("Unreleased" in line for line in lines), "an empty release goes")
-        self.assertIn("    • A new thing with code and a link, continued here.", lines)
-        self.assertFalse(any("**" in line or "`" in line or "](" in line for line in lines), "no raw markdown")
-        calm = ["".join(t for t, _ in p) for p in view.changelog_lines(60, releases, "0.1.0", False)]
-        self.assertFalse(any("restart" in line for line in calm))
-        narrow = view.changelog_lines(30, releases, "0.1.0", False)
-        bullet = next(i for i, parts in enumerate(narrow) if parts and parts[0][0] == "    • ")
-        self.assertEqual(" " * 6, narrow[bullet + 1][0][0][:6], "a wrapped entry hangs under its text")
+    def test_the_owners_layout(self) -> None:
+        lines = self.lines(200, read={"godfather": "0.1.0"})
+        text = ["".join(part[0] for part in parts) for parts in lines]
+        start = text.index("Godfather 0.2.0 · 2026-12-01 · new")
+        self.assertEqual([
+            "Godfather 0.2.0 · 2026-12-01 · new", "", "ADDED", "",
+            "• A new thing with code and a link, continued here.  fathers#17", "", "• Second.", "", "FIXED", "",
+            "• A long entry that has to wrap because it says a great deal more than",
+            "  one line of the overlay can hold at all.  fathers#21", "", "",
+            "Godfather 0.1.0 · 2026-11-11 · installed", "", "REMOVED", "", "• An old key."], text[start:])
+        self.assertTrue(all(len(line) <= 72 for line in text), "at most 72 cells, even in a wider overlay")
+        title = dict((part[0], part[1]) for part in lines[start])
+        self.assertEqual(("text", "bold", "dim", "ok"), (title["Godfather "], title["0.2.0"], title["2026-12-01"],
+                                                         title["new"]))
+        self.assertEqual("accent", dict(lines[text.index("Godfather 0.1.0 · 2026-11-11 · installed")])["installed"])
+        self.assertEqual([("ADDED", "dim")], lines[start + 2], "caps, the dim label colour, not bold")
+        bullet = lines[start + 4]
+        self.assertEqual(("  fathers#17", "dim"), bullet[-1], "the reference dimmed, two cells after the text")
+        self.assertNotIn("Not out yet.", " ".join(text), "Unreleased stays out of the combined timeline")
+        self.assertFalse(any("**" in line or "`" in line or "](" in line for line in text), "no raw markdown")
 
-    def test_the_footer_version_is_the_click_target_and_the_dialog_closes(self) -> None:
+    def test_godfathers_own_view_starts_with_what_is_not_released_yet(self) -> None:
+        text = ["".join(part[0] for part in parts) for parts in self.lines(70, "godfather")]
+        self.assertEqual(["not released yet", "", "FIXED", "", "• Not out yet.", "", "", "Godfather 0.2.0 · 2026-12-01 · new"],
+                         text[text.index("not released yet"):text.index("not released yet") + 8])
+
+    def test_the_versions_come_first_a_stale_or_old_one_with_what_to_do(self) -> None:
+        from godfather import news
+        found = news.News((news.Installed("godfather", "0.1.0", "stale"), news.Installed("slotfather", "0.2.0", "ok"),
+                           news.Installed("lanefather", None, "absent"),
+                           news.Installed("junkfather", "0.1.0", "versions")), ())
+        text = ["".join(part[0] for part in parts) for parts in tool().news_lines(70, found)]
+        self.assertEqual(["Godfather   0.1.0  ↻ restart to update", "Slotfather  0.2.0", "Lanefather  not installed",
+                          "Junkfather  0.1.0  versions only — update Junkfather", "", "",
+                          "Nothing in the changelogs yet."], text)
+
+    def test_whats_new_in_the_footer_is_the_click_target_and_the_dialog_closes(self) -> None:
         view = tool()
         canvas = view.Canvas(140, 30)
         view.dashboard_draw(canvas, None)
         row, start, end = canvas.version_at
         footer = "".join(cell[0] for cell in canvas.cells[row])
-        self.assertEqual(view.running_version(), footer[start:end].strip())
-        self.assertTrue(view.running_version().startswith(view._version.VERSION))
-        state, _ = view.reduce(drawn_state(canvas), view.Mouse(0, start, row, True), 0.0)
-        self.assertEqual(view.Changelog(), state.overlay, "a click on the version opens the changelog")
+        self.assertEqual("Godfather · what's new?", footer[start:end])
+        for x in (start, end - 1):
+            state, _ = view.reduce(drawn_state(canvas), view.Mouse(0, x, row, True), 0.0)
+            self.assertEqual(view.Changelog(), state.overlay, "a click on what's new opens it")
         canvas = view.Canvas(100, 30)
         view.dashboard_draw(canvas, None, overlay=view.Changelog())
-        self.assertIn("CHANGELOG", canvas.render(False))
+        self.assertIn("WHAT'S NEW", canvas.render(False))
         self.assertIn("esc close", canvas.render(False))
         info = canvas.help_view
         state = drawn_state(canvas, overlay=view.Changelog())
