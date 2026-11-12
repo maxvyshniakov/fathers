@@ -47,11 +47,11 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   the focus blue, ok, warn, bad and legacy, and the MACHINE chart and bars, a smooth indigo-to-red ramp through
   purple and magenta whose red is also a critical bar's. Terminal mode keeps the theme's ANSI colours.
 - Unfocused frames are a little paler than muted text.
-- MACHINE starts right under its top border, with the chart's axis right under the chart; short of rows, the
-  chart shrinks to two rows and then goes before load, memory and swap share one compact line, and memory and
-  swap are always shown.
+- MACHINE keeps the chart's axis right under the chart; short of rows, the chart shrinks to two rows and then
+  goes before load, memory and swap share one compact line, and memory and swap are always shown.
 - MACHINE has no status row: each of load, memory and swap starts with 🆗 or 🔥, and the unleased load and the
-  admission state sit on the right of its top border.
+  admission state sit on the right of its top border. A blank row stays under the border; short of rows it goes
+  after the chart and before the rows compress.
 - Under 110 columns MACHINE and EVENTS sit side by side below the details; under 83, EVENTS goes.
 - The holder palette is "Neon": eight saturated hues (hot pink, orange, acid green, spring teal, cyan, electric
   violet, magenta, green), more distinct from one another, with inks at 4.6:1 or more.

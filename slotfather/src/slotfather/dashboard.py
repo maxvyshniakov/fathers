@@ -47,7 +47,7 @@ from . import version as _version
 
 SPARK = "▁▂▃▄▅▆▇█"
 CHART_ROWS, MIN_CHART_ROWS = 4, 2  # the chart's rows when there is room; fewer than two, it goes (owner)
-MACHINE_HEIGHT = 7 + CHART_ROWS  # frame, 3 resource rows, a gap, the chart and its axis line
+MACHINE_HEIGHT = 8 + CHART_ROWS  # frame, a blank row, 3 resource rows, a gap, the chart and its axis line
 LABEL_COLUMN = 12  # a MACHINE row: its health mark, a gap, the label, then the bar this far in
 HISTORY_WINDOW = 3600  # seconds of queue.log the utilisation strip rebuilds
 LOG_TAIL = 262144  # bytes of queue.log read per refresh
@@ -1430,15 +1430,16 @@ def draw_machine(canvas: Canvas, y: int, x: int, height: int, width: int, model:
     chart_width = max(1, inner)
     buckets = history_buckets(model["history"], chart_width)
     summary = history_summary(model["history"], slots)
-    # Inside the frame: the status line, a gap, the three resource rows; then a gap, the chart and its axis line,
-    # which the bottom frame follows directly. Short of rows (owner, 2026-11-12) the chart gives up height first,
-    # 4 → 3 → 2 rows and then entirely (never one row); then the resource rows become one compact line; memory and
-    # swap never go.
+    # Inside the frame: a blank row, the three resource rows; then a gap, the chart and its axis line, which the
+    # bottom frame follows directly. Short of rows (owner, 2026-11-12) the chart gives up height first, 4 → 3 → 2
+    # rows and then entirely (never one row); then the blank row; then the resource rows become one compact line;
+    # memory and swap never go.
     interior = height - 2
     full = interior >= len(lines)
-    chart_rows = min(CHART_ROWS, interior - len(lines) - 2) if full else 0
+    padded = interior >= 1 + len(lines)  # a blank row under the top border, which carries the status (owner)
+    chart_rows = min(CHART_ROWS, interior - 1 - len(lines) - 2) if padded else 0
     chart_rows = chart_rows if chart_rows >= MIN_CHART_ROWS else 0
-    row = y + 1  # right under the top border, which carries the status (owner, 2026-11-12)
+    row = y + 2 if padded else y + 1
     critical = {"load 1m": load_hot, "memory": memory_low, "swap": swap_low}
     if full:
         for name, parts in lines:

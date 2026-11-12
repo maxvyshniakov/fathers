@@ -853,8 +853,9 @@ class MachineStatusTests(unittest.TestCase):
                 lines=canvas.lines(False)
                 permit=f"admission: {admission} slots" if admission else "no admission"
                 self.assertTrue(lines[0].rstrip().endswith(f" unleased 4.5 · {permit} ─╮"),lines[0])
-                for row,(name,mark) in enumerate(zip(("load 1m","memory","swap"),marks),1):
-                    self.assertEqual(mark,canvas.cells[row][3][0],f"{name}: right under the top border")
+                self.assertFalse("".join(cell[0] for cell in canvas.cells[1][1:-1]).strip(),"a blank row first")
+                for row,(name,mark) in enumerate(zip(("load 1m","memory","swap"),marks),2):
+                    self.assertEqual(mark,canvas.cells[row][3][0],f"{name}: under the blank row")
                     self.assertEqual(name,"".join(cell[0] for cell in canvas.cells[row][6:6+len(name)]))
                 self.assertNotIn("memory ok",canvas.render(False),"no status row")
                 coloured=canvas.lines(True)[0]
@@ -866,7 +867,7 @@ class MachineStatusTests(unittest.TestCase):
                 tool.draw_machine(ascii_canvas,0,0,24,110,model)
                 plain=ascii_canvas.lines(False,ascii_only=True)
                 self.assertEqual("".join("!" if mark=="🔥" else "+" for mark in marks),
-                                 "".join(plain[row][3] for row in (1,2,3)),"ASCII: + and !")
+                                 "".join(plain[row][3] for row in (2,3,4)),"ASCII: + and !")
                 tool.use_marks(False)
 
     def test_a_narrow_border_keeps_the_admission_and_drops_the_unleased_load(self):
@@ -897,8 +898,9 @@ class MemoryBarTests(unittest.TestCase):
                           memory=dict(level=1, used=768, total=1024, swap_total=512, swap_free=128),
                           history=[(now-datetime.timedelta(hours=1), now, 4)]))
         lines = canvas.render(False).splitlines()
-        self.assertEqual(11, len(lines))
-        self.assertIn("load 1m", lines[1], "the rows right under the top border")
+        self.assertEqual(12, len(lines))
+        self.assertFalse(lines[1][1:-1].strip(), "a blank row under the top border")
+        self.assertIn("load 1m", lines[2], "then the rows")
         text = "\n".join(lines)
         self.assertIn("used 768 MB of 1.0 GB", text)
         self.assertIn("used 384 MB of 512 MB", text)
@@ -960,8 +962,8 @@ class MemoryBarTests(unittest.TestCase):
     def test_full_capacity_is_the_ramps_red_end_in_the_shortest_chart(self):
         tool=load_dashboard()
         now=datetime.datetime.now(datetime.timezone.utc)
-        canvas=tool.Canvas(90,9)
-        tool.draw_machine(canvas,0,0,9,90,dict(slots=4,cores=12,averages=(1,2,3),
+        canvas=tool.Canvas(90,10)
+        tool.draw_machine(canvas,0,0,10,90,dict(slots=4,cores=12,averages=(1,2,3),
                           advice=dict(unleased_load=0,jobs=2),memory_block=None,
                           memory=dict(level=1,used=768,total=1024,swap_total=512,swap_free=128),
                           history=[(now-datetime.timedelta(hours=1),now,4)]))
@@ -983,7 +985,7 @@ class MemoryBarTests(unittest.TestCase):
 
     def test_the_chart_gives_up_rows_first_four_three_two_then_none(self):
         tool=load_dashboard()
-        for height,chart in ((11,4),(10,3),(9,2),(8,0),(7,0),(5,0)):
+        for height,chart in ((12,4),(11,3),(10,2),(9,0),(8,0),(6,0),(5,0)):
             with self.subTest(height=height):
                 lines=self.machine(tool,height)
                 rows=sum(1 for line in lines if any(glyph in line for glyph in tool.SPARK))
@@ -991,6 +993,9 @@ class MemoryBarTests(unittest.TestCase):
                 self.assertEqual(chart>0,any("avg" in line for line in lines),"the axis line goes with the chart")
                 for name in ("load 1m","memory","swap"):
                     self.assertTrue(any(name in line for line in lines),f"{name}: rows before the chart goes")
+                padded=height>=6
+                self.assertEqual(padded,not lines[1][1:-1].strip(),"the blank row goes after the chart, before the rows")
+                self.assertIn("load 1m",lines[2 if padded else 1])
 
     def test_short_of_rows_the_resources_share_one_line_and_never_drop_memory_or_swap(self):
         tool=load_dashboard()
