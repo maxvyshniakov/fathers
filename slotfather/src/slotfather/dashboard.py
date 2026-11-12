@@ -64,7 +64,7 @@ def set_theme(theme: _theme.Theme) -> None:
     current_theme = theme
 
 
-ASCII = str.maketrans({"╔": "#", "╗": "#", "╚": "#", "╝": "#", "═": "=", "║": "#", "▀": "#", "🆗": "+", "🔥": "!", "🮅": "#", "■": "#", "▪": "#", "◌": "o", "□": "o", "▫": "o", "▶": ">", "▉": "#", "▌": "+", "▐": "|", "█": "#", "▓": "%", "▒": "=", "░": ".", "·": ".", "●": "*", "…": "~", "─": "-", "│": "|",
+ASCII = str.maketrans({"▀": "#", "🆗": "+", "🔥": "!", "🮅": "#", "■": "#", "▪": "#", "◌": "o", "□": "o", "▫": "o", "▶": ">", "▉": "#", "▌": "+", "▐": "|", "█": "#", "▓": "%", "▒": "=", "░": ".", "·": ".", "●": "*", "…": "~", "─": "-", "│": "|",
                        "╭": "+", "╮": "+", "╰": "+", "╯": "+", "↑": "^", "↓": "v", "↗": "/", "↘": "\\", "→": ">",
                        "←": "<", "≈": "~", "×": "x", "—": "-", "⏸": "=", "▭": "o", "−": "-", "╻": "#", "╹": "#",  "┃": "#", "▁": "_", "▂": "_", "▃": "-", "▄": "-",
                        "▅": "=", "▆": "=", "▇": "#"})
@@ -321,11 +321,8 @@ class Canvas:
         #15) in the accent blue, the same glyphs: focus shows by colour alone (owner)."""
         if height < 2 or width < 6:
             return
-        focused = bool(name) and name == self.focus
-        frame = "accent" if focused else "frame"
-        # The focused panel's frame is double (owner, 2026-11-12); panels never share an edge, so no junction mixes
-        top_left, top_right, bottom_left, bottom_right, across, down = (
-            ("╔", "╗", "╚", "╝", "═", "║") if focused else ("╭", "╮", "╰", "╯", "─", "│"))
+        frame = "accent" if name and name == self.focus else "frame"
+        top_left, top_right, bottom_left, bottom_right, across, down = "╭", "╮", "╰", "╯", "─", "│"
         self.put(y, x, top_left + across * (width - 2) + top_right, frame)
         for row in range(y + 1, y + height - 1):
             self.put(row, x, down, frame)

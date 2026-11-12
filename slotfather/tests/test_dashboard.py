@@ -84,11 +84,9 @@ class DashboardTests(SlotCase):
         lines = text.splitlines()
         for title, message in (("QUEUE", "No requests"), ("EVENTS", "No grants")):
             row = next(i for i, line in enumerate(lines) if title in line)
-            inner = lines[row + 1][1:]
-            self.assertFalse(inner[:min(i for i in (inner.find("│"), inner.find("║")) if i >= 0)].strip(),
-                             "a blank padding row first")
+            self.assertFalse(lines[row + 1][1:lines[row + 1].index("│", 1)].strip(), "a blank padding row first")
             self.assertEqual(lines[row].index(title), lines[row + 2].index(message), "then the message")
-            self.assertTrue({"╭", "╔"} & set(lines[row]), "its corner: light, or double while focused")
+            self.assertIn("╭", lines[row])
             if title != "EVENTS":
                 self.assertIn("pid", lines[row], "column names belong on the top border")
 
@@ -144,7 +142,7 @@ class DashboardTests(SlotCase):
         self.assertNotIn("next:", text)
         self.assertNotIn("2/4 held", text)
         self.assertIn("no admission",text)
-        self.assertIn("═ QUEUE ", text, "QUEUE has focus: its double frame")
+        self.assertIn("─ QUEUE ", text)
         self.assertNotIn("REQUESTS", text, "the request table is the QUEUE panel")
         self.assertNotIn("RUNNING", text)
         self.assertIn("┃  ▶️    holder", text, "the selected row on the frame, its state (#15), then the label")
@@ -481,7 +479,7 @@ class QueueTableTests(unittest.TestCase):
                 self.assertIn("▪▪▪", gate, "the slot cells stay longest after the label")
                 if "cpu use/share" in kept:
                     self.assertIn("waiting #1", gate, "the state outlasts the time and pid")
-                self.assertIn(gate.rstrip()[-1], "│┃║")
+                self.assertIn(gate.rstrip()[-1], "│┃")
 
     def test_a_wide_table_shares_its_width_out_in_proportion(self) -> None:
         model = self.model()

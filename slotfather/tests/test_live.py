@@ -132,7 +132,7 @@ class FocusTests(unittest.TestCase):
                 self.assertEqual("\x1b[0;38;2;%d;%d;%dm" % view.current_theme.styles["accent"][0], view.sgr("accent", False),
                                  "our accent blue")
 
-    def test_the_focused_frame_is_double_in_blue_and_the_rest_light_and_rounded(self) -> None:
+    def test_every_frame_is_light_and_rounded_and_focus_shows_by_colour(self) -> None:
         view = tool()
         canvas = view.Canvas(80, 20)
         canvas.focus = "details"
@@ -140,21 +140,18 @@ class FocusTests(unittest.TestCase):
         canvas.box(0, 40, 10, 40, "DETAILS", name="details")
         canvas.box(10, 0, 10, 80, "EVENTS", name="events")
         rows = ["".join(cell[0] for cell in row) for row in canvas.cells]
-        self.assertEqual(("╭", "╮", "╰", "╯"), (rows[0][0], rows[0][39], rows[9][0], rows[9][39]), "QUEUE")
-        self.assertEqual(("│", "─"), (rows[5][0], rows[9][20]))
-        self.assertEqual(("╔", "╗", "╚", "╝"), (rows[0][40], rows[0][79], rows[9][40], rows[9][79]), "DETAILS: double")
-        self.assertEqual(("║", "═", "║"), (rows[5][40], rows[9][60], rows[5][79]))
-        self.assertEqual("╔═ DETAILS ═", rows[0][40:52], "the double border runs straight into the title")
-        self.assertEqual(("╭", "╮"), (rows[10][0], rows[10][79]), "a light corner under a double one, unmixed")
-        self.assertFalse(set("┏┓┗┛━╠╣╦╩╬╞╡╟╢") & set("".join(rows)), "no heavy glyphs or mixed junctions")
-        self.assertEqual("#=", canvas.lines(False, ascii_only=True)[0][40:42], "ASCII: # and =")
+        for x, name in ((0, "QUEUE"), (40, "DETAILS")):
+            self.assertEqual(("╭", "╮", "╰", "╯"), (rows[0][x], rows[0][x + 39], rows[9][x], rows[9][x + 39]), name)
+            self.assertEqual(("│", "─"), (rows[5][x], rows[9][x + 20]), name)
+        self.assertEqual(("╭", "╮"), (rows[10][0], rows[10][79]))
+        self.assertFalse(set("┏┓┗┛━┃") & set("".join(rows)), "no heavy glyphs")
         self.assertEqual({"accent"}, {cell[1] for cell in (canvas.cells[0][40], canvas.cells[0][79],
                                                             canvas.cells[5][40], canvas.cells[9][60])})
         self.assertEqual({"frame"}, {cell[1] for cell in (canvas.cells[0][0], canvas.cells[5][39], canvas.cells[15][0])})
         lines = canvas.lines(True)
         blue = view.sgr("accent", False)
-        self.assertIn(blue + "╔", lines[0], "the focused corner in our blue")
-        self.assertIn(blue + "║", lines[5], "and its sides")
+        self.assertIn(blue + "╭", lines[0], "the focused corner in our blue")
+        self.assertIn(blue + "│", lines[5], "and its sides")
         self.assertEqual("DETAILS", "".join(cell[0] for cell in canvas.cells[0][43:50]))
         self.assertEqual("title", canvas.cells[0][43][1], "the title in the foreground (bold), as on every panel")
 
@@ -533,7 +530,7 @@ class LiveTests(SlotCase):
             for found in re.finditer(r"\x1b\[(\d+);1H([^\n]*?)(?=\x1b\[\d+;1H|$)",
                                      self.raw.decode("utf-8", "replace"), re.S):
                 rows[int(found[1])] = PLAIN.sub("", found[2])
-            cells = re.split("[│┃║]", rows.get(3, ""))  # row 2 is the blank padding row
+            cells = re.split("[│┃]", rows.get(3, ""))  # row 2 is the blank padding row
             return len(cells) >= 3 and "priority" in cells[-2]
 
         mark = len(receive(top_row, 3, "the details scrolled two lines"))
