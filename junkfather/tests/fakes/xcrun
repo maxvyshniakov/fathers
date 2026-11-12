@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from _fake import begin, save  # noqa: E402
+
+state, args = begin("xcrun")
+sims = state.setdefault("sims", {})
+if args[:4] == ["simctl", "list", "-j", "devices"]:
+    devices = [{"udid": u, "name": d["name"], "state": d["state"], "isAvailable": True} for u, d in sims.items()]
+    print(json.dumps({"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-27-0": devices}}))
+elif args[:2] == ["simctl", "boot"] and args[2] in sims:
+    if sims[args[2]]["state"] == "Booted":
+        print("Unable to boot device in current state: Booted", file=sys.stderr)
+        sys.exit(149)
+    sims[args[2]]["state"] = "Booted"
+    save(state)
+elif args[:2] == ["simctl", "shutdown"] and args[2] in sims:
+    sims[args[2]]["state"] = "Shutdown"
+    save(state)
+else:
+    print(f"xcrun: unexpected {args}", file=sys.stderr)
+    sys.exit(2)

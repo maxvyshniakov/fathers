@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+import hashlib
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from _fake import begin, save  # noqa: E402
+
+state, args = begin("docker")
+boxes = state.setdefault("containers", {})
+
+
+def find(given):
+    for ident, box in boxes.items():
+        if ident.startswith(given) or box["name"] == given:
+            return ident
+    return None
+
+
+if args[:1] == ["ps"]:
+    for ident, box in boxes.items():
+        if box["running"]:
+            print(f"{ident}\t{box['name']}\t{box['image']}")
+elif args[:1] == ["inspect"]:
+    ident = find(args[-1])
+    if ident is None:
+        print(f"Error: No such object: {args[-1]}", file=sys.stderr)
+        sys.exit(1)
+    print(f"{ident}\t/{boxes[ident]['name']}")
+elif args[:2] == ["run", "-d"]:
+    ident = hashlib.sha256(str(len(boxes)).encode() + args[-1].encode()).hexdigest()
+    boxes[ident] = {"name": f"box{len(boxes)}", "image": args[-1], "running": True}
+    save(state)
+    print(ident)
+elif args[:1] == ["stop"] and find(args[-1]):
+    boxes[find(args[-1])]["running"] = False
+    save(state)
+    print(args[-1])
+elif args[:1] == ["rm"] and find(args[-1]):
+    del boxes[find(args[-1])]
+    save(state)
+else:
+    print(f"docker: unexpected {args}", file=sys.stderr)
+    sys.exit(1)

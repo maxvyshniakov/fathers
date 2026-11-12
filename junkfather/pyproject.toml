@@ -1,0 +1,19 @@
+# junkfather is standard library only and installs without a build step (install.py); this file names the version
+# and configures the checks tools/check.py runs (Ruff and Pyright, pinned in requirements-dev.txt).
+[project]
+name = "junkfather"
+version = "0.1.0"  # the newest release in CHANGELOG.md; junkfather/__init__.py __version__ matches it
+requires-python = ">=3.9"
+license = "MIT"
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B"]
+
+[tool.pyright]
+include = ["junkfather", "tests", "install.py", "tools"]
+pythonVersion = "3.9"
+typeCheckingMode = "basic"
