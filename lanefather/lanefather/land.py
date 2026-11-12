@@ -195,7 +195,8 @@ def land(args: Any) -> int:
         results, check_results, triaged, stamp = checks.run_suites(checkout, suites, f"post-merge-{args.id}", jobs,
                                                                    selected=selected, phase="post-merge",
                                                                    meta=checks.lane_meta(record),
-                                                                   ticket=checks.lane_ticket(record))
+                                                                   ticket=checks.lane_ticket(record),
+                                                                   toolchain=toolchain)
     status = "green" if all(r["status"] == "passed" for r in results) else "red"
     post = state.receipt_path(args.id, "post-merge")
     info = host()

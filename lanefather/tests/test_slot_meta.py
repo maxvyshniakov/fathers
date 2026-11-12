@@ -7,7 +7,7 @@ import pathlib
 from typing import Any
 import unittest
 
-from support import LaneCase
+from support import FAKE_PLAN, LaneCase
 
 
 def plan_key(selection: Any) -> str:
@@ -76,6 +76,34 @@ class SlotMetaTests(LaneCase):
         self.lane("check", "a")
         check = self.requests()[-1]
         self.assertEqual((check["plan"], check["checks"]), (plan_key(["suite:structure", "suite:lib"]), "3"))
+
+    def test_a_base_rerun_and_the_perf_suite_name_their_run_type(self):
+        worktree = self.created("core", "native/**")
+        self.commit(worktree, {"native/straylight-core/corpus.txt": "v2\n"})
+        self.lane("check", "core", ok=False)
+        # The base rerun queues itself as verify does: its meta goes through the slot environment.
+        base = [m for m in self.requests() if m.get("on") == "base"]
+        self.assertEqual([(m["phase"], m["plan"], m["checks"]) for m in base],
+                         [("rerun", plan_key(["native-check"]), "1")])
+        self.git(self.repo, "branch", "dev")
+        self.commit(self.integration, {"tools/verification_plan.py": FAKE_PLAN + 'PERF = "perf"\n'}, "perf suite")
+        self.lane("perf", self.tip())
+        perf = self.requests()[-1]
+        self.assertEqual((perf["phase"], perf["plan"]), ("perf", plan_key(["suite:perf"])))
+        # The fixture's plan module has no perf checks of its own to count.
+        self.assertEqual(perf["checks"], "0")
+
+
+class PlanMetaTests(unittest.TestCase):
+    def test_counts_are_check_ids_or_given_and_a_refused_toolchain_is_one_run_type(self):
+        from lanefather import checks, results
+        self.assertEqual(checks.plan_meta(["a", "b", "a"], toolchain=None),
+                         {"plan": results.plan_hash(["a", "b"]), "checks": "2"})
+        # Whole suites without a plan module to count them leave the count out rather than count suites.
+        self.assertNotIn("checks", checks.plan_meta(["suite:lib", "suite:native"], toolchain=None))
+        self.assertEqual(checks.plan_meta(["step:install"], None, 0)["checks"], "0")
+        self.assertEqual(checks.plan_meta(["a"], toolchain={"refused": "rustup: no toolchain at /tmp/x"}),
+                         checks.plan_meta(["a"], toolchain={"refused": "rustup: timed out after 300 s"}))
 
 
 if __name__ == "__main__":

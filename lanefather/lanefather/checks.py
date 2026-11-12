@@ -75,12 +75,22 @@ def verify_env(label: str, phase: str, *, ticket: str | None = None, **meta: Any
     return dict(os.environ, **slots.queue_environment(label, priority, ticket=ticket, **tags))
 
 
-def plan_meta(selection: Any, root: Any = None, count: int | None = None) -> dict[str, str]:
+UNRESOLVED: Any = object()
+
+
+def plan_meta(selection: Any, root: Any = None, count: int | None = None, toolchain: Any = UNRESOLVED,
+              ) -> dict[str, str]:
     """The run type a slot request carries (fathers#107): `plan`, the plan's key of the results store (fathers#91:
-    its sorted check ids, or FULL, with the toolchain of `root`), and `checks`, how many checks it runs, when known.
-    Slotfather keeps expected durations per run type."""
-    toolchain = plan.toolchain_state(root) if root is not None else None
-    number = count if count is not None else None if selection == result_store.FULL else len(set(selection))
+    its sorted check ids, or FULL, with the toolchain), and `checks`, how many checks it runs. A selection of check
+    ids counts them; the full gate, whole suites (`suite:<name>`) and a promote step (`step:<name>`) take `count`,
+    and leave `checks` out without one. The toolchain is the caller's when it resolved it, else `root`'s; a refused
+    one is one run type, whatever its message. Slotfather keeps expected durations per run type."""
+    if toolchain is UNRESOLVED:
+        toolchain = plan.toolchain_state(root) if root is not None else None
+    if isinstance(toolchain, dict) and "refused" in toolchain:
+        toolchain = {"refused": True}
+    named = selection == result_store.FULL or any(str(item).startswith(("suite:", "step:")) for item in selection)
+    number = count if named else len(set(selection))
     return {"plan": result_store.plan_hash(selection, toolchain), **({"checks": str(number)} if number is not None
                                                                     else {})}
 
@@ -102,7 +112,7 @@ def lane_ticket(record: Record) -> str | None:
 
 def run_suites(root: Any, suites: list[str], label: str, jobs: int, full: bool = False,
                selected: dict[str, list[str]] | None = None, phase: str = "check",
-               meta: dict[str, Any] | None = None, ticket: str | None = None,
+               meta: dict[str, Any] | None = None, ticket: str | None = None, toolchain: Any = UNRESOLVED,
                ) -> tuple[Rows, dict[str, dict[str, Any]], str | None, dict[str, Any]]:
     """Each suite's result, each selected check's result, the gate triage when the run is red, and the verified-tree
     stamp.
@@ -123,11 +133,11 @@ def run_suites(root: Any, suites: list[str], label: str, jobs: int, full: bool =
     # verify queues for its own --jobs-slot lease; label, priority, ticket and tags name the run (#650).
     if full:
         known = plan.known_checks(root)
-        kind = plan_meta(result_store.FULL, root, len(known) if known is not None else None)
+        kind = plan_meta(result_store.FULL, root, len(known) if known is not None else None, toolchain)
     elif ids is not None:
-        kind = plan_meta(ids, root)
+        kind = plan_meta(ids, root, toolchain=toolchain)
     else:
-        kind = plan_meta([f"suite:{s}" for s in suites], root, suite_count(root, suites))
+        kind = plan_meta([f"suite:{s}" for s in suites], root, suite_count(root, suites), toolchain)
     # verify queues for its own --jobs-slot lease; label, priority, ticket and tags name the run (#650). The run id
     # and tree in the lease's meta tie the lease to the receipt and the history (fathers#92).
     run_id, tree = new_run_id(), tree_of(root)
@@ -332,12 +342,12 @@ class Rerun:
     need no slot."""
 
     def __init__(self, root: Any, ids: list[str], label: str, jobs: int, queued: bool = True,
-                 meta: dict[str, Any] | None = None, ticket: str | None = None):
+                 meta: dict[str, Any] | None = None, ticket: str | None = None, toolchain: Any = UNRESOLVED):
         self.root, self.ids, self.label, self.jobs = root, ids, label, jobs
         self.log = journal.log_path(label)
         self.run_id, self.tree = new_run_id(), tree_of(root)
-        self.meta = {"check": ",".join(ids), **(meta or {}), **plan_meta(ids, root), "run": self.run_id,
-                     **({"tree": self.tree} if self.tree else {})}
+        self.meta = {"check": ",".join(ids), **(meta or {}), **plan_meta(ids, root, toolchain=toolchain),
+                     "run": self.run_id, **({"tree": self.tree} if self.tree else {})}
         self.ticket = ticket
         self.verify = [plan.verify_path(root), "--checks", ",".join(ids), "--keep-going", "--jobs", str(jobs)]
         priority, source = slots.phase_priority("rerun")
@@ -428,7 +438,7 @@ def keep_run(run: Path | None, label: str) -> Path | None:
 
 
 def classify(record: Record, worktree: str, base: str, fresh: Rows,
-             report: dict[str, Any] | None, jobs: int = 1) -> dict[str, Any] | None:
+             report: dict[str, Any] | None, jobs: int = 1, toolchain: Any = UNRESOLVED) -> dict[str, Any] | None:
     """Rerun the red checks of a lane check (at most LANEFATHER_RERUNS) and classify each; None when nothing is red.
     `green` is true when every red check is flaky-under-load or pre-existing.
 
@@ -461,7 +471,7 @@ def classify(record: Record, worktree: str, base: str, fresh: Rows,
     if rerun and not first:
         alone_report, log, _, problem = run_rerun(Rerun(worktree, rerun, f"lane-{record['id']}-alone",
                                                         rerun_jobs(jobs), meta=lane_meta(record),
-                                                        ticket=lane_ticket(record)))
+                                                        ticket=lane_ticket(record), toolchain=toolchain))
         load["alone"] = host.load_averages()
         for check_id in rerun:
             row = report_row(alone_report, check_id)
@@ -756,7 +766,7 @@ def check(args: Any) -> int:
     else:
         decision: dict[str, Any] = {"jobs": 1, "reason": "nothing to run"}
     fresh, ran, triaged, classification, stopped = lane_run(record, worktree, base, suites, remaining,
-                                                            decision["jobs"])
+                                                            decision["jobs"], toolchain)
     results = combined_results(suites, selected, fresh, reused)
     check_results = {} if selected is None else {
         c: reused.get(c) or ran.get(c) or {"suite": s, "status": "not_run"} for s, ids in selected.items() for c in ids}
@@ -830,7 +840,8 @@ def leases_of(fresh: Rows) -> list[dict[str, Any]]:
 
 
 def lane_run(record: Record, worktree: str, base: str, suites: list[str], remaining: dict[str, list[str]] | None,
-             jobs: int) -> tuple[Rows, dict[str, dict[str, Any]], str | None, dict[str, Any] | None, Any]:
+             jobs: int, toolchain: Any = UNRESOLVED,
+             ) -> tuple[Rows, dict[str, dict[str, Any]], str | None, dict[str, Any] | None, Any]:
     """Run the lane's checks that are left and classify the red ones (#568): (results, check results, triage,
     classification, stopped).
 
@@ -841,13 +852,13 @@ def lane_run(record: Record, worktree: str, base: str, suites: list[str], remain
                                                                  dict[str, Any] | None, Any]:
         fresh, ran, triaged, _ = run_suites(worktree, [s for s in suites if selection is None or selection.get(s)],
                                             f"lane-{record['id']}", jobs, selected=selection,
-                                            meta=lane_meta(record), ticket=lane_ticket(record))
+                                            meta=lane_meta(record), ticket=lane_ticket(record), toolchain=toolchain)
         classification, report = None, None
         if any(r["status"] != "passed" for r in fresh):
             run = next((Path(r["report"]).parent for r in fresh if r.get("report")), None)
             report = state.read_json(run / "report.json") if run else None
             with terminable():
-                classification = classify(record, worktree, base, fresh, report, jobs)
+                classification = classify(record, worktree, base, fresh, report, jobs, toolchain)
             if classification and run:
                 # The project's gate triage reads the classification beside the run's report (rerun.json).
                 state.write_json(run / "rerun.json", classification)

@@ -320,7 +320,7 @@ def install_and_deploy(common: str, sha: str, deploy: str | None) -> None:
                     argv = slots.wrap(step.lease.slots, f"promote-{sha[:10]}-{step.name}", argv,
                                       priority=priority, ticket=step.lease.ticket, required=True,
                                       meta={"phase": step.name, "kind": "promote", "sha": sha[:10],
-                                            **checks.plan_meta([f"step:{step.name}"], path, 0),
+                                            **checks.plan_meta([f"step:{step.name}"], None, 0),
                                             **slots.priority_meta(priority, source),
                                             "lanefather.state": str(state.state_dir())})
                 except slots.Unavailable as error:
