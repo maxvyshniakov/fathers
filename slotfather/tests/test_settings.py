@@ -251,12 +251,15 @@ class KeyTests(PanelCase):
     def test_one_flat_list_with_labels_that_read_alone_and_units_by_the_values(self) -> None:
         dialog = self.dialog()
         self.assertEqual(["mode", "order", "safety", "fallback", "overrun", "limit", "interactive", "batch",
-                          "idle_cpu", "idle_after", "yield_after", "interval", "theme"], dialog.fields())
+                          "aging_batch", "aging_normal", "warn_wait", "idle_cpu", "idle_after", "yield_after",
+                          "interval", "theme"], dialog.fields())
         text = self.panel(dialog, idle(), height=60)
         for label, value in (("Capacity", "Automatic"), ("Queue order", "Backfill"), ("Backfill margin", "3×"),
                              ("Unknown job runtime", "3600 s"), ("Overrun estimate", "0.5×"),
-                             ("Overtaking stops after", "2700 s"), ("Interactive head start", "1800 s"),
-                             ("Batch held back", "1800 s"), ("Idle when below", "0.1 cores"),
+                             ("Overtaking stops after", "never"), ("Interactive head start", "1800 s"),
+                             ("Batch held back", "1800 s"), ("Batch promoted after", "1800 s"),
+                             ("Normal promoted after", "3600 s"), ("Warn after waiting", "1800 s"),
+                             ("Idle when below", "0.1 cores"),
                              ("Idle for", "300 s"), ("Ask to yield after", "120 s"), ("Refresh every", "1 s"),
                              ("Colour theme", "Auto")):
             self.assertRegex(text, rf"{re.escape(label)} +(‹ )?{re.escape(value)}")

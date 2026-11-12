@@ -4,6 +4,7 @@
                                                                      run COMMAND holding N slots (default 1)
   slotfather yield                                                   inside a yieldable lease: yield if asked
   slotfather status [--json [--pid PID]]                             running and waiting requests, in queue order
+  slotfather reprioritize PID|LABEL interactive|normal|batch         move a request to another class, keeping its place
   slotfather procs --json [--cwd PATH] [--pid PID]                  read-only process, lease and session ancestry
   slotfather lane-admission --json                                    stateless lifetime lane policy, stdin JSON
   slotfather version [--json]                                        identify this runtime source
@@ -31,20 +32,24 @@ replaces the core count, SLOTFATHER_MEMORY_GIB the memory. A request above the t
 
 Requests are served in arrival order. A waiter that does not fit lets later requests that fit start before it until
 it has waited SLOTFATHER_OVERTAKE_WINDOW seconds (default 600). Past that it is the head (#643, the backfill order):
-a later request that fits still starts first if, by the run times of earlier requests of its kind in the history,
-three times its expected run ends before the head can start (when the held leases are expected to end) and before
-the head has waited 2700 s, its limit; past the limit nothing passes it. An all-slot request therefore starts at
-most the limit plus the overrun of what passed it, or, with classes, once what ranks ahead of it has run: the
-requests that came within the class offsets after it (up to 3600 s for a batch one), and their overrun. A batch
-request never holds back a waiting normal or interactive one: while such work waits it is no head, and a batch
-all-slot request does not start; once none waits it is the head over later batch work as before. A waiter whose
-`--wait` ends before the held leases are expected to free its slots, counting the overrun of those past their
-estimate, holds nobody back either. `slotfather order` shows and saves the order and these numbers
-for every client (order.json beside the queue); a client's environment can only tighten them, and
-SLOTFATHER_QUEUE=window falls back to the earlier order, where the head holds back everyone behind it. Classes
-(`--priority interactive|normal|batch`, normal by default): an interactive waiter queues as if it came 1800 s earlier,
-a batch one 1800 s later; an interactive waiter that has waited 120 s asks holders of a lower class that took
-`--yieldable` to yield, by a marker file their client checks between steps (SLOTFATHER_YIELD) before it runs
+its start is reserved for when the held leases are expected to end, and that reservation only ever moves earlier.
+A later request that fits still starts first if, by the run times of earlier requests of its kind in the history,
+three times its expected run ends before that reserved start, or if it takes only slots the head will not need
+then; requests that came after the head pass it only so, whatever their class. So short work keeps flowing beside
+a waiting all-slot request, and the request starts once the leases it waited for end, plus the overrun of what
+passed it. Classes (`--priority interactive|normal|batch`, normal by default): an interactive waiter queues as if
+it came 1800 s earlier, a batch one 1800 s later, and a waiting request moves up a class as it waits (ageing): a
+batch one is served as normal after 1800 s, and a normal one as interactive after 3600 s more, keeping its
+arrival. A batch request never holds back a waiting normal or interactive one: while such work waits it is no
+head, and a batch all-slot request does not start, until it has aged. A waiter whose `--wait` ends before the held
+leases are expected to free its slots, counting the overrun of those past their estimate, holds nobody back
+either. `slotfather order` shows and saves the order and these numbers for every client (order.json beside the
+queue); a client's environment can only tighten them, and SLOTFATHER_QUEUE=window falls back to the earlier order,
+where the head holds back everyone behind it. `slotfather reprioritize PID|LABEL CLASS` moves a request (yours) to
+another class without losing its place. A request that has waited 1800 s (`order --warn-wait`) says so on its
+stderr every 15 minutes, with its expected start, and in queue.log; `status` flags it. An interactive waiter that
+has waited 120 s asks holders of a lower class that took `--yieldable` to yield, by a marker file their client
+checks between steps (SLOTFATHER_YIELD) before it runs
 `slotfather yield`; nothing ever stops a holder. A process
 that already runs under a lease (SLOTFATHER_LEASE, or a holder among its ancestors) runs without a second lease, so
 nested wrappers neither deadlock nor count twice. A lease whose holder died (its pid gone, or reused by a process
@@ -109,10 +114,12 @@ USAGE = ("usage: slotfather                     (in a terminal: the live dashboa
          "       slotfather run [-n N|all] [--label L] [--meta KEY=VALUE]... [--priority interactive|normal|batch] [--ticket ID]\n"
          "                      [--yieldable] [--wait SECONDS] [--] COMMAND...      (inside a lease: slotfather yield)\n"
          "       slotfather status [--json [--pid PID]] | history [N] | available [--label L] [-- COMMAND...]\n"
+         "       slotfather reprioritize PID|LABEL interactive|normal|batch\n"
          "       slotfather lane-admission --json                         (one lifetime request on stdin)\n"
          "       slotfather advise [--max N] [--exclusive] [--label L] [-- COMMAND...]\n"
          "       slotfather order [backfill|window] [--safety X] [--limit S] [--fallback S] [--overrun X]\n"
-         "                        [--interactive S] [--batch S] [--yield-after S] [--idle-cpu C] [--idle-after S] | reset\n"
+         "                        [--interactive S] [--batch S] [--yield-after S] [--idle-cpu C] [--idle-after S]\n"
+         "                        [--aging-batch S] [--aging-normal S] [--warn-wait S] | reset   (S: 90, 90s, 30m, 1.5h)\n"
          "       slotfather stats [--since WHEN] [--label GLOB] [--by both|label|kind] [--top N] [--json]\n"
          "       slotfather slots [N|memory GIB|lower GIB|reset]\n"
          "       slotfather procs --json [--cwd PATH] [--pid PID] | version [--json]\n"
@@ -214,6 +221,19 @@ def status_command(argv: list[str]) -> int:
     return 0
 
 
+def reprioritize_command(argv: list[str]) -> int:
+    """`slotfather reprioritize PID|LABEL interactive|normal|batch`: the request keeps its arrival."""
+    from . import leases as _leases
+    if len(argv) != 2 or argv[1] not in _config.PRIORITIES:
+        raise _config.SlotError(f"reprioritize takes a pid or label and then one of {', '.join(_config.PRIORITIES)}")
+    for entry in _leases.reprioritize(argv[0], argv[1]):
+        first = entry.get("reprioritized")
+        print(f"{entry.get('label')} (pid {entry.get('pid')}, {entry.get('state')}): {argv[1]}" +
+              (f", asked {first} first" if first and first != argv[1] else "") +
+              f"; queued since {entry.get('since')}")
+    return 0
+
+
 def advise_command(argv: list[str]) -> int:
     from . import query as _query
     found, label, command = request_options(argv, "advise", {"--max": True, "--exclusive": False})
@@ -230,15 +250,19 @@ def available_command(argv: list[str]) -> int:
 
 
 def order_line(found: dict) -> str:
+    def ages(key: str) -> str:
+        return f"after {found[key]:g} s" if found[key] else "never"
     return (f"{found['order']}: safety {found['safety']:g}, limit {found['limit']:g} s, fallback "
             f"{found['fallback']:g} s, overrun {found['overrun']:g}; interactive {found['interactive']:g} s ahead, "
             f"batch {found['batch']:g} s behind, yield after {found['yield_after']:g} s; idle below "
-            f"{found['idle_cpu']:g} cores for {found['idle_after']:g} s ({'saved' if found['saved'] else 'default'})")
+            f"{found['idle_cpu']:g} cores for {found['idle_after']:g} s; batch ages {ages('aging_batch')}, normal "
+            f"{ages('aging_normal')}; warn after {found['warn_wait']:g} s waiting "
+            f"({'saved' if found['saved'] else 'default'})")
 
 
 def order_command(argv: list[str]) -> int:
     """`slotfather order [backfill|window] [--safety X] [--limit S] [--fallback S] [--overrun X] [--idle-cpu C]
-    [--idle-after S] | reset`."""
+    [--idle-after S] [--aging-batch S] [--aging-normal S] [--warn-wait S] | reset`; S is seconds or 30m, 1.5h."""
     from . import schedule as _schedule
     from . import state as _state
     directory = _config.state_dir()
@@ -251,22 +275,28 @@ def order_command(argv: list[str]) -> int:
         elif word == "reset" and not changes:
             reset = True
         elif word.startswith("--") and word[2:].replace("-", "_") in _config.ORDER_KNOBS and argv:
+            key = word[2:].replace("-", "_")
             try:
-                changes[word[2:].replace("-", "_")] = float(argv.pop(0))
+                changes[key] = _config.parse_duration(argv.pop(0)) if key in _config.DURATION_KNOBS else \
+                    float(argv.pop(0))
             except ValueError:
-                raise _config.SlotError(f"{word} takes a number") from None
+                raise _config.SlotError(f"{word} takes " + ("seconds, or a duration such as 30m or 1.5h"
+                                                            if key in _config.DURATION_KNOBS else "a number")) from None
         else:
             raise _config.SlotError(f"order takes backfill or window, --safety, --limit, --fallback, --overrun, "
-                            f"--interactive, --batch, --yield-after, --idle-cpu, --idle-after, or reset; not {word!r}")
+                            f"--interactive, --batch, --yield-after, --idle-cpu, --idle-after, --aging-batch, "
+                            f"--aging-normal, --warn-wait, or reset; not {word!r}")
     if reset and changes:
         raise _config.SlotError("order reset takes nothing else")
     if changes or reset:
         _state.configure({"order.json": None if reset else changes})
     saved = _schedule.order_settings(directory, environment=False)
-    moved = [k for k in _config.ORDER_DEFAULTS if k not in _config.ORDER_BASE and saved[k] != _config.ORDER_DEFAULTS[k]]
+    moved = [k for k in _config.ORDER_DEFAULTS if k not in _config.ORDER_BASE + ("limit",)
+             and saved[k] != _config.ORDER_DEFAULTS[k]]  # every slotfather knows `limit`
     if (changes or reset) and moved:
-        print(f"slotfather: note: order.json now holds {', '.join(moved)}, which slotfather 3e3a621 and older do not "
-              f"know: their looks fall back to the window order until they are updated", file=sys.stderr)
+        print(f"slotfather: note: order.json now holds {', '.join(moved)}, which an older slotfather may not know "
+              f"(3e3a621 and older know no classes, those before ageing no aging or warn settings): their looks fall "
+              f"back to the window order until they are updated", file=sys.stderr)
     print(order_line(_schedule.order_settings(directory)))
     return 0
 
@@ -356,6 +386,8 @@ def main(argv: list[str] | None = None) -> int:
             return status_command(rest[1:])
         if command == "yield":
             return yield_command(rest)
+        if command == "reprioritize":
+            return reprioritize_command(rest)
         if command == "history" and (not rest or (len(rest) == 1 and rest[0].isdigit())):
             from . import state as _state
             print("\n".join(_state.history_lines(int(rest[0]) if rest else 20)))

@@ -1,0 +1,1 @@
+{"pid": 29725, "count": 1, "label": "lane-710-speech-paste-phase-review-fixes", "cmd": "verify.sh --checks [57]", "since": "2026-11-11T21:40:02Z", "state": "held", "priority": "normal", "granted": "2026-11-11T21:41:01Z", "start": ""}

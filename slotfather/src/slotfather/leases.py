@@ -121,7 +121,7 @@ def yield_lease(path: Path, out=sys.stderr) -> bool:
         live = reap(directory, _platform.processes())
         asker = next((e for p, e in live if p.stem == request.get("by") and e.get("state") != "held"), None)
         settings = _schedule.order_settings(directory, environment=False)
-        behind = _schedule.rank_time(asker, settings) + _config.YIELD_BEHIND if asker is not None else None
+        behind = _schedule.rank_time(asker, settings, time.time()) + _config.YIELD_BEHIND if asker is not None else None
         if asker is not None:  # would the asker start? Things may have changed since it asked.
             table = _platform.processes()
             held = [e for p, e in live if e.get("state") == "held" and p != path]
@@ -136,6 +136,7 @@ def yield_lease(path: Path, out=sys.stderr) -> bool:
             return False
         entry.update(state="waiting", yields=int(entry.get("yields") or 0) + 1, yielded_at=round(time.time(), 3),
                      first_granted=entry.get("granted"), rank=behind)
+        entry.pop("reserved", None)  # a reservation an older client granted it with is no promise now
         _state.write(path, entry)
         _state.marker(path).unlink(missing_ok=True)
         _state.log(directory, f"yielded {entry['count']} ({path.name}) to {asker.get('label')}")
@@ -145,6 +146,55 @@ def yield_lease(path: Path, out=sys.stderr) -> bool:
     held_again(path)
     print(f"slot: {entry.get('label')} resumes with {entry['count']} slot(s)", file=out, flush=True)
     return True
+
+
+def reprioritize(target: str, priority: str, directory: Path | None = None) -> list[dict[str, Any]]:
+    """Moves the requests `target` names (a pid, or the label of exactly one request) to class `priority`, keeping
+    their arrival (`since`): a waiter keeps its place among the requests that came before and after it, now ranked
+    by its new class. Only the owner of a request may move it (the same uid as its holder). Records it on the entry
+    (`reprioritized`: the class it asked first), in queue.log and in the history line, then grants at once. Returns
+    the entries as they are now; raises SlotError for a target that names none, or several, or another user's."""
+    if priority not in _config.PRIORITIES:
+        raise _config.SlotError(f"priority is one of {', '.join(_config.PRIORITIES)}, not {priority!r}")
+    directory = directory or _config.state_dir()
+    _state.require_own(directory, "a priority change")
+    changed: list[dict[str, Any]] = []
+    with _state.locked(directory):
+        table = _platform.processes()
+        live = reap(directory, table)
+        if target.isdigit():
+            chosen = [(p, e) for p, e in live if e.get("pid") == int(target)]
+        else:
+            chosen = [(p, e) for p, e in live if e.get("label") == target]
+            if len(chosen) > 1:
+                waiting = [(p, e) for p, e in chosen if e.get("state") != "held"]
+                if len(waiting) != 1:
+                    pids = ", ".join(str(e.get("pid")) for _, e in chosen)
+                    raise _config.SlotError(f"{len(chosen)} requests are labelled {target} (pids {pids}): name the pid")
+                chosen = waiting
+        if not chosen:
+            raise _config.SlotError(f"no request in the queue has pid or label {target}")
+        me = os.geteuid()
+        for _, entry in chosen:
+            owner = _platform.process_uid(entry.get("pid"))
+            if owner != me:
+                raise _config.SlotError(f"{entry.get('label')} (pid {entry.get('pid')}) runs as uid {owner}: only its "
+                                        f"owner may change its priority")
+        for path, entry in chosen:
+            before = _config.priority_of(entry)
+            if before == priority:
+                changed.append(entry)
+                continue
+            entry.setdefault("reprioritized", before)  # the class it asked first; `since` stays its arrival
+            entry["priority"] = priority
+            entry["reprioritized_at"] = round(time.time(), 3)  # ageing counts from here (schedule.ageing_since())
+            entry.pop("aged", None)
+            _state.write(path, entry)
+            _state.log(directory, f"reprioritized {entry.get('label')} (pid {entry.get('pid')}) from {before} to "
+                                  f"{priority}")
+            changed.append(entry)
+        grant(directory, _platform.processes())
+    return changed
 
 
 def held_again(path: Path) -> None:
@@ -187,8 +237,17 @@ def grant(directory: Path, table: Table) -> str | None:
     estimate = _schedule.estimator(directory)
     other = legacy_used(table)
     slots = _config.total()
-    found = _schedule.plan(_schedule.fit(waiters, slots), held, slots, time.time(), estimate=estimate, other=other,
-                 settings=_schedule.order_settings(directory))
+    moment = time.time()
+    settings = _schedule.order_settings(directory)
+    found = _schedule.plan(_schedule.fit(waiters, slots), held, slots, moment, estimate=estimate, other=other,
+                 settings=settings)
+    # The head's reservation, kept on its entry so that the next look promises no later start; others hold none.
+    # Every client keeps it by the shared settings, whatever its environment (shared_plan()).
+    keeper = _schedule.shared_plan(found, waiters, held, slots, moment, estimate, other, settings,
+                                   _schedule.order_settings(directory, environment=False))
+    for entry in _schedule.reservations(waiters, keeper):
+        if not any(entry is g for g in found.grants):  # a grant is written below
+            _state.write(paths[id(entry)], entry)
     used = sum(_schedule.holds(e, slots) for e in held) + other
     short = None
     for entry in found.grants:
@@ -196,7 +255,10 @@ def grant(directory: Path, table: Table) -> str | None:
             short = short or _platform.memory_short()
             if short:
                 return short
+        served = _schedule.effective_priority(entry, settings, moment)
         entry.update(state="held", granted=_config.now())
+        if served != _config.priority_of(entry):
+            entry["aged"] = served  # the class ageing moved it to by its grant; status and the history show it
         resume(entry, time.time())
         _state.write(paths[id(entry)], entry)
         used += entry["count"]
@@ -363,6 +425,8 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
     previous_term = signal.signal(signal.SIGTERM, terminate) if main_thread else None
     try:
         said, interval, look = None, poll, 0.0
+        queued = time.monotonic()
+        warned = None  # when it last said it waits long (WARN_REPEAT)
         while True:
             if time.monotonic() >= look:
                 # A full look runs ps over the machine under the queue lock. While the reason to wait stays the same,
@@ -385,6 +449,16 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
                 return lease
             if deadline is not None and time.monotonic() >= deadline:
                 raise _config.SlotTimeout(f"no {count} slot(s) within {wait:g} s: {waiting or 'earlier requests first'}")
+            warn = float(_schedule.order_settings(directory).get("warn_wait") or 0)
+            if warn and time.monotonic() - queued >= warn and (warned is None or
+                                                              time.monotonic() - warned >= _config.WARN_REPEAT):
+                warned = time.monotonic()
+                with contextlib.suppress(Exception):  # a display must never cost the request its place
+                    line = _query.long_wait(directory, path)
+                    if line:  # the client's own stderr, and queue.log (EVENTS): a long wait does not go unnoticed
+                        print(f"slot: {line}", file=out, flush=True)
+                        with _state.locked(directory):
+                            _state.log(directory, f"waiting long: {line}")
             if waiting != said:
                 print(f"slot: {label} waits for {count} slot(s): {waiting or 'earlier requests first'}",
                       file=out, flush=True)

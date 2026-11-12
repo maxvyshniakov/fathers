@@ -32,12 +32,15 @@ KNOBS = {"safety": ("Backfill margin", 0.5), "limit": ("Overtaking stops after",
          "fallback": ("Unknown job runtime", 60), "overrun": ("Overrun estimate", 0.1),
          "interactive": ("Interactive head start", 60), "batch": ("Batch held back", 60),
          "yield_after": ("Ask to yield after", 30), "idle_cpu": ("Idle when below", 0.05),
-         "idle_after": ("Idle for", 60)}
+         "idle_after": ("Idle for", 60), "aging_batch": ("Batch promoted after", 300),
+         "aging_normal": ("Normal promoted after", 300), "warn_wait": ("Warn after waiting", 300)}
 UNITS = {"safety": "×", "overrun": "×", "limit": " s", "fallback": " s", "interactive": " s", "batch": " s",
-         "yield_after": " s", "idle_after": " s", "idle_cpu": " cores", "interval": " s"}
+         "yield_after": " s", "idle_after": " s", "idle_cpu": " cores", "interval": " s", "aging_batch": " s",
+         "aging_normal": " s", "warn_wait": " s"}
 # One flat list (owner, 2026-11-11), the STATUS block above it
-FIELDS = ("mode", "amount", "order", "safety", "fallback", "overrun", "limit", "interactive", "batch", "idle_cpu",
-          "idle_after", "yield_after", "interval", "theme")
+FIELDS = ("mode", "amount", "order", "safety", "fallback", "overrun", "limit", "interactive", "batch", "aging_batch",
+          "aging_normal", "warn_wait", "idle_cpu", "idle_after", "yield_after", "interval", "theme")
+NEVER = ("limit", "aging_batch", "aging_normal", "warn_wait")  # 0 is off: shown as "never"
 LOCAL = ("interval", "theme")  # this dashboard's own settings, never written to the shared queue
 CHOICES = ("mode", "order", "theme")
 DESCRIPTIONS = {
@@ -46,11 +49,14 @@ DESCRIPTIONS = {
     "amount.memory": "One slot per this many GiB of memory. Applies at the next grant.",
     "order": "Backfill lets short work pass; Arrival serves in arrival order.",
     "safety": "Multiplier on expected runtimes for backfill; at least 1.",
-    "limit": "How long a waiting head can be overtaken; 0: no limit.",
+    "limit": "After this a waiting head lets nothing pass; 0: its reserved start alone.",
     "fallback": "Assumed runtime of work with no history.",
     "overrun": "Remaining runtime as a share of elapsed time once a run overruns.",
     "interactive": "How far interactive requests move ahead; 0: not at all.",
     "batch": "How far batch requests move back; 0: not at all.",
+    "aging_batch": "A waiting batch request is served as normal after this; 0: never.",
+    "aging_normal": "A waiting normal request is served as interactive after this; 0: never.",
+    "warn_wait": "A request waiting this long says so and is flagged; 0: never.",
     "yield_after": "Before a yieldable holder is asked to yield; 0: nobody is asked.",
     "idle_cpu": "A lease below this for the idle time is idle (💤); 0: never.",
     "idle_after": "Below the idle cores this long: idle, and asked if it can yield.",
@@ -198,6 +204,8 @@ class Settings:
             return _theme.MODE_LABELS[value]
         if key == "amount":
             return number(value) + ("" if self.mode() == "fixed" else " GiB")
+        if key in NEVER and not value:
+            return "never"
         return number(value) + UNITS.get(key, "")
 
     def label(self, key: str) -> str:
@@ -238,7 +246,7 @@ class Settings:
         if key not in self.fields() or key in CHOICES:
             return None, "This setting takes no typed value."
         try:
-            value = float(text)
+            value = config.parse_duration(text) if key in config.DURATION_KNOBS else float(text)  # 30m, 1.5h
         except ValueError:
             value = math.nan
         if key == "amount" and self.mode() == "fixed":

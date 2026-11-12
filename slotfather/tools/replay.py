@@ -309,9 +309,10 @@ class Replay:
         return None if found is None else found * bias
 
     def settings(self) -> dict[str, Any]:
-        """The queue's defaults before classes (no class moves, nobody asked), and what the policy changes."""
-        return {**sf_config.ORDER_DEFAULTS, "interactive": 0.0, "batch": 0.0, "yield_after": 0.0,
-                **self.policy.get("settings", {})}
+        """The queue's defaults before classes (no class moves, nobody asked, no ageing, the head's limit of 2700 s),
+        and what the policy changes."""
+        return {**sf_config.ORDER_DEFAULTS, "interactive": 0.0, "batch": 0.0, "yield_after": 0.0, "limit": 2700.0,
+                "aging_batch": 0.0, "aging_normal": 0.0, **self.policy.get("settings", {})}
 
     def step(self, number: int) -> float:
         """How long the holder takes to reach the end of its current step once asked: uniform up to the policy's
@@ -332,7 +333,10 @@ class Replay:
                             settings={**settings, "interactive": bonus, "batch": 0.0}).grants
             by_id = {e["id"]: e for e in waiting}
             return [by_id[e["id"]] for e in found]
-        return sf_schedule.plan(waiting, held, self.slots, moment, name, self.estimate, settings=settings).grants
+        found = sf_schedule.plan(waiting, held, self.slots, moment, name, self.estimate, settings=settings)
+        if settings.get("keep"):  # the head keeps its reservation from look to look, as grant() keeps it
+            sf_schedule.reservations(waiting, found)
+        return found.grants
 
     def simulate(self) -> list[dict]:
         environment = {k: os.environ.get(k) for k in self.policy.get("env", {})}
@@ -411,7 +415,8 @@ class Replay:
                         asked[number] not in waiting:
                     continue  # the ask was withdrawn, or it ended first, or the asker started or left meanwhile
                 entry = held.pop(number)
-                entry["rank"] = sf_schedule.rank_time(waiting[asked.pop(number)], self.settings()) + sf_config.YIELD_BEHIND
+                entry["rank"] = sf_schedule.rank_time(waiting[asked.pop(number)], self.settings(), moment) + \
+                    sf_config.YIELD_BEHIND
                 remaining[number] -= moment - began[number]
                 entry.update(state="waiting", yields=int(entry.get("yields") or 0) + 1, yielded_at=moment)
                 waiting[number] = entry
@@ -531,7 +536,16 @@ def measure(requests: list[dict], results: list[dict], start: float, until: floa
 WINDOW = {"SLOTFATHER_OVERTAKE_WINDOW": "600"}
 CLASSES = {"interactive": 1800, "batch": 1800}  # the shipped class offsets
 SHIPPED = {**CLASSES, "yield_after": 120}
+AGEING = {"aging_batch": 1800, "aging_normal": 3600}  # the shipped ageing steps
+# What ships with ageing: no limit, and the head's reservation kept (`keep`, the replay's own: grant() always keeps it)
+RESERVED = {**SHIPPED, **AGEING, "limit": 0, "keep": True}
 POLICIES = {
+    "ageing + reservations (shipped)": {"order": "backfill", "env": WINDOW, "settings": RESERVED, "step": 300},
+    "  ageing only": {"order": "backfill", "env": WINDOW, "settings": {**SHIPPED, **AGEING}, "step": 300},
+    "  reservations only": {"order": "backfill", "env": WINDOW, "settings": {**SHIPPED, "limit": 0, "keep": True},
+                            "step": 300},
+    "  shipped, estimates noisy": {"order": "backfill", "env": WINDOW, "settings": RESERVED, "step": 300,
+                                  "noise": 1.0},
     "window (current)": {"order": "window", "env": WINDOW},
     "fifo (window 0)": {"order": "window", "env": {"SLOTFATHER_OVERTAKE_WINDOW": "0"}},
     "backfill (shipped)": {"order": "backfill", "env": WINDOW},

@@ -370,7 +370,7 @@ class OvertakeTests(SlotCase):
         self.release("one")
         self.release("gate")
         self.finish(one)
-        self.assertEqual(1, self.finish(gate).count("slot: -n all holds every later request behind it"))
+        self.assertEqual(1, self.finish(gate).count("slot: -n all waits until the whole machine is free"))
 
     def test_a_batch_all_slot_request_lets_normal_work_start_and_says_so(self):
         # #5: past its window and its limit alike, a batch `-n all` request lets later normal work start.

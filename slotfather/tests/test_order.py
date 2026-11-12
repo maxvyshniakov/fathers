@@ -123,7 +123,7 @@ class BackfillTests(PlanCase):
                       str(found.reason))
 
     def test_nothing_passes_a_head_that_has_waited_the_limit_and_a_pass_must_end_before_it(self):
-        self.settings["limit"] = sf_config.ORDER_DEFAULTS["limit"]  # 2700 s
+        self.settings["limit"] = 2700.0  # the limit before reservations, now off by default
         queue = [waiter("gate", 6, -2700), waiter("short", 1, -10)]
         self.assertEqual([], self.started(queue, self.held, one=3600, short=1))
         queue = [waiter("gate", 6, -2000), waiter("short", 1, -10)]  # 700 s to the limit
@@ -133,7 +133,7 @@ class BackfillTests(PlanCase):
         self.assertEqual(["short"], self.started(queue, self.held, one=3600, short=900))
 
     def test_past_the_limit_not_even_slots_the_head_will_not_need_are_given(self):
-        self.settings["limit"] = sf_config.ORDER_DEFAULTS["limit"]
+        self.settings["limit"] = 2700.0
         held = [holder("a", 2, -10), holder("b", 2, -10)]
         queue = [waiter("head", 3, -2800), waiter("long", 1, -10)]
         self.assertEqual([], self.started(queue, held, a=600, b=6000, long=99999))
@@ -178,7 +178,7 @@ class BackfillTests(PlanCase):
     def test_a_head_past_its_limit_that_would_give_up_first_holds_nobody_back_either(self):
         # 2026-11-10 (#5): three `-n all --wait 3300` reruns were the head for the last ten minutes of their wait,
         # past the limit, behind checks that ran on for an hour, and left without running while slots stood idle.
-        self.settings["limit"] = sf_config.ORDER_DEFAULTS["limit"]
+        self.settings["limit"] = 2700.0
         big = dict(waiter("big", 6, -2800), until=stamp(1000))  # one is expected to end in 3000 s
         self.assertEqual(["long"], self.started([big, waiter("long", 1, -10)], self.held, one=3600, long=7200))
         later = dict(big, until=stamp(3001))  # it still waits when one is expected to end: past the limit, as before
@@ -525,10 +525,11 @@ class OrderTests(SlotCase):
             self.finish(process)
 
     def test_the_order_is_saved_for_every_client_and_reset(self):
-        classes = "interactive 1800 s ahead, batch 1800 s behind, yield after 120 s; idle below 0.1 cores for 300 s"
-        self.assertEqual(f"backfill: safety 3, limit 2700 s, fallback 3600 s, overrun 0.5; {classes} (default)",
+        classes = ("interactive 1800 s ahead, batch 1800 s behind, yield after 120 s; idle below 0.1 cores for 300 s; "
+                   "batch ages after 1800 s, normal after 3600 s; warn after 1800 s waiting")
+        self.assertEqual(f"backfill: safety 3, limit 0 s, fallback 3600 s, overrun 0.5; {classes} (default)",
                          self.tool("order").stdout.strip())
-        self.assertEqual(f"window: safety 3, limit 2700 s, fallback 3600 s, overrun 0.5; {classes} (saved)",
+        self.assertEqual(f"window: safety 3, limit 0 s, fallback 3600 s, overrun 0.5; {classes} (saved)",
                          self.tool("order", "window").stdout.strip())
         self.assertEqual(f"backfill: safety 4, limit 1800 s, fallback 3600 s, overrun 0.5; {classes} (saved)",
                          self.tool("order", "backfill", "--safety", "4", "--limit", "1800").stdout.strip())

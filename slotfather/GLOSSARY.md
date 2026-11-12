@@ -20,7 +20,9 @@ belong to their own context; the relationship is recorded in [terminology](docs/
 | Label family | A group of related request labels used to reuse runtime history. |
 | Runtime estimate | A prediction of how long work will run, based on comparable completed requests or the scheduling fallback. |
 | Queue head | The waiting request whose expected start is protected by the scheduling policy. |
-| Whole-machine request | A request for every slot: `-n all`, or a count of at least the capacity. A batch one starts only while no normal or interactive request waits. |
+| Reserved start | The start a queue head is promised: the earliest its looks have projected since it became the head. Nothing that passes the head may be expected to end after it. |
+| Ageing | A waiting request moving up a class (batch to normal, normal to interactive) after waiting a set time, keeping its arrival. |
+| Whole-machine request | A request for every slot: `-n all`, or a count of at least the capacity. A batch one starts only while no normal or interactive request waits, until it has aged to normal. |
 | Priority | A request's scheduling priority: interactive, normal or batch. |
 | Overtaking | A later request starting before an earlier waiting request. |
 | Overtaking window | The initial period in which later requests that fit may start ahead of a waiting request. |

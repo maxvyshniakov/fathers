@@ -149,22 +149,31 @@ counted in more than one process.
 
 For the first waiting request:
 
-- `start est` is its estimated start. Later work may backfill only if its
-  predicted finish, including the safety margin, is before this time, or it
-  uses only slots the protected request will not need.
-- `pass until` is the end of the current overtaking window. With `start est`
-  shown, no later request may pass after this deadline. Without it, stricter
-  backfill rules may follow the initial window.
+- `start est` is its estimated start, by the held leases' expected ends now.
+- `reserved` is the start it is promised once it is the head: the earliest
+  `start est` since it became the head, which only moves earlier. Later work,
+  of any class, may backfill only if its predicted finish, including the safety
+  margin, is before this time, or it uses only slots the head will not need.
+- `pass until` is the end of the current overtaking window, or with a limit
+  set, the moment from which no later request may pass at all.
 
-For example, `start est 10:30` and `pass until 10:20` allow a later request at
-10:10 only if it is expected to finish before 10:30 with the safety margin.
-At 10:21 it cannot pass. These are policy deadlines and estimates, not a promised
-start. The help explains them alongside CPU, load, memory, admission and history.
+For example, `reserved 10:30` allows a later request at 10:10 only if it is
+expected to finish before 10:30 with the safety margin. If a held lease runs on
+past its estimate, `start est` moves to 10:45 but `reserved` stays 10:30: from
+10:30 nothing passes. These are estimates, not a promised start.
+
+For a waiting request further back, `start est` is when the queue is expected
+to start it if nothing more comes (`status`' `est-start`). The priority line
+shows the class a request is served in, with `aged from batch` when ageing moved
+it up and `reprioritized from …` after `slotfather reprioritize`; QUEUE's ⚡ and
+🐢 marks show the served class too. The help explains them alongside CPU, load, memory, admission and history.
 
 ## Events
 
 EVENTS lists the grants, releases, waiters that left and reaped requests at the end
-of `queue.log`, newest first, in the columns time, event, slots, detail, label and
+of `queue.log`, and two events without slots: `priority` (`slotfather reprioritize`, detail
+`batch → interactive`) and `waiting` (a request that has waited the warn time says so, detail
+`45m00s, est. 18:40`), newest first, in the columns time, event, slots, detail, label and
 pid. **slots** uses the same cells as QUEUE in the event's
 colour: filled `▪` for slots taken (granted) and hollow `▫` for slots handed back
 (released, a held lease reaped) or never held (a waiter that left or was reaped).
@@ -264,7 +273,8 @@ slots are draining. Status rows have dim labels
 and no selection cursor. Below a rule are the editable settings, one flat list,
 each value with its unit: Capacity, Slots or GiB per slot, Queue order (Backfill
 or Arrival), Backfill margin (×), Unknown job runtime, Overrun estimate (×),
-Overtaking stops after, Interactive head start, Batch held back, Idle when below
+Overtaking stops after (never: the head's reserved start alone), Interactive head start, Batch
+held back, Batch promoted after, Normal promoted after, Warn after waiting (each 0: never), Idle when below
 (cores), Idle for, Ask to yield after, and this dashboard's own Refresh every and
 Colour theme. The selected setting has ▶, a soft background and a one-line
 description under the list; the key line at the bottom is centred.

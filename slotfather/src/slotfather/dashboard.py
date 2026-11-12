@@ -69,6 +69,8 @@ ASCII = str.maketrans({"🮅": "#", "■": "#", "▪": "#", "◌": "o", "□": "
 GRANTED = re.compile(r"granted (\d+) to (.*) \(pid (\d+)\)$")
 RELEASED = re.compile(r"released (\d+) \(\d+-(\d+)\.json\)$")
 REAPED = re.compile(r"reaped (\S+) lease of (\d+) for (.*) \(pid (\d+) exited\)$")
+REPRIORITIZED = re.compile(r"reprioritized (.*) \(pid (\d+)\) from (\w+) to (\w+)$")
+WAITING_LONG = re.compile(r"waiting long: (.*) \(pid (\d+), [^)]*\) waiting (\S+) behind .*: est\. start (\S+)")
 
 
 JOINER, TEXT_STYLE, EMOJI_STYLE = "\u200d", "\ufe0e", "\ufe0f"  # zero-width joiner, variation selectors 15 and 16
@@ -486,7 +488,8 @@ def queue_events(directory: Path) -> list[dict]:
             lines = handle.read().decode("utf-8", "replace").splitlines()[1 if start else 0:]
     except OSError:
         return []
-    events, granted = [], {}
+    events: list[dict[str, Any]] = []
+    granted: dict[int, str] = {}
     for line in lines:
         moment, _, message = line.partition(" ")
         when = parse_utc(moment)
@@ -509,6 +512,12 @@ def queue_events(directory: Path) -> list[dict]:
             granted.pop(pid, None)
             events.append({"when": when, "verb": "reaped", "count": count, "label": label, "pid": pid,
                            "delta": -count if state == "held" else 0, "state": state})
+        elif found := REPRIORITIZED.match(message):  # slotfather reprioritize: a class, not slots
+            events.append({"when": when, "verb": "priority", "count": 0, "label": found[1], "pid": int(found[2]),
+                           "delta": 0, "detail": f"{found[3]} → {found[4]}"})
+        elif found := WAITING_LONG.match(message):  # a long wait, said by the waiter itself
+            events.append({"when": when, "verb": "waiting", "count": 0, "label": found[1], "pid": int(found[2]),
+                           "delta": 0, "detail": f"{found[3]}, est. {found[4]}"})
     return events
 
 
@@ -535,6 +544,8 @@ def describe_events(events: list[dict[str, Any]], directory: Path, live: list[di
         return moment is not None and abs((moment - when).total_seconds()) <= EVENT_MATCH
 
     for event in events:
+        if event["verb"] in ("priority", "waiting"):  # their detail is their own line's
+            continue
         event["detail"] = ""
         verb, when = event["verb"], event["when"]
         if verb == "granted":
@@ -653,6 +664,7 @@ def dashboard_model() -> dict:
 
     def item(entry: dict[str, Any], kind: str, count: int, queue: str = "") -> dict[str, Any]:
         tree = process_tree(entry.get("pid"), own, children) if kind != "waiting" else []
+        foreseen: dict[str, Any] = expected.get(id(entry)) or {}  # query.outlook(): its class and expected start
         return {"tree": sorted(tree, key=lambda process: -process[1]), "cpu": sum(p[1] for p in tree),
                 "rss": sum(p[2] for p in tree), "procs": len(tree),"key": (entry.get("pid"), entry.get("since")), "kind": kind, "count": count, "queue": queue,
                 "label": dashboard_text(entry.get("label", "")), "pid": entry.get("pid"),
@@ -666,19 +678,28 @@ def dashboard_model() -> dict:
                 # #12: since when the holder's record says the lease has been idle (query.locked_snapshot()).
                 "idle_since": datetime.datetime.fromtimestamp(entry["idle_since"], datetime.timezone.utc)
                 if isinstance(entry.get("idle_since"), (int, float)) else None,
+                "served": foreseen.get("priority") or
+                (entry.get("aged") if entry.get("aged") in _config.PRIORITIES else None),
+                "reprioritized": entry.get("reprioritized") if entry.get("reprioritized") in _config.PRIORITIES else None,
+                "est_start": datetime.datetime.fromtimestamp(foreseen["est_start"], datetime.timezone.utc)
+                if foreseen.get("est_start") is not None else None,
                 "granted": parse_utc(entry.get("granted")), "passable": kind == "waiting" and _schedule.overtakable(entry),
                 "all": bool(entry.get("all")),
                 "style": "text" if kind == "waiting" else "legacy"}
 
+    # The class each waiter is served in and its expected start (query.outlook(); nothing when it cannot be read).
+    expected: dict[int, dict[str, Any]] = {}
+    with contextlib.suppress(Exception):
+        expected = _query.outlook(directory, live, slots, sum(count for _, _, count in legacy))
     # An `-n all` lease holds the whole capacity, also one grown under it (#7).
     holders = [item(e, "held", _schedule.holds(e, slots)) for e in live if e["state"] == "held"]
     holders += [item(e, "legacy", count, str(path.parent.parent)) for path, e, count in legacy]
-    settings, start = _schedule.order_settings(directory), None
+    settings, start, reserved = _schedule.order_settings(directory), None, None
     order = settings["order"]
     live_waiters = [e for e in live if e["state"] != "held"]
     _schedule.fit(live_waiters, slots)  # as the queue grants them when the capacity shrank under them
     if order == "backfill":
-        live_waiters = _schedule.ranked(live_waiters, settings)  # the order the queue serves them in
+        live_waiters = _schedule.ranked(live_waiters, settings, time.time())  # the order the queue serves them in
     waiters = [item(e, "waiting", e["count"]) for e in live_waiters]
     used = sum(h["count"] for h in holders)
     if order == "backfill" and live_waiters:
@@ -688,6 +709,8 @@ def dashboard_model() -> dict:
                             settings=settings)
             if found.head is not None and found.start is not None:
                 start = datetime.datetime.fromtimestamp(found.start, datetime.timezone.utc)
+            if found.head is not None and found.reserved is not None:
+                reserved = datetime.datetime.fromtimestamp(found.reserved, datetime.timezone.utc)
     memory_block, machine, averages = _platform.memory_short(), _config.cores(), _platform.loads()
     events = queue_events(directory)
     describe_events(cast(list[dict[str, Any]], events), directory, live)
@@ -703,7 +726,7 @@ def dashboard_model() -> dict:
                               bool(waiters) and admission == 0),
             "holders": holders, "waiters": waiters, "used": used, "free": free, "memory_block": memory_block,
             "admission": admission,
-            "order": order, "start": start, "limit": settings["limit"],
+            "order": order, "start": start, "reserved": reserved, "limit": settings["limit"],
             "memory": memory_facts(), "history": held_history(events, own_held, moment), "events": events[-60:],
             "updated": moment}
 
@@ -1038,8 +1061,9 @@ def use_marks(ascii_only: bool, joined: bool = True) -> None:
 
 
 def priority_mark(item: dict[str, Any]) -> str:
-    """⚡ for an interactive request, 🐢 for a batch one (! and ~ in ASCII), nothing for normal."""
-    return priority_marks.get(_config.priority_of({"priority": item.get("priority")}), "")
+    """⚡ for an interactive request, 🐢 for a batch one (! and ~ in ASCII), nothing for normal: the class it is
+    served in, aged (`served`), else the one it asked."""
+    return priority_marks.get(_config.priority_of({"priority": item.get("served") or item.get("priority")}), "")
 
 
 def row_state(item: dict[str, Any], model: dict[str, Any]) -> str:
@@ -1130,6 +1154,9 @@ def queue_policy(model: dict) -> dict[str, str]:
         fields["pass until"] = clock(head["since"] + datetime.timedelta(seconds=_config.overtake_window()))
     if model.get("order") == "backfill" and model.get("start") is not None and head.get("since"):
         fields["start est"] = clock(model["start"])
+        promised: Any = cast(Any, model).get("reserved")  # the start it is promised: nothing that passes it ends later
+        if promised is not None:
+            fields["reserved"] = clock(promised)
         if model.get("limit"):
             fields["pass until"] = clock(head["since"] + datetime.timedelta(seconds=model["limit"]))
     return fields
@@ -1188,9 +1215,13 @@ def draw_detail(canvas: Canvas, y: int, x: int, height: int, width: int, model: 
     else:
         heading = ("earlier queue" if item["kind"] == "legacy" else "running") + f" · {item['count']} slot{'s' if item['count'] != 1 else ''}"
     facts: list[tuple[str, list[tuple[str, str]]]] = [("label", [(item["label"] or "(no label)", "bold")]), ("status", [(heading, "text")])]
-    priority = _config.priority_of({"priority": item.get("priority")})
+    priority = _config.priority_of({"priority": item.get("served") or item.get("priority")})
     mark = priority_mark(item)
-    facts.append(("priority", ([(mark, "text"), (" ", "text")] if mark else []) + [(priority, "text")]))
+    asked = _config.priority_of({"priority": item.get("priority")})
+    how = f" · aged from {asked}" if priority != asked else ""
+    how += f" · reprioritized from {item['reprioritized']}" if item.get("reprioritized") else ""
+    facts.append(("priority", ([(mark, "text"), (" ", "text")] if mark else []) + [(priority, "text"),
+                                                                                 (how, "dim")]))
     if ticket_text:
         facts.append(("ticket", [(ticket_text, "accent" if ticket_url else "text")]))
     for key, label in (("phase", "phase"), ("kind", "kind"), ("check", "check"), ("sha", "revision"),
@@ -1207,6 +1238,8 @@ def draw_detail(canvas: Canvas, y: int, x: int, height: int, width: int, model: 
                 facts.append(("blocked", [(model["memory_block"], "warn")]))
         else:
             facts.append(("ahead", [(f"{position} requests · {sum(w['count'] for w in model['waiters'][:position])} slots", "text")]))
+            if item.get("est_start") is not None:  # schedule.forecast(): if nothing more comes
+                facts.append(("start est", [(clock(item["est_start"]), "text")]))
     else:
         used, allotted = share(item, model)
         style = share_style(item, model, moment)
@@ -1476,7 +1509,8 @@ def draw_events(canvas: Canvas, y: int, x: int, height: int, width: int, model: 
         ("detail", "detail", 22, False, 3), ("label", "label", 0, False, 0), ("pid", "pid", 6, True, 4)]))
     size = next((column[3] for column in placed if column[0] == "slots"), cells)
     table_header(canvas, y, x, height, width, "EVENTS", placed, name="events")
-    styles = {"granted": "ok", "released": "accent", "left": "dim", "reaped": "bad"}
+    styles = {"granted": "ok", "released": "accent", "left": "dim", "reaped": "bad", "priority": "accent",
+              "waiting": "warn"}
     offset, visible = table_view(canvas, "events", y, x, height, width, y + 2, height - 4, len(events))
     if not events:
         canvas.put(y + 2, x + 3, "No grants, releases or reaps logged yet", "dim", width - 6)

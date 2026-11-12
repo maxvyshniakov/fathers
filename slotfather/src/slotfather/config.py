@@ -65,8 +65,9 @@ OVERTAKE_WINDOW = 600  # seconds a waiter that does not fit lets later requests 
 QUEUE_ORDERS = ("backfill", "window")  # `slotfather order`; the first is the default
 
 
-ORDER_DEFAULTS = {"order": "backfill", "safety": 3.0, "limit": 2700.0, "fallback": 3600.0, "overrun": 0.5,
-                  "interactive": 1800.0, "batch": 1800.0, "yield_after": 120.0, "idle_cpu": 0.1, "idle_after": 300.0}
+ORDER_DEFAULTS = {"order": "backfill", "safety": 3.0, "limit": 0.0, "fallback": 3600.0, "overrun": 0.5,
+                  "interactive": 1800.0, "batch": 1800.0, "yield_after": 120.0, "idle_cpu": 0.1, "idle_after": 300.0,
+                  "aging_batch": 1800.0, "aging_normal": 3600.0, "warn_wait": 1800.0}
 
 
 ORDER_KNOBS = {"safety": ("BACKFILL_SAFETY", 1.0, "up"), "limit": ("BACKFILL_LIMIT", 0.0, "limit"),
@@ -75,10 +76,26 @@ ORDER_KNOBS = {"safety": ("BACKFILL_SAFETY", 1.0, "up"), "limit": ("BACKFILL_LIM
                "yield_after": ("YIELD_AFTER", 0.0, "delay"),
                # Idle leases (#12): below idle_cpu cores for idle_after seconds. A client's environment tightens them
                # by finding fewer leases idle: a lower threshold, a longer duration.
-               "idle_cpu": ("IDLE_CPU", 0.0, "down"), "idle_after": ("IDLE_AFTER", 1.0, "up")}
+               "idle_cpu": ("IDLE_CPU", 0.0, "down"), "idle_after": ("IDLE_AFTER", 1.0, "up"),
+               # Ageing: a waiter moves up a class after waiting this long in its class (batch -> normal ->
+               # interactive); 0: never. Like the class offsets, a client's environment can only move requests less:
+               # a longer wait, or 0.
+               "aging_batch": ("AGING_BATCH", 0.0, "delay"), "aging_normal": ("AGING_NORMAL", 0.0, "delay"),
+               # How long a waiter waits before its client says so (stderr, queue.log) and status flags it; 0: never.
+               # It decides nothing for other clients, so a client's environment sets it either way.
+               "warn_wait": ("WARN_WAIT", 0.0, "own")}
 
 
-ORDER_BASE = ("order", "safety", "limit", "fallback", "overrun")  # always saved; the rest only when not the default
+DURATION_KNOBS = ("limit", "fallback", "interactive", "batch", "yield_after", "idle_after", "aging_batch",
+                  "aging_normal", "warn_wait")  # `slotfather order` takes these as 90, 90s, 30m or 1.5h
+
+
+WARN_REPEAT = 900  # seconds between a long waiter's repeated "waiting ..." lines once it has waited warn_wait
+
+
+# Always saved; the rest only when not the default. `limit` left the base when its default went from 2700 to 0:
+# a file without it gives an older client its own default (2700), the bound it has without reservations.
+ORDER_BASE = ("order", "safety", "fallback", "overrun")
 
 
 PRIORITIES = ("interactive", "normal", "batch")
@@ -135,13 +152,14 @@ PS_TIMEOUT = 5  # seconds a ps or sysctl of the sampler may take before its answ
 WATCH_JOIN = 5  # seconds a release waits for the sampler to stop, and for its lock; then it goes without
 
 
-ALL_NOTE = ("-n all holds every later request behind it until the whole machine is free; use it only for work that "
-            "needs the machine to itself, such as a performance measurement, and otherwise ask for the slots the "
-            "command uses")
+ALL_NOTE = ("-n all waits until the whole machine is free; once it is the head, later requests start before it only "
+            "if they are expected to end before its reserved start; use it only for work that needs the machine to "
+            "itself, such as a performance measurement, and otherwise ask for the slots the command uses")
 
 
-BATCH_NOTE = ("a batch request lets waiting normal and interactive requests go first: it is the head only while none "
-              "waits, and one for every slot starts only then, so it may wait for as long as such work keeps coming")
+BATCH_NOTE = ("a batch request lets waiting normal and interactive requests go first until it has aged (`slotfather "
+              "order` shows after how long): until then it is the head only while none waits, and one for every slot "
+              "starts only then; `slotfather reprioritize PID normal` moves it up without losing its place")
 
 
 LEASE_ENV_PREFIXES = ["SLOTFATHER_"]
@@ -303,6 +321,15 @@ def duration(value: float) -> str:
     if value >= 3600:
         return f"{value // 3600}h{value % 3600 // 60:02d}m"
     return f"{value // 60}m{value % 60:02d}s" if value >= 60 else f"{value}s"
+
+
+def parse_duration(text: str) -> float:
+    """Seconds from `90`, `90s`, `30m`, `1.5h` or `1h30m`; raises ValueError for anything else."""
+    words = re.fullmatch(r"\s*(?:(\d+(?:\.\d+)?)h)?\s*(?:(\d+(?:\.\d+)?)m)?\s*(?:(\d+(?:\.\d+)?)s?)?\s*", text or "")
+    if not words or not any(words.groups()):
+        raise ValueError(f"not a duration: {text!r}")
+    hours, minutes, rest = (float(part) if part else 0.0 for part in words.groups())
+    return hours * 3600 + minutes * 60 + rest
 
 
 def number_setting(name: str, default: float) -> float:

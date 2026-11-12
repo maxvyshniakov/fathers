@@ -29,6 +29,7 @@ NOW = sf_config.seconds("2026-11-03T01:48:36Z")  # when the live queue in the fi
 INCIDENT = (sf_config.seconds("2026-11-03T00:48:50Z"), sf_config.seconds("2026-11-03T01:40:00Z"))
 SHIPPED, CURRENT = "backfill (shipped)", "window (current)"
 CLASSES = "classes + yields (#643 shipped)"
+AGED = "ageing + reservations (shipped)"
 TODAY = ROOT / "tests" / "fixtures" / "replay-2026-11-10"
 TODAY_SINCE, TODAY_NOW = sf_config.seconds("2026-11-10T15:59:00Z"), sf_config.seconds("2026-11-10T20:51:00Z")
 
@@ -165,8 +166,10 @@ class AllSlotTraceTests(unittest.TestCase):
         found = self.requests(priority="batch")
         for policy in (CLASSES, SHIPPED):
             with self.subTest(policy):
-                self.assertLessEqual(self.waited(found, policy),
-                                     float(sf_config.ORDER_DEFAULTS["limit"]) + 300 + 2 * replay.POLL)
+                self.assertLessEqual(self.waited(found, policy), 2700 + 300 + 2 * replay.POLL)  # its limit then
+        # With its reservation it starts once the checks running when it became the head end: its window and one
+        # check's run, however many come after it.
+        self.assertLessEqual(self.waited(found, AGED), 600 + 300 + 2 * replay.POLL)
 
 
 class TodayReplayTests(unittest.TestCase):

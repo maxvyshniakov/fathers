@@ -85,6 +85,7 @@ class RankTests(PlanCase):
     def test_a_yielded_head_counts_its_limit_from_when_it_yielded(self):
         # review P3-5: by its first arrival the limit is long past, and nothing could pass it at all.
         held = [holder("one", 1, -600)]
+        self.settings["limit"] = 2700.0
         head = classed(waiter("gate", 6, -4000), "normal", yielded_at=M - 100, yields=1)
         queue = [head, waiter("short", 1, -10)]
         self.assertEqual(["short"], self.started(queue, held, one=3600, short=60))
@@ -107,6 +108,7 @@ class BatchDefersTests(PlanCase):
         super().setUp()
         self.held = [holder("one", 1, -600)]  # 3000 s of its expected 3600 left
         self.measure = classed(waiter("measure", 6, -7200), "batch", all=True, yieldable=True)
+        self.settings["aging_batch"] = 0.0  # #5 as it was: a batch request that never ages (AgingTests)
 
     def plan(self, waiters: list[dict[str, Any]], held: list[dict[str, Any]], slots: int = 6,
              **estimates: float) -> sf_schedule.Plan:
@@ -328,7 +330,7 @@ class ProtocolTests(SlotCase):
                                                              found["gate"]["yieldable"], found["gate"]["yields"],
                                                              found["gate"]["position"]))
         self.assertEqual(("held", "interactive"), (found["quick"]["state"], found["quick"]["priority"]))
-        self.assertRegex(self.status(), r"waiting: 4 slot\(s\) gate .*yieldable yielded=1 cmd=")
+        self.assertRegex(self.status(), r"waiting: 4 slot\(s\) gate .*yieldable yielded=1 .*cmd=")
         self.release("quick")
         self.wait_for(lambda: "resume gate" in self.events(), "the gate to resume")
         self.release("gate")

@@ -14,9 +14,12 @@
 │   Backfill margin           3×                                               │
 │   Unknown job runtime       3600 s                                           │
 │   Overrun estimate          0.5×                                             │
-│   Overtaking stops after    2700 s                                           │
+│   Overtaking stops after    never                                            │
 │   Interactive head start    1800 s                                           │
 │   Batch held back           1800 s                                           │
+│   Batch promoted after      1800 s                                           │
+│   Normal promoted after     3600 s                                           │
+│   Warn after waiting        1800 s                                           │
 │   Idle when below           0.1 cores                                        │
 │   Idle for                  300 s                                            │
 │   Ask to yield after        120 s                                            │

@@ -444,6 +444,18 @@ def cpu_ticks() -> list[int] | None:
     return None
 
 
+def process_uid(pid: object) -> int | None:
+    """The real uid a live process runs as, or None when it is not running or cannot be inspected."""
+    if type(pid) is not int or pid < 1:
+        return None
+    try:
+        result = subprocess.run(["ps", "-o", "uid=", "-p", str(pid)], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    words = result.stdout.split()
+    return int(words[0]) if result.returncode == 0 and len(words) == 1 and words[0].isdigit() else None
+
+
 def process_group(pid) -> int | None:
     try:
         return os.getpgid(pid)

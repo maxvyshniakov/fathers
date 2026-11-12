@@ -98,7 +98,7 @@ def entries(directory: Path) -> list[tuple[Path, dict[str, Any]]]:
     return found
 
 
-def write(path: Path, entry: dict) -> None:
+def write(path: Path, entry: Any) -> None:
     pending = path.with_name(path.name + ".pending")
     pending.write_text(json.dumps(entry) + "\n")
     pending.replace(path)
@@ -127,6 +127,11 @@ def record(directory: Path, entry: dict, outcome: str, status: int | None = None
         item.update(yields=int(entry["yields"]), yielded=round(yielded + (max(0.0, ended - away) if away else 0), 2))
     if entry.get("until"):
         item["until"] = entry["until"]  # when its client would have given up (run --wait): the replay's patience
+    fields = cast(dict[str, Any], entry)
+    if fields.get("aged") in _config.PRIORITIES:
+        item["aged"] = fields["aged"]  # the class it was granted in after ageing; `priority` stays the one it asked
+    if fields.get("reprioritized") in _config.PRIORITIES:
+        item["reprioritized"] = fields["reprioritized"]  # the class it asked first (slotfather reprioritize)
     meta = _config.meta_of(entry)
     if meta:
         item["meta"] = meta
@@ -239,7 +244,7 @@ def asked(path: Path) -> dict | None:
     return found if isinstance(found, dict) else None
 
 
-def epoch(value) -> float | None:
+def epoch(value: Any) -> float | None:
     """A moment stored as epoch seconds or as a now() stamp, as epoch seconds; None for anything else."""
     return float(value) if type(value) in (int, float) and math.isfinite(value) else _config.seconds(value)
 

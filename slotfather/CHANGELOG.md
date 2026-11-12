@@ -6,11 +6,26 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- A waiting request ages: a batch one is served as normal after 30 minutes, a normal one as interactive after 60
+  more, keeping its arrival. `slotfather order --aging-batch 30m --aging-normal 60m` sets the steps (0: never;
+  `SLOTFATHER_AGING_BATCH`, `_AGING_NORMAL` can only age less); Settings shows them as Batch promoted after and
+  Normal promoted after. `status` and the dashboard show the class a request is served in and that it aged.
+- `slotfather reprioritize PID|LABEL interactive|normal|batch` moves your request to another class without losing
+  its place in the queue; queue.log and EVENTS record it.
+- `status` gives each waiting request its expected start (`est-start=`, JSON `est_start`) and marks the head with
+  its reserved start; the dashboard's details show the expected start.
+- A request that has waited 30 minutes (`slotfather order --warn-wait`, Settings: Warn after waiting) says so on
+  its stderr every 15 minutes, with what it waits behind, its expected start and the `reprioritize` command to move
+  it up; queue.log and EVENTS record it, and `status` flags it (`long-wait=`, JSON `long_wait`).
 - QUEUE shows each request's priority after its state: ⚡ interactive, 🐢 batch, nothing for normal; the
   details put the same mark before the priority's name.
 
 ### Changed
 
+- The head's start is reserved and only ever moves earlier: a later request, of any class, passes a head only if
+  three times its expected run ends before that reserved start, or in slots the head will not need. Short work keeps
+  flowing beside a waiting `-n all` request, and the request starts once the leases it waited for end. The head's
+  limit (nothing passes after 2700 s) is off by default; `--limit` still sets one.
 - The scrollbar is a thumb alone, moving in half cells; the `↑ N above` and `↓ N more` counts are gone.
   EVENTS still shows `↑ N new` while scrolled away from the newest.
 - The focused panel's frame is the terminal's blue, with its title and column headers in the foreground
@@ -30,6 +45,8 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- A batch `-n all` request no longer waits for as long as normal and interactive work keeps coming: on 2026-11-11 a
+  Safari profile run waited 6 h 14 min and was given up. It now ages to normal after 30 minutes and is then the head.
 - QUEUE, EVENTS, the details, help, the changelog and Settings keep a blank row over and under their content
   again, as SLOTS and MACHINE do; the scrollbar runs between them.
 - The load chart no longer shows more slots held than the queue has (`peak 9` of 8): a request that left
