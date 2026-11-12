@@ -239,13 +239,16 @@ Solarized whose bright black is close to the background. `SLOTFATHER_THEME` sets
 
 ## Machine
 
-- **health marks:** 🆗 before load 1m, memory and swap while they are fine, 🔥 while
+- **rows:** `🆗 load ▮▮▮… 10.1/12`, `🆗 mem ▮▮▮… 23.0/32G`, `🆗 swap ▮▮▮… 10.0/11G`: used / total, the
+  values right-aligned in one column so every bar has the same length; tight, memory and swap drop their
+  decimals (`23/32G`).
+- **health marks:** 🆗 before load, mem and swap while they are fine, 🔥 while
   critical (memory low and swap low can block additional leases).
 - **unleased load** (top border): estimated load not explained by the CPU share of held slots.
   It uses the lower of the one- and five-minute load averages.
 - **admission** (top border): slots a generic new request can get immediately, considering
   queue order and memory checks. It is not a count of worker processes.
-- **load 1m:** one-minute system load, shown beside the core count.
+- **load:** the one-minute load average over the core count.
   Load counts runnable and waiting tasks; it is not CPU busy percentage and can
   exceed the number of cores.
 - **memory / swap bars:** observed used capacity. Missing observations are shown
@@ -275,7 +278,9 @@ produce fractional block heights when graph height and capacity differ.
 Historical over-capacity values are retained in `peak`.
 
 MACHINE does not scroll: one blank row under its top border, then load, memory and swap, the chart right under
-them and its axis right under the chart. The chart keeps half a cell of air at each end instead of blank rows: its
+them and its axis right under the chart. From 62 columns wide the chart sits beside the three rows instead, its
+rows level with theirs (four if the panel has room), two cells to their right, with its axis under it alone;
+MACHINE is then 7 rows high, not 11, and the panels above take the difference. The chart keeps half a cell of air at each end instead of blank rows: its
 scale runs from the bottom cell's mid-line (a column with any height shows `▀` there) to the top cell's (a full
 column tops out at `▄`), in exact eighths between. Each row starts with its health: 🆗, or 🔥 when critical by the
 rules that turn its bar red (`+` and `!` in ASCII). The load outside leases and the admission state sit on the

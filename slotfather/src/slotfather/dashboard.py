@@ -48,8 +48,14 @@ from . import version as _version
 
 SPARK = "▁▂▃▄▅▆▇█"
 CHART_ROWS, MIN_CHART_ROWS = 4, 2  # the chart's rows when there is room; fewer than two, it goes (owner)
-MACHINE_HEIGHT = 7 + CHART_ROWS  # frame, a blank row, 3 resource rows, the chart and its axis line
-LABEL_COLUMN = 12  # a MACHINE row: its health mark, a gap, the label, then the bar this far in
+MACHINE_HEIGHT = 7 + CHART_ROWS  # stacked: frame, a blank row, 3 resource rows, the chart and its axis line
+MACHINE_SIDE_HEIGHT = 7  # the chart beside the rows: frame, a blank row, 3 rows level with 3 chart rows, the axis
+MACHINE_LABEL = 8  # a MACHINE row: its health mark, a gap, the label (load, mem, swap), a gap, then the bar
+MACHINE_BAR_MIN, MACHINE_BAR_SIDE = 4, 12  # the shortest bar before values go short; beside the chart, its bars
+MACHINE_GAP, MACHINE_CHART_MIN = 2, 24  # between the rows and a chart beside them, which needs this many columns
+# The width from which the chart sits beside the rows: frame and padding (6), the rows with a 9-cell value
+# column, the gap and the chart's least width (owner, 2026-11-12: picked by rendering)
+MACHINE_SIDE_WIDTH = 6 + MACHINE_LABEL + MACHINE_BAR_SIDE + 1 + 9 + MACHINE_GAP + MACHINE_CHART_MIN
 HISTORY_WINDOW = 3600  # seconds of queue.log the utilisation strip rebuilds
 LOG_TAIL = 262144  # bytes of queue.log read per refresh
 WIDE = 110  # columns from which the panels sit side by side
@@ -1382,6 +1388,76 @@ def machine_note(model: dict[str, Any]) -> list[tuple[str, str]]:
     return [(f"unleased {model['advice']['unleased_load']:.1f}", "status-normal"), (" · ", "dim"), permit]
 
 
+class Resource(NamedTuple):
+    """A MACHINE row: its short label, how full (None: unknown), its used/total value in full and short, and whether
+    it is critical by the rules that turn its bar red."""
+    label: str
+    fraction: float | None
+    value: str
+    short: str
+    critical: bool
+
+
+def machine_resources(model: dict[str, Any]) -> list[Resource]:
+    """load, mem and swap as used/total (owner, 2026-11-12): `10.1/12`, `23.0/32G`, `10.0/11G`; short `23/32G`."""
+    memory = cast(dict[str, Any], model["memory"])
+    cores, slots = int(model["cores"]), int(model["slots"])
+    load1 = float(model["averages"][0])
+    # Critical where the one-minute load leaves less than one slot's share of the cores free (#15 review): by load
+    # alone, so a fully leased but quiet machine is not red
+    load_value = f"{load1:.1f}/{cores}"
+    found = [Resource("load", load1 / cores, load_value, load_value, cores - load1 < cores / slots)]
+    used, total = memory.get("used"), memory.get("total")
+    if used is None and total and memory.get("available") is not None:
+        used = max(0, total - memory["available"])
+    low = machine_memory_status(memory)[1] == "bad"
+    if total and used is not None:
+        found.append(Resource("mem", used / total, f"{gigabytes(used)}/{gigabytes(total, True)}G",
+                              f"{round(used / 1024)}/{round(total / 1024)}G", low))
+    else:
+        found.append(Resource("mem", None, "?", "?", low))
+    swap_total = float(memory.get("swap_total") or 0)
+    if swap_total and memory.get("swap_free") is not None:
+        swap_used = max(0.0, swap_total - float(memory["swap_free"]))
+        swap_low = float(memory["swap_free"]) < _config.number_setting("MIN_FREE_SWAP_MB", _config.MIN_FREE_SWAP_MB)
+        found.append(Resource("swap", swap_used / swap_total, f"{gigabytes(swap_used)}/{gigabytes(swap_total, True)}G",
+                              f"{round(swap_used / 1024)}/{round(swap_total / 1024)}G", swap_low))
+    else:
+        found.append(Resource("swap", None, "off" if memory.get("swap_total") == 0 else "?",
+                              "off" if memory.get("swap_total") == 0 else "?", False))
+    return found
+
+
+def machine_side_by_side(width: int) -> bool:
+    """Whether MACHINE is wide enough for its chart beside the three rows rather than under them (owner)."""
+    return width >= MACHINE_SIDE_WIDTH
+
+
+def machine_height(width: int) -> int:
+    """MACHINE's natural height at this width: shorter with the chart beside the rows."""
+    return MACHINE_SIDE_HEIGHT if machine_side_by_side(width) else MACHINE_HEIGHT
+
+
+def draw_resource_rows(canvas: Canvas, row: int, x: int, width: int, resources: list[Resource]) -> None:
+    """The three rows in `width` cells from x: health mark, label, a bar, and the value right-aligned in one column
+    as wide as the longest, so every bar has the same length; short values (`23/32G`) where full ones leave no bar."""
+    values = [resource.value for resource in resources]
+    column = max(text_width(value) for value in values)
+    bar_width = width - MACHINE_LABEL - 1 - column
+    if bar_width < MACHINE_BAR_MIN:
+        values = [resource.short for resource in resources]
+        column = max(text_width(value) for value in values)
+        bar_width = width - MACHINE_LABEL - 1 - column
+    bar_width = max(0, bar_width)
+    for line, (resource, value) in enumerate(zip(resources, values)):
+        canvas.put(row + line, x, health_marks["hot" if resource.critical else "ok"], "text", 2)
+        canvas.put(row + line, x + 3, resource.label, "dim")
+        if bar_width and resource.fraction is not None:
+            canvas.segments(row + line, x + MACHINE_LABEL, ramp_bar(resource.fraction, bar_width, resource.critical),
+                            bar_width)
+        canvas.put(row + line, x + width - text_width(value), value, "text")
+
+
 def draw_machine(canvas: Canvas, y: int, x: int, height: int, width: int, model: dict) -> None:
     canvas.box(y, x, height, width, "MACHINE")
     note = machine_note(cast(dict[str, Any], model))
@@ -1390,86 +1466,50 @@ def draw_machine(canvas: Canvas, y: int, x: int, height: int, width: int, model:
         if x + 2 + text_width(" MACHINE ") + 2 + size <= x + width - 2:
             canvas.segments(y, x + width - 2 - size, [(" ", "text"), *parts, (" ", "text")], size)
             break
-    inner, slots = width - 6, model["slots"]
-    load1 = model["averages"][0]
-    memory = model["memory"]
-    ram_status = machine_memory_status(memory)
-    def usage_parts(used: float, total: float, critical: bool) -> list:
-        label = f"used {megabytes(used)} of {megabytes(total)}"
-        bar_width = min(12, max(0, inner - LABEL_COLUMN - text_width(label) - 1))
-        return ramp_bar(used / total, bar_width, critical) + [(" " + label if bar_width else label, "text")]
-
-    if memory["swap_total"] == 0:
-        swap = ("off", "text")
-    else:
-        total = f" of {megabytes(memory['swap_total'])}" if memory["swap_total"] else ""
-        swap = (f"{megabytes(memory['swap_free'])} free{total}", "text")
-    swap_parts = [swap]
-    swap_used: float | None = None
-    swap_low = False
-    if memory.get("swap_total") and memory.get("swap_free") is not None:
-        swap_used = max(0, memory["swap_total"] - memory["swap_free"])
-        swap_low = cast(float, memory["swap_free"]) < _config.number_setting("MIN_FREE_SWAP_MB", _config.MIN_FREE_SWAP_MB)
-        swap_parts = usage_parts(swap_used, memory["swap_total"], swap_low)  # critical as "swap low"
-    used_memory, total_memory = memory.get("used"), memory.get("total")
-    if used_memory is None and total_memory and memory.get("available") is not None:
-        used_memory = max(0, total_memory - memory["available"])
-    memory_parts = [("usage unavailable", "dim")]
-    memory_low = ram_status[1] == "bad"
-    if total_memory and used_memory is not None:
-        memory_parts = usage_parts(used_memory, total_memory, memory_low)  # critical as "memory low"
-    # Critical where the one-minute load leaves less than one slot's share of the cores free (#15 review): by load
-    # alone, so a fully leased but quiet machine is not red
-    load_hot = cast(bool, model["cores"] - load1 < model["cores"] / slots)
-    load_text = f"{load1:.1f} · {model['cores']} cores"
-    load_bar = min(12, max(0, inner - LABEL_COLUMN - text_width(load_text) - 1))  # as narrow as the text needs
-    lines: list[tuple[str, list[tuple[str, str]]]] = [
-        ("load 1m", ramp_bar(cast(float, load1 / model["cores"]), load_bar, load_hot)
-         + [((" " if load_bar else "") + load_text, "text")]),
-        ("memory", cast(list[tuple[str, str]], memory_parts)), ("swap", cast(list[tuple[str, str]], swap_parts))]
-    chart_width = max(1, inner)
-    buckets = history_buckets(model["history"], chart_width)
-    summary = history_summary(model["history"], slots)
-    # Inside the frame: a blank row, the three resource rows, the chart and its axis line, which the bottom frame
-    # follows directly. Short of rows (owner, 2026-11-12) the chart gives up height first, 4 → 3 → 2
-    # rows and then entirely (never one row); then the blank row; then the resource rows become one compact line;
-    # memory and swap never go.
+    inner, slots = width - 6, int(cast(int, model["slots"]))
+    resources = machine_resources(cast(dict[str, Any], model))
+    rows = len(resources)
     interior = height - 2
-    full = interior >= len(lines)
-    padded = interior >= 1 + len(lines)  # a blank row under the top border, which carries the status (owner)
-    chart_rows = min(CHART_ROWS, interior - 1 - len(lines) - 1) if padded else 0  # then the chart and its axis
+    # Wide (owner, 2026-11-12): the chart beside the rows, its rows level with theirs, its axis under it alone
+    if machine_side_by_side(width) and interior >= 1 + rows + 1:
+        metrics = MACHINE_LABEL + MACHINE_BAR_SIDE + 1 + max(text_width(resource.value) for resource in resources)
+        chart_x, chart_width = x + 3 + metrics + MACHINE_GAP, inner - metrics - MACHINE_GAP
+        chart_rows = min(CHART_ROWS, interior - 2)
+        draw_resource_rows(canvas, y + 2, x + 3, metrics, resources)
+        draw_chart(canvas, y + 2, chart_x, chart_width, chart_rows, cast(dict[str, Any], model), slots)
+        return
+    # Stacked: a blank row, the three rows, the chart and its axis line, which the bottom frame follows directly.
+    # Short of rows (owner, 2026-11-12) the chart gives up height first, 4 → 3 → 2 rows and then entirely (never one
+    # row); then the blank row; then the rows become one compact line; memory and swap never go.
+    full = interior >= rows
+    padded = interior >= 1 + rows
+    chart_rows = min(CHART_ROWS, interior - 1 - rows - 1) if padded else 0
     chart_rows = chart_rows if chart_rows >= MIN_CHART_ROWS else 0
     row = y + 2 if padded else y + 1
-    critical = {"load 1m": load_hot, "memory": memory_low, "swap": swap_low}
     if full:
-        for name, parts in lines:
-            canvas.put(row, x + 3, health_marks["hot" if critical[name] else "ok"], "text", 2)
-            canvas.put(row, x + 6, name, "dim")
-            canvas.segments(row, x + 3 + LABEL_COLUMN, parts, inner - LABEL_COLUMN)
-            row += 1
+        draw_resource_rows(canvas, row, x + 3, inner, resources)
+        row += rows
     elif interior >= 1:
-        resources: list[tuple[str, float | None, str, bool]] = [
-            ("load", cast(float, load1 / model["cores"]), f"{load1:.1f}/{model['cores']}", load_hot)]
-        used_mb, total_mb = cast(float | None, used_memory), cast(float | None, total_memory)
-        swap_total = cast(float, cast(dict[str, Any], memory).get("swap_total") or 0)
-        if used_mb is not None and total_mb:
-            resources.append(("mem", used_mb / total_mb, f"{gigabytes(used_mb)}/{gigabytes(total_mb, True)}G",
-                              memory_low))
-        else:
-            resources.append(("mem", None, "?", memory_low))
-        resources.append(("swap", swap_used / swap_total if swap_used is not None and swap_total else None,
-                          f"{gigabytes(swap_used)}/{gigabytes(swap_total, True)}G"
-                          if swap_used is not None else "off" if swap_total == 0 else "?", swap_low))
-        canvas.segments(row, x + 3, compact_resources(resources, inner), inner)
+        canvas.segments(row, x + 3, compact_resources(
+            [(resource.label, resource.fraction, resource.value, resource.critical) for resource in resources],
+            inner, [resource.short for resource in resources]), inner)
         row += 1
-    # The chart right under the rows and over its axis, with half a cell of air at each end (owner, 2026-11-12)
-    for line, column_glyphs in enumerate(chart_cells(buckets, cast(int, slots), chart_rows)):
-        colour = round((chart_rows - 1 - line) / (chart_rows - 1) * (_theme.CHART_STEPS - 1))
+    if chart_rows:
+        draw_chart(canvas, row, x + 3, inner, chart_rows, cast(dict[str, Any], model), slots)
+
+
+def draw_chart(canvas: Canvas, row: int, x: int, width: int, rows: int, model: dict[str, Any], slots: int) -> None:
+    """The history chart, `rows` high from `row`, with half a cell of air at each end (owner, 2026-11-12), and its
+    axis line right under it."""
+    chart_width = max(1, width)
+    history = cast(list[tuple[datetime.datetime, datetime.datetime, int]], model["history"])
+    buckets = history_buckets(history, chart_width)
+    for line, column_glyphs in enumerate(chart_cells(buckets, slots, rows)):
+        colour = round((rows - 1 - line) / (rows - 1) * (_theme.CHART_STEPS - 1))
         for column, glyph in enumerate(column_glyphs):
-            canvas.put(row, x + 3 + column, glyph, f"chart{colour}" if glyph != " " else "dim")
-        row += 1
-    if chart_rows and row <= y + height - 2:  # the axis line right under the chart
-        canvas.segments(row, x + 3, machine_legend(cast(dict[str, Any], summary), cast(int, slots), chart_width), inner)
+            canvas.put(row + line, x + column, glyph, f"chart{colour}" if glyph != " " else "dim")
+    summary = history_summary(history, slots)
+    canvas.segments(row + rows, x, machine_legend(cast(dict[str, Any], summary), slots, chart_width), width)
 
 
 def chart_cells(buckets: list[int], slots: int, rows: int, half_gaps: bool = True) -> list[list[str]]:
@@ -1501,15 +1541,20 @@ def gigabytes(value_mb: float | None, total: bool = False) -> str:
     return (f"{value:.1f}".rstrip("0").rstrip(".") or "0") if total else f"{value:.1f}"
 
 
-def compact_resources(resources: list[tuple[str, float | None, str, bool]], width: int) -> list[tuple[str, str]]:
+def compact_resources(resources: list[tuple[str, float | None, str, bool]], width: int,
+                      shorts: list[str] | None = None) -> list[tuple[str, str]]:
     """Load, memory and swap on one line (owner, 2026-11-12) when MACHINE is too short for their rows: short ramp
-    bars (6 to 4 cells, red when critical), else the numbers alone, a critical one in red. Never drops one."""
+    bars (6 to 4 cells, red when critical), else the numbers alone, a critical one in red; at the narrowest the
+    short values (`23/32G`), then no marks. Never drops one."""
     parts: list[tuple[str, str]] = []
-    forms = [(6, " · ", True), (5, " · ", True), (4, " · ", True), (0, " · ", True), (0, "  ", True), (0, " ", True),
-             (0, " ", False)]  # the last, on the narrowest panel, without the marks: never without a value
-    for bar_width, separator, marked in forms:
+    forms = [(6, " · ", True, False), (5, " · ", True, False), (4, " · ", True, False), (0, " · ", True, False),
+             (0, "  ", True, False), (0, " ", True, False), (0, " ", True, True), (0, " ", False, False),
+             (0, " ", False, True)]
+    for bar_width, separator, marked, short in forms:
         parts = []
         for index, (label, fraction, value, critical) in enumerate(resources):
+            if short and shorts:
+                value = shorts[index]
             if index:
                 parts.append((separator, "dim"))
             if marked:
@@ -1638,10 +1683,12 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
         ("reaped", "owner exited; entry removed"),
     ]),
     ("MACHINE", [
-        ("load 1m", "1-minute load against cores (not CPU %)"),
+        ("load", "the 1-minute load average / cores (not CPU %)"),
+        ("mem · swap", "used / total, in GB"),
+        ("🆗 · 🔥", "fine · critical"),
         ("unleased", "demand outside leased work"),
         ("admission", "slots a new request could get now"),
-        ("", "Bars run blue→red, and turn all red when the resource is critical."),
+        ("", "Bars run indigo→red, and turn all red when the resource is critical."),
         ("", "The chart shows held slots over time, now on the right."),
     ]),
     ("SETTINGS", [
@@ -2043,7 +2090,7 @@ def dashboard_draw(canvas: Canvas, model: dict[str, Any] | None, selected: int =
                 draw_panel(canvas, name, y, 0, heights[name], left, model, selected, cwd, moment)
                 y += heights[name]
         right_available = height - 1
-        machine = min(MACHINE_HEIGHT, right_available - 10) if right_available >= 16 else 0
+        machine = min(machine_height(width - left - 1), right_available - 10) if right_available >= 16 else 0
         right = {"detail": right_available - machine, "machine": machine}
         y = 0
         for name in ("detail", "machine"):
@@ -2055,10 +2102,10 @@ def dashboard_draw(canvas: Canvas, model: dict[str, Any] | None, selected: int =
         # The bottom row is MACHINE's own height (EVENTS beside it scrolls in the same); QUEUE gets its rows and the
         # details what is left (owner, 2026-11-12). Short of room, each gives way down to its minimum.
         heights = allocate(available, [("requests", min(requests, 10), requests), ("detail", 5, 5),
-                                       ("bottom", 6, MACHINE_HEIGHT)])
-        extra = heights.get("bottom", 0) - MACHINE_HEIGHT
+                                       ("bottom", 6, machine_height(machine_width))])
+        extra = heights.get("bottom", 0) - machine_height(machine_width)
         if extra > 0:  # MACHINE never grows past its own height: the rest goes to the details
-            heights["bottom"] = MACHINE_HEIGHT
+            heights["bottom"] = machine_height(machine_width)
             heights["detail" if "detail" in heights else "requests"] += extra
         y = top
         for name in ("requests", "detail", "bottom"):

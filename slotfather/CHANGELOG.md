@@ -49,6 +49,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 - Unfocused frames are a little paler than muted text.
 - MACHINE's chart sits right under the resource rows and over its axis, with half a cell of air at each end; short of rows, the chart shrinks to two rows and then
   goes before load, memory and swap share one compact line, and memory and swap are always shown.
+- MACHINE's rows are short: `load 10.1/12`, `mem 23.0/32G`, `swap 10.0/11G`, used / total with the values in
+  one right-aligned column and bars of one length. From 62 columns the chart sits beside them, so MACHINE is
+  shorter and the panels above get the rows.
 - MACHINE has no status row: each of load, memory and swap starts with 🆗 or 🔥, and the unleased load and the
   admission state sit on the right of its top border. A blank row stays under the border; short of rows it goes
   after the chart and before the rows compress.
