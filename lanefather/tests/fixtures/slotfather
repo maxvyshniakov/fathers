@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+"""A stand-in for the installed `slotfather` command (#619), first on PATH in Straylight's tests, so that no test
+reaches the machine's queue. It keeps no queue: it records each call and answers the documented commands.
+
+  run [-n N|all] [--label L] [--meta K=V]... [--priority P] [--ticket ID] [--yieldable] [--wait S] [--] COMMAND...
+                                                         exec COMMAND with SLOTFATHER_LEASE and SLOTFATHER_COUNT,
+                                                         and SLOTFATHER_YIELD when yieldable; under a lease
+                                                         (SLOTFATHER_LEASE set) without a second one
+  yield                                                  inside a yieldable lease: take the request back, as a
+                                                         yield that was granted again does
+  advise [--max N] [--exclusive]                         JSON advice sized as slotfather sizes it, with 3 cores a
+                                                         slot: jobs = min(--max, the slots left after the load and
+                                                         the held slots, total - held unless --exclusive), at least 1
+  slots | status | available                             the capacity, an empty queue, the free slots
+  status --json [--pid PID]                              an empty queue as JSON; with --pid, PID's start time
+  sweep --json [--live] [--no-log] --pid PID...          slotfather sweep's verdict on those pids (#661): a pid
+                                                         whose command matches FAKE_SLOTFATHER_SWEEP_STOP is an
+                                                         orphan it would stop (with --live: SIGTERM, "stopped" once
+                                                         it is gone within 3 s, else "failed" and exit 1); one
+                                                         matching FAKE_SLOTFATHER_SWEEP_SPARE is spared as inside a
+                                                         live lease; others are no item
+
+FAKE_SLOTFATHER_LOG    file that gets one JSON line per call: {"command", "args", "lease"}
+FAKE_SLOTFATHER_TOTAL  the capacity (default 4)
+FAKE_SLOTFATHER_HELD   slots others hold, for advise and available (default 0)
+FAKE_SLOTFATHER_BUSY   set: a run with --wait gives up as slotfather does, exit 75, without running COMMAND
+FAKE_SLOTFATHER_FAIL   set: advise fails with exit 2 and this message
+FAKE_SLOTFATHER_SLOTS_FAIL  set: slots fails with exit 2, so the capacity is unknown
+FAKE_SLOTFATHER_SWEEP_FAIL  set: sweep fails with exit 2 and this message
+FAKE_SLOTFATHER_SWEEP_STOP, FAKE_SLOTFATHER_SWEEP_SPARE  regular expressions on a process's command (see sweep)
+FAKE_SLOTFATHER_BYPASS set: a run hands COMMAND no lease, as SLOTFATHER_POLICY=bypass does
+FAKE_SLOTFATHER_YIELD  the yield request path a yieldable run hands COMMAND (default: beside the log)
+FAKE_SLOTFATHER_YIELD_EXIT  the exit status of yield (default 0; non-zero: the lease is gone)
+SLOTFATHER_LOADAVG     the load averages advise sizes for, as slotfather reads them: "load1 load5 load15" or one
+                       number (default 0)
+"""
+import json
+import math
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+
+
+def setting(name, default):
+    value = os.environ.get("FAKE_SLOTFATHER_" + name, "")
+    return int(value) if value.isdigit() else default
+
+
+def yield_path():
+    configured = os.environ.get("FAKE_SLOTFATHER_YIELD")
+    if configured:
+        return configured
+    log = os.environ.get("FAKE_SLOTFATHER_LOG")
+    return os.path.join(os.path.dirname(log) if log else "/nonexistent", f"yield-request-{os.getpid()}")
+
+
+def main(argv):
+    total, held = setting("TOTAL", 4), setting("HELD", 0)
+    log = os.environ.get("FAKE_SLOTFATHER_LOG")
+    if log:
+        with open(log, "a") as out:
+            out.write(json.dumps({"command": argv[:1] and argv[0], "args": argv[1:],
+                                  "lease": os.environ.get("SLOTFATHER_LEASE")}) + "\n")
+    command, rest = (argv[0], argv[1:]) if argv else ("", [])
+    if command == "run":
+        count, wait, yieldable = 1, None, False
+        while rest and rest[0] != "--" and rest[0].startswith("-"):
+            if rest[0] == "--yieldable":
+                yieldable, rest = True, rest[1:]
+                continue
+            option, value, rest = rest[0], rest[1], rest[2:]
+            if option == "-n":
+                count = total if value == "all" else min(int(value), total)
+            elif option == "--wait":
+                wait = value
+        if rest[:1] == ["--"]:
+            rest = rest[1:]
+        if os.environ.get("SLOTFATHER_LEASE"):
+            os.execvp(rest[0], rest)
+        if wait is not None and os.environ.get("FAKE_SLOTFATHER_BUSY"):
+            print(f"slot: fake: no {count} slot(s) within {wait} s", file=sys.stderr)
+            return 75
+        if not os.environ.get("FAKE_SLOTFATHER_BYPASS"):
+            os.environ.update(SLOTFATHER_LEASE=f"fake-lease-{os.getpid()}", SLOTFATHER_COUNT=str(count))
+            if yieldable:
+                os.environ["SLOTFATHER_YIELD"] = yield_path()
+        os.execvp(rest[0], rest)
+    if command == "yield":
+        if not os.environ.get("SLOTFATHER_LEASE"):
+            print("slotfather: yield runs only inside a lease", file=sys.stderr)
+            return 2
+        status = setting("YIELD_EXIT", 0)
+        if not status and os.environ.get("SLOTFATHER_YIELD"):
+            try:
+                os.remove(os.environ["SLOTFATHER_YIELD"])
+            except FileNotFoundError:
+                print("slotfather: no yield requested")
+        return status
+    if command == "advise":
+        if os.environ.get("FAKE_SLOTFATHER_FAIL"):
+            print("slotfather: " + os.environ["FAKE_SLOTFATHER_FAIL"], file=sys.stderr)
+            return 2
+        maximum = int(rest[rest.index("--max") + 1]) if "--max" in rest else total
+        exclusive = "--exclusive" in rest
+        # slotfather's size(): load without a lease takes its cores out, a slot counting while half its cores idle.
+        averages = [float(v) for v in (os.environ.get("SLOTFATHER_LOADAVG") or "0").split()]
+        load = min(averages[0], averages[1 if len(averages) > 1 else 0])
+        per_slot = 3.0
+        unleased = max(0.0, load - held * per_slot)
+        busy = unleased + (0.0 if exclusive else held * per_slot)
+        capacity = max(0, math.floor((total * per_slot - busy) / per_slot + 0.5))
+        free = total if exclusive else max(0, total - held)
+        print(json.dumps({"jobs": max(1, min(maximum, capacity, free)), "maximum": maximum, "exclusive": exclusive,
+                          "total": total, "held": held, "free": free, "load": load, "unleased_load": unleased,
+                          "cores_per_slot": per_slot, "capacity": capacity, "waiting": False}))
+        return 0
+    if command == "slots":
+        if os.environ.get("FAKE_SLOTFATHER_SLOTS_FAIL"):
+            print("slotfather: fixture capacity unavailable", file=sys.stderr)
+            return 2
+        print(f"{total} slots (automatic)")
+        return 0
+    if command == "status":
+        if rest[:1] == ["--json"]:
+            # An empty queue: no process is in a lease; --pid echoes the start time as slotfather reads it.
+            answer = {"v": 2, "slots": total, "held": held, "free": total - held, "legacy": [], "entries": []}
+            if rest[1:2] == ["--pid"] and rest[2:3]:
+                start = subprocess.run(["ps", "-o", "lstart=", "-p", rest[2]], capture_output=True, text=True,
+                                       env={**os.environ, "LC_ALL": "C"}).stdout.strip()
+                answer["query"] = {"pid": int(rest[2]), "start": start or None}
+            print(json.dumps(answer))
+            return 0
+        print(f"{held} of {total} slots held")
+        return 0
+    if command == "sweep":
+        return sweep(rest)
+    if command == "available":
+        print(total - held)
+        return 0
+    print("usage: fake slotfather run|yield|advise|slots|status|available", file=sys.stderr)
+    return 2
+
+
+def command_of(pid):
+    """(command, running) as ps shows the pid; a zombie is not running."""
+    out = subprocess.run(["ps", "-o", "stat=,command=", "-p", str(pid)], capture_output=True, text=True,
+                         env={**os.environ, "LC_ALL": "C"}).stdout.strip()
+    stat, _, command = out.partition(" ")
+    return command.strip(), bool(stat) and not stat.startswith("Z")
+
+
+def sweep(rest):
+    if os.environ.get("FAKE_SLOTFATHER_SWEEP_FAIL"):
+        print("slotfather sweep: " + os.environ["FAKE_SLOTFATHER_SWEEP_FAIL"], file=sys.stderr)
+        return 2
+    live = "--live" in rest
+    pids = [int(rest[i + 1]) for i, word in enumerate(rest[:-1]) if word == "--pid" and rest[i + 1].isdigit()]
+    stop, spare = os.environ.get("FAKE_SLOTFATHER_SWEEP_STOP"), os.environ.get("FAKE_SLOTFATHER_SWEEP_SPARE")
+    items = []
+    for pid in pids:
+        command, running = command_of(pid)
+        if not running:
+            continue
+        item = {"pid": pid, "class": "orphan", "kind": "runner", "tree": [pid], "cmd": command,
+                "reason": "runner adopted by pid 1"}
+        if spare and re.search(spare, command):
+            items.append(dict(item, action="spared", reason=item["reason"] + "; inside the live lease lane-641-other"))
+        elif stop and re.search(stop, command):
+            item["action"] = "would-stop"
+            if live:
+                os.kill(pid, signal.SIGTERM)
+                deadline = time.monotonic() + 3
+                while command_of(pid)[1] and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                item["action"] = "failed" if command_of(pid)[1] else "stopped"
+            items.append(item)
+    print(json.dumps({"v": 1, "live": live, "only": pids, "items": items, "live_refused": False,
+                      "failed": sum(i["action"] == "failed" for i in items)}))
+    return 1 if any(i["action"] == "failed" for i in items) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

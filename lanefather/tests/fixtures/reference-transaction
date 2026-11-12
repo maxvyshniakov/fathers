@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# One writer for main and dev (audit 2026-10-21, barrier B2). In an agent session
+# (CLAUDECODE=1, or any CODEX_* variable set), refuses a ref transaction that moves
+# refs/heads/main or refs/heads/dev unless LANDING_TOKEN matches the token of the
+# landing lock, $(git rev-parse --git-common-dir)/landing.lock, taken less than 2 h
+# ago. Straylight's tools/lane land, promote and sync take the lock and set the token;
+# the refusal names the lane command for each legal move (#666). It also refuses
+# writing ORIG_HEAD while main or dev is checked out, the first ref a merge or pull
+# writes, so a refused fast-forward leaves the worktree untouched.
+# Fetches (refs/remotes/*), other branches, tags and no-op updates pass; so does
+# everyone outside an agent session. The hook fails open: a lock it cannot parse
+# passes with a warning. The same file serves Sid-Kit and Data Grid
+# (tools/agent-hooks/reference-transaction); keep the two copies equal.
+
+# Fast path, builtins only: this runs for every ref transaction in every worktree.
+[[ "$1" == prepared ]] || exit 0
+[[ "${CLAUDECODE:-}" == 1 || -n "${!CODEX_@}" ]] || exit 0
+
+protected=()
+while read -r old new ref; do
+  [[ "$old" == "$new" ]] && continue
+  case "$ref" in
+    refs/heads/main | refs/heads/dev) protected+=("$ref") ;;
+    ORIG_HEAD) orig_head=1 ;;
+  esac
+done
+if [[ -n "${orig_head:-}" ]]; then
+  case "$(git symbolic-ref -q HEAD 2>/dev/null)" in
+    refs/heads/main) protected+=("ORIG_HEAD (a merge, pull or reset of main)") ;;
+    refs/heads/dev) protected+=("ORIG_HEAD (a merge, pull or reset of dev)") ;;
+  esac
+fi
+[[ ${#protected[@]} -gt 0 ]] || exit 0
+
+ttl=7200
+if [[ "${CLAUDECODE:-}" == 1 ]]; then agent="CLAUDECODE=1"; else agent="${!CODEX_@}"; agent="${agent%% *} set"; fi
+
+common="$(git rev-parse --git-common-dir 2>/dev/null)" || {
+  echo "reference-transaction: warning: cannot find the Git directory; not checking the landing lock" >&2
+  exit 0
+}
+lock="$common/landing.lock"
+status=""
+if [[ ! -e "$lock" ]]; then
+  status="No landing lock is held."
+else
+  token="" holder="" acquired=""
+  while read -r key value; do
+    case "$key" in
+      token) token="$value" ;;
+      holder) holder="$value" ;;
+      acquired) acquired="$value" ;;
+    esac
+  done <"$lock" 2>/dev/null
+  if [[ -z "$token" || ! "$acquired" =~ ^[0-9]+$ ]]; then
+    echo "reference-transaction: warning: $lock is unreadable or malformed; letting ${protected[*]} through. Remove it if no landing is in progress." >&2
+    exit 0
+  fi
+  now="$(date +%s 2>/dev/null)"
+  if [[ ! "$now" =~ ^[0-9]+$ ]]; then
+    echo "reference-transaction: warning: cannot read the clock; not checking the landing lock" >&2
+    exit 0
+  fi
+  since="$(date -r "$acquired" '+%Y-%m-%d %H:%M' 2>/dev/null || date -d "@$acquired" '+%Y-%m-%d %H:%M' 2>/dev/null)"
+  if ((now - 10#$acquired > ttl)); then
+    status="The landing lock held by ${holder:-an unnamed holder} since ${since:-$acquired} expired after 2 h."
+  elif [[ "${LANDING_TOKEN:-}" == "$token" ]]; then
+    exit 0
+  elif [[ -n "${LANDING_TOKEN:-}" ]]; then
+    status="LANDING_TOKEN does not match the landing lock, held by ${holder:-an unnamed holder} since ${since:-$acquired}."
+  else
+    status="The landing lock is held by ${holder:-an unnamed holder} since ${since:-$acquired}."
+  fi
+fi
+
+printf '%s\n' >&2 \
+  "reference-transaction: refusing to update ${protected[*]} from an agent session ($agent)." \
+  "main and dev have one writer. $status" \
+  "Commit on a lane or integration branch and land it with tools/lane land <id>. Move main" \
+  "or dev only with Straylight's tools/lane, run in this repository; it takes the landing lock:" \
+  "  tools/lane promote <sha> [--ship]  publish <sha>: push it to dev (and main), then fast-forward" \
+  "  tools/lane sync                    catch local main and dev up with origin" \
+  "  tools/lane sync --drop-local       drop stale local commits; a backup/ branch keeps them"
+exit 1
