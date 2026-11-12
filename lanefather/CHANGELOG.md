@@ -28,6 +28,10 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 - `lanefather changelog --json [--since VERSION]` gives the installed release's changelog as entries for
   Godfather's what's new (fathers#104), the Unreleased ones first with the installed commit; install.py ships the
   changelog in the release ([docs/api.md](docs/api.md)).
+- Cheaper post-merge smokes (fathers#94): a smoke check the merge does not select that passed on the previous
+  tip's tree does not run again, as the lane's receipt already stands for what the integration did not change; and
+  `[checks] gate_only = ["tools/test-*"]` leaves the matching checks (tooling self-tests) to the batch gate. The
+  land output, the post-merge receipt (`skipped`) and the ledger give each skip's reason.
 
 ### Changed
 

@@ -95,6 +95,8 @@ class Config:
     toolchain_pin: str = ""
     # The variables a verify run that queues itself reads: <slot_env>_LABEL, _PRIORITY, _TICKET, _META, _YIELDABLE.
     slot_env: str = "LANEFATHER_SLOT"
+    # Check ids (fnmatch patterns) the post-merge smoke leaves to the batch gate: tooling self-tests (fathers#94).
+    gate_only: tuple[str, ...] = ()
     # [slots.priority]: a phase's (or `default`) Slotfather priority, below the environment's (lanefather#24).
     slot_priority: tuple[tuple[str, str], ...] = ()
     cache_name: str = "lanefather"
@@ -223,7 +225,7 @@ TOP_KEYS = ("project", "command", "state_dir", "legacy_env_prefix", "shared_env"
             "promote", "hooks", "env", "gc", "admission", "tickets", "slots")
 TABLE_KEYS = {
     "admission": ("provider",),
-    "checks": ("verify", "plan_module", "triage", "toolchain", "toolchain_pin", "slot_env"),
+    "checks": ("verify", "plan_module", "triage", "toolchain", "toolchain_pin", "slot_env", "gate_only"),
     "lane": ("cache_name", "targets", "cache_partitions"),
     "gate": ("stamp_tool", "stamp_file", "pre_push_hook"),
     "promote": ("ship_refuses", "ship_refusal", "install", "deploy", "install_env_drop", "after"),
@@ -318,6 +320,7 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         toolchain=_strings(checks, "toolchain", default.toolchain),
         toolchain_pin=_string(checks, "toolchain_pin", default.toolchain_pin),
         slot_env=_string(checks, "slot_env", default.slot_env),
+        gate_only=_strings(checks, "gate_only", default.gate_only),
         slot_priority=_slot_priority(slot_table),
         cache_name=_string(lane, "cache_name", default.cache_name),
         lane_targets=_strings(lane, "targets", default.lane_targets),

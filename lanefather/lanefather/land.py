@@ -10,6 +10,7 @@ diff from the lane tip to the merge selects, plus every smoke check the receipt 
 """
 from __future__ import annotations
 
+import fnmatch
 import os
 import subprocess
 from typing import Any
@@ -53,17 +54,38 @@ def touched_lines(failed: list[tuple[str, str]], integration: str, merge: str) -
 
 
 def smoke_reuse(kind: str, rows: list[dict[str, Any]] | None, merge_tree: str, toolchain: Any,
+                merged_plan: dict[str, Any] | None = None, prior_tree: str | None = None,
                 ) -> tuple[str, list[dict[str, Any]] | None, dict[str, dict[str, Any]], dict[str, str]]:
-    """The smoke rows left once each check that already passed on the merge tree is taken out (fathers#91): (kind,
-    rows, the reused results, why each was skipped). Nothing left is kind "skip"."""
+    """The smoke rows left once these are taken out: (kind, rows, the reused results, why each was skipped).
+    Nothing left is kind "skip".
+    - a check the project leaves to the batch gate (`[checks] gate_only`, fathers#94): not run, not verified;
+    - a check that already passed on the merge tree (fathers#91);
+    - a check the merge does not select (the merged diff's plan, `merged_plan`) that passed on the previous tip's
+      tree, `prior_tree` (fathers#94): it reads the same files on both trees, as the lane's receipt stands for
+      what the integration did not change (#640). A full merged plan reuses nothing."""
     if not rows:
         return kind, rows, {}, {}
-    wanted = {row["id"]: row["suite"] for row in rows}
+    skips: dict[str, str] = {}
+    patterns = config.current().gate_only
+    for row in rows:
+        if any(fnmatch.fnmatchcase(row["id"], pattern) for pattern in patterns):
+            skips[row["id"]] = "left to the batch gate ([checks] gate_only)"
+    wanted = {row["id"]: row["suite"] for row in rows if row["id"] not in skips}
     reused = checks.same_tree(wanted, merge_tree, toolchain)
-    skips = {c: "passed on this merge tree before (" + str(e.get("reused_source") or "an earlier run")
-             + (f", {e['reused_receipt']}" if e.get("reused_receipt") else "") + ")" for c, e in reused.items()}
-    kept = [row for row in rows if row["id"] not in reused]
-    return ("skip" if reused and not kept else kind), kept, reused, skips
+    skips.update({c: "passed on this merge tree before (" + str(e.get("reused_source") or "an earlier run")
+                  + (f", {e['reused_receipt']}" if e.get("reused_receipt") else "") + ")" for c, e in reused.items()})
+    selection = (merged_plan or {}).get("selection")
+    if prior_tree and merged_plan is not None and not merged_plan.get("full") and selection is not None:
+        selected = {row["id"] for row in selection}
+        unchanged = {c: s for c, s in wanted.items() if c not in reused and c not in selected}
+        earlier = {c: dict(e, reused_from=prior_tree, reused_by="previous-tip")
+                   for c, e in checks.same_tree(unchanged, prior_tree, toolchain).items()}
+        skips.update({c: f"the merge changes nothing it reads, and it passed on the previous tip's tree "
+                         f"{prior_tree[:10]} (" + str(e.get("reused_source") or "an earlier run") + ")"
+                      for c, e in earlier.items()})
+        reused.update(earlier)
+    kept = [row for row in rows if row["id"] not in skips]
+    return ("skip" if skips and not kept else kind), kept, reused, skips
 
 
 def merge_problem(args: Any, tip: str, tree: str, receipt: dict[str, Any] | None) -> str | None:
@@ -183,7 +205,8 @@ def land(args: Any) -> int:
         lane_verified = narrowing.pop("lane_verified", {})
         # fathers#91: a smoke check that already passed on the merge tree, under this toolchain, does not run again.
         toolchain = plan.toolchain_state(checkout)
-        kind, rows, tree_verified, skips = smoke_reuse(kind, rows, merge_tree, toolchain)
+        kind, rows, tree_verified, skips = smoke_reuse(kind, rows, merge_tree, toolchain, merged_plan,
+                                                       git(checkout, "rev-parse", previous + "^{tree}"))
         suites, selected = ((merged_plan["selected"], None) if rows is None
                             else (plan.suites_of(rows), plan.by_suite(rows)))
         info = host()
@@ -232,7 +255,7 @@ def land(args: Any) -> int:
             else ", ".join(suites)) or "no suites affected"
     prefix = {"smoke": "smoke: ", "narrowed": "narrowed smoke: "}.get(kind, "")
     if kind == "skip" and skips:
-        # Every check left was taken out because it passed on this merge tree before (review of fathers#91).
+        # Every check left was taken out: left to the gate, passed on this tree, or unchanged since the previous tip.
         what = "skipped: " + "; ".join(f"{c}: {why}" for c, why in skips.items())
         if narrowing.get("narrowed"):
             what += f"; the lane's green receipt stands for {verified}"
