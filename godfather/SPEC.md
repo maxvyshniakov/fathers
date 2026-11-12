@@ -48,8 +48,8 @@ full pages one key away.
    standard library only, the interpreter that ran the installer, refused inside a virtual environment. A reinstall
    replaces the entry point atomically; a running dashboard keeps its release and shows `↻` in the footer.
 2. `godfather` opens the live dashboard in a terminal; without a terminal it prints usage and exits 2.
-   `godfather --once [--width N] [--height N] [--color]` prints one frame and exits, as `slotfather dashboard --once`
-   does today. `--interval S` sets Refresh every for this run.
+   `godfather --once [--page overview|lanes|processes] [--width N] [--height N] [--color]` prints one frame and
+   exits, as `slotfather dashboard --once` does today. `--interval S` sets Refresh every for this run.
 3. `slotfather dashboard [ARGS]`, and a bare `slotfather` in a terminal, exec `godfather` with the same arguments
    when `godfather` is on `PATH`. Without it they print
    `slotfather: the dashboard is part of godfather now; install it from https://github.com/maxvyshniakov/godfather`
@@ -414,7 +414,8 @@ last sweep (pid, start, command, directory, root, age) and the sweep's last time
 | LANES: a lane with a worktree | Open the worktree | the platform opener on the path | no |
 | LANES: an active lane | Park, with a reason | `lanefather park ID --reason R` (lanefather#19) | yes |
 
-Ask to yield is not confirmed **(chosen here)**: nothing is stopped, the holder yields between its own steps and goes
+`ask-yield` and `--start` on `reprioritize` are new in Slotfather (SF-5); `--start` refuses when the pid now
+belongs to another process. Ask to yield is not confirmed **(chosen here)**: nothing is stopped, the holder yields between its own steps and goes
 back to the queue, and Slotfather already asks on its own after two minutes. Reprioritize and extend are reversible.
 Opening is local and read-only, so it needs no owner command. Park is offered only once Lanefather advertises it.
 Land, promote, done, sync, review and sweep are never offered. A live owned entry cannot be reaped from Godfather;
@@ -463,6 +464,24 @@ Every step leaves every tool working on its own.
 6. **Lanes** (slice 4; LF-2), **Processes** (slice 5; JF-1), **Settings sections** (slice 6; LF-3, JF-2),
    **actions** (slice 7; SF-5, lanefather#19): each adds a page or section that stays hidden until its tool supports
    the contract.
+
+### Cross-repo tickets
+
+Slotfather and Lanefather are public; their tickets are filed there by the owner. junkfather has no repository yet.
+
+| Id | Tool | What | Needed by |
+| --- | --- | --- | --- |
+| SF-1 | Slotfather | `capabilities --json` with a `dashboard` block; `status --json --full` | slice 1 |
+| SF-2 | Slotfather | `settings --json`, `check`, `set --revision`, `reset` | slice 1 |
+| SF-3 | Slotfather | `dashboard` execs Godfather or prints the install message; the in-tree dashboard goes | after slice 1 is installed |
+| SF-4 | Slotfather | `events.jsonl` mirroring `queue.log`, tested with the vendored validator | slice 2 |
+| SF-5 | Slotfather | `ask-yield PID --start START`; `--start` on `reprioritize` | slice 7 |
+| LF-1 | Lanefather | machine-wide `events.jsonl` mirroring `ledger.log`; `dashboard` block in capabilities | slice 2 |
+| LF-2 | Lanefather | machine-wide `status --json` over a project registry | slice 4 |
+| LF-3 | Lanefather | `settings` commands for machine-local settings | slice 6 |
+| JF-1 | junkfather | the shared event schema; `capabilities --json`; `status --json` | slice 5 |
+| JF-2 | junkfather | `settings` commands | slice 6, optional |
+| lanefather#19 | Lanefather | `park` and `unpark` | slice 7, park only |
 
 ## Seams
 
