@@ -21,6 +21,9 @@
                                      in REF..HEAD names (lanefather.tickets, [tickets] release_comment)
   list [--all] [--json]
   status [--json]                    every registered project's lanes on this machine (lanefather.status)
+  settings [check|set|reset KEY [VALUE]] [--json]
+                                     this machine's settings: review start, rerun wait, slot priorities
+                                     (lanefather.settings)
 
 --config PATH (or LANEFATHER_CONFIG) names the project's .lanefather.toml; by default it is read from the top of the
 repository the command runs in. State: one JSON file per lane in the configured state directory (LANEFATHER_STATE
@@ -45,6 +48,7 @@ from . import (
     registry,
     review,
     runtime,
+    settings,
     show,
     status,
     tickets,
@@ -183,6 +187,14 @@ def parser() -> argparse.ArgumentParser:
                                            "dashboards")
     p.add_argument("--json", action="store_true", help="the version-1 snapshot")
     p.set_defaults(run=status.status)
+    p = commands.add_parser("settings", help="this machine's Lanefather settings: show, check, set or reset")
+    p.add_argument("action", nargs="?", choices=("check", "set", "reset"))
+    p.add_argument("key", nargs="?")
+    p.add_argument("value", nargs="?")
+    p.add_argument("--all", action="store_true", help="with reset: every setting")
+    p.add_argument("--revision", help="with set or reset: refuse when the settings changed since this revision")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(run=settings.settings)
     p = commands.add_parser("list", help="lanes that are not done, with claims, receipts, disk and load")
     p.add_argument("--all", action="store_true", help="include done lanes")
     p.add_argument("--json", action="store_true", help="the lane records with their worktree and receipt state, the "

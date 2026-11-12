@@ -382,5 +382,10 @@ def use(config: Config | None) -> None:
 
 
 def prog() -> str:
-    """How messages name the command."""
-    return current().command
+    """How messages name the command. An unreadable configuration names it `lanefather`, so the machine-wide
+    commands (capabilities, status, settings) still run in such a repository; any command that needs the
+    configuration reports its error when it reads it."""
+    try:
+        return current().command
+    except LaneError:
+        return Config().command

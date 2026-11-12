@@ -22,7 +22,7 @@ import sys
 import time
 from typing import Any
 
-from . import claims, config, done, journal, lanes, reviewer, state, worktrees
+from . import claims, config, done, journal, lanes, reviewer, settings, state, worktrees
 from .checks import terminable
 from .errors import LaneError
 from .gitops import common_dir, current_branch, git, git_ok, main_checkout
@@ -238,7 +238,16 @@ def review_lines(receipt: dict[str, Any]) -> list[str]:
 
 
 def review_start_manual() -> bool:
-    return config.current().env("REVIEW_START") == "manual"
+    """LANEFATHER_REVIEW_START when set, else this machine's `review.start` setting."""
+    found = config.current().env("REVIEW_START")
+    return found == "manual" if found else settings.value("review.start") == "manual"
+
+
+def review_start_source() -> str:
+    """What made land skip the review, for its message."""
+    if config.current().env("REVIEW_START"):
+        return f"{config.current().env_names('REVIEW_START')}=manual"
+    return "lanefather settings review.start=manual"
 
 
 def self_argv() -> list[str]:
@@ -290,7 +299,7 @@ def start_lane_review(record: Record) -> str:
                        details={"exempt": exempt})
         return f"review exempt: {exempt}"
     if review_start_manual():
-        return (f"review not started ({config.current().env_names('REVIEW_START')}=manual): run "
+        return (f"review not started ({review_start_source()}): run "
                 f"{config.prog()} review {lane_id}")
     receipt = spawn_review(lane_id, {"kind": "lane", "lane": lane_id, "ticket": record["ticket"]}, [lane_id],
                            main_checkout(record["common_dir"]))

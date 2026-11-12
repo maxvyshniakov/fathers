@@ -11,8 +11,9 @@ A verify run queues itself: lanefather hands it the label, priority, optional ti
 Without slotfather on PATH a command runs directly, under no lease.
 
 Each run's priority (lanefather#24), first wins: LANEFATHER_PRIORITY_<PHASE> (POST_MERGE for post-merge),
-LANEFATHER_PRIORITY, `[slots.priority]` <phase> and then `default` in `.lanefather.toml`, the built-in below. The
-environment names also read the project's legacy prefix and `[env]` aliases, as every setting does (config.names).
+LANEFATHER_PRIORITY, this machine's `slots.priority.<phase>` setting (lanefather.settings), `[slots.priority]`
+<phase> and then `default` in `.lanefather.toml`, the built-in below. The environment names also read the project's
+legacy prefix and `[env]` aliases, as every setting does (config.names).
 Each request carries the priority and its source as metadata `lanefather.priority`, which `slotfather status` shows.
 """
 from __future__ import annotations
@@ -24,7 +25,7 @@ import shutil
 import subprocess
 from typing import Any
 
-from . import config
+from . import config, settings
 from .errors import LaneError
 
 TIMED_OUT = 75  # slotfather run --wait gave up; the command did not run
@@ -67,7 +68,8 @@ def priority_setting(phase: str) -> str:
 
 def phase_priority(phase: str, fallback: str | None = None) -> tuple[str, str]:
     """The Slotfather priority of a run of `phase` and where it comes from: LANEFATHER_PRIORITY_<PHASE>,
-    LANEFATHER_PRIORITY, `[slots.priority]` <phase>, `[slots.priority]` default, then `fallback` or the built-in.
+    LANEFATHER_PRIORITY, the machine setting slots.priority.<phase>, `[slots.priority]` <phase>, `[slots.priority]`
+    default, then `fallback` or the built-in.
     An empty variable is unset; a value that is not a Slotfather priority, or a LANEFATHER_PRIORITY_<NAME> that
     names no phase, is refused."""
     if phase not in PHASES:
@@ -83,6 +85,9 @@ def phase_priority(phase: str, fallback: str | None = None) -> tuple[str, str]:
             if found[1] not in PRIORITIES:
                 raise LaneError(f"{found[0]}={found[1]!r} is not a Slotfather priority; use {', '.join(PRIORITIES)}")
             return found[1], found[0]
+    machine = settings.value(f"slots.priority.{phase}")
+    if machine in PRIORITIES:
+        return machine, f"lanefather settings slots.priority.{phase}"
     table = dict(cfg.slot_priority)
     for key in (phase, "default"):
         if key in table:

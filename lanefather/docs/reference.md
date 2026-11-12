@@ -21,6 +21,7 @@ lanefather released <version> --since REF [--head REF]   comment a published ver
 lanefather list [--all] [--json]
 lanefather show <id> [--state-dir DIR] [--project-dir DIR] [--json]   read-only lane context
 lanefather status [--json]                every registered project's lanes on this machine, read-only
+lanefather settings [check KEY VALUE | set KEY VALUE [--revision R] | reset KEY|--all] [--json]
 ```
 
 A claim is a glob relative to the repository: `*` and `?` stay within a path segment and `**` spans segments. A
@@ -89,8 +90,9 @@ LANEFATHER_PRIORITY_GATE=normal lanefather promote <sha>
 LANEFATHER_PRIORITY_POST_MERGE=batch lanefather land a   # post-merge: the dash becomes an underscore
 ```
 
-The first that is set wins: `LANEFATHER_PRIORITY_<PHASE>`, `LANEFATHER_PRIORITY`, the phase's key in
-`[slots.priority]`, its `default`, the built-in. An empty variable counts as unset. The variables also take the
+The first that is set wins: `LANEFATHER_PRIORITY_<PHASE>`, `LANEFATHER_PRIORITY`, this machine's
+`slots.priority.<phase>` [setting](#machine-settings), the phase's key in `[slots.priority]`, its `default`, the
+built-in. An empty variable counts as unset. The variables also take the
 project's `legacy_env_prefix` and `[env]` names, as every setting does (`STRAYLIGHT_LANE_PRIORITY`). A value other
 than `interactive`, `normal` or `batch`, a `LANEFATHER_PRIORITY_<NAME>` that names no phase, or an unknown key in
 `[slots.priority]` is an error that names it. An orchestrator that exports `LANEFATHER_PRIORITY=batch` demotes all
@@ -216,7 +218,7 @@ disable external review. Set `LANEFATHER_REVIEW_START=manual` during setup to de
 | `reviewer` | configured reviewer, real CLI adapters, fallback and interpreted answer |
 | `land`, `review`, `done`, `promote` | land and the smoke; the review; finishing a lane; gate, perf, promote, sync |
 | `lanes`, `cli` | start, next, adopt, list; the command line |
-| `registry`, `status` | the machine's project registry; the machine-wide status snapshot |
+| `registry`, `status`, `settings` | the machine's project registry; the machine-wide status snapshot; machine settings |
 
 The [architecture pass](../docs/architecture-667.md) records the survey, alternative interfaces and deployment order.
 
@@ -347,12 +349,45 @@ command has seen for 7 days is left out, and the next registration drops it. The
 nothing, runs no project hook and makes no network call. `capabilities --json` advertises it as
 `dashboard.snapshot`: `{"argv": ["status", "--json"], "versions": [1], "poll": 5}`.
 
+## Machine settings
+
+A few knobs belong to the machine, not to a project. They live in a file Lanefather owns,
+`~/.config/lanefather/settings.json` (`LANEFATHER_SETTINGS` names another), and the `settings` command reads and
+writes them; Godfather's Settings section goes through it.
+
+| Key | Values | Read by | Environment that wins |
+| --- | --- | --- | --- |
+| `review.start` | `auto` (default), `manual` | land: start the lane's review in the background, or leave it for `review ID` | `LANEFATHER_REVIEW_START` |
+| `rerun.wait` | seconds, `90`, `15m`, `1h` (default 3300, at most 86400) | a red check's rerun: how long it waits for its lease | `LANEFATHER_RERUN_WAIT` |
+| `slots.priority.<phase>` | `project` (default), `interactive`, `normal`, `batch` | each phase's [slot priority](#slot-priorities), above the project's `[slots.priority]` | `LANEFATHER_PRIORITY_<PHASE>`, `LANEFATHER_PRIORITY` |
+
+With a slot priority saved, the order of [slot priorities](#slot-priorities) becomes: `LANEFATHER_PRIORITY_<PHASE>`,
+`LANEFATHER_PRIORITY`, the machine's `slots.priority.<phase>`, the project's `[slots.priority]` phase and default,
+the built-in; its source reads `lanefather settings slots.priority.<phase>`.
+
+```text
+lanefather settings [--json]                                  the schema and the current values
+lanefather settings check KEY VALUE [--json]                  {"v": 1, "ok", "error", "preview"}
+lanefather settings set KEY VALUE [--revision R] [--json]     save; the reply is the settings with "ok"
+lanefather settings reset (KEY | --all) [--revision R] [--json]
+```
+
+The `--json` schema follows Godfather's settings contract, version 1: `{"v": 1, "tool": "lanefather", "writable",
+"reason", "revision", "status": [{"label", "value"}], "sections": [{"id", "title", "settings": [{"key", "label",
+"type", "value", "default", "source", "writable", "revision", "description", "choices"?, "min"?, "max"?, "step"?,
+"unit"?}]}]}`. A knob the environment sets is a read-only row whose `source` names the variable; the project's own
+`[slots.priority]` values, from the `.lanefather.toml` of the repository the command runs in, are read-only rows of a
+`project` section. `revision` is the SHA-256 of the settings file; a `set` or `reset` with a stale `--revision` is
+refused and its reply is the current settings, and without `--revision` it merges. Writes take an `flock` on
+`settings.lock` and replace the file atomically, mode 0600. Exit codes: 0 done, 2 invalid, 3 conflict, 4 read-only.
+`capabilities --json` advertises it as `dashboard.settings`: `{"versions": [1]}`.
+
 ## Installed runtime contract
 
 `lanefather capabilities --json` returns version 1, the state schema, supported
 Slotfather query versions and the installed source commit and payload SHA-256, and a
 `dashboard` block for Godfather: `{"v": 1, "tag": "lane", "events": {"path", "versions": [1]},
-"snapshot": {"argv", "versions", "poll"}}`.
+"snapshot": {"argv", "versions", "poll"}, "settings": {"versions": [1]}}`.
 An installed release verifies its package and canonical hook against its
 manifest; a changed or missing manifest refuses verification. A checkout reports
 `installed: false`, so a project launcher can require the installed artifact.

@@ -21,7 +21,7 @@ import time
 from types import FrameType
 from typing import Any, TextIO
 
-from . import claims, config, host, journal, plan, queue, slots, state, worktrees
+from . import claims, config, host, journal, plan, queue, settings, slots, state, worktrees
 from .errors import LaneError
 from .gitops import current_branch, dirty, git, git_ok
 from .state import Record
@@ -39,7 +39,7 @@ LANDABLE = ("flaky-under-load", "pre-existing")
 TEST_PATH = re.compile(r"(?:^|/)(?:tests?|__tests__)/|(?:^|/)test[-_][^/]*$|[._-]tests?\.[^/]+$")
 # Longer than slotfather's head limit (2700 s) plus a margin: an all-slot rerun that becomes the queue head starts
 # by then (#650).
-DEFAULT_RERUN_WAIT = 3300.0
+DEFAULT_RERUN_WAIT = float(settings.DEFAULT_RERUN_WAIT)
 # A rerun's most slots (lanefather#4): the lane check's own lease size, never the whole machine; only the perf suite
 # measures alone.
 RERUN_MAX_JOBS = 2
@@ -234,8 +234,9 @@ class RerunUnavailable(Exception):
 
 
 def rerun_wait() -> float:
-    """LANEFATHER_RERUN_WAIT: seconds a rerun waits for its lease before its checks stay unclassified."""
-    value = config.current().env("RERUN_WAIT")
+    """LANEFATHER_RERUN_WAIT, else this machine's `rerun.wait` setting: seconds a rerun waits for its lease before
+    its checks stay unclassified."""
+    value = config.current().env("RERUN_WAIT") or str(settings.value("rerun.wait") or "")
     try:
         seconds = float(value) if value else DEFAULT_RERUN_WAIT
     except ValueError:

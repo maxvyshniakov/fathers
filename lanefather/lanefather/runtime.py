@@ -18,7 +18,7 @@ from .project import Project
 MANIFEST = 'INSTALL.json'
 CAPABILITIES = ('project.readiness', 'project.update_queue', 'project-hook', 'canonical-reference-transaction',
                 'promote.step-leases', 'tickets.lifecycle', 'slots.priority', 'dashboard.events',
-                'dashboard.status')
+                'dashboard.status', 'dashboard.settings')
 # The dashboard contract versions Godfather reads (its SPEC.md, "Capabilities contract").
 DASHBOARD = 1
 
@@ -65,11 +65,12 @@ def installed_identity(root: Path) -> dict[str, Any]:
 
 
 def dashboard() -> dict[str, Any]:
-    """What a dashboard reads from Lanefather: its EVENTS tag, the machine-wide event log and status snapshot."""
-    from . import status  # the snapshot module reads every other module; install.py imports only this one
+    """What a dashboard reads from Lanefather: its EVENTS tag, the event log, the status snapshot, settings."""
+    from . import settings, status  # the snapshot module reads every other module; install.py imports only this one
     return {'v': DASHBOARD, 'tag': events.TAG,
             'events': {'path': str(events.path().absolute()), 'versions': [events.SCHEMA]},
-            'snapshot': {'argv': ['status', '--json'], 'versions': [status.VERSION], 'poll': status.POLL}}
+            'snapshot': {'argv': ['status', '--json'], 'versions': [status.VERSION], 'poll': status.POLL},
+            'settings': {'versions': [settings.VERSION]}}
 
 
 def capabilities(args: argparse.Namespace) -> int:
