@@ -111,3 +111,32 @@ class FakeSlotfather:
 
 def reload(name: str) -> Any:
     return importlib.reload(importlib.import_module(name))
+
+
+# The reducer as the drawing tests drive it: a state over the frame a canvas drew, and an event through reduce()
+
+def frame_of(canvas: Any) -> Any:
+    """What a drawn canvas placed, as the live loop hands it to the reducer (state.Drawn)."""
+    state = importlib.import_module("godfather.state")
+    return state.Frame(canvas.width, canvas.height, dict(canvas.tables), canvas.version_at, tuple(canvas.hint_hits))
+
+
+def drawn_state(canvas: Any, model: dict[str, Any] | None = None, selected: int = 0, **fields: Any) -> Any:
+    """An app state with `selected` selected in `model`, over the frame `canvas` drew."""
+    import dataclasses
+
+    state = importlib.import_module("godfather.state")
+    found = state.move(state.AppState(model=model), selected)
+    return dataclasses.replace(found, frame=frame_of(canvas), **fields)
+
+
+def mouse(canvas: Any, event: tuple[str, int, int, int, bool], scroll: dict[str, int], selected: int = 0,
+          model: dict[str, Any] | None = None) -> int:
+    """One mouse event through the reducer on the frame `canvas` drew: `scroll` takes the panels' offsets after it;
+    the selected index after it."""
+    state = importlib.import_module("godfather.state")
+    found, _ = state.reduce(drawn_state(canvas, model, selected, scroll=dict(scroll)),
+                            state.Mouse(event[1], event[2], event[3], event[4]), 0.0)
+    scroll.clear()
+    scroll.update(found.scroll)
+    return found.selection.index

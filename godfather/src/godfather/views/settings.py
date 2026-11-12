@@ -12,15 +12,14 @@ from __future__ import annotations
 
 import contextlib
 import math
-import os
-import textwrap
 import threading
 import time
 from typing import TYPE_CHECKING, Any, Callable, NamedTuple, cast
 
-from .. import keys as _keys
 from .. import theme as _theme
 from ..adapters.slotfather import Conflict, SettingsClient, SettingsError
+from . import settings_draw as _draw
+from .settings_draw import FLASH_SECONDS, number
 
 if TYPE_CHECKING:
     from ..tui import Canvas
@@ -66,7 +65,6 @@ DESCRIPTIONS = {
     "theme": "Auto, Terminal (palette only) or Built-in colours · this dashboard only.",
 }
 DEFAULT_INTERVAL = 1.0
-FLASH_SECONDS = 4.0  # how long a confirmation shows, and how long a first D stays armed
 SETTLE_SECONDS = 1.0  # quiet after an arrow change before it is saved
 READ_EVERY = 1.0  # seconds between looks at the shared settings while the panel is open
 CAPACITY_PER_CORE = 4  # the most slots the panel saves: this many per core, unless Slotfather says otherwise
@@ -75,15 +73,6 @@ MINIMUMS = {"safety": 1.0, "limit": 0.0, "fallback": 0.0, "overrun": 0.0, "inter
             "yield_after": 0.0, "idle_cpu": 0.0, "idle_after": 1.0, "aging_batch": 0.0, "aging_normal": 0.0,
             "warn_wait": 0.0}
 AUTO_GIB_PER_SLOT = 4.0  # Slotfather's automatic rule, the GiB per slot a memory mode starts from without one
-STATUS_LABEL = 13  # columns of a status label
-FIELD_LABEL = 28  # columns of a setting's label, its gutter included
-MIN_WIDTH, MIN_HEIGHT = 30, 12  # below this the panel only says to enlarge the terminal
-
-
-class Row(NamedTuple):
-    """One body line: `key` is the field it selects ("" for none); parts are (column, text, style)."""
-    key: str
-    parts: tuple[tuple[int, str, str], ...]
 
 
 class Pending(NamedTuple):
@@ -96,10 +85,6 @@ class Pending(NamedTuple):
     at: float
     token: bytes | None = None
     mode: str = ""
-
-
-def number(value: float) -> str:
-    return f"{value:g}"
 
 
 def plural(count: int, word: str) -> str:
@@ -153,7 +138,7 @@ class Settings:
         self.total = 0
         self.reveal = True
         self.hits: list[tuple[str, int, int, int, int]] = []
-        self.bounds = (0, 0, 0, 0)
+        self.bounds: tuple[int, int, int, int] = (0, 0, 0, 0)
         self.held = 0  # slots running leases hold, from the last model drawn
         self.waiting: list[int] = []  # the waiting requests' slot counts, in queue order, from the last model
         self.basis: dict[str, Any] = {}
@@ -617,9 +602,8 @@ class Settings:
         return "handled"
 
     def key(self, key: str) -> str:
-        """One key: "close", "quit", "changed" when a setting was saved, else "handled"."""
-        if not self.editing:  # a hotkey by its US-QWERTY position (#13); typed values stay as typed
-            key = _keys.hotkey(key)
+        """One key, already a hotkey by its US-QWERTY position unless a value is being typed (modes.dispatch()):
+        "close", "quit", "changed" when a setting was saved, else "handled"."""
         if self.small:  # nothing to see: only the ways out; a pending change is cancelled first, and said
             if key in ("esc", "s") and self.pending:
                 self.cancel_pending()
@@ -696,149 +680,10 @@ class Settings:
                 return self.key(" " if key in CHOICES else "\r")
         return "handled"
 
-    # Drawing
-
-    def status_rows(self, model: dict[str, Any] | None) -> list[Row]:
-        def row(label: str, text: str, style: str = "text") -> Row:
-            return Row("", ((2, label, "dim"), (2 + STATUS_LABEL, text, style)))
-
-        rows = [Row("", ((0, "STATUS", "title"), (7, "· read-only, live", "dim")))]
-        if self.local_only:
-            rows.append(row("slotfather", self.problem() or "no settings contract; update slotfather", "dim"))
-            return rows
-        rows.append(row("queue", self.location()))
-        if model:
-            rows.append(row("slots", f"{model['slots']} total · {model.get('free', 0)} free · "
-                                     f"{model.get('used', 0)} held · {len(model.get('waiters', []))} waiting"))
-        else:
-            rows.append(row("slots", "queue unavailable", "dim"))
-        # The capacity the queue's last look read under its lock; this panel's own reading only without a model.
-        basis = cast(dict[str, Any], (model or {}).get("basis") or self.basis)
-        per = number(basis["gib_per_slot"] or 0)
-        how = {"fixed": "saved, fixed count", "memory": f"saved, one per {per} GiB of memory",
-               "lower": f"saved, lower of CPU and one per {per} GiB",
-               "automatic": "automatic, lower of the two budgets"}[basis["mode"]]
-        rows.append(row("capacity", f"{basis['slots']} slots · {how}"))
-        budget_slots = basis["memory_slots"] if basis["memory_slots"] is not None else self.memory_budget
-        memory = basis["memory_gib"] if basis["memory_gib"] is not None else self.memory_gib
-        budget = (f"CPU {basis['cpu_slots']} ({basis['cores']} cores) · memory "
-                  + (f"{budget_slots}" if budget_slots is not None else "unknown")
-                  + (f" ({number(memory)} GiB)" if memory is not None else ""))
-        rows.append(row("budgets", budget))
-        drain = max(0, self.held - int(model["slots"])) if model else 0
-        rows.append(row("draining", f"{drain} slots · nothing starts until at most {model['slots']} are held"
-                        if drain and model else "none", "warn" if drain else "dim"))
-        environment = next((item for item in self.reply.get("status") or []
-                            if isinstance(item, dict) and item.get("label") == "environment"), None)
-        if environment and environment.get("value"):
-            rows.append(row("environment", str(environment["value"]), "dim"))
-        problem = self.problem()
-        if problem:  # the Slotfather snapshot is stale or unsupported: why, from the source
-            rows.append(row("slotfather", problem, "bad"))
-        return rows
+    # Drawing: views/settings_draw.py
 
     def location(self) -> str:
-        """The queue's directory, tilde-shortened: Slotfather's STATUS `queue` row."""
-        found = next((item.get("value") for item in self.reply.get("status") or []
-                      if isinstance(item, dict) and item.get("label") == "queue"), None)
-        directory, home = str(found or self.basis.get("directory") or "?"), os.path.expanduser("~")
-        return "~" + directory[len(home):] if directory.startswith(home + os.sep) else directory
-
-    def field_rows(self, key: str, value_column: int) -> list[Row]:
-        """The field's row; while it is typed or pending, a second row says what the value would do, or why not."""
-        selected = key == self.focus
-        label, room = self.label(key), value_column - 3
-        label = label if len(label) <= room else label[:max(0, room - 1)] + "…"
-        parts: list[tuple[int, str, str]] = [(0, "▶" if selected else " ", "cursor"), (2, label, "text")]
-        if selected and self.editing:
-            parts.append((value_column, "[" + self.buffer + "▏]", "cursor"))
-            note, style = self.preview()
-            return [Row(key, tuple(parts)), Row(key, ((4, note, style),))]
-        pending = self.pending is not None and self.pending.key == key
-        value = self.text(key, self.shown_value(key))
-        if selected and key in CHOICES:
-            value = f"‹ {value} ›"
-        parts.append((value_column, value, "cursor" if pending else "accent"))
-        after = value_column + len(value) + 2
-        if pending:
-            parts.append((after, "pending", "dim"))
-            if key in ("mode", "amount"):
-                note, style = self.effect(key, self.shown_value(key))
-                return [Row(key, tuple(parts)), Row(key, ((4, note, style),))]
-            return [Row(key, tuple(parts))]
-        if key == "amount" and self.mode() == "fixed":
-            note = self.drain_note(self.basis["slots"])
-            if note:
-                parts.append((after, note.replace("will drain", "draining"), "warn"))
-        elif key in self.effective and key not in LOCAL and self.effective[key] != self.saved[key]:
-            effective = self.effective[key]
-            shown = self.text(key, effective)
-            parts.append((after, f"effective here: {shown}", "dim"))  # this dashboard's environment tightens it
-        return [Row(key, tuple(parts))]
-
-    def rows(self, model: dict[str, Any] | None, inner: int) -> list[Row]:
-        rows = self.status_rows(model)
-        rows.append(Row("", ((0, "─" * inner, "frame"),)))
-        value_column = min(FIELD_LABEL, max(12, inner // 2))
-        shown = self.fields()
-        for key in shown:  # one flat list (owner, 2026-11-11)
-            rows.extend(self.field_rows(key, value_column))
-        return rows
-
-    def footer(self) -> list[tuple[str, str]]:
-        """The panel's short key line, centred like the dashboard's footer (Canvas.overlay_footer())."""
-        if self.editing:
-            return [("enter", "save"), ("esc", "cancel")]
-        if self.pending:
-            return [("enter", "save now"), ("esc", "cancel")]
-        return [("↑↓", "select"), ("←→", "change"), ("enter", "edit"), ("d", "reset"), ("esc", "close")]
+        return _draw.location(self)
 
     def draw(self, canvas: Canvas, model: dict[str, Any] | None) -> None:
-        self.refresh()
-        if model:
-            self.held = int(model.get("used", 0))
-            self.waiting = [int(waiter.get("count", 1)) for waiter in model.get("waiters", [])]
-        self.settle_focus()
-        width = min(max(0, canvas.width - 2), 80)
-        inner = max(0, width - 4)
-        body = self.rows(model, max(0, inner - 2))  # two padding cells on the right, the scrollbar in one (#15)
-        height = min(max(0, canvas.height - 2), len(body) + 9)  # a blank row above the list and one below it
-        x, y = (canvas.width - width) // 2, (canvas.height - height) // 2
-        self.bounds = x, y, width, height
-        self.hits = []
-        canvas.fill(y, x, height, width)
-        canvas.box(y, x, height, width, "SETTINGS", "saved at once · applies at the next grant" if inner >= 60 else "")
-        self.small = height < MIN_HEIGHT or width < MIN_WIDTH
-        if self.small:
-            canvas.put(y + 1, x + 2, "Enlarge terminal · Esc closes", "dim", inner)
-            return
-        self.visible, self.total = height - 9, len(body)
-        if self.reveal:
-            lines = [n for n, row in enumerate(body) if row.key == self.focus]
-            if lines:
-                self.offset = min(self.offset, lines[0])
-                self.offset = max(self.offset, lines[-1] - self.visible + 1)
-            self.reveal = False
-        self.offset = max(0, min(self.offset, max(0, len(body) - self.visible)))
-        canvas.scrollbar(y + 2, x + width - 2, self.visible, self.offset, self.visible, self.total, "settings")
-        for line, row in enumerate(body[self.offset:self.offset + self.visible], y + 2):
-            for column, text, style in row.parts:
-                if column < inner - 2:
-                    canvas.put(line, x + 2 + column, text, style, inner - 2 - column)
-            if row.key:
-                self.hits.append((row.key, x + 1, line, width - 2, 1))
-                if row.key == self.focus:
-                    canvas.select(line, x + 1, x + width - 1)
-                    for frame in (x, x + width - 1):  # the selected row on both frames, as in QUEUE (#15)
-                        canvas.put(line, frame, "┃", "text")
-        rule = y + height - 6
-        canvas.put(rule, x + 2, "─" * inner, "frame", inner)
-        notes = [(text, "dim") for text in textwrap.wrap(self.description(self.focus), max(1, inner))[:2]]
-        if self.flash and (self.clock() - self.flash[2] < FLASH_SECONDS or self.flash[1] == "bad"
-                           or (self.flash[1] == "accent" and self.pending)):
-            text, style, _ = self.flash
-            mark = {"ok": "✓ ", "warn": "! ", "bad": "✗ ", "accent": "… "}.get(style, "")
-            notes = notes[:1] + [(text, style) for text in textwrap.wrap(mark + text, max(1, inner))[:2]]
-        for line, (text, style) in enumerate(notes[:3], rule + 1):
-            canvas.put(line, x + 2, text, style, inner)
-        canvas.overlay_footer(y + height - 2, x, width, self.footer())
+        _draw.draw(self, canvas, model)

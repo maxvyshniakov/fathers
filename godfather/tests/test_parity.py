@@ -22,9 +22,9 @@ from unittest import mock
 
 from helpers import ROOT, frozen_at, timezone
 
-from godfather import app, sources, tui
+from godfather import app, sources, state, tui
 from godfather.adapters import slotfather as adapter
-from godfather.views import overview
+from godfather.views import common, machine, overlays, overview
 
 
 FIXTURE = ROOT / "tests" / "fixtures" / "parity"
@@ -63,16 +63,16 @@ class ParityTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         tui.set_theme(app._theme.from_environment(environ={}))
-        history = mock.patch.object(overview, "HISTORY_WINDOW", self.scene["history_window"])
+        history = mock.patch.object(machine, "HISTORY_WINDOW", self.scene["history_window"])
         history.start()
         self.addCleanup(history.stop)
-        self.addCleanup(overview.use_marks, False)
+        self.addCleanup(common.use_marks, False)
 
     def model(self) -> dict[str, Any]:
         model, error = app.Screen().load()
         self.assertIsNone(error)
         assert model is not None
-        overview.dashboard_colours(model, {})
+        common.dashboard_colours(model, {})
         for item in model["holders"] + model["waiters"]:
             item["lane"] = self.scene["lanes"][json.dumps(list(item["key"]))]
             if item["lane"] is None:
@@ -81,10 +81,10 @@ class ParityTests(unittest.TestCase):
 
     def canvas(self, width: int, height: int, ascii_only: bool, selected: int, help_open: bool = False) -> tui.Canvas:
         model = self.model()
-        overview.use_marks(ascii_only)
+        common.use_marks(ascii_only)
         with timezone("Etc/GMT-2"), frozen_at(adapter.parse_time(self.scene["moment"])):  # type: ignore[arg-type]
             canvas = tui.Canvas(width, height)
-            overview.dashboard_draw(canvas, model, selected, help_open, cwd="~/straylight")
+            overview.dashboard_draw(canvas, model, selected, state.Help() if help_open else None, cwd="~/straylight")
             return canvas
 
     def render(self, width: int, height: int, colour: bool, ascii_only: bool, selected: int,
@@ -121,7 +121,7 @@ class ParityTests(unittest.TestCase):
         self.assertGreaterEqual(compared, 25)
 
     def test_help_is_slotfathers_in_every_section_but_events(self) -> None:
-        ours = {title: [list(entry) for entry in entries] for title, entries in overview.HELP}
+        ours = {title: [list(entry) for entry in entries] for title, entries in overlays.HELP}
         theirs = {title: entries for title, entries in self.help}
         self.assertEqual(list(theirs), list(ours), "the same sections in the same order")
         for title in theirs:

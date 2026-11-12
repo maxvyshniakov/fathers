@@ -4,6 +4,18 @@ Versions and release rules: [README.md](README.md#versions).
 
 ## Unreleased
 
+### Fixed
+
+- `?` and `v` switch between help and the changelog instead of closing one, and keys typed right after `v`
+  scroll the changelog (fathers#17).
+- The selection follows its request through reorders, grants and yields; when it ends, the selection moves to its
+  neighbour among the running or the waiting, never across to the other group; two requests of one pid started in
+  the same second are two rows; a lease that yields keeps its colour when it resumes (fathers#21).
+- Details that fail to load say why and are tried again, and a grant or a yield loads them again at once
+  instead of showing the other kind's facts for up to 5 s (fathers#23).
+- Settings that cannot open say so in the footer for a few seconds; the status stays `● live` and nothing claims
+  the refresh failed (fathers#24).
+
 ## 0.1.0 - 2026-11-12
 
 ### Added

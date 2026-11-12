@@ -1,7 +1,7 @@
 """The terminal framework, moved from Slotfather's dashboard unchanged in behaviour: a canvas of styled cells and
-its rendering, frames with titles set into their borders, tables and column sharing, scrollbars, scrollable
-overlays and their footers, footer hints as click targets, key and mouse reading (the kitty keyboard protocol and
-SGR mouse), full-screen setup and restore, and the background loader. It knows nothing about any tool.
+its rendering, text measured as the glyphs a terminal draws, footer hints as click targets, key and mouse reading
+(the kitty keyboard protocol and SGR mouse), full-screen setup and restore, and the background loader. Frames,
+tables and scrollbars are widgets.py; where things go is layout.py. It knows nothing about any tool.
 
 Plain escape sequences, not curses: the ncurses that Python links (6.0 here) repeats a multibyte character with REP
 by sending only its last byte, and terminals with REP in their terminfo, such as Ghostty and cmux, then draw each
@@ -15,14 +15,11 @@ import os
 import re
 import select
 import termios
-import textwrap
 import threading
-import time
 import tty
 import unicodedata
 from urllib.parse import urlsplit
-from collections.abc import Callable, Iterable
-from typing import Any, NamedTuple, cast
+from typing import Any, cast
 
 from . import keys as _keys
 from . import theme as _theme
@@ -48,7 +45,7 @@ ASCII = str.maketrans({"▀": "#", "🆗": "+", "🔥": "!", "🮅": "#", "■":
 JOINER, TEXT_STYLE, EMOJI_STYLE = "\u200d", "\ufe0e", "\ufe0f"  # zero-width joiner, variation selectors 15 and 16
 
 
-def dashboard_text(value) -> str:
+def dashboard_text(value: Any) -> str:
     """A label or command as plain text: any process writes queue entries, so control bytes are blanked. The
     zero-width joiner of an emoji sequence (👨‍🦳) stays."""
     return "".join(char if char.isprintable() or char == JOINER else " " for char in str(value))
@@ -82,11 +79,11 @@ def cluster_width(cluster: str) -> int:
     return cell_width(cluster[0]) if cluster else 0
 
 
-def text_width(value) -> int:
+def text_width(value: Any) -> int:
     return sum(cluster_width(cluster) for cluster in clusters(dashboard_text(value)))
 
 
-def clip(value, width: int) -> str:
+def clip(value: Any, width: int) -> str:
     """value cut to `width` cells, ending in … when cut; a glyph is never split."""
     text = dashboard_text(value)
     if text_width(text) <= width:
@@ -145,7 +142,7 @@ def tilde(path: str) -> str:
     return "~" + path[len(home):] if path == home or path.startswith(home + os.sep) else path
 
 
-def parse_utc(value) -> datetime.datetime | None:
+def parse_utc(value: Any) -> datetime.datetime | None:
     try:
         return datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
     except (TypeError, ValueError):
@@ -156,10 +153,10 @@ class Canvas:
     """A grid of [character, style, selected] cells; a wide character takes its cell and an empty one after it."""
 
     def __init__(self, width: int, height: int):
-        self.scroll: dict[str, int] = {}
+        self.scroll: dict[str, int] = {}  # each panel's scroll offset this frame is drawn at (state.AppState.scroll)
         self.tables: dict[str, dict[str, Any]] = {}
         self.links: dict[tuple[int, int], str] = {}
-        self.help_view: HelpViewport | None = None
+        self.help_view: Any = None  # the overlay drawn (help or the changelog): a widgets.OverlayView
         self.focus = "requests"  # the panel keys act on (#15): requests (QUEUE), details or events; its frame is bright
         self.loading: int | None = None  # the details' spinner frame while they load in the background, else None
         self.fresh_events = 0  # events that arrived while EVENTS was scrolled down
@@ -230,23 +227,6 @@ class Canvas:
                 self.links.pop((row, column), None)
             self.unsplit(row, max(0, x), min(self.width, x + width))
 
-    def overlay_footer(self, y: int, x: int, width: int, hints: list[tuple[str, str]], right: str = "") -> None:
-        """An overlay's key line, as the main footer (#15): the hints centred in key and muted tokens, the least
-        needed dropped when narrow (closing last), and a muted position on the right."""
-        inner = max(0, width - 4)
-        room = inner - (text_width(right) + 2 if right else 0)
-        for drop in ("↑↓", "q", "←→", "d", "enter"):
-            if hints_width(hints) <= room:
-                break
-            hints = [hint for hint in hints if hint[0] != drop]
-        start = x + 2 + max(0, (inner - hints_width(hints)) // 2)
-        if right:
-            self.right(y, x + width - 2, right, "dim")
-        for index, (key, action) in enumerate(hints):
-            start = self.hint(y, start, key, action, x + width - 2 - start)
-            if index < len(hints) - 1:
-                start += HINT_GAP
-
     def hint(self, y: int, x: int, key: str, action: str, width: int | None = None) -> int:
         """One footer hint, key and label, drawn and made a click target that does what its key does (HINT_KEYS):
         the one registry both drawing and clicks use. The column after it."""
@@ -264,43 +244,11 @@ class Canvas:
         return next((press for y, start, end, press in reversed(self.hint_hits) if y == my and start <= mx < end),
                     None)
 
-    def scrollbar(self, y: int, x: int, height: int, offset: int, visible: int, total: int, name: str = "") -> None:
-        """A scrollable panel's scrollbar in column x, the outer of the two padding cells left of its right frame, so
-        a blank cell stays between it and the content (a right-aligned pid touched the inner one) and nothing moves
-        (#15): a thumb as long as the visible share, at the bottom on the last page, in the muted token at rest and in
-        the foreground for a flash while panel `name` scrolls (owner). Nothing while everything fits."""
-        if total <= visible or height <= 0 or visible <= 0:
-            return
-        halves = 2 * height  # in half cells, so the thumb moves in half-cell steps (owner)
-        length = min(halves, max(1, round(halves * visible / total)))
-        start = round((halves - length) * min(offset, total - visible) / (total - visible))
-        for row in range(height):  # the thumb alone, no track (owner)
-            upper, lower = start <= 2 * row < start + length, start <= 2 * row + 1 < start + length
-            if upper or lower:
-                glyph = SCROLL_THUMB if upper and lower else THUMB_LOWER if lower else THUMB_UPPER
-                self.put(y + row, x, glyph, "text" if name in self.glow else "dim")  # fg only while scrolling
-
     def select(self, y: int, start: int, end: int, tint: bool | str = True) -> None:
         """Marks cells start..end of row y selected: True for the neutral background, a holder style for its tint."""
         if 0 <= y < self.height:
             for column in range(max(0, start), min(self.width, end)):
                 self.cells[y][column][2] = tint
-
-    def box(self, y: int, x: int, height: int, width: int, title: str = "", note: str = "", name: str = "") -> None:
-        """A rounded light frame in the frame token (a little paler than muted text); the focused panel's (`name`,
-        #15) in the accent blue, the same glyphs: focus shows by colour alone (owner)."""
-        if height < 2 or width < 6:
-            return
-        frame = "accent" if name and name == self.focus else "frame"
-        top_left, top_right, bottom_left, bottom_right, across, down = "╭", "╮", "╰", "╯", "─", "│"
-        self.put(y, x, top_left + across * (width - 2) + top_right, frame)
-        for row in range(y + 1, y + height - 1):
-            self.put(row, x, down, frame)
-            self.put(row, x + width - 1, down, frame)
-        self.put(y + height - 1, x, bottom_left + across * (width - 2) + bottom_right, frame)
-        after = self.put(y, x + 2, f" {title} ", "title", width - 4) if title else x + 2
-        if note and x + width - 2 - text_width(note) - 2 > after:
-            self.right(y, x + width - 2, f" {note} ", "dim")
 
     def runs(self, y: int) -> list[list]:
         """Row y as [text, style, selected] runs."""
@@ -371,263 +319,6 @@ def sgr(style: str, selected: bool | str) -> str:
         codes += _theme.sgr_colour(back, 4)
     codes += ["7"] if "r" in flags else []
     return "\x1b[" + ";".join(codes) + "m"
-
-
-def columns(width: int, spec: list[tuple]) -> list[tuple]:
-    """spec: (key, title, width, right-aligned, priority) with width 0 for the one flexible column. Drops the
-    columns of the highest priority number until the rest leave the flexible one 10 cells; (key, title, x, width,
-    right-aligned)."""
-    keep = list(spec)
-    while sum(c[2] for c in keep) + 2 * (len(keep) - 1) + 10 > width and any(c[2] and c[4] for c in keep):
-        keep.remove(max((c for c in keep if c[2] and c[4]), key=lambda c: c[4]))
-    flexible = max(4, width - sum(c[2] for c in keep) - 2 * (len(keep) - 1))
-    placed, x = [], 0
-    for key, title, size, right, _ in keep:
-        placed.append((key, title, x, size or flexible, right))
-        x += (size or flexible) + 2
-    return placed
-
-
-def draw_row(canvas: Canvas, y: int, x: int, placed: list, values: dict) -> None:
-    for key, _, column, size, right in placed:
-        value = values.get(key, "")
-        parts = value if isinstance(value, list) else [(value, "text")] if isinstance(value, str) else [value]
-        start = x + column
-        if right:
-            start += max(0, size - sum(text_width(text) for text, _ in parts))
-        canvas.segments(y, start, parts, x + column + size - start)
-
-
-def table_view(canvas: Canvas, name: str, y: int, x: int, height: int, width: int,
-               top: int, room: int, count: int, selected: int | None = None,
-               base: int | None = None, row_items: list | None = None) -> tuple[int, int]:
-    """One viewport shared by painting, hit testing and wheel scrolling: `room` rows from `top`, between a blank
-    padding row under the top border and one over the bottom border; the scrollbar's thumb runs in them too."""
-    room = max(0, room)
-    visible = room
-    automatic = max(0, (selected or 0) - visible + 1) if selected is not None else 0
-    offset = max(0, min(canvas.scroll.get(name, automatic), max(0, count - visible)))
-    canvas.tables[name] = dict(x=x, y=y, width=width, height=height, top=top,
-                              visible=visible, count=count, offset=offset, base=base, row_items=row_items)
-    if room:  # the scrollbar shows what overflows (no row counts)
-        canvas.scrollbar(top, x + width - 2, visible, offset, visible, count, name)
-        fresh = canvas.fresh_events if name == "events" and offset else 0
-        if fresh:  # EVENTS scrolled down: what arrived since, in its bottom border (Home goes back to it)
-            canvas.put(y + height - 1, x + 2, f" ↑ {fresh} new ", "text" if canvas.focus == name else "dim",
-                       width - 4)
-    return offset, visible
-
-
-def mouse_action(canvas: Canvas, event: tuple[str, int, int, int, bool],
-                 scroll: dict[str, int], selected: int) -> int:
-    if canvas.help_view is not None:
-        help_mouse(canvas, event, scroll)
-        return selected
-    _, button, mx, my, pressed = event
-    if not pressed:
-        return selected
-    for name, view in reversed(list(canvas.tables.items())):
-        if not (view["x"] < mx < view["x"] + view["width"] - 1
-                and view["y"] < my < view["y"] + view["height"] - 1):
-            continue
-        code = button & ~28  # Shift / Alt / Ctrl do not change the wheel direction.
-        if code in (64, 65):
-            scroll[name] = max(0, min(scroll.get(name, cast(int, view["offset"])) + (3 if code == 65 else -3),
-                                      max(0, view["count"] - view["visible"])))
-        elif code == 0:
-            row = my - view["top"]
-            if 0 <= row < min(view["visible"], view["count"] - view["offset"]):
-                position = view["offset"] + row
-                if view["row_items"] is not None:
-                    item = view["row_items"][position]
-                    return selected if item is None else item
-                if view["base"] is not None:
-                    return view["base"] + position
-        return selected
-    return selected
-
-
-def table_header(canvas: Canvas, y: int, x: int, height: int, width: int, title: str, placed: list[Any], gutter: int = 0,
-                 name: str = "") -> None:
-    """The panel's top border doubles as its table header, aligned with the data."""
-    canvas.box(y, x, height, width, name=name)
-    for index, (_key, label, column, size, right) in enumerate(cast(list[tuple[str, str, int, int, bool]], placed)):
-        value = title if index == 0 else label.lower()
-        # The title sits where every panel's does (x + 3); the other headers over their columns, `gutter` in
-        start = x + 3 if index == 0 else x + 3 + gutter + column + (max(0, size - text_width(value)) if right else 0)
-        canvas.put(y, start - 1, " ", "text")
-        focused = bool(name) and canvas.focus == name  # a focused panel's labels in the foreground, its frame blue
-        canvas.put(y, start, value, "title" if index == 0 else "text" if focused else "dim", size)
-        canvas.put(y, min(x + width - 2, start + min(size, text_width(value))), " ", "text")
-
-
-SELECTED_FRAME = "┃"  # the left frame beside a selected row, heavy in the row's colour (#15); # on ASCII
-# A scrollbar's thumb (#15): a whole cell, a cell's lower half (where it starts), its upper half (where it ends);
-# # on an ASCII terminal
-SCROLL_THUMB, THUMB_LOWER, THUMB_UPPER = "┃", "╻", "╹"
-
-
-HELP_INDENT, HELP_GAP = 2, 2  # before a term, and between the term column and its description
-
-
-def wrap(text: str, width: int) -> list[str]:
-    return textwrap.wrap(text, max(1, width), break_long_words=True, break_on_hyphens=False) or [""]
-
-
-
-
-HEADING_BEFORE, HEADING_AFTER = 2, 1  # blank lines around an overlay's section or release title (owner)
-
-
-def add_heading(lines: list[list[tuple[str, str]]], title: list[tuple[str, str]]) -> None:
-    """Adds a section title: HEADING_BEFORE blank lines before it but the first, HEADING_AFTER after it."""
-    blank: list[tuple[str, str]] = []
-    lines.extend([blank[:] for _ in range(HEADING_BEFORE if lines else 0)] + [title]
-                 + [blank[:] for _ in range(HEADING_AFTER)])
-
-
-
-class HelpViewport(NamedTuple):
-    x: int
-    y: int
-    width: int
-    height: int
-    offset: int
-    visible: int
-    total: int
-    name: str = "help"  # the overlay: help, or changelog
-
-
-def help_key(canvas: Canvas, key: str, scroll: dict[str, int]) -> str:
-    """Help owns navigation while open; dashboard actions cannot leak through it."""
-    if key in ("?", "v", "esc"):
-        return "close"
-    if key in ("q", "Q"):
-        return "quit"
-    info = canvas.help_view
-    if info is None:
-        return "ignored"
-    maximum = max(0, info.total - info.visible)
-    offset = scroll.get(info.name, info.offset)
-    page = max(1, info.visible - 1)
-    if key in ("j", "down"):
-        offset += 1
-    elif key in ("k", "up"):
-        offset -= 1
-    elif key in ("page_down", " "):
-        offset += page
-    elif key == "page_up":
-        offset -= page
-    elif key in ("g", "home"):
-        offset = 0
-    elif key in ("G", "end"):
-        offset = maximum
-    else:
-        return "ignored"
-    scroll[info.name] = max(0, min(offset, maximum))
-    return "scroll"
-
-
-def help_mouse(canvas: Canvas, event: tuple[str, int, int, int, bool], scroll: dict[str, int]) -> str:
-    """The wheel inside the help scrolls it; a left click outside closes it ("close"); nothing reaches the dashboard."""
-    info = canvas.help_view
-    if info is None:
-        return "ignored"
-    _, button, x, y, pressed = event
-    code = button & ~28
-    if not (info.x <= x < info.x + info.width and info.y <= y < info.y + info.height):
-        return "close" if pressed and code == 0 else "ignored"
-    if not pressed:
-        return "ignored"
-    if code in (64, 65):
-        offset = scroll.get(info.name, info.offset) + (3 if code == 65 else -3)
-        scroll[info.name] = max(0, min(offset, max(0, info.total - info.visible)))
-    return "ignored"
-
-
-def draw_overlay(canvas: Canvas, title: str, layout: Any, name: str) -> None:
-    """A centred, scrollable overlay (help, the changelog): `layout(width)` gives its lines as (text, style) parts;
-    the frame, scrollbar, counts and centred footer are the same for every one."""
-    width = min(max(0, canvas.width - 2), 76)
-    # The text starts under the title's first letter (x + 3); on the right two padding cells, the scrollbar in one
-    lines = cast(list[list[tuple[str, str]]], layout(width - 7))
-    height = min(max(0, canvas.height - 2), len(lines) + 5)  # a blank row above the lines and one below them
-    y, x = (canvas.height - height) // 2, (canvas.width - width) // 2
-    visible = max(0, height - 5)
-    offset = max(0, min(canvas.scroll.get(name, 0), max(0, len(lines) - visible)))
-    canvas.scroll[name] = offset
-    canvas.help_view = HelpViewport(x, y, width, height, offset, visible, len(lines), name)
-    canvas.fill(y, x, height, width)
-    canvas.box(y, x, height, width, title)
-    inner = max(0, width - 4)
-    if height < 6:
-        canvas.put(y + 1, x + 2, "Enlarge terminal", "dim", inner)
-        return
-    canvas.scrollbar(y + 2, x + width - 2, visible, offset, visible, len(lines), name)
-    for row, parts in enumerate(lines[offset:offset + visible], y + 2):
-        canvas.segments(row, x + 3, parts, width - 7)
-    shown = f"{round(100 * (offset + visible) / len(lines))}%" if len(lines) > visible else ""
-    hints = [("↑↓", "scroll"), ("esc", "close")] + ([("q", "quit")] if name == "help" else [])
-    canvas.overlay_footer(y + height - 2, x, width, hints, shown)
-
-
-
-# The changelog: CHANGELOG.md shipped with the installed package, as titles and bullet rows
-
-RELEASE = re.compile(r"^## \[?([^\]\s]+)\]?(?: - (\d{4}-\d\d-\d\d))?(?: \((\w+)\))?")
-MARKUP = re.compile(r"\*\*|`|\[([^\]]*)\]\([^)]*\)")
-
-
-class Release(NamedTuple):
-    version: str
-    date: str
-    commit: str
-    sections: list[tuple[str, list[str]]]  # (Added, [entries])
-
-
-def plain(text: str) -> str:
-    """Markdown taken out of a changelog entry: bold, code and links."""
-    return MARKUP.sub(lambda found: found[1] or "", text)
-
-
-def parse_changelog(text: str) -> list[Release]:
-    """The releases of a Keep a Changelog file, newest first, with markdown taken out of the entries; an entry's
-    continuation lines join it."""
-    found: list[Release] = []
-    for line in text.splitlines():
-        heading = RELEASE.match(line)
-        if heading:
-            found.append(Release(heading[1], heading[2] or "", heading[3] or "", []))
-        elif not found:
-            continue
-        elif line.startswith("### "):
-            found[-1].sections.append((line[4:].strip(), []))
-        elif line.startswith("- ") and found[-1].sections:
-            found[-1].sections[-1][1].append(plain(line[2:].strip()))
-        elif line.startswith("  ") and line.strip() and found[-1].sections and found[-1].sections[-1][1]:
-            entries = found[-1].sections[-1][1]
-            entries[-1] += " " + plain(line.strip())
-    return found
-
-
-def version_key(version: str) -> tuple[int, ...]:
-    return tuple(int(part) for part in re.findall(r"\d+", version)) or (-1,)
-
-
-def allocate(available: int, panels: list[tuple[str, int, int]]) -> dict[str, int]:
-    """panels: (name, minimum, natural height) by priority. Each gets its minimum while room lasts, then grows
-    towards its natural height; the last panel placed takes what remains."""
-    heights = {}
-    for name, minimum, _ in panels:
-        if minimum <= available:
-            heights[name], available = minimum, available - minimum
-    for name, _, natural in panels:
-        if name in heights:
-            extra = min(available, max(0, natural - heights[name]))
-            heights[name], available = heights[name] + extra, available - extra
-    if heights:
-        heights[list(heights)[-1]] += available
-    return heights
 
 
 HINT_GAP = 3
@@ -783,72 +474,3 @@ class Loader:
         with self.lock:
             found, self.results = self.results, []
             return found
-
-
-
-NAVIGATION = ("up", "k", "down", "j", "page_up", "page_down", "home", "g", "end", "G")
-
-
-
-def panel_key(canvas: Canvas, scroll: dict[str, int], name: str, key: str) -> bool:
-    """A navigation key on a focused DETAILS or EVENTS panel is that panel's, also with nothing to scroll (still
-    loading, empty): it never falls through to QUEUE's selection. True when the key was the panel's."""
-    if key not in NAVIGATION:
-        return False
-    scroll_panel(canvas, scroll, name, key)
-    return True
-
-
-def scroll_panel(canvas: Canvas, scroll: dict[str, int], name: str, key: str) -> bool:
-    """A scroll key on the focused DETAILS or EVENTS panel: a line, a page, the top or the bottom (#15)."""
-    view = canvas.tables.get(name)
-    if not view:
-        return False
-    visible, count = int(view["visible"]), int(view["count"])
-    last = max(0, count - visible)
-    offset = scroll[name] if name in scroll else int(view["offset"])
-    moves = {"up": -1, "k": -1, "down": 1, "j": 1, "page_up": -max(1, visible - 1), "page_down": max(1, visible - 1)}
-    if key in moves:
-        offset += moves[key]
-    elif key in ("home", "g"):
-        offset = 0
-    elif key in ("end", "G"):
-        offset = last
-    else:
-        return False
-    scroll[name] = max(0, min(last, offset))
-    return True
-
-
-SCROLL_GLOW = 0.28  # seconds a scrolled panel's thumb stays in the foreground after its last scroll: a flash
-
-
-class ScrollGlow:
-    """When each panel last scrolled, by the wheel, keys or an overlay's own scrolling: its thumb is drawn in the
-    foreground until SCROLL_GLOW after that, and the live loop wakes once at that moment to draw it back."""
-
-    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
-        self.clock = clock
-        self.last: dict[str, float] = {}
-
-    def touch(self, names: Iterable[str]) -> None:
-        now = self.clock()
-        for name in names:
-            self.last[name] = now
-
-    def bright(self) -> set[str]:
-        now = self.clock()
-        self.last = {name: when for name, when in self.last.items() if now - when < SCROLL_GLOW}
-        return set(self.last)
-
-    def fade(self) -> float | None:
-        """Seconds until the next thumb goes back to its colour, None while none glows: one repaint, then."""
-        now = self.clock()
-        due = [when + SCROLL_GLOW - now for when in self.last.values() if now - when < SCROLL_GLOW]
-        return max(0.0, min(due)) if due else None
-
-
-def scrolled(before: dict[str, int], after: dict[str, int]) -> set[str]:
-    """The panels scrolled: their offset set to another value. One dropped (a new selection, an overlay opened)
-    went back to its start without being scrolled."""
-    return {name for name in after if before.get(name, 0) != after[name]}

@@ -22,15 +22,17 @@ import time
 from pathlib import Path
 from typing import Any, cast
 
-from . import keys as _keys
 from . import sources as _sources
 from . import theme as _theme
 from . import version as _version
 from .adapters import slotfather as _slotfather
 from .adapters.slotfather import SettingsClient, SettingsError, Unsupported
 from .sources import SnapshotError, Source
-from .tui import (Canvas, Loader, ScrollGlow, dashboard_text, full_screen, help_key, help_mouse, mouse_action,
-                  panel_key, read_keys, scrolled, set_theme)
+from . import state as _state
+from .tui import Canvas, Loader, full_screen, read_keys, set_theme
+from .views import common as _common
+from .views import details as _details
+from .views import overlays as _overlays
 from .views import overview as _overview
 from .views import settings as _settings
 
@@ -126,12 +128,12 @@ class Screen:
     def tabs(self) -> None:
         """The changelog overlay's Slotfather tab, from the changelog its capabilities name."""
         path = _slotfather.changelog(self.source.capabilities)
-        tabs: list[_overview.ChangelogTab] = []
+        tabs: list[_overlays.ChangelogTab] = []
         if path:
             with contextlib.suppress(OSError, UnicodeDecodeError):
-                tabs.append(_overview.ChangelogTab("Slotfather", Path(path).read_text(encoding="utf-8"),
+                tabs.append(_overlays.ChangelogTab("Slotfather", Path(path).read_text(encoding="utf-8"),
                                                    str(self.source.version or "")))
-        _overview.changelog_tabs[:] = tabs
+        _overlays.changelog_tabs[:] = tabs
 
     def notice(self) -> list[str] | None:
         """What the screen says instead of the overview: the tools looked for, or why Slotfather is unsupported."""
@@ -152,12 +154,6 @@ class Screen:
                                   local_only=client is None, background=True)
 
 
-DETAILS_FRESH = 5.0  # seconds a request's loaded details are shown as they are; older ones load again, quietly
-PANELS = ("requests", "details", "events")  # Tab's order (#15)
-
-
-
-
 def load_details(item: dict[str, Any]) -> tuple[Any, str | None]:
     """A request's slow facts, off the main thread (#15): its lane (a lanefather call) and its holder's directory (lsof
     or /proc). GODFATHER_DETAILS_DELAY, a test seam, adds seconds first."""
@@ -166,293 +162,174 @@ def load_details(item: dict[str, Any]) -> tuple[Any, str | None]:
         if delay > 0:
             time.sleep(delay)
     found = dict(item)
-    _overview.enrich_details(found)  # the lane, through the same seam --once and the demo use
+    _details.enrich_details(found)  # the lane, through the same seam --once and the demo use
     cwd = _sources.process_cwd(item["pid"]) if item.get("kind") != "waiting" else None
     return found.get("lane"), cwd
 
 
-class DetailsCache:
-    """Loaded details by request key, with when they arrived. A result is kept under the key it was loaded for, so a
-    load that finishes after the selection moved on never paints over the row now selected (#15)."""
+class Live:
+    """The live view's loop around the one state and its reducer (state.py): what the terminal, the loaders and the
+    clock say goes in as events; what reduce() asks for is carried out here; the screen is drawn from the state,
+    only the rows that changed written."""
 
-    def __init__(self, clock: Any = time.monotonic) -> None:
-        self.clock = clock
-        self.found: dict[Any, tuple[float, Any, str | None]] = {}
+    def __init__(self, fd_in: int, fd_out: int, screen: Screen, interval: float, theme: str) -> None:
+        self.fd_in, self.fd_out, self.screen = fd_in, fd_out, screen
+        self.colour = not os.environ.get("NO_COLOR")
+        # What the terminal says about its colours (#14) and how wide it draws 👨‍🦳 (#15): asked with colour off too
+        self.answers = _theme.Answers()
+        self.ascii_only = "utf" not in (sys.stdout.encoding or "").lower()
+        self.state = _state.AppState(interval=interval, theme=theme)
+        self.saved = (interval, theme)  # Refresh every and Colour theme as saved; a change is written back
+        self.shown: list[str] = []
+        self.drawn_size: Any = None
+        self.drawn = self.whole = 0.0
+        self.glowing: set[str] = set()  # the thumbs drawn in the foreground
+        self.dirty, self.done = True, False
+        self.wake_read, self.wake_write = os.pipe()
+        # Everything slow runs in the background, so a key moves the selection within one frame (#15)
+        self.models = Loader(screen.load, self.wake_write)
+        self.details = Loader(load_details, self.wake_write)
+        self.fetched = 0.0
 
-    def put(self, key: Any, lane: Any, cwd: str | None) -> None:
-        self.found[key] = (self.clock(), lane, cwd)
+    def close(self) -> None:
+        for fd in (self.wake_read, self.wake_write):
+            os.close(fd)
 
-    def get(self, key: Any) -> tuple[Any, str | None, bool] | None:
-        """(lane, cwd, fresh) for a key loaded before, else None."""
-        entry = self.found.get(key)
-        if entry is None:
-            return None
-        return entry[1], entry[2], self.clock() - entry[0] < DETAILS_FRESH
+    def apply_theme(self) -> None:
+        set_theme(_theme.from_environment(answers=self.answers, mode=self.state.theme))
 
+    def send(self, event: _state.Event) -> None:
+        """One event through the reducer, and its effects carried out; any change is drawn at the next pass."""
+        before = self.state
+        self.state, effects = _state.reduce(self.state, event, time.monotonic())
+        self.dirty = self.dirty or self.state is not before
+        for effect in effects:
+            self.carry_out(effect)
 
-def panel_at(canvas: Canvas, mx: int, my: int) -> str | None:
-    """The panel (requests, details, events) under a click."""
-    for name in PANELS:
-        view = canvas.tables.get(name)
-        if view and view["x"] <= mx < view["x"] + view["width"] and view["y"] <= my < view["y"] + view["height"]:
-            return name
-    return None
+    def carry_out(self, effect: _state.Effect) -> None:
+        kind = effect.kind
+        if kind == "quit":
+            self.done = True
+        elif kind == "load-model":
+            self.load_model()
+        elif kind == "load-details":
+            if not self.details.wants(effect.key):
+                self.details.request(effect.key, effect.item)
+        elif kind == "apply-theme":
+            self.apply_theme()
+        elif kind == "repaint":
+            self.shown, self.dirty = [], True
+        elif kind == "remember":
+            current = (self.state.interval, self.state.theme)
+            if current != self.saved:
+                save_choices(*current)
+                self.saved = current
+        elif kind == "open-settings":
+            try:
+                panel = self.screen.settings(self.state.interval, self.state.theme)
+            except SettingsError as failure:
+                self.send(_state.SettingsFailed(str(failure)))
+                return
+            size = os.get_terminal_size(self.fd_out)
+            panel.draw(Canvas(size.columns, size.lines), self.state.model)  # its hit-test geometry, before a click
+            self.send(_state.SettingsOpened(panel))
 
+    def load_model(self) -> None:
+        self.models.request("model")
+        self.fetched = time.monotonic()
 
+    def take(self) -> None:
+        """What the loaders finished, and the clock: a model polled every Refresh every."""
+        for _, value, failure in self.models.take():
+            if failure is not None:
+                self.send(_state.ModelFailed(str(failure)))
+            else:
+                model, problem = value
+                self.send(_state.ModelLoaded(model, problem))
+        for key, value, failure in self.details.take():
+            lane, cwd = value if failure is None and value else (None, None)
+            self.send(_state.DetailsLoaded(key, lane, cwd, None if failure is None else str(failure) or
+                                           type(failure).__name__))
+        self.send(_state.Tick())
+        if time.monotonic() - self.fetched >= self.state.interval and not self.models.wants("model"):
+            self.load_model()
 
+    def draw(self) -> bool:
+        """The screen when something changed, a second passed or the details' spinner turns; only the rows that
+        changed are written. True while the spinner turns."""
+        size = os.get_terminal_size(self.fd_out)  # read each pass: at most 0.25 s behind a resize
+        if size != self.drawn_size:
+            # A terminal reflows its own screen on resize: clear it and draw every row.
+            os.write(self.fd_out, b"\x1b[2J")
+            self.shown, self.drawn_size, self.dirty = [], size, True
+        elif time.monotonic() - self.whole >= 5:
+            self.shown = []  # rewrite every row now and then, in place, so a stray line cannot stay wrong
+        now = time.monotonic()
+        glowing = _state.glowing(self.state, now)
+        if glowing != self.glowing:  # a thumb lit up or faded back
+            self.glowing, self.dirty = glowing, True
+        loading = self.loading()
+        if not (self.dirty or loading or now - self.drawn >= 1 or not self.shown):
+            return loading
+        canvas = Canvas(size.columns, size.lines)
+        _overview.render(canvas, self.state, now, self.screen.notice())
+        self.send(_state.Drawn(_state.Frame(canvas.width, canvas.height, canvas.tables, canvas.version_at,
+                                            tuple(canvas.hint_hits))))
+        lines = canvas.lines(self.colour, self.ascii_only, place=True)
+        # Only rows that changed are written: a second's tick usually touches the clock and a few ages.
+        frame = "".join(f"\x1b[{row + 1};1H{line}" for row, line in enumerate(lines)
+                        if row >= len(self.shown) or self.shown[row] != line)
+        if frame:
+            os.write(self.fd_out, frame.encode("utf-8", "replace"))
+        self.whole = time.monotonic() if not self.shown else self.whole
+        self.shown, self.drawn, self.dirty = lines, time.monotonic(), False
+        return loading
 
-def next_panel(canvas: Canvas, focus: str, step: int) -> str:
-    """Tab's next panel (Shift-Tab's with step -1) among those drawn in the last frame, by columns: left to right,
-    each top to bottom, as the layout placed them (wide: QUEUE, EVENTS, DETAILS; narrow: top to bottom). A focus
-    whose panel is no longer drawn starts again from QUEUE."""
-    drawn = sorted((name for name in PANELS if name in canvas.tables),
-                   key=lambda name: (canvas.tables[name].get("x", 0), canvas.tables[name].get("y", 0)))
-    if "requests" not in drawn:
-        drawn.insert(0, "requests")
-    if focus not in drawn:
-        return "requests"
-    return drawn[(drawn.index(focus) + step) % len(drawn)]
+    def loading(self) -> bool:
+        """The selected request's details are loading: the spinner turns at ten frames a second."""
+        found = _state.items(self.state)
+        if not found:
+            return False
+        item = found[self.state.selection.index]
+        return _state.details_key(item, cast(Any, self.state.selection.key)) not in self.state.details
 
+    def read(self, wait: float) -> None:
+        """Waits for a key, a loader or the moment a thumb fades, then takes the keys and what the terminal said."""
+        fade = _state.fade(self.state, time.monotonic())  # one wake when a scrolled thumb goes back, not a poll
+        ready = select.select([self.fd_in, self.wake_read], [], [], wait if fade is None else min(wait, fade))[0]
+        if self.wake_read in ready:
+            os.read(self.wake_read, 4096)
+        if self.fd_in not in ready:
+            return
+        reports: list[str] = []
+        pressed = read_keys(self.fd_in, reports)
+        if reports and theme_reports(reports, self.answers, self.fd_out, self.ascii_only):
+            self.apply_theme()
+            self.shown, self.dirty = [], True  # every row's colours changed
+        for key in pressed:
+            self.dirty = True
+            self.send(_state.Mouse(key[1], key[2], key[3], key[4]) if isinstance(key, tuple) else _state.Key(key))
+            if self.done:
+                return
 
-
-
-def event_id(event: dict[str, Any]) -> tuple[Any, ...]:
-    return (event.get("when"), event.get("verb"), event.get("pid"), event.get("count"))
-
-
-def follow_events(scroll: dict[str, int], fresh: int, newest: Any, events: list[dict[str, Any]]) -> tuple[int, Any]:
-    """EVENTS (newest first) after a refresh (#15): at the top it shows the newest; scrolled down, it keeps showing
-    the same events as new ones arrive above them and counts those (fresh). (fresh, the newest event's id)."""
-    ids = [event_id(event) for event in events[::-1]]
-    arrived = ids.index(newest) if newest in ids else 0
-    if scroll.get("events"):
-        scroll["events"] += arrived
-        fresh += arrived
-    else:
-        fresh = 0
-    return fresh, ids[0] if ids else None
-
+    def run(self) -> None:
+        with full_screen(self.fd_in, self.fd_out, self.answers, _common.MARKS["legacy"][0]):
+            self.apply_theme()
+            # 👨‍🦳 is one glyph where the cursor ended two cells on (column 3); without an answer, assume it is
+            _common.use_marks(self.ascii_only, joined=self.answers.column in (None, 3))
+            self.load_model()
+            while not self.done:
+                self.take()
+                loading = self.draw()
+                self.read(0.1 if loading else 0.25)
 
 
 def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE, screen: Screen | None = None) -> None:
-    fd_in, fd_out = sys.stdin.fileno(), sys.stdout.fileno()
-    colour = not os.environ.get("NO_COLOR")
-    # What the terminal says about its colours (#14) and how wide it draws 👨‍🦳 (#15): asked with colour off too
-    answers = _theme.Answers()
-    ascii_only = "utf" not in (sys.stdout.encoding or "").lower()
-    screen = screen or Screen()
-    model: dict[str, Any] | None = None
-    error: str | None = None
-    changelog_tab = 0
-    selected_key: Any = None
-    index, colours, shown, drawn_size = 0, {}, [], None
-    scroll: dict[str, int] = {}
-    focus, fresh_events, newest = "requests", 0, None
-    help_open: bool | str = False  # True: help; "changelog": the changelog
-    settings: _settings.Settings | None = None
-    saved_choices = (interval, theme)  # Refresh every and Colour theme as saved; a change is written back
-    drawn, whole, dirty = 0.0, 0.0, True
-    glow, glowing = ScrollGlow(), set[str]()
-    canvas = Canvas(0, 0)
-    wake_read, wake_write = os.pipe()
-    # Everything slow runs in the background, so a key moves the selection within one frame (#15)
-    models, details, cache = Loader(screen.load, wake_write), Loader(load_details, wake_write), DetailsCache()
-    models.request("model")
-    fetched = time.monotonic()
+    live = Live(sys.stdin.fileno(), sys.stdout.fileno(), screen or Screen(), interval, theme)
     try:
-        with full_screen(fd_in, fd_out, answers, _overview.MARKS["legacy"][0]):
-            set_theme(_theme.from_environment(answers=answers, mode=theme))
-            # 👨‍🦳 is one glyph where the cursor ended two cells on (column 3); without an answer, assume it is
-            _overview.use_marks(ascii_only, joined=answers.column in (None, 3))
-            while True:
-                for _, value, failure in models.take():
-                    if failure is not None:
-                        error = dashboard_text(failure)
-                    else:
-                        fresh, error = value
-                        if fresh is not model and fresh is not None:
-                            _overview.dashboard_colours(fresh, colours)
-                            fresh_events, newest = follow_events(scroll, fresh_events, newest,
-                                                                 cast(list[dict[str, Any]], fresh["events"]))
-                        model = fresh
-                    dirty = True
-                for key, value, failure in details.take():
-                    lane, cwd = value if failure is None and value else (None, None)
-                    cache.put(key, lane, cwd)
-                    dirty = dirty or key == selected_key
-                if settings is not None and settings.tick():  # an arrow change settled: saved, so show its effect now
-                    interval, dirty = float(settings.interval), True
-                    saved_choices = remember(saved_choices, settings)
-                    models.request("model")
-                    fetched = time.monotonic()
-                if settings is not None and settings.theme != theme:  # this dashboard's theme, applied at once
-                    theme = str(settings.theme)
-                    shown, dirty = [], True
-                    set_theme(_theme.from_environment(answers=answers, mode=theme))
-                    saved_choices = remember(saved_choices, settings)
-                if time.monotonic() - fetched >= interval and not models.wants("model"):
-                    models.request("model")
-                    fetched = time.monotonic()
-                items = cast(list[dict[str, Any]], (model["holders"] + model["waiters"]) if model else [])
-                keys = [item["key"] for item in items]
-                index = keys.index(selected_key) if selected_key in keys else max(0, min(index, len(items) - 1))
-                next_key = keys[index] if items else None
-                if next_key != selected_key:
-                    scroll.pop("details", None)
-                selected_key = next_key
-                loading, cwd = None, None
-                if items:
-                    item = items[index]
-                    known = cache.get(selected_key)
-                    if known is None:
-                        loading = int(time.monotonic() * 10)  # a spinner at ten frames a second
-                        if not details.wants(selected_key):
-                            details.request(selected_key, dict(item))
-                    else:
-                        lane, cwd, current = known
-                        if lane is not None:
-                            item["lane"] = lane
-                        if not current and not details.wants(selected_key):
-                            details.request(selected_key, dict(item))  # quietly: the cached facts stay meanwhile
-                if not scroll.get("events"):
-                    fresh_events = 0
-                size = os.get_terminal_size(fd_out)  # read each pass: at most 0.25 s behind a resize
-                if size != drawn_size:
-                    # A terminal reflows its own screen on resize: clear it and draw every row.
-                    os.write(fd_out, b"\x1b[2J")
-                    shown, drawn_size, dirty = [], size, True
-                elif time.monotonic() - whole >= 5:
-                    shown = []  # rewrite every row now and then, in place, so a stray line cannot stay wrong
-                bright = glow.bright()
-                if bright != glowing:  # a thumb lit up or faded back
-                    glowing, dirty = bright, True
-                if dirty or loading is not None or time.monotonic() - drawn >= 1 or not shown:
-                    canvas = Canvas(size.columns, size.lines)
-                    canvas.focus, canvas.loading, canvas.fresh_events = focus, loading, fresh_events
-                    canvas.glow = glowing
-                    _overview.dashboard_draw(canvas, model, index, help_open, error, cwd, scroll, settings,
-                                             changelog_tab, screen.notice())
-                    if focus != "requests" and focus not in canvas.tables:  # its panel is not drawn now
-                        focus = canvas.focus = "requests"
-                    lines = canvas.lines(colour, ascii_only, place=True)
-                    # Only rows that changed are written: a second's tick usually touches the clock and a few ages.
-                    frame = "".join(f"\x1b[{row + 1};1H{line}" for row, line in enumerate(lines)
-                                    if row >= len(shown) or shown[row] != line)
-                    if frame:
-                        os.write(fd_out, frame.encode("utf-8", "replace"))
-                    whole = time.monotonic() if not shown else whole
-                    shown, drawn, dirty = lines, time.monotonic(), False
-                wait = 0.1 if loading is not None else 0.25
-                fade = glow.fade()  # one wake at the moment a scrolled thumb goes back, not a poll
-                ready = select.select([fd_in, wake_read], [], [], wait if fade is None else min(wait, fade))[0]
-                if wake_read in ready:
-                    os.read(wake_read, 4096)
-                if fd_in not in ready:
-                    continue
-                reports: list[str] = []
-                pressed = read_keys(fd_in, reports)
-                if reports and theme_reports(reports, answers, fd_out, ascii_only):
-                    set_theme(_theme.from_environment(answers=answers, mode=theme))
-                    shown, dirty = [], True  # every row's colours changed
-                offsets = dict(scroll)
-                settings_offset = settings.offset if settings is not None else 0
-                for key in pressed:
-                    dirty = True
-                    if isinstance(key, tuple) and key[4] and key[1] & ~28 == 0:  # a click on a footer hint is its key
-                        key = canvas.hint_at(key[2], key[3]) or key
-                    if settings is not None:
-                        action = settings.mouse(key) if isinstance(key, tuple) else settings.key(key)
-                        if action == "quit":
-                            return
-                        interval = float(settings.interval)  # this dashboard's own setting, changed at once
-                        if settings.theme != theme:  # so is its colour theme
-                            theme = str(settings.theme)
-                            shown = []
-                            set_theme(_theme.from_environment(answers=answers, mode=theme))
-                        saved_choices = remember(saved_choices, settings)
-                        if action == "close":
-                            settings = None
-                            shown = []
-                        if action == "changed":  # a saved setting applies at the next grant: show its effect now
-                            models.request("model")
-                            fetched = time.monotonic()
-                        continue
-                    if isinstance(key, tuple) and help_open:  # the help keeps the mouse; a click outside closes it
-                        if help_mouse(canvas, key, scroll) == "close":
-                            help_open, canvas.help_view = False, None
-                        continue
-                    if isinstance(key, tuple):  # a click or the wheel; Shift+drag stays the terminal's own selection
-                        _, button, mx, my, pressed_now = key
-                        at = canvas.version_at
-                        if pressed_now and button & ~28 == 0 and at and my == at[0] and at[1] <= mx < at[2]:
-                            help_open, changelog_tab = "changelog", 0  # the footer's version opens what changed
-                            scroll.pop("changelog", None)
-                            continue
-                        if pressed_now and button & ~28 == 0 and canvas.help_view is None:
-                            focus = panel_at(canvas, mx, my) or focus  # a click focuses the panel it lands in
-                        previous = index
-                        index = mouse_action(canvas, key, scroll, index)
-                        if index != previous:
-                            scroll.pop("details", None)
-                        selected_key = keys[index] if items else None
-                        continue
-                    key = _keys.hotkey(key)  # the hotkey at this key's US-QWERTY position (#13)
-                    if help_open == "changelog" and key in ("left", "right", "h", "l", "\t", "back_tab"):
-                        step = -1 if key in ("left", "h", "back_tab") else 1  # the next tool's changelog
-                        changelog_tab = (changelog_tab + step) % len(_overview.tabs())
-                        scroll.pop("changelog", None)
-                        continue
-                    if help_open:
-                        action = help_key(canvas, key, scroll)
-                        if action == "quit":
-                            return
-                        if action == "close":
-                            help_open = False
-                            canvas.help_view = None
-                        continue
-                    if key in ("q", "Q"):
-                        return
-                    if key in ("\t", "back_tab"):  # Tab and Shift-Tab move between the panels drawn (#15)
-                        focus = next_panel(canvas, focus, 1 if key == "\t" else -1)
-                        continue
-                    if focus != "requests" and panel_key(canvas, scroll, focus, key):
-                        continue
-                    if key in ("j", "down", "k", "up", "g", "home", "G", "end", "page_up", "page_down"):
-                        scroll.pop("requests", None)
-                        scroll.pop("details", None)
-                    if key == "esc":
-                        help_open = False
-                    elif key == "?":
-                        help_open = True
-                        scroll.pop("help", None)
-                        _overview.draw_help(canvas)
-                    elif key == "v":  # the changelog, as a click on the footer's version
-                        help_open, changelog_tab = "changelog", 0
-                        scroll.pop("changelog", None)
-                    elif key == "s":
-                        try:
-                            settings = screen.settings(interval, theme)
-                        except SettingsError as failure:
-                            error = dashboard_text(failure)
-                        if settings is not None:
-                            settings.draw(canvas, model)
-                    elif key in ("j", "down"):
-                        index += 1
-                    elif key in ("k", "up"):
-                        index -= 1
-                    elif key in ("g", "home", "page_up"):
-                        index = 0
-                    elif key in ("G", "end", "page_down"):
-                        index = len(items) - 1
-                    index = max(0, min(index, len(items) - 1))
-                    selected_key = keys[index] if items else None
-                moved = scrolled(offsets, scroll)
-                if settings is not None and settings.offset != settings_offset:
-                    moved.add("settings")
-                glow.touch(moved)
+        live.run()
     finally:
-        for fd in (wake_read, wake_write):
-            os.close(fd)
+        live.close()
 
 
 def theme_reports(reports: list[str], answers: _theme.Answers, fd_out: int, ascii_only: bool = False) -> bool:
@@ -464,7 +341,7 @@ def theme_reports(reports: list[str], answers: _theme.Answers, fd_out: int, asci
         column = answers.column
         changed = answers.feed(report) or changed
         if answers.column != column:
-            _overview.use_marks(ascii_only, joined=answers.column in (None, 3))
+            _common.use_marks(ascii_only, joined=answers.column in (None, 3))
             changed = True
         if _theme.SCHEME_REPLY.match(report):
             os.write(fd_out, _theme.QUERY)
@@ -479,12 +356,12 @@ def once(width: int | None, height: int | None, colour: bool | None, interval: f
     items = cast(list[dict[str, Any]], (model["holders"] + model["waiters"]) if model else [])
     cwd = None
     if model:
-        _overview.dashboard_colours(model, {})
+        _common.dashboard_colours(model, {})
         if items:
-            _overview.enrich_details(items[0])
+            _details.enrich_details(items[0])
             cwd = _sources.process_cwd(items[0]["pid"]) if items[0]["kind"] != "waiting" else None
     ascii_only = "utf" not in (sys.stdout.encoding or "").lower()
-    _overview.use_marks(ascii_only)
+    _common.use_marks(ascii_only)
     size_now = shutil.get_terminal_size((120, 40))
     canvas = Canvas(width or size_now.columns, height or size_now.lines)
     _overview.dashboard_draw(canvas, model, error=error, cwd=cwd, notice=screen.notice())

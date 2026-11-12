@@ -9,8 +9,11 @@ from typing import Any
 
 import helpers  # noqa: F401 - puts src/ on sys.path
 
-NAMES = ("godfather.views.overview", "godfather.tui", "godfather.app", "godfather.sources", "godfather.version",
-         "godfather.adapters.slotfather")
+NAMES = ("godfather.views.overview", "godfather.views.queue", "godfather.views.details", "godfather.views.events",
+         "godfather.views.machine", "godfather.views.overlays", "godfather.views.common", "godfather.views.settings",
+         "godfather.views.settings_draw", "godfather.widgets",
+         "godfather.layout", "godfather.state", "godfather.modes", "godfather.tui", "godfather.app",
+         "godfather.sources", "godfather.version", "godfather.adapters.slotfather")
 
 
 class View:
@@ -49,8 +52,11 @@ class View:
 def fresh() -> Any:
     """Every module reloaded, in import order, so module state (theme, marks, changelog tabs) starts over."""
     modules = []
-    for name in ("godfather.theme", "godfather.keys", "godfather.tui", "godfather.views.overview",
-                 "godfather.views.settings", "godfather.app"):
+    for name in ("godfather.theme", "godfather.keys", "godfather.tui", "godfather.layout", "godfather.widgets",
+                 "godfather.views.common", "godfather.views.queue", "godfather.views.events", "godfather.views.details",
+                 "godfather.views.machine", "godfather.views.overlays", "godfather.views.settings_draw",
+                 "godfather.views.settings", "godfather.views.overview", "godfather.state", "godfather.modes",
+                 "godfather.app"):
         importlib.reload(importlib.import_module(name))
     for name in NAMES:
         modules.append(importlib.import_module(name))

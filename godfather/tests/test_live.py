@@ -6,6 +6,7 @@ import helpers  # noqa: F401 - src/ on sys.path
 import view as _view
 from helpers import ROOT
 
+import dataclasses
 import datetime
 import os
 import re
@@ -16,6 +17,8 @@ import unittest
 from typing import Any, Callable, Protocol, cast
 
 from godfather import theme
+from helpers import drawn_state
+from godfather.layout import Rect
 
 def judged(memory: dict[str, Any]) -> dict[str, Any]:
     """Memory facts with Slotfather's judgement of them, as its snapshot carries it (docs/contracts/slotfather.md):
@@ -43,6 +46,24 @@ def tool() -> Any:
 def event(n: int) -> dict[str, Any]:
     when = datetime.datetime(2026, 11, 11, 12, tzinfo=datetime.timezone.utc) + datetime.timedelta(seconds=n)
     return {"when": when, "verb": "granted", "count": 1, "label": f"job{n}", "pid": 1000 + n, "delta": 1}
+
+
+def frames_of(view: Any, canvas: Any) -> None:
+    """QUEUE and DETAILS side by side over EVENTS, each in a shared Panel frame."""
+    view.Panel(canvas, Rect(0, 0, 10, 40), "requests").frame("QUEUE")
+    view.Panel(canvas, Rect(0, 40, 10, 40), "details").frame("DETAILS")
+    view.Panel(canvas, Rect(10, 0, 10, 80), "events").frame("EVENTS")
+
+
+def tabs(canvas: Any, key: str = "\t", presses: int = 3) -> list[str]:
+    """The focus from QUEUE after each Tab (or Shift-Tab) through the reducer, over the frame `canvas` drew."""
+    view = _view.current()
+    state = drawn_state(canvas)
+    order = [state.focus]
+    for _ in range(presses):
+        state, _ = view.reduce(state, view.Key(key), 0.0)
+        order.append(state.focus)
+    return order
 
 
 class LoaderTests(unittest.TestCase):
@@ -77,13 +98,23 @@ class LoaderTests(unittest.TestCase):
         self.assertTrue(select.select([read], [], [], 0)[0], "each result wakes the main loop")
 
     def test_a_result_is_kept_under_its_own_key_never_the_selected_one(self) -> None:
-        now = [100.0]
-        cache = tool().DetailsCache(lambda: now[0])
-        cache.put("a", {"lane": "a"}, "/a")  # a load for row a, finished after the selection moved to b
-        self.assertIsNone(cache.get("b"), "row b still loads: nothing of a's is painted on it")
-        self.assertEqual(({"lane": "a"}, "/a", True), cache.get("a"))
-        now[0] += tool().DETAILS_FRESH + 1
-        self.assertEqual(({"lane": "a"}, "/a", False), cache.get("a"), "shown at once, refreshed quietly")
+        view = tool()
+        model = {"holders": [dict(key=(n, None), kind="held", pid=n) for n in (1, 2)], "waiters": []}
+        state, effects = view.reduce(view.AppState(model=model), view.ModelLoaded(model), 100.0)
+        a = view.details_key(model["holders"][0], ((1, None), 0))
+        b = view.details_key(model["holders"][1], ((2, None), 0))
+        self.assertEqual([a], [effect.key for effect in effects if effect.kind == "load-details"], "row a loads")
+        state, _ = view.reduce(state, view.Key("j"), 100.0)  # the selection moves to b before a's load lands
+        state, effects = view.reduce(state, view.DetailsLoaded(a, {"lane": "a"}, "/a"), 100.0)
+        self.assertNotIn(b, state.details, "row b still loads: nothing of a's is painted on it")
+        self.assertEqual([b], [effect.key for effect in effects if effect.kind == "load-details"])
+        self.assertEqual(({"lane": "a"}, "/a"), (state.details[a].lane, state.details[a].cwd))
+        state, effects = view.reduce(state, view.Key("k"), 100.0)
+        self.assertEqual([], [effect for effect in effects if effect.kind == "load-details"], "fresh: shown as it is")
+        state, effects = view.reduce(state, view.Tick(), 100.0 + view.DETAILS_FRESH + 1)
+        self.assertEqual([a], [effect.key for effect in effects if effect.kind == "load-details"],
+                         "older: shown at once and refreshed quietly")
+        self.assertIn(a, state.details)
 
 
 class DetailsPanelTests(unittest.TestCase):
@@ -99,7 +130,7 @@ class DetailsPanelTests(unittest.TestCase):
         now = datetime.datetime.now(datetime.timezone.utc)
         canvas = view.Canvas(60, 20)
         canvas.loading = 3
-        view.draw_detail(canvas, 0, 0, 20, 60, self.model(), 0, None, now)
+        view.draw_detail(canvas, Rect(0, 0, 20, 60), self.model(), 0, None, now)
         text = canvas.render(False)
         self.assertIn(view.SPINNER[3], text)
         self.assertIn("loading", text)
@@ -109,7 +140,7 @@ class DetailsPanelTests(unittest.TestCase):
         self.assertLessEqual(abs(spinner[1] - 29), 1, "centred")
         self.assertEqual("dim", canvas.cells[spinner[0]][spinner[1]][1])
         canvas = view.Canvas(60, 20)  # a cache hit: no spinner
-        view.draw_detail(canvas, 0, 0, 20, 60, self.model(), 0, None, now)
+        view.draw_detail(canvas, Rect(0, 0, 20, 60), self.model(), 0, None, now)
         text = canvas.render(False)
         self.assertNotIn("loading", text)
         self.assertRegex(text, r"label\s+build")
@@ -122,9 +153,7 @@ class FocusTests(unittest.TestCase):
             with self.subTest(focus=focus):
                 canvas = view.Canvas(80, 20)
                 canvas.focus = focus
-                canvas.box(0, 0, 10, 40, "QUEUE", name="requests")
-                canvas.box(0, 40, 10, 40, "DETAILS", name="details")
-                canvas.box(10, 0, 10, 80, "EVENTS", name="events")
+                frames_of(view, canvas)
                 frames = {"requests": canvas.cells[5][0], "details": canvas.cells[5][40], "events": canvas.cells[15][0]}
                 for name, cell in frames.items():
                     self.assertEqual("accent" if name == focus else "frame", cell[1], name)
@@ -135,9 +164,7 @@ class FocusTests(unittest.TestCase):
         view = tool()
         canvas = view.Canvas(80, 20)
         canvas.focus = "details"
-        canvas.box(0, 0, 10, 40, "QUEUE", name="requests")
-        canvas.box(0, 40, 10, 40, "DETAILS", name="details")
-        canvas.box(10, 0, 10, 80, "EVENTS", name="events")
+        frames_of(view, canvas)
         rows = ["".join(cell[0] for cell in row) for row in canvas.cells]
         for x, name in ((0, "QUEUE"), (40, "DETAILS")):
             self.assertEqual(("╭", "╮", "╰", "╯"), (rows[0][x], rows[0][x + 39], rows[9][x], rows[9][x + 39]), name)
@@ -161,7 +188,7 @@ class FocusTests(unittest.TestCase):
             with self.subTest(focus=focus):
                 canvas = view.Canvas(60, 6)
                 canvas.focus = focus
-                view.table_header(canvas, 0, 0, 6, 60, "QUEUE", placed, name="requests")
+                view.Table(placed).header(view.Panel(canvas, Rect(0, 0, 6, 60), "requests"), "QUEUE")
                 x = "".join(cell[0] for cell in canvas.cells[0]).index("pid")
                 self.assertEqual("text" if focus == "requests" else "dim", canvas.cells[0][x][1])
                 self.assertEqual("title", canvas.cells[0][3][1])
@@ -173,9 +200,14 @@ class FocusTests(unittest.TestCase):
         canvas = view.Canvas(80, 20)
         canvas.tables = {"requests": dict(x=0, y=0, width=40, height=10), "details": dict(x=40, y=0, width=40,
                          height=10), "events": dict(x=0, y=10, width=80, height=10)}
+        state = drawn_state(canvas)
         self.assertEqual(("requests", "details", "events", None),
-                         (view.panel_at(canvas, 5, 5), view.panel_at(canvas, 50, 2), view.panel_at(canvas, 70, 15),
-                          view.panel_at(canvas, 90, 25)))
+                         (view.panel_at(state, 5, 5), view.panel_at(state, 50, 2), view.panel_at(state, 70, 15),
+                          view.panel_at(state, 90, 25)))
+        canvas.tables = {name: dict(view, x=view["x"], top=view["y"] + 2, visible=6, count=0, offset=0)
+                         for name, view in canvas.tables.items()}
+        for x, y, focus in ((50, 2, "details"), (70, 15, "events"), (5, 5, "requests")):
+            self.assertEqual(focus, tool().reduce(drawn_state(canvas), tool().Mouse(0, x, y, True), 0.0)[0].focus)
 
     def test_scroll_keys_move_a_panel_and_its_thumb(self) -> None:
         view = tool()
@@ -186,7 +218,7 @@ class FocusTests(unittest.TestCase):
             canvas = view.Canvas(80, 14)
             canvas.scroll = scroll
             canvas.focus = "events"
-            view.draw_events(canvas, 0, 0, 14, 80, model)
+            view.draw_events(canvas, Rect(0, 0, 14, 80), model)
             return canvas
 
         def thumb(canvas: Any) -> list[int]:
@@ -196,7 +228,8 @@ class FocusTests(unittest.TestCase):
         top = thumb(canvas)
         self.assertEqual(2, top[0], "the first content row, under the padding row")
         for key, expected in (("down", 1), ("j", 2), ("page_down", 11), ("up", 10), ("end", 30), ("home", 0)):
-            self.assertTrue(view.scroll_panel(canvas, scroll, "events", key))
+            state, _ = view.reduce(drawn_state(canvas, focus="events", scroll=dict(scroll)), view.Key(key), 0.0)
+            scroll.update(state.scroll)
             self.assertEqual(expected, scroll["events"], key)
             canvas = draw()
         scroll["events"] = 30
@@ -204,23 +237,26 @@ class FocusTests(unittest.TestCase):
         self.assertEqual(11, thumb(last)[-1], "the last page puts the thumb at the bottom of the rows")
         for padding in (1, 12):  # nothing draws on the padding rows, scrolled or not
             self.assertEqual(" " * 77, "".join(cell[0] for cell in last.cells[padding][1:78]), padding)
-        self.assertFalse(view.scroll_panel(canvas, scroll, "events", "x"))
+        state = drawn_state(canvas, focus="events", scroll=dict(scroll))
+        self.assertIs(state, view.reduce(state, view.Key("x"), 0.0)[0], "x is no scroll key")
 
     def test_events_follow_the_newest_at_the_top_and_stay_put_when_scrolled(self) -> None:
         view = tool()
-        scroll: dict[str, int] = {}
-        fresh, newest = view.follow_events(scroll, 0, None, [event(n) for n in range(10)])
-        fresh, newest = view.follow_events(scroll, fresh, newest, [event(n) for n in range(12)])
-        self.assertEqual((0, None), (fresh, scroll.get("events")), "pinned to the newest at the top")
-        scroll["events"] = 3
-        fresh, newest = view.follow_events(scroll, fresh, newest, [event(n) for n in range(15)])
-        self.assertEqual((3, 6), (fresh, scroll["events"]), "three new ones above: the same rows stay in view")
+        state = view.follow_events(view.AppState(), [event(n) for n in range(10)])
+        state = view.follow_events(state, [event(n) for n in range(12)])
+        self.assertEqual((0, None), (state.fresh_events, state.scroll.get("events")), "pinned to the newest at the top")
+        state = dataclasses.replace(state, scroll={"events": 3})
+        state = view.follow_events(state, [event(n) for n in range(15)])
+        self.assertEqual((3, 6), (state.fresh_events, state.scroll["events"]),
+                         "three new ones above: the same rows stay in view")
         canvas = view.Canvas(80, 14)
-        canvas.scroll, canvas.fresh_events = scroll, fresh
-        view.draw_events(canvas, 0, 0, 14, 80, {"events": [event(n) for n in range(15)]})
+        canvas.scroll, canvas.fresh_events = state.scroll, state.fresh_events
+        view.draw_events(canvas, Rect(0, 0, 14, 80), {"events": [event(n) for n in range(15)]})
         self.assertIn("↑ 3 new", canvas.render(False))
-        scroll["events"] = 0  # Home
-        self.assertEqual(0, view.follow_events(scroll, fresh, newest, [event(n) for n in range(15)])[0])
+        state = dataclasses.replace(state, scroll={"events": 0})  # Home
+        self.assertEqual(0, view.follow_events(state, [event(n) for n in range(15)]).fresh_events)
+        self.assertEqual(0, view.settle(dataclasses.replace(state, fresh_events=3), 0.0)[0].fresh_events,
+                         "at the top the count goes")
 
 
 def sample_model() -> dict[str, Any]:
@@ -257,24 +293,23 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
         for loading, model in ((1, self.model()), (None, empty)):
             canvas = view.Canvas(60, 20)
             canvas.focus, canvas.loading = "details", loading
-            view.draw_detail(canvas, 0, 0, 20, 60, model, 1, None, now)
+            view.draw_detail(canvas, Rect(0, 0, 20, 60), model, 1, None, now)
             self.assertIn("details", canvas.tables, "drawn, so it can hold the focus")
+            state = drawn_state(canvas, model if model["holders"] else None, 1, focus="details")
             for key in ("j", "k", "down", "page_down", "home"):
-                self.assertTrue(view.panel_key(canvas, {}, "details", key), f"{key} is the panel's")
+                after, _ = view.reduce(state, view.Key(key), 0.0)
+                self.assertEqual((state.selection, "details"), (after.selection, after.focus),
+                                 f"{key} is the panel's: QUEUE's selection stays")
 
     def test_tab_goes_by_columns_from_the_layout(self) -> None:
         view = tool()
         canvas = view.Canvas(160, 40)
         view.dashboard_draw(canvas, sample_model())
-        order = ["requests"]
-        for _ in range(3):
-            order.append(view.next_panel(canvas, order[-1], 1))
-        self.assertEqual(["requests", "events", "details", "requests"], order, "left column down, then the right")
-        self.assertEqual("details", view.next_panel(canvas, "requests", -1), "Shift-Tab backwards")
+        self.assertEqual(["requests", "events", "details", "requests"], tabs(canvas), "left column down, then the right")
+        self.assertEqual("details", tabs(canvas, "back_tab")[1], "Shift-Tab backwards")
         narrow = view.Canvas(100, 60)
         view.dashboard_draw(narrow, sample_model())
-        self.assertEqual("details", view.next_panel(narrow, "requests", 1), "one column: top to bottom")
-        self.assertEqual("events", view.next_panel(narrow, "details", 1))
+        self.assertEqual(["requests", "details", "events"], tabs(narrow)[:3], "one column: top to bottom")
 
     def test_one_column_puts_machine_and_events_side_by_side_or_drops_events(self) -> None:
         view = tool()
@@ -288,9 +323,7 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
                 self.assertEqual(beside, "events" in canvas.tables, "a hidden EVENTS is no Tab stop")
                 self.assertTrue(lines[machine].startswith("╭─ EVENTS " if beside else "╭─ MACHINE "),
                                 "EVENTS on the left, MACHINE on the right (alone: the whole width)")
-                order = ["requests"]
-                for _ in range(3):
-                    order.append(view.next_panel(canvas, order[-1], 1))
+                order = tabs(canvas)
                 expected = ["requests", "details", "events", "requests"] if beside else ["requests", "details",
                                                                                          "requests", "details"]
                 self.assertEqual(expected, order, "by columns, top to bottom")
@@ -325,19 +358,20 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
     def test_a_scrolled_thumb_flashes_and_fades_with_one_wake(self) -> None:
         view = tool()
         self.assertAlmostEqual(0.28, view.SCROLL_GLOW)
-        now = [100.0]
-        glow = view.ScrollGlow(lambda: now[0])
-        self.assertEqual((set(), None), (glow.bright(), glow.fade()), "nothing scrolled: no wake")
-        glow.touch(view.scrolled({"events": 0, "details": 4}, {"events": 3, "details": 4}))
-        self.assertEqual({"events"}, glow.bright())
-        now[0] = 100.2
-        glow.touch({"events"})  # still scrolling: the flash runs on from the last scroll
-        now[0] = 100.4
-        self.assertEqual({"events"}, glow.bright())
-        self.assertAlmostEqual(0.08, cast(float, glow.fade()), places=6, msg="one wake, at the fade")
-        now[0] = 100.48
-        self.assertEqual(set(), glow.bright(), "0.28 s after the last scroll: back to muted")
-        self.assertIsNone(glow.fade(), "and no more wakes")
+        canvas = view.Canvas(80, 14)
+        canvas.focus = "events"
+        view.draw_events(canvas, Rect(0, 0, 14, 80), {"events": [event(n) for n in range(40)]})
+        state = drawn_state(canvas, focus="events")
+        self.assertEqual((set(), None), (view.glowing(state, 100.0), view.fade(state, 100.0)),
+                         "nothing scrolled: no wake")
+        state, _ = view.reduce(state, view.Key("j"), 100.0)
+        self.assertEqual({"events"}, view.glowing(state, 100.0))
+        state, _ = view.reduce(state, view.Key("j"), 100.2)  # still scrolling: the flash runs on from the last scroll
+        self.assertEqual({"events"}, view.glowing(state, 100.4))
+        self.assertAlmostEqual(0.08, cast(float, view.fade(state, 100.4)), places=6, msg="one wake, at the fade")
+        self.assertEqual(set(), view.glowing(state, 100.48), "0.28 s after the last scroll: back to muted")
+        self.assertIsNone(view.fade(state, 100.48), "and no more wakes")
+        self.assertEqual({"events"}, view.scrolled({"events": 0, "details": 4}, {"events": 3, "details": 4}))
         self.assertEqual(set(), view.scrolled({"details": 5}, {}), "an offset dropped is no scroll")
         model = {"events": [event(n) for n in range(40)]}
         cases: list[tuple[set[str], bool, str]] = [(set(), False, "dim"), (set(), True, "dim"),
@@ -347,7 +381,7 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
                 canvas = view.Canvas(80, 14)
                 canvas.scroll, canvas.glow = {"events": 3}, lit
                 canvas.focus = "events" if focused else "requests"
-                view.draw_events(canvas, 0, 0, 14, 80, model)
+                view.draw_events(canvas, Rect(0, 0, 14, 80), model)
                 thumb = {canvas.cells[y][78][1] for y in range(14) if canvas.cells[y][78][0] in ("┃", "╻", "╹")}
                 self.assertEqual({style}, thumb, "muted at rest, focused or not; the foreground while scrolling")
         for draw, name in ((view.draw_help, "help"), (view.draw_changelog, "changelog")):
@@ -366,10 +400,12 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
         view = tool()
         canvas = view.Canvas(80, 20)
         canvas.tables = {"requests": {"x": 0, "y": 0}, "events": {"x": 0, "y": 10}}
-        self.assertEqual("events", view.next_panel(canvas, "requests", 1))
-        self.assertEqual("requests", view.next_panel(canvas, "events", 1))
-        self.assertEqual("events", view.next_panel(canvas, "requests", -1))
-        self.assertEqual("requests", view.next_panel(canvas, "details", 1), "a focus that lost its panel")
+        self.assertEqual(["requests", "events", "requests", "events"], tabs(canvas))
+        self.assertEqual("events", tabs(canvas, "back_tab")[1])
+        state = drawn_state(canvas, focus="details")
+        self.assertEqual("requests", view.reduce(state, view.Key("\t"), 0.0)[0].focus, "a focus that lost its panel")
+        self.assertEqual("requests", view.reduce(state, view.Drawn(state.frame), 0.0)[0].focus,
+                         "and a frame that no longer draws it gives the focus back to QUEUE")
 
 
 class ChangelogTests(unittest.TestCase):
@@ -424,17 +460,23 @@ class ChangelogTests(unittest.TestCase):
         footer = "".join(cell[0] for cell in canvas.cells[row])
         self.assertEqual(view.running_version(), footer[start:end].strip())
         self.assertTrue(view.running_version().startswith(view._version.VERSION))
+        state, _ = view.reduce(drawn_state(canvas), view.Mouse(0, start, row, True), 0.0)
+        self.assertEqual(view.Changelog(), state.overlay, "a click on the version opens the changelog")
         canvas = view.Canvas(100, 30)
-        view.dashboard_draw(canvas, None, help_open="changelog")
+        view.dashboard_draw(canvas, None, overlay=view.Changelog())
         self.assertIn("CHANGELOG", canvas.render(False))
         self.assertIn("esc close", canvas.render(False))
         info = canvas.help_view
-        self.assertEqual("close", view.help_mouse(canvas, ("mouse", 0, 0, 0, True), {}), "a click outside")
-        self.assertEqual("ignored", view.help_mouse(canvas, ("mouse", 0, info.x + 5, info.y + 3, True), {}))
-        self.assertEqual("ignored", view.help_mouse(canvas, ("mouse", 65, 0, 0, True), {}), "the wheel outside")
-        self.assertEqual("close", view.help_key(canvas, "esc", {}))
-        self.assertEqual("scroll", view.help_key(canvas, "down", scroll := {}))
-        self.assertEqual({"changelog": 1}, scroll)
+        state = drawn_state(canvas, overlay=view.Changelog())
+
+        def after(event: Any) -> Any:
+            return view.reduce(state, event, 0.0)[0].overlay
+
+        self.assertIsNone(after(view.Mouse(0, 0, 0, True)), "a click outside closes it")
+        self.assertEqual(view.Changelog(), after(view.Mouse(0, info.x + 5, info.y + 3, True)), "one inside does not")
+        self.assertEqual(view.Changelog(), after(view.Mouse(65, 0, 0, True)), "nor the wheel outside")
+        self.assertIsNone(after(view.Key("esc")))
+        self.assertEqual(view.Changelog(scroll=1), after(view.Key("down")))
 
 
 

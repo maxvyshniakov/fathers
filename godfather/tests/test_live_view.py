@@ -158,8 +158,8 @@ class VersionTests(LiveCase):
         screen.until(lambda _: "0.1.0 ↻" in screen.rows().get(30, ""), 8, "↻ after the reinstall")
         mark = screen.mark()
         screen.write(b"v")
-        text = screen.receive("CHANGELOG", since=mark)
-        self.assertIn("installed", text)
+        text = screen.receive("CHANGELOG", "installed", since=mark)
+        self.assertIn("installed", text, "the running release, under any unreleased entries")
         self.assertEqual(0, screen.quit())
 
 

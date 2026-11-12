@@ -12,7 +12,9 @@ from typing import Any
 import unittest
 
 import helpers  # noqa: F401 - src/ on sys.path
+from helpers import mouse
 import view as _view
+from godfather.layout import Rect
 view = _view.current()
 
 
@@ -34,13 +36,13 @@ class DetailsTests(unittest.TestCase):
         titles: list[str] = []
         for selected in range(3):
             canvas = view.Canvas(80, 12)
-            view.draw_detail(canvas, 0, 0, 12, 80, model, selected, '/project', now)
+            view.draw_detail(canvas, Rect(0, 0, 12, 80), model, selected, '/project', now)
             first = canvas.render(False).splitlines()[0]
             titles.append('LEASE DETAILS' if 'LEASE DETAILS' in first else 'REQUEST DETAILS' if 'REQUEST DETAILS' in first
                           else first)
         self.assertEqual(['LEASE DETAILS', 'REQUEST DETAILS', 'REQUEST DETAILS'], titles)
         canvas = view.Canvas(80, 12)
-        view.draw_detail(canvas, 0, 0, 12, 80, dict(model, holders=[], waiters=[]), 0, None, now)
+        view.draw_detail(canvas, Rect(0, 0, 12, 80), dict(model, holders=[], waiters=[]), 0, None, now)
         self.assertIn('REQUEST DETAILS', canvas.render(False).splitlines()[0], "nothing selected")
 
     def test_wheel_anywhere_in_details_scrolls_the_whole_document(self) -> None:
@@ -49,22 +51,22 @@ class DetailsTests(unittest.TestCase):
         def draw() -> Any:
             canvas = view.Canvas(80, 12)
             canvas.scroll = scroll
-            view.draw_detail(canvas, 0, 0, 12, 80, model, 0, '/project', now)
+            view.draw_detail(canvas, Rect(0, 0, 12, 80), model, 0, '/project', now)
             return canvas
         canvas = draw()
         self.assertIn('compiler', canvas.render(False))
         self.assertNotIn('processes', canvas.tables)
-        view.mouse_action(canvas, ('mouse', 65, 25, 3, True), scroll, 0)
+        mouse(canvas, ('mouse', 65, 25, 3, True), scroll, 0, model)
         canvas = draw()
         self.assertNotIn('compiler', canvas.render(False))
         self.assertNotIn('above', canvas.render(False), 'the scrollbar shows overflow, no row counts')
         for _ in range(20):
-            view.mouse_action(canvas, ('mouse', 65, 25, 3, True), scroll, 0)
+            mouse(canvas, ('mouse', 65, 25, 3, True), scroll, 0, model)
             canvas = draw()
         self.assertIn('worker-19', canvas.render(False))
         self.assertNotIn('more', canvas.render(False))
         self.assertIn('LEASE DETAILS', canvas.render(False).splitlines()[0])
-        view.mouse_action(canvas, ('mouse', 64, 25, 3, True), scroll, 0)
+        mouse(canvas, ('mouse', 64, 25, 3, True), scroll, 0, model)
         self.assertLess(scroll['details'], canvas.tables['details']['offset'])
 
     def test_lane_context_has_a_scrolling_ticket_link_and_no_escape_in_plain_text(self) -> None:
@@ -75,7 +77,7 @@ class DetailsTests(unittest.TestCase):
             checks=dict(status='green', current=True), review=dict(status='not started', findings=0, unresolved=0))
         model['holders'][0]['context'] = dict(lane='architecture', phase='check')
         canvas = view.Canvas(100, 80)
-        view.draw_detail(canvas, 0, 0, 80, 100, model, 0, '/project', now)
+        view.draw_detail(canvas, Rect(0, 0, 80, 100), model, 0, '/project', now)
         plain = canvas.render(False)
         self.assertNotIn('LANE', plain)
         self.assertRegex(plain, r'lane\s+architecture')
@@ -87,7 +89,7 @@ class DetailsTests(unittest.TestCase):
         canvas.scroll = {'details': 20}
         short = view.Canvas(100, 12)
         short.scroll = canvas.scroll
-        view.draw_detail(short, 0, 0, 12, 100, model, 0, '/project', now)
+        view.draw_detail(short, Rect(0, 0, 12, 100), model, 0, '/project', now)
         self.assertNotIn('https://github.com', short.render(True), 'off-screen links must not leak onto other rows')
 
     def test_context_query_uses_explicit_identity_and_caches_the_read_only_response(self) -> None:
@@ -128,7 +130,7 @@ class DetailsTests(unittest.TestCase):
         model['holders'][0]['lane'] = dict(id='compiler', worktree=folder)
         model['holders'][0]['context'] = dict(lane='compiler')
         canvas = view.Canvas(64, 80)
-        view.draw_detail(canvas, 0, 0, 80, 64, model, 0, '/project', now)
+        view.draw_detail(canvas, Rect(0, 0, 80, 64), model, 0, '/project', now)
         plain = canvas.render(False)
         self.assertLess(plain.index('worktree'), plain.index('command'))
         url = Path(folder).as_uri()
@@ -154,7 +156,7 @@ class DetailsTests(unittest.TestCase):
             ticket=dict(number='42', url='https://github.com/example/project/issues/42'),
             checks=dict(status='green', current=True), review=dict(status='not started'))
         canvas = view.Canvas(110, 80)
-        view.draw_detail(canvas, 0, 0, 80, 110, model, 0, '/project', now)
+        view.draw_detail(canvas, Rect(0, 0, 80, 110), model, 0, '/project', now)
         text = canvas.render(False)
         for label, value in [('priority', '⚡ interactive'), ('ticket', '#99'), ('phase', 'check'),
                              ('kind', 'verify'), ('revision', 'abc123'), ('run on', 'base'),

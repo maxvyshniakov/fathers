@@ -6,7 +6,8 @@
 
 tests/fixtures/scene/ is a GODFATHER_FIXTURES directory: the scene's `status --json --full` reply as the Slotfather
 adapter reads it, capabilities and a `settings --json` reply, with scene.json holding the frozen moment and the lane
-summaries the scene recorded. tests/goldens/ holds, for each screen, the plain text (`.txt`) and the exact escape
+summaries the scene recorded, and CHANGELOG.md the changelog the changelog screen shows, so a new entry in the real
+one changes no golden. tests/goldens/ holds, for each screen, the plain text (`.txt`) and the exact escape
 sequences in the owner's two themes (`.seti.ansi`, Seti dark; `.prolight.ansi`, Pro Light): the overview wide
 (156×43), at 100 and at 76 columns (one column), short (156×20), and the help, changelog and Settings overlays.
 """
@@ -76,6 +77,7 @@ def write_scene() -> None:
         "capabilities --json": {"code": 0, "json": capabilities},
         "status --json --full": {"code": 0, "json": snapshot},
         "settings --json": {"code": 0, "json": fake.settings(state)}}, indent=1) + "\n")
+    (SCENE / "CHANGELOG.md").write_text((ROOT / "CHANGELOG.md").read_text())
     (SCENE / "scene.json").write_text(json.dumps({"moment": block["updated"], "history_window": 60,
                                                   "lanes": lanes}, indent=1) + "\n")
 
@@ -103,19 +105,19 @@ def environment(theme: str | None) -> Iterator[None]:
 
 def render(name: str, theme: str | None) -> str:
     """One screen in one theme (None: plain text), as the live view would draw it at the scene's moment."""
-    from godfather import app, theme as themes, tui
+    from godfather import app, state, theme as themes, tui, version
     from godfather.adapters import slotfather as adapter
-    from godfather.views import overview
+    from godfather.views import common, machine, overlays, overview
 
     width, height, overlay = SCREENS[name]
     scene = json.loads((SCENE / "scene.json").read_text())
     with environment(theme):
         tui.set_theme(themes.from_environment())
-        overview.use_marks(False)
+        common.use_marks(False)
         screen = app.Screen()
         model, error = screen.load()
         assert model is not None and error is None, error
-        overview.dashboard_colours(model, {})
+        common.dashboard_colours(model, {})
         for item in model["holders"] + model["waiters"]:
             lane = scene["lanes"].get(json.dumps(list(item["key"])))
             if lane:
@@ -123,16 +125,19 @@ def render(name: str, theme: str | None) -> str:
         moment = adapter.parse_time(scene["moment"])
         assert moment is not None
         clock = load(ROOT / "tests" / "helpers.py", "golden_helpers").frozen(moment)
-        settings = None
+        shown: object = None
         with mock.patch.object(tui, "datetime", clock), mock.patch.object(overview, "datetime", clock), \
-                mock.patch.object(overview, "HISTORY_WINDOW", scene["history_window"]), \
-                mock.patch.object(overview, "changelog_tabs", []):
+                mock.patch.object(machine, "HISTORY_WINDOW", scene["history_window"]), \
+                mock.patch.object(overlays, "changelog_tabs", []), \
+                mock.patch.object(version, "changelog_text", (SCENE / "CHANGELOG.md").read_text):
             if overlay == "settings":
                 settings = screen.settings(1.0, "auto")
                 settings.location = lambda: "~/.local/state/slotfather"  # type: ignore[method-assign]
+                shown = state.SettingsOverlay(settings)
+            elif overlay:
+                shown = state.Changelog() if overlay == "changelog" else state.Help()
             canvas = tui.Canvas(width, height)
-            overview.dashboard_draw(canvas, model, 0, overlay if overlay == "changelog" else overlay == "help",
-                                    cwd="~/straylight", settings=settings)
+            overview.dashboard_draw(canvas, model, 0, shown, cwd="~/straylight")
             return canvas.render(theme is not None)
 
 

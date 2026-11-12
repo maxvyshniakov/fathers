@@ -4,11 +4,13 @@ from __future__ import annotations
 import datetime
 import os
 from pathlib import Path
+from typing import Any
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 import helpers  # noqa: F401 - src/ on sys.path
 import view as _view
+from helpers import drawn_state
 view = _view.current()
 
 
@@ -71,7 +73,6 @@ class HelpTests(unittest.TestCase):
 
     def test_narrow_help_wraps_and_reaches_its_end_with_interior_overflow_hints(self) -> None:
         canvas = view.Canvas(36, 14)
-        canvas.scroll = {"requests": 4, "processes": 2}
         view.draw_help(canvas)
         text = canvas.render(False)
         lines = text.splitlines()
@@ -82,8 +83,10 @@ class HelpTests(unittest.TestCase):
         self.assertNotIn("…", text, "help paragraphs wrap instead of truncating")
         for parts in view.help_lines(30):
             self.assertLessEqual(view.text_width("".join(text for text, _ in parts)), 30)
-        self.assertEqual("scroll", view.help_key(canvas, "end", canvas.scroll))
-        view.draw_help(canvas)
+        state = drawn_state(canvas, overlay=view.Help(), scroll={"requests": 4, "events": 2})
+        state, _ = view.reduce(state, view.Key("end"), 0.0)
+        canvas = view.Canvas(36, 14)
+        view.draw_help(canvas, state.overlay.scroll)
         at_end = canvas.render(False)
         info = canvas.help_view
         self.assertIn(at_end.splitlines()[info.y + 1 + info.visible][info.x + info.width - 2], "┃╻╹",
@@ -92,8 +95,7 @@ class HelpTests(unittest.TestCase):
                          "a blank padding row under them, also at the end")
         self.assertIn("Built-in.", at_end)
         self.assertIn("esc close", at_end)
-        self.assertEqual(4, canvas.scroll["requests"])
-        self.assertEqual(2, canvas.scroll["processes"])
+        self.assertEqual({"requests": 4, "events": 2}, state.scroll, "the panels under it do not scroll")
         info = canvas.help_view
         self.assertEqual(info.total - info.visible, info.offset)
         self.assertNotIn("above", at_end.splitlines()[info.y])
@@ -105,7 +107,7 @@ class HelpTests(unittest.TestCase):
         for contents in (None, model):
             with self.subTest(unavailable=contents is None):
                 canvas = view.Canvas(36, 14)
-                view.dashboard_draw(canvas, contents, help_open=True)
+                view.dashboard_draw(canvas, contents, overlay=view.Help())
                 text = canvas.render(False)
                 self.assertIn("HELP", text)
                 self.assertRegex(text, r"[┃╻╹]│", "the scrollbar shows there is more")
@@ -113,31 +115,30 @@ class HelpTests(unittest.TestCase):
 
     def test_modal_keyboard_and_wheel_do_not_change_underlying_tables_or_selection(self) -> None:
         canvas = view.Canvas(80, 20)
-        scroll = {"requests": 4, "processes": 2}
-        canvas.scroll = scroll
         canvas.tables["requests"] = dict(x=0, y=0, width=80, height=20, top=2,
-                                      visible=10, count=20, offset=4, base=0, row_items=None)
+                                         visible=10, count=20, offset=4, base=0, row_items=None)
         view.draw_help(canvas)
-        self.assertEqual("scroll", view.help_key(canvas, "down", scroll))
-        self.assertEqual(1, scroll["help"])
-        self.assertEqual("scroll", view.help_key(canvas, "page_down", scroll))
-        self.assertEqual(canvas.help_view.visible, scroll["help"])
-        self.assertEqual("scroll", view.help_key(canvas, "page_up", scroll))
-        self.assertEqual(1, scroll["help"])
-        self.assertEqual("scroll", view.help_key(canvas, "home", scroll))
-        self.assertEqual(0, scroll["help"])
-        self.assertEqual(7, view.mouse_action(canvas, ("mouse", 65, 10, 5, True), scroll, 7))
-        self.assertEqual(3, scroll["help"])
-        self.assertEqual(7, view.mouse_action(canvas, ("mouse", 0, 10, 5, True), scroll, 7))
-        self.assertEqual(7, view.mouse_action(canvas, ("mouse", 65, 0, 5, True), scroll, 7))
-        self.assertEqual(3, scroll["help"], "outside-modal input is ignored")
+        visible = canvas.help_view.visible
+        model = {"holders": [dict(key=(n, None), kind="held") for n in range(10)], "waiters": []}
+        state = drawn_state(canvas, model, 7, overlay=view.Help(), scroll={"requests": 4, "events": 2})
+
+        def send(event: Any) -> tuple[Any, list[Any]]:
+            return view.reduce(state, event, 0.0)
+
+        for key, offset in (("down", 1), ("page_down", visible), ("page_up", 1), ("home", 0)):
+            state, _ = send(view.Key(key))
+            self.assertEqual(offset, state.overlay.scroll, key)
+        state, _ = send(view.Mouse(65, 10, 5, True))
+        self.assertEqual(3, state.overlay.scroll, "the wheel inside scrolls it")
+        state, _ = send(view.Mouse(0, 10, 5, True))
+        state, _ = send(view.Mouse(65, 0, 5, True))
+        self.assertEqual(3, state.overlay.scroll, "outside-modal input is ignored")
         for key in ("p", "m", "r", "unrecognized"):
-            self.assertEqual("ignored", view.help_key(canvas, key, scroll))
+            self.assertIs(state, send(view.Key(key))[0], f"{key} does nothing")
         for key in ("?", "esc"):
-            self.assertEqual("close", view.help_key(canvas, key, scroll))
-        self.assertEqual("quit", view.help_key(canvas, "q", scroll))
-        self.assertEqual(4, scroll["requests"])
-        self.assertEqual(2, scroll["processes"])
+            self.assertIsNone(send(view.Key(key))[0].overlay, f"{key} closes")
+        self.assertIn(view.QUIT, send(view.Key("q"))[1])
+        self.assertEqual((7, {"requests": 4, "events": 2}), (state.selection.index, state.scroll))
 
     def test_page_keys_are_distinct_from_home_and_end(self) -> None:
         read, write = os.pipe()

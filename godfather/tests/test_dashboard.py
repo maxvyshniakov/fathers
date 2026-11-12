@@ -3,6 +3,7 @@
 read its text. Log history is checked on slotfather-dashboard itself."""
 from __future__ import annotations
 import helpers  # noqa: F401 - src/ on sys.path
+from helpers import mouse
 import view as _view
 
 def judged(memory: dict[str, Any]) -> dict[str, Any]:
@@ -25,6 +26,7 @@ import re
 import unittest
 from unittest import mock
 from typing import Any, cast
+from godfather.layout import Rect
 
 
 
@@ -49,11 +51,12 @@ class UnifiedLaneTests(unittest.TestCase):
     def test_running_and_waiting_share_a_viewport_with_an_unselectable_gap(self):
         tool=load_dashboard()
         now=datetime.datetime.now(datetime.timezone.utc)
-        holder=dict(label="active",kind="held",count=1,pid=10,style="h0",cpu=150,since=now,granted=now)
-        waiter=dict(label="pending",kind="waiting",count=2,pid=11,style="warn",cpu=0,since=now,granted=None)
+        holder=dict(label="active",kind="held",count=1,pid=10,style="h0",cpu=150,since=now,granted=now,key=(10,None))
+        waiter=dict(label="pending",kind="waiting",count=2,pid=11,style="warn",cpu=0,since=now,granted=None,
+                    key=(11,None))
         model=dict(holders=[holder],waiters=[waiter],slots=6,cores=12)
         canvas=tool.Canvas(130,8)
-        tool.draw_requests(canvas,0,0,8,130,model,1,now)
+        tool.draw_requests(canvas, Rect(0, 0, 8, 130),model,1,now)
         lines=canvas.render(False).splitlines()
         self.assertIn("QUEUE",lines[0])
         self.assertFalse(lines[1][1:-1].strip(),"a blank padding row")
@@ -62,10 +65,10 @@ class UnifiedLaneTests(unittest.TestCase):
         self.assertIn("┃  ⏸️    pending",lines[4])
         column=lines[0].index("cpu use/share")+len("cpu use/share")
         self.assertTrue(lines[4][:column].rstrip().endswith("waiting #1"),lines[4])
-        self.assertEqual(1,tool.mouse_action(canvas,("mouse",0,20,4,True),{},0))
-        self.assertEqual(0,tool.mouse_action(canvas,("mouse",0,20,3,True),{},0))
+        self.assertEqual(1,mouse(canvas,("mouse",0,20,4,True),{},0,model))
+        self.assertEqual(0,mouse(canvas,("mouse",0,20,3,True),{},0,model))
         canvas=tool.Canvas(130,6)
-        tool.draw_requests(canvas,0,0,6,130,model,1,now)
+        tool.draw_requests(canvas, Rect(0, 0, 6, 130),model,1,now)
         lines=canvas.render(False).splitlines()
         self.assertIn("pending",lines[3],"selection must remain visible beyond the gap")
         self.assertNotIn("above",canvas.render(False),"the scrollbar shows overflow, no row counts")
@@ -91,7 +94,7 @@ class QueueTableTests(unittest.TestCase):
 
     def draw(self, model: dict[str, Any], width: int = 120, height: int = 10) -> Any:
         canvas = self.tool.Canvas(width, height)
-        self.tool.draw_requests(canvas, 0, 0, height, width, model, 0, self.now)
+        self.tool.draw_requests(canvas, Rect(0, 0, height, width), model, 0, self.now)
         return canvas
 
     def row(self, canvas: Any, label: str) -> int:
@@ -167,7 +170,7 @@ class QueueTableTests(unittest.TestCase):
             dict(label="hog", kind="held", count=1, pid=11, style="h1", cpu=900, since=now, granted=now),
             dict(label="idle", kind="held", count=1, pid=12, style="h2", cpu=5, since=old, granted=old,
                  idle_since=old)]  # #12: idle is the holder's record (idle.idle_since()), not a guess from one sample
-        styles = [self.tool.queue_bar_style(item, model, now) for item in model["holders"]]
+        styles = [self.tool.queue_bar_style(item, model) for item in model["holders"]]
         self.assertEqual(["f0", "bad", "warn"], styles, "over its share stays red, an idle lease stays yellow")
         canvas = self.draw(model)
         cpu = canvas.render(False).splitlines()[0].index("cpu use/share")
@@ -224,7 +227,7 @@ class QueueTableTests(unittest.TestCase):
         for width in (120, 160, 220):
             with self.subTest(width=width):
                 layout = self.tool.queue_layout(width - 6, model)
-                sizes = {key: size for key, _, _, size, _ in layout.placed}
+                sizes = {key: size for key, _, _, size, _ in layout.table.placed}
                 self.assertEqual(width - 6, sum(sizes.values()) + 2 * (len(sizes) - 1), "the table fills the panel")
                 ratios = [sizes[key] / layout.natural[key] for key in sizes]
                 self.assertLess(max(ratios) - min(ratios), 0.25, f"in proportion: {sizes} of {layout.natural}")
@@ -289,7 +292,7 @@ class EventDetailTests(unittest.TestCase):
         patched.start()
         self.addCleanup(patched.stop)
         canvas = tool.Canvas(width, 12)
-        tool.draw_events(canvas, 0, 0, 12, width, {"events": found})
+        tool.draw_events(canvas, Rect(0, 0, 12, width), {"events": found})
         return canvas, canvas.render(False).splitlines()
 
     def test_the_columns_are_time_slots_label_result(self) -> None:
@@ -371,17 +374,17 @@ class MouseInputTests(unittest.TestCase):
         tool = load_dashboard()
         now = datetime.datetime.now(datetime.timezone.utc)
         holders = [dict(label=f"job-{i}", kind="held", count=1, pid=100+i, style="h0",
-                        cpu=0, since=now, granted=now) for i in range(8)]
+                        cpu=0, since=now, granted=now, key=(100+i, None)) for i in range(8)]
         model = dict(holders=holders, waiters=[], slots=8, cores=8)
-        scroll = {}
+        scroll: dict[str, int] = {}
         def render():
             canvas = tool.Canvas(100, 7)
             canvas.scroll = scroll
-            tool.draw_requests(canvas, 0, 0, 7, 100, model, 0, now)
+            tool.draw_requests(canvas, Rect(0, 0, 7, 100), model, 0, now)
             return canvas
         canvas = render()
-        self.assertEqual(1, tool.mouse_action(canvas, ("mouse", 0, 20, 3, True), scroll, 0))
-        self.assertEqual(0, tool.mouse_action(canvas, ("mouse", 65, 20, 3, True), scroll, 0),
+        self.assertEqual(1, mouse(canvas, ("mouse", 0, 20, 3, True), scroll, 0, model))
+        self.assertEqual(0, mouse(canvas, ("mouse", 65, 20, 3, True), scroll, 0, model),
                          "wheel scrolls the viewport without changing selection")
         canvas = render()
         lines = canvas.render(False).splitlines()
@@ -391,13 +394,13 @@ class MouseInputTests(unittest.TestCase):
         self.assertFalse(lines[5][1:-2].strip(), "and the bottom one")
         self.assertNotIn("above", canvas.render(False))
         self.assertNotIn("more", canvas.render(False))
-        self.assertEqual(3, tool.mouse_action(canvas, ("mouse", 0, 20, 2, True), scroll, 0))
+        self.assertEqual(3, mouse(canvas, ("mouse", 0, 20, 2, True), scroll, 0, model))
         for padding in (1, 5):
-            self.assertEqual(0, tool.mouse_action(canvas, ("mouse", 0, 20, padding, True), scroll, 0),
+            self.assertEqual(0, mouse(canvas, ("mouse", 0, 20, padding, True), scroll, 0, model),
                              "clicking a padding row selects nothing")
-        self.assertEqual(0, tool.mouse_action(canvas, ("mouse", 0, 20, 0, True), scroll, 0),
+        self.assertEqual(0, mouse(canvas, ("mouse", 0, 20, 0, True), scroll, 0, model),
                          "clicking the border must not select a hidden row")
-        self.assertEqual(0, tool.mouse_action(canvas, ("mouse", 0, 20, 1, False), scroll, 0))
+        self.assertEqual(0, mouse(canvas, ("mouse", 0, 20, 1, False), scroll, 0, model))
 
     def test_a_delayed_mouse_release_cannot_become_the_copy_shortcut(self):
         tool = load_dashboard()
@@ -437,7 +440,7 @@ class DetailLayoutTests(unittest.TestCase):
                                     memory_block=None, order="window", start=None, limit=0, overtake_window=600)
         canvas = tool.Canvas(90, 24)
         with mock.patch.object(tool, "today", return_value=moment.date()):
-            tool.draw_detail(canvas, 0, 0, 24, 90, model, 0, None, moment)
+            tool.draw_detail(canvas, Rect(0, 0, 24, 90), model, 0, None, moment)
         lines = canvas.render(False).splitlines()
         for label, value in (("label", "first"), ("status", "waiting"), ("queued", "10:00:00"),
                              ("free", "4 of 6 slots"), ("pass until", "10:10:00"),
@@ -455,7 +458,7 @@ class DetailLayoutTests(unittest.TestCase):
                     meta="lane=build,ticket=42,phase=check," * 12,
                     tree=[(12345, 150, 102400, "worker")])
         canvas = tool.Canvas(70, 20)
-        tool.draw_detail(canvas, 0, 0, 20, 70, {"holders": [item], "waiters": [], "cores": 12, "slots": 6},
+        tool.draw_detail(canvas, Rect(0, 0, 20, 70), {"holders": [item], "waiters": [], "cores": 12, "slots": 6},
                          0, "/project", now)
         lines = canvas.render(False).splitlines()
         self.assertIn("LEASE DETAILS", lines[0], "a running request's lease holds slots")
@@ -470,7 +473,7 @@ class DetailLayoutTests(unittest.TestCase):
         self.assertNotIn("processes", canvas.tables)
         canvas = tool.Canvas(70, 20)
         canvas.scroll = {"details": 1000}
-        tool.draw_detail(canvas, 0, 0, 20, 70, {"holders": [item], "waiters": [], "cores": 12, "slots": 6},
+        tool.draw_detail(canvas, Rect(0, 0, 20, 70), {"holders": [item], "waiters": [], "cores": 12, "slots": 6},
                          0, "/project", now)
         lines = canvas.render(False).splitlines()
         header = next(line for line in lines if "process" in line and "cpu" in line)
@@ -484,7 +487,7 @@ class DetailLayoutTests(unittest.TestCase):
         item["tree"] = [(1000+i, 0, 1024, f"worker{i}") for i in range(10)]
         canvas = tool.Canvas(70, 20)
         canvas.scroll = {"details": 1000}
-        tool.draw_detail(canvas, 0, 0, 20, 70, {"holders": [item], "waiters": [], "cores": 12, "slots": 6},
+        tool.draw_detail(canvas, Rect(0, 0, 20, 70), {"holders": [item], "waiters": [], "cores": 12, "slots": 6},
                          0, "/project", now)
         text = canvas.render(False)
         self.assertIn("worker9", text)
@@ -504,7 +507,7 @@ class QueuePolicyTests(unittest.TestCase):
         self.assertEqual({"start est": "10:30:00", "pass until": "10:20:00"},
                          tool.queue_policy(model))
         canvas = tool.Canvas(100,24)
-        tool.draw_detail(canvas,0,0,24,100,model,0,None,since)
+        tool.draw_detail(canvas, Rect(0, 0, 24, 100),model,0,None,since)
         lines = canvas.render(False).splitlines()
         for title, value in (("start est", "10:30:00"), ("pass until", "10:20:00")):
             line=next(line for line in lines if title in line)
@@ -517,7 +520,7 @@ class SlotBarTests(unittest.TestCase):
     def test_free_label_is_right_aligned_and_leaves_room_for_the_last_owner(self):
         tool = surfaces(load_dashboard())
         canvas = tool.Canvas(120, 3)
-        tool.draw_slots(canvas, 0, 2, 116, dict(slots=6, used=1, waiters=[],
+        tool.draw_slots(canvas, Rect(0, 2, 2, 116), dict(slots=6, used=1, waiters=[],
                         holders=[dict(count=1, kind="held", style="h0", label="lane-624-flows-are-graphs")]))
         lines = canvas.render(False).splitlines()
         self.assertIn("lane-624-flows-are-graphs", lines[1])
@@ -526,7 +529,7 @@ class SlotBarTests(unittest.TestCase):
     def test_each_slot_is_solid_with_only_a_gap_between_slots(self):
         tool = surfaces(load_dashboard())
         canvas = tool.Canvas(120, 3)
-        tool.draw_slots(canvas, 0, 2, 116, dict(slots=3, used=2, waiters=[dict(count=3)],
+        tool.draw_slots(canvas, Rect(0, 2, 2, 116), dict(slots=3, used=2, waiters=[dict(count=3)],
                         holders=[dict(count=2, kind="held", style="h0", label="build")]))
         line = canvas.render(False).splitlines()[0]
         self.assertEqual("🮅" * 38 + "  " + "🮅" * 37 + "  " + "🮅" * 37, line[2:118])
@@ -535,7 +538,7 @@ class SlotBarTests(unittest.TestCase):
     def test_blocks_are_in_the_holders_fill_and_its_label_in_its_ink(self):
         tool = surfaces(load_dashboard())
         canvas = tool.Canvas(120, 3)
-        tool.draw_slots(canvas, 0, 2, 116, dict(slots=3, used=2, waiters=[],
+        tool.draw_slots(canvas, Rect(0, 2, 2, 116), dict(slots=3, used=2, waiters=[],
                         holders=[dict(count=2, kind="held", style="h3", label="build")]))
         self.assertEqual({"f3"}, {cell[1] for cell in canvas.cells[0] if cell[0] == "🮅"} - {"free"})
         self.assertEqual({"h3"}, {cell[1] for cell in canvas.cells[1][2:7]})
@@ -557,7 +560,7 @@ class MachineStatusTests(unittest.TestCase):
                            advice=dict(unleased_load=4.5,jobs=1),memory_block=None,
                            memory=judged(dict(level=level,used=768,total=1024,swap_total=1024,swap_free=free)),
                            history=[(now-datetime.timedelta(hours=1),now,1)])
-                tool.draw_machine(canvas,0,0,24,110,model)
+                tool.draw_machine(canvas, Rect(0, 0, 24, 110),model)
                 lines=canvas.lines(False)
                 permit=f"admission: {admission} slots" if admission else "no admission"
                 self.assertTrue(lines[0].rstrip().endswith(f" unleased 4.5 · {permit} ─╮"),lines[0])
@@ -572,7 +575,7 @@ class MachineStatusTests(unittest.TestCase):
                               "red when it blocks")
                 tool.use_marks(True)
                 ascii_canvas=tool.Canvas(110,24)
-                tool.draw_machine(ascii_canvas,0,0,24,110,model)
+                tool.draw_machine(ascii_canvas, Rect(0, 0, 24, 110),model)
                 plain=ascii_canvas.lines(False,ascii_only=True)
                 self.assertEqual("".join("!" if mark=="🔥" else "+" for mark in marks),
                                  "".join(plain[row][3] for row in (2,3,4)),"ASCII: + and !")
@@ -585,7 +588,7 @@ class MachineStatusTests(unittest.TestCase):
         for width,shown in ((60,"unleased 4.5 · no admission"),(34,"no admission"),(24,None)):
             with self.subTest(width=width):
                 canvas=tool.Canvas(width,13)
-                tool.draw_machine(canvas,0,0,13,width,model)
+                tool.draw_machine(canvas, Rect(0, 0, 13, width),model)
                 top=canvas.lines(False)[0]
                 self.assertTrue(top.startswith("╭─ MACHINE "))
                 if shown:
@@ -602,7 +605,7 @@ class MemoryBarTests(unittest.TestCase):
         now = datetime.datetime(2026, 1, 1, 12, tzinfo=datetime.timezone.utc)
         self.assertFalse(tool.machine_side_by_side(60), "60 columns: the chart under the rows")
         canvas = tool.Canvas(60, tool.MACHINE_HEIGHT)
-        tool.draw_machine(canvas, 0, 0, tool.MACHINE_HEIGHT, 60, dict(slots=4, cores=12, averages=(1,2,3),
+        tool.draw_machine(canvas, Rect(0, 0, tool.MACHINE_HEIGHT, 60), dict(slots=4, cores=12, averages=(1,2,3),
                           advice=dict(unleased_load=0, jobs=2), memory_block=None,
                           memory=judged(dict(level=1, used=768, total=1024, swap_total=512, swap_free=128)),
                           history=[(now-datetime.timedelta(hours=1), now, 4)]))
@@ -661,7 +664,7 @@ class MemoryBarTests(unittest.TestCase):
             # the ramp's blue at the bar's start; under pressure (memory low) the theme's red, the whole bar
             with self.subTest(level=level):
                 canvas = tool.Canvas(90,24)
-                tool.draw_machine(canvas,0,0,24,90,dict(slots=4,cores=12,averages=(1,2,3),
+                tool.draw_machine(canvas, Rect(0, 0, 24, 90),dict(slots=4,cores=12,averages=(1,2,3),
                                   advice=dict(unleased_load=0,jobs=2),memory_block=None,
                                   memory=judged(dict(level=level,used=768,total=1024,swap_total=512,swap_free=128)),
                                   history=[(now-datetime.timedelta(hours=1),now,4)]))
@@ -673,7 +676,7 @@ class MemoryBarTests(unittest.TestCase):
         tool=load_dashboard()
         now=datetime.datetime.now(datetime.timezone.utc)
         canvas=tool.Canvas(60,9)
-        tool.draw_machine(canvas,0,0,9,60,dict(slots=4,cores=12,averages=(1,2,3),
+        tool.draw_machine(canvas, Rect(0, 0, 9, 60),dict(slots=4,cores=12,averages=(1,2,3),
                           advice=dict(unleased_load=0,jobs=2),memory_block=None,
                           memory=judged(dict(level=1,used=768,total=1024,swap_total=512,swap_free=128)),
                           history=[(now-datetime.timedelta(hours=1),now,4)]))
@@ -686,7 +689,7 @@ class MemoryBarTests(unittest.TestCase):
                 load: float = 3) -> list[str]:
         now=datetime.datetime.now(datetime.timezone.utc)
         canvas=tool.Canvas(width,height)
-        tool.draw_machine(canvas,0,0,height,width,dict(slots=4,cores=12,averages=(load,2,3),
+        tool.draw_machine(canvas, Rect(0, 0, height, width),dict(slots=4,cores=12,averages=(load,2,3),
                           advice=dict(unleased_load=0,jobs=2),memory_block=None,admission=1,
                           memory=judged(memory or dict(level=1,used=24678,total=32768,swap_total=9216,swap_free=1434)),
                           history=[(now-datetime.timedelta(hours=1),now,4)]))
@@ -729,7 +732,7 @@ class MemoryBarTests(unittest.TestCase):
                 self.assertNotIn("cores","\n".join(lines))
         resources=tool.machine_resources(dict(cores=12,slots=4,averages=(10.1,1,1),memory=judged(memory)))
         tight=tool.Canvas(19,3)
-        tool.draw_resource_rows(tight,0,0,19,resources)
+        tool.draw_resource_rows(tight, Rect(0, 0, 3, 19),resources)
         self.assertEqual(["10.1/12","23/32G","10/11G"],[line.split()[-1] for line in tight.render(False).splitlines()],
                          "tight: memory and swap without decimals")
 
@@ -806,7 +809,8 @@ class MemoryBarTests(unittest.TestCase):
                     self.assertLess(queue["visible"],queue["count"])
                 else:  # wide: the details have their own column, the whole right side above MACHINE
                     self.assertGreater(details["height"],20)
-        self.assertEqual(dict(requests=13,detail=5,bottom=6),tool.narrow_heights(24,21,11),
+        self.assertEqual(dict(requests=13,details=5,machine=6),{name:rect.height for name,rect in
+                         tool.overview(100,30,17,tool.machine_height).panels.items() if name!="slots" and name!="events"},
                          "too short for the floors: the earlier order")
 
     def layout_model(self) -> dict[str, Any]:
@@ -894,7 +898,7 @@ class MemoryBarTests(unittest.TestCase):
                                 (now-datetime.timedelta(minutes=10),now,4)])
             model.update(extra)
             canvas=tool.Canvas(90,24)
-            tool.draw_machine(canvas,0,0,24,90,model)
+            tool.draw_machine(canvas, Rect(0, 0, 24, 90),model)
             return canvas
         canvas=machine()
         def bar_styles(name: str) -> set[str]:
@@ -922,7 +926,7 @@ class MemoryBarTests(unittest.TestCase):
         for load,critical in ((0.5,False),(6.5,False),(7.5,True),(20.3,True)):
             with self.subTest(load=load):
                 canvas=tool.Canvas(90,24)  # every slot held: the advice has no capacity, whatever the load
-                tool.draw_machine(canvas,0,0,24,90,dict(slots=8,cores=8,averages=(load,0.1,0.1),admission=0,
+                tool.draw_machine(canvas, Rect(0, 0, 24, 90),dict(slots=8,cores=8,averages=(load,0.1,0.1),admission=0,
                                   advice=dict(unleased_load=0,jobs=1,capacity=0),memory_block=None,
                                   memory=judged(dict(level=1,used=512,total=1024,swap_total=0,swap_free=None)),
                                   history=[(now-datetime.timedelta(hours=1),now,8)]))

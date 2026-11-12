@@ -172,7 +172,12 @@ full pages one key away.
 
 Godfather is one Python package, standard library only, Python 3.9+, installed by its own `install.py`. Its modules:
 
-- **tui**: the framework moved from Slotfather's dashboard: canvas, frames and titles set into borders, tables and
+- **tui**, **widgets**, **layout**, **state**, **modes** (fathers#90): the framework moved from Slotfather's
+  dashboard. tui is the canvas, text measure, key and mouse reading, full-screen setup and the background loader;
+  widgets the shared `Panel` (frame, labels in the border, padding, focus, selected-row markers, viewport, the
+  scrollbar and its flash), `Table` (column sharing and dropping) and `Footer`; layout the one function that
+  places every panel from their declared sizes; state the one app state and its reducer; modes the key and mouse
+  dispatch as a mode table. Moved from Slotfather: canvas, frames and titles set into borders, tables and
   column sharing, scrollbars, overlays (help, changelog, Settings, confirmation, action menu, text field), the footer
   and hint dropping, key reading with the kitty keyboard protocol and layout table, mouse (SGR 1000/1006), full-screen
   setup and restore, the background loader. It knows nothing about any tool.
@@ -186,7 +191,8 @@ Godfather is one Python package, standard library only, Python 3.9+, installed b
 - **eventcheck**: the validator, one file with no imports outside the standard library, meant to be vendored.
 - **adapters**: one per tool; each checks the snapshot versions it supports, turns a snapshot into the render model
   and computes its border summary and its side of the joins.
-- **views**: overview (SLOTS, QUEUE, DETAILS, EVENTS, MACHINE renderers, moved), lanes, processes.
+- **views**: overview, which composes the moved renderers (queue: SLOTS and QUEUE; details, events, machine),
+  the overlays (help, changelog) and Settings; lanes and processes next.
 - **fixtures**: `GODFATHER_FIXTURES=DIR` replaces discovery and every tool call with recorded capabilities,
   snapshots, event logs and settings replies, and records the argv of actions instead of running them. Tests,
   `--once` goldens and the README media use it.

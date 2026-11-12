@@ -226,9 +226,9 @@ class MutedTests(unittest.TestCase):
             fg, bg, _ = MUTED_THEMES["Seti"]
             tool.set_theme(theme.resolve("auto", answered(fg=fg, bg=bg), {}))
             canvas = tool.Canvas(40, 6)
-            canvas.box(0, 0, 6, 40, "QUEUE", name="requests")  # unfocused: QUEUE is not the canvas's focus
+            tool.Panel(canvas, tool.Rect(0, 0, 6, 40), "requests").frame("QUEUE")  # unfocused: QUEUE is not the focus
             canvas.focus = "details"
-            canvas.box(0, 0, 6, 40, "QUEUE", name="requests")
+            tool.Panel(canvas, tool.Rect(0, 0, 6, 40), "requests").frame("QUEUE")
             canvas.put(2, 3, "label", "dim")
             self.assertEqual("frame", canvas.cells[3][0][1], "the frame's own token")
             line = canvas.lines(True)[2]
@@ -495,7 +495,7 @@ class DrawingTests(unittest.TestCase):
             with self.subTest(name):
                 self.tool.set_theme(theme_now)
                 canvas = self.tool.Canvas(40, 4)
-                canvas.box(0, 0, 4, 40, "TITLE")
+                self.tool.Panel(canvas, self.tool.Rect(0, 0, 4, 40)).frame("TITLE")
                 canvas.put(1, 2, "muted words", "dim")
                 frame = self.sgr_of(canvas, 0, "╭")
                 self.assertEqual(frame, self.sgr_of(canvas, 1, "│"))

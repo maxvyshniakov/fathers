@@ -9,6 +9,7 @@ import unittest
 from typing import Any
 
 from godfather import theme
+from godfather.layout import Rect
 
 DARK = {"SLOTFATHER_TERMINAL_BG": "#282c34", "SLOTFATHER_TERMINAL_FG": "#ffffff"}
 LIGHT = {"SLOTFATHER_TERMINAL_BG": "#fdfcfa", "SLOTFATHER_TERMINAL_FG": "#2a2a2a"}
@@ -65,7 +66,7 @@ class MarkTests(unittest.TestCase):
         for width in (120, 60, 40):
             with self.subTest(width=width):
                 canvas = self.tool.Canvas(width, 14)
-                self.tool.draw_requests(canvas, 0, 0, 14, width, self.model(), 0, self.now)
+                self.tool.draw_requests(canvas, Rect(0, 0, 14, width), self.model(), 0, self.now)
                 rows = [y for y in range(1, 13) if canvas.cells[y][3][0] not in (" ", "")]
                 self.assertEqual(8, len(rows), "every row has a state")
                 for y in rows:
@@ -88,7 +89,7 @@ class MarkTests(unittest.TestCase):
     def test_the_priority_column_marks_interactive_and_batch_and_leaves_normal_blank(self) -> None:
         model = self.model()
         canvas = self.tool.Canvas(120, 14)
-        self.tool.draw_requests(canvas, 0, 0, 14, 120, model, 0, self.now)
+        self.tool.draw_requests(canvas, Rect(0, 0, 14, 120), model, 0, self.now)
         found = {}
         for y in range(1, 13):
             text = "".join(cell[0] for cell in canvas.cells[y][9:30])
@@ -102,7 +103,7 @@ class MarkTests(unittest.TestCase):
         self.assertEqual(2, self.tool.text_width("🐢"))
         self.tool.use_marks(True)
         ascii_lines = self.tool.Canvas(120, 14)
-        self.tool.draw_requests(ascii_lines, 0, 0, 14, 120, model, 0, self.now)
+        self.tool.draw_requests(ascii_lines, Rect(0, 0, 14, 120), model, 0, self.now)
         plain = ascii_lines.lines(False, ascii_only=True)
         tags = {label: line[6] for line in plain for label in ("plain", "everything", "sleepy") if f" {label} " in line}
         self.assertEqual({"plain": " ", "everything": "!", "sleepy": "~"}, tags)
@@ -120,7 +121,7 @@ class MarkTests(unittest.TestCase):
                                 granted=now, rss=1024, procs=1, queue="", cmd="work", tree=[], priority=priority)
                     model = {"holders": [item], "waiters": [], "slots": 4, "cores": 12}
                     canvas = self.tool.Canvas(80, 20)
-                    self.tool.draw_detail(canvas, 0, 0, 20, 80, model, 0, None, now)
+                    self.tool.draw_detail(canvas, Rect(0, 0, 20, 80), model, 0, None, now)
                     line = next(line for line in canvas.render(False).splitlines() if "priority" in line)
                     self.assertRegex(line, r"priority\s+" + (ascii_shown if ascii_only else shown) + r"\s")
                     self.assertNotRegex(line, r"priority\s+\S+\s+normal", "normal has no mark")
@@ -130,13 +131,13 @@ class MarkTests(unittest.TestCase):
         model = self.model()
         model["holders"][0]["label"] = "lane-pin-ui-libs-0_42_2-0_3-and-a-good-deal-more-than-fits-here"
         canvas = self.tool.Canvas(60, 14)
-        self.tool.draw_requests(canvas, 0, 0, 14, 60, model, 0, self.now)
+        self.tool.draw_requests(canvas, Rect(0, 0, 14, 60), model, 0, self.now)
         row = next(line for line in canvas.render(False).splitlines() if "lane-pin" in line)
         self.assertRegex(row, r"^┃  ▶️    lane-pin-u\S*… ", "the state, a blank priority, the name cut with an ellipsis")
 
     def test_the_selected_row_has_its_background_and_no_cursor(self) -> None:
         canvas = self.tool.Canvas(120, 14)
-        self.tool.draw_requests(canvas, 0, 0, 14, 120, self.model(), 1, self.now)
+        self.tool.draw_requests(canvas, Rect(0, 0, 14, 120), self.model(), 1, self.now)
         selected = [y for y in range(14) if any(cell[2] for cell in canvas.cells[y])]
         self.assertEqual(1, len(selected))
         self.assertTrue(all(cell[2] for cell in canvas.cells[selected[0]][1:119]), "the whole row, state included")
@@ -148,7 +149,7 @@ class MarkTests(unittest.TestCase):
                                   (6, "text", "\x1b[0m")):  # a running lease: its colour; a waiter: the text colour
             with self.subTest(index=index):
                 canvas = self.tool.Canvas(120, 14)
-                self.tool.draw_requests(canvas, 0, 0, 14, 120, model, index, self.now)
+                self.tool.draw_requests(canvas, Rect(0, 0, 14, 120), model, index, self.now)
                 [y] = [y for y in range(14) if any(cell[2] for cell in canvas.cells[y])]
                 self.assertEqual(["┃", style], canvas.cells[y][0][:2])
                 self.assertTrue(canvas.lines(True)[y].startswith(sgr + "┃"), canvas.lines(True)[y][:40])
@@ -165,7 +166,7 @@ class MarkTests(unittest.TestCase):
             for height in (14, 6):  # everything fits; it overflows, with a thumb
                 with self.subTest(index=index, height=height):
                     canvas = self.tool.Canvas(120, height)
-                    self.tool.draw_requests(canvas, 0, 0, height, 120, model, index, self.now)
+                    self.tool.draw_requests(canvas, Rect(0, 0, height, 120), model, index, self.now)
                     [y] = [y for y in range(height) if any(cell[2] for cell in canvas.cells[y])]
                     self.assertEqual([["┃", fill], ["┃", fill]], [canvas.cells[y][0][:2], canvas.cells[y][119][:2]])
                     thumbs = {(row, column) for row in range(height) for column in range(120)
@@ -180,7 +181,7 @@ class MarkTests(unittest.TestCase):
         self.tool.use_marks(True)
         model = self.model()
         canvas = self.tool.Canvas(120, 14)
-        self.tool.draw_requests(canvas, 0, 0, 14, 120, model, 0, self.now)
+        self.tool.draw_requests(canvas, Rect(0, 0, 14, 120), model, 0, self.now)
         lines = canvas.lines(False, ascii_only=True)
         self.assertTrue(all(line.isascii() for line in lines))
         found = {label: line[3] for line in lines for label in ("plain", "everything", "sleepy", "hog", "veteran",
@@ -261,7 +262,7 @@ class TintTests(unittest.TestCase):
 
     def selected_sgr(self, index: int) -> tuple[str, Any]:
         canvas = self.tool.Canvas(120, 14)
-        self.tool.draw_requests(canvas, 0, 0, 14, 120, sample(self.now), index, self.now)
+        self.tool.draw_requests(canvas, Rect(0, 0, 14, 120), sample(self.now), index, self.now)
         [y] = [y for y in range(14) if any(cell[2] for cell in canvas.cells[y])]
         label = next(x for x in range(6, 60) if canvas.cells[y][x][0] not in (" ", ""))
         return self.tool.sgr(canvas.cells[y][label][1], canvas.cells[y][label][2]), canvas.cells[y]
@@ -310,7 +311,7 @@ class TintTests(unittest.TestCase):
             holder = dict(label=f"h{n}", kind="held", count=1, pid=10, style=f"h{n}", cpu=50, since=now, granted=now)
             model = {"holders": [holder], "waiters": [], "slots": 4, "cores": 12}
             canvas = self.tool.Canvas(80, 5)
-            self.tool.draw_requests(canvas, 0, 0, 5, 80, model, 0, now)
+            self.tool.draw_requests(canvas, Rect(0, 0, 5, 80), model, 0, now)
             cell = next(cell for cell in canvas.cells[2] if cell[0] == "h")
             self.assertEqual(f"h{n}", cell[1])
             self.assertEqual(self.tool.sgr(cell[1], False)[:-1], self.tool.sgr(cell[1], cell[2]).split(";48;2")[0])
@@ -341,29 +342,29 @@ class FrameTests(unittest.TestCase):
         for offset, drawn in ((0, "┃┃┃       "), (15, " ╻┃┃╹     "), (35, "   ╻┃┃╹   "), (50, "     ┃┃┃  "),
                               (70, "       ┃┃┃"), (99, "       ┃┃┃")):
             with self.subTest(offset=offset):
-                canvas = self.tool.Canvas(20, 12)
-                canvas.box(0, 0, 12, 20)
-                canvas.scrollbar(1, 18, 10, offset, 30, 100)
-                self.assertEqual(drawn, self.column(canvas, 18, 1, 10))
-                self.assertEqual({"dim"}, {canvas.cells[row][18][1] for row in range(1, 11)
+                canvas = self.tool.Canvas(20, 13)
+                panel = self.tool.Panel(canvas, Rect(0, 0, 13, 20)).frame()
+                panel.scrollbar(offset, 30, 100, height=10)
+                self.assertEqual(drawn, self.column(canvas, 18, 2, 10))
+                self.assertEqual({"dim"}, {canvas.cells[row][18][1] for row in range(2, 12)
                                            if canvas.cells[row][18][0] != " "}, "at rest: muted")
-                self.assertEqual({"│"}, {canvas.cells[row][19][0] for row in range(1, 11)}, "the frame is unbroken")
-        canvas = self.tool.Canvas(20, 12)
+                self.assertEqual({"│"}, {canvas.cells[row][19][0] for row in range(2, 12)}, "the frame is unbroken")
+        canvas = self.tool.Canvas(20, 13)
         canvas.glow = {"events"}
-        canvas.scrollbar(1, 18, 10, 15, 30, 100, "events")
-        self.assertEqual({"text"}, {canvas.cells[row][18][1] for row in (2, 3, 4, 5)}, "while scrolling: the foreground")
-        self.assertEqual(" #### ", "".join(canvas.lines(False, ascii_only=True)[row][18] for row in range(1, 7)),
+        self.tool.Panel(canvas, Rect(0, 0, 13, 20), "events").scrollbar(15, 30, 100, height=10)
+        self.assertEqual({"text"}, {canvas.cells[row][18][1] for row in (3, 4, 5, 6)}, "while scrolling: the foreground")
+        self.assertEqual(" #### ", "".join(canvas.lines(False, ascii_only=True)[row][18] for row in range(2, 8)),
                          "ASCII: whole cells")
         for offset, drawn in ((0, "╹         "), (2970, "         ╻")):  # the shortest thumb: half a cell
-            canvas = self.tool.Canvas(20, 12)
-            canvas.scrollbar(1, 18, 10, offset, 1, 3000)
-            self.assertEqual(drawn, self.column(canvas, 18, 1, 10), offset)
+            canvas = self.tool.Canvas(20, 13)
+            self.tool.Panel(canvas, Rect(0, 0, 13, 20)).scrollbar(offset, 1, 3000, height=10)
+            self.assertEqual(drawn, self.column(canvas, 18, 2, 10), offset)
 
     def test_tables_put_it_in_the_outer_padding_cell_and_nothing_moves(self) -> None:
         model = sample(self.now)
         fits, overflows = self.tool.Canvas(120, 14), self.tool.Canvas(120, 7)
-        self.tool.draw_requests(fits, 0, 0, 14, 120, model, 0, self.now)
-        self.tool.draw_requests(overflows, 0, 0, 7, 120, model, 0, self.now)
+        self.tool.draw_requests(fits, Rect(0, 0, 14, 120), model, 0, self.now)
+        self.tool.draw_requests(overflows, Rect(0, 0, 7, 120), model, 0, self.now)
         self.assertEqual("┃", overflows.cells[2][118][0], "the thumb, in the outer padding cell")
         self.assertEqual(" ", overflows.cells[2][117][0], "a blank between it and the content")
         self.assertEqual(" ", fits.cells[2][118][0], "nothing while everything fits")
@@ -381,27 +382,28 @@ class FrameTests(unittest.TestCase):
 
         def panels() -> list[tuple[str, Any]]:
             def queue(canvas: Any) -> tuple[int, int, int, int]:
-                self.tool.draw_requests(canvas, 0, 0, 8, 100, model, 0, now)
+                self.tool.draw_requests(canvas, Rect(0, 0, 8, 100), model, 0, now)
                 return 0, 0, 8, 100
 
             def events(canvas: Any) -> tuple[int, int, int, int]:
-                self.tool.draw_events(canvas, 0, 0, 10, 100, model)
+                self.tool.draw_events(canvas, Rect(0, 0, 10, 100), model)
                 return 0, 0, 10, 100
 
             def details(canvas: Any) -> tuple[int, int, int, int]:
-                self.tool.draw_detail(canvas, 0, 0, 12, 100, detail_model, 0, None, now)
+                self.tool.draw_detail(canvas, Rect(0, 0, 12, 100), detail_model, 0, None, now)
                 return 0, 0, 12, 100
 
-            def overlay(draw: Any) -> Any:
+            def overlay(draw: Any, name: str) -> Any:
                 def drawn(canvas: Any) -> tuple[int, int, int, int]:
-                    draw(canvas)
+                    draw(canvas, offset=canvas.scroll.get(name, 0))
                     info = canvas.help_view
                     return info.y, info.x, info.height - 1, info.width  # as if the footer row were the border
 
                 return drawn
 
             return [("requests", queue), ("events", events), ("details", details),
-                    ("help", overlay(self.tool.draw_help)), ("changelog", overlay(self.tool.draw_changelog))]
+                    ("help", overlay(self.tool.draw_help, "help")),
+                    ("changelog", overlay(self.tool.draw_changelog, "changelog"))]
 
         for name, draw in panels():
             for offset in (0, 3, 10_000):  # the top, scrolled, the end
@@ -424,13 +426,13 @@ class FrameTests(unittest.TestCase):
 
     def test_no_thumb_when_everything_fits(self) -> None:
         canvas = self.tool.Canvas(120, 14)
-        self.tool.draw_requests(canvas, 0, 0, 14, 120, sample(self.now), 0, self.now)  # 8 rows fit
+        self.tool.draw_requests(canvas, Rect(0, 0, 14, 120), sample(self.now), 0, self.now)  # 8 rows fit
         self.assertEqual(" " * 12, self.column(canvas, 118, 1, 12))
 
     def test_the_selection_marker_and_the_thumb_share_a_row(self) -> None:
         model = sample(self.now)
         canvas = self.tool.Canvas(120, 7)  # room for three of the nine rows
-        self.tool.draw_requests(canvas, 0, 0, 7, 120, model, 0, self.now)
+        self.tool.draw_requests(canvas, Rect(0, 0, 7, 120), model, 0, self.now)
         selected = [y for y in range(7) if any(cell[2] for cell in canvas.cells[y])]
         self.assertEqual(["┃", "f0"], canvas.cells[selected[0]][0][:2], "left: the row's fill")
         self.assertEqual(["┃", "dim"], canvas.cells[selected[0]][118][:2], "right: the thumb, same row, muted at rest")

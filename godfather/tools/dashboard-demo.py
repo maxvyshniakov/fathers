@@ -43,7 +43,7 @@ def load_scene(advance: bool = False) -> tuple[Any, dict[str, Any]]:
     """(the app module with the scene patched in, its first model): the demo's clock frozen at the scene's moment,
     or advancing from it, recorded machine samples replayed over the fixed queue."""
     from godfather import app, sources, tui
-    from godfather.views import overview
+    from godfather.views import common, details, machine, overview
 
     data = json.loads(FIXTURE.read_text())
     profiles = json.loads(METRICS.read_text())["samples"]
@@ -59,7 +59,7 @@ def load_scene(advance: bool = False) -> tuple[Any, dict[str, Any]]:
     model["updated"] = dt.datetime.fromisoformat(model["updated"])
     model["overtake_window"] = 600
     judge(model["memory"])
-    overview.HISTORY_WINDOW = 60  # short demo zoom; the legend reports seconds per column
+    machine.HISTORY_WINDOW = 60  # short demo zoom; the legend reports seconds per column
     origin = model["updated"]
     started = time.monotonic()
     history_anchor = origin + dt.timedelta(seconds=10 if advance else 0)
@@ -81,8 +81,8 @@ def load_scene(advance: bool = False) -> tuple[Any, dict[str, Any]]:
     clock = types.SimpleNamespace(datetime=Clock, date=Date, timedelta=dt.timedelta, timezone=dt.timezone)
     overview.datetime = clock  # type: ignore[assignment]
     tui.datetime = clock  # type: ignore[assignment]
-    model["history"] = overview.held_history(model["events"], model["used"], origin)
-    overview.dashboard_colours(model, {})
+    model["history"] = machine.held_history(model["events"], model["used"], origin)
+    common.dashboard_colours(model, {})
 
     def sample() -> dict[str, Any]:
         fresh = copy.deepcopy(model)
@@ -113,7 +113,7 @@ def load_scene(advance: bool = False) -> tuple[Any, dict[str, Any]]:
     def frozen_details(_item: dict[str, Any]) -> None:
         pass  # frozen lane summaries; never query a live lanefather
 
-    overview.enrich_details = frozen_details  # type: ignore[assignment]
+    details.enrich_details = frozen_details  # type: ignore[assignment]
     holders = [holder["pid"] for holder in model["holders"]]
     sources.process_cwd = lambda pid: "~/straylight" if pid in holders else None  # type: ignore[assignment]
     app.Scene = Scene  # type: ignore[attr-defined]

@@ -112,9 +112,10 @@ class HintClickTests(unittest.TestCase):
         self.assertIsNone(canvas.hint_at(gap, row), "between hints: nothing")
 
     def test_overlay_footers_are_click_targets_too(self) -> None:
-        for which, hints in ((True, {"esc close": "esc", "q quit": "q"}), ("changelog", {"esc close": "esc"})):
+        for which, hints in ((self.tool.Help(), {"esc close": "esc", "q quit": "q"}),
+                             (self.tool.Changelog(), {"esc close": "esc"})):
             canvas = self.tool.Canvas(100, 30)
-            self.tool.dashboard_draw(canvas, model(), help_open=which)
+            self.tool.dashboard_draw(canvas, model(), overlay=which)
             info = canvas.help_view
             row = info.y + info.height - 2
             found = self.targets(canvas, row, ["↑↓ scroll", *hints])

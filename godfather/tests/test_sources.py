@@ -18,7 +18,7 @@ from helpers import ROOT, FakeSlotfather
 
 from godfather import app, sources, tui
 from godfather.adapters import slotfather as adapter
-from godfather.views import overview
+from godfather.views import common, overlays, overview, settings_draw
 
 SCENE = ROOT / "tests" / "fixtures" / "scene"
 
@@ -49,7 +49,7 @@ class FixtureCase(unittest.TestCase):
         model, error = screen.load()
         canvas = tui.Canvas(width, height)
         if model:
-            overview.dashboard_colours(model, {})
+            common.dashboard_colours(model, {})
         overview.dashboard_draw(canvas, model, error=error, notice=screen.notice())
         self.canvas = canvas
         return canvas.render(False)
@@ -122,7 +122,7 @@ class FailingTests(FixtureCase):
         self.assertEqual("stale", screen.source.state)
         dialog = screen.settings(1.0, "auto")
         self.assertIn("slotfather: queue unreadable", "\n".join(
-            "".join(part[1] for part in row.parts) for row in dialog.status_rows(None)))
+            "".join(part[1] for part in row.parts) for row in settings_draw.status_rows(dialog, None)))
         self.reply("status --json --full", replies(SCENE)["status --json --full"])
         text = self.frame(screen)
         self.assertNotIn("stale", text, "a good snapshot ends it")
@@ -269,9 +269,9 @@ class ChangelogTabTests(FixtureCase):
         found["json"]["dashboard"]["changelog"] = str(changelog)
         self.reply("capabilities --json", found)
         app.Screen().load()
-        self.assertEqual(["Godfather", "Slotfather"], [tab.name for tab in overview.tabs()])
+        self.assertEqual(["Godfather", "Slotfather"], [tab.name for tab in overlays.tabs()])
         canvas = tui.Canvas(120, 40)
-        overview.draw_changelog(canvas, tab=1)
+        overlays.draw_changelog(canvas, tab=1)
         text = canvas.render(False)
         self.assertIn("Godfather · Slotfather", text.split("\n")[canvas.help_view.y])  # type: ignore[union-attr]
         self.assertRegex(text, r"0\.2\.0 · 2026-11-12  installed")

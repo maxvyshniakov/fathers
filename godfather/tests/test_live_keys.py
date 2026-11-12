@@ -17,22 +17,34 @@ from godfather.views import settings as sf_settings
 
 class SettingsKeyTests(LiveCase):
     def test_hotkeys_translate_and_typed_values_stay_as_typed(self) -> None:
+        """Keys reach Settings through the mode table, which translates them once (modes.press())."""
+        from godfather import state as sf_state
+
         with mock.patch.dict(os.environ, self.fake.environ()):
             dialog = sf_settings.Settings(1.0)
             dialog.focus = "safety"
-            self.assertEqual("handled", dialog.key("д"), "д is l: the next value, pending")
+            app = sf_state.AppState(overlay=sf_state.SettingsOverlay(dialog))
+
+            def key(name: str) -> list[str]:
+                nonlocal app
+                app, effects = sf_state.reduce(app, sf_state.Key(name), 0.0)
+                return [effect.kind for effect in effects]
+
+            self.assertNotIn("load-model", key("д"), "д is l: the next value, pending")
             assert dialog.pending is not None
             self.assertEqual(3.5, dialog.pending.value)
-            self.assertEqual("changed", dialog.key("\r"), "Enter saves it")
+            self.assertIn("load-model", key("\r"), "Enter saves it")
             self.assertEqual(3.5, self.fake.read()["order"]["safety"])
             dialog.focus = "interval"
-            self.assertEqual("handled", dialog.key("\r"))
-            for key in ("ю", "5"):
-                dialog.key(key)
+            key("\r")
+            self.assertTrue(dialog.editing)
+            for name in ("ю", "5"):
+                key(name)
             self.assertEqual("5", dialog.buffer, "ю types nothing into a number, never the . at its position")
-            dialog.key("esc")
-            self.assertEqual("changed", dialog.key("в"), "в is d: reset the selected setting")
-            self.assertEqual("close", dialog.key("ы"), "ы is s: close")
+            key("esc")
+            self.assertIn("load-model", key("в"), "в is d: reset the selected setting")
+            key("ы")
+            self.assertIsNone(app.overlay, "ы is s: close")
 
 
 class TerminalTests(LiveCase):
