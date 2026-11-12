@@ -117,6 +117,12 @@ def batch_gate(cwd: str, common: str, sha: str, jobs: int | None) -> None:
         run_batch_gate(cwd, common, sha, jobs)
 
 
+def gate_meta(path: Any) -> dict[str, str]:
+    """The batch gate's run type (fathers#107): the full plan, and how many checks the tree's plan module defines."""
+    known = plan.known_checks(path)
+    return checks.plan_meta(result_store.FULL, path, len(known) if known is not None else None)
+
+
 def run_batch_gate(cwd: str, common: str, sha: str, jobs: int | None) -> None:
     path = worktrees.gate_worktree(common, sha)
     log = journal.log_path(f"promote-{sha[:10]}")
@@ -131,7 +137,7 @@ def run_batch_gate(cwd: str, common: str, sha: str, jobs: int | None) -> None:
     started, clock, load = journal.now(), time.monotonic(), {"start": host.load_averages()}
     with open(log, "w") as handle:
         status = subprocess.run([plan.verify_path(path), "--keep-going", "--jobs", str(jobs)], cwd=path,
-                                env=checks.verify_env(label, "gate", sha=sha[:10]), stdout=handle,
+                                env=checks.verify_env(label, "gate", sha=sha[:10], **gate_meta(path)), stdout=handle,
                                 stderr=subprocess.STDOUT).returncode
     seconds = round(time.monotonic() - clock, 1)
     load["end"] = host.load_averages()
@@ -230,7 +236,10 @@ def perf_suite(cwd: str, common: str, sha: str, ship: bool, remote: str = "origi
         started, clock, load = journal.now(), time.monotonic(), {"start": host.load_averages()}
         with open(log, "w") as handle:
             status = subprocess.run([plan.verify_path(worktree), "--suites", suite, "--keep-going", "--jobs", "1"],
-                                    cwd=worktree, env=checks.verify_env(label, "perf", sha=sha[:10]),
+                                    cwd=worktree, env=checks.verify_env(
+                                        label, "perf", sha=sha[:10],
+                                        **checks.plan_meta([f"suite:{suite}"], worktree,
+                                                           checks.suite_count(worktree, [suite]))),
                                     stdout=handle, stderr=subprocess.STDOUT).returncode
         seconds = round(time.monotonic() - clock, 1)
         load["end"] = host.load_averages()
@@ -311,6 +320,7 @@ def install_and_deploy(common: str, sha: str, deploy: str | None) -> None:
                     argv = slots.wrap(step.lease.slots, f"promote-{sha[:10]}-{step.name}", argv,
                                       priority=priority, ticket=step.lease.ticket, required=True,
                                       meta={"phase": step.name, "kind": "promote", "sha": sha[:10],
+                                            **checks.plan_meta([f"step:{step.name}"], path, 0),
                                             **slots.priority_meta(priority, source),
                                             "lanefather.state": str(state.state_dir())})
                 except slots.Unavailable as error:

@@ -74,6 +74,22 @@ def verify_env(label: str, phase: str, *, ticket: str | None = None, **meta: Any
     return dict(os.environ, **slots.queue_environment(label, priority, ticket=ticket, **tags))
 
 
+def plan_meta(selection: Any, root: Any = None, count: int | None = None) -> dict[str, str]:
+    """The run type a slot request carries (fathers#107): `plan`, the plan's key of the results store (fathers#91:
+    its sorted check ids, or FULL, with the toolchain of `root`), and `checks`, how many checks it runs, when known.
+    Slotfather keeps expected durations per run type."""
+    toolchain = plan.toolchain_state(root) if root is not None else None
+    number = count if count is not None else None if selection == result_store.FULL else len(set(selection))
+    return {"plan": result_store.plan_hash(selection, toolchain), **({"checks": str(number)} if number is not None
+                                                                    else {})}
+
+
+def suite_count(root: Any, suites: list[str]) -> int | None:
+    """How many checks whole suites hold, by the tree's plan module; None for a tree without it."""
+    owners = plan.suite_owners(root, suites)
+    return None if owners is None else sum(len(ids) for ids in owners.values())
+
+
 def lane_meta(record: Record) -> dict[str, str]:
     """Caller tags for the lane; ticket is passed as a separate request field."""
     return {"lane": record["id"], "lanefather.state": str(state.state_dir().resolve())}
@@ -104,7 +120,14 @@ def run_suites(root: Any, suites: list[str], label: str, jobs: int, full: bool =
     selection = () if full else ("--checks", ",".join(ids)) if ids is not None else ("--suites", ",".join(suites))
     argv = [plan.verify_path(root), *selection, "--keep-going", "--jobs", str(jobs)]
     # verify queues for its own --jobs-slot lease; label, priority, ticket and tags name the run (#650).
-    env = verify_env(label, phase, ticket=ticket, **(meta or {}))
+    if full:
+        known = plan.known_checks(root)
+        kind = plan_meta(result_store.FULL, root, len(known) if known is not None else None)
+    elif ids is not None:
+        kind = plan_meta(ids, root)
+    else:
+        kind = plan_meta([f"suite:{s}" for s in suites], root, suite_count(root, suites))
+    env = verify_env(label, phase, ticket=ticket, **(meta or {}), **kind)
     what = "the full gate" if full else ", ".join(suites) + (f" ({len(ids)} checks)" if ids is not None else "")
     print(f"lane: running {what} in {root} (log {log}); queue: slotfather status", flush=True)
     started, load = time.monotonic(), {"start": host.load_averages()}
@@ -294,7 +317,7 @@ class Rerun:
                  meta: dict[str, Any] | None = None, ticket: str | None = None):
         self.root, self.ids, self.label, self.jobs = root, ids, label, jobs
         self.log = journal.log_path(label)
-        self.meta = {"check": ",".join(ids), **(meta or {})}
+        self.meta = {"check": ",".join(ids), **(meta or {}), **plan_meta(ids, root)}
         self.ticket = ticket
         self.verify = [plan.verify_path(root), "--checks", ",".join(ids), "--keep-going", "--jobs", str(jobs)]
         priority, source = slots.phase_priority("rerun")

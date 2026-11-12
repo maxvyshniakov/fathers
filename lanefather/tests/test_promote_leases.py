@@ -104,6 +104,10 @@ if args[:1] != ["--changed"]:
             self.assertEqual(bool(row["lease"]), bool(expected), row)
             if row["step"] in ("install", "link-package"):
                 self.assertEqual(row["status"]["entries"][0]["meta"]["phase"], row["step"])
+                # fathers#107: a step's run type is its own plan, of no checks.
+                from lanefather import results
+                self.assertEqual(row["status"]["entries"][0]["meta"]["plan"], results.plan_hash([f"step:{row['step']}"]))
+                self.assertEqual(row["status"]["entries"][0]["meta"]["checks"], "0")
                 self.assertEqual(row["count"], str(expected))
         self.assertNotEqual(rows[0]["lease"], rows[1]["lease"], "the gate ended before the install lease")
         self.assertNotEqual(rows[1]["lease"], rows[3]["lease"], "each heavy phase owns its own execution lease")
