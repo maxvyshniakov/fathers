@@ -239,7 +239,10 @@ Solarized whose bright black is close to the background. `SLOTFATHER_THEME` sets
 
 ## Machine
 
-- **rows:** `🆗 load ▮▮▮… 10.1/12`, `🆗 mem ▮▮▮… 23.0/32G`, `🆗 swap ▮▮▮… 10.0/11G`: used / total, the
+- **mem:** what admission reads. On macOS the kernel's memory-pressure level as a three-step gauge, its word as
+  the value (`normal`, `warning`, `critical`), 🔥 above the admission limit; used RAM would read near full because
+  of the file cache. On Linux used / total from MemAvailable, or `psi N%` while PSI holds admission back.
+- **rows:** `🆗 load ▮▮▮… 10.1/12`, `🆗 mem ▮▮▮… normal`, `🆗 swap ▮▮▮… 10.0/11G`: used / total, the
   values right-aligned in one column so every bar has the same length; tight, memory and swap drop their
   decimals (`23/32G`).
 - **health marks:** 🆗 before load, mem and swap while they are fine, 🔥 while

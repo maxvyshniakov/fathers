@@ -55,6 +55,11 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 - MACHINE has no status row: each of load, memory and swap starts with 🆗 or 🔥, and the unleased load and the
   admission state sit on the right of its top border. A blank row stays under the border; short of rows it goes
   after the chart and before the rows compress.
+- In one column a long queue scrolls instead of squeezing the details, which keep at least nine rows.
+- MACHINE's mem row shows what admission reads: on macOS the kernel's memory pressure (normal, warning,
+  critical) as a three-step gauge, not used RAM, which the file cache keeps near full; on Linux used / total
+  from MemAvailable, or the PSI figure while it holds admission back.
+- Without its chart, MACHINE keeps a blank row under its rows as well as over them.
 - Under 110 columns EVENTS and MACHINE sit side by side below the details, EVENTS on the left, in MACHINE's own
   height, with the details taking the rest; under 83, EVENTS goes.
 - A scrollbar's thumb is muted at rest everywhere, also on the focused panel and in help, the changelog and

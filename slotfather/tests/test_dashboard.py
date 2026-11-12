@@ -905,7 +905,7 @@ class MemoryBarTests(unittest.TestCase):
         self.assertIn("swap", lines[4])
         text = "\n".join(lines)
         self.assertRegex(lines[2], r"🆗 load ■+░* +1\.0/12  │")
-        self.assertRegex(lines[3], r"🆗 mem  ■+░* +0\.8/1G  │", "used/total, in GB")
+        self.assertRegex(lines[3], r"🆗 mem  ■+░* +normal  │", "macOS: the pressure level, a third of the gauge")
         self.assertRegex(lines[4], r"swap ■+░* +0\.4/0\.5G  │")
         self.assertNotIn("used ", text)
         self.assertNotIn("cores", text)
@@ -995,13 +995,17 @@ class MemoryBarTests(unittest.TestCase):
                 self.assertEqual(chart>0,any("avg" in line for line in lines),"the axis line goes with the chart")
                 for name in ("load","mem","swap"):
                     self.assertTrue(any(f" {name} " in line for line in lines),f"{name}: rows before the chart goes")
-                padded=height>=6
-                self.assertEqual(padded,not lines[1][1:-1].strip(),"the blank row goes after the chart, before the rows")
+                padded=height>=7
+                self.assertEqual(padded,not lines[1][1:-1].strip(),"the blank rows go after the chart, before the rows")
                 self.assertIn("🆗 load ",lines[2 if padded else 1])
+                swap=next(i for i,line in enumerate(lines) if " swap " in line)
+                if chart==0 and height>=6:  # no chart: a blank row under swap too, never swap on the border
+                    self.assertFalse(lines[swap+1][1:-1].strip(),f"height {height}: a blank row under swap")
+                    self.assertTrue(lines[height-1].startswith("╰"))
 
     def test_short_labels_values_in_one_column_and_bars_of_one_length(self):
         tool=load_dashboard()
-        memory=dict(level=1,used=23552,total=32768,swap_total=11264,swap_free=1024)
+        memory=dict(level=None,available=9216,total=32768,swap_total=11264,swap_free=1024)  # Linux: MemAvailable
         for width in (60,90):
             with self.subTest(width=width):
                 lines=self.machine(tool,13,width=width,memory=memory,load=10.1)
@@ -1034,8 +1038,7 @@ class MemoryBarTests(unittest.TestCase):
                     rows=[lines[row] for row in (2,3,4)]
                     self.assertTrue(all(any(glyph in row for glyph in "▄█▀") for row in rows),"the chart level with the rows")
                     start=min(row.index(glyph) for row in rows for glyph in "▄█▀" if glyph in row)
-                    value_end=max(row.rindex("G")+1 if "G" in row[:start] else row.index("/12")+3 for row in rows)
-                    self.assertGreaterEqual(start-value_end,2,"a gap of two cells")
+                    self.assertTrue(all(row[start-2:start]=="  " for row in rows),"a gap of two cells")
                     axis=lines[5]
                     self.assertTrue(axis[3:start].strip()=="","the axis under the chart alone")
                     self.assertTrue(axis[start:].lstrip().startswith("−") and "now" in axis)
@@ -1059,6 +1062,44 @@ class MemoryBarTests(unittest.TestCase):
                 self.assertEqual(tool.machine_height(right-left+1),bottom-top+1,"MACHINE at its own height")
                 details=canvas.tables["details"]
                 self.assertEqual(top,details["y"]+details["height"],"the details take everything above it")
+
+    def test_mem_shows_what_admission_reads(self):
+        tool=load_dashboard()
+        for level,word,third,mark in ((1,"normal",1,"🆗"),(2,"warning",2,"🔥"),(4,"critical",3,"🔥")):
+            with self.subTest(level=level):
+                lines=self.machine(tool,11,width=60,memory=dict(level=level,used=32000,total=32768,swap_total=0,
+                                                                swap_free=None))
+                row=lines[3]
+                self.assertRegex(row,rf"{mark} mem  ■+░* +{word}  │","the level's word, not used RAM")
+                bar=sum(1 for char in row if char=="■")+sum(1 for char in row if char=="░")
+                self.assertEqual(round(bar*third/3),sum(1 for char in row if char=="■"),"a three-step gauge")
+                self.assertNotIn("/32G",row)
+        linux=self.machine(tool,11,width=60,memory=dict(level=None,available=8192,total=32768,psi_some=1.0,
+                                                         psi_full=0.0,swap_total=0,swap_free=None))
+        self.assertRegex(linux[3],r"🆗 mem  ■+░* +24\.0/32G  │","Linux: MemAvailable-based used/total")
+        held=self.machine(tool,11,width=60,memory=dict(level=None,available=8192,total=32768,psi_some=15.0,
+                                                        psi_full=0.0,swap_total=0,swap_free=None))
+        self.assertRegex(held[3],r"🔥 mem  ■+░* +psi 15%  │","the PSI that holds admission back")
+        self.assertTrue(any("not used RAM" in "".join(text for text,_ in line) for line in tool.help_lines(70)))
+
+    def test_a_long_queue_scrolls_and_the_details_keep_their_floor(self):
+        tool=load_dashboard()
+        model=self.layout_model()
+        model["holders"]=[dict(model["holders"][0],label=f"job-{n}",pid=100+n,key=(100+n,None)) for n in range(17)]
+        model["slots"],model["used"],model["free"]=17,17,0
+        for width,height in ((100,50),(100,40),(156,43),(176,50)):
+            with self.subTest(width=width,height=height):
+                canvas=tool.Canvas(width,height)
+                tool.dashboard_draw(canvas,model)
+                details,queue=canvas.tables["details"],canvas.tables["requests"]
+                self.assertGreaterEqual(details["height"],tool.DETAILS_FLOOR,"the details keep 9 rows and more")
+                self.assertGreaterEqual(queue["height"],tool.QUEUE_FLOOR)
+                if width<tool.WIDE:  # one column: QUEUE scrolls instead of growing into the details
+                    self.assertLess(queue["visible"],queue["count"])
+                else:  # wide: the details have their own column, the whole right side above MACHINE
+                    self.assertGreater(details["height"],20)
+        self.assertEqual(dict(requests=13,detail=5,bottom=6),tool.narrow_heights(24,21,11),
+                         "too short for the floors: the earlier order")
 
     def layout_model(self) -> dict[str, Any]:
         now=datetime.datetime.now(datetime.timezone.utc)
@@ -1091,19 +1132,19 @@ class MemoryBarTests(unittest.TestCase):
             with self.subTest(height=height):
                 lines=self.machine(tool,height,width=90)
                 compact=next(line for line in lines if "load " in line)
-                self.assertRegex(compact,r"🆗 load ■\S* 3\.0/12 · 🆗 mem ■\S* 24\.1/32G · 🆗 swap ■\S* 7\.6/9G")
+                self.assertRegex(compact,r"🆗 load ■\S* 3\.0/12 · 🆗 mem ■\S* normal · 🆗 swap ■\S* 7\.6/9G")
                 self.assertTrue(" mem " in compact and " swap " in compact,"one line, not rows")
         tool.use_marks(True)
         self.machine(tool,3,width=90)
         self.assertRegex(next(line for line in self.canvas.lines(False,ascii_only=True) if "load " in line),
-                         r"\+ load #\S* 3\.0/12 \. \+ mem #\S* 24\.1/32G \. \+ swap #\S* 7\.6/9G")
+                         r"\+ load #\S* 3\.0/12 \. \+ mem #\S* normal \. \+ swap #\S* 7\.6/9G")
         tool.use_marks(False)
         narrow=self.machine(tool,3,width=56)
         line=next(line for line in narrow if "load " in line)
-        self.assertRegex(line,r"🆗 load 3\.0/12 (· )?🆗 mem 24\.1/32G (· )?🆗 swap 7\.6/9G","too narrow for bars: the numbers")
+        self.assertRegex(line,r"🆗 load 3\.0/12 (· )?🆗 mem normal (· )?🆗 swap 7\.6/9G","too narrow for bars: the numbers")
         self.assertNotIn("■",line)
         narrowest=next(line for line in self.machine(tool,3,width=tool.NARROW_MACHINE) if "load " in line)
-        self.assertRegex(narrowest,r"load 3\.0/12 mem 24\.1/32G swap 7\.6/9G","the narrowest drops the marks")
+        self.assertRegex(narrowest,r"load 3\.0/12 mem normal swap 7\.6/9G","the narrowest drops the marks")
         for width in (90,60,tool.NARROW_MACHINE):  # never narrower in any layout
             for height in range(3,14):
                 with self.subTest(width=width,height=height):

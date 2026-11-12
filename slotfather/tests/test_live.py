@@ -306,7 +306,7 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
 
     def test_side_by_side_machine_keeps_its_own_height_and_the_details_get_the_rest(self) -> None:
         view = tool()
-        for height in (60, 44, 34):
+        for height in (60, 44, 40):  # 34 and less: the details keep their floor, MACHINE gives way
             with self.subTest(height=height):
                 canvas = view.Canvas(100, height)
                 view.dashboard_draw(canvas, sample_model())
