@@ -37,6 +37,7 @@ class Panel:
         # 3) or two in (Settings), a cell more on the right, above its footer row
         self.inner = Rect(y + 2, x + left, max(0, height - (5 if footer else 4)), max(0, width - left - right))
         self.footer_row = y + height - 2
+        self.left = left  # the content's column within the panel
 
     @property
     def focused(self) -> bool:
@@ -140,12 +141,18 @@ class Panel:
         """A line of content `row` rows into the panel, cut to its width."""
         self.canvas.put(self.inner.y + row, self.inner.x, text, style, self.inner.width)
 
+    def note(self, text: str) -> None:
+        """One muted line just inside the frame, where a panel too small to show its content says so."""
+        y, x, _, width = self.rect
+        self.canvas.put(y + 1, x + 2, text, "dim", max(0, width - 4))
+
     def document(self, document: Canvas, height: int, offset: Optional[int] = None) -> None:
-        """A document drawn offscreen, scrolled within the panel: the rows the viewport shows, links and all."""
+        """A document as wide as the panel, its content at the panel's own columns, drawn offscreen and scrolled
+        within the panel: the rows the viewport shows, links and all."""
         start, visible = self.viewport(height, offset=offset)
-        canvas, (_, x, _, width) = self.canvas, self.rect
+        canvas, x = self.canvas, self.rect.x
         for row in range(min(visible, height - start)):
-            for column in range(3, max(3, width - 3)):
+            for column in range(self.left, self.left + self.inner.width):
                 target_y, target_x = self.inner.y + row, x + column
                 if 0 <= target_y < canvas.height and 0 <= target_x < canvas.width:
                     canvas.cells[target_y][target_x] = document.cells[start + row][column][:]
@@ -225,6 +232,10 @@ class Table:
             placed.append((key, title, column, sizes[key], right))
             column += sizes[key] + 2
         return cls(placed)
+
+    def shifted(self, offset: int) -> Table:
+        """The same columns `offset` cells further right: after columns another table draws before them."""
+        return Table([(key, title, x + offset, size, right) for key, title, x, size, right in self.placed])
 
     def width(self, key: str, default: int) -> int:
         return next((size for name, _, _, size, _ in self.placed if name == key), default)

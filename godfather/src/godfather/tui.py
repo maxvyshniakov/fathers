@@ -162,6 +162,7 @@ class Canvas:
         self.fresh_events = 0  # events that arrived while EVENTS was scrolled down
         self.version_at: tuple[int, int, int] | None = None  # the footer version's row and columns: the changelog
         self.hint_hits: list[tuple[int, int, int, str]] = []  # (row, from, to, key) of every footer hint drawn
+        self.order: tuple[str, ...] = ("requests",)  # Tab's order among the panels drawn (layout.tab_order())
         self.glow: set[str] = set()  # panels scrolled within SCROLL_GLOW seconds: their thumb in the foreground
         self.width, self.height = max(0, width), max(0, height)
         self.cells = [[[" ", "text", False] for _ in range(self.width)] for _ in range(self.height)]

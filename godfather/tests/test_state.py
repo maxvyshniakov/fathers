@@ -7,7 +7,7 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import unittest
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 
 import helpers  # noqa: F401 - src/ on sys.path
 import view as _view
@@ -194,6 +194,114 @@ class ModeTableTests(Case):
         self.assertEqual("help", after.overlay.kind)
 
 
+class StubPanel:
+    """A Settings panel that answers every key and click with one action, to drive the Settings mode."""
+
+    def __init__(self, action: str, editing: bool = False, theme: str = "auto", interval: float = 1.0) -> None:
+        self.action, self.editing, self.theme, self.interval = action, editing, theme, interval
+        self.offset, self.pressed = 0, cast(list[Any], [])
+
+    def key(self, key: str) -> str:
+        self.pressed.append(key)
+        return self.action
+
+    def mouse(self, event: tuple[str, int, int, int, bool]) -> str:
+        self.pressed.append(event)
+        return self.action
+
+    def tick(self) -> bool:
+        return False
+
+
+class SettingsModeTableTests(Case):
+    """The Settings mode: every key and click goes to the panel, translated to its hotkey unless a value is typed,
+    and its answer does one thing to the app."""
+
+    def test_each_answer_of_the_panel(self) -> None:
+        tool = self.tool
+        cases: list[tuple[str, dict[str, Any], Optional[str], list[str], float, str]] = [
+            # (answer, panel fields, overlay kind after, effects, Refresh every, theme)
+            ("handled", {}, "settings", ["remember"], 1.0, "auto"),
+            ("changed", {}, "settings", ["remember", "load-model"], 1.0, "auto"),
+            ("close", {}, None, ["remember", "repaint"], 1.0, "auto"),
+            ("quit", {}, "settings", ["quit"], 1.0, "auto"),
+            ("handled", {"interval": 2.0}, "settings", ["remember"], 2.0, "auto"),
+            ("handled", {"theme": "builtin"}, "settings", ["apply-theme", "repaint", "remember"], 1.0, "builtin"),
+        ]
+        for answer, fields, kind, effects, interval, theme in cases:
+            for event in (tool.Key("x"), tool.Mouse(0, 5, 5, True)):
+                with self.subTest(answer=answer, fields=fields, event=type(event).__name__):
+                    panel = StubPanel(answer, **fields)
+                    state = dataclasses.replace(self.screen(), overlay=tool.SettingsOverlay(panel))
+                    after, kinds = self.send(state, event)
+                    self.assertEqual(kind, after.overlay.kind if after.overlay else None)
+                    self.assertEqual(effects, kinds)
+                    self.assertEqual((interval, theme), (after.interval, after.theme))
+                    self.assertEqual(1, len(panel.pressed), "the panel got it, once")
+
+    def test_keys_are_hotkeys_unless_a_value_is_typed(self) -> None:
+        tool = self.tool
+        for editing, expected in ((False, "s"), (True, "ы")):
+            panel = StubPanel("handled", editing=editing)
+            self.send(dataclasses.replace(self.screen(), overlay=tool.SettingsOverlay(panel)), tool.Key("ы"))
+            self.assertEqual([expected], panel.pressed)
+
+    def test_a_click_on_a_footer_hint_is_the_hint_key_for_the_panel_too(self) -> None:
+        tool = self.tool
+        state = self.screen()
+        row, start, _, _ = state.frame.hints[0]
+        panel = StubPanel("handled")
+        self.send(dataclasses.replace(state, overlay=tool.SettingsOverlay(panel)), tool.Mouse(0, start, row, True))
+        self.assertEqual([state.frame.hints[0][3]], panel.pressed)
+
+
+class MouseTableTests(Case):
+    """The mouse in each mode, by button and where it lands."""
+
+    def test_each_mode_button_and_place(self) -> None:
+        tool = self.tool
+        events = [dict(when=datetime.datetime(2026, 11, 12, tzinfo=datetime.timezone.utc)
+                       + datetime.timedelta(seconds=n), verb="granted", count=1, label=f"e{n}", pid=n, delta=1)
+                  for n in range(40)]
+        base = tool.move(self.screen(model([entry(n) for n in range(3)], [entry(n, "waiting") for n in range(3, 5)],
+                                           events=events)), 2)
+        queue, details, evs = (base.frame.tables[name] for name in ("requests", "details", "events"))
+        version = base.frame.version_at
+        gap = queue["top"] + 3  # the row between running and waiting
+        help_ = dataclasses.replace(base, overlay=tool.Help(scroll=3))
+        box = tool.overlay_box(help_, help_.overlay)
+        inside, outside = (box.x + 3, box.y + 3), (0, 0)
+        cases: list[tuple[str, Any, tuple[int, int, int, bool], Callable[[Any], object]]] = [
+            ("a click on a running row selects it", base, (0, 10, queue["top"], True),
+             lambda state: state.selection.index == 0),
+            ("a click on a waiting row selects it", base, (0, 10, queue["top"] + 4, True),
+             lambda state: state.selection.index == 3),
+            ("the gap selects nothing", base, (0, 10, gap, True), lambda state: state.selection.index == 2),
+            ("a padding row selects nothing", base, (0, 10, queue["top"] - 1, True),
+             lambda state: state.selection.index == 2),
+            ("a release does nothing", base, (0, 10, queue["top"], False), lambda state: state == base),
+            ("a click on DETAILS focuses it", base, (0, details["x"] + 5, details["y"] + 5, True),
+             lambda state: state.focus == "details" and state.selection.index == 2),
+            ("the wheel on EVENTS scrolls it, not the selection", base, (65, 10, evs["y"] + 3, True),
+             lambda state: state.scroll.get("events") == 3 and state.selection.index == 2
+             and "events" in state.glow),
+            ("the wheel up at the top stays there", base, (64, 10, evs["y"] + 3, True),
+             lambda state: state.scroll.get("events") == 0),
+            ("Ctrl+wheel is the wheel", base, (65 | 16, 10, evs["y"] + 3, True),
+             lambda state: state.scroll.get("events") == 3),
+            ("the version opens the changelog", base, (0, version[1], version[0], True),
+             lambda state: state.overlay == tool.Changelog()),
+            ("the wheel in help scrolls it", help_, (65, *inside, True), lambda state: state.overlay.scroll == 6),
+            ("a click in help does nothing", help_, (0, *inside, True), lambda state: state == help_),
+            ("a click outside help closes it", help_, (0, *outside, True), lambda state: state.overlay is None),
+            ("the wheel outside help does nothing", help_, (65, *outside, True), lambda state: state == help_),
+            ("a release outside help does nothing", help_, (0, *outside, False), lambda state: state == help_),
+        ]
+        for what, state, (button, x, y, pressed), check in cases:
+            with self.subTest(what):
+                self.assertTrue(check(self.send(state, tool.Mouse(button, x, y, pressed), now=1.0)[0]))
+
+
 class OverlayTests(Case):
     """fathers#17: one overlay at a time, each with its own scroll."""
 
@@ -213,6 +321,21 @@ class OverlayTests(Case):
             with self.subTest(opener=opener):
                 state, _ = self.keys(self.screen(), opener, "j", "j")  # never drawn between them
                 self.assertEqual((kind, 2), (state.overlay.kind, state.overlay.scroll))
+
+    def test_with_one_changelog_tab_the_tab_keys_go_back_to_its_top(self) -> None:
+        state, _ = self.keys(self.screen(), "v", "j", "j", "right")
+        self.assertEqual(self.tool.Changelog(tab=0, scroll=0), state.overlay)
+
+    def test_a_refresh_that_moves_events_down_does_not_flash_its_thumb(self) -> None:
+        tool = self.tool
+        when = datetime.datetime(2026, 11, 12, tzinfo=datetime.timezone.utc)
+        events = [dict(when=when + datetime.timedelta(seconds=n), verb="granted", count=1, label=f"e{n}", pid=n,
+                       delta=1) for n in range(40)]
+        state = self.screen(model([entry(0)], events=events))
+        state = dataclasses.replace(state, scroll={"events": 5}, glow={})
+        state, _ = self.send(state, tool.ModelLoaded(model([entry(0)], events=events + [
+            dict(events[0], when=when + datetime.timedelta(seconds=99))])), now=2.0)
+        self.assertEqual((6, {}), (state.scroll["events"], state.glow), "kept in place, and no flash")
 
     def test_each_overlay_owns_its_scroll_and_the_panels_keep_theirs(self) -> None:
         state = dataclasses.replace(self.screen(), scroll={"events": 2})
@@ -459,6 +582,14 @@ class SettingsModeTests(PanelCase):
         self.assertIsNone(state.overlay)
         self.assertIn("repaint", kinds)
         self.assertEqual({"slots": 4}, self.saved_capacity())
+
+    def test_the_wheel_in_settings_flashes_its_thumb(self) -> None:
+        tool = self.state_module
+        dialog, state = self.open(height=16)  # short enough to scroll
+        x, y, width, height = dialog.bounds
+        state, _ = self.send(state, tool.Mouse(65, x + width // 2, y + height // 2, True))
+        self.assertGreater(dialog.offset, 0)
+        self.assertIn("settings", state.glow)
 
     def test_a_settled_change_and_a_theme_apply_at_once(self) -> None:
         tool = self.state_module

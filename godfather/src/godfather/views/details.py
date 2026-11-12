@@ -212,7 +212,7 @@ def draw_detail(canvas: Canvas, rect: Rect, model: Model, selected: int, cwd: Op
     tree = cast(list[tuple[int, float, int, str]], item["tree"])
     content_height = len(facts) + (3 + len(tree) if tree else 0)
     document = Canvas(rect.width, content_height)
-    column = panel.inner.x - rect.x  # the document is the panel's width, its content where the panel's is
+    column = panel.left  # the document is the panel's width, its content at the panel's columns
     values = column + label_width
     for row, (name, parts) in enumerate(facts):
         document.put(row, column, name, "dim")

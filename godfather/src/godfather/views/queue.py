@@ -15,7 +15,8 @@ from .common import Item, Model, cell_run, fill, share, share_style
 
 QUEUE_LABEL_MAX = 40  # the most cells a label asks for when the table is wide enough to share out its width
 CPU_BAR = 5  # the CPU bar's base length; a wide table lets it grow to twice that
-MARK_COLUMNS = 6  # the state and the priority marks before the table: two cells and a gap each
+MARKS_TABLE = Table([("state", "", 0, 2, False), ("priority", "", 3, 2, False)])  # before the shared columns
+MARK_COLUMNS = 6  # the state and the priority marks: two cells and a gap each
 
 
 def draw_slots(canvas: Canvas, area: Rect, model: Model) -> None:
@@ -35,14 +36,11 @@ def draw_slots(canvas: Canvas, area: Rect, model: Model) -> None:
         filled += count
     for start, size in cells[filled:]:
         canvas.put(area.y, start, free_slot(size), "free")
-    label_end = area.x + area.width
-    if filled < slots and area.width >= 4:
-        free_start = area.x + area.width - 4
-        canvas.put(area.y + 1, free_start, "free", "dim")
-        label_end = free_start - 2
-    for index, (label_x, label, style) in enumerate(labels):
-        limit = labels[index + 1][0] - 2 if index + 1 < len(labels) else label_end
-        canvas.put(area.y + 1, label_x, label, style, max(0, limit - label_x))
+    places, free_at = _layout.slot_labels(area, [x for x, _, _ in labels], filled < slots)
+    if free_at is not None:
+        canvas.put(area.y + 1, free_at, "free", "dim")
+    for (x, width), (_, label, style) in zip(places, labels):
+        canvas.put(area.y + 1, x, label, style, width)
 
 
 def free_slot(width: int) -> str:
@@ -139,7 +137,8 @@ def draw_requests(canvas: Canvas, rect: Rect, model: Model, selected: int, momen
     # left-aligned around the slash, padded to the widest on screen; a waiting row's state starts where the bars do.
     layout = queue_layout(panel.inner.width - MARK_COLUMNS, model)
     size = layout.table.width("slots", layout.natural["slots"])
-    layout.table.header(panel, "QUEUE", gutter=MARK_COLUMNS)
+    table = layout.table.shifted(MARK_COLUMNS)
+    table.header(panel, "QUEUE")
     if not items:
         panel.put(0, f"No requests · all {model['slots']} slots free", "dim")
     visual_selected = row_items.index(selected) if selected in row_items else None
@@ -163,13 +162,14 @@ def draw_requests(canvas: Canvas, rect: Rect, model: Model, selected: int, momen
             used, allotted = share(item, model)
             cpu = _common.bar(used / allotted if allotted else 0, layout.bar, queue_bar_style(item, model)) + [
                 (f" {used:.1f}".rjust(layout.use_width + 1) + "/" + short(allotted).ljust(layout.share_width), style)]
-        # The state is the row's first content, where every panel's starts; the priority, then the label after it
-        canvas.put(row, panel.inner.x, _common.marks[row_state(item, model)], style, 2)
-        canvas.put(row, panel.inner.x + 3, _common.priority_mark(item), style, 2)  # blank for normal: labels align
+        # The state is the row's first content, where every panel's starts; the priority (blank for normal, so the
+        # labels align), then the label after it
+        MARKS_TABLE.row(canvas, row, panel.inner.x, {"state": (_common.marks[row_state(item, model)], style),
+                                                     "priority": (_common.priority_mark(item), style)})
         values: dict[str, Value] = {
             "label": (str(item["label"]), style), "slots": slot_cells(item, size),
             "time": (span(age) if age is not None else "—", style), "cpu": cpu, "pid": (str(item["pid"]), style)}
-        layout.table.row(canvas, row, panel.inner.x + MARK_COLUMNS, values)
+        table.row(canvas, row, panel.inner.x, values)
         if index == selected:  # a selected running row keeps its colour and gets its own tint behind it (#15)
             panel.mark(row, fill(style), style if style in _tui.current_theme.tints else True)
 

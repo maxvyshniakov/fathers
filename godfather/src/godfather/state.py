@@ -11,7 +11,6 @@ import dataclasses
 from dataclasses import dataclass, field
 from typing import Any, Optional, Union, cast
 
-from . import version as _version
 from .tui import dashboard_text
 from .views import common as _common
 from .views import overlays as _overlays
@@ -94,6 +93,7 @@ class Frame:
     tables: dict[str, dict[str, Any]] = field(default_factory=lambda: cast(dict[str, dict[str, Any]], {}))
     version_at: Optional[tuple[int, int, int]] = None
     hints: tuple[tuple[int, int, int, str], ...] = ()
+    order: tuple[str, ...] = ("requests",)  # Tab's order, as layout.overview() placed the panels
 
     def hint_at(self, x: int, y: int) -> Optional[str]:
         return next((press for row, start, end, press in reversed(self.hints) if row == y and start <= x < end), None)
@@ -202,25 +202,21 @@ def details_key(item: dict[str, Any], identity: EntryId) -> DetailsKey:
     return identity, "request" if item.get("kind") == "waiting" else "lease"
 
 
-def stale_install(model: Optional[Model]) -> bool:
-    """A newer install waits for a restart: the changelog marks its releases new."""
-    return bool(model and model.get("installed") not in (None, _version.running_source()))
-
-
 def overlay_box(state: AppState, overlay: Union[Help, Changelog]) -> OverlayView:
     """Where an overlay is on this screen and how much of it shows: the geometry its keys and the wheel use."""
     tab = overlay.tab if isinstance(overlay, Changelog) else 0
     return _overlays.overlay_view(overlay.kind, state.frame.width, state.frame.height, overlay.scroll, tab,
-                                  stale_install(state.model))[0]
+                                  _common.stale_install(state.model))[0]
 
 
 # Transitions shared by the modes
 
-def move(state: AppState, index: int, by_key: bool = False) -> AppState:
+def move(state: AppState, index: int, by_key: bool = False,
+         known: Optional[tuple[list[dict[str, Any]], list[EntryId]]] = None) -> AppState:
     """The one way the selection moves (fathers#21): to the entry at `index`, kept in range. A key move starts QUEUE's
-    and DETAILS' scroll over; any move to another entry starts DETAILS' over."""
-    found = items(state)
-    ids = _common.entry_ids(found)
+    and DETAILS' scroll over; any move to another entry starts DETAILS' over. `known`: the entries and their ids,
+    where the caller has them."""
+    found, ids = known or entries(state)
     holders = len(state.model["holders"]) if state.model else 0
     index = max(0, min(index, len(found) - 1))
     key = ids[index] if found else None
@@ -236,11 +232,15 @@ def move(state: AppState, index: int, by_key: bool = False) -> AppState:
     return dataclasses.replace(state, selection=selection, scroll=scroll)
 
 
-def resolve(state: AppState) -> int:
+def entries(state: AppState) -> tuple[list[dict[str, Any]], list[EntryId]]:
+    found = items(state)
+    return found, _common.entry_ids(found)
+
+
+def resolve(state: AppState, known: Optional[tuple[list[dict[str, Any]], list[EntryId]]] = None) -> int:
     """The selected entry's index now: where its identity is, else its neighbour in the same group (the one that
     took its place), else the nearest row."""
-    found = items(state)
-    ids = _common.entry_ids(found)
+    found, ids = known or entries(state)
     selection = state.selection
     if selection.key in ids:
         return ids.index(selection.key)
@@ -340,8 +340,9 @@ def settle(state: AppState, now: float) -> Result:
         state = dataclasses.replace(state, notice=None)
     if not state.scroll.get("events") and state.fresh_events:
         state = dataclasses.replace(state, fresh_events=0)
-    found = items(state)
-    state = move(state, resolve(state))
+    known = entries(state)
+    found = known[0]
+    state = move(state, resolve(state, known), known=known)
     if found:
         index = state.selection.index
         key = details_key(found[index], cast(EntryId, state.selection.key))
@@ -369,10 +370,14 @@ def reduce(state: AppState, event: Event, now: float) -> Result:
     """The one reducer: the state after `event` at `now`, and what the app must do."""
     from . import modes as _modes  # the mode table builds on the transitions above
 
-    old = state
     effects: list[Effect] = []
-    if isinstance(event, (Key, Mouse)):
+    if isinstance(event, (Key, Mouse)):  # only these scroll: a refresh that moves EVENTS down is no flash
+        old, before, panels = state, offsets(state), offsets(state, False)  # Settings' offset before it moves
         state, effects = _modes.dispatch(state, event)
+        same = overlay_identity(state) == overlay_identity(old)  # an overlay opened or switched is not scrolled
+        moved = scrolled(before if same else panels, offsets(state, same))
+        if moved:
+            state = dataclasses.replace(state, glow={**state.glow, **{name: now for name in moved}})
     elif isinstance(event, ModelLoaded):
         state = model_loaded(state, event)
     elif isinstance(event, ModelFailed):
@@ -393,9 +398,5 @@ def reduce(state: AppState, event: Event, now: float) -> Result:
             state, effects = settings_effects(state, "changed")
         elif str(panel.theme) != state.theme:
             state, effects = settings_effects(state, "handled")
-    same = overlay_identity(state) == overlay_identity(old)  # an overlay opened or switched is not scrolled
-    moved = scrolled(offsets(old, same), offsets(state, same))
-    if moved:
-        state = dataclasses.replace(state, glow={**state.glow, **{name: now for name in moved}})
     state, more = settle(state, now)
     return state, effects + more

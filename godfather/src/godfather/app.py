@@ -72,13 +72,6 @@ def save_choices(interval: float, theme: str) -> None:
         os.replace(pending, path)
 
 
-def remember(saved: tuple[float, str], settings: Any) -> tuple[float, str]:
-    current = (float(settings.interval), str(settings.theme))
-    if current != saved:
-        save_choices(*current)
-    return current
-
-
 def starting_choices(interval: float | None) -> tuple[float, str]:
     """Refresh every: --interval, else the saved value, else 1 s. Colour theme: GODFATHER_THEME (SLOTFATHER_THEME
     where unset), else the saved one, else auto."""
@@ -274,7 +267,7 @@ class Live:
         canvas = Canvas(size.columns, size.lines)
         _overview.render(canvas, self.state, now, self.screen.notice())
         self.send(_state.Drawn(_state.Frame(canvas.width, canvas.height, canvas.tables, canvas.version_at,
-                                            tuple(canvas.hint_hits))))
+                                            tuple(canvas.hint_hits), canvas.order)))
         lines = canvas.lines(self.colour, self.ascii_only, place=True)
         # Only rows that changed are written: a second's tick usually touches the clock and a few ages.
         frame = "".join(f"\x1b[{row + 1};1H{line}" for row, line in enumerate(lines)

@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Callable, NamedTuple, cast
 from .. import theme as _theme
 from ..adapters.slotfather import Conflict, SettingsClient, SettingsError
 from . import settings_draw as _draw
-from .settings_draw import FLASH_SECONDS, number
+from .settings_draw import CHOICES, FLASH_SECONDS, LOCAL, number
 
 if TYPE_CHECKING:
     from ..tui import Canvas
@@ -42,8 +42,6 @@ UNITS = {"safety": "×", "overrun": "×", "limit": " s", "fallback": " s", "inte
 FIELDS = ("mode", "amount", "order", "safety", "fallback", "overrun", "limit", "interactive", "batch", "aging_batch",
           "aging_normal", "warn_wait", "idle_cpu", "idle_after", "yield_after", "interval", "theme")
 NEVER = ("limit", "aging_batch", "aging_normal", "warn_wait")  # 0 is off: shown as "never"
-LOCAL = ("interval", "theme")  # this dashboard's own settings, never written to the shared queue
-CHOICES = ("mode", "order", "theme")
 DESCRIPTIONS = {
     "mode": "Shared by every client. Automatic: the lower of the CPU and memory budgets.",
     "amount.fixed": "Total slots for every client. Applies at the next grant; a shrink drains.",

@@ -17,6 +17,7 @@ import dataclasses
 from typing import Any, Callable, Union, cast
 
 from . import keys as _keys
+from . import layout as _layout
 from .state import (OPEN_SETTINGS, QUIT, AppState, Changelog, Help, Key, Mouse, Result, SettingsOverlay, items, move,
                     overlay_box, settings_effects)
 from .views import overlays as _overlays
@@ -38,14 +39,10 @@ def quit_(state: AppState, _: str) -> Result:
 # The main screen
 
 def focus_step(step: int) -> Handler:
-    """Tab and Shift-Tab: the next panel drawn, by columns (layout.tab_order()); a focus whose panel is no longer
-    drawn starts again from QUEUE."""
+    """Tab and Shift-Tab: the next panel drawn, by columns, in the order the layout placed them (layout.tab_order());
+    a focus whose panel is no longer drawn starts again from QUEUE."""
     def handler(state: AppState, _: str) -> Result:
-        order = [name for name in ("requests", "details", "events") if name in state.frame.tables]
-        order = sorted(order, key=lambda name: (state.frame.tables[name].get("x", 0),
-                                                state.frame.tables[name].get("y", 0)))
-        if "requests" not in order:
-            order.insert(0, "requests")
+        order = state.frame.order
         if state.focus not in order:
             return dataclasses.replace(state, focus="requests"), []
         return dataclasses.replace(state, focus=order[(order.index(state.focus) + step) % len(order)]), []
@@ -205,7 +202,7 @@ def click(state: AppState, event: Mouse) -> Result:
 
 def panel_at(state: AppState, x: int, y: int) -> Union[str, None]:
     """The focusable panel under a click."""
-    for name in ("requests", "details", "events"):
+    for name in _layout.FOCUSABLE:
         view = state.frame.tables.get(name)
         if view and view["x"] <= x < view["x"] + view["width"] and view["y"] <= y < view["y"] + view["height"]:
             return name

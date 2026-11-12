@@ -12,6 +12,7 @@ from .. import layout as _layout
 from .. import version as _version
 from ..tui import Canvas, clock
 from ..widgets import Footer, Panel, Part
+from . import common as _common
 from . import details as _details
 from . import events as _events
 from . import machine as _machine
@@ -34,7 +35,7 @@ def footer_hints(focus: str) -> list[Part]:
 def draw_footer(canvas: Canvas, model: Optional[Model], error: Optional[str], message: Optional[str]) -> None:
     """Name, version (a click opens the changelog), hints, then the refresh failure or a notice (fathers#24: a
     notice never says the refresh failed, nor makes the status stale), then the last update and the status."""
-    installed = bool(model and model.get("installed") not in (None, _version.running_source()))
+    installed = _common.stale_install(model)
     Footer(canvas).draw(_version.NAME, _version.running_version() + (" ↻" if installed else ""),
                         footer_hints(canvas.focus), ("● stale", "bad") if error else ("● live", "ok"),
                         clock(model["updated"]) if model else "",
@@ -67,6 +68,7 @@ def draw_panels(canvas: Canvas, model: Model, selected: int, cwd: Optional[str],
     moment = datetime.datetime.now(datetime.timezone.utc)
     screen = _layout.overview(canvas.width, canvas.height, _queue.queue_rows(model), _layout.machine_height)
     panels = screen.panels
+    canvas.order = screen.order
     if "slots" in panels:
         Panel(canvas, panels["slots"]).frame("SLOTS", _queue.slots_note(model))
     _queue.draw_slots(canvas, screen.slots, model)
@@ -91,8 +93,7 @@ def draw_overlay(canvas: Canvas, overlay: Any, model: Optional[Model]) -> None:
     if kind == "settings":
         overlay.panel.draw(canvas, model)
     elif kind == "changelog":
-        stale = bool(model and model.get("installed") not in (None, _version.running_source()))
-        _overlays.draw_changelog(canvas, stale, int(overlay.tab), int(overlay.scroll))
+        _overlays.draw_changelog(canvas, _common.stale_install(model), int(overlay.tab), int(overlay.scroll))
     else:
         _overlays.draw_help(canvas, int(overlay.scroll))
 

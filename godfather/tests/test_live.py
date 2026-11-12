@@ -400,6 +400,7 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
         view = tool()
         canvas = view.Canvas(80, 20)
         canvas.tables = {"requests": {"x": 0, "y": 0}, "events": {"x": 0, "y": 10}}
+        canvas.order = view.tab_order({"requests": Rect(0, 0, 10, 80), "events": Rect(10, 0, 10, 80)})
         self.assertEqual(["requests", "events", "requests", "events"], tabs(canvas))
         self.assertEqual("events", tabs(canvas, "back_tab")[1])
         state = drawn_state(canvas, focus="details")

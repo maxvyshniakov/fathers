@@ -118,7 +118,8 @@ def reload(name: str) -> Any:
 def frame_of(canvas: Any) -> Any:
     """What a drawn canvas placed, as the live loop hands it to the reducer (state.Drawn)."""
     state = importlib.import_module("godfather.state")
-    return state.Frame(canvas.width, canvas.height, dict(canvas.tables), canvas.version_at, tuple(canvas.hint_hits))
+    return state.Frame(canvas.width, canvas.height, dict(canvas.tables), canvas.version_at, tuple(canvas.hint_hits),
+                       canvas.order)
 
 
 def drawn_state(canvas: Any, model: dict[str, Any] | None = None, selected: int = 0, **fields: Any) -> Any:

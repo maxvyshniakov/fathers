@@ -143,14 +143,9 @@ def machine_resources(model: Model) -> list[Resource]:
 def draw_resource_rows(canvas: Canvas, area: Rect, resources: list[Resource]) -> None:
     """The three rows in the area: health mark, label, a bar, and the value right-aligned in one column as wide as
     the longest, so every bar has the same length; short values (`23/32G`) where full ones leave no bar."""
-    values = [resource.value for resource in resources]
-    column = max(text_width(value) for value in values)
-    bar_width = area.width - _layout.MACHINE_LABEL - 1 - column
-    if bar_width < _layout.MACHINE_BAR_MIN:
-        values = [resource.short for resource in resources]
-        column = max(text_width(value) for value in values)
-        bar_width = area.width - _layout.MACHINE_LABEL - 1 - column
-    bar_width = max(0, bar_width)
+    bar_width, shortened = _layout.resource_bars(area.width, max(text_width(item.value) for item in resources),
+                                                 max(text_width(item.short) for item in resources))
+    values = [resource.short if shortened else resource.value for resource in resources]
     for line, (resource, value) in enumerate(zip(resources, values), area.y):
         canvas.put(line, area.x, _common.health_marks["hot" if resource.critical else "ok"], "text", 2)
         canvas.put(line, area.x + 3, resource.label, "dim")

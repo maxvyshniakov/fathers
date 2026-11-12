@@ -182,6 +182,16 @@ class SlotsTests(unittest.TestCase):
             with self.subTest(width=width, slots=slots):
                 self.assertEqual(cells, layout.slot_cells(x, width, slots))
 
+    def test_labels_end_two_cells_before_the_next_and_free_sits_right(self) -> None:
+        cases: list[tuple[tuple[int, int], list[int], bool, list[tuple[int, int]], int | None]] = [
+            ((3, 87), [3, 26], True, [(3, 21), (26, 58)], 86),
+            ((3, 87), [3, 26], False, [(3, 21), (26, 64)], None),
+            ((3, 3), [3], True, [(3, 3)], None),  # no room for "free"
+        ]
+        for (x, width), starts, free, places, free_at in cases:
+            with self.subTest(width=width, free=free):
+                self.assertEqual((places, free_at), layout.slot_labels(Rect(0, x, 2, width), starts, free))
+
 
 if __name__ == "__main__":
     unittest.main()

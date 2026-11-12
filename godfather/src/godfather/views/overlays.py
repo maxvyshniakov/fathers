@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import re
 import textwrap
-from typing import Callable, NamedTuple, Optional
+from typing import Any, NamedTuple, Optional
 
 from .. import layout as _layout
 from .. import version as _version
@@ -227,42 +227,52 @@ def tabs() -> list[ChangelogTab]:
     return [ChangelogTab("Godfather", _version.changelog_text(), _version.VERSION), *changelog_tabs]
 
 
-def overlay_lines(kind: str, tab: int = 0, stale: bool = False) -> tuple[str, Callable[[int], list[Line]]]:
-    """An overlay's title and its text at a width: help, or the changelog's `tab` (the Godfather one marks newer
-    releases while a newer install waits for a restart)."""
+LAID_OUT: dict[tuple[Any, ...], list[Line]] = {}  # an overlay's text by what it was laid out from: keys reuse it
+
+
+def overlay_lines(kind: str, width: int, tab: int = 0, stale: bool = False) -> tuple[str, list[Line], list[ChangelogTab]]:
+    """An overlay's title, its text at `width`, and the changelog's tabs: help, or the changelog's `tab` (the
+    Godfather one marks newer releases while a newer install waits for a restart). Laid out once per text and
+    width, so scrolling never wraps it again."""
     if kind == "help":
-        return "HELP", help_lines
-    shown = tabs()
-    current = shown[tab % len(shown)]
-
-    def layout(width: int) -> list[Line]:
-        return changelog_lines(width, parse_changelog(current.text), current.running,
-                               stale=stale and current.name == "Godfather")
-
-    return "CHANGELOG", layout
+        key: tuple[Any, ...] = (kind, width)
+        shown: list[ChangelogTab] = []
+    else:
+        shown = tabs()
+        current = shown[tab % len(shown)]
+        key = (kind, width, current, stale)
+    if key not in LAID_OUT:
+        if len(LAID_OUT) > 16:
+            LAID_OUT.clear()
+        if kind == "help":
+            LAID_OUT[key] = help_lines(width)
+        else:
+            current = shown[tab % len(shown)]
+            LAID_OUT[key] = changelog_lines(width, parse_changelog(current.text), current.running,
+                                            stale=stale and current.name == "Godfather")
+    return ("HELP" if kind == "help" else "CHANGELOG"), LAID_OUT[key], shown
 
 
 def overlay_view(kind: str, width: int, height: int, offset: int = 0, tab: int = 0,
-                 stale: bool = False) -> tuple[OverlayView, list[Line]]:
+                 stale: bool = False) -> tuple[OverlayView, list[Line], str, list[ChangelogTab]]:
     """Where an overlay goes on a screen this size and what of it shows from `offset` (kept in range): the one
-    geometry painting, the keys and the wheel share."""
-    box = _layout.centred(width, height, OVERLAY_WIDTH, 0, 0)
-    lines = overlay_lines(kind, tab, stale)[1](box.width - TEXT_INSET)
+    geometry painting, the keys and the wheel share; its lines, title and the changelog's tabs too."""
+    title, lines, shown = overlay_lines(kind, _layout.overlay_text(width, OVERLAY_WIDTH, TEXT_INSET), tab, stale)
     box = _layout.centred(width, height, OVERLAY_WIDTH, len(lines), OVERLAY_CHROME)
     visible = max(0, box.height - OVERLAY_CHROME)
     offset = max(0, min(offset, max(0, len(lines) - visible)))
-    return OverlayView(box.x, box.y, box.width, box.height, offset, visible, len(lines), kind), lines
+    return OverlayView(box.x, box.y, box.width, box.height, offset, visible, len(lines), kind), lines, title, shown
 
 
 def draw_overlay(canvas: Canvas, kind: str, offset: int = 0, tab: int = 0, stale: bool = False) -> None:
     """A centred, scrollable overlay (help, the changelog): the frame, scrollbar, counts and centred footer are the
     same for every one."""
-    view, lines = overlay_view(kind, canvas.width, canvas.height, offset, tab, stale)
+    view, lines, title, tool_tabs = overlay_view(kind, canvas.width, canvas.height, offset, tab, stale)
     canvas.help_view = view
     panel = Panel(canvas, _layout.Rect(view.y, view.x, view.height, view.width), kind, right=4, footer=True)
-    panel.overlay(overlay_lines(kind, tab, stale)[0])
+    panel.overlay(title)
     if view.height < 6:
-        canvas.put(view.y + 1, view.x + 2, "Enlarge terminal", "dim", max(0, view.width - 4))
+        panel.note("Enlarge terminal")
         return
     panel.scrollbar(view.offset, view.visible, view.total)
     for row, parts in enumerate(lines[view.offset:view.offset + view.visible], panel.inner.y):
@@ -271,12 +281,11 @@ def draw_overlay(canvas: Canvas, kind: str, offset: int = 0, tab: int = 0, stale
     hints = [("↑↓", "scroll"), ("esc", "close")] + ([("q", "quit")] if kind == "help" else [])
     panel.footer(hints, shown)
     if kind == "changelog":
-        changelog_tabs_border(panel, tab)
+        changelog_tabs_border(panel, tool_tabs, tab)
 
 
-def changelog_tabs_border(panel: Panel, tab: int) -> None:
+def changelog_tabs_border(panel: Panel, shown: list[ChangelogTab], tab: int) -> None:
     """With more than one tab, their names in the changelog's top border, the shown one bright; ←/→ switch them."""
-    shown = tabs()
     if len(shown) < 2:
         return
     current = shown[tab % len(shown)]

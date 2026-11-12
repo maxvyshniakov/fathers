@@ -17,6 +17,8 @@ STATUS_LABEL = 13  # columns of a status label
 FIELD_LABEL = 28  # columns of a setting's label, its gutter included
 FLASH_SECONDS = 4.0  # how long a confirmation shows, and how long a first D stays armed
 FLASH_MARKS = {"ok": "✓ ", "warn": "! ", "bad": "✗ ", "accent": "… "}
+LOCAL = ("interval", "theme")  # this dashboard's own settings, never written to the shared queue
+CHOICES = ("mode", "order", "theme")  # fields whose value is picked from a list (‹ ›), never typed
 
 
 class Row(NamedTuple):
@@ -92,7 +94,7 @@ def field_rows(settings: Settings, key: str, value_column: int) -> list[Row]:
         return [Row(key, tuple(parts)), Row(key, ((4, note, style),))]
     pending = settings.pending is not None and settings.pending.key == key
     value = settings.text(key, settings.shown_value(key))
-    if selected and key in ("mode", "order", "theme"):
+    if selected and key in CHOICES:
         value = f"‹ {value} ›"
     parts.append((value_column, value, "cursor" if pending else "accent"))
     after = value_column + len(value) + 2
@@ -106,7 +108,7 @@ def field_rows(settings: Settings, key: str, value_column: int) -> list[Row]:
         note = settings.drain_note(settings.basis["slots"])
         if note:
             parts.append((after, note.replace("will drain", "draining"), "warn"))
-    elif key in settings.effective and key not in ("interval", "theme") and \
+    elif key in settings.effective and key not in LOCAL and \
             settings.effective[key] != settings.saved[key]:
         shown = settings.text(key, settings.effective[key])
         parts.append((after, f"effective here: {shown}", "dim"))  # this dashboard's environment tightens it
@@ -149,8 +151,7 @@ def draw(settings: Settings, canvas: Canvas, model: Optional[dict[str, Any]]) ->
         settings.held = int(model.get("used", 0))
         settings.waiting = [int(waiter.get("count", 1)) for waiter in model.get("waiters", [])]
     settings.settle_focus()
-    width = _layout.centred(canvas.width, canvas.height, _layout.SETTINGS_WIDTH, 0, 0).width
-    lines = body(settings, model, max(0, width - 6))
+    lines = body(settings, model, _layout.overlay_text(canvas.width, _layout.SETTINGS_WIDTH, _layout.SETTINGS_INSET))
     rect = _layout.centred(canvas.width, canvas.height, _layout.SETTINGS_WIDTH, len(lines), _layout.SETTINGS_CHROME)
     inside = _layout.settings(rect)
     settings.bounds = rect.x, rect.y, rect.width, rect.height
@@ -159,7 +160,7 @@ def draw(settings: Settings, canvas: Canvas, model: Optional[dict[str, Any]]) ->
     panel.overlay("SETTINGS", "saved at once · applies at the next grant" if inside.notes.width >= 60 else "")
     settings.small = inside.small
     if inside.small:
-        canvas.put(rect.y + 1, rect.x + 2, "Enlarge terminal · Esc closes", "dim", inside.notes.width)
+        panel.note("Enlarge terminal · Esc closes")
         return
     settings.visible, settings.total = inside.rows.height, len(lines)
     if settings.reveal:

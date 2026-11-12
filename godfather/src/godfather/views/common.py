@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import math
 import re
-from typing import Any, Union, cast
+from typing import Any, Optional, Union, cast
 
 from .. import theme as _theme
 from .. import tui as _tui
+from .. import version as _version
 from ..tui import text_width
 
 Part = tuple[str, str]
@@ -67,6 +68,11 @@ def dashboard_colours(model: Model, assigned: dict[Any, int]) -> None:
             taken = [index % count for index in assigned.values()]
             assigned[identity] = min(range(count), key=lambda n: (taken.count(n), n))
         holder["style"] = f"h{assigned[identity] % count}"
+
+
+def stale_install(model: Optional[Model]) -> bool:
+    """A newer install waits for a restart: the footer shows ↻ and the changelog marks the newer releases new."""
+    return bool(model and model.get("installed") not in (None, _version.running_source()))
 
 
 def fill(style: str) -> str:

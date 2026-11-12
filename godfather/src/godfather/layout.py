@@ -202,6 +202,21 @@ def machine(panel: Rect, values: int) -> Machine:
     return Machine(False, lines, compact, Rect(row, x + 3, chart_rows, inner) if chart_rows else None)
 
 
+def resource_bars(width: int, values: int, shorts: int) -> tuple[int, bool]:
+    """MACHINE's rows in `width` cells: the bars' length after the mark and label and before the values' column, and
+    whether the short values (`23/32G`) stand in for the full ones, which they do where those leave no bar."""
+    bar = width - MACHINE_LABEL - 1 - values
+    if bar < MACHINE_BAR_MIN:
+        return max(0, width - MACHINE_LABEL - 1 - shorts), True
+    return bar, False
+
+
+def overlay_text(width: int, most: int, inset: int) -> int:
+    """The text width of an overlay at most `most` columns on a screen `width` wide, `inset` cells of frame and
+    padding left of and right of its text."""
+    return max(0, min(max(0, width - 2), most) - inset)
+
+
 def centred(width: int, height: int, most: int, rows: int, chrome: int) -> Rect:
     """An overlay over the screen: at most `most` columns and two less than the screen, as tall as its `rows` and
     its `chrome` (frame, padding, footer) allow, centred."""
@@ -224,7 +239,22 @@ def slot_cells(x: int, width: int, slots: int) -> list[tuple[int, int]]:
     return found
 
 
+FREE_LABEL = 4  # "free", right-aligned under the free slots
+
+
+def slot_labels(area: Rect, starts: list[int], free: bool) -> tuple[list[tuple[int, int]], Optional[int]]:
+    """The labels under the slot blocks: each lease's from its first block to two cells before the next label (or
+    the free label), (x, width) each; and where "free" goes, right-aligned, while any slot is free."""
+    end = area.x + area.width
+    free_at = end - FREE_LABEL if free and area.width >= FREE_LABEL else None
+    if free_at is not None:
+        end = free_at - 2
+    limits = [start - 2 for start in starts[1:]] + [end]
+    return [(start, max(0, limit - start)) for start, limit in zip(starts, limits)], free_at
+
+
 SETTINGS_WIDTH, SETTINGS_CHROME = 80, 9  # Settings' most columns; frame, padding, the rule, notes and footer rows
+SETTINGS_INSET = 6  # the list two cells in from the frame, two padding cells on the right (the scrollbar in one)
 SETTINGS_MIN_WIDTH, SETTINGS_MIN_HEIGHT = 30, 12  # below this the panel only says to enlarge the terminal
 
 
