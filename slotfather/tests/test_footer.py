@@ -233,6 +233,11 @@ class HintClickLiveTests(SlotCase):
             mark = receive("↑↓ scroll", mark)
             click("s settings", 30)
             mark = receive("enter edit", mark)
+            deadline = time.monotonic() + 8  # the rest of the footer can come in a later PTY read
+            while time.monotonic() < deadline and not any(
+                    "esc close" in line and "enter" in line for line in self.rows(bytes(screen)).values()):
+                if select.select([master], [], [], 0.05)[0]:
+                    screen.extend(os.read(master, 65536))
             settings_row = next(r for r, line in self.rows(bytes(screen)).items() if "esc close" in line and "enter" in line)
             click("esc close", settings_row)
             mark = receive("QUEUE", mark)
