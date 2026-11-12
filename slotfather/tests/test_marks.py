@@ -78,7 +78,7 @@ class MarkTests(unittest.TestCase):
                                   "the priority: two cells, blank for normal")
                     self.assertEqual(" ", cells[8][0], "then a gap")
                     self.assertNotEqual(" ", cells[9][0], "the label starts in the same cell on every row")
-                    self.assertEqual("┃" if y == rows[0] else "│", cells[width - 1][0], "the frame stays put")
+                    self.assertEqual("┃" if y == rows[0] else "║", cells[width - 1][0], "the frame stays put (focused)")
                     self.assertNotIn("▶", [cell[0] for cell in cells], "no cursor glyph")
                     self.assertFalse({"◌", "↓"} & {cell[0] for cell in cells}, "no marker column")
                 if width >= 60:  # the columns right of the label start in the same cell on every running row
@@ -155,7 +155,7 @@ class MarkTests(unittest.TestCase):
                 self.assertEqual(["┃", style], canvas.cells[y][0][:2])
                 self.assertTrue(canvas.lines(True)[y].startswith(sgr + "┃"), canvas.lines(True)[y][:40])
                 others = [canvas.cells[row][0][0] for row in range(1, 13) if row != y]
-                self.assertEqual({"│"}, set(others), "only the selected row")
+                self.assertEqual({"║"}, set(others), "only the selected row; the rest of the focused frame double")
                 self.assertEqual({"accent"}, {canvas.cells[row][0][1] for row in range(1, 13) if row != y},
                                  "the rest of the frame is the focused blue")
                 self.assertEqual("#", canvas.lines(False, ascii_only=True)[y][0])
@@ -437,7 +437,7 @@ class FrameTests(unittest.TestCase):
         self.assertEqual(["┃", "f0"], canvas.cells[selected[0]][0][:2], "left: the row's fill")
         self.assertEqual(["┃", "dim"], canvas.cells[selected[0]][118][:2], "right: the thumb, same row, muted at rest")
         self.assertEqual(["┃", "f0"], canvas.cells[selected[0]][119][:2], "right: the row's fill on the frame too")
-        self.assertEqual(["│", "accent"], canvas.cells[selected[0] + 1][119][:2], "the focused frame: light, in blue")
+        self.assertEqual(["║", "accent"], canvas.cells[selected[0] + 1][119][:2], "the focused frame: double, in blue")
         self.assertNotIn("↓", canvas.render(False), "no row counts: the scrollbar shows it")
 
     def test_every_panel_title_sits_at_one_offset(self) -> None:

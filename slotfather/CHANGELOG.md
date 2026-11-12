@@ -28,8 +28,8 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   limit (nothing passes after 2700 s) is off by default; `--limit` still sets one.
 - The scrollbar is a thumb alone, moving in half cells; the `↑ N above` and `↓ N more` counts are gone.
   EVENTS still shows `↑ N new` while scrolled away from the newest.
-- The focused panel's frame is the terminal's blue, with its title and column headers in the foreground
-  colour; the other panels stay muted. Every frame keeps the same light, rounded lines.
+- The focused panel's frame is a double line in the focus blue, with its title and column headers in the
+  foreground colour; the other panels keep a light, rounded, muted frame.
 - A selected row keeps its text colour; only its background is tinted, lightly enough that its text keeps
   most of its contrast.
 - Every footer hint, in the dashboard and in help, Settings and the changelog, is a click target that does
