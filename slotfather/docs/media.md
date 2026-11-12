@@ -28,8 +28,9 @@ slotfather run -n 1 --priority interactive -- python3 tools/dashboard-demo.py --
 Outputs are `assets/dashboard.webp` and `assets/dashboard.png`, each also in a light
 terminal theme (`assets/dashboard-light.*`, which the README shows to a light page).
 Recipes live in `tools/screens.mjs`; reusable takes and verification evidence stay under the
-ignored `assets/screens/` directory. The animation is lossless WebP. The dark palette
-is Ghostty’s built-in default, the light one a warm white with GitHub Light’s ANSI colours.
+ignored `assets/screens/` directory. The animation is lossless WebP. The themes are the owner's: dark is
+Seti (background `#111213`, foreground `#cacecd`), light is Pro Light (`#ffffff`, `#191919`), each with its exact
+ANSI palette from the Ghostty theme files cmux bundles. Proof screenshots use the same two.
 screen-kit's terminal does not answer colour queries, so each recipe passes its background
 and foreground as `SLOTFATHER_TERMINAL_BG` / `_FG` (#14). Screen Kit Mono preserves JetBrains Mono geometry
 except for compact-square side bearings, so bar cells remain visibly separate.

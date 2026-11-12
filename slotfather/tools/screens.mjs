@@ -1,14 +1,17 @@
 // The demo cannot ask screen-kit's headless terminal for its colours (#14), so each recipe tells the dashboard the
-// background and foreground it renders with. Dark: Ghostty's built-in default (screen-kit's). Light: a warm white
-// with GitHub Light's ANSI palette.
-const dark={bg:'#282c34',fg:'#ffffff'};
-const light={bg:'#fdfcfa',fg:'#2a2a2a',palette:[
- '#24292f','#cf222e','#116329','#4d2d00','#0969da','#8250df','#1b7c83','#6e7781',
- '#57606a','#a40e26','#1a7f37','#633c01','#218bff','#a475f9','#3192aa','#8c959f',
+// background and foreground it renders with. The owner's themes (cmux, from its bundled Ghostty theme files):
+// dark Seti, light Pro Light, with their exact palettes.
+const dark={bg:'#111213',fg:'#cacecd',palette:[
+ '#323232','#c22832','#8ec43d','#e0c64f','#43a5d5','#8b57b5','#8ec43d','#eeeeee',
+ '#3f3f3f','#c22832','#8ec43d','#e0c64f','#43a5d5','#8b57b5','#8ec43d','#ffffff',
+].join(':')};
+const light={bg:'#ffffff',fg:'#191919',palette:[
+ '#000000','#e5492b','#50d148','#c6c440','#3b75ff','#ed66e8','#4ed2de','#c2c2c2',
+ '#9f9f9f','#ff6640','#48d53e','#bfbe23','#0082ff','#ff7eff','#3bd1d2','#f2f2f2',
 ].join(':')};
 const surface=({bg,fg})=>({SLOTFATHER_TERMINAL_BG:bg,SLOTFATHER_TERMINAL_FG:fg,SLOTFATHER_THEME:'auto'});
 const terminal={
- source:'terminal',command:['python3','tools/dashboard-demo.py'],columns:176,rows:50,
+ source:'terminal',command:['python3','tools/dashboard-demo.py'],columns:176,rows:50,theme:dark,
  env:{NO_COLOR:'',COLORFGBG:'',...surface(dark)},
  fontSize:18,lineHeight:1.2,fontFamily:'Screen Kit Mono,JetBrains Mono,Noto Sans Symbols 2',
 };

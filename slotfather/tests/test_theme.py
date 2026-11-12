@@ -34,7 +34,9 @@ LIGHT_BG, LIGHT_FG = (0xFD, 0xFC, 0xFA), (0x2A, 0x2A, 0x2A)
 DARK_BG, DARK_FG = (0x28, 0x2C, 0x34), (0xFF, 0xFF, 0xFF)
 LIGHT_ENV = {"SLOTFATHER_TERMINAL_BG": "#fdfcfa", "SLOTFATHER_TERMINAL_FG": "#2a2a2a"}
 DARK_ENV = {"SLOTFATHER_TERMINAL_BG": "#282c34", "SLOTFATHER_TERMINAL_FG": "#ffffff"}
-BACKGROUNDS = {"light": [LIGHT_BG, (255, 255, 255), (238, 232, 213)], "dark": [DARK_BG, (0, 0, 0), (30, 30, 46)]}
+# The owner's own themes (cmux's bundled Ghostty files) among them: Pro Light #ffffff, Seti #111213
+BACKGROUNDS = {"light": [LIGHT_BG, (255, 255, 255), (238, 232, 213)],
+               "dark": [DARK_BG, (0, 0, 0), (30, 30, 46), (0x11, 0x12, 0x13)]}
 # The palette's red the "over share" bar uses: Ghostty's default and a light theme's (GitHub Light)
 RED = {"light": (0xCF, 0x22, 0x2E), "dark": (0xCC, 0x66, 0x66)}
 
@@ -83,10 +85,11 @@ def hexes(text: str) -> list[tuple[int, int, int]]:
 REFERENCES = {"light": (0xFD, 0xFC, 0xFA), "dark": (0x1E, 0x1E, 0x1E)}
 # Terminal palettes' (blue, red, yellow): focus, over share and idle
 RESERVED = {"light": [hexes("#0969da #cf222e #4d2d00"), hexes("#0000ee #cd0000 #cdcd00"),
-                      hexes("#4078f2 #e45649 #c18401")],  # GitHub Light, xterm, One Light
+                      hexes("#4078f2 #e45649 #c18401"), hexes("#3b75ff #e5492b #c6c440")],  # GitHub Light, xterm,
+            # One Light, Pro Light
             "dark": [hexes("#81a2be #cc6666 #f0c674"), hexes("#61afef #e06c75 #e5c07b"), hexes("#0000ee #cd0000 #cdcd00"),
-                     hexes("#bd93f9 #ff5555 #f1fa8c"), hexes("#89b4fa #f38ba8 #f9e2af")]}  # Ghostty, One Dark, xterm,
-# Dracula, Catppuccin Mocha
+                     hexes("#bd93f9 #ff5555 #f1fa8c"), hexes("#89b4fa #f38ba8 #f9e2af"),
+                     hexes("#43a5d5 #c22832 #e0c64f")]}  # Ghostty, One Dark, xterm, Dracula, Catppuccin Mocha, Seti
 # The owner's pick (2026-11-11), "Neon": OKLCH hues in the order holders get them
 ORDER = ["hot pink", "orange", "acid green", "spring teal", "cyan", "electric violet", "magenta", "green"]
 NEON_HUES = [350, 68, 138, 172, 205, 288, 318, 152]
@@ -186,7 +189,7 @@ def cast_rgb(colour: Any) -> tuple[int, int, int]:
 
 # Real themes' (foreground, background, bright black): Seti and Pro Light (iTerm2), One Dark, Solarized, Dracula,
 # GitHub Light Default
-MUTED_THEMES = {"Seti": hexes("#cacecd #111213 #323232"), "Pro Light": hexes("#191919 #ffffff #9f9f9f"),
+MUTED_THEMES = {"Seti": hexes("#cacecd #111213 #3f3f3f"), "Pro Light": hexes("#191919 #ffffff #9f9f9f"),
                 "One Dark": hexes("#abb2bf #282c34 #5c6370"), "Solarized Dark": hexes("#839496 #002b36 #002b36"),
                 "Solarized Light": hexes("#657b83 #fdf6e3 #002b36"), "Dracula": hexes("#f8f8f2 #282a36 #6272a4"),
                 "GitHub Light": hexes("#1f2328 #ffffff #57606a")}
@@ -302,6 +305,10 @@ class RampTests(unittest.TestCase):
                 self.assertGreaterEqual(theme.contrast(colour, reference), 4.5, name)
         for name in theme.SEMANTIC:  # One Dark's background is lighter than the reference: bad gets lighter
             self.assertGreaterEqual(theme.contrast(theme.semantic(name, DARK_BG, False), DARK_BG), 4.5, name)
+        for light, background in ((True, (255, 255, 255)), (False, (0x11, 0x12, 0x13))):  # Pro Light, Seti
+            for name in theme.SEMANTIC:
+                self.assertGreaterEqual(theme.contrast(theme.semantic(name, background, light), background), 4.5,
+                                        f"{name} on {background}")
         found = theme.resolve("auto", None, DARK_ENV)
         self.assertEqual(theme.semantic("bad", DARK_BG, False), found.styles["bad"][0])
         self.assertEqual((found.styles["ok"][0], "br"), found.styles["badge-ok"])
