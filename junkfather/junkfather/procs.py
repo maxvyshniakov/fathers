@@ -1,17 +1,19 @@
 """The process table: one `ps` read, identities (pid plus start time), trees and process groups.
 
-A process is known by its pid and its start time (`ps -o lstart` in the C locale). A pid alone can be reused; the
-pair cannot within the lifetime of a machine's clock. Every decision to signal a process goes through that pair.
+A process is known by its pid and its start time (`ps -o lstart` in the C locale and UTC, so every caller reads the
+same text whatever its TZ). A pid alone can be reused; the pair cannot within the lifetime of a machine's clock.
+Every decision to signal a process goes through that pair.
 """
 from __future__ import annotations
 
+import calendar
 import os
 import subprocess
 import time
 from typing import Dict, List, NamedTuple, Optional
 
 TIMEOUT = 10.0  # seconds a ps or lsof call may take
-C_LOCALE = {"LC_ALL": "C", "LANG": "C"}
+C_LOCALE = {"LC_ALL": "C", "LANG": "C", "TZ": "UTC"}
 LSTART = "%a %b %d %H:%M:%S %Y"
 
 
@@ -42,9 +44,9 @@ def norm(start: str) -> str:
 
 
 def started_at(lstart: str) -> Optional[float]:
-    """Epoch seconds of a local-time lstart; None when it does not parse."""
+    """Epoch seconds of a UTC lstart; None when it does not parse."""
     try:
-        return time.mktime(time.strptime(norm(lstart), LSTART))
+        return float(calendar.timegm(time.strptime(norm(lstart), LSTART)))
     except ValueError:
         return None
 
@@ -107,7 +109,8 @@ class Table:
             here = self.procs[here].ppid
         return chain
 
-    def descendants(self, pid: int) -> List[Proc]:
+    def descendants(self, pid: int, prune=None) -> List[Proc]:
+        """Every process below pid; with `prune`, a process it accepts is left out together with its subtree."""
         found: List[Proc] = []
         seen = {pid}
         stack = list(self.children.get(pid, ()))
@@ -116,6 +119,8 @@ class Table:
             if here in seen or here not in self.procs:
                 continue
             seen.add(here)
+            if prune is not None and prune(self.procs[here]):
+                continue
             found.append(self.procs[here])
             stack.extend(self.children.get(here, ()))
         return found
@@ -129,13 +134,11 @@ class Table:
 
 
 def identities(pids: List[int]) -> Dict[int, str]:
-    """pid -> start time for those of `pids` that still run and are not zombies; {} when ps cannot be asked."""
+    """pid -> start time for those of `pids` that still run and are not zombies. ProcError when ps cannot be asked:
+    an unreadable answer is never "they are gone"."""
     if not pids:
         return {}
-    try:
-        text = run(["ps", "-o", "pid=,stat=,lstart=", "-p", ",".join(str(pid) for pid in pids)], ok=(0, 1))
-    except ProcError:
-        return {}
+    text = run(["ps", "-o", "pid=,stat=,lstart=", "-p", ",".join(str(pid) for pid in pids)], ok=(0, 1))
     found: Dict[int, str] = {}
     for line in text.splitlines():
         parts = line.split(None, 2)

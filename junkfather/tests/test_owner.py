@@ -36,6 +36,12 @@ class AliveTests(unittest.TestCase):
         registry = [{"pid": 600, "sessionId": "s2", "procStart": UTC}]
         self.assertFalse(owner.alive(self.claude, table(proc(600, start=START)), sessions=registry))
 
+    def test_a_claude_owner_without_a_process_is_unknown_unless_the_registry_names_it(self):
+        bare = {"kind": "claude", "session": "s1", "pid": None}
+        self.assertIsNone(owner.alive(bare, table(proc(600, start=START)), sessions=[]))
+        registry = [{"pid": 600, "sessionId": "s1", "procStart": UTC}]
+        self.assertTrue(owner.alive(bare, table(proc(600, start=START)), sessions=registry))
+
     def test_unknown_is_never_gone(self):
         self.assertIsNone(owner.alive(self.claude, None))
         self.assertIsNone(owner.alive({"kind": "codex", "session": "t1", "pid": None}, table()))
@@ -94,6 +100,20 @@ class ClaimTests(Case):
         now = time.time()
         self.claim("a1", "npm run dev", now - 1, "t1")
         self.assertIsNone(owner.find_claim(self.store, "s1", ["own", "npm"], now)[0])
+
+    def test_a_claim_that_does_not_hold_every_word_is_no_claim(self):
+        now = time.time()
+        self.claim("agent-b", "junkfather list", now - 60, "t1")
+        self.claim("agent-c", "junkfather own -- npm run build", now - 30, "t2")
+        found, note = owner.find_claim(self.store, "s1", ["own", "npm", "run", "dev"], now)
+        self.assertIsNone(found)
+        self.assertIn("no claim", note)
+
+    def test_a_claim_is_used_once_per_command(self):
+        now = time.time()
+        self.claim("a1", "junkfather own -- vite", now - 5, "t1")
+        self.assertEqual("a1", (owner.find_claim(self.store, "s1", ["own", "vite"], now)[0] or {}).get("agent"))
+        self.assertIsNone(owner.find_claim(self.store, "s1", ["own", "vite"], now)[0])
 
     def test_unsafe_names_write_no_claim(self):
         self.assertIsNone(owner.write_claim(self.store, {"session_id": "../x", "tool_use_id": "t",

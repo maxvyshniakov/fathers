@@ -13,7 +13,7 @@ A = "Thu Nov 12 10:00:00 2026"
 B = "Thu Nov 12 11:30:00 2026"
 
 
-def entry(pid: int = 100, start: str = A, cmd: str = "node server.js", group: bool = True, known=None):
+def entry(pid: "int | None" = 100, start: str = A, cmd: str = "node server.js", group: bool = True, known=None):
     return {"id": "jtest", "state": "running", "pid": pid, "pgid": pid, "start": start, "seen": cmd, "group": group,
             "known": known or [], "argv": cmd.split(), "expires": 0, "keep": "owner", "owner": {}}
 
@@ -119,3 +119,70 @@ class ReapEntryTests(Case):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReviewFixTests(Case):
+    """The independent review's findings, each pinned by a test."""
+
+    def test_terminals_agent_sessions_and_what_runs_below_them_are_never_members(self):
+        found, _ = reap.members(entry(), table(
+            proc(100, cmd="node server.js"), proc(101, ppid=100, pgid=100, cmd="tmux new-session"),
+            proc(102, ppid=101, pgid=102, tty="ttys004", cmd="-zsh"),
+            proc(103, ppid=102, pgid=103, cmd="/Users/x/.local/share/claude/versions/2.1.322"),
+            proc(104, ppid=100, pgid=100, cmd="/opt/bin/codex exec"), proc(105, ppid=104, pgid=100),
+            proc(106, ppid=100, pgid=100, cmd="chrome --headless")))
+        self.assertEqual([100, 101, 106], [p.pid for p in found])
+
+    def test_an_unreadable_process_table_fails_the_stop_and_keeps_the_entry(self):
+        def look(_pids):
+            raise procs.ProcError("ps did not answer")
+        result = reap.stop([proc(100)], look=look, kill=lambda *_: self.fail("signalled"))
+        self.assertEqual("failed", result["result"])
+        child = self.spawn("sleep", "600", start_new_session=True)
+        mine = procs.Table.read().get(child.pid)
+        assert mine is not None
+        self.store.save(entry(pid=child.pid, start=mine.start, cmd=mine.cmd))
+        outcome = reap.reap(self.store, "jtest", "test", stopper=lambda targets, grace: reap.stop(targets, grace,
+                                                                                              look=look))
+        self.assertEqual("failed", outcome["result"])
+        self.assertEqual("running", self.state_of("jtest"))
+        self.assertTrue(self.runs(child.pid))
+
+    def test_a_starting_entry_is_skipped_not_marked_reaped(self):
+        record = entry(pid=None)
+        record["state"] = "starting"
+        self.store.save(record)
+        self.assertEqual("skipped", reap.reap(self.store, "jtest", "session-end")["result"])
+        self.assertEqual("starting", self.state_of("jtest"))
+
+    def test_a_child_whose_entry_stopped_starting_is_stopped_not_revived(self):
+        from junkfather import launch
+        import subprocess
+        record = entry(pid=None)
+        record["state"] = "reaped"
+        self.store.save(record)
+        child = subprocess.Popen(["sleep", "600"], start_new_session=True)
+        self.children.append(child)
+        self.assertIsNone(launch.record_child(self.store, "jtest", child, os.getpid()))
+        self.assertIsNotNone(child.poll())
+        self.assertEqual("reaped", self.state_of("jtest"))
+
+    def test_identities_do_not_depend_on_the_callers_time_zone(self):
+        child = self.spawn("sleep", "600")
+        first = procs.identities([child.pid])
+        os.environ["TZ"] = "Asia/Tokyo"
+        self.addCleanup(os.environ.pop, "TZ", None)
+        self.assertEqual(first, procs.identities([child.pid]))
+        self.assertEqual(first[child.pid], (procs.Table.read().get(child.pid) or proc(0)).start)
+
+    def test_unowned_reports_skip_live_sessions_and_trees_holding_terminals(self):
+        from junkfather import sweep
+        root = "/scratch/"
+        t = table(proc(500, cmd="/Users/x/.local/share/claude/versions/2.1.322"),
+                  proc(510, ppid=500, cmd="node mcp-server.js"),
+                  proc(520, ppid=1, cmd="tmux new -d"), proc(521, ppid=520, pgid=521, tty="ttys009", cmd="-zsh"),
+                  proc(530, ppid=1, cmd="firefox -marionette -profile /scratch/s/profile"))
+        cwds = {510: "/scratch/s", 520: "/scratch/s"}
+        items = sweep.unowned(t, cwds, set(), [root], sweep.agent_sessions(t))
+        self.assertEqual([530], [i["pid"] for i in items])
+        self.assertEqual("/scratch/", items[0]["root"])

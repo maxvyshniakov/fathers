@@ -356,13 +356,20 @@ def reap_unowned(store: Store, args: argparse.Namespace, table: _procs.Table) ->
         refusal = "it no longer runs"
     elif proc.start != _procs.norm(listed.get("start") or ""):
         refusal = "the pid now belongs to another process (its start time changed)"
-    elif proc.uid != os.getuid() or proc.tty or pid in _reap.protected(table):
+    elif proc.uid != os.getuid() or _reap.unsafe(proc) or pid in _reap.protected(table):
         refusal = "not a process junkfather may stop"
+    elif any(_reap.unsafe(p) for p in table.descendants(pid)):
+        refusal = "its tree holds a terminal's process or an agent session"
+    elif any(pid in {p.pid for p in _reap.members(e, table)[0]} for e in store.entries()
+             if e.get("state") in RUNNING):
+        refusal = "an entry owns it now (reap that entry)"
     if refusal:
         print(f"junkfather reap: refusing pid {pid}: {refusal}", file=sys.stderr)
         return 1
     assert proc is not None
-    targets = [proc] + [p for p in table.descendants(pid) if p.uid == os.getuid()]
+    skip = _reap.protected(table)
+    targets = [proc] + [p for p in table.descendants(pid, prune=_reap.unsafe)
+                        if p.uid == os.getuid() and p.pid not in skip]
     if args.dry_run:
         results = [{"id": f"pid {pid}", "result": "would-stop", "reason": "forced", "pids": [p.pid for p in targets],
                     "how": "unowned"}]

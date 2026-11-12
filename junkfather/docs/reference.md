@@ -67,10 +67,13 @@ A command run with `GODFATHER_ACTOR` set carries `via: "godfather"`.
   or the same program; `--force` skips the command check, never the start time); with a verified leader of its own
   group, the whole group, which the live leader pins; without one, only the `known` members, never the group id
   alone, since a group id can be taken again once its last member ends; then the descendants of all of these. Only
-  this user's processes, never pid 1, junkfather or its ancestors.
+  this user's processes, never pid 1, junkfather or its ancestors, and never a process with a terminal or an agent
+  session (Claude Code, Codex), nor anything below one. Up to three rounds: a process forked during the grace
+  period is found by the next read.
 - **How**: SIGTERM to each target whose start time was just read again, up to `--grace` seconds (10), SIGKILL to
   what is left, again only to unchanged identities. Results: `stopped`, `killed`, `gone` (nothing left to signal),
-  `failed` (the entry keeps running and records `last_error`).
+  `failed` (the entry keeps running and records `last_error`; also when `ps` cannot be read, which is never taken
+  for "they ended"). Start times are read in UTC, whatever the caller's `TZ`.
 - **Never** a process junkfather did not start or adopt, except `reap --pid PID --force` on a pid the last sweep
   listed as unowned, with the same start time and still unowned.
 
@@ -79,13 +82,16 @@ A command run with `GODFATHER_ACTOR` set carries `via: "godfather"`.
 A Claude Code session lives while its recorded process (`CLAUDE_PID`, with its start time) runs, or while Claude
 Code's session registry, `~/.claude/sessions/<pid>.json` (`{pid, sessionId, procStart, ...}`), names the session
 with a process that runs and started when the record says (a resumed session gets a new process). A Codex session
-lives while its `codex` process runs; a shell owner while that process runs. When the process table cannot be
-read, or an owner has no process to check, its liveness is unknown, and unknown never reaps.
+lives while its `codex` process runs; a shell owner (outside an agent) is the nearest ancestor with a terminal and
+lives while it runs; a script or cron job has no such ancestor, so only the TTL ends its entries. When the process
+table cannot be read, or an owner has no process to check and the registry does not name it, its liveness is
+unknown, and unknown never reaps.
 
 The subagent comes from claims: the PreToolUse hook writes `claims/<session>/<tool_use_id>.json` (agent id, agent
 type, command) for each Bash call naming junkfather, and `own` takes the newest claim of its session whose command
-holds its arguments. When two agents of the session ran a matching command within a minute of each other, the
-entry belongs to the session alone and `own` says so. Claude Code passes `agent_id` to hooks but not to the Bash
+holds `own` and every one of its arguments, and marks it used for them. No full match (a script that runs
+junkfather, a hook not installed), or two agents of the session with a matching command within a minute of each
+other, leaves the entry to the session alone, and `own` says so: a session-level entry lives longer, never shorter. Claude Code passes `agent_id` to hooks but not to the Bash
 tool's environment, hence the claims.
 
 ## Hooks
@@ -107,8 +113,10 @@ Hourly (`com.junkfather.sweep`, `sweep.out` beside the state): reaps entries pas
 is gone, marks entries with no process left `gone`, resets an entry stuck in `reaping` for 5 minutes, prunes old
 entries, and reports unowned processes: this user's, outside every running entry, whose working directory or a
 path in their command is under `/private/tmp/claude-<uid>/`, `/tmp/claude-<uid>/`, `$JUNKFATHER_SCRATCH_ROOTS`, or a
-`.claude/worktrees/` or `.codex/worktrees/` directory. Agent sessions, processes with a terminal and processes under
-a live agent session younger than 6 h are left out; one item per tree and process group. The report goes to
+`.claude/worktrees/` or `.codex/worktrees/` directory. Left out: agent sessions, processes with a terminal, anything
+below a live agent session (its shells, MCP and language servers at work), and any process whose tree holds a
+terminal's process or an agent session (a tmux server). A browser or server left behind has been adopted by launchd,
+so it is reported; one item per tree and process group. The report goes to
 `unowned.json` and never stops anything.
 
 ## Boundaries

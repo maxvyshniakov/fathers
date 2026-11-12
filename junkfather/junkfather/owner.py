@@ -9,10 +9,13 @@ process that ran junkfather (a terminal's shell, a script).
            its recorded process runs or the registry names it with a running process (a resumed session gets a
            new process). $JUNKFATHER_CLAUDE_SESSIONS moves the registry (tests).
   codex    CODEX_THREAD_ID (or CODEX_SESSION_ID); the session's process is the nearest `codex` ancestor.
-  shell    the parent process of junkfather.
+  shell    the nearest ancestor with a terminal (a person's shell); none outside a terminal (a script, cron), and
+           then only the TTL ends the entry.
 
 The subagent comes from a claim: the PreToolUse hook writes the session, agent id and command of every Bash call
-that names junkfather (hook.py); `own` takes the newest claim of its session whose command holds its arguments. Two
+that names junkfather (hook.py); `own` takes the newest claim of its session whose command holds `own` and every
+one of its arguments, and marks it used for those arguments; anything less leaves the entry to the session alone (a
+session-level entry lives longer, never shorter). Two
 agents of one session running the same command within CLAIM_AMBIGUOUS seconds make the claim ambiguous: the entry
 then belongs to the session alone, and says so.
 """
@@ -97,8 +100,14 @@ def detect(env: Mapping[str, str], table: Optional[_procs.Table], cwd: str, me: 
         owner.update(kind="codex", session=codex)
         proc = nearest(table, me, CODEX)
     else:
-        parent = table.get(table.procs[me].ppid) if table is not None and me in table.procs else None
-        proc = parent
+        proc = None
+        if table is not None and me in table.procs:
+            proc = next((table.procs[p] for p in table.ancestors(me) if table.procs[p].tty), None)
+    if proc is None and owner["kind"] == "claude" and table is not None:
+        for record in registry() or []:
+            if record.get("sessionId") == session and registered_alive(record, table):
+                proc = table.get(record["pid"])
+                break
     if proc is not None:
         owner.update(pid=proc.pid, pid_start=proc.start)
     return owner
@@ -141,7 +150,7 @@ def registered_alive(record: Dict[str, Any], table: _procs.Table) -> bool:
     if isinstance(record.get("procStart"), str):
         try:
             return abs(calendar.timegm(time.strptime(_procs.norm(record["procStart"]), _procs.LSTART))
-                       - proc.started) <= 1
+                       - proc.started) <= 1  # both UTC
         except ValueError:
             pass
     if isinstance(record.get("startedAt"), (int, float)):
@@ -159,10 +168,10 @@ def alive(owner: Owner, table: Optional[_procs.Table],
     if owner.get("kind") == "claude" and owner.get("session"):
         if sessions is None:
             sessions = registry()
-        if sessions is not None:
-            if any(r.get("sessionId") == owner["session"] and registered_alive(r, table) for r in sessions):
-                return True
-            return False
+        if sessions is not None and any(r.get("sessionId") == owner["session"] and registered_alive(r, table)
+                                        for r in sessions):
+            return True
+    # Without a recorded process only a positive answer counts: an unregistered session is unknown, not gone.
     return False if owner.get("pid") else None
 
 
@@ -232,7 +241,8 @@ def score(command: str, words: List[str]) -> int:
 def find_claim(store: Store, session: str, words: List[str], now: Optional[float] = None
                ) -> Tuple[Optional[Dict[str, Any]], str]:
     """The claim of the Bash call that ran this junkfather, and a note: "" when it is clear, else why the entry
-    belongs to the session alone."""
+    belongs to the session alone. Only a claim holding every word, not yet used for these words, counts; the one
+    taken is marked used for them."""
     now = time.time() if now is None else now
     directory = store.claims_dir / session
     try:
@@ -243,16 +253,21 @@ def find_claim(store: Store, session: str, words: List[str], now: Optional[float
     for name in names:
         data = read_json(directory / name) if name.endswith(".json") else None
         if isinstance(data, dict) and isinstance(data.get("command"), str) \
-                and isinstance(data.get("at"), (int, float)) and 0 <= now - data["at"] <= CLAIM_WINDOW:
-            claims.append((score(data["command"], words), data))
-    best = max((s for s, _ in claims), default=-1)
-    if best < 0:
-        return None, "no claim for this command"
-    top = sorted((d for s, d in claims if s == best), key=lambda d: d["at"], reverse=True)
+                and isinstance(data.get("at"), (int, float)) and 0 <= now - data["at"] <= CLAIM_WINDOW \
+                and words not in (data.get("used") or []) and score(data["command"], words) == len(words):
+            claims.append(data)
+    if not claims:
+        return None, "no claim names this command (is the junkfather PreToolUse hook installed?)"
+    top = sorted(claims, key=lambda d: d["at"], reverse=True)
     newest = top[0]
     rivals = [d for d in top[1:] if newest["at"] - d["at"] <= CLAIM_AMBIGUOUS and d.get("agent") != newest.get("agent")]
     if rivals:
         return None, "ambiguous: agents of this session ran the same command together"
+    newest["used"] = [*(newest.get("used") or []), list(words)]
+    try:
+        write_atomic(claim_path(store, session, str(newest.get("tool_use_id"))), newest)
+    except (OSError, ValueError):
+        pass
     return newest, ""
 
 

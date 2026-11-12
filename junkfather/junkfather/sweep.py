@@ -10,9 +10,10 @@ Owned entries:
 Unowned report: this user's processes, outside every running entry, whose working directory or a path in their
 command is under a scratch root (`/private/tmp/claude-<uid>/`, `/tmp/claude-<uid>/`, `$JUNKFATHER_SCRATCH_ROOTS`)
 or a `.claude/worktrees/` or `.codex/worktrees/` directory. Not reported: agent sessions themselves, processes with
-a terminal, junkfather and its ancestors, and processes under a live agent session younger than `session_age`
-(an agent's own shells and servers at work). Each is reported once per tree, with the commands to own or end it;
-the list goes to unowned.json, which `junkfather reap --pid PID --force` checks.
+a terminal, junkfather and its ancestors, anything below a live agent session (its shells, MCP and language servers
+at work) and any process whose tree holds a terminal's process or an agent session (a tmux server and its panes).
+A browser or server left behind has been adopted by launchd, so it is reported. Each is reported once per tree, with
+the commands to own or end it; the list goes to unowned.json, which `junkfather reap --pid PID --force` checks.
 """
 from __future__ import annotations
 
@@ -31,7 +32,6 @@ from . import reap as _reap
 from .state import Store, VERSION, read_json, write_atomic
 
 KEEP_FINISHED = 7 * 86400.0
-SESSION_AGE = 6 * 3600.0  # an unowned process under a live session is reported once it is this old
 REAPING_STUCK = 300.0
 LABEL = "com.junkfather.sweep"
 WORKTREES = ("/.claude/worktrees/", "/.codex/worktrees/")
@@ -61,8 +61,7 @@ def points_into(path: str, roots: List[str]) -> Optional[str]:
 
 
 def unowned(table: _procs.Table, cwds: Dict[int, str], owned: set, roots: List[str],
-            sessions_alive: Dict[int, bool], session_age: float = SESSION_AGE,
-            uid: Optional[int] = None) -> List[Dict[str, Any]]:
+            sessions_alive: Dict[int, bool], uid: Optional[int] = None) -> List[Dict[str, Any]]:
     uid = os.getuid() if uid is None else uid
     skip = _reap.protected(table)
     found: Dict[int, Dict[str, Any]] = {}
@@ -84,15 +83,14 @@ def unowned(table: _procs.Table, cwds: Dict[int, str], owned: set, roots: List[s
                     break
         if why is None:
             continue
-        session = next((pid for pid in table.ancestors(proc.pid)
-                        if pid in sessions_alive and sessions_alive[pid]), None)
-        age = table.age(proc)
-        if session is not None and (age is None or age < session_age):
+        if any(sessions_alive.get(pid) for pid in table.ancestors(proc.pid)):
+            continue
+        below = table.descendants(proc.pid)
+        if any(_reap.unsafe(p) for p in below):
             continue
         found[proc.pid] = {"pid": proc.pid, "start": proc.start, "ppid": proc.ppid, "pgid": proc.pgid,
-                           "age": age, "cwd": cwd, "cmd": proc.cmd, "why": why, "root": root,
-                           "under_session": session,
-                           "tree": [proc.pid] + [p.pid for p in table.descendants(proc.pid)]}
+                           "age": table.age(proc), "cwd": cwd, "cmd": proc.cmd, "why": why, "root": root,
+                           "tree": [proc.pid] + [p.pid for p in below]}
     # One item per tree (drop those whose ancestor is reported too) and per process group (a browser's helpers).
     tops = [item for pid, item in found.items() if not any(a in found for a in table.ancestors(pid))]
     groups: Dict[int, Dict[str, Any]] = {}
@@ -128,7 +126,9 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
     owned: set = set()
     for entry in store.entries():
         state = entry.get("state")
-        if state == "reaping" and now - float((entry.get("reaping") or {}).get("at") or 0) > REAPING_STUCK:
+        reaping = entry.get("reaping") or {}
+        if state == "reaping" and now - float(reaping.get("at") or 0) > REAPING_STUCK \
+                and not table.alive(reaping.get("by"), reaping.get("by_start")):
             if not dry_run:
                 store.update(entry["id"], lambda e: e.update(state="running") if e.get("state") == "reaping" else False)
             state = "running"
@@ -143,7 +143,13 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
                              if e.get("state") == "starting" else False)
             continue
         members, how = _reap.members(entry, table)
+        supervisor = entry.get("supervisor") or {}
+        supervised = table.alive(supervisor.get("pid"), supervisor.get("start"))
         if not members:
+            if supervised:  # the supervisor marks its own entry when the command ends
+                report["running"] += 1
+                owned.add(supervisor["pid"])
+                continue
             if not dry_run:
                 store.update(entry["id"], lambda e: e.update(state="gone", ended=now, known=[])
                              if e.get("state") == "running" else False)
@@ -155,17 +161,16 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
         elif _owner.alive(entry.get("owner") or {}, table, sessions) is False:
             reason = f"owner gone ({_owner.describe(entry.get('owner') or {})})"
         if reason:
-            result = _reap.reap(store, entry["id"], reason, grace=grace, dry_run=dry_run, table=table,
-                                actor=_events.tool("sweep"))
+            result = _reap.reap(store, entry["id"], reason, grace=grace, dry_run=dry_run,
+                                table=table if dry_run else None, actor=_events.tool("sweep"))
             report["reaped"].append(result)
             if result["result"] in _reap.STOPPED:
                 continue
         report["running"] += 1
         owned.update(p.pid for p in members)
-        supervisor = entry.get("supervisor") or {}
-        if table.alive(supervisor.get("pid"), supervisor.get("start")):
-            owned.add(supervisor["pid"])
-        if not dry_run:
+        if supervised:
+            owned.add(supervisor["pid"])  # and it keeps `known` fresh itself
+        elif not dry_run:
             store.update(entry["id"], refresher([[p.pid, p.start] for p in members]))
     if cwds is None:
         cwds = _procs.working_dirs(os.getuid())
@@ -244,7 +249,7 @@ def text(report: Dict[str, Any], quiet: bool = False) -> str:
         return "\n".join(lines)
     for item in report["unowned"]:
         age = _age(item.get("age"))
-        under = f", under live session pid {item['under_session']}" if item.get("under_session") else ""
+        under = ""
         also = f", {len(item['also'])} more in its group" if item.get("also") else ""
         lines.append(f"unowned pid {item['pid']} ({age}{under}{also}; {item['why']}): {item['cmd'][:160]}")
         lines.append(f"  own it: junkfather adopt {item['pid']} --ttl 1h   end it: junkfather reap --pid "

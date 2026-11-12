@@ -20,10 +20,12 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 sys.dont_write_bytecode = True
 MIN_PYTHON = (3, 9)
@@ -113,7 +115,11 @@ def launchd(command: Path) -> Path:
     write_atomic(plist, text, 0o644)
     domain = f"gui/{os.getuid()}"
     subprocess.run(["launchctl", "bootout", f"{domain}/com.junkfather.sweep"], capture_output=True)
-    loaded = subprocess.run(["launchctl", "bootstrap", domain, str(plist)], capture_output=True, text=True)
+    for attempt in range(5):  # bootout finishes asynchronously; an early bootstrap fails with error 5
+        loaded = subprocess.run(["launchctl", "bootstrap", domain, str(plist)], capture_output=True, text=True)
+        if not loaded.returncode:
+            break
+        time.sleep(0.5 * (attempt + 1))
     if loaded.returncode:
         raise InstallError(f"launchctl bootstrap: {loaded.stderr.strip()}")
     return plist
@@ -122,14 +128,14 @@ def launchd(command: Path) -> Path:
 def mastack(command: Path) -> None:
     """Add junkfather's lifecycle entries to Mastack's machine settings and let Mastack register them."""
     config = Path(os.environ.get("MASTACK_CONFIG") or Path.home() / ".config" / "mastack").expanduser()
-    path = config / "hooks.json"
+    path = (config / "hooks.json").resolve()  # a symlinked settings file stays a symlink
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except OSError:
         raise InstallError(f"no {path}: install Mastack's hooks first") from None
     except ValueError as error:
         raise InstallError(f"{path} is not JSON: {error}") from None
-    hook = HOOK.format(command=str(command))
+    hook = HOOK.format(command=shlex.quote(str(command)))
     lifecycle = data.setdefault("lifecycle", {})
     if not isinstance(lifecycle, dict):
         raise InstallError(f"`lifecycle` in {path} is not an object")
@@ -141,7 +147,7 @@ def mastack(command: Path) -> None:
     observer = {"command": hook, "contains": ["junkfather"]}
     if observer not in observers:
         observers.append(observer)
-    write_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n", 0o644)
+    write_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n", path.stat().st_mode & 0o7777)
     root = Path(os.environ.get("MASTACK_ROOT") or Path.home() / "mastack").expanduser()
     result = subprocess.run([str(root / "bin" / "install"), "--only", "hooks"], text=True)
     if result.returncode:
