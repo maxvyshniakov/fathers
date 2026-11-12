@@ -898,20 +898,18 @@ class MemoryBarTests(unittest.TestCase):
                           memory=dict(level=1, used=768, total=1024, swap_total=512, swap_free=128),
                           history=[(now-datetime.timedelta(hours=1), now, 4)]))
         lines = canvas.render(False).splitlines()
-        self.assertEqual(12, len(lines))
+        self.assertEqual(11, len(lines))
         self.assertFalse(lines[1][1:-1].strip(), "a blank row under the top border")
         self.assertIn("load 1m", lines[2], "then the rows")
+        self.assertIn("swap", lines[4])
         text = "\n".join(lines)
         self.assertIn("used 768 MB of 1.0 GB", text)
         self.assertIn("used 384 MB of 512 MB", text)
         self.assertNotIn("load avg", text)
         self.assertNotIn("pressure", text)
-        self.assertEqual(4,sum("█" in line for line in lines), "four chart rows")
-        first_chart = next(i for i, line in enumerate(lines) if "█" in line)
-        self.assertFalse(lines[first_chart - 1][1:-1].strip(), "gap above chart")
-        self.assertIn("█", lines[-3], "the axis line right under the chart, no gap")
-        chart = lines[first_chart]
-        self.assertEqual("█" * 84, chart[3:87])
+        self.assertEqual(["▄" * 84, "█" * 84, "█" * 84, "▀" * 84], [line[3:87] for line in lines[5:9]],
+                         "four rows right under swap: a full column tops out at ▄, half a cell of air each end")
+        chart = lines[5]
         self.assertEqual("  ", chart[1:3])
         self.assertEqual("  ", chart[87:89])
         self.assertRegex(lines[-2], r"^│  −\d+[smh] +avg 4\.0/4 · peak 4 · full 100% +now  │$")
@@ -962,15 +960,15 @@ class MemoryBarTests(unittest.TestCase):
     def test_full_capacity_is_the_ramps_red_end_in_the_shortest_chart(self):
         tool=load_dashboard()
         now=datetime.datetime.now(datetime.timezone.utc)
-        canvas=tool.Canvas(90,10)
-        tool.draw_machine(canvas,0,0,10,90,dict(slots=4,cores=12,averages=(1,2,3),
+        canvas=tool.Canvas(90,9)
+        tool.draw_machine(canvas,0,0,9,90,dict(slots=4,cores=12,averages=(1,2,3),
                           advice=dict(unleased_load=0,jobs=2),memory_block=None,
                           memory=dict(level=1,used=768,total=1024,swap_total=512,swap_free=128),
                           history=[(now-datetime.timedelta(hours=1),now,4)]))
-        rows=[i for i,line in enumerate(canvas.lines(False)) if "█" in line]
-        self.assertEqual(2,len(rows),"two rows: never fewer")
+        rows=[i for i,line in enumerate(canvas.lines(False)) if "▄" in line or "▀" in line]
+        self.assertEqual(2,len(rows),"two rows: never fewer, one cell of span")
         red=tool.current_theme.styles["chart7"][0]  # the ramp's red end: a full column's top, not the warning red
-        self.assertIn("38;2;%d;%d;%dm█"%red,canvas.lines(True)[rows[0]])
+        self.assertIn("38;2;%d;%d;%dm▄"%red,canvas.lines(True)[rows[0]])
 
     def machine(self, tool: Any, height: int, width: int = 90, memory: dict[str, Any] | None = None,
                 load: float = 3) -> list[str]:
@@ -985,10 +983,10 @@ class MemoryBarTests(unittest.TestCase):
 
     def test_the_chart_gives_up_rows_first_four_three_two_then_none(self):
         tool=load_dashboard()
-        for height,chart in ((12,4),(11,3),(10,2),(9,0),(8,0),(6,0),(5,0)):
+        for height,chart in ((11,4),(10,3),(9,2),(8,0),(6,0),(5,0)):
             with self.subTest(height=height):
                 lines=self.machine(tool,height)
-                rows=sum(1 for line in lines if any(glyph in line for glyph in tool.SPARK))
+                rows=sum(1 for line in lines if any(glyph in line for glyph in tool.SPARK+"▀"))
                 self.assertEqual(chart,rows)
                 self.assertEqual(chart>0,any("avg" in line for line in lines),"the axis line goes with the chart")
                 for name in ("load 1m","memory","swap"):
@@ -996,6 +994,21 @@ class MemoryBarTests(unittest.TestCase):
                 padded=height>=6
                 self.assertEqual(padded,not lines[1][1:-1].strip(),"the blank row goes after the chart, before the rows")
                 self.assertIn("load 1m",lines[2 if padded else 1])
+
+    def test_the_chart_keeps_half_a_cell_of_air_at_both_ends(self):
+        tool=load_dashboard()
+        # four rows, eight slots: the span is 3 cells (24 eighths) from the bottom cell's mid-line to the top's
+        # level 2 is 6 eighths above the mid-line: the bottom cell's upper half (4) and 2 of the next row; level 4
+        # is 12, the next row full; level 8 is 24, half of the top row (▄); more than capacity caps there
+        for level,glyphs in ((0,"    "),(1,"   ▀"),(2,"  ▂▀"),(3,"  ▅▀"),(4,"  █▀"),(5," ▃█▀"),(6," ▆█▀"),
+                             (7,"▁██▀"),(8,"▄██▀"),(12,"▄██▀")):
+            with self.subTest(level=level):
+                self.assertEqual(list(glyphs),[row[0] for row in tool.chart_cells([level],8,4)])
+        two=[row[0] for row in tool.chart_cells([4],4,2)]
+        self.assertEqual(["▄","▀"],two,"two rows: one cell of span, a full column at ▄ over ▀")
+        self.assertEqual([" ","▀"],[row[0] for row in tool.chart_cells([2],4,2)],"half: the bottom half cell")
+        self.assertEqual([" ","▄"],[row[0] for row in tool.chart_cells([1],4,2,half_gaps=False)],
+                         "without the half gaps, full rows as before")
 
     def test_short_of_rows_the_resources_share_one_line_and_never_drop_memory_or_swap(self):
         tool=load_dashboard()
@@ -1066,9 +1079,10 @@ class MemoryBarTests(unittest.TestCase):
         self.assertEqual({"chart7"},bar_styles("load 1m"),"20.3 on 12 cores leaves no room: all red")
         self.assertEqual({"chart7"},bar_styles("swap"),"swap low: all red")
         self.assertTrue(all(style.startswith("chart") for style in bar_styles("memory")),"memory ok: the ramp")
-        chart=[i for i,line in enumerate(canvas.lines(False)) if "█" in line]
-        columns=[x for x in range(90) if canvas.cells[chart[0]][x][0]=="█"]  # the columns that reached every slot
+        chart=[i for i,line in enumerate(canvas.lines(False)) if any(glyph in line for glyph in "▄█▀")]
+        columns=[x for x in range(90) if canvas.cells[chart[0]][x][0]=="▄"]  # the columns that reached every slot
         self.assertTrue(columns)
+        self.assertEqual(["▄","█","█","▀"],[canvas.cells[row][columns[0]][0] for row in chart],"half cells at the ends")
         for step,row in enumerate(chart):  # a full column keeps the height ramp: red only at its top (owner)
             self.assertEqual({f"chart{round((len(chart)-1-step)/(len(chart)-1)*7)}"},
                              {canvas.cells[row][x][1] for x in columns})

@@ -273,8 +273,10 @@ narrow chart drops `full`, then `peak`; the axis stays. Whole slots can still
 produce fractional block heights when graph height and capacity differ.
 Historical over-capacity values are retained in `peak`.
 
-MACHINE does not scroll: one blank row under its top border, then load, memory and swap, and the axis right
-under the chart. Each row starts with its health: 🆗, or 🔥 when critical by the
+MACHINE does not scroll: one blank row under its top border, then load, memory and swap, the chart right under
+them and its axis right under the chart. The chart keeps half a cell of air at each end instead of blank rows: its
+scale runs from the bottom cell's mid-line (a column with any height shows `▀` there) to the top cell's (a full
+column tops out at `▄`), in exact eighths between. Each row starts with its health: 🆗, or 🔥 when critical by the
 rules that turn its bar red (`+` and `!` in ASCII). The load outside leases and the admission state sit on the
 right of the top border, `unleased 3.5 · no admission`, the admission red while it blocks; a narrow border keeps
 the admission alone. Short of rows, the chart gives up height first, four rows to three to two and

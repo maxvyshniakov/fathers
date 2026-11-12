@@ -47,7 +47,7 @@ from . import version as _version
 
 SPARK = "▁▂▃▄▅▆▇█"
 CHART_ROWS, MIN_CHART_ROWS = 4, 2  # the chart's rows when there is room; fewer than two, it goes (owner)
-MACHINE_HEIGHT = 8 + CHART_ROWS  # frame, a blank row, 3 resource rows, a gap, the chart and its axis line
+MACHINE_HEIGHT = 7 + CHART_ROWS  # frame, a blank row, 3 resource rows, the chart and its axis line
 LABEL_COLUMN = 12  # a MACHINE row: its health mark, a gap, the label, then the bar this far in
 HISTORY_WINDOW = 3600  # seconds of queue.log the utilisation strip rebuilds
 LOG_TAIL = 262144  # bytes of queue.log read per refresh
@@ -63,7 +63,7 @@ def set_theme(theme: _theme.Theme) -> None:
     current_theme = theme
 
 
-ASCII = str.maketrans({"🆗": "+", "🔥": "!", "🮅": "#", "■": "#", "▪": "#", "◌": "o", "□": "o", "▫": "o", "▶": ">", "▉": "#", "▌": "+", "▐": "|", "█": "#", "▓": "%", "▒": "=", "░": ".", "·": ".", "●": "*", "…": "~", "─": "-", "│": "|",
+ASCII = str.maketrans({"▀": "#", "🆗": "+", "🔥": "!", "🮅": "#", "■": "#", "▪": "#", "◌": "o", "□": "o", "▫": "o", "▶": ">", "▉": "#", "▌": "+", "▐": "|", "█": "#", "▓": "%", "▒": "=", "░": ".", "·": ".", "●": "*", "…": "~", "─": "-", "│": "|",
                        "╭": "+", "╮": "+", "╰": "+", "╯": "+", "↑": "^", "↓": "v", "↗": "/", "↘": "\\", "→": ">",
                        "←": "<", "≈": "~", "×": "x", "—": "-", "⏸": "=", "▭": "o", "−": "-", "╻": "#", "╹": "#",  "┃": "#", "▁": "_", "▂": "_", "▃": "-", "▄": "-",
                        "▅": "=", "▆": "=", "▇": "#"})
@@ -1430,14 +1430,14 @@ def draw_machine(canvas: Canvas, y: int, x: int, height: int, width: int, model:
     chart_width = max(1, inner)
     buckets = history_buckets(model["history"], chart_width)
     summary = history_summary(model["history"], slots)
-    # Inside the frame: a blank row, the three resource rows; then a gap, the chart and its axis line, which the
-    # bottom frame follows directly. Short of rows (owner, 2026-11-12) the chart gives up height first, 4 → 3 → 2
+    # Inside the frame: a blank row, the three resource rows, the chart and its axis line, which the bottom frame
+    # follows directly. Short of rows (owner, 2026-11-12) the chart gives up height first, 4 → 3 → 2
     # rows and then entirely (never one row); then the blank row; then the resource rows become one compact line;
     # memory and swap never go.
     interior = height - 2
     full = interior >= len(lines)
     padded = interior >= 1 + len(lines)  # a blank row under the top border, which carries the status (owner)
-    chart_rows = min(CHART_ROWS, interior - 1 - len(lines) - 2) if padded else 0
+    chart_rows = min(CHART_ROWS, interior - 1 - len(lines) - 1) if padded else 0  # then the chart and its axis
     chart_rows = chart_rows if chart_rows >= MIN_CHART_ROWS else 0
     row = y + 2 if padded else y + 1
     critical = {"load 1m": load_hot, "memory": memory_low, "swap": swap_low}
@@ -1462,19 +1462,35 @@ def draw_machine(canvas: Canvas, y: int, x: int, height: int, width: int, model:
                           if swap_used is not None else "off" if swap_total == 0 else "?", swap_low))
         canvas.segments(row, x + 3, compact_resources(resources, inner), inner)
         row += 1
-    if chart_rows:
-        row += 1  # gap above the histogram
-    # Eighth-block heights; the same ramp is tied to the capacity scale.
-    for line in range(chart_rows):
-        floor = (chart_rows - 1 - line) * 8
-        for column, level in enumerate(buckets):
-            eighths = math.ceil(level / slots * chart_rows * 8) - floor if level else 0
-            glyph = SPARK[min(8, eighths) - 1] if eighths > 0 else " "
-            colour = round((chart_rows - 1 - line) / (chart_rows - 1) * (_theme.CHART_STEPS - 1))
-            canvas.put(row, x + 3 + column, glyph, f"chart{colour}" if eighths > 0 else "dim")
+    # The chart right under the rows and over its axis, with half a cell of air at each end (owner, 2026-11-12)
+    for line, column_glyphs in enumerate(chart_cells(buckets, cast(int, slots), chart_rows)):
+        colour = round((chart_rows - 1 - line) / (chart_rows - 1) * (_theme.CHART_STEPS - 1))
+        for column, glyph in enumerate(column_glyphs):
+            canvas.put(row, x + 3 + column, glyph, f"chart{colour}" if glyph != " " else "dim")
         row += 1
     if chart_rows and row <= y + height - 2:  # the axis line right under the chart
         canvas.segments(row, x + 3, machine_legend(cast(dict[str, Any], summary), cast(int, slots), chart_width), inner)
+
+
+def chart_cells(buckets: list[int], slots: int, rows: int, half_gaps: bool = True) -> list[list[str]]:
+    """The history chart's glyphs, top row first, one per bucket. With `half_gaps` (owner, 2026-11-12) the span
+    runs from the bottom cell's mid-line to the top cell's: a column with any height shows `▀` in the bottom row,
+    the rows above fill from their own bottoms in exact eighths, and a full column tops out at `▄` in the top row,
+    so half a cell of air sits above the chart and half over its axis. Without them, the full rows."""
+    span = 8 * (rows - 1) if half_gaps else 8 * rows
+    base = 4 if half_gaps else 0  # eighths below the span's zero: the bottom cell's lower half
+    grid: list[list[str]] = [[] for _ in range(rows)]
+    for level in buckets:
+        height = base + math.ceil(min(1.0, level / slots) * span) if level > 0 and slots else 0
+        for line in range(rows):
+            above = rows - 1 - line  # rows below this one
+            if half_gaps and above == 0:
+                glyph = "▀" if height else " "
+            else:
+                fill = max(0, min(8, height - 8 * above))
+                glyph = SPARK[fill - 1] if fill else " "
+            grid[line].append(glyph)
+    return grid
 
 
 def gigabytes(value_mb: float | None, total: bool = False) -> str:

@@ -47,7 +47,7 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   the focus blue, ok, warn, bad and legacy, and the MACHINE chart and bars, a smooth indigo-to-red ramp through
   purple and magenta whose red is also a critical bar's. Terminal mode keeps the theme's ANSI colours.
 - Unfocused frames are a little paler than muted text.
-- MACHINE keeps the chart's axis right under the chart; short of rows, the chart shrinks to two rows and then
+- MACHINE's chart sits right under the resource rows and over its axis, with half a cell of air at each end; short of rows, the chart shrinks to two rows and then
   goes before load, memory and swap share one compact line, and memory and swap are always shown.
 - MACHINE has no status row: each of load, memory and swap starts with 🆗 or 🔥, and the unleased load and the
   admission state sit on the right of its top border. A blank row stays under the border; short of rows it goes
