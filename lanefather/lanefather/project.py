@@ -107,6 +107,7 @@ class Project:
             finally:
                 if pending is not None:
                     pending.unlink(missing_ok=True)
-            with (self._store.directory / 'ledger.log').open('a') as ledger:
-                ledger.write(f'{journal.now()} {change.message or "queue updated via project policy"}\n')
+            journal.ledger(change.message or "queue updated via project policy", kind="queue.updated",
+                           subject={"type": "queue", "id": str(self._queue_path)},
+                           details={"lanes": ids}, directory=self._store.directory, project=self.config)
             return change.message

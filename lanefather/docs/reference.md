@@ -206,7 +206,7 @@ disable external review. Set `LANEFATHER_REVIEW_START=manual` during setup to de
 | --- | --- |
 | `config` | `.lanefather.toml`, the `LANEFATHER_*` settings and their legacy names |
 | `state` | records and receipts, the schema version, locks in the state directory |
-| `journal` | the ledger and run logs |
+| `journal`, `events` | the ledger, the machine-wide event log mirroring it, and run logs |
 | `claims`, `queue` | path claims and rule snippets; the ranked queue |
 | `gitops`, `worktrees`, `landing` | git calls; smoke, gate, base and review checkouts; the landing lock |
 | `host`, `slots`, `procs` | the lane cap and load; the slotfather client; the process source |
@@ -274,10 +274,43 @@ repository or missing project configuration is refused rather than matched by
 ID alone.
 
 
+## Event log
+
+Every ledger line (`<state>/ledger.log`, unchanged, which orchestration metrics read) is also written as an event in
+Godfather's shared schema, version 1, to one machine-wide log for every project:
+`~/.local/state/lanefather/events.jsonl` (`LANEFATHER_EVENTS` names another file). `capabilities --json` gives its
+absolute path as `dashboard.events.path`. One `journal.ledger` call writes both, at the same moment: the event's
+`time` has milliseconds, `details.message` is the ledger text, and the other details are the kind's own fields.
+
+- `subject`: `{"type": "lane", "id", "ticket"}` for a lane, otherwise `commit` (gate, perf, promote), `review` (an
+  overall review), `remote` (sync), `queue`, `landing_lock`, `run` (a load wait) or `ticket`; always with
+  `project` and `state_dir`, which tell the projects apart (lane ids repeat across projects).
+- `actor`: `agent` with `session` and `name` (`claude-code` or `codex`) when `CLAUDE_CODE_SESSION_ID` or
+  `CODEX_THREAD_ID` is set, else `process`; always `pid`; `via: godfather` when `GODFATHER_ACTOR` is
+  `godfather/<version>`.
+- `level`: `warn` for an override, a red lane check, a failed review or ticket rule; `error` for a merge conflict, a
+  red post-merge smoke, gate or perf run and a failed promote step.
+
+Kinds: `lane.started`, `lane.adopted`, `claims.added`, `lane.checked`, `landing.reviewed`, `lane.conflict`,
+`lane.landed`, `lane.post_merge`, `lane.released`, `lane.done_refused`, `lane.done`, `process.stopped`,
+`review.started`, `review.kept`, `review.exempted`, `review.finished`, `finding.marked`, `review.marked`,
+`review.handed_over`, `review.ticket_filed`, `gate.finished`, `perf.finished`, `promote.step`, `promote.finished`,
+`sync.finished`, `load.waited`, `landing.lock_taken`, `ticket.marked`, `ticket.skipped`,
+`ticket.release_commented`, `ticket.failed`, `queue.updated` and `override`; `lanefather/events.py` describes each.
+
+The writer appends each line with one `write` on the file opened with `O_APPEND`, mode 0600, under an `flock` on
+`events.lock`; past 4 MiB the log becomes `events.jsonl.1`, replacing the previous one. A line over 16 KiB keeps
+shorter strings; control characters become spaces. An event that cannot be written is dropped and never fails the
+action. A project whose state directory is in a temporary directory writes no machine-wide event unless
+`LANEFATHER_EVENTS` is set, so test runs stay out of the machine's feed. The tests validate every line in strict
+mode with Godfather's validator, vendored unchanged as `tests/vendor/eventcheck.py` with its SHA-256 beside it;
+with `GODFATHER_DIR` set, a test compares it with the canonical copy.
+
 ## Installed runtime contract
 
 `lanefather capabilities --json` returns version 1, the state schema, supported
-Slotfather query versions and the installed source commit and payload SHA-256.
+Slotfather query versions and the installed source commit and payload SHA-256, and a
+`dashboard` block for Godfather: `{"v": 1, "tag": "lane", "events": {"path", "versions": [1]}}`.
 An installed release verifies its package and canonical hook against its
 manifest; a changed or missing manifest refuses verification. A checkout reports
 `installed: false`, so a project launcher can require the installed artifact.

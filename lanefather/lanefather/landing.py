@@ -76,7 +76,10 @@ def landing(common: str, holder: str, wait: float) -> Generator[dict[str, str]]:
                                    f"pid {os.getpid()}\nhost {os.uname().nodename}\n")
                 pending.replace(path)
                 if stale and current is not None:
-                    journal.ledger(f"landing lock taken over from {current.get('holder', '?')} ({stale}) by {holder}")
+                    journal.ledger(f"landing lock taken over from {current.get('holder', '?')} ({stale}) by {holder}",
+                                   kind="landing.lock_taken", level="warn",
+                                   subject={"type": "landing_lock", "id": str(path)},
+                                   details={"from": current.get("holder", "?"), "stale": stale, "by": holder})
                 break
         if time.monotonic() >= deadline:
             raise LaneError(f"the landing lock ({path}) is held by {landing_holder(current)}; it expires "

@@ -634,7 +634,11 @@ def check(args: Any) -> int:
     classes = ",".join(f"{e['check']}={e['class']}" for e in (classification or {}).get("checks", []))
     journal.ledger(f"check {args.id} tree={tree} {status} suites={','.join(suites) or '-'} "
                    f"checks={len(check_results) - len(reused)} reused={len(reused)} jobs={decision['jobs']} "
-                   f"classified={classes or '-'} {host.host_fields(info)}")
+                   f"classified={classes or '-'} {host.host_fields(info)}",
+                   kind="lane.checked", lane=record, level="info" if status == "green" else "warn",
+                   details={"status": status, "tree": tree, "suites": suites,
+                            "checks": len(check_results) - len(reused), "reused": len(reused),
+                            "jobs": decision["jobs"], "receipt": str(path)})
     for result in results:
         note = (f" (reused from tree {result['reused_from'][:10]})" if result.get("reused_from")
                 else f" ({len(result['reused'])} of {len(result['checks'])} checks reused)" if result.get("reused")

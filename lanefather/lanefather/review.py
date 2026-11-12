@@ -144,6 +144,13 @@ def ticket_text(record: Record) -> str:
     return f"Ticket #{record['ticket']}: {data.get('title', '')}\n\n{data.get('body', '')}".strip()  # pyright: ignore[reportUnknownMemberType]
 
 
+def review_about(label: str, fields: dict[str, Any]) -> dict[str, Any]:
+    """The subject of a review's events: its lane's for a lane review, else the review itself (an overall one)."""
+    if fields.get("kind") == "lane" and fields.get("lane"):
+        return {"lane": str(fields["lane"])}
+    return {"subject": {"type": "review", "id": label, **({"kind": fields["kind"]} if fields.get("kind") else {})}}
+
+
 def perform_review(label: str, fields: dict[str, Any], main: str, base: str, tip: str, subject: str,
                    finalize: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
     """Review base...tip with Sol, or Opus when Sol may not or cannot run; write and return the receipt.
@@ -183,7 +190,15 @@ def perform_review(label: str, fields: dict[str, Any], main: str, base: str, tip
                    f"model={receipt.get('model', '-')} effort={receipt['effort']} "
                    f"left={'-' if receipt.get('codex_left') is None else receipt['codex_left']} "
                    f"seconds={receipt['seconds']:.0f} findings={len(findings)} {counts}"
-                   + (f" fallback: {receipt['fallback']}" if receipt["fallback"] else ""))
+                   + (f" fallback: {receipt['fallback']}" if receipt["fallback"] else ""),
+                   kind="review.finished", level="info" if receipt["status"] == "finished" else "warn",
+                   **review_about(label, fields),
+                   details={"status": receipt["status"], "reviewer": receipt.get("reviewer"),
+                            "model": receipt.get("model"), "effort": receipt["effort"],
+                            "seconds": receipt["seconds"], "findings": len(findings),
+                            "severities": {s.lower(): sum(1 for f in findings if f["severity"] == s)
+                                           for s in SEVERITIES},
+                            "fallback": receipt["fallback"], "error": receipt.get("error")})
     return receipt
 
 
@@ -249,7 +264,8 @@ def spawn_review(label: str, fields: dict[str, Any], argv: list[str], cwd: str) 
         receipt = {"version": 1, "label": label, **fields, "status": "running", "pid": child.pid, "log": str(log),
                    "started": journal.now(), "effort": reviewer.Reviewer(config.current()).models["sol_effort"]}
         state.write_json(state.receipt_path(label, "review"), receipt)
-    journal.ledger(f"review-start {label} pid={child.pid} log={log}")
+    journal.ledger(f"review-start {label} pid={child.pid} log={log}", kind="review.started",
+                   **review_about(label, fields), details={"pid": child.pid, "log": str(log)})
     return receipt
 
 
@@ -261,14 +277,17 @@ def start_lane_review(record: Record) -> str:
                                                           and alive(current.get("pid"))):
         # Reviewed before landing (onto dev or main), or by hand: one review per lane, kept as it is.
         journal.ledger(f"review {lane_id} kept at land: {current['status']} since "
-                       f"{current.get('started') or current.get('finished')}")
+                       f"{current.get('started') or current.get('finished')}", kind="review.kept", lane=record,
+                       details={"status": current["status"],
+                                "since": current.get("started") or current.get("finished")})
         return f"review kept: {review_state(lane_id)[1]}"
     exempt = review_exemption(record)
     if exempt:
         state.write_json(state.receipt_path(lane_id, "review"),
                          {"version": 1, "label": lane_id, "kind": "lane", "lane": lane_id, "ticket": record["ticket"],
                           "status": "exempt", "exempt": exempt, "finished": journal.now()})
-        journal.ledger(f"review {lane_id} exempt: {exempt}")
+        journal.ledger(f"review {lane_id} exempt: {exempt}", kind="review.exempted", lane=record,
+                       details={"exempt": exempt})
         return f"review exempt: {exempt}"
     if review_start_manual():
         return (f"review not started ({config.current().env_names('REVIEW_START')}=manual): run "
@@ -304,7 +323,9 @@ def review_lane(args: Any) -> int:
             print(f"Lane {args.id} is already reviewed: one review per lane (--force-reason reviews again, logged)")
         return 0
     if status == "finished":
-        journal.ledger(f"override review {args.id}: {args.force_reason} (reviewed again)")
+        journal.ledger(f"override review {args.id}: {args.force_reason} (reviewed again)", kind="override",
+                       level="warn", lane=record,
+                       details={"command": "review", "reason": args.force_reason, "refusals": ["reviewed again"]})
     exempt = review_exemption(record)
     if exempt and not args.force_reason:
         start_lane_review(record)
@@ -361,13 +382,18 @@ def mark_review(args: Any) -> int:
             finding["mark"] = mark
             journal.ledger(f"review-mark {args.id} {finding['n']} "
                            + (f"fixed:{mark['merge'][:10]}" if mark["kind"] == "fixed"
-                              else f"rejected: {mark['reason']}"))
+                              else f"rejected: {mark['reason']}"),
+                           kind="finding.marked", lane=args.id,
+                           details={"finding": finding["n"], "mark": mark["kind"], "merge": mark.get("merge"),
+                                    "reason": mark.get("reason")})
         state.write_json(path, receipt)
     print("\n".join(review_lines(receipt)))
     complete, words = review_state(args.id)
     if complete:
         kinds = [f["mark"]["kind"] for f in receipt.get("findings", [])]
-        journal.ledger(f"review-marked {args.id} fixed={kinds.count('fixed')} rejected={kinds.count('rejected')}")
+        journal.ledger(f"review-marked {args.id} fixed={kinds.count('fixed')} rejected={kinds.count('rejected')}",
+                       kind="review.marked", lane=args.id,
+                       details={"fixed": kinds.count("fixed"), "rejected": kinds.count("rejected")})
         review_complete_finish(args.id)
     else:
         print(f"Lane {args.id}: {words}")
@@ -455,7 +481,8 @@ def hand_over(args: Any) -> int:
         receipt = state.read_json(state.receipt_path(args.id, "review")) or {}
         receipt["fix_lane"] = fix_id
         state.write_json(state.receipt_path(args.id, "review"), receipt)
-    journal.ledger(f"review-hand-over {args.id} to {fix_id} worktree={fix['worktree']}")
+    journal.ledger(f"review-hand-over {args.id} to {fix_id} worktree={fix['worktree']}", kind="review.handed_over",
+                   lane=record, details={"to": fix_id, "worktree": fix["worktree"]})
     print(f"The fix round runs in {fix['worktree']}: git checkout -B {fix['branch']} {fix['base']}, fix each finding "
           f"that holds, commit, then {prog} check {fix_id} and report. Its land needs no review. Then mark "
           f"{args.id}'s findings: " + mark_help(args.id).replace("<merge>", fix_id + "|<merge>"))
@@ -513,7 +540,10 @@ def file_ticket(receipt: dict[str, Any], common: str) -> None:
     else:
         receipt["issue_error"] = ((created.stderr or created.stdout).strip() or f"gh exit {created.returncode}")[:300]
     journal.ledger(f"review-ticket {receipt['label']} " + (f"filed {receipt['issue']}" if receipt.get("issue")
-                                                            else f"failed: {receipt['issue_error']}"))
+                                                            else f"failed: {receipt['issue_error']}"),
+                   kind="review.ticket_filed", level="info" if receipt.get("issue") else "warn",
+                   subject={"type": "review", "id": receipt["label"]},
+                   details={"issue": receipt.get("issue"), "error": receipt.get("issue_error")})
 
 
 def retry_ticket(label: str, common: str) -> dict[str, Any]:

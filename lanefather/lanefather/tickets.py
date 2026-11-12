@@ -103,7 +103,8 @@ def remove_label(repo: str, number: str) -> str | None:
 def warn(what: str, problems: list[str]) -> None:
     for problem in problems:
         print(f"lane: warning: {what}: {problem}", file=sys.stderr)
-    journal.ledger(f"tickets {what} warning: {'; '.join(problems)}".replace("\n", " "))
+    journal.ledger(f"tickets {what} warning: {'; '.join(problems)}".replace("\n", " "), kind="ticket.failed",
+                   level="warn", subject={"type": "ticket", "id": what}, details={"problems": problems})
 
 
 def on_origin(cwd: str, sha: str) -> list[str]:
@@ -161,7 +162,8 @@ def after_land(record: Record, merge: str, integration: str, branch: str, receip
         return
     number, what = record["ticket"], f"land {record['id']} #{record['ticket']}"
     if smoke_status != "green":
-        journal.ledger(f"tickets {what}: not marked, the post-merge smoke is {smoke_status}")
+        journal.ledger(f"tickets {what}: not marked, the post-merge smoke is {smoke_status}",
+                       kind="ticket.skipped", lane=record, details={"issue": number, "smoke": smoke_status})
         print(f"lane: #{number} is not marked integrated: the post-merge smoke is {smoke_status}")
         return
     repo = repository(record["common_dir"])
@@ -184,7 +186,8 @@ def after_land(record: Record, merge: str, integration: str, branch: str, receip
         else:
             done.append("commented")
     if done:
-        journal.ledger(f"tickets {what}: {', '.join(done)} ({repo})")
+        journal.ledger(f"tickets {what}: {', '.join(done)} ({repo})", kind="ticket.marked", lane=record,
+                       details={"issue": number, "done": done, "repository": repo})
         print(f"lane: #{number} {' and '.join(done)} in {repo}")
     if problems:
         warn(what, problems)
@@ -223,7 +226,10 @@ def release_comments(cwd: str, common: str, base: str, head: str, version: str |
         else:
             unlabelled += 1
     journal.ledger(f"tickets {what}: commented {commented} of {len(numbers)} fixed issues "
-                   f"({', '.join('#' + n for n in numbers)}) in {repo}, label {LABEL} removed from {unlabelled}")
+                   f"({', '.join('#' + n for n in numbers)}) in {repo}, label {LABEL} removed from {unlabelled}",
+                   kind="ticket.release_commented", subject={"type": "commit", "id": head},
+                   details={"version": version, "issues": numbers, "commented": commented,
+                            "unlabelled": unlabelled, "repository": repo})
     print(f"lane: {what}: commented on {commented} of {len(numbers)} issues it fixes "
           f"({', '.join('#' + n for n in numbers)})")
     if problems:

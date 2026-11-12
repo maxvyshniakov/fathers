@@ -63,7 +63,8 @@ def finish_landed(lane_id: str, keep: bool) -> None:
             record.update(status="released", released=journal.now())
             state.save(record)
             journal.ledger(f"release {lane_id}: worktree {worktree} is locked ({lock}); "
-                           "lane cap space and claims freed")
+                           "lane cap space and claims freed", kind="lane.released", lane=record,
+                           details={"worktree": worktree, "lock": lock})
         print(f"Lane {lane_id} released: it no longer counts toward the lane cap or holds claims. "
               f"Its agent still holds {worktree} "
               f"(locked: {lock}); once the agent exits, remove it with {prog} done {lane_id}")
@@ -71,7 +72,8 @@ def finish_landed(lane_id: str, keep: bool) -> None:
     try:
         finish(lane_id, None)
     except LaneError as error:
-        journal.ledger(f"auto-done {lane_id} refused: {str(error).replace(chr(10), ' ')}")
+        journal.ledger(f"auto-done {lane_id} refused: {str(error).replace(chr(10), ' ')}", kind="lane.done_refused",
+                       level="warn", lane=lane_id, details={"error": str(error)})
         print(f"{prog} done {lane_id} did not run after landing; "
               "the lane stays landed and does not count toward the lane cap.\n"
               f"{error}\nFix that, then run {prog} done {lane_id}")
@@ -120,7 +122,9 @@ def finish(lane_id: str, force_reason: str | None) -> None:
         if refusals and not force_reason:
             raise LaneError("done refused (not landed or not safe to remove):\n- " + "\n- ".join(refusals))
         if refusals:
-            journal.ledger(f"override done {lane_id}: {force_reason} ({'; '.join(refusals)})")
+            journal.ledger(f"override done {lane_id}: {force_reason} ({'; '.join(refusals)})", kind="override",
+                           level="warn", lane=record,
+                           details={"command": "done", "reason": force_reason, "refusals": refusals})
         freed, removed = 0, list[str]()
         if leftover:
             # The source stops only what it took for left behind, then reads the worktree again: whatever still works
@@ -128,7 +132,9 @@ def finish(lane_id: str, force_reason: str | None) -> None:
             left = scanner.stop(leftover, worktree)
             for process in leftover:
                 journal.ledger(f"done {lane_id}: {procs.source_name(scanner)} stopped {process.describe()} in "
-                               f"{worktree}")
+                               f"{worktree}", kind="process.stopped", lane=record,
+                               details={"source": procs.source_name(scanner), "process": process.describe(),
+                                        "worktree": worktree})
                 removed.append(f"stopped {process.describe()}")
             if left and not force_reason:
                 raise LaneError(f"done refused: {procs.source_name(scanner)} stopped what it took for left behind in "
@@ -165,7 +171,8 @@ def finish(lane_id: str, force_reason: str | None) -> None:
                 removed.append(str(partition))
         record.update(status="done", done=journal.now(), freed_bytes=freed)
         state.save(record)
-        journal.ledger(f"done {lane_id} freed={freed // 2**20} MiB removed={' '.join(removed) or '-'}")
+        journal.ledger(f"done {lane_id} freed={freed // 2**20} MiB removed={' '.join(removed) or '-'}",
+                       kind="lane.done", lane=record, details={"freed_bytes": freed, "removed": removed})
     print(f"Lane {lane_id} done: claims released, {freed / 1e9:.1f} GB freed")
     for item in removed:
         print(f"  {item}" if item.startswith(("stopped ", "did not stop ")) else f"  removed {item}")

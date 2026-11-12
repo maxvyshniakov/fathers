@@ -24,7 +24,7 @@ import sys
 import time
 from typing import Any
 
-from . import checks, config, host, journal, plan, review, slots, state, tickets, worktrees
+from . import checks, config, events, host, journal, plan, review, slots, state, tickets, worktrees
 from .errors import LaneError
 from .gitops import common_dir, git, git_ok, worktree_list
 from .landing import landing
@@ -138,7 +138,10 @@ def run_batch_gate(cwd: str, common: str, sha: str, jobs: int | None) -> None:
                      "load_wait": load_wait, "load": load, "log": str(log), "failed_checks": failed}],
         "log": str(log), "host": info, "started": started, "finished": journal.now()})
     journal.ledger(f"promote-gate {sha} {'green' if green else 'red'} jobs={jobs} seconds={seconds:.0f}"
-                   f"{' stamped' if stamp['stamped'] else ''} {host.host_fields(info)}")
+                   f"{' stamped' if stamp['stamped'] else ''} {host.host_fields(info)}",
+                   kind="gate.finished", level="info" if green else "error", subject={"type": "commit", "id": sha},
+                   details={"status": "green" if green else "red", "jobs": jobs, "seconds": seconds,
+                            "stamped": bool(stamp["stamped"]), "failed_checks": failed, "log": str(log)})
     if green:
         print(f"lane: batch gate green in {seconds:.0f} s; verified tree {stamp['tree']} stamped")
         return
@@ -221,7 +224,11 @@ def perf_suite(cwd: str, common: str, sha: str, ship: bool, remote: str = "origi
                                "log": str(log), "load": load, "host": info, "started": started,
                                "finished": journal.now()}
     state.write_json(path, receipt)
-    journal.ledger(f"perf {sha} {receipt['status']} seconds={seconds:.0f} {host.host_fields(info)}")
+    journal.ledger(f"perf {sha} {receipt['status']} seconds={seconds:.0f} {host.host_fields(info)}",
+                   kind="perf.finished", level="info" if receipt["status"] == "green" else "error",
+                   subject={"type": "commit", "id": sha},
+                   details={"status": receipt["status"], "seconds": seconds, "failed_checks": failed,
+                            "log": str(log)})
     if not status:
         print(f"lane: perf suite green in {seconds:.0f} s on {sha[:10]}")
         return receipt
@@ -290,7 +297,9 @@ def install_and_deploy(common: str, sha: str, deploy: str | None) -> None:
                     raise LaneError(f"promote of {sha[:10]} went through, but {step.name} cannot run: "
                                     f"{error}") from None
             status = subprocess.run(argv, cwd=path, env={**environment, **extra}).returncode
-            journal.ledger(f"promote-{step.name} {sha} exit={status}")
+            journal.ledger(f"promote-{step.name} {sha} exit={status}", kind="promote.step",
+                           level="error" if status else "info", subject={"type": "commit", "id": sha},
+                           details={"step": step.name, "exit": status, "command": events.command(argv)})
             if status:
                 skipped = ", ".join(later.name for later in steps[index + 1:]) or "none"
                 raise LaneError(f"promote of {sha[:10]} went through, but {step.name} failed (exit {status}); "
@@ -478,7 +487,9 @@ def sync(args: Any) -> int:
         print(f"lane: local dev and main are up to date with {args.remote} ({'; '.join(notes)})")
         return 0
     journal.ledger(f"sync {args.remote}: {'; '.join(finished) or '-'}" + (f" failed: {'; '.join(failed)}" if failed
-                                                                            else ""))
+                                                                            else ""),
+                   kind="sync.finished", level="warn" if failed else "info",
+                   subject={"type": "remote", "id": args.remote}, details={"moved": finished, "failed": failed})
     for line in kept:
         print(line if line.startswith("  ") else f"lane: {line}")
     for line in finished + notes:
@@ -539,7 +550,9 @@ def promote_sha(args: Any) -> int:
                         + f", then rerun {prog} promote {sha[:10]}; a stamped tree is not gated again. "
                         "--force-reason overrides, logged")
     if refusals:
-        journal.ledger(f"override promote {sha}: {args.force_reason} ({'; '.join(refusals)})")
+        journal.ledger(f"override promote {sha}: {args.force_reason} ({'; '.join(refusals)})", kind="override",
+                       level="warn", subject={"type": "commit", "id": sha},
+                       details={"command": "promote", "reason": args.force_reason, "refusals": refusals})
     # main takes only a tree whose timing budgets held, measured alone after the gate (#579); dev never waits for it.
     if args.ship and git_ok(cwd, "cat-file", "-e", f"{sha}:{cfg.verify}"):
         perf_suite(cwd, common, sha, ship=True, remote=args.remote)
@@ -593,7 +606,10 @@ def promote_sha(args: Any) -> int:
             if moved.returncode:
                 failed.append(f"local {branch} in {where}: {(moved.stdout + moved.stderr).strip()}")
     pushed = "local only" if args.no_push else f"pushed to {args.remote}"
-    journal.ledger(f"promote {sha} {'+'.join(branches)} {pushed}" + (f" failed: {'; '.join(failed)}" if failed else ""))
+    journal.ledger(f"promote {sha} {'+'.join(branches)} {pushed}" + (f" failed: {'; '.join(failed)}" if failed else ""),
+                   kind="promote.finished", level="warn" if failed else "info", subject={"type": "commit", "id": sha},
+                   details={"branches": branches, "pushed": not args.no_push, "remote": args.remote,
+                            "failed": failed})
     if failed:
         print("lane: " + ("the push went through, but " if not args.no_push else "") + "these local branches did "
               "not move:\n  " + "\n  ".join(failed) + f"\nFix that, then rerun {prog} promote {sha[:10]}"

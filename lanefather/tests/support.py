@@ -12,6 +12,7 @@ so a seam between two lanes and a frozen corpus can be broken in a few lines of 
 """
 from __future__ import annotations
 
+import atexit
 from collections.abc import Iterator
 import contextlib
 import json
@@ -33,6 +34,14 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "tests" / "fixtures"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+# Lanefather's machine-wide files (the event log, lanefather.events) never reach this machine's in a test: the
+# in-process tests write to a scratch directory, and each command test to its own (LaneCase.setUp).
+MACHINE = pathlib.Path(tempfile.mkdtemp(prefix="lanefather-machine-"))
+atexit.register(shutil.rmtree, MACHINE, True)
+MACHINE_FILES = {"LANEFATHER_EVENTS": "events.jsonl"}
+for _name, _file in MACHINE_FILES.items():
+    os.environ[_name] = str(MACHINE / _file)
 
 # Straylight's seams as its .lanefather.toml names them, in the fixture's paths.
 FIXTURE_CONFIG = textwrap.dedent("""\
@@ -468,6 +477,8 @@ class LaneCase(unittest.TestCase):
                         LANEFATHER_REVIEW_START="manual")
         self.addCleanup(self.stop_reviews)
         # 6 cores and 20 GB derive a cap of 3 lanes and a load15 limit of 9 (#572).
+        self.env.update({name: str(self.tmp / "machine" / file) for name, file in MACHINE_FILES.items()})
+        self.events = self.tmp / "machine" / "events.jsonl"
         self.env.update(LANEFATHER_STATE=str(self.state), LANEFATHER_DISK_FREE_GB="500",
                         LANEFATHER_LOAD15="0.1", LANEFATHER_CORES="6", LANEFATHER_MEMORY_GB="20",
                         LANEFATHER_GH=str(gh), LANEFATHER_BUILD_CACHE=str(self.cache),

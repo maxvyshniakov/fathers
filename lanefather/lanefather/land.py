@@ -97,7 +97,9 @@ def land(args: Any) -> int:
         if problem:
             record.setdefault("overrides", []).append({"at": journal.now(), "reason": args.force_reason,
                                                        "refusals": [problem]})
-            journal.ledger(f"override land {args.id}: {args.force_reason} ({problem})")
+            journal.ledger(f"override land {args.id}: {args.force_reason} ({problem})", kind="override",
+                           level="warn", lane=record,
+                           details={"command": "land", "reason": args.force_reason, "refusals": [problem]})
         if not args.into and not record.get("integration"):
             raise LaneError(f"no worktree has {record['base']} checked out; give --into <integration worktree>")
         integration = os.path.realpath(args.into or record["integration"])
@@ -114,9 +116,13 @@ def land(args: Any) -> int:
                                     "findings first, or land into the integration branch")
                 record.setdefault("overrides", []).append({"at": journal.now(), "reason": args.force_reason,
                                                            "refusals": [f"unreviewed land onto {onto}"]})
-                journal.ledger(f"override land {args.id} onto {onto} unreviewed: {args.force_reason} ({words})")
+                journal.ledger(f"override land {args.id} onto {onto} unreviewed: {args.force_reason} ({words})",
+                               kind="override", level="warn", lane=record,
+                               details={"command": "land", "reason": args.force_reason,
+                                        "refusals": [f"unreviewed land onto {onto}"], "review": words})
             else:
-                journal.ledger(f"land {args.id} onto {onto}: {words}")
+                journal.ledger(f"land {args.id} onto {onto}: {words}", kind="landing.reviewed", lane=record,
+                               details={"onto": onto, "review": words})
         previous = git(integration, "rev-parse", "HEAD")
         if git_ok(integration, "merge-base", "--is-ancestor", tip, previous):
             raise LaneError(f"land refused: {record['branch']} ({tip[:10]}) is already in {integration}")
@@ -132,7 +138,9 @@ def land(args: Any) -> int:
                 conflicts = git(integration, "diff", "--name-only", "--diff-filter=U", check=False)
                 subprocess.run(["git", "merge", "--abort"], cwd=integration, capture_output=True, env=env)
         if merged.returncode:
-            journal.ledger(f"land {args.id} conflict: {conflicts.replace(chr(10), ' ')}")
+            journal.ledger(f"land {args.id} conflict: {conflicts.replace(chr(10), ' ')}", kind="lane.conflict",
+                           level="error", lane=record,
+                           details={"paths": conflicts.split(), "integration": integration, "previous": previous})
             raise LaneError(f"merge conflict, integration left at {previous[:10]}; send it back to the lane:\n"
                             f"{conflicts or merged.stdout + merged.stderr}")
         merge = git(integration, "rev-parse", "HEAD")
@@ -140,7 +148,9 @@ def land(args: Any) -> int:
                                                "integration": integration, "at": journal.now(),
                                                "keep": bool(args.keep)})
         state.save(record)
-        journal.ledger(f"land {args.id} merge={merge} previous={previous}")
+        journal.ledger(f"land {args.id} merge={merge} previous={previous}", kind="lane.landed", lane=record,
+                       details={"merge": merge, "previous": previous, "tip": tip, "onto": onto,
+                                "integration": integration, "keep": bool(args.keep)})
     # The land lock is free from here on (#573): the next land merges while this merge's smoke runs on its own
     # checkout of the merge, since the integration worktree moves on.
     with worktrees.smoke_checkout(record["common_dir"], merge) as checkout:
@@ -186,7 +196,10 @@ def land(args: Any) -> int:
     verified = len(lane_verified)
     journal.ledger(f"post-merge {args.id} {status} {kind} jobs={jobs} suites={','.join(suites) or '-'} "
                    + (f"lane_verified={verified} " if narrowing.get("narrowed") else "")
-                   + f"{host_fields(info)} merge={merge}")
+                   + f"{host_fields(info)} merge={merge}",
+                   kind="lane.post_merge", level="info" if status == "green" else "error", lane=record,
+                   details={"status": status, "scope": kind, "jobs": jobs, "suites": suites,
+                            "lane_verified": verified, "merge": merge, "receipt": str(post)})
     ids = [c for s in suites for c in selected[s]] if selected is not None else None
     what = (", ".join(ids) if ids is not None and len(ids) <= 8 else f"{len(ids)} checks" if ids is not None
             else ", ".join(suites)) or "no suites affected"

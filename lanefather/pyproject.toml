@@ -10,7 +10,8 @@ license-files = ["LICENSE"]
 [tool.ruff]
 line-length = 120
 target-version = "py311"
-extend-exclude = ["tests/fixtures"]
+# tests/vendor holds files copied unchanged from other repositories (eventcheck.py: Godfather's validator).
+extend-exclude = ["tests/fixtures", "tests/vendor"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PL"]
@@ -34,6 +35,6 @@ force-sort-within-sections = true
 
 [tool.pyright]
 include = ["lanefather", "tests", "install.py", "tools"]
-exclude = ["tests/fixtures"]
+exclude = ["tests/fixtures", "tests/vendor"]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"

@@ -183,5 +183,8 @@ def wait_for_load(label: str) -> dict[str, Any]:
     print(f"lane: {label} starts after {wait['seconds']:.0f} s at load15 {current:.1f}"
           + (" (still above the limit)" if current > limit else ""), flush=True)
     journal.ledger(f"load-wait {label} seconds={wait['seconds']} load15={before}->{current} limit={limit}"
-                   + (" gave up" if current > limit else ""))
+                   + (" gave up" if current > limit else ""),
+                   kind="load.waited", subject={"type": "run", "id": label},
+                   details={"seconds": wait["seconds"], "load15_before": before, "load15": current,
+                            "limit": limit, "gave_up": current > limit})
     return wait

@@ -92,7 +92,9 @@ def register(record: Record, rules: list[dict[str, Any]], force_reason: str | No
         Path(record["scratch"][0]).mkdir(exist_ok=True)
         if refusals:
             record["overrides"].append({"at": journal.now(), "reason": force_reason, "refusals": refusals})
-            journal.ledger(f"override start {lane_id}: {force_reason} (refusals: {'; '.join(refusals)})")
+            journal.ledger(f"override start {lane_id}: {force_reason} (refusals: {'; '.join(refusals)})",
+                           kind="override", level="warn", lane=record,
+                           details={"command": "start", "reason": force_reason, "refusals": refusals})
         if create:
             main = main_checkout(record["common_dir"])
             path = os.path.join(main, ".claude", "worktrees", f"lane-{lane_id}")
@@ -101,7 +103,11 @@ def register(record: Record, rules: list[dict[str, Any]], force_reason: str | No
         state.save(record)
         journal.ledger(f"start {lane_id} ticket={record['ticket']} branch={record['branch']} "
                        f"base={record['base']}@{record['base_sha'][:10]} claims={' '.join(lane_claims)} "
-                       f"after={','.join(after) or '-'} cap={cap} ({source}) {host.host_fields(info)}")
+                       f"after={','.join(after) or '-'} cap={cap} ({source}) {host.host_fields(info)}",
+                       kind="lane.started", lane=record,
+                       details={"status": record["status"], "branch": record["branch"], "base": record["base"],
+                                "base_sha": record["base_sha"], "claims": lane_claims, "after": after,
+                                "worktree": record["worktree"], "cap": cap, "cap_source": source})
     print(header(record, rules))
     warning = tickets.no_ticket_warning(record)
     if warning:
@@ -149,7 +155,8 @@ def adopt_worktree(record: Record, worktree: str, branch: str) -> None:
     record.update(worktree=path, branch=branch, status="active" if record["status"] == "planned" else record["status"],
                   adopted=journal.now())
     state.save(record)
-    journal.ledger(f"adopt {record['id']} worktree={path} branch={branch}")
+    journal.ledger(f"adopt {record['id']} worktree={path} branch={branch}", kind="lane.adopted", lane=record,
+                   details={"worktree": path, "branch": branch, "status": record["status"]})
 
 
 def adopt(args: Any) -> int:

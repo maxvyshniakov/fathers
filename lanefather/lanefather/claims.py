@@ -157,7 +157,10 @@ def widen_claims(lane_id: str, paths: list[str]) -> tuple[list[str], list[dict[s
         record["claims"] = [*record["claims"], *added]
         state.save(record)
         journal.ledger(f"claims {lane_id} + {' '.join(added)}"
-                       + "".join(f" (overlaps {o['lane']}: {o['claim']})" for o in overlaps))
+                       + "".join(f" (overlaps {o['lane']}: {o['claim']})" for o in overlaps),
+                       kind="claims.added", lane=record,
+                       details={"added": added, "overlaps": [{"lane": o["lane"], "claim": o["claim"]}
+                                                             for o in overlaps]})
     return added, overlaps
 
 

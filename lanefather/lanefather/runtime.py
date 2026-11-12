@@ -11,13 +11,15 @@ import runpy
 import sys
 from typing import Any, cast
 
-from . import __version__, config
+from . import __version__, config, events
 from .errors import LaneError
 from .project import Project
 
 MANIFEST = 'INSTALL.json'
 CAPABILITIES = ('project.readiness', 'project.update_queue', 'project-hook', 'canonical-reference-transaction',
-                'promote.step-leases', 'tickets.lifecycle', 'slots.priority')
+                'promote.step-leases', 'tickets.lifecycle', 'slots.priority', 'dashboard.events')
+# The dashboard contract versions Godfather reads (its SPEC.md, "Capabilities contract").
+DASHBOARD = 1
 
 
 def shipping_files(root: Path) -> dict[str, str]:
@@ -61,9 +63,16 @@ def installed_identity(root: Path) -> dict[str, Any]:
         raise LaneError(f'installed payload cannot be verified: {error}; reinstall committed source') from None
 
 
+def dashboard() -> dict[str, Any]:
+    """What a dashboard reads from Lanefather: its EVENTS tag and the machine-wide event log."""
+    return {'v': DASHBOARD, 'tag': events.TAG,
+            'events': {'path': str(events.path().absolute()), 'versions': [events.SCHEMA]}}
+
+
 def capabilities(args: argparse.Namespace) -> int:
-    report = {'v': 1, 'version': __version__, 'state_schema': 1, 'slotfather_query_versions': [1, 2],
-              'capabilities': CAPABILITIES, 'source': installed_identity(Path(__file__).resolve().parent.parent)}
+    report = {'v': 1, 'tool': 'lanefather', 'version': __version__, 'state_schema': 1,
+              'slotfather_query_versions': [1, 2], 'capabilities': CAPABILITIES, 'dashboard': dashboard(),
+              'source': installed_identity(Path(__file__).resolve().parent.parent)}
     print(json.dumps(report, sort_keys=True) if args.json else json.dumps(report, indent=2, sort_keys=True))
     return 0
 
