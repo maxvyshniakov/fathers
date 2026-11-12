@@ -13,6 +13,8 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   stop them through the kind's own command (`simctl shutdown`, `docker stop`, that serve route `off`, the app's
   quit), and the hourly sweep reports booted simulators, running containers and serve routes no one owns, without
   stopping them.
+- `junkfather changelog --json [--since VERSION]` gives the installed release's changelog entries, newest first, for
+  Godfather's what's new.
 
 ### Changed
 

@@ -62,6 +62,11 @@ A command run with `GODFATHER_ACTOR` set carries `via: "godfather"`.
   [{pid, start, cmd, cwd, root, why, age, alive}] from the last sweep, unowned_resources: [{kind, id, name, why}]
   from the last sweep, sweep: {time, result}, errors}`. A resource entry's row has `resource: {kind, id, name}` and
   `processes: null`. It changes nothing.
+- `junkfather changelog --json [--since VERSION]`: the installed release's CHANGELOG.md for Godfather's what's new
+  (`godfather/docs/contracts/changelog.md`): `{v: 1, tool: "junkfather", version, source, entries: [{version, date,
+  section, text}]}`, newest first. Unreleased is left out, an entry's continuation lines join it and its markdown
+  stays; `--since` keeps only releases newer than that version. `source` is the file read, `null` (with no entries)
+  when the release has none. It reads one file and changes nothing.
 
 ## Ending an entry
 

@@ -10,6 +10,7 @@ them when their owner ends or their TTL passes.
   junkfather list [--all] [--json]
   junkfather status --json   (list --json, the last sweep's unowned processes and its time and result)
   junkfather capabilities --json
+  junkfather changelog --json [--since VERSION]   (the installed release's CHANGELOG, newest first)
   junkfather reap (--id ID... | --owner SESSION|AGENT [--agent AGENT] | --lane L | --pid PID [--force])
                   [--expired] [--reason TEXT] [--grace S] [--dry-run] [--json] [--quiet]
   junkfather hand ID --to SESSION|self
@@ -33,6 +34,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from . import __version__
+from . import changelog as _changelog
 from . import events as _events
 from . import hook as _hook
 from . import launch as _launch
@@ -105,7 +107,9 @@ def parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("capabilities", help="what this junkfather offers a dashboard")
     p.add_argument("--json", action="store_true", required=True)
-
+    p = sub.add_parser("changelog", help="the installed release's changelog entries, newest first")
+    p.add_argument("--json", action="store_true", required=True)
+    p.add_argument("--since", help="only releases newer than this version")
     p = sub.add_parser("reap", help="end owned entries")
     p.add_argument("--id", action="append", default=[])
     p.add_argument("--owner", help="a session id (everything not handed away) or a subagent id")
@@ -178,6 +182,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.command == "capabilities":
             print(json.dumps(capabilities(store), sort_keys=True))
             return 0
+        if args.command == "changelog":
+            return changelog_command(args.since)
         if args.command == "reap":
             return reap_command(store, args)
         if args.command == "hand":
@@ -320,11 +326,32 @@ def capabilities(store: Store) -> Dict[str, Any]:
         "events": {"path": str((store.root / "events.jsonl").resolve()), "versions": [_events.VERSION],
                    "kinds": list(_events.KINDS)},
         "actions": ["reap", "extend"]}
-    changelog = os.path.join(_launch.PACKAGE_ROOT, "CHANGELOG.md")
+    changelog = changelog_path()
     if os.path.isfile(changelog):
         dashboard["changelog"] = changelog
     return {"v": 1, "tool": "junkfather", "version": __version__, "commit": commit().strip(" ()"),
             "dashboard": dashboard}
+
+
+def changelog_path() -> str:
+    return os.path.join(_launch.PACKAGE_ROOT, "CHANGELOG.md")
+
+
+def changelog_command(since: Optional[str]) -> int:
+    """Godfather's changelog contract: {v, tool, version, source, entries: [{version, date, section, text}]},
+    newest first, Unreleased left out; no changelog in the release gives no entries and source null."""
+    if since is not None and not _changelog.valid_version(since):
+        raise Usage(f"--since takes a version like 0.1.0, not {since!r}")
+    path = changelog_path()
+    try:
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        source: Optional[str] = os.path.realpath(path)
+    except (OSError, UnicodeDecodeError):
+        text, source = "", None
+    print(json.dumps({"v": 1, "tool": "junkfather", "version": __version__, "source": source,
+                      "entries": _changelog.entries(text, since)}, sort_keys=True))
+    return 0
 
 
 # reap
