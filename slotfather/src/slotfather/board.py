@@ -1,8 +1,8 @@
 """The dashboard's model: what the main screen shows, gathered from one look at the queue under its lock (#20).
 
-The in-tree dashboard draws it (dashboard.dashboard_draw()), and `slotfather status --json --full` prints it as its
-`dashboard` block (dashboard_json()) for Godfather, which renders the same screen without importing Slotfather. The
-model is scheduler facts and plain data only: no terminal, theme or layout code lives here.
+`slotfather status --json --full` prints it as its `dashboard` block (dashboard_json()) for Godfather, which renders
+the screen without importing Slotfather (the in-tree dashboard that drew it moved there, #28). The model is
+scheduler facts and plain data only: no terminal, theme or layout code lives here.
 """
 from __future__ import annotations
 

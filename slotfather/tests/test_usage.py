@@ -31,7 +31,7 @@ BURN = "import sys, time\nt = time.process_time()\nwhile time.process_time() - t
 
 def load(path: str, name: str):
     import importlib
-    if pathlib.Path(path).name in ("slotfather-dashboard", "slotfather-stats", "slotfather-sweep"):
+    if pathlib.Path(path).name in ("slotfather-stats", "slotfather-sweep"):
         companion = path.rsplit("slotfather-", 1)[-1]
         return importlib.reload(importlib.import_module("slotfather." + companion))
     loader = importlib.machinery.SourceFileLoader(name, path)

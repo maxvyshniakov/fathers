@@ -417,14 +417,14 @@ class CommandTests(SlotCase):
 class EventsTests(unittest.TestCase):
     def test_events_show_a_priority_change_and_a_long_wait(self):
         import tempfile
-        from slotfather import dashboard
+        from slotfather import board
         with tempfile.TemporaryDirectory() as tmp:
             (_Path(tmp) / "queue.log").write_text(
                 "2026-11-11T22:55:54Z reprioritized safari-profile (pid 49535) from batch to interactive\n"
                 "2026-11-11T23:25:54Z waiting long: safari-profile (pid 49535, interactive) waiting 30m00s behind 8 "
                 "running leases: est. start 01:40\n")
-            events: list[dict[str, Any]] = cast(Any, dashboard).queue_events(_Path(tmp))
-            dashboard.describe_events(events, _Path(tmp), [])
+            events: list[dict[str, Any]] = cast(Any, board).queue_events(_Path(tmp))
+            board.describe_events(events, _Path(tmp), [])
         self.assertEqual([("priority", "safari-profile", 49535, 0, "batch → interactive"),
                           ("waiting", "safari-profile", 49535, 0, "30m00s, est. 01:40")],
                          [(e["verb"], e["label"], e["pid"], e["delta"], e["detail"]) for e in events])

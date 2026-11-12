@@ -6,7 +6,6 @@ import sys as _path_sys
 from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 
-import datetime
 import importlib
 import json
 import os
@@ -178,45 +177,6 @@ class AskTests(unittest.TestCase):
                          "its one slot would not start a request for three")
         tired = dict(lazy, yields=sf_config.YIELDS_MAX)
         self.assertEqual([], self.asks([waiter("next", 1, -60)], [tired, holder("busy", 1, -60)], [tired]))
-
-
-class MarkerTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.tool = importlib.reload(importlib.import_module("slotfather.dashboard"))
-        self.now = datetime.datetime.now(datetime.timezone.utc)
-
-    def model(self) -> dict[str, Any]:
-        now, old = self.now, self.now - datetime.timedelta(minutes=30)
-        holders = [dict(label="busy", kind="held", count=1, pid=10, style="h0", cpu=150, since=now, granted=now,
-                        rss=1024, procs=1, queue="", cmd="work", tree=[]),
-                   dict(label="idle", kind="held", count=1, pid=11, style="h1", cpu=0, since=old, granted=old,
-                        idle_since=old, rss=1024, procs=1, queue="", cmd="work", tree=[]),
-                   dict(label="asked", kind="held", count=1, pid=12, style="h2", cpu=0, since=old, granted=old,
-                        idle_since=old, asked="next", asked_at=now, rss=1024, procs=1, queue="", cmd="work", tree=[])]
-        waiters = [dict(label="next", kind="waiting", count=1, pid=13, style="text", cpu=0, since=now, granted=None)]
-        return {"holders": holders, "waiters": waiters, "slots": 4, "cores": 12}
-
-    def test_asked_to_yield_wins_over_idle(self) -> None:  # the state column (#15, tests/test_marks.py)
-        model = self.model()
-        self.assertEqual(["running", "idle", "asked", "waiting"],
-                         [self.tool.row_state(item, model) for item in model["holders"] + model["waiters"]])
-
-    def test_the_bar_warns_by_the_same_idle(self) -> None:
-        model = self.model()
-        styles = [self.tool.queue_bar_style(item, model, self.now) for item in model["holders"]]
-        self.assertEqual(["f0", "warn", "warn"], styles)
-        long_ago = dict(model["holders"][0], cpu=0, granted=self.now - datetime.timedelta(hours=1))
-        self.assertEqual("f0", self.tool.queue_bar_style(long_ago, model, self.now),
-                         "no own idle rule any more: only the holder's record says idle")
-
-    def test_lease_details_say_since_when_and_when_it_was_asked(self) -> None:
-        model = dict(self.model(), free=0, used=3, memory_block=None, admission=0, start=None, limit=600.0,
-                     order="backfill")
-        canvas = self.tool.Canvas(90, 24)
-        self.tool.draw_detail(canvas, 0, 0, 24, 90, model, 2, None, self.now)
-        text = canvas.render(False)
-        self.assertRegex(text, r"idle +30m since \d\d:\d\d")
-        self.assertRegex(text, r"yield +asked at \d\d:\d\d for next")
 
 
 class QueueTests(SlotCase):

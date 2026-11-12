@@ -11,7 +11,7 @@ or by one key of the lease metadata (`--by ticket` or `--by meta.KEY`; requests 
 per group the median and 90th percentile of wait and run, and the cores used per slot held, CPU seconds over wall
 seconds times slots. The machine part gives the share of sampled time the one-minute load stood over the cores
 (more runnable threads than cores) and under them, the CPU busy share, and how often a slot's worth of cores sat
-idle. The sweeps (sweep.jsonl, `slotfather sweep`) add what was found and stopped. It only reads; it lives apart from the queue like the dashboard and loads the slotfather beside it.
+idle. The sweeps (sweep.jsonl, `slotfather sweep`) add what was found and stopped. It only reads; it lives apart from the queue and loads the slotfather beside it.
 """
 from __future__ import annotations
 

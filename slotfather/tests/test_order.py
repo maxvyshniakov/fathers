@@ -10,7 +10,6 @@ from slotfather import state as sf_state
 from slotfather import schedule as sf_schedule
 
 
-import datetime
 import json
 import os
 import pathlib
@@ -19,10 +18,9 @@ import tempfile
 import time
 import unittest
 from unittest import mock
-from typing import Any, Callable, Optional, cast
+from typing import Any, Callable, Optional
 
 from test_slotfather import ROOT, TOOL, SlotCase, WORK
-from test_usage import load
 
 
 M = 1_800_000_000.0  # the moment plan() decides at
@@ -617,34 +615,15 @@ class MixedVersionTests(SlotCase):
 
 
 class DashboardOrderTests(SlotCase):
-    def test_a_waiting_gate_says_when_it_should_start_and_until_when_others_pass(self):
+    def test_a_waiting_gate_is_in_the_dashboard_block_with_an_estimated_start(self):
         OrderTests.seed(self, one=3600)
         one = self.request("one", 1)
         self.started("one")
         gate = self.request("gate", "all")
         self.wait_for(lambda: "waiting: 4 slot(s) gate" in self.status(), "the gate to queue")
-        with mock.patch.dict(os.environ,self.env,clear=True):
-            dashboard=load(TOOL+"-dashboard","order_dashboard")
-            model=dashboard.dashboard_model()
-            self.assertTrue(model["start"] is not None, "the real queue supplies its estimate")
-            # Keep the display fixture away from midnight: a one-hour estimate
-            # otherwise changes from HH:MM:SS to a weekday while this test runs.
-            noon = datetime.datetime(2026, 11, 7, 12).astimezone()
-            model["start"] = noon + datetime.timedelta(hours=1)
-            model["waiters"][0]["since"] = noon
-            model["limit"] = 600
-            canvas=dashboard.Canvas(200,40)
-            with mock.patch.object(dashboard, "today", return_value=noon.date()):
-                dashboard.dashboard_draw(canvas,model,selected=len(model["holders"]))
-        lines=canvas.render(False).splitlines()
-        details=lines[0].index("╭",1)
-        values={}
-        for name, expected in (("start est", "13:00:00"), ("pass until", "12:10:00")):
-            line=next(line for line in lines if name in line[details:])
-            values[name]=line[details:].split(name,1)[1].strip().split()[0]
-            self.assertEqual(expected, values[name])
-        self.assertNotIn("backfill by", "\n".join(cast(list[str], lines)))
-        self.assertIn("⏸️    gate",canvas.render(False))
+        block = json.loads(self.tool("status", "--json", "--full").stdout)["dashboard"]
+        self.assertIsNotNone(block["start"], "the real queue supplies its estimate")
+        self.assertEqual(["gate"], [item["label"] for item in block["waiters"]])
         for label in ("one", "gate"):
             self.release(label)
         for process in (one, gate):

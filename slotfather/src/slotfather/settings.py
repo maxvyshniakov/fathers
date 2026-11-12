@@ -6,8 +6,8 @@
   slotfather settings reset (KEY | --all) [--revision R] --json
 
 Every change goes through state.configure(), the same validation, ownership check and queue lock as `slotfather
-slots` and `slotfather order`, and applies at the queue's next grant. The in-tree Settings panel
-(dashboard_settings.py) reads its labels, checks and previews from here, so the two say the same. Exit codes: 0
+slots` and `slotfather order`, and applies at the queue's next grant. The labels, checks and previews here are
+the ones Godfather's Settings panel shows. Exit codes: 0
 done, 2 invalid (the reply says why), 3 conflict (the reply is the current settings), 4 another user's queue.
 docs/api.md has the reply shapes.
 """

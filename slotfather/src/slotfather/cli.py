@@ -18,7 +18,7 @@
   slotfather advise [--max N] [--exclusive] [--label L] [-- CMD...]  a recommended worker budget, as JSON
   slotfather order [backfill|window] [--safety X] [--limit S] ...    show, save or reset the queue's order
   slotfather sweep [--live [--dev-servers]] [--json] | config | --plist  find (and stop) processes left behind
-  slotfather [dashboard [--interval S | --once]]                     live view of capacity, leases and queue
+  slotfather [dashboard [ARGS...]]                                   the live view: runs `godfather ARGS...`
 
 Run heavy builds and tests through `slotfather run -n <k> -- ...`: a test suite or build that keeps the
 machine busy takes 1 to 2 slots, a full gate that must not share the machine takes `-n all`.
@@ -99,8 +99,12 @@ from typing import Any
 from . import config as _config
 
 
+GODFATHER_MISSING = ("the dashboard is part of godfather now; install it from "
+                     "https://github.com/maxvyshniakov/godfather")
+
+
 def companion(name: str, argv: list[str], title: str) -> int:
-    """Load only the requested view; admission never imports optional terminal or cleanup code."""
+    """Load only the requested view; admission never imports optional cleanup or statistics code."""
     from importlib import import_module
     try:
         module = import_module(f"slotfather.{name}")
@@ -111,12 +115,28 @@ def companion(name: str, argv: list[str], title: str) -> int:
     return module.main(argv)
 
 
-
 def dashboard(argv: list[str]) -> int:
-    return companion("dashboard", argv, "the dashboard")
+    """`slotfather dashboard ARGS`, and a bare `slotfather` in a terminal: the dashboard is Godfather's (#28), so
+    this process becomes `godfather ARGS` (its arguments and exit code are Godfather's); 2 when it is not on PATH."""
+    import shutil
+    found = shutil.which("godfather")
+    if found is None:
+        print(f"slotfather: {GODFATHER_MISSING}", file=sys.stderr)
+        return 2
+    sys.stdout.flush()
+    sys.stderr.flush()
+    import signal
+    for name in ("SIGPIPE", "SIGXFSZ"):  # Python ignores these; an exec would hand that on to godfather
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), signal.SIG_DFL)
+    try:
+        os.execv(found, ["godfather", *argv])
+    except OSError as error:
+        print(f"slotfather: cannot run {found}: {error.strerror or error}", file=sys.stderr)
+        return 126
 
 
-USAGE = ("usage: slotfather                     (in a terminal: the live dashboard)\n"
+USAGE = ("usage: slotfather                     (in a terminal: the live dashboard, godfather)\n"
          "       slotfather run [-n N|all] [--label L] [--meta KEY=VALUE]... [--priority interactive|normal|batch] [--ticket ID]\n"
          "                      [--yieldable] [--wait SECONDS] [--] COMMAND...      (inside a lease: slotfather yield)\n"
          "       slotfather status [--json [--pid PID | --full]] | history [N] | available [--label L] [-- COMMAND...]\n"
@@ -134,7 +154,7 @@ USAGE = ("usage: slotfather                     (in a terminal: the live dashboa
          "       slotfather procs --json [--cwd PATH] [--pid PID] | version [--json] | capabilities --json\n"
          "       slotfather sweep [--live [--dev-servers]] [--json] [--quiet] [--pid PID]... | sweep config [KEY VALUE]...\n"
          "                        | sweep --plist [--live [--dev-servers]] [--interval SECONDS]\n"
-         "       slotfather dashboard [--interval SECONDS] | dashboard --once [--width N] [--height N] [--color]")
+         "       slotfather dashboard [ARGS...]                          (runs godfather ARGS...)")
 
 
 def parse_count(value: str) -> int:

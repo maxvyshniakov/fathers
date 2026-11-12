@@ -64,16 +64,16 @@ class GateTests(unittest.TestCase):
 
 class DashboardAdmissionTests(unittest.TestCase):
     def test_the_dashboard_admits_one_slot_under_warning_and_none_beside_a_pressed_lease(self):
-        from slotfather import dashboard as sf_dashboard
+        from slotfather import board as sf_board
         settings = dict(sf_config.ORDER_DEFAULTS)
         held = [{"count": 1, "label": "running", "state": "held"}]
-        self.assertEqual(1, sf_dashboard.dashboard_admission([], held, 4, 0, WARNING, None, settings, "warning"))
-        self.assertEqual(0, sf_dashboard.dashboard_admission([], [{**held[0], sf_schedule.PRESSED: True}], 4, 0,
-                                                             WARNING, None, settings, "warning"))
-        self.assertEqual(0, sf_dashboard.dashboard_admission([], held, 4, 0, "level 4", None, settings, "short"))
-        self.assertEqual(0, sf_dashboard.dashboard_admission([], held, 4, 0, "level 2", None,
-                                                             {**settings, "warning_admits": 0.0}, "warning"))
-        self.assertEqual(3, sf_dashboard.dashboard_admission([], held, 4, 0, None, None, settings, "normal"))
+        self.assertEqual(1, sf_board.dashboard_admission([], held, 4, 0, WARNING, None, settings, "warning"))
+        self.assertEqual(0, sf_board.dashboard_admission([], [{**held[0], sf_schedule.PRESSED: True}], 4, 0,
+                                                         WARNING, None, settings, "warning"))
+        self.assertEqual(0, sf_board.dashboard_admission([], held, 4, 0, "level 4", None, settings, "short"))
+        self.assertEqual(0, sf_board.dashboard_admission([], held, 4, 0, "level 2", None,
+                                                         {**settings, "warning_admits": 0.0}, "warning"))
+        self.assertEqual(3, sf_board.dashboard_admission([], held, 4, 0, None, None, settings, "normal"))
 
 
 class GrantTests(SlotCase):

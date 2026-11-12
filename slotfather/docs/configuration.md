@@ -49,7 +49,9 @@ A saved value persists across shells and process restarts in `capacity.json` und
 | `SLOTFATHER_MEMORY_FILE` | Memory test seam: file containing `free_swap_MB pressure_level` (1 normal, 2 warning, 4 critical); it replaces both the macOS and the Linux signals, and the swap floor applies at every level. |
 | `SLOTFATHER_CGROUP_ROOT` | Linux test seam: the cgroup v2 mount, default `/sys/fs/cgroup`. |
 | `SLOTFATHER_PROC` | Linux test seam: a directory read as `/proc` for `meminfo`, `pressure/memory` and `PID/environ` (and the Linux paths then run on any host). |
-| `SLOTFATHER_THEME` | Dashboard colours: `auto` (default; the terminal's theme with mixed surfaces), `terminal` (its palette only) or `builtin` (the fixed palette before #14). Settings changes it for one dashboard. |
-| `SLOTFATHER_TERMINAL_BG`, `_FG` | The terminal's background and foreground (`#fdfcfa`), for the dashboard where the terminal cannot be asked: `dashboard --once`, tests and media. They override what a terminal answers. |
+
+The dashboard's colours are Godfather's: `GODFATHER_THEME`, `GODFATHER_TERMINAL_BG` and `_FG`; see
+[its README](https://github.com/maxvyshniakov/godfather#install-and-run) for those and the `SLOTFATHER_` names it
+still reads.
 
 A command receives `SLOTFATHER_LEASE` and `SLOTFATHER_COUNT` for its existing lease, and a yieldable lease's command `SLOTFATHER_YIELD`, the path of its yield request (see Polite preemption). Do not fabricate these values to skip queue admission.

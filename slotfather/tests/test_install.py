@@ -13,7 +13,6 @@ import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
 PAYLOAD = b"#!/bin/sh\nprintf slotfather-fixture\n"
-DASHBOARD = b"#!/usr/bin/env python3\nprint('dashboard fixture')\n"
 STATS = b"#!/usr/bin/env python3\nprint('stats fixture')\n"
 SWEEP = b"#!/usr/bin/env python3\nprint('sweep fixture')\n"
 
@@ -36,7 +35,6 @@ class InstallTests(unittest.TestCase):
         if (ROOT / "install.py").exists():
             shutil.copyfile(ROOT / "install.py", self.source / "install.py")
         (self.source / "slotfather").write_bytes(PAYLOAD)
-        (self.source / "slotfather-dashboard").write_bytes(DASHBOARD)
         (self.source / "slotfather-stats").write_bytes(STATS)
         (self.source / "slotfather-sweep").write_bytes(SWEEP)
         self.env = {**os.environ, "HOME": str(self.home)}
@@ -82,20 +80,72 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(PAYLOAD, (self.bin / "slotfather").read_bytes())
         self.assertFalse((self.bin / "machine-slot").exists())
         self.assertTrue(os.access(self.bin / "slotfather", os.X_OK))
-        self.assertTrue(os.access(self.bin / "slotfather-dashboard", os.X_OK))
         self.assertTrue(os.access(self.bin / "slotfather-stats", os.X_OK))
         self.assertTrue(os.access(self.bin / "slotfather-sweep", os.X_OK))
 
     def test_installed_commands_name_the_installing_interpreter_instead_of_env(self):
         result = self.run_install("--python", sys.executable)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        installed = (self.bin / "slotfather-dashboard").read_bytes()
-        self.assertEqual(f"#!{sys.executable}\nprint('dashboard fixture')\n".encode(), installed)
         self.assertEqual(PAYLOAD, (self.bin / "slotfather").read_bytes(), "only an env python3 shebang is pinned")
-        run = subprocess.run([str(self.bin / "slotfather-dashboard")], capture_output=True, text=True)
-        self.assertEqual("dashboard fixture\n", run.stdout)
+        run = subprocess.run([str(self.bin / "slotfather-stats")], capture_output=True, text=True)
+        self.assertEqual("stats fixture\n", run.stdout)
         self.assertEqual(f"#!{sys.executable}\nprint('stats fixture')\n".encode(),
                          (self.bin / "slotfather-stats").read_bytes())
+
+    def test_the_dashboard_command_is_no_longer_shipped_and_an_earlier_one_is_removed(self):
+        # An earlier release installed slotfather-dashboard (#28: the dashboard is Godfather's now).
+        (self.bin / "slotfather-dashboard").write_text("#!/usr/bin/env python3\nfrom slotfather.dashboard import main\n")
+        result = self.run_install("--python", sys.executable)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertFalse(os.path.lexists(self.bin / "slotfather-dashboard"))
+        self.assertIn("Removed", result.stdout)
+        self.assertNotIn("slotfather-dashboard,", result.stdout)
+        self.assertEqual(["slotfather", "slotfather-stats", "slotfather-sweep"],
+                         sorted(path.name for path in self.bin.iterdir()))
+
+        old = self.tmp / "old-checkout"
+        old.mkdir()
+        (old / "slotfather-dashboard").write_text("#!/usr/bin/env python3\nfrom slotfather.dashboard import main\n")
+        for target, why in ((old / "slotfather-dashboard", "a link to an old entry point goes too"),
+                            (self.tmp / "gone" / "slotfather-dashboard", "so does one to a checkout that lost it")):
+            (self.bin / "slotfather-dashboard").symlink_to(target)
+            self.assertEqual(0, self.run_install("--python", sys.executable).returncode)
+            self.assertFalse(os.path.lexists(self.bin / "slotfather-dashboard"), why)
+
+        mine = self.tmp / "my-shim"
+        mine.write_text("#!/bin/sh\nexec godfather \"$@\"  # was slotfather-dashboard\n")
+        for keep in ("#!/bin/sh\nexec godfather \"$@\"  # was slotfather-dashboard\n", None):
+            with self.subTest(keep=keep):
+                if keep is None:
+                    (self.bin / "slotfather-dashboard").symlink_to(mine)
+                else:
+                    (self.bin / "slotfather-dashboard").write_text(keep)
+                self.assertEqual(0, self.run_install("--python", sys.executable).returncode)
+                self.assertTrue(os.path.lexists(self.bin / "slotfather-dashboard"), "a user's own command stays")
+                self.assertEqual(mine.read_text(), (self.bin / "slotfather-dashboard").read_text())
+                (self.bin / "slotfather-dashboard").unlink()
+
+        if os.geteuid() != 0:  # root reads any file
+            locked = self.bin / "slotfather-dashboard"
+            locked.write_text("#!/usr/bin/env python3\nfrom slotfather.dashboard import main\n")
+            locked.chmod(0)
+            result = self.run_install("--python", sys.executable)
+            self.assertEqual(0, result.returncode, "the install itself is done: " + result.stderr)
+            self.assertIn(f"could not remove {locked}", result.stderr)
+            locked.chmod(0o644)
+
+    def test_the_payload_carries_no_dashboard_entry_point_or_terminal_module(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("installer_payload", ROOT / "install.py")
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertNotIn("slotfather-dashboard", module.COMMANDS)
+        names = {str(path.relative_to(ROOT)) for path in module.source_files(ROOT)}
+        for removed in ("slotfather-dashboard", "src/slotfather/dashboard.py", "src/slotfather/dashboard_settings.py",
+                        "src/slotfather/theme.py", "src/slotfather/keys.py"):
+            self.assertNotIn(removed, names)
+        self.assertIn("src/slotfather/board.py", names, "the model behind status --json --full stays")
 
     def test_an_interpreter_older_than_the_minimum_is_refused_before_any_change(self):
         old_python = self.tmp / "python3.8"
@@ -566,7 +616,7 @@ class PackageInstallTests(unittest.TestCase):
             '    print(json.dumps({"state": config.DEFAULT_DIR, "cgroup": config.DEFAULT_CGROUP, '
             '"version": json.loads(Path(__file__).with_name("version.json").read_text())}))\n'
             '    return 0\n')
-        for name in ('dashboard', 'stats', 'sweep'):
+        for name in ('stats', 'sweep'):
             (package / (name + '.py')).write_text('def main():\n    print("package ' + name + '")\n    return 0\n')
         return package
 
@@ -583,7 +633,7 @@ class PackageInstallTests(unittest.TestCase):
         self.assertEqual(64, len(info['version']['source_sha256']))
         self.assertIn('commit', info['version'])
         self.assertNotIn(str(self.source), (self.bin / 'slotfather').read_text())
-        for name in ('dashboard', 'stats', 'sweep'):
+        for name in ('stats', 'sweep'):
             companion = subprocess.run([str(self.bin / ('slotfather-' + name))], env=self.env,
                                        capture_output=True, text=True, timeout=20)
             self.assertEqual('package ' + name + '\n', companion.stdout, companion.stderr)
@@ -632,7 +682,7 @@ class PackageInstallTests(unittest.TestCase):
         old = self.tmp / 'old-slotfather'
         old.write_bytes(payload)
         old.chmod(0o755)
-        for name in ('slotfather', 'slotfather-dashboard', 'slotfather-stats', 'slotfather-sweep'):
+        for name in ('slotfather', 'slotfather-stats', 'slotfather-sweep'):
             shutil.copyfile(ROOT / name, self.source / name)
         shutil.copytree(ROOT / 'src', self.source / 'src', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
         memory = self.tmp / 'memory'

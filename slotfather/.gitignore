@@ -1,5 +1,3 @@
 __pycache__/
 *.py[cod]
 
-# Reusable local media takes and evidence; README exports are tracked.
-assets/screens/

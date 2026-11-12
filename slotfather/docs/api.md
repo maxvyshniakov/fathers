@@ -25,6 +25,12 @@ keep the outer request's fields. Built-in fields cannot be passed through metada
 these commands; it never imports Slotfather or reads its state files. Each reply carries its own version, and a
 reader treats a version it does not know as unsupported.
 
+**`slotfather dashboard [ARGS...]`**, and `slotfather` alone with a terminal on stdin and stdout, replace their
+process with `godfather ARGS...` (found on `PATH`): the arguments pass through untouched and the exit code is
+Godfather's. Without an executable `godfather` on `PATH` they print `slotfather: the dashboard is part of godfather
+now; install it from https://github.com/maxvyshniakov/godfather` on stderr and exit 2. Slotfather itself carries no
+terminal code since #28; `slotfather-dashboard` is no longer installed, and the installer removes an earlier one.
+
 **`slotfather capabilities --json`** says which contracts this release supports; a feature it does not name is
 not there:
 
@@ -43,7 +49,7 @@ hint in seconds; `changelog` is the CHANGELOG.md shipped with the running packag
 
 **`slotfather status --json --full`** is `status --json` (version 2, every field as above, nothing added to an
 entry) plus three top-level fields: `host` (the short host name, lowercase), `time` (RFC 3339 UTC with
-milliseconds) and `dashboard`, the in-tree dashboard's model (`board.dashboard_model()`) as JSON. The status and
+milliseconds) and `dashboard`, the dashboard's model (`board.dashboard_model()`) as JSON. The status and
 the block come from one look at the queue under its lock (`query.look()`), so each entry's `yield_asked` and
 `idle_since` agree with its row's `asked` and `idle_since`; like `status`, it may reap dead entries and changes
 nothing else. The block:

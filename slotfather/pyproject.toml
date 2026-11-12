@@ -4,7 +4,7 @@ version = "0.1.0"  # the newest release in CHANGELOG.md; src/slotfather/version.
 
 [tool.ruff]
 target-version = "py39"
-extend-include = ["slotfather", "slotfather-dashboard", "slotfather-stats", "slotfather-sweep"]
+extend-include = ["slotfather", "slotfather-stats", "slotfather-sweep"]
 exclude = [".git", "__pycache__", ".venv", "assets"]
 
 [tool.ruff.lint]

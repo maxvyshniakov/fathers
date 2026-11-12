@@ -19,7 +19,7 @@ choices and compatibility aliases; it does not define a second vocabulary.
 
 The dashboard's QUEUE panel lists the queue's running and waiting requests; the details panel is LEASE DETAILS for a request whose lease holds slots and REQUEST DETAILS for one that waits. The `label` field names a
 request; it is not another entity. `pass until` and `start est` remain the concise display labels for the distinct scheduling times explained
-in [dashboard help](dashboard.md).
+in the dashboard's help (Godfather's `?`, see [the dashboard](dashboard.md)).
 
 An owner with a held lease may be called a holder in scheduling code; a waiter
 is a waiting request. These describe roles, not additional domain objects.

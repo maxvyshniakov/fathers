@@ -374,9 +374,8 @@ class ProtocolTests(SlotCase):
         [entry] = [e for e in json.loads(self.tool("status", "--json").stdout)["entries"] if e["label"] == "gate"]
         self.assertEqual(("quick", "interactive", 1), (entry["yield_asked"]["label"], entry["yield_asked"]["priority"],
                                                        entry["yield_asked"]["count"]))
-        text = self.tool("dashboard", "--once", "--width", "160", "--height", "40").stdout
-        self.assertRegex(text, r"yield +asked at \d\d:\d\d for quick")
-        self.assertRegex(text, r"❓ (🐢|  ) gate", "asked to yield: the state column (#15)")
+        [held] = json.loads(self.tool("status", "--json", "--full").stdout)["dashboard"]["holders"]
+        self.assertEqual(("gate", "quick"), (held["label"], held["asked"]), "the dashboard block names the ask")
         self.assertEqual(75, quick.wait(timeout=20), "it gave up waiting")
         self.assertEqual([], list((self.state / "queue").glob("*.yield")), "its leaving withdrew the request")
         self.assertIn("withdrew the yield request to gate", (self.state / "queue.log").read_text())

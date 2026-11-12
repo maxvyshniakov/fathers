@@ -43,7 +43,9 @@ from typing import Any, Iterator, cast
 
 MIN_PYTHON = (3, 9)
 ENV_SHEBANG = b"#!/usr/bin/env python3\n"
-COMMANDS = ("slotfather", "slotfather-dashboard", "slotfather-stats", "slotfather-sweep")
+COMMANDS = ("slotfather", "slotfather-stats", "slotfather-sweep")
+# Commands an earlier release installed and this one removes: the dashboard moved to Godfather (slotfather#28).
+RETIRED = ("slotfather-dashboard",)
 USAGE = "usage: python3 install.py [--python /path/to/python3] [--user NAME] [--bin DIR] [--cgroup /A.slice/B.slice] [--host SSH_ALIAS]"
 STATE_LINE = b'DEFAULT_DIR = "~/.local/state/slotfather"\n'  # in slotfather; --user replaces it
 CGROUP_LINE = b"DEFAULT_CGROUP = None  "  # in slotfather; --cgroup replaces the None
@@ -414,7 +416,7 @@ def source_files(root: Path) -> list[Path]:
     package = root / "src" / "slotfather"
     if package.is_dir():
         files.extend(sorted(package.rglob("*.py")))
-    if (root / "CHANGELOG.md").is_file():  # shipped with the package: the dashboard's changelog reads it
+    if (root / "CHANGELOG.md").is_file():  # shipped with the package: capabilities --json names it for Godfather
         files.append(root / "CHANGELOG.md")
     return files
 
@@ -534,6 +536,31 @@ def install_remote(root: Path, host: str, argv: list[str]) -> None:
         raise InstallError(f"remote install on {host} failed (exit {result.returncode})")
 
 
+RETIRED_MARKER = b"from slotfather.dashboard import main"  # in every slotfather-dashboard entry point we wrote
+
+
+def retire_command(path: Path) -> bool:
+    """Remove a retired entry point an earlier install wrote: a file starting `#!` that loads the old dashboard (the
+    package wrapper or the source entry point), or a symlink to one. Anything else, a user's own script or a link
+    elsewhere, stays; so does one that cannot be read or removed, with a note, since the install itself is done."""
+    try:
+        if path.is_symlink() and not path.exists() and Path(os.readlink(path)).name == path.name:
+            path.unlink()  # a link to a checkout's slotfather-dashboard, which that checkout no longer has
+            return True
+        if not path.is_file():  # missing, a directory, or a link to something else that is gone
+            return False
+        with path.open("rb") as handle:
+            head = handle.read(4096)
+        if not (head.startswith(b"#!") and RETIRED_MARKER in head):
+            return False
+        path.unlink()
+        return True
+    except OSError as error:
+        print(f"slotfather install: note: could not remove {path} ({error.strerror or error}); remove it by hand",
+              file=sys.stderr)
+        return False
+
+
 def install(home: Path, source: Path, python: str, bin_dir: Path | None = None,
             pinned: bool = False, cgroup: str | None = None) -> None:
     """Install into `bin_dir` (default HOME/.local/bin) for the queue in HOME/.local/state/slotfather; `pinned`
@@ -609,7 +636,7 @@ def install(home: Path, source: Path, python: str, bin_dir: Path | None = None,
             # Before the new commands exist, so that every client they start finds canonical entries.
             migrate_queue(entry_updates, backup)
             migrate_history(destination, updates, backup)
-            # The companions (dashboard, stats, sweep) first: an executable that names a missing one is the shorter-lived
+            # The companions (stats, sweep) first: an executable that names a missing one is the shorter-lived
             # mismatch.
             for name in reversed(COMMANDS):
                 main_command = name == "slotfather"
@@ -625,7 +652,10 @@ def install(home: Path, source: Path, python: str, bin_dir: Path | None = None,
                     finally:
                         wrapper.unlink(missing_ok=True)
             old_command.unlink(missing_ok=True)
-            print(f"Installed {bin_dir / 'slotfather'}, slotfather-dashboard, slotfather-stats and slotfather-sweep for "
+            for name in RETIRED:
+                if retire_command(bin_dir / name):
+                    print(f"Removed {bin_dir / name}: the dashboard is part of godfather now")
+            print(f"Installed {bin_dir / 'slotfather'}, slotfather-stats and slotfather-sweep for "
                   f"{python}; old queue paths are file guards" + (f"; queue {destination}" if pinned else "")
                   + (f"; cgroup {cgroup}" if cgroup else ""))
         finally:

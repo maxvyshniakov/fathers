@@ -18,14 +18,17 @@ Definitions: [glossary](../GLOSSARY.md). Naming and wire aliases: [terminology](
 | `usage` | Process-tree accounting and machine sampling while work runs. |
 | `lane_admission` | Stateless versioned lifetime lane policy and JSON validation; no execution state. |
 | `query` | Compatible queue snapshots and status output; `look()`, one look under the queue lock that `status --json --full` and the dashboard share (#20). |
-| `board` | The dashboard's model from one look, for the in-tree dashboard and `status --json --full` (its JSON block). |
+| `board` | The dashboard's model from one look, the `dashboard` block of `status --json --full` that Godfather draws. |
 | `settings` | `settings --json/check/set/reset`: the shared settings as data; labels, checks and previews the Settings panel shares. |
 | `events` | events.jsonl in Godfather's shared event schema, appended beside each queue.log line; never fails an operation. |
 | `capabilities` | `capabilities --json`: the dashboard contracts this release supports. |
 | `procs` | Read-only process queries for guards and other tools. |
 | `cli` | Argument validation and command dispatch. |
-| `dashboard`, `stats`, `sweep` | Presentation, historical analysis and guarded leftover-process cleanup. |
-| `dashboard_settings` | Settings panel: read-only queue status, per-field input, validation and the local refresh preference; each change is saved at once through `state.configure`, also used by the CLI. |
+| `stats`, `sweep` | Historical analysis and guarded leftover-process cleanup. |
+
+No module imports terminal code (`termios`, `tty`, `curses`): the dashboard is Godfather's (#28), and `slotfather
+dashboard` only runs `godfather`. `tests/test_godfather.py` checks that admission, status, settings, procs, stats,
+history and version load none of it.
 
 Scheduling decisions operate on entry data; OS inspection and file mutation stay outside
 those decisions. Optional views load separately from admission. Tests cross the same package

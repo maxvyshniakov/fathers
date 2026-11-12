@@ -276,7 +276,7 @@ class RealClientsTests(CutoverCase):
         state.mkdir(parents=True)
         source = self.tmp / "source"
         source.mkdir()
-        for name in ("install.py", "slotfather", "slotfather-dashboard", "slotfather-stats", "slotfather-sweep"):
+        for name in ("install.py", "slotfather", "slotfather-stats", "slotfather-sweep"):
             shutil.copyfile(ROOT / name, source / name)
         shutil.copytree(ROOT / "src", source / "src", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         env = {**self.environment(state), "HOME": str(home)}

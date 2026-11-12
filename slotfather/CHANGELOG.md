@@ -84,6 +84,14 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 - The holder palette is "Neon": eight saturated hues (hot pink, orange, acid green, spring teal, cyan, electric
   violet, magenta, green), more distinct from one another, with inks at 4.6:1 or more.
 
+### Removed
+
+- The in-tree dashboard and the `slotfather-dashboard` command: the dashboard is part of
+  [Godfather](https://github.com/maxvyshniakov/godfather) now. `slotfather dashboard [ARGS]`, and `slotfather`
+  alone in a terminal, run `godfather ARGS` (its arguments and exit code), or say where to get it and exit 2 when
+  it is not installed. The installer removes an earlier `slotfather-dashboard`. `status --json --full`,
+  `capabilities --json` and `settings` stay, for Godfather.
+
 ### Fixed
 
 - A batch `-n all` request no longer waits for as long as normal and interactive work keeps coming: on 2026-11-11 a

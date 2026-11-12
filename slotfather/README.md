@@ -14,7 +14,7 @@ Slotfather gives them one place to wait and a visible answer to “what is using
 - Wrap a build or test command and it waits until its requested slots are available.
 - Give an interactive check priority over unattended batch work.
 - Reserve all cooperating slots for a benchmark instead of timing it beside another wrapped build.
-- Inspect the dashboard, process/lease ancestry and history when work seems stuck.
+- Inspect the queue, process/lease ancestry and history when work seems stuck.
 - Reuse a parent's lease through nested scripts instead of reserving the same work twice.
 
 Use it on a development workstation or shared runner when expensive commands overlap. It runs any command and
@@ -35,8 +35,12 @@ state location; it is not a distributed scheduler or a sandbox.
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="assets/dashboard-light.webp">
-  <img alt="Slotfather dashboard: navigating running and waiting requests" src="assets/dashboard.webp">
+  <img alt="Godfather showing Slotfather's queue: navigating running and waiting requests" src="assets/dashboard.webp">
 </picture>
+
+The live dashboard is [Godfather](https://github.com/maxvyshniakov/godfather), which reads Slotfather through its
+[JSON contracts](docs/api.md#dashboard-contracts). Install it beside Slotfather; `slotfather` in a terminal (or
+`slotfather dashboard ARGS`) then runs `godfather ARGS`. [More](docs/dashboard.md).
 
 ## Install
 
@@ -88,31 +92,14 @@ work; an otherwise idle machine can still start its first request.
 
 ## Watch the queue
 
-Run `slotfather` in a terminal to open the live dashboard.
-
-| Widget | Shows |
-| --- | --- |
-| SLOTS | Occupied and free capacity; colours identify running requests. |
-| QUEUE | Running and waiting requests. Select either to see details. |
-| LEASE DETAILS / REQUEST DETAILS | Command, status, resource use and the busiest processes; the title says whether the selection holds slots. |
-| MACHINE | Admission status, load, memory, swap and occupied-slot history. |
-| EVENTS | Recent grants, releases and abandoned requests. |
-
-Use **↑/↓** or click to select, the mouse wheel to scroll a table, **?** for help and **q** to quit;
-Shift+drag selects text. The view refreshes on its own.
-Press **s** for Settings: a read-only status of the queue above shared capacity,
-queue policy and the local refresh interval. A change is saved at once and applies
-at the next grant, also while work runs; Esc closes.
-
 ```sh
+slotfather                         # in a terminal: the live dashboard (runs godfather)
 slotfather status                  # a plain-text queue summary
 slotfather status --json --pid 4242 # find a process’s lease
 slotfather procs --json --pid 4242  # read-only process, lease and session ancestry
-slotfather dashboard --once         # a dashboard snapshot for scripts
 ```
 
-[Reading the dashboard](docs/dashboard.md) ·
-[JSON status and metadata](docs/api.md)
+[The dashboard](docs/dashboard.md) · [JSON status and metadata](docs/api.md)
 
 ## Inspect usage and leftover processes
 
@@ -124,7 +111,7 @@ slotfather advise --max 4
 slotfather sweep
 ```
 
-`available` reports queue space before memory checks. Dashboard admission also
+`available` reports queue space before memory checks; the dashboard's admission also
 applies memory policy. `advise` recommends a worker budget; it does not reserve slots. `sweep` is a dry run by
 default. Only `sweep --live` stops eligible leftover processes.
 
@@ -150,9 +137,7 @@ slotfather run -n 1 -- python3 -m unittest discover -s tests -v
 
 [Lint and strict type checks](docs/agents/checks.md) use a baseline that can only shrink.
 
-The animation uses the real dashboard and input handling, a historical queue,
-and separately recorded workload metrics. It is an illustrative demo, not a
-recording of those historical processes. [Regenerate media](docs/media.md).
+The dashboard media above are Godfather's (copied from its README); they are made there.
 
 [Verification](docs/testing.md) · [Scheduler experiments](docs/scheduler-experiments.md)
 

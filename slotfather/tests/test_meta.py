@@ -129,12 +129,12 @@ class MetaTests(SlotCase):
         self.assertEqual({"ticket": "1"}, sf_config.meta_of({"meta": {"ticket": "1", "Bad Key\x1b": "x", "": "y"}}),
                          "keys a foreign writer left that --meta would refuse are dropped")
 
-    def test_the_dashboard_promotes_the_selected_request_ticket_from_legacy_meta(self):
+    def test_the_dashboard_block_carries_the_request_ticket_apart_from_its_meta(self):
         process = self.request("lane-650", 1, options=("--ticket", "650"))
         self.started("lane-650")
-        text = self.tool("dashboard", "--once", "--width", "160", "--height", "40").stdout
-        self.assertRegex(text, r"ticket +#650")
-        self.assertNotIn("ticket=650", text)
+        [holder] = json.loads(self.tool("status", "--json", "--full").stdout)["dashboard"]["holders"]
+        self.assertEqual("650", holder["ticket"])
+        self.assertNotIn("ticket=650", holder["meta"])
         self.release("lane-650")
         self.finish(process)
 
