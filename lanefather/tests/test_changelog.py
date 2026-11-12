@@ -66,6 +66,18 @@ class ChangelogParseTests(unittest.TestCase):
         self.assertEqual([e["version"] for e in found], [None, "0.2.0", "0.2.0"])
         self.assertEqual([e["version"] for e in changelog.entries(FIXTURE, since="0.2.0")], [None])
 
+    def test_since_takes_a_build_version_by_its_heading(self):
+        from lanefather import changelog
+        # The build release is below 0.2.0: since it, 0.2.0 and Unreleased remain; since plain 0.1.0 (no heading
+        # here), the build with the same number is not newer.
+        self.assertEqual([e["version"] for e in changelog.entries(FIXTURE, since="0.1.0+abc1234")],
+                         [None, "0.2.0", "0.2.0"])
+        text = (ROOT / "CHANGELOG.md").read_text()
+        newer = {e["version"] for e in changelog.entries(text, since="0.1.0")}
+        self.assertEqual(newer, {None, "0.1.0+7eca44a", "0.1.0+1138486"})
+        self.assertEqual({e["version"] for e in changelog.entries(text, since="0.1.0+7eca44a")},
+                         {None, "0.1.0+1138486"})
+
     def test_no_text_gives_no_entries(self):
         from lanefather import changelog
         self.assertEqual(changelog.entries(""), [])
@@ -101,6 +113,7 @@ class ChangelogCommandTests(LaneCase):
         self.assertEqual(answer["source"], str((ROOT / "CHANGELOG.md").resolve()))
         self.assertTrue(answer["entries"])
         self.assertIn("--since takes a version", self.lane("changelog", "--json", "--since", "later", ok=False))
+        self.assertTrue(json.loads(self.lane("changelog", "--json", "--since", "0.1.0+7eca44a"))["entries"])
         self.assertEqual(json.loads(self.lane("changelog", "--json", "--since", "99.0.0"))["entries"],
                          [e for e in answer["entries"] if e.get("unreleased")])
 

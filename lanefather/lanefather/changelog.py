@@ -18,7 +18,7 @@ import sys
 from typing import Any
 
 RELEASE = re.compile(r"^## (\d+\.\d+\.\d+\S*) - (\d{4}-\d\d-\d\d)\s*$")
-VERSION = re.compile(r"\d+\.\d+\.\d+")
+VERSION = re.compile(r"\d+\.\d+\.\d+\S*")
 PACKAGE = Path(__file__).resolve().parent
 
 
@@ -28,7 +28,13 @@ def version_key(version: str) -> tuple[int, ...]:
 
 def entries(text: str, since: str | None = None, commit: str | None = None) -> list[dict[str, Any]]:
     """Every entry of Unreleased and of every dated release, newest first. Anything before the first release heading
-    and under other headings is left out. `since`: only the releases newer than that version, and Unreleased."""
+    and under other headings is left out. `since`: only the releases newer than that version, and Unreleased; a
+    version the file has a heading for keeps the releases above that heading, so a build (`0.1.0+7eca44a`) counts as
+    newer than the release below it although its number is the same."""
+    headings = [m[1] for m in (RELEASE.match(line) for line in text.splitlines()) if m]
+    if since and since in headings:
+        newer = set(headings[:headings.index(since)])
+        return [e for e in entries(text, None, commit) if e["version"] is None or e["version"] in newer]
     found: list[dict[str, Any]] = []
     release: dict[str, Any] | None = None
     section: str | None = None
