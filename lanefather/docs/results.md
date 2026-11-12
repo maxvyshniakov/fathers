@@ -32,6 +32,11 @@ Lanefather's own runs reuse it, a result the check produced on the tree always w
 counts it. The full gate is verified only by a green full-gate entry, because the gate's check list is the tree's
 own.
 
+The post-merge smoke also reuses a pass of the previous tip's tree for a smoke check the merged diff's plan does not
+select (fathers#94): the merge adds only the lane's changes, so that check reads the same files on both trees. Such a
+result is inferred (`reused_by: "previous-tip"`); a full merged plan, or a tree whose plan names whole suites,
+reuses nothing this way.
+
 `promote` skips the batch gate by the tree's stamp, as before: the project's pre-push hook requires the stamp, which
 only the gate writes. The store records each gate's result, and a promote of a verified tree names the gate that
 passed it.

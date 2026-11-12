@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 import unittest
+import unittest.mock
 
 from support import LaneCase
 
@@ -69,6 +70,48 @@ class SmokeSkipTests(LaneCase):
         self.git(self.repo, "branch", "dev", "main")
         self.lane("promote", self.tip(), "--no-push", "--wait", "0")
         self.assertEqual(self.verify_runs()[-1], "FULL structure,lib,native,host-journeys")
+
+
+class SmokeReuseTableTests(unittest.TestCase):
+    """smoke_reuse as a table: what the merged plan selects, what passed where, and gate_only (review of #94)."""
+
+    def run_table(self, passed: dict[str, set[str]], merged: dict[str, Any] | None, gate_only: tuple[str, ...] = (),
+                  ) -> tuple[str, list[str], dict[str, str]]:
+        from lanefather import checks, config, land
+        rows: list[dict[str, Any]] = [{"id": c, "suite": "s", "paths": []} for c in ("lint", "unit", "tools/test-lane.py")]
+
+        def same_tree(wanted: dict[str, str], tree: str, _toolchain: Any) -> dict[str, dict[str, Any]]:
+            return {c: {"suite": s, "status": "passed", "reused_from": tree, "reused_source": "check"}
+                    for c, s in wanted.items() if c in passed.get(tree, set())}
+        config.use(config.Config(gate_only=gate_only))
+        self.addCleanup(config.use, None)
+        with unittest.mock.patch.object(checks, "same_tree", same_tree):
+            kind, kept, _, skips = land.smoke_reuse("smoke", rows, "M" * 40, None, merged, "P" * 40)
+        return kind, [r["id"] for r in kept or []], skips
+
+    def test_the_table(self):
+        selects_unit = {"full": False, "selection": [{"id": "unit"}]}
+        rows: list[tuple[dict[str, set[str]], dict[str, Any] | None, tuple[str, ...], list[str]]] = [
+            # (passed by tree, the merged plan, gate_only, the checks that still run)
+            ({}, selects_unit, (), ["lint", "unit", "tools/test-lane.py"]),
+            ({"P" * 40: {"lint", "unit"}}, selects_unit, (), ["unit", "tools/test-lane.py"]),  # unit is selected
+            ({"P" * 40: {"lint"}}, {"full": True, "selection": []}, (), ["lint", "unit", "tools/test-lane.py"]),
+            ({"P" * 40: {"lint"}}, {"full": False, "selection": None}, (), ["lint", "unit", "tools/test-lane.py"]),
+            ({"M" * 40: {"unit"}}, selects_unit, (), ["lint", "tools/test-lane.py"]),  # passed on the merge tree
+            ({}, selects_unit, ("tools/test-*",), ["lint", "unit"]),
+            ({"P" * 40: {"lint"}}, selects_unit, ("tools/test-*",), ["unit"]),
+        ]
+        for passed, merged, gate_only, running in rows:
+            with self.subTest(passed=passed, merged=merged, gate_only=gate_only):
+                kind, kept, skips = self.run_table(passed, merged, gate_only)
+                self.assertEqual(kept, running)
+                self.assertEqual(kind, "smoke")
+                self.assertEqual(sorted(skips), sorted({"lint", "unit", "tools/test-lane.py"} - set(running)))
+        kind, kept, skips = self.run_table({"P" * 40: {"lint", "unit"}}, selects_unit | {"selection": []},
+                                           ("tools/test-*",))
+        self.assertEqual((kind, kept), ("skip", []))
+        self.assertIn("previous tip", skips["lint"])
+        self.assertIn("passed on this merge tree", self.run_table({"M" * 40: {"lint"}}, selects_unit)[2]["lint"])
 
 
 if __name__ == "__main__":

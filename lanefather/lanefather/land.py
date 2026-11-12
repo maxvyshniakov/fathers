@@ -6,7 +6,10 @@ smoke the merged tree's plan module defines on its own checkout detached at the 
 <main checkout>/.claude/worktrees/smoke-<n>, so smokes of several lands overlap while the integration worktree moves
 on; a merge whose plan selects only the structure checks runs that plan instead. The lane's green receipt stands for
 what it verified (#640): a merge whose tree is the receipt's runs nothing more, and otherwise only the checks the
-diff from the lane tip to the merge selects, plus every smoke check the receipt does not show passed.
+diff from the lane tip to the merge selects, plus every smoke check the receipt does not show passed. Of those, a
+check that already passed on the merge tree (fathers#91), or that the merged diff does not select and that passed on
+the previous tip's tree (fathers#94), does not run again, and the project's `[checks] gate_only` checks are left to
+the batch gate; each skip's reason is in the output, the receipt (`skipped`) and the ledger.
 """
 from __future__ import annotations
 
@@ -245,7 +248,8 @@ def land(args: Any) -> int:
     verified = len(lane_verified)
     journal.ledger(f"post-merge {args.id} {status} {kind} jobs={jobs} suites={','.join(suites) or '-'} "
                    + (f"lane_verified={verified} " if narrowing.get("narrowed") else "")
-                   + (f"not_rerun={len(skips)} " if skips else "")
+                   + (f"not_rerun={len(tree_verified)} " if tree_verified else "")
+                   + (f"gate_only={len(skips) - len(tree_verified)} " if len(skips) > len(tree_verified) else "")
                    + f"{host_fields(info)} merge={merge}",
                    kind="lane.post_merge", level="info" if status == "green" else "error", lane=record,
                    details={"status": status, "scope": kind, "jobs": jobs, "suites": suites,
