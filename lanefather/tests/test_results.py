@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-import tempfile
 import shutil
+import tempfile
+import time
+from typing import Any
 import unittest
 import unittest.mock
 
-from support import LaneCase
+from support import RUST_STUB, LaneCase
 
 TREE_A = "a" * 40
 TREE_B = "b" * 40
@@ -77,6 +79,34 @@ class ResultKeyTableTests(unittest.TestCase):
         results.record(TREE_A, {}, full=True, status="red", source="external:repo-kit")
         self.assertFalse(results.lookup(TREE_A, results.FULL)["verified"])
 
+    def test_an_inferred_pass_never_beats_a_result_of_the_tree_and_lookup_does_not_count_it(self):
+        # Review of fathers#91, finding 1: a run that took lib from an earlier tree records it after a fresh failure.
+        from lanefather import results
+        results.record(TREE_A, {"lib": "failed"}, source="check", lane="b")
+        results.record(TREE_A, {"lib": "passed"}, source="check", lane="a", reused=["lib"],
+                       origins={"lib": {"tree": TREE_B, "receipt": "/state/a.receipt.json"}})
+        self.assertEqual(results.latest(TREE_A)["lib"]["status"], "failed")
+        results.record(TREE_B, {"lib": "passed"}, source="post-merge", reused=["lib"],
+                       origins={"lib": {"tree": TREE_A, "receipt": "/state/a.receipt.json"}})
+        self.assertEqual(results.passed(TREE_B)["lib"]["origin"]["receipt"], "/state/a.receipt.json")
+        answer = results.lookup(TREE_B, ["lib"])
+        self.assertFalse(answer["verified"])
+        self.assertIn("never ran here: lib", answer["reason"])
+
+    def test_a_tree_keeps_its_newest_entries_and_old_files_go(self):
+        from lanefather import results
+        for index in range(results.KEEP_ENTRIES + 3):
+            results.record(TREE_A, {f"c{index}": "passed"}, source="check")
+        kept = results.entries(TREE_A)
+        self.assertEqual(len(kept), results.KEEP_ENTRIES)
+        self.assertEqual(list(kept[0]["checks"]), ["c3"])
+        results.record(TREE_B, {"lib": "passed"}, source="check")
+        old = time.time() - (results.RETENTION_DAYS + 1) * 86400
+        os.utime(results.path_for(TREE_B), (old, old))
+        results.record(TREE_A, {"lib": "passed"}, source="check")
+        self.assertFalse(results.path_for(TREE_B).exists())
+        self.assertTrue(results.path_for(TREE_A).exists())
+
     def test_an_unreadable_store_reuses_nothing(self):
         from lanefather import results
         results.path_for(TREE_A).write_text("{not json")
@@ -88,7 +118,7 @@ class ResultKeyTableTests(unittest.TestCase):
 class TreeReuseTests(LaneCase):
     """check, the post-merge smoke and promote look the tree up before they run."""
 
-    def receipt(self, lane_id, kind="receipt"):
+    def receipt(self, lane_id: str, kind: str = "receipt") -> dict[str, Any]:
         return json.loads((self.state / f"{lane_id}.{kind}.json").read_text())
 
     def test_a_second_lane_with_the_same_tree_runs_nothing_and_names_the_first_run(self):
@@ -167,6 +197,29 @@ class TreeReuseTests(LaneCase):
         self.assertIn(f"tree is already verified (the batch gate of {tip[:10]} passed tree {tree[:10]} at ", output)
         self.assertIn(f"promote-{tip[:10]}.gate.json); no batch gate needed", output)
         self.assertEqual(self.git(self.repo, "rev-parse", "main"), tip)
+
+    def test_a_smoke_the_receipt_narrowed_and_the_tree_store_emptied_says_both(self):
+        worktree = self.created("a", "calls/**")
+        self.commit(worktree, {"calls/main.txt": "foo\n\n"})
+        self.lane("check", "a")
+        self.commit(self.integration, {"docs/install.md": "journey\n"}, "another lane landed")
+        merge_tree = self.git(self.repo, "merge-tree", "--write-tree", "integrate/q", "lane/a")
+        self.lane("results", "record", merge_tree, "--checks", "structure-check=passed", "--source", "repo-kit")
+        runs = len(self.verify_runs())
+        output = self.lane("land", "a")
+        self.assertEqual(len(self.verify_runs()), runs)
+        self.assertIn("post-merge green (skipped: structure-check: passed on this merge tree before (external:repo-kit)"
+                      "; the lane's green receipt stands for 1)", output)
+
+    def test_the_commands_refuse_a_checkout_that_pins_another_toolchain(self):
+        # Review of fathers#91, finding 2: the toolchain is resolved in this checkout, so it must pin what REV pins.
+        self.commit(self.integration, {"rust-toolchain.toml": '[toolchain]\nchannel = "1.98.1"\n',
+                                       "tools/rust-toolchain.py": RUST_STUB}, "pin Rust")
+        worktree = self.created("a", "rust-toolchain.toml")
+        self.commit(worktree, {"rust-toolchain.toml": '[toolchain]\nchannel = "1.99.0"\n'})
+        output = self.lane("results", "lookup", "integrate/q", "--full", cwd=worktree, ok=False)
+        self.assertIn("pins another toolchain (rust-toolchain.toml) than this checkout", output)
+        self.assertIn("not verified", self.lane("results", "lookup", "integrate/q", "--full", ok=False))
 
     def test_the_lookup_command_answers_with_its_exit_status_and_json(self):
         worktree = self.created("a", "lib/**")

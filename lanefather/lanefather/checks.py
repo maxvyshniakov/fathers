@@ -169,10 +169,24 @@ def same_tree(wanted: dict[str, str], tree: str, toolchain: Any) -> dict[str, di
     if not wanted:
         return {}
     stored = result_store.passed(tree, toolchain)
-    return {c: {"suite": suite, "status": "passed", "log": stored[c].get("receipt", ""), "reused_from": tree,
-                "reused_by": "tree", **{f"reused_{k}": stored[c][k] for k in ("source", "receipt", "lane", "at")
-                                        if stored[c].get(k)}}
+
+    def standing(result: dict[str, Any]) -> dict[str, Any]:
+        # An inferred result points at the run it was taken from (review of fathers#91).
+        origin: dict[str, Any] = result.get("origin") or {}
+        return {**result, **origin}
+    return {c: {"suite": suite, "status": "passed", "log": standing(stored[c]).get("receipt", ""), "reused_from": tree,
+                "reused_by": "tree", **{f"reused_{k}": standing(stored[c])[k]
+                                        for k in ("source", "receipt", "lane", "at") if standing(stored[c]).get(k)}}
             for c, suite in wanted.items() if c in stored}
+
+
+def origins(reused: dict[str, dict[str, Any]], receipt: str) -> dict[str, dict[str, Any]]:
+    """Where each reused result came from, for the results store: the receipt and tree that ran it."""
+    return {c: {k: v for k, v in (("tree", e.get("reused_from")),
+                                  ("receipt", e.get("reused_receipt") or receipt),
+                                  ("source", e.get("reused_source") or "check"),
+                                  ("lane", e.get("reused_lane")), ("at", e.get("reused_at"))) if v}
+            for c, e in reused.items()}
 
 
 def recordable(check_results: dict[str, dict[str, Any]]) -> dict[str, str]:
@@ -655,11 +669,9 @@ def check(args: Any) -> int:
                             "stopped": stopped, "status": status, "host": info, "started": started,
                             "finished": journal.now()})
     # fathers#91: what ran, and what was reused for this tree, is on record for any later run of the tree. A check
-    # that passed rerun by itself is a pass of the tree.
-    flaky = [e["check"] for e in (classification or {}).get("checks", []) if e.get("class") == "flaky-under-load"]
-    statuses = dict(recordable(check_results), **{c: "passed" for c in flaky if c in check_results})
-    result_store.record(tree, statuses, source="check", toolchain=toolchain, lane=args.id, sha=head, receipt=str(path),
-                   reused=list(reused))
+    # that failed and passed rerun by itself stays failed here: the merge runs it again (#640).
+    result_store.record(tree, recordable(check_results), source="check", toolchain=toolchain, lane=args.id,
+                        sha=head, receipt=str(path), reused=list(reused), origins=origins(reused, str(path)))
     classes = ",".join(f"{e['check']}={e['class']}" for e in (classification or {}).get("checks", []))
     journal.ledger(f"check {args.id} tree={tree} {status} suites={','.join(suites) or '-'} "
                    f"checks={len(check_results) - len(reused)} reused={len(reused)} jobs={decision['jobs']} "

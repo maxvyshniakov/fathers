@@ -209,7 +209,9 @@ def land(args: Any) -> int:
                             "host": info, "finished": journal.now()})
     result_store.record(merge_tree, checks.recordable({**lane_verified, **tree_verified, **check_results}),
                    source="post-merge", toolchain=toolchain, lane=args.id, sha=merge, receipt=str(post),
-                   reused=[*lane_verified, *tree_verified])
+                   reused=[*lane_verified, *tree_verified],
+                   origins={**checks.origins(lane_verified, str(state.receipt_path(args.id))),
+                            **checks.origins(tree_verified, "")})
     # Reloaded: a review hand-over may have changed the record during the smoke.
     with state.locked("state"):
         record = state.load(args.id)
@@ -227,8 +229,11 @@ def land(args: Any) -> int:
     what = (", ".join(ids) if ids is not None and len(ids) <= 8 else f"{len(ids)} checks" if ids is not None
             else ", ".join(suites)) or "no suites affected"
     prefix = {"smoke": "smoke: ", "narrowed": "narrowed smoke: "}.get(kind, "")
-    if kind == "skip" and not narrowing.get("narrowed"):
+    if kind == "skip" and skips:
+        # Every check left was taken out because it passed on this merge tree before (review of fathers#91).
         what = "skipped: " + "; ".join(f"{c}: {why}" for c, why in skips.items())
+        if narrowing.get("narrowed"):
+            what += f"; the lane's green receipt stands for {verified}"
     elif kind == "skip" and merge_tree == narrowing["receipt_tree"]:
         what = f"skipped: the lane's green receipt verified the merge tree {merge_tree[:10]}"
     elif kind == "skip":
@@ -240,7 +245,7 @@ def land(args: Any) -> int:
         what += f"; the lane's receipt stands for {verified} more"
     elif narrowing.get("reason") and rows:
         what += f"; whole, since {narrowing['reason']}"
-    if skips and kind != "skip" or skips and narrowing.get("narrowed"):
+    if skips and kind != "skip":
         what += f"; {len(skips)} not run again ({', '.join(f'{c}: {why}' for c, why in skips.items())})"
     print(f"Landed {record['branch']} as {merge[:10]} on {current_branch(integration) or integration}; "
           f"post-merge {status} ({prefix}{what})")

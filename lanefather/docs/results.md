@@ -26,12 +26,20 @@ included, so a changed configuration is a changed tree. `env` covers what the tr
   inputs the merge did not change; both are the plan's own reasoning, recorded as such.)
 
 A check's newest result on the tree decides: a pass recorded after a failure counts, and a failure recorded
-after a pass hides that pass. The full gate is verified only by a green full-gate entry, because the gate's
-check list is the tree's own.
+after a pass hides that pass. A result a run took from another tree (an earlier tree of the lane whose change the
+check does not read, or the lane's receipt standing for part of a smoke) is recorded as inferred, with its origin:
+Lanefather's own runs reuse it, a result the check produced on the tree always wins over it, and `lookup` never
+counts it. The full gate is verified only by a green full-gate entry, because the gate's check list is the tree's
+own.
+
+`promote` skips the batch gate by the tree's stamp, as before: the project's pre-push hook requires the stamp, which
+only the gate writes. The store records each gate's result, and a promote of a verified tree names the gate that
+passed it.
 
 ## Commands
 
-All commands run inside the repository and resolve `REV` (a commit, branch or tree) there. The store is the
+All commands run inside the repository and resolve `REV` (a commit, branch or tree) there. For a project with a
+toolchain pin, the checkout must pin what `REV` pins; otherwise the command refuses. The store is the
 project's state directory, `<state>/results/<tree>.json`.
 
 ```text
@@ -70,6 +78,7 @@ Lanefather produced, under source `external:NAME`; Lanefather's own sources are 
 
 ## Compatibility
 
-New in Lanefather 0.2.0. Older releases neither read nor write `<state>/results/`; a project pinned to one keeps
-running every check, and the two can share a state directory. Receipts gain keys (`reused_from` on reused
-checks, `run_id`), none removed. The `v` field changes only with a migration of the store in place.
+New after Lanefather 0.1.0 (fathers#91). Older releases neither read nor write `<state>/results/`; a project
+pinned to one keeps running every check, and the two can share a state directory. Receipts gain keys
+(`reused_by`, `reused_source`, `reused_receipt`, `reused_lane` and `reused_at` on reused checks; `skipped` on a
+post-merge receipt), none removed. The `v` field changes only with a migration of the store in place.
