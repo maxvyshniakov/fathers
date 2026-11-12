@@ -285,9 +285,10 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
                 view.dashboard_draw(canvas, sample_model())
                 lines = canvas.render(False).splitlines()
                 machine = next(y for y, line in enumerate(lines) if " MACHINE " in line)
-                self.assertEqual(beside, " EVENTS " in lines[machine], "on MACHINE's row, to its right")
+                self.assertEqual(beside, " EVENTS " in lines[machine], "on MACHINE's row")
                 self.assertEqual(beside, "events" in canvas.tables, "a hidden EVENTS is no Tab stop")
-                self.assertTrue(lines[machine].startswith("╭─ MACHINE "), "MACHINE on the left")
+                self.assertTrue(lines[machine].startswith("╭─ EVENTS " if beside else "╭─ MACHINE "),
+                                "EVENTS on the left, MACHINE on the right (alone: the whole width)")
                 order = ["requests"]
                 for _ in range(3):
                     order.append(view.next_panel(canvas, order[-1], 1))
@@ -296,9 +297,12 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
                 self.assertEqual(expected, order, "by columns, top to bottom")
                 if beside:
                     events = canvas.tables["events"]
+                    self.assertEqual(0, events["x"])
                     self.assertGreaterEqual(events["width"], view.NARROW_EVENTS)
-                    self.assertGreaterEqual(events["x"] - 1, view.NARROW_MACHINE, "MACHINE keeps its least width")
-                    self.assertEqual(lines[machine].index("╭─ EVENTS"), events["x"])
+                    machine_x = lines[machine].index("╭─ MACHINE")
+                    self.assertEqual(events["width"] + 1, machine_x, "one column between them")
+                    self.assertGreaterEqual(width - machine_x, view.NARROW_MACHINE, "MACHINE keeps its least width")
+                    self.assertTrue(lines[machine].rstrip().endswith("╮"))
 
     def test_side_by_side_machine_keeps_its_own_height_and_the_details_get_the_rest(self) -> None:
         view = tool()
@@ -307,8 +311,9 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
                 canvas = view.Canvas(100, height)
                 view.dashboard_draw(canvas, sample_model())
                 lines = canvas.render(False).splitlines()
-                top = next(y for y, line in enumerate(lines) if line.startswith("╭─ MACHINE "))
-                bottom = next(y for y in range(top + 1, height) if lines[y].startswith("╰"))
+                top = next(y for y, line in enumerate(lines) if "╭─ MACHINE " in line)
+                left = lines[top].index("╭─ MACHINE ")
+                bottom = next(y for y in range(top + 1, height) if lines[y][left:].startswith("╰"))
                 self.assertEqual(view.MACHINE_HEIGHT, bottom - top + 1, "MACHINE at its own height, chart and all")
                 self.assertIn("now", lines[bottom - 1], "its axis right over the bottom border: no blank rows")
                 events = canvas.tables["events"]
@@ -317,6 +322,37 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
                 self.assertEqual(top, details["y"] + details["height"], "the details right above")
                 self.assertEqual(height - 1 - 5 - queue["height"] - view.MACHINE_HEIGHT, details["height"],
                                  "the details take what QUEUE and MACHINE leave")
+
+    def test_a_scrolled_thumb_glows_for_a_second_then_fades_with_one_wake(self) -> None:
+        view = tool()
+        now = [100.0]
+        glow = view.ScrollGlow(lambda: now[0])
+        self.assertEqual((set(), None), (glow.bright(), glow.fade()), "nothing scrolled: no wake")
+        glow.touch(view.scrolled({"events": 0, "details": 4}, {"events": 3, "details": 4}))
+        self.assertEqual({"events"}, glow.bright())
+        now[0] = 100.4
+        glow.touch({"events"})  # still scrolling: the glow runs on from the last scroll
+        now[0] = 101.0
+        self.assertEqual({"events"}, glow.bright())
+        self.assertAlmostEqual(0.4, cast(float, glow.fade()), places=6, msg="one wake, at the fade")
+        now[0] = 101.4
+        self.assertEqual(set(), glow.bright(), "a second after the last scroll: back to its colour")
+        self.assertIsNone(glow.fade(), "and no more wakes")
+        self.assertEqual(set(), view.scrolled({"details": 5}, {}), "an offset dropped is no scroll")
+        model = {"events": [event(n) for n in range(40)]}
+        cases: list[tuple[set[str], bool, str]] = [(set(), False, "dim"), ({"events"}, False, "text"), (set(), True, "text")]
+        for lit, focused, style in cases:
+            with self.subTest(lit=lit, focused=focused):
+                canvas = view.Canvas(80, 14)
+                canvas.scroll, canvas.glow = {"events": 3}, lit
+                canvas.focus = "events" if focused else "requests"
+                view.draw_events(canvas, 0, 0, 14, 80, model)
+                thumb = {canvas.cells[y][78][1] for y in range(14) if canvas.cells[y][78][0] in ("┃", "╻", "╹")}
+                self.assertEqual({style}, thumb)
+        for draw, name in ((view.draw_help, "help"), (view.draw_changelog, "changelog")):
+            canvas = view.Canvas(80, 20)
+            canvas.glow = {name}
+            draw(canvas)  # an overlay's thumb is in the foreground anyway: it has the keys
 
     def test_tab_skips_panels_that_are_not_drawn(self) -> None:
         view = tool()

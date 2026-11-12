@@ -64,7 +64,8 @@ tenth of its contrast; a waiting row's is the neutral selection;
 without a known background the row is bold. Every panel that overflows (QUEUE,
 EVENTS, the details, Settings, help, the changelog) shows a scrollbar thumb, no
 track, in the padding cell left of its right frame: muted, or in the foreground on
-the focused panel, as long as the visible share and moving in half cells (`╻` and
+the focused panel or for a second after the panel last scrolled (by the wheel, keys or an overlay's own
+scrolling; the dashboard wakes once to draw it back), as long as the visible share and moving in half cells (`╻` and
 `╹` at its ends). There are no row counts. Like SLOTS and MACHINE, every scrollable
 panel (QUEUE, EVENTS, the details, help, the changelog, Settings) keeps one blank row under
 its top border and one over its bottom border; its content and the thumb run between them.
@@ -286,7 +287,7 @@ share one line,
 critical), and on a narrow panel the numbers alone, a critical one in red; the narrowest drops the marks. Memory and swap never go while MACHINE is shown.
 
 **One column** (under 110 columns): SLOTS, QUEUE and the details stack; below them MACHINE and EVENTS sit side by
-side, MACHINE on the left at half the width and at least 44 columns, EVENTS in the rest. The row is MACHINE's own
+side, EVENTS on the left and MACHINE on the right at half the width and at least 44 columns. The row is MACHINE's own
 height, its chart included; EVENTS scrolls in the same, and QUEUE and then the details take the height above it.
 Where EVENTS would get under 38 columns (a terminal under 83 columns wide), it goes and MACHINE takes the whole
 width; a hidden EVENTS is no Tab stop. Tab goes by columns as everywhere: QUEUE, the details, EVENTS.

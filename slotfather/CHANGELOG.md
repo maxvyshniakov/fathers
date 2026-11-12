@@ -52,8 +52,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 - MACHINE has no status row: each of load, memory and swap starts with 🆗 or 🔥, and the unleased load and the
   admission state sit on the right of its top border. A blank row stays under the border; short of rows it goes
   after the chart and before the rows compress.
-- Under 110 columns MACHINE and EVENTS sit side by side below the details, in MACHINE's own height, with the
-  details taking the rest; under 83, EVENTS goes.
+- Under 110 columns EVENTS and MACHINE sit side by side below the details, EVENTS on the left, in MACHINE's own
+  height, with the details taking the rest; under 83, EVENTS goes.
+- A scrollbar's thumb is drawn in the text colour while its panel scrolls and for a second after.
 - The holder palette is "Neon": eight saturated hues (hot pink, orange, acid green, spring teal, cyan, electric
   violet, magenta, green), more distinct from one another, with inks at 4.6:1 or more.
 

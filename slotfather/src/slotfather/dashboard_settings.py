@@ -691,7 +691,7 @@ class Settings:
                 self.offset = max(self.offset, lines[-1] - self.visible + 1)
             self.reveal = False
         self.offset = max(0, min(self.offset, max(0, len(body) - self.visible)))
-        canvas.scrollbar(y + 2, x + width - 2, self.visible, self.offset, self.visible, self.total, True)
+        canvas.scrollbar(y + 2, x + width - 2, self.visible, self.offset, self.visible, self.total, True, "settings")
         for line, row in enumerate(body[self.offset:self.offset + self.visible], y + 2):
             for column, text, style in row.parts:
                 if column < inner - 2:

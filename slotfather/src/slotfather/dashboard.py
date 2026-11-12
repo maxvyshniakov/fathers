@@ -27,6 +27,7 @@ import time
 import tty
 import unicodedata
 from urllib.parse import urlsplit
+from collections.abc import Callable, Iterable
 from typing import Any, NamedTuple, cast
 
 
@@ -194,6 +195,7 @@ class Canvas:
         self.fresh_events = 0  # events that arrived while EVENTS was scrolled down
         self.version_at: tuple[int, int, int] | None = None  # the footer version's row and columns: the changelog
         self.hint_hits: list[tuple[int, int, int, str]] = []  # (row, from, to, key) of every footer hint drawn
+        self.glow: set[str] = set()  # panels scrolled within SCROLL_GLOW seconds: their thumb in the foreground
         self.width, self.height = max(0, width), max(0, height)
         self.cells = [[[" ", "text", False] for _ in range(self.width)] for _ in range(self.height)]
 
@@ -293,7 +295,7 @@ class Canvas:
                     None)
 
     def scrollbar(self, y: int, x: int, height: int, offset: int, visible: int, total: int,
-                  focused: bool = False) -> None:
+                  focused: bool = False, name: str = "") -> None:
         """A scrollable panel's scrollbar in column x, the outer of the two padding cells left of its right frame, so
         a blank cell stays between it and the content (a right-aligned pid touched the inner one) and nothing moves
         (#15): a quiet `│` track in the bar-track
@@ -308,7 +310,7 @@ class Canvas:
             upper, lower = start <= 2 * row < start + length, start <= 2 * row + 1 < start + length
             if upper or lower:
                 glyph = SCROLL_THUMB if upper and lower else THUMB_LOWER if lower else THUMB_UPPER
-                self.put(y + row, x, glyph, "text" if focused else "dim")
+                self.put(y + row, x, glyph, "text" if focused or name in self.glow else "dim")
 
     def select(self, y: int, start: int, end: int, tint: bool | str = True) -> None:
         """Marks cells start..end of row y selected: True for the neutral background, a holder style for its tint."""
@@ -836,7 +838,7 @@ def table_view(canvas: Canvas, name: str, y: int, x: int, height: int, width: in
     canvas.tables[name] = dict(x=x, y=y, width=width, height=height, top=top,
                               visible=visible, count=count, offset=offset, base=base, row_items=row_items)
     if room:  # the scrollbar shows what overflows (no row counts)
-        canvas.scrollbar(top, x + width - 2, visible, offset, visible, count, canvas.focus == name)
+        canvas.scrollbar(top, x + width - 2, visible, offset, visible, count, canvas.focus == name, name)
         fresh = canvas.fresh_events if name == "events" and offset else 0
         if fresh:  # EVENTS scrolled down: what arrived since, in its bottom border (Home goes back to it)
             canvas.put(y + height - 1, x + 2, f" ↑ {fresh} new ", "text" if canvas.focus == name else "dim",
@@ -1774,7 +1776,7 @@ def draw_overlay(canvas: Canvas, title: str, layout: Any, name: str) -> None:
     if height < 6:
         canvas.put(y + 1, x + 2, "Enlarge terminal", "dim", inner)
         return
-    canvas.scrollbar(y + 2, x + width - 2, visible, offset, visible, len(lines), True)
+    canvas.scrollbar(y + 2, x + width - 2, visible, offset, visible, len(lines), True, name)
     for row, parts in enumerate(lines[offset:offset + visible], y + 2):
         canvas.segments(row, x + 3, parts, width - 7)
     shown = f"{round(100 * (offset + visible) / len(lines))}%" if len(lines) > visible else ""
@@ -2066,11 +2068,13 @@ def dashboard_draw(canvas: Canvas, model: dict[str, Any] | None, selected: int =
                 continue
             if name != "bottom":
                 draw_panel(canvas, name, y, 0, heights[name], width, model, selected, cwd, moment)
+            elif machine_width < width:  # EVENTS on the left, MACHINE on the right (owner, 2026-11-12)
+                events_width = width - machine_width - 1
+                draw_panel(canvas, "events", y, 0, heights[name], events_width, model, selected, cwd, moment)
+                draw_panel(canvas, "machine", y, events_width + 1, heights[name], machine_width, model, selected,
+                           cwd, moment)
             else:
-                draw_panel(canvas, "machine", y, 0, heights[name], machine_width, model, selected, cwd, moment)
-                if machine_width < width:
-                    draw_panel(canvas, "events", y, machine_width + 1, heights[name], width - machine_width - 1,
-                               model, selected, cwd, moment)
+                draw_panel(canvas, "machine", y, 0, heights[name], width, model, selected, cwd, moment)
             y += heights[name]
     if help_open:
         draw_open_overlay(canvas, help_open, model)
@@ -2352,6 +2356,40 @@ def follow_events(scroll: dict[str, int], fresh: int, newest: Any, events: list[
     return fresh, ids[0] if ids else None
 
 
+SCROLL_GLOW = 1.0  # seconds a scrolled panel's thumb stays in the foreground after its last scroll (owner)
+
+
+class ScrollGlow:
+    """When each panel last scrolled, by the wheel, keys or an overlay's own scrolling: its thumb is drawn in the
+    foreground until SCROLL_GLOW after that, and the live loop wakes once at that moment to draw it back."""
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self.clock = clock
+        self.last: dict[str, float] = {}
+
+    def touch(self, names: Iterable[str]) -> None:
+        now = self.clock()
+        for name in names:
+            self.last[name] = now
+
+    def bright(self) -> set[str]:
+        now = self.clock()
+        self.last = {name: when for name, when in self.last.items() if now - when < SCROLL_GLOW}
+        return set(self.last)
+
+    def fade(self) -> float | None:
+        """Seconds until the next thumb goes back to its colour, None while none glows: one repaint, then."""
+        now = self.clock()
+        due = [when + SCROLL_GLOW - now for when in self.last.values() if now - when < SCROLL_GLOW]
+        return max(0.0, min(due)) if due else None
+
+
+def scrolled(before: dict[str, int], after: dict[str, int]) -> set[str]:
+    """The panels scrolled: their offset set to another value. One dropped (a new selection, an overlay opened)
+    went back to its start without being scrolled."""
+    return {name for name in after if before.get(name, 0) != after[name]}
+
+
 def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
     fd_in, fd_out = sys.stdin.fileno(), sys.stdout.fileno()
     colour = not os.environ.get("NO_COLOR")
@@ -2367,6 +2405,7 @@ def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
     help_open: bool | str = False  # True: help; "changelog": the changelog
     settings: _settings.Settings | None = None
     drawn, whole, dirty = 0.0, 0.0, True
+    glow, glowing = ScrollGlow(), set[str]()
     canvas = Canvas(0, 0)
     wake_read, wake_write = os.pipe()
     # Everything slow runs in the background, so a key moves the selection within one frame (#15)
@@ -2435,9 +2474,13 @@ def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
                     shown, drawn_size, dirty = [], size, True
                 elif time.monotonic() - whole >= 5:
                     shown = []  # rewrite every row now and then, in place, so a stray line cannot stay wrong
+                bright = glow.bright()
+                if bright != glowing:  # a thumb lit up or faded back
+                    glowing, dirty = bright, True
                 if dirty or loading is not None or time.monotonic() - drawn >= 1 or not shown:
                     canvas = Canvas(size.columns, size.lines)
                     canvas.focus, canvas.loading, canvas.fresh_events = focus, loading, fresh_events
+                    canvas.glow = glowing
                     dashboard_draw(canvas, model, index, help_open, error, cwd, scroll, settings)
                     if focus != "requests" and focus not in canvas.tables:  # its panel is not drawn now
                         focus = canvas.focus = "requests"
@@ -2449,7 +2492,9 @@ def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
                         os.write(fd_out, frame.encode("utf-8", "replace"))
                     whole = time.monotonic() if not shown else whole
                     shown, drawn, dirty = lines, time.monotonic(), False
-                ready = select.select([fd_in, wake_read], [], [], 0.1 if loading is not None else 0.25)[0]
+                wait = 0.1 if loading is not None else 0.25
+                fade = glow.fade()  # one wake at the moment a scrolled thumb goes back, not a poll
+                ready = select.select([fd_in, wake_read], [], [], wait if fade is None else min(wait, fade))[0]
                 if wake_read in ready:
                     os.read(wake_read, 4096)
                 if fd_in not in ready:
@@ -2459,6 +2504,8 @@ def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
                 if reports and theme_reports(reports, answers, fd_out, ascii_only):
                     set_theme(_theme.from_environment(answers=answers, mode=theme))
                     shown, dirty = [], True  # every row's colours changed
+                offsets = dict(scroll)
+                settings_offset = settings.offset if settings is not None else 0
                 for key in pressed:
                     dirty = True
                     if isinstance(key, tuple) and key[4] and key[1] & ~28 == 0:  # a click on a footer hint is its key
@@ -2543,6 +2590,10 @@ def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE) -> None:
                         index = len(items) - 1
                     index = max(0, min(index, len(items) - 1))
                     selected_key = keys[index] if items else None
+                moved = scrolled(offsets, scroll)
+                if settings is not None and settings.offset != settings_offset:
+                    moved.add("settings")
+                glow.touch(moved)
     finally:
         for fd in (wake_read, wake_write):
             os.close(fd)
