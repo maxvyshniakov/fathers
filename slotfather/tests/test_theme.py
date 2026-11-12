@@ -126,7 +126,7 @@ class HolderColourTests(unittest.TestCase):
         for kind, background, reserved in every_theme():
             with self.subTest(kind=kind, background=background, reserved=reserved):
                 holders = theme.holder_pairs(background, kind == "light", reserved)
-                blue, red, yellow = reserved or (theme.LIGHT_RESERVED if kind == "light" else theme.DARK_RESERVED)
+                blue, red, yellow = reserved or theme.reserved_for(background, kind == "light")
                 for holder in holders:
                     self.assertGreaterEqual(theme.distance(holder.fill, blue), theme.RESERVED_APART, f"{holder}: focus")
                     self.assertGreaterEqual(theme.distance(holder.fill, red), theme.RESERVED_APART, f"{holder}: over")
@@ -162,14 +162,18 @@ class HolderColourTests(unittest.TestCase):
         self.assertGreater(min(theme.distance(first.fill, second.fill)
                                for first, second in itertools.combinations(light, 2)), 0.06, "well separated")
 
-    def test_the_queried_palette_sets_what_is_reserved(self) -> None:
-        blue = theme.oklch(0.73, 0.15, 172)  # a teal accent: the spring teal holder must move or go
-        found = theme.resolve("auto", answered(bg=LIGHT_BG, p4=blue), {})
+    def test_holders_keep_apart_from_our_fixed_tokens_whatever_the_palette(self) -> None:
+        plain = theme.resolve("auto", answered(bg=LIGHT_BG), {})
+        teal = theme.oklch(0.73, 0.15, 172)  # a palette whose blue is a teal changes nothing now
+        found = theme.resolve("auto", answered(bg=LIGHT_BG, p4=teal, p1=teal, p3=teal), {})
         fills = [found.styles[f"f{n}"][0] for n in range(found.holders())]
-        for fill in fills:
-            self.assertGreaterEqual(theme.distance(cast_rgb(fill), blue), theme.RESERVED_APART)
-        self.assertEqual([holder.fill for holder in theme.holder_pairs(LIGHT_BG, True, (blue,) + theme.LIGHT_RESERVED[1:])],
-                         fills)
+        self.assertEqual([plain.styles[f"f{n}"][0] for n in range(plain.holders())], fills)
+        for background in (REFERENCES["light"], REFERENCES["dark"]):
+            tokens = theme.resolve("auto", None, {"SLOTFATHER_TERMINAL_BG": "#%02x%02x%02x" % background})
+            for fill in (tokens.styles[f"f{n}"][0] for n in range(tokens.holders())):
+                for name in ("accent", "bad", "warn"):
+                    self.assertGreaterEqual(theme.distance(cast_rgb(fill), cast_rgb(tokens.styles[name][0])),
+                                            theme.RESERVED_APART, f"{fill} near {name}")
 
     def test_a_dark_background_known_or_not_gives_the_dark_set(self) -> None:
         self.assertEqual(theme.holder_pairs(None, False), theme.holder_pairs(REFERENCES["dark"], False))
@@ -225,7 +229,7 @@ class MutedTests(unittest.TestCase):
         self.assertEqual(theme.muted(*MUTED_THEMES["Pro Light"][:2]), light)
         self.assertNotEqual(dark, light)
 
-    def test_frames_and_muted_text_share_the_token(self) -> None:
+    def test_frames_are_a_little_paler_than_muted_text(self) -> None:
         tool = importlib.import_module("slotfather.dashboard")
         before = tool.current_theme
         try:
@@ -236,38 +240,72 @@ class MutedTests(unittest.TestCase):
             canvas.focus = "details"
             canvas.box(0, 0, 6, 40, "QUEUE", name="requests")
             canvas.put(2, 3, "label", "dim")
-            self.assertEqual("dim", canvas.cells[3][0][1], "the frame")
+            self.assertEqual("frame", canvas.cells[3][0][1], "the frame's own token")
             line = canvas.lines(True)[2]
             dim = cast_rgb(tool.current_theme.styles["dim"][0])
-            code = "\x1b[0;38;2;%d;%d;%dm" % dim
-            self.assertTrue(line.startswith(code + "│"), line[:40])
-            self.assertIn(code + "label", line, "muted text in the same colour")
+            drawn = cast_rgb(tool.current_theme.styles["frame"][0])
+            self.assertTrue(line.startswith("\x1b[0;38;2;%d;%d;%dm" % drawn + "│"), line[:40])
+            self.assertIn("\x1b[0;38;2;%d;%d;%dm" % dim + "label", line, "muted text in its own colour")
+            self.assertLess(theme.contrast(drawn, bg), theme.contrast(dim, bg), "the frame paler than muted text")
+            self.assertGreaterEqual(theme.contrast(drawn, bg), 2.5, "but at least 2.5:1")
         finally:
             tool.set_theme(before)
 
 
 class GradientTests(unittest.TestCase):
-    def test_the_chart_runs_from_the_themes_blue_to_its_red_in_oklab(self) -> None:
+    def test_gradient_mixes_in_oklab(self) -> None:
         blue, red = (0x7A, 0xA6, 0xDA), (0xD5, 0x4E, 0x53)
         steps = theme.gradient(blue, red)
-        self.assertEqual(8, len(steps))
-        self.assertEqual((blue, red), (steps[0], steps[-1]))
+        self.assertEqual((8, blue, red), (len(steps), steps[0], steps[-1]))
         for index, colour in enumerate(steps):
             self.assertEqual(theme.mix(blue, red, index / 7), colour)
-        for colour in steps[1:-1]:  # no rainbow: the path never passes through green or yellow
-            self.assertFalse(70 < theme.hue(colour) < 200, colour)
-        found = theme.resolve("auto", answered(bg=DARK_BG, p12=blue, p9=red, p4=(0x81, 0xA2, 0xBE),
-                                               p1=(0xCC, 0x66, 0x66)), {})
-        self.assertIn((found.styles["chart0"][0], found.styles["chart7"][0]),
-                      [(blue, red), ((0x81, 0xA2, 0xBE), (0xCC, 0x66, 0x66))])
-        only = theme.resolve("auto", answered(bg=DARK_BG, p4=(0, 0, 238), p1=(205, 0, 0)), {})
-        self.assertEqual(((0, 0, 238), (205, 0, 0)), (only.styles["chart0"][0], only.styles["chart7"][0]))
 
-    def test_without_the_palette_the_chart_is_fixed_blue_to_red(self) -> None:
-        found = theme.resolve("auto", None, {})
-        self.assertEqual((theme.FIXED_LOW, theme.FIXED_HIGH), (found.styles["chart0"][0], found.styles["chart7"][0]))
-        self.assertEqual([4, 4, 4, 5, 5, 1, 1, 1], [theme.resolve("terminal", None, {}).styles[f"chart{n}"][0]
-                                                    for n in range(8)], "terminal: palette steps, nothing mixed")
+
+RAMP_DARK = hexes("#00c2e0 #7b6cff #e05cf0 #ff4f8b #ff5a36")
+
+
+class RampTests(unittest.TestCase):
+    """The MACHINE chart and bars (owner, 2026-11-12): our ramp, whatever the theme's palette."""
+
+    def test_the_ramp_runs_through_our_stops_and_deepens_on_a_light_background(self) -> None:
+        dark = theme.chart_ramp(False, 5)
+        self.assertEqual(RAMP_DARK, dark, "five steps are the stops themselves")
+        light = theme.chart_ramp(True, 5)
+        for stop, deep in zip(RAMP_DARK, light):
+            (level, _, angle), (deeper, _, turned) = theme.lch(stop), theme.lch(deep)
+            self.assertAlmostEqual(level - 0.08, deeper, delta=0.01, msg=f"{stop}: 0.08 deeper")
+            self.assertLess(abs((angle - turned + 180) % 360 - 180), 4, f"{stop} keeps its hue")
+        eight = theme.chart_ramp(False)
+        self.assertEqual((RAMP_DARK[0], RAMP_DARK[-1]), (eight[0], eight[-1]))
+        palette = answered(bg=DARK_BG, p4=(0, 0, 238), p1=(205, 0, 0), p12=(92, 92, 255), p9=(255, 0, 0))
+        for mode, environ in (("auto", {}), ("auto", DARK_ENV), ("builtin", {})):
+            found = theme.resolve(mode, palette, environ)
+            self.assertEqual(eight, [found.styles[f"chart{n}"][0] for n in range(8)], f"{mode}: never the palette's")
+        lit = theme.resolve("auto", palette, LIGHT_ENV)
+        self.assertEqual(theme.chart_ramp(True), [lit.styles[f"chart{n}"][0] for n in range(8)])
+        self.assertEqual(theme.chart_ramp(False), [theme.resolve("auto", None, {}).styles[f"chart{n}"][0]
+                                                   for n in range(8)], "unknown: dark")
+        self.assertEqual(theme.chart_ramp(True), [theme.resolve("auto", None, {"COLORFGBG": "0;15"}).styles[
+            f"chart{n}"][0] for n in range(8)], "COLORFGBG says light")
+
+    def test_our_tokens_read_on_both_references_and_on_a_theme_that_needs_a_nudge(self) -> None:
+        for light, reference in ((True, REFERENCES["light"]), (False, REFERENCES["dark"])):
+            for name, (dark, lit) in theme.SEMANTIC.items():
+                colour = theme.semantic(name, reference, light)
+                self.assertEqual(theme.hex_colour(lit if light else dark), colour, f"{name}: as chosen")
+                self.assertGreaterEqual(theme.contrast(colour, reference), 4.5, name)
+        for name in theme.SEMANTIC:  # One Dark's background is lighter than the reference: bad gets lighter
+            self.assertGreaterEqual(theme.contrast(theme.semantic(name, DARK_BG, False), DARK_BG), 4.5, name)
+        found = theme.resolve("auto", None, DARK_ENV)
+        self.assertEqual(theme.semantic("bad", DARK_BG, False), found.styles["bad"][0])
+        self.assertEqual((found.styles["ok"][0], "br"), found.styles["badge-ok"])
+
+    def test_the_critical_red_is_ours_and_terminal_mode_keeps_the_palette(self) -> None:
+        self.assertEqual(theme.hex_colour("#ff3b4e"), theme.resolve("auto", None, {}).styles["bad"][0])
+        self.assertEqual(theme.hex_colour("#d1203a"), theme.resolve("auto", None, LIGHT_ENV).styles["bad"][0])
+        terminal = theme.resolve("terminal", answered(bg=DARK_BG), {})
+        self.assertEqual([4, 4, 4, 5, 5, 1, 1, 1], [terminal.styles[f"chart{n}"][0] for n in range(8)])
+        self.assertEqual(1, terminal.styles["bad"][0], "terminal: the theme's own red")
 
 
 class ReplyTests(unittest.TestCase):
@@ -378,14 +416,16 @@ class FallbackTests(unittest.TestCase):
         self.assertEqual([(h.fill, h.ink) for h in theme.holder_pairs(LIGHT_BG, True)],
                          [(found.styles[f"f{n}"][0], found.styles[f"h{n}"][0]) for n in range(8)])
 
-    def test_tokens_follow_the_palette_and_the_default_foreground(self) -> None:
+    def test_tokens_follow_the_default_foreground_and_terminal_mode_the_palette(self) -> None:
         for mode in ("auto", "terminal"):
             styles = theme.resolve(mode, answered(bg=DARK_BG), {}).styles
             for name in ("text", "bold", "title", "key", "cursor", "status-normal"):
                 self.assertIsNone(styles[name][0], f"{name} is the terminal's own foreground, never white")
-            self.assertEqual({"dim": 8, "accent": 4, "ok": 2, "warn": 3, "bad": 1},
-                             {name: styles[name][0] for name in ("dim", "accent", "ok", "warn", "bad")})
-            self.assertNotIn("frame", styles, "frames are drawn in the muted token")
+            self.assertEqual((8, 8), (styles["dim"][0], styles["frame"][0]), "no foreground: bright black for both")
+        terminal = theme.resolve("terminal", answered(bg=DARK_BG), {}).styles
+        self.assertEqual({"accent": 4, "ok": 2, "warn": 3, "bad": 1, "legacy": 5},
+                         {name: terminal[name][0] for name in ("accent", "ok", "warn", "bad", "legacy")},
+                         "terminal mode: the theme's own ANSI colours, the opt-out")
 
     def test_the_environment_overrides_the_terminal_and_colorfgbg_stands_in(self) -> None:
         found = theme.resolve("auto", answered(bg=DARK_BG, fg=DARK_FG), LIGHT_ENV)
@@ -422,7 +462,8 @@ class FallbackTests(unittest.TestCase):
                          (builtin.selection, builtin.selected_text, builtin.track, builtin.free))
         self.assertEqual([75, 79, 216, 141, 110, 186], [builtin.styles[f"h{n}"][0] for n in range(6)])
         self.assertEqual([75, 79, 216, 141, 110, 186], [builtin.styles[f"f{n}"][0] for n in range(6)], "one token")
-        self.assertEqual((255, 175, 95), builtin.styles["chart7"][0])
+        self.assertEqual(theme.chart_ramp(True)[-1], builtin.styles["chart7"][0], "our ramp")
+        self.assertEqual(theme.semantic("accent", LIGHT_BG, True), builtin.styles["accent"][0], "our tokens")
 
     def test_modes_and_colours_from_the_environment_are_checked(self) -> None:
         self.assertEqual("auto", theme.checked_mode(None))
@@ -443,7 +484,7 @@ class DrawingTests(unittest.TestCase):
         assert found, (text, line)
         return found[1]
 
-    def test_frames_and_muted_text_share_one_colour_in_light_and_dark(self) -> None:
+    def test_frames_have_their_own_token_paler_than_muted_text(self) -> None:
         for name, theme_now in (("light", theme.resolve("auto", None, LIGHT_ENV)),
                                 ("dark", theme.resolve("auto", None, DARK_ENV)),
                                 ("unknown", theme.resolve("auto", None, {})),
@@ -456,9 +497,18 @@ class DrawingTests(unittest.TestCase):
                 canvas.put(1, 2, "muted words", "dim")
                 frame = self.sgr_of(canvas, 0, "╭")
                 self.assertEqual(frame, self.sgr_of(canvas, 1, "│"))
-                self.assertEqual(frame, self.sgr_of(canvas, 1, "muted words"))
                 self.assertEqual(frame, self.sgr_of(canvas, 3, "╰"))
+                self.assertEqual(frame, self.tool.sgr("frame", False))
+                self.assertEqual(self.sgr_of(canvas, 1, "muted words"), self.tool.sgr("dim", False))
                 self.assertNotIn("239", frame, "never the near-black of the palette before")
+                dim, drawn = theme_now.styles["dim"][0], theme_now.styles["frame"][0]
+                if isinstance(dim, tuple) and theme_now.background is not None:
+                    background = theme_now.background
+                    paler = theme.contrast(cast_rgb(drawn), background)
+                    self.assertLess(paler, theme.contrast(dim, background), "frames a little paler than muted text")
+                    self.assertGreaterEqual(paler, 2.5, "and still clearly visible")
+                else:
+                    self.assertEqual(dim, drawn, "without our muted colour: the same token")
 
     def test_the_selection_is_the_mixed_colour_or_bold(self) -> None:
         for environ, expect in ((LIGHT_ENV, "48;2;%d;%d;%d" % theme.mix(LIGHT_BG, LIGHT_FG, 0.10)),
@@ -565,9 +615,9 @@ class OnceTests(SlotCase):
             drawn = self.tool("dashboard", "--once", "--color", "--width", "140", "--height", "40", **environ).stdout
             for share in (theme.TRACK_MIX, theme.FREE_MIX):  # the bar tracks and the free slots
                 self.assertIn("\x1b[0;38;2;%d;%d;%dm" % theme.mix(bg, fg, share), drawn)
-            muted = "\x1b[0;38;2;%d;%d;%dm" % theme.muted(fg, bg)  # ours, from the theme's own fg and bg
-            self.assertIn(muted + "╭", drawn, "frames in the muted token")
-            self.assertIn(muted + "status", drawn, "muted text in the same token")
+            dim = theme.muted(fg, bg)  # ours, from the theme's own fg and bg
+            self.assertIn("\x1b[0;38;2;%d;%d;%dm" % theme.frame(dim, bg) + "╭", drawn, "frames, a little paler")
+            self.assertIn("\x1b[0;38;2;%d;%d;%dm" % dim + "status", drawn, "muted text")
         unknown = self.tool("dashboard", "--once", "--color", "--width", "140", "--height", "40")
         self.assertNotIn("48;2;", unknown.stdout, "nothing known: no background colour at all")
         self.assertIn("\x1b[0;1m", unknown.stdout)

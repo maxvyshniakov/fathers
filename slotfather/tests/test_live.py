@@ -128,8 +128,9 @@ class FocusTests(unittest.TestCase):
                 canvas.box(10, 0, 10, 80, "EVENTS", name="events")
                 frames = {"requests": canvas.cells[5][0], "details": canvas.cells[5][40], "events": canvas.cells[15][0]}
                 for name, cell in frames.items():
-                    self.assertEqual("accent" if name == focus else "dim", cell[1], name)
-                self.assertEqual("\x1b[0;34m", view.sgr("accent", False), "the terminal's ANSI blue")
+                    self.assertEqual("accent" if name == focus else "frame", cell[1], name)
+                self.assertEqual("\x1b[0;38;2;%d;%d;%dm" % view.current_theme.styles["accent"][0], view.sgr("accent", False),
+                                 "our accent blue")
 
     def test_every_frame_is_light_and_rounded_and_focus_shows_by_colour(self) -> None:
         view = tool()
@@ -146,10 +147,11 @@ class FocusTests(unittest.TestCase):
         self.assertFalse(set("┏┓┗┛━┃") & set("".join(rows)), "no heavy glyphs")
         self.assertEqual({"accent"}, {cell[1] for cell in (canvas.cells[0][40], canvas.cells[0][79],
                                                             canvas.cells[5][40], canvas.cells[9][60])})
-        self.assertEqual({"dim"}, {cell[1] for cell in (canvas.cells[0][0], canvas.cells[5][39], canvas.cells[15][0])})
+        self.assertEqual({"frame"}, {cell[1] for cell in (canvas.cells[0][0], canvas.cells[5][39], canvas.cells[15][0])})
         lines = canvas.lines(True)
-        self.assertIn("\x1b[0;34m╭", lines[0], "the focused corner in ANSI blue")
-        self.assertIn("\x1b[0;34m│", lines[5], "and its sides")
+        blue = view.sgr("accent", False)
+        self.assertIn(blue + "╭", lines[0], "the focused corner in our blue")
+        self.assertIn(blue + "│", lines[5], "and its sides")
         self.assertEqual("DETAILS", "".join(cell[0] for cell in canvas.cells[0][43:50]))
         self.assertEqual("title", canvas.cells[0][43][1], "the title in the foreground (bold), as on every panel")
 
@@ -164,7 +166,7 @@ class FocusTests(unittest.TestCase):
                 x = "".join(cell[0] for cell in canvas.cells[0]).index("pid")
                 self.assertEqual("text" if focus == "requests" else "dim", canvas.cells[0][x][1])
                 self.assertEqual("title", canvas.cells[0][3][1])
-                self.assertEqual("accent" if focus == "requests" else "dim", canvas.cells[0][0][1], "the frame")
+                self.assertEqual("accent" if focus == "requests" else "frame", canvas.cells[0][0][1], "the frame")
         self.assertEqual("\x1b[0m", view.sgr("text", False), "the foreground token: no colour code")
 
     def test_a_click_focuses_the_panel_it_lands_in(self) -> None:
@@ -274,6 +276,29 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
         view.dashboard_draw(narrow, sample_model())
         self.assertEqual("details", view.next_panel(narrow, "requests", 1), "one column: top to bottom")
         self.assertEqual("events", view.next_panel(narrow, "details", 1))
+
+    def test_one_column_puts_machine_and_events_side_by_side_or_drops_events(self) -> None:
+        view = tool()
+        for width, beside in ((109, True), (100, True), (83, True), (82, False), (60, False)):
+            with self.subTest(width=width):
+                canvas = view.Canvas(width, 60)
+                view.dashboard_draw(canvas, sample_model())
+                lines = canvas.render(False).splitlines()
+                machine = next(y for y, line in enumerate(lines) if " MACHINE " in line)
+                self.assertEqual(beside, " EVENTS " in lines[machine], "on MACHINE's row, to its right")
+                self.assertEqual(beside, "events" in canvas.tables, "a hidden EVENTS is no Tab stop")
+                self.assertTrue(lines[machine].startswith("╭─ MACHINE "), "MACHINE on the left")
+                order = ["requests"]
+                for _ in range(3):
+                    order.append(view.next_panel(canvas, order[-1], 1))
+                expected = ["requests", "details", "events", "requests"] if beside else ["requests", "details",
+                                                                                         "requests", "details"]
+                self.assertEqual(expected, order, "by columns, top to bottom")
+                if beside:
+                    events = canvas.tables["events"]
+                    self.assertGreaterEqual(events["width"], view.NARROW_EVENTS)
+                    self.assertGreaterEqual(events["x"] - 1, view.NARROW_MACHINE, "MACHINE keeps its least width")
+                    self.assertEqual(lines[machine].index("╭─ EVENTS"), events["x"])
 
     def test_tab_skips_panels_that_are_not_drawn(self) -> None:
         view = tool()

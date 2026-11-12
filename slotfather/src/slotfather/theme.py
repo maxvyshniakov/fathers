@@ -36,6 +36,7 @@ SELECTION_MIX, TRACK_MIX, FREE_MIX = 0.10, 0.15, 0.20
 # Muted text and frames (owner, 2026-11-11): this share of the way from the foreground to the background, at least
 # MUTED_FLOOR against the background and at most MUTED_CAP of the foreground's own contrast
 MUTED_MIX, MUTED_FLOOR, MUTED_CAP = 0.42, 4.5, 0.85
+FRAME_MIX, FRAME_FLOOR = 0.28, 2.5  # unfocused frames: this far on from muted text to the background, at least 2.5:1
 TINT_MIX = 0.16  # a selected running row's background: this much of its holder fill in the background (#15)
 TINT_KEEP = 0.9  # the share of its ink's contrast a tint keeps; a fill that would take more is mixed in less
 # Holder colours (owner, 2026-11-11, the "Neon" set): two tokens per holder. The fill paints what needs no text
@@ -64,14 +65,22 @@ MOST_TURN = 30  # degrees a fill's hue turns at most to keep those apart; a hue 
 LIGHTNESS_SHIFTS = (0.0, -0.03, 0.03, -0.06, 0.06)  # or the lightness it moves by, deeper first (more chroma)
 BLUE_HUES = (225.0, 280.0)  # OKLCH hues no fill turns into, whatever the theme's blue: sky, blue and indigo
 LIGHTNESS_STEP = 0.005
-# The theme's blue, red and yellow where the terminal does not say them: on a light background GitHub Light's
-# blue and red with Tango's yellow, on a dark one Ghostty's default palette (Tomorrow Night)
-LIGHT_RESERVED: Tuple[RGB, RGB, RGB] = ((9, 105, 218), (207, 34, 46), (196, 160, 0))
-DARK_RESERVED: Tuple[RGB, RGB, RGB] = ((129, 162, 190), (204, 102, 102), (240, 198, 116))
+# Our chromatic tokens (owner, 2026-11-12), the same in every theme but `terminal` mode: (dark, light) variants that
+# go with the Neon holders and the chart's ramp. Each reads at TOKEN_INK or more on the background it is drawn on.
+SEMANTIC: Dict[str, Tuple[str, str]] = {
+    "accent": ("#4da3ff", "#1f6feb"),  # the focused frame, links, released
+    "ok": ("#3ddc84", "#15803d"),  # granted, "ok" status words
+    "warn": ("#ffc23d", "#a16207"),  # an idle bar, warnings
+    "bad": ("#ff3b4e", "#d1203a"),  # an over-share or critical bar, errors, no admission
+    "legacy": ("#b48cff", "#6d3fd8"),  # a lease of an older client
+}
+TOKEN_INK = 4.5
+# The load chart and MACHINE's bars, low to high, in OKLab between the stops; a light background deepens each stop
+CHART_STOPS = ("#00c2e0", "#7b6cff", "#e05cf0", "#ff4f8b", "#ff5a36")
+CHART_LIGHT_DEEPEN = 0.08
 # Where the background is unknown, inks are measured against these
 LIGHT_REFERENCE, DARK_REFERENCE = (253, 252, 250), (30, 30, 30)
 CHART_STEPS = 8
-FIXED_LOW, FIXED_HIGH = (80, 140, 240), (225, 85, 80)  # the chart without the theme's own blue and red
 QUERY_TIMEOUT = 0.1  # seconds the dashboard waits at startup for the terminal's colours
 SCHEME_ON, SCHEME_OFF = b"\x1b[?2031h", b"\x1b[?2031l"  # colour-scheme change notifications (CSI ? 997 ; 1|2 n)
 PALETTE_ASKED = (1, 3, 4, 9, 12)  # red and blue, the chart's ends, with their bright forms; red and yellow warn
@@ -96,15 +105,14 @@ XTERM = [(0, 0, 0), (205, 0, 0), (0, 205, 0), (205, 205, 0), (0, 0, 238), (205, 
 
 # The palette before #14, kept as the builtin mode. Frames share the muted token.
 BUILTIN_HOLDERS: List[Colour] = [75, 79, 216, 141, 110, 186]
-BUILTIN_CHART: List[Colour] = [(95, 175, 255), (105, 155, 255), (135, 145, 255), (170, 135, 240),
-                               (200, 140, 210), (225, 150, 170), (245, 160, 130), (255, 175, 95)]
 BUILTIN: Dict[str, Style] = {
-    "text": (None, ""), "bold": (None, "b"), "dim": (245, "d"), "title": (None, "b"), "key": (255, "b"),
+    "text": (None, ""), "bold": (None, "b"), "dim": (245, "d"), "frame": (245, "d"), "title": (None, "b"),
+    "key": (255, "b"),
     "accent": (75, ""), "cursor": (255, "b"), "status-normal": (255, ""), "ok": (114, ""), "warn": (179, ""),
     "bad": (167, ""), "legacy": (176, ""), "badge-ok": (114, "br"), "badge-warn": (179, "br"),
     "badge-bad": (167, "br"), "track": (239, "d"), "free": (239, "d")}
 TOKENS: Dict[str, Style] = {
-    "text": (None, ""), "bold": (None, "b"), "dim": (8, ""), "title": (None, "b"), "key": (None, "b"),
+    "text": (None, ""), "bold": (None, "b"), "dim": (8, ""), "frame": (8, ""), "title": (None, "b"), "key": (None, "b"),
     "accent": (4, ""), "cursor": (None, "b"), "status-normal": (None, ""), "ok": (2, ""), "warn": (3, ""),
     "bad": (1, ""), "legacy": (5, ""), "badge-ok": (2, "br"), "badge-warn": (3, "br"), "badge-bad": (1, "br"),
     "track": (8, ""), "free": (8, "")}
@@ -219,13 +227,45 @@ def ink_for(lightness: float, angle: float, background: RGB) -> RGB:
     return colour
 
 
+def semantic(name: str, background: Optional[RGB], light: bool) -> RGB:
+    """Our `name` token for this background: its light or dark variant, moved away from the background in
+    lightness until it reads at TOKEN_INK (a reference background where it is unknown)."""
+    colour = hex_colour(SEMANTIC[name][1 if light else 0])
+    surface = background or (LIGHT_REFERENCE if light else DARK_REFERENCE)
+    lightness, chroma, angle = lch(colour)
+    away = -1 if is_light(surface) else 1
+    while contrast(colour, surface) < TOKEN_INK and 0 < lightness < 1:
+        lightness += away * LIGHTNESS_STEP
+        colour = oklch(lightness, chroma, angle)
+    return colour
+
+
+def reserved_for(background: Optional[RGB], light: bool) -> Tuple[RGB, RGB, RGB]:
+    """What no holder fill comes near: our accent (focus), bad (over share) and warn (idle) for this background."""
+    accent, bad, warn = (semantic(name, background, light) for name in ("accent", "bad", "warn"))
+    return accent, bad, warn
+
+
+def chart_ramp(light: bool, steps: int = 8) -> List[RGB]:
+    """`steps` colours along CHART_STOPS in OKLab, each stop deepened by CHART_LIGHT_DEEPEN on a light background."""
+    stops = [hex_colour(stop) for stop in CHART_STOPS]
+    if light:
+        stops = [oklch(lch(stop)[0] - CHART_LIGHT_DEEPEN, lch(stop)[1], lch(stop)[2]) for stop in stops]
+    found: List[RGB] = []
+    for step in range(steps):
+        where = step / (steps - 1) * (len(stops) - 1)
+        index = min(int(where), len(stops) - 2)
+        found.append(mix(stops[index], stops[index + 1], where - index))
+    return found
+
+
 def holder_pairs(background: Optional[RGB], light: bool,
                  reserved: Optional[Sequence[RGB]] = None) -> List[Holder]:
     """The holders for this background in HOLDER_HUES order: each hue's fill, turned away a few degrees at a
     time from a reserved colour (the theme's blue, red and yellow) it is within RESERVED_APART of, or from an earlier
     holder within HOLDER_APART; a hue that finds no room within MOST_TURN is dropped. The ink keeps the fill's turn
     and reads at MIN_INK on the background (a reference one where it is unknown)."""
-    return list(_holder_pairs(background, light, tuple(reserved or (LIGHT_RESERVED if light else DARK_RESERVED))))
+    return list(_holder_pairs(background, light, tuple(reserved or reserved_for(background, light))))
 
 
 @functools.lru_cache(maxsize=64)
@@ -423,15 +463,19 @@ def resolve(mode: str, answers: Optional[Answers] = None,
     if background is None and guessed is not None:
         foreground, background, source = foreground or guessed[0], guessed[1], "COLORFGBG"
     light = is_light(background) if background else answers.scheme == "light"
+    ours = {name: semantic(name, background, light) for name in SEMANTIC}  # `terminal` keeps the theme's own
     if mode == "builtin":
         styles = dict(BUILTIN)
+        styles.update({name: (colour, "") for name, colour in ours.items()})
+        styles.update({f"badge-{name}": (ours[name], "br") for name in ("ok", "warn", "bad")})
         styles.update({f"{token}{n}": (colour, "") for n, colour in enumerate(BUILTIN_HOLDERS) for token in "hf"})
-        styles.update({f"chart{n}": (colour, "") for n, colour in enumerate(BUILTIN_CHART)})
+        styles.update({f"chart{n}": (colour, "") for n, colour in enumerate(chart_ramp(light, CHART_STEPS))})
         return Theme(mode, styles, (56, 62, 74), 252, "■", "block", light, background, source)
     styles = dict(TOKENS)
-    defaults = LIGHT_RESERVED if light else DARK_RESERVED  # focus, over share and idle: the theme's blue, red, yellow
-    reserved = tuple(answers.palette.get(index, default) for index, default in zip((4, 1, 3), defaults))
-    holders = holder_pairs(background, light, reserved)
+    if mode == "auto":
+        styles.update({name: (colour, "") for name, colour in ours.items()})
+        styles.update({f"badge-{name}": (ours[name], "br") for name in ("ok", "warn", "bad")})
+    holders = holder_pairs(background, light, (ours["accent"], ours["bad"], ours["warn"]))
     styles.update({f"h{n}": (holder.ink, "") for n, holder in enumerate(holders)})
     styles.update({f"f{n}": (holder.fill, "") for n, holder in enumerate(holders)})
     mixing = mode == "auto" and background is not None
@@ -440,13 +484,15 @@ def resolve(mode: str, answers: Optional[Answers] = None,
         ink = foreground or ((0, 0, 0) if light else (255, 255, 255))
         styles["track"] = (mix(background, ink, TRACK_MIX), "")
         styles["free"] = (mix(background, ink, FREE_MIX), "")
-        if foreground is not None:  # muted text and every frame: ours, not bright black, which many themes hide
-            styles["dim"] = (muted(foreground, background), "")
+        if foreground is not None:  # muted text and frames: ours, not bright black, which many themes hide
+            dim = muted(foreground, background)
+            styles["dim"], styles["frame"] = (dim, ""), (frame(dim, background), "")
         selection: Optional[RGB] = mix(background, ink, SELECTION_MIX)
         tints = {f"h{n}": tint(background, holder.fill, holder.ink) for n, holder in enumerate(holders)}
     else:
         selection, tints = None, {}
-    styles.update({f"chart{n}": (colour, "") for n, colour in enumerate(chart_colours(mode, answers, background))})
+    chart: List[Colour] = [4, 4, 4, 5, 5, 1, 1, 1] if mode == "terminal" else list(chart_ramp(light, CHART_STEPS))
+    styles.update({f"chart{n}": (colour, "") for n, colour in enumerate(chart)})
     return Theme(mode, styles, selection, None, "■" if mixing else "░", "block" if mixing else "outline",
                  light, background, source, tints)
 
@@ -471,6 +517,15 @@ def muted(foreground: RGB, background: RGB) -> RGB:
     return mix(foreground, background, step / 100)
 
 
+def frame(dim: RGB, background: RGB) -> RGB:
+    """Unfocused frames, a little paler than muted text (owner, 2026-11-12): FRAME_MIX of the way on to the
+    background, back toward the muted colour where that would read under FRAME_FLOOR."""
+    step = round(FRAME_MIX * 100)
+    while step > 0 and contrast(mix(dim, background, step / 100), background) < FRAME_FLOOR:
+        step -= 1
+    return mix(dim, background, step / 100)
+
+
 def tint(background: RGB, fill: RGB, ink: RGB) -> RGB:
     """A selected row's background in its holder's colour: TINT_MIX of its fill in the background, less where its
     ink would keep under TINT_KEEP of its contrast against the plain background."""
@@ -481,21 +536,6 @@ def tint(background: RGB, fill: RGB, ink: RGB) -> RGB:
         if contrast(ink, found) >= TINT_KEEP * plain:
             return found
     return found
-
-
-def chart_colours(mode: str, answers: Answers, background: Optional[RGB]) -> List[Colour]:
-    """The load chart by height: the theme's blue to its red in OKLab (the pair, bright or normal, that reads better
-    on the background), fixed RGB without them; in terminal mode palette steps, nothing mixed."""
-    if mode == "terminal":
-        return [4, 4, 4, 5, 5, 1, 1, 1]
-    pairs = [(answers.palette[low], answers.palette[high]) for low, high in ((12, 9), (4, 1))
-             if low in answers.palette and high in answers.palette]
-    if not pairs:
-        return list(gradient(FIXED_LOW, FIXED_HIGH))
-    if background is not None:
-        bg = background
-        pairs.sort(key=lambda pair: -min(contrast(pair[0], bg), contrast(pair[1], bg)))
-    return list(gradient(*pairs[0]))
 
 
 def from_environment(environ: Optional[Mapping[str, str]] = None, answers: Optional[Answers] = None,

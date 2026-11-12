@@ -863,17 +863,17 @@ class MachineStatusTests(unittest.TestCase):
                            history=[(now-datetime.timedelta(hours=1),now,1)])
                 tool.draw_machine(canvas,0,0,24,110,model)
                 lines=canvas.lines(False)
-                self.assertIn(memory_word,lines[2]);self.assertIn(swap_word,lines[2])
-                self.assertIn("unleased load: 4.5",lines[2])
-                self.assertIn(f"admission: {admission}" if admission else "no admission",lines[2])
-                self.assertFalse(lines[3][1:-1].strip())
-                self.assertIn("load 1m",lines[4])
+                self.assertIn(memory_word,lines[1]);self.assertIn(swap_word,lines[1])  # right under the top border
+                self.assertIn("unleased load: 4.5",lines[1])
+                self.assertIn(f"admission: {admission}" if admission else "no admission",lines[1])
+                self.assertFalse(lines[2][1:-1].strip())
+                self.assertIn("load 1m",lines[3])
                 self.assertNotIn("advise",canvas.render(False))
                 self.assertNotIn("memory_block",canvas.render(False))
                 # #14: normal status is the terminal's own foreground (no colour code), a block ANSI red
-                self.assertIn("\x1b[0munleased load: 4.5",canvas.lines(True)[2])
+                self.assertIn("\x1b[0munleased load: 4.5",canvas.lines(True)[1])
                 self.assertNotIn("38;5;255",canvas.lines(True)[2])
-                if not admission:self.assertIn("\x1b[0;31mno admission",canvas.lines(True)[2])
+                if not admission:self.assertIn(tool.sgr("bad",False)+"no admission",canvas.lines(True)[1])
 
 
 class MemoryBarTests(unittest.TestCase):
@@ -886,7 +886,8 @@ class MemoryBarTests(unittest.TestCase):
                           memory=dict(level=1, used=768, total=1024, swap_total=512, swap_free=128),
                           history=[(now-datetime.timedelta(hours=1), now, 4)]))
         lines = canvas.render(False).splitlines()
-        self.assertEqual(15, len(lines))
+        self.assertEqual(13, len(lines))
+        self.assertIn("memory ok", lines[1], "the status line right under the top border")
         text = "\n".join(lines)
         self.assertIn("used 768 MB of 1.0 GB", text)
         self.assertIn("used 384 MB of 512 MB", text)
@@ -895,7 +896,7 @@ class MemoryBarTests(unittest.TestCase):
         self.assertEqual(4,sum("█" in line for line in lines), "four chart rows")
         first_chart = next(i for i, line in enumerate(lines) if "█" in line)
         self.assertFalse(lines[first_chart - 1][1:-1].strip(), "gap above chart")
-        self.assertFalse(lines[-3][1:-1].strip(), "one gap row before legend")
+        self.assertIn("█", lines[-3], "the axis line right under the chart, no gap")
         chart = lines[first_chart]
         self.assertEqual("█" * 84, chart[3:87])
         self.assertEqual("  ", chart[1:3])
@@ -933,7 +934,7 @@ class MemoryBarTests(unittest.TestCase):
     def test_memory_bar_colour_reflects_pressure_without_a_separate_pressure_row(self):
         tool = load_dashboard()
         now = datetime.datetime.now(datetime.timezone.utc)
-        for level, colour in ((1,"38;2;%d;%d;%d"%tool.current_theme.styles["chart0"][0]), (2,"31"), (4,"31")):
+        for level, colour in ((1,"38;2;%d;%d;%d"%tool.current_theme.styles["chart0"][0]), (2,tool.sgr("bad",False)[4:-1]), (4,tool.sgr("bad",False)[4:-1])):
             # the ramp's blue at the bar's start; under pressure (memory low) the theme's red, the whole bar
             with self.subTest(level=level):
                 canvas = tool.Canvas(90,24)
@@ -945,7 +946,7 @@ class MemoryBarTests(unittest.TestCase):
                 self.assertIn(f"\x1b[0;{colour}m■", canvas.lines(True)[row])
                 self.assertNotIn("pressure", canvas.render(False))
 
-    def test_full_capacity_is_the_gradients_red_end_even_in_a_one_row_histogram(self):
+    def test_full_capacity_is_the_ramps_red_end_in_the_shortest_chart(self):
         tool=load_dashboard()
         now=datetime.datetime.now(datetime.timezone.utc)
         canvas=tool.Canvas(90,11)
@@ -954,9 +955,67 @@ class MemoryBarTests(unittest.TestCase):
                           memory=dict(level=1,used=768,total=1024,swap_total=512,swap_free=128),
                           history=[(now-datetime.timedelta(hours=1),now,4)]))
         rows=[i for i,line in enumerate(canvas.lines(False)) if "█" in line]
-        self.assertEqual(1,len(rows))
+        self.assertEqual(2,len(rows),"two rows: never fewer")
         red=tool.current_theme.styles["chart7"][0]  # the ramp's red end: a full column's top, not the warning red
         self.assertIn("38;2;%d;%d;%dm█"%red,canvas.lines(True)[rows[0]])
+
+    def machine(self, tool: Any, height: int, width: int = 90, memory: dict[str, Any] | None = None,
+                load: float = 3) -> list[str]:
+        now=datetime.datetime.now(datetime.timezone.utc)
+        canvas=tool.Canvas(width,height)
+        tool.draw_machine(canvas,0,0,height,width,dict(slots=4,cores=12,averages=(load,2,3),
+                          advice=dict(unleased_load=0,jobs=2),memory_block=None,admission=1,
+                          memory=memory or dict(level=1,used=24678,total=32768,swap_total=9216,swap_free=1434),
+                          history=[(now-datetime.timedelta(hours=1),now,4)]))
+        self.canvas=canvas
+        return canvas.lines(False)
+
+    def test_the_chart_gives_up_rows_first_four_three_two_then_none(self):
+        tool=load_dashboard()
+        for height,chart in ((13,4),(12,3),(11,2),(10,0),(9,0),(7,0)):
+            with self.subTest(height=height):
+                lines=self.machine(tool,height)
+                rows=sum(1 for line in lines if any(glyph in line for glyph in tool.SPARK))
+                self.assertEqual(chart,rows)
+                self.assertEqual(chart>0,any("avg" in line for line in lines),"the axis line goes with the chart")
+                for name in ("load 1m","memory","swap"):
+                    self.assertTrue(any(name in line for line in lines),f"{name}: rows before the chart goes")
+
+    def test_short_of_rows_the_resources_share_one_line_and_never_drop_memory_or_swap(self):
+        tool=load_dashboard()
+        for height in (6,5,4,3):
+            with self.subTest(height=height):
+                lines=self.machine(tool,height)
+                compact=next(line for line in lines if "load " in line)
+                self.assertRegex(compact,r"load ■\S* 3\.0/12 · mem ■\S* 24\.1/32G · swap ■\S* 7\.6/9G")
+                self.assertFalse(any("load 1m" in line for line in lines),"one line, not rows")
+                self.assertEqual(height>3,any("memory ok" in line or "mem ok" in line for line in lines),
+                                 "the status line while there is a row for it")
+        narrow=self.machine(tool,5,width=tool.NARROW_MACHINE)
+        line=next(line for line in narrow if "load " in line)
+        self.assertRegex(line,r"load 3\.0/12 +mem 24\.1/32G +swap 7\.6/9G","too narrow for bars: the numbers")
+        self.assertNotIn("■",line)
+        for width in (90,60,tool.NARROW_MACHINE):  # never narrower in any layout
+            for height in range(3,16):
+                with self.subTest(width=width,height=height):
+                    text="\n".join(self.machine(tool,height,width=width))
+                    self.assertRegex(text,r"mem(ory)?\b","memory shown")
+                    self.assertIn("swap",text)
+
+    def test_critical_values_are_red_in_the_compact_forms(self):
+        tool=load_dashboard()
+        hot=dict(level=4,used=32000,total=32768,swap_total=9216,swap_free=10)  # memory low, swap low
+        for width,red in ((90,"bar"),(44,"value")):
+            with self.subTest(width=width):
+                lines=self.machine(tool,5,width=width,memory=hot,load=12)
+                y=next(i for i,line in enumerate(lines) if "load " in line)
+                cells=self.canvas.cells[y]
+                text="".join(cell[0] for cell in cells)
+                for label in ("load","mem","swap"):
+                    start=text.index(label+" ")+len(label)+1
+                    styles={cell[1] for cell in cells[start:start+6] if cell[0] not in (" ","")}
+                    self.assertIn("bad",styles,f"{label}: critical in red ({red})")
+                    self.assertEqual("dim",cells[text.index(label+" ")][1],"labels muted")
 
     def test_resource_bars_follow_the_chart_ramp_and_turn_red_when_critical(self):
         tool=surfaces(load_dashboard())

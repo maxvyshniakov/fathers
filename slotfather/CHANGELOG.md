@@ -40,6 +40,17 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   the same hue for labels and numbers, readable on light and dark backgrounds. None sits near the theme's blue,
   red or yellow, so a holder is never taken for the focused frame, an over-share bar or an idle lease; the
   selected row's tint is stronger on light backgrounds.
+- The selected row is marked on both frames, left and right, in QUEUE and Settings.
+- Help and the changelog start their text under their title's first letter, with two blank lines before each
+  section or release and one after its title.
+- Every chromatic colour is the dashboard's own, in a dark and a light variant that reads on either background:
+  the focus blue, ok, warn, bad and legacy, and the MACHINE chart and bars, a cyan to red-orange ramp. Terminal
+  mode keeps the theme's ANSI colours.
+- Unfocused frames are a little paler than muted text.
+- MACHINE starts right under its top border, with the chart's axis right under the chart; short of rows, the
+  chart shrinks to two rows and then goes before load, memory and swap share one compact line, and memory and
+  swap are always shown.
+- Under 110 columns MACHINE and EVENTS sit side by side below the details; under 83, EVENTS goes.
 - The holder palette is "Neon": eight saturated hues (hot pink, orange, acid green, spring teal, cyan, electric
   violet, magenta, green), more distinct from one another, with inks at 4.6:1 or more.
 

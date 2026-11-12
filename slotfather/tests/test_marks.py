@@ -77,7 +77,7 @@ class MarkTests(unittest.TestCase):
                                   "the priority: two cells, blank for normal")
                     self.assertEqual(" ", cells[8][0], "then a gap")
                     self.assertNotEqual(" ", cells[9][0], "the label starts in the same cell on every row")
-                    self.assertEqual("│", cells[width - 1][0], "the frame stays put")
+                    self.assertEqual("┃" if y == rows[0] else "│", cells[width - 1][0], "the frame stays put")
                     self.assertNotIn("▶", [cell[0] for cell in cells], "no cursor glyph")
                     self.assertFalse({"◌", "↓"} & {cell[0] for cell in cells}, "no marker column")
                 if width >= 60:  # the columns right of the label start in the same cell on every running row
@@ -159,6 +159,23 @@ class MarkTests(unittest.TestCase):
                                  "the rest of the frame is the focused blue")
                 self.assertEqual("#", canvas.lines(False, ascii_only=True)[y][0])
                 self.assertEqual(" ", canvas.cells[y][1][0], "nothing after the frame moves")
+
+    def test_the_selected_row_is_marked_on_both_frames_never_in_the_thumbs_cell(self) -> None:
+        model = self.model()
+        for index, fill in ((0, "f0"), (6, "text")):  # a running lease in its fill; a waiter in the text colour
+            for height in (14, 6):  # everything fits; it overflows, with a thumb
+                with self.subTest(index=index, height=height):
+                    canvas = self.tool.Canvas(120, height)
+                    self.tool.draw_requests(canvas, 0, 0, height, 120, model, index, self.now)
+                    [y] = [y for y in range(height) if any(cell[2] for cell in canvas.cells[y])]
+                    self.assertEqual([["┃", fill], ["┃", fill]], [canvas.cells[y][0][:2], canvas.cells[y][119][:2]])
+                    thumbs = {(row, column) for row in range(height) for column in range(120)
+                              if canvas.cells[row][column][0] in ("┃", "╻", "╹") and column not in (0, 119)}
+                    self.assertEqual(height == 6, bool(thumbs), "a thumb only when the rows overflow")
+                    self.assertTrue(all(column == 118 for _, column in thumbs), "the thumb is in the padding cell")
+                    self.assertNotIn((y, 119), thumbs)
+                    plain = canvas.lines(False, ascii_only=True)[y]
+                    self.assertEqual(("#", "#"), (plain[0], plain[-1]), "ASCII: # on both sides")
 
     def test_ascii_terminals_get_one_character_tags(self) -> None:
         self.tool.use_marks(True)
@@ -417,7 +434,8 @@ class FrameTests(unittest.TestCase):
         selected = [y for y in range(7) if any(cell[2] for cell in canvas.cells[y])]
         self.assertEqual(["┃", "f0"], canvas.cells[selected[0]][0][:2], "left: the row's fill")
         self.assertEqual(["┃", "text"], canvas.cells[selected[0]][118][:2], "right: the thumb, same row (QUEUE has focus)")
-        self.assertEqual(["│", "accent"], canvas.cells[selected[0]][119][:2], "the focused frame: light, in blue")
+        self.assertEqual(["┃", "f0"], canvas.cells[selected[0]][119][:2], "right: the row's fill on the frame too")
+        self.assertEqual(["│", "accent"], canvas.cells[selected[0] + 1][119][:2], "the focused frame: light, in blue")
         self.assertNotIn("↓", canvas.render(False), "no row counts: the scrollbar shows it")
 
     def test_every_panel_title_sits_at_one_offset(self) -> None:

@@ -29,9 +29,11 @@ class HelpTests(unittest.TestCase):
                          [title for title, _ in view.HELP])
         lines = view.help_lines(60)
         texts = ["".join(text for text, _ in parts) for parts in lines]
-        self.assertEqual([index for index, parts in enumerate(lines) if parts and parts[0][1] == "title"],
-                         [0] + [index + 1 for index, parts in enumerate(lines) if not parts],
-                         "one blank line between sections, none inside them")
+        titles = [index for index, parts in enumerate(lines) if parts and parts[0][1] == "title"]
+        self.assertEqual(0, titles[0], "the first title right under the top padding row")
+        blanks = {index for index, parts in enumerate(lines) if not parts}
+        expected = {title + 1 for title in titles} | {title - n for title in titles[1:] for n in (1, 2)}
+        self.assertEqual(expected, blanks, "two blank lines before a title but the first, one after, none elsewhere")
         for title, entries in view.HELP:
             start = texts.index(title)
             terms = [entry for entry in entries if entry[0]]
@@ -51,6 +53,27 @@ class HelpTests(unittest.TestCase):
             for text, style in parts:
                 if text.strip() and style == "bold":
                     self.assertTrue(text.strip())
+
+    def test_the_text_starts_under_the_titles_first_letter(self) -> None:
+        for draw, title in ((view.draw_help, "HELP"), (view.draw_changelog, "CHANGELOG")):
+            with self.subTest(title=title):
+                canvas = view.Canvas(100, 40)
+                draw(canvas)
+                info = canvas.help_view
+                lines = canvas.render(False).splitlines()
+                title_x = lines[info.y].index(f" {title} ") + 1
+                inside = [line[info.x + 1:info.x + info.width - 1] for line in lines[info.y + 1:info.y + info.height - 2]]
+                first = next(text for text in inside if text.strip())
+                self.assertEqual(title_x, info.x + 1 + len(first) - len(first.lstrip()), first)
+                self.assertEqual(title_x, info.x + 3)
+
+    def test_changelog_versions_have_the_help_rhythm(self) -> None:
+        releases = view.parse_changelog(view.changelog_text())
+        lines = view.changelog_lines(70, releases, "0.1.0")
+        titles = [index for index, parts in enumerate(lines) if parts and parts[0][1] == "title"]
+        self.assertEqual(0, titles[0])
+        blanks = {index for index, parts in enumerate(lines) if not parts}
+        self.assertEqual({title + 1 for title in titles} | {title - n for title in titles[1:] for n in (1, 2)}, blanks)
 
     def test_every_hotkey_is_in_keys(self) -> None:
         terms = " ".join(entry[0] for entry in dict(view.HELP)["KEYS"])

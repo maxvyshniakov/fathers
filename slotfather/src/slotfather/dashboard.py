@@ -46,8 +46,8 @@ from . import version as _version
 # and --once write that canvas as the same escape sequences, so they are the same picture.
 
 SPARK = "▁▂▃▄▅▆▇█"
-CHART_ROWS = 4
-MACHINE_HEIGHT = 11 + CHART_ROWS  # frame, status, resource bars, gaps and the legend, the bottom frame right after it
+CHART_ROWS, MIN_CHART_ROWS = 4, 2  # the chart's rows when there is room; fewer than two, it goes (owner)
+MACHINE_HEIGHT = 9 + CHART_ROWS  # frame, status, a gap, 3 resource rows, a gap, the chart and its axis line
 HISTORY_WINDOW = 3600  # seconds of queue.log the utilisation strip rebuilds
 LOG_TAIL = 262144  # bytes of queue.log read per refresh
 WIDE = 110  # columns from which the panels sit side by side
@@ -316,11 +316,11 @@ class Canvas:
                 self.cells[y][column][2] = tint
 
     def box(self, y: int, x: int, height: int, width: int, title: str = "", note: str = "", name: str = "") -> None:
-        """A rounded light frame in the muted token; the focused panel's (`name`, #15) in the accent blue, the same
-        glyphs: focus shows by colour alone (owner)."""
+        """A rounded light frame in the frame token (a little paler than muted text); the focused panel's (`name`,
+        #15) in the accent blue, the same glyphs: focus shows by colour alone (owner)."""
         if height < 2 or width < 6:
             return
-        frame = "accent" if name and name == self.focus else "dim"
+        frame = "accent" if name and name == self.focus else "frame"
         top_left, top_right, bottom_left, bottom_right, across, down = "╭", "╮", "╰", "╯", "─", "│"
         self.put(y, x, top_left + across * (width - 2) + top_right, frame)
         for row in range(y + 1, y + height - 1):
@@ -1139,7 +1139,8 @@ def draw_requests(canvas: Canvas, y: int, x: int, height: int, width: int, model
             "time": (span(age) if age is not None else "—", ink), "cpu": cpu, "pid": (str(item["pid"]), ink)})
         if index == selected:  # its background, and the left frame heavy in the row's colour: no cursor glyph
             canvas.select(row, x + 1, x + width - 1, style if tinted else True)
-            canvas.put(row, x, SELECTED_FRAME, fill(style))
+            for frame in (x, x + width - 1):  # both frames, at that row; the thumb is in the padding cell (#15)
+                canvas.put(row, frame, SELECTED_FRAME, fill(style))
 
 
 def queue_policy(model: dict) -> dict[str, str]:
@@ -1416,55 +1417,100 @@ def draw_machine(canvas: Canvas, y: int, x: int, height: int, width: int, model:
         total = f" of {megabytes(memory['swap_total'])}" if memory["swap_total"] else ""
         swap = (f"{megabytes(memory['swap_free'])} free{total}", "text")
     swap_parts = [swap]
+    swap_used: float | None = None
+    swap_low = False
     if memory.get("swap_total") and memory.get("swap_free") is not None:
-        used_swap = max(0, memory["swap_total"] - memory["swap_free"])
+        swap_used = max(0, memory["swap_total"] - memory["swap_free"])
         swap_low = cast(float, memory["swap_free"]) < _config.number_setting("MIN_FREE_SWAP_MB", _config.MIN_FREE_SWAP_MB)
-        swap_parts = usage_parts(used_swap, memory["swap_total"], swap_low)  # critical as "swap low"
+        swap_parts = usage_parts(swap_used, memory["swap_total"], swap_low)  # critical as "swap low"
     used_memory, total_memory = memory.get("used"), memory.get("total")
     if used_memory is None and total_memory and memory.get("available") is not None:
         used_memory = max(0, total_memory - memory["available"])
     memory_parts = [("usage unavailable", "dim")]
+    memory_low = ram_status[1] == "bad"
     if total_memory and used_memory is not None:
-        memory_parts = usage_parts(used_memory, total_memory, ram_status[1] == "bad")  # critical as "memory low"
+        memory_parts = usage_parts(used_memory, total_memory, memory_low)  # critical as "memory low"
+    # Critical where the one-minute load leaves less than one slot's share of the cores free (#15 review): by load
+    # alone, so a fully leased but quiet machine is not red
+    load_hot = cast(bool, model["cores"] - load1 < model["cores"] / slots)
+    lines: list[tuple[str, list[tuple[str, str]]]] = [
+        ("load 1m", ramp_bar(cast(float, load1 / model["cores"]), 12, load_hot)
+         + [(f" {load1:.1f} · {model['cores']} cores", "text")]),
+        ("memory", cast(list[tuple[str, str]], memory_parts)), ("swap", cast(list[tuple[str, str]], swap_parts))]
     chart_width = max(1, inner)
     buckets = history_buckets(model["history"], chart_width)
     summary = history_summary(model["history"], slots)
-    # (priority, name, parts): the lines a short panel drops first have the highest priority number.
-    lines = [
-        # Critical where the one-minute load leaves less than one slot's share of the cores free (#15 review): by
-        # load alone, so a fully leased but quiet machine is not red
-        (0, "load 1m", ramp_bar(cast(float, load1 / model["cores"]), 12, cast(bool, model["cores"] - load1 < model["cores"] / slots))
-         + [(f" {load1:.1f} · {model['cores']} cores", "text")]),
-        (1, "memory", memory_parts),
-        (3, "swap", swap_parts),
-    ]
-    # Rows besides the chart: the frame (2), a gap, the status, a gap, the bars, a gap on each side of the chart and
-    # the legend, which the bottom frame follows directly.
-    while len(lines) + 9 > height and len(lines) > 1:
-        lines.remove(max(lines, key=lambda line: line[0]))
-    chart_rows = max(0, min(CHART_ROWS, height - 8 - len(lines)))
-    canvas.segments(y + 2, x + 3, machine_status(model, inner), inner)
-    row = y + 4  # one gap between the status row and resource bars
-    for _, name, parts in lines:
-        canvas.put(row, x + 3, name, "dim")
-        canvas.segments(row, x + 13, parts, inner - 10)
+    # Inside the frame: the status line, a gap, the three resource rows; then a gap, the chart and its axis line,
+    # which the bottom frame follows directly. Short of rows (owner, 2026-11-12) the chart gives up height first,
+    # 4 → 3 → 2 rows and then entirely (never one row); then the resource rows become one compact line; memory and
+    # swap never go.
+    interior = height - 2
+    full = interior >= 2 + len(lines)
+    chart_rows = min(CHART_ROWS, interior - 2 - len(lines) - 2) if full else 0
+    chart_rows = chart_rows if chart_rows >= MIN_CHART_ROWS else 0
+    row = y + 1
+    if interior >= 2 or full:  # the status line, unless only the compact resource line fits
+        canvas.segments(row, x + 3, machine_status(model, inner), inner)
+        row += 2 if (full or interior >= 3) else 1
+    if full:
+        for name, parts in lines:
+            canvas.put(row, x + 3, name, "dim")
+            canvas.segments(row, x + 13, parts, inner - 10)
+            row += 1
+    elif interior >= 1:
+        resources: list[tuple[str, float | None, str, bool]] = [
+            ("load", cast(float, load1 / model["cores"]), f"{load1:.1f}/{model['cores']}", load_hot)]
+        used_mb, total_mb = cast(float | None, used_memory), cast(float | None, total_memory)
+        swap_total = cast(float, cast(dict[str, Any], memory).get("swap_total") or 0)
+        if used_mb is not None and total_mb:
+            resources.append(("mem", used_mb / total_mb, f"{gigabytes(used_mb)}/{gigabytes(total_mb, True)}G",
+                              memory_low))
+        else:
+            resources.append(("mem", None, "?", memory_low))
+        resources.append(("swap", swap_used / swap_total if swap_used is not None and swap_total else None,
+                          f"{gigabytes(swap_used)}/{gigabytes(swap_total, True)}G"
+                          if swap_used is not None else "off" if swap_total == 0 else "?", swap_low))
+        canvas.segments(row, x + 3, compact_resources(resources, inner), inner)
         row += 1
     if chart_rows:
         row += 1  # gap above the histogram
-    # Eighth-block heights; the same blue-to-red gradient is tied to the capacity scale.
+    # Eighth-block heights; the same ramp is tied to the capacity scale.
     for line in range(chart_rows):
         floor = (chart_rows - 1 - line) * 8
         for column, level in enumerate(buckets):
             eighths = math.ceil(level / slots * chart_rows * 8) - floor if level else 0
             glyph = SPARK[min(8, eighths) - 1] if eighths > 0 else " "
-            height_fraction = min(1, level / slots) if chart_rows == 1 else (chart_rows - 1 - line) / (chart_rows - 1)
-            colour = round(height_fraction * (_theme.CHART_STEPS - 1))
+            colour = round((chart_rows - 1 - line) / (chart_rows - 1) * (_theme.CHART_STEPS - 1))
             canvas.put(row, x + 3 + column, glyph, f"chart{colour}" if eighths > 0 else "dim")
         row += 1
-    if chart_rows:
-        row += 1  # one gap row between histogram and legend
-    if chart_rows and row <= y + height - 2:
+    if chart_rows and row <= y + height - 2:  # the axis line right under the chart
         canvas.segments(row, x + 3, machine_legend(cast(dict[str, Any], summary), cast(int, slots), chart_width), inner)
+
+
+def gigabytes(value_mb: float | None, total: bool = False) -> str:
+    """Megabytes as a short GB number for the compact resource line: 24.1, or a total as 32 or 0.5."""
+    if value_mb is None:
+        return "?"
+    value = value_mb / 1024
+    return (f"{value:.1f}".rstrip("0").rstrip(".") or "0") if total else f"{value:.1f}"
+
+
+def compact_resources(resources: list[tuple[str, float | None, str, bool]], width: int) -> list[tuple[str, str]]:
+    """Load, memory and swap on one line (owner, 2026-11-12) when MACHINE is too short for their rows: short ramp
+    bars (6 to 4 cells, red when critical), else the numbers alone, a critical one in red. Never drops one."""
+    parts: list[tuple[str, str]] = []
+    for bar_width, separator in ((6, " · "), (5, " · "), (4, " · "), (0, " · "), (0, "  ")):
+        parts = []
+        for index, (label, fraction, value, critical) in enumerate(resources):
+            if index:
+                parts.append((separator, "dim"))
+            parts.append((label + " ", "dim"))
+            if bar_width and fraction is not None:
+                parts += ramp_bar(fraction, bar_width, critical) + [(" ", "text")]
+            parts.append((value, "bad" if critical and not bar_width else "text"))
+        if sum(text_width(text) for text, _ in parts) <= width:
+            break
+    return parts
 
 
 def window_text(seconds: float) -> str:
@@ -1606,15 +1652,24 @@ def wrap(text: str, width: int) -> list[str]:
 
 
 
+HEADING_BEFORE, HEADING_AFTER = 2, 1  # blank lines around an overlay's section or release title (owner)
+
+
+def add_heading(lines: list[list[tuple[str, str]]], title: list[tuple[str, str]]) -> None:
+    """Adds a section title: HEADING_BEFORE blank lines before it but the first, HEADING_AFTER after it."""
+    blank: list[tuple[str, str]] = []
+    lines.extend([blank[:] for _ in range(HEADING_BEFORE if lines else 0)] + [title]
+                 + [blank[:] for _ in range(HEADING_AFTER)])
+
+
 def help_lines(width: int) -> list[list[tuple[str, str]]]:
     """The help laid out at `width` cells: a section title, then its rows with the terms in one column as wide as the
-    section's longest term and each description wrapped under itself (a hanging indent), then its notes; one blank
-    line between sections. A row too narrow for both columns puts its description under its term."""
+    section's longest term and each description wrapped under itself (a hanging indent), then its notes. Two blank
+    lines before a section title but the first, one after it (owner). A row too narrow for both columns puts its
+    description under its term."""
     lines: list[list[tuple[str, str]]] = []
     for title, entries in HELP:
-        if lines:
-            lines.append([])
-        lines.append([(title, "title")])
+        add_heading(lines, [(title, "title")])
         terms = max([text_width(entry[0]) for entry in entries if entry[0]] or [0])
         column = HELP_INDENT + terms + HELP_GAP
         for entry in entries:
@@ -1695,7 +1750,8 @@ def draw_overlay(canvas: Canvas, title: str, layout: Any, name: str) -> None:
     """A centred, scrollable overlay (help, the changelog): `layout(width)` gives its lines as (text, style) parts;
     the frame, scrollbar, counts and centred footer are the same for every one."""
     width = min(max(0, canvas.width - 2), 76)
-    lines = cast(list[list[tuple[str, str]]], layout(width - 6))  # two padding cells, the scrollbar in one
+    # The text starts under the title's first letter (x + 3); on the right two padding cells, the scrollbar in one
+    lines = cast(list[list[tuple[str, str]]], layout(width - 7))
     height = min(max(0, canvas.height - 2), len(lines) + 5)  # a blank row above the lines and one below them
     y, x = (canvas.height - height) // 2, (canvas.width - width) // 2
     visible = max(0, height - 5)
@@ -1710,7 +1766,7 @@ def draw_overlay(canvas: Canvas, title: str, layout: Any, name: str) -> None:
         return
     canvas.scrollbar(y + 2, x + width - 2, visible, offset, visible, len(lines), True)
     for row, parts in enumerate(lines[offset:offset + visible], y + 2):
-        canvas.segments(row, x + 2, parts, width - 6)
+        canvas.segments(row, x + 3, parts, width - 7)
     shown = f"{round(100 * (offset + visible) / len(lines))}%" if len(lines) > visible else ""
     hints = [("↑↓", "scroll"), ("esc", "close")] + ([("q", "quit")] if name == "help" else [])
     canvas.overlay_footer(y + height - 2, x, width, hints, shown)
@@ -1792,15 +1848,13 @@ def changelog_lines(width: int, releases: list[Release] | None = None, running: 
     for release in releases:
         if not any(entries for _, entries in release.sections):
             continue
-        if lines:
-            lines.append([])
         title: list[tuple[str, str]] = [(release.version, "title")]
         title += [(f" · {part}", "dim") for part in (release.date, release.commit) if part]
         if release.version == running:
             title.append(("  installed", "ok"))
         elif stale and release.version[:1].isdigit() and version_key(release.version) > version_key(running):
             title.append(("  new — restart to get these", "warn"))
-        lines.append(title)
+        add_heading(lines, title)
         for heading, entries in release.sections:
             if not entries:
                 continue
@@ -1817,6 +1871,16 @@ def draw_changelog(canvas: Canvas, stale: bool = False) -> None:
         return changelog_lines(width, stale=stale)
 
     draw_overlay(canvas, "CHANGELOG", layout, "changelog")
+
+
+NARROW_MACHINE, NARROW_EVENTS = 44, 38  # the least width each takes side by side; below both, EVENTS goes
+
+
+def narrow_machine_width(width: int) -> int:
+    """MACHINE's width in the one-column layout: half, at least NARROW_MACHINE, with EVENTS beside it in the rest
+    and a one-cell gap; the whole width where EVENTS would get under NARROW_EVENTS."""
+    machine = max(NARROW_MACHINE, (width - 1) // 2)
+    return machine if width - machine - 1 >= NARROW_EVENTS else width
 
 
 def allocate(available: int, panels: list[tuple[str, int, int]]) -> dict[str, int]:
@@ -1976,15 +2040,26 @@ def dashboard_draw(canvas: Canvas, model: dict[str, Any] | None, selected: int =
             if right[name]:
                 draw_panel(canvas, name, y, left + 1, right[name], width - left - 1, model, selected, cwd, moment)
                 y += right[name]
-    else:
-        heights = allocate(available, [("requests", min(requests, 10), requests),
-                                       ("detail", 5, 10), ("machine", 6, MACHINE_HEIGHT),
-                                       ("events", 5, available)])
+    else:  # one column: QUEUE, the details, then MACHINE and EVENTS side by side, or MACHINE alone (owner)
+        machine_width = narrow_machine_width(width)
+        if machine_width < width:
+            heights = allocate(available, [("requests", min(requests, 10), requests), ("detail", 5, 10),
+                                           ("bottom", 6, available)])
+        else:  # no room for EVENTS beside MACHINE: it goes, and the details take what MACHINE leaves
+            heights = allocate(available, [("requests", min(requests, 10), requests), ("bottom", 6, MACHINE_HEIGHT),
+                                           ("detail", 5, available)])
         y = top
-        for name in ("requests", "detail", "machine", "events"):
-            if name in heights:
+        for name in ("requests", "detail", "bottom"):
+            if name not in heights:
+                continue
+            if name != "bottom":
                 draw_panel(canvas, name, y, 0, heights[name], width, model, selected, cwd, moment)
-                y += heights[name]
+            else:
+                draw_panel(canvas, "machine", y, 0, heights[name], machine_width, model, selected, cwd, moment)
+                if machine_width < width:
+                    draw_panel(canvas, "events", y, machine_width + 1, heights[name], width - machine_width - 1,
+                               model, selected, cwd, moment)
+            y += heights[name]
     if help_open:
         draw_open_overlay(canvas, help_open, model)
     if settings is not None:

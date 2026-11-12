@@ -35,7 +35,7 @@ settings, tab and select, quit last, and they never cover the status.
 same light, rounded lines; the focused panel's is in the accent blue (the terminal's ANSI blue) and the labels set
 into its top border (title, column headers) in the foreground colour, while the others stay muted. Arrow keys on a
 focused DETAILS or EVENTS are always theirs, also while the details load or with nothing to scroll. The selected
-row's marker is a heavy `┃` on the left frame in its colour. EVENTS
+row's marker is a heavy `┃` on both frames, left and right, in its colour. EVENTS
 stays on its newest entry while scrolled to the top; scrolled down, it keeps showing the same events and counts the
 new ones in its bottom border (`↑ 3 new`); Home goes back.
 
@@ -57,7 +57,7 @@ restores the terminal's mode on exit, also after a failure; elsewhere a table ma
 those layouts to the US positions. Only hotkeys are translated: what you type into
 a Settings field stays as typed. Help keeps showing the Latin letters.
 
-Only the selected request has a heavy `┃` on the left frame, in its fill, and a
+Only the selected request has a heavy `┃` on both frames, in its fill (`#` in ASCII), and a
 tinted background; its text keeps its ink. A running row's tint mixes up to 16% of
 its fill into the terminal's background, less where its ink would lose more than a
 tenth of its contrast; a waiting row's is the neutral selection;
@@ -187,14 +187,27 @@ the history does not reach back.
 ## Colours
 
 The dashboard takes its colours from the terminal's theme (#14), so it reads on light and dark backgrounds alike.
-Text, bold, hotkeys, the cursor and the status line use the terminal's own foreground; ok, warn and bad are ANSI
-green, yellow and red, and the accent is ANSI blue. They are palette entries, so they follow a theme change at once.
-Muted text and every panel frame share one token, which the dashboard derives itself where the terminal reports its
+Text, bold, hotkeys, the cursor and the status line use the terminal's own foreground. Every chromatic colour is
+the dashboard's own, the same whatever the theme, in a dark and a light variant that reads at 4.5:1 or more on the
+background (moved in lightness where a background needs it):
+
+| Token | Dark | Light | For |
+| --- | --- | --- | --- |
+| accent | `#4da3ff` | `#1f6feb` | the focused frame, links, `released` |
+| ok | `#3ddc84` | `#15803d` | `granted`, "ok" status words |
+| warn | `#ffc23d` | `#a16207` | an idle bar, warnings |
+| bad | `#ff3b4e` | `#d1203a` | an over-share or critical bar, errors, `no admission` |
+| legacy | `#b48cff` | `#6d3fd8` | a lease of an older client |
+
+`Terminal` mode keeps the theme's ANSI colours for these, as the opt-out.
+Muted text uses one token, which the dashboard derives itself where the terminal reports its
 foreground and background: 42% of the way from the foreground to the background in OKLab, moved back toward the
 foreground until it reads at 4.5:1, and kept at no more than 85% of the foreground's own contrast so it stays
 dimmer. Many themes put ANSI bright black close to their background (Seti: 1.5:1; One Dark: 2.3:1). Where the
 foreground itself reads under 4.5:1 (Solarized Light, 4.1:1) the muted token keeps 85% of it, dimmer than the text
-and never stronger. Without both colours, and in `Terminal` mode, it is ANSI bright black.
+and never stronger. Without both colours, and in `Terminal` mode, it is ANSI bright black. Unfocused frames and
+the rules between sections are a little paler: 28% of the way on from the muted colour to the background, at least
+2.5:1 (the muted colour itself where it is bright black).
 
 What a palette lacks is mixed from the terminal's background and foreground, like `color-mix()` in OKLab: the
 selected row's background (10% foreground), a bar's empty track (15%) and a free slot (20%). Selected text keeps its
@@ -212,11 +225,11 @@ from the fill's lightness darker (light background) or lighter (dark background)
 the reported background (a reference `#fdfcfa` or `#1e1e1e` where none is reported); on a dark background a fill
 that already reads is its own ink. Eight hues are handed out in order: hot pink (350), orange (68), acid green
 (138), spring teal (172), cyan (205), electric violet (288), magenta (318), green (152). No fill may sit within
-OKLab ΔE 0.12 of the theme's blue (the focused panel's frame), red (a CPU bar over its share) or yellow (an idle
-lease), measured on the colours the terminal reports: a fill too close turns away a few degrees at a time (at most
+OKLab ΔE 0.12 of our accent (the focused panel's frame), bad (a CPU bar over its share) or warn (an idle lease): a fill too close turns away a few degrees at a time (at most
 30°) or moves a little in lightness, the smallest change first, and one with no room left is dropped. No fill
-turns into blue, sky or indigo (OKLCH hues 225–280). The load chart runs from the theme's blue to its red in OKLab, without the terminal's answer
-from a fixed blue to red.
+turns into blue, sky or indigo (OKLCH hues 225–280). The load chart and MACHINE's bars use our ramp, in OKLab
+between `#00c2e0`, `#7b6cff`, `#e05cf0`, `#ff4f8b` and `#ff5a36`, each stop 0.08 deeper in lightness on a light
+background; `Terminal` mode keeps palette steps.
 
 Settings → this dashboard → **Colour theme**: `Auto` is the above; `Terminal` uses the palette only, with nothing
 mixed (the chart in palette steps); `Built-in` is the fixed 256-colour palette from before, for themes such as
@@ -237,16 +250,16 @@ Solarized whose bright black is close to the background. `SLOTFATHER_THEME` sets
 - **memory / swap bars:** observed used capacity. Missing observations are shown
   as unavailable rather than as zero.
 - **bar colours:** each filled cell of the load, memory and swap bars takes the
-  history chart's blue-to-red ramp at its place along the bar, so a half-full bar
-  runs from blue to the middle and a nearly full one ends red. A bar is entirely
-  red (the theme's red) while its resource is critical: memory low, swap low
+  history chart's ramp at its place along the bar, so a half-full bar
+  runs from cyan to the middle and a nearly full one ends red-orange. A bar is entirely
+  red (the bad token) while its resource is critical: memory low, swap low
   (the conditions that turn the status word red), or a one-minute load that leaves
   less than one slot's share of the cores free (by load alone: a fully leased but
   quiet machine is not red).
 
 The histogram shows peak occupied slots per fixed time bucket over roughly an
-hour, four rows high. Blue-to-red colour follows the capacity scale. The newest
-bucket is incomplete. The line under it is its time axis:
+hour, four rows high. The ramp's colour follows the capacity scale. The newest
+bucket is incomplete. The line right under it is its time axis:
 
 ```
 −60m              avg 5.2/8 · peak 8 · full 20%              now
@@ -259,6 +272,17 @@ the most held and `full` the share of the window's time every slot was held. A
 narrow chart drops `full`, then `peak`; the axis stays. Whole slots can still
 produce fractional block heights when graph height and capacity differ.
 Historical over-capacity values are retained in `peak`.
+
+MACHINE does not scroll, so it keeps no blank padding rows: the status line sits right under its top border and
+the axis right under the chart. Short of rows, the chart gives up height first, four rows to three to two and
+then entirely (never one row, and its axis goes with it). Shorter still, load, memory and swap share one line,
+`load ■■■■ 26.8/12 · mem ■■■ 24.1/32G · swap ■■ 7.6/9G`, with short bars in the same ramp (red when critical),
+and on a narrow panel the numbers alone, a critical one in red. Memory and swap never go while MACHINE is shown.
+
+**One column** (under 110 columns): SLOTS, QUEUE and the details stack; below them MACHINE and EVENTS sit side by
+side, MACHINE on the left at half the width and at least 44 columns, EVENTS in the rest. Where EVENTS would get
+under 38 columns (a terminal under 83 columns wide), it goes, MACHINE takes the whole width and the details the
+height EVENTS left; a hidden EVENTS is no Tab stop. Tab goes by columns as everywhere: QUEUE, the details, EVENTS.
 
 Refreshing can reap dead queue entries, like `status`. Selecting and
 scrolling never grants a lease, cancels work or kills a process.

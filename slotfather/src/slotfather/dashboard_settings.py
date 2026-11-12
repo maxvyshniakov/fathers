@@ -649,7 +649,7 @@ class Settings:
 
     def rows(self, model: dict[str, Any] | None, inner: int) -> list[Row]:
         rows = self.status_rows(model)
-        rows.append(Row("", ((0, "─" * inner, "dim"),)))
+        rows.append(Row("", ((0, "─" * inner, "frame"),)))
         value_column = min(FIELD_LABEL, max(12, inner // 2))
         shown = self.fields()
         for key in shown:  # one flat list (owner, 2026-11-11)
@@ -700,9 +700,10 @@ class Settings:
                 self.hits.append((row.key, x + 1, line, width - 2, 1))
                 if row.key == self.focus:
                     canvas.select(line, x + 1, x + width - 1)
-                    canvas.put(line, x, "┃", "text")  # the selected row on the left frame, as in QUEUE (#15)
+                    for frame in (x, x + width - 1):  # the selected row on both frames, as in QUEUE (#15)
+                        canvas.put(line, frame, "┃", "text")
         rule = y + height - 6
-        canvas.put(rule, x + 2, "─" * inner, "dim", inner)
+        canvas.put(rule, x + 2, "─" * inner, "frame", inner)
         notes = [(text, "dim") for text in textwrap.wrap(self.description(self.focus), max(1, inner))[:2]]
         if self.flash and (self.clock() - self.flash[2] < FLASH_SECONDS or self.flash[1] == "bad"
                            or (self.flash[1] == "accent" and self.pending)):
