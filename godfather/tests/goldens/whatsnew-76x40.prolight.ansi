@@ -26,15 +26,15 @@
 [0;38;2;150;150;150m││[0m[0m                                                                        [0m[0;38;2;150;150;150m││[0m
 [0;38;2;150;150;150m││[0m[0m  [0m[0;38;2;112;112;112mCHANGED[0m[0m                                                               [0m[0;38;2;150;150;150m││[0m
 [0;38;2;150;150;150m││[0m[0m                                                                        [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m  [0m[0;38;2;112;112;112m• [0m[0mwhat's new? in the footer has one muted style, the key hints',      [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    whether or not anything is unread, and one space after Godfather;   [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    what's new itself still marks unread entries (owner, 2026-11-13).   [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m╰│[0m[0m                                                                        [0m[0;38;2;150;150;150m│╯[0m
-[0;38;2;150;150;150m╭│[0m[0m  [0m[0;38;2;112;112;112m• [0m[0mA request is known by Slotfather's lease_id (fathers#101) for its   [0m[0;38;2;150;150;150m│╮[0m
-[0;38;2;150;150;150m││[0m[0m    selection, colour and details, and by its pid and start only with   [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    an older Slotfather that gives none.                                [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m  [0m[0;38;2;112;112;112m• [0m[0mScreenshots and the README media come from tools/raster.py,         [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    Godfather's own cell rasterizer, with no browser, terminal or       [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    machine slot: box drawing and blocks are geometry snapped to each   [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m╰│[0m[0m    cell, so rounded corners and joins meet their lines and bars have   [0m[0;38;2;150;150;150m│╯[0m
+[0;38;2;150;150;150m╭│[0m[0m    no seams at fractional cell widths; emoji such as 🆗 are drawn in   [0m[0;38;2;150;150;150m│╮[0m
+[0;38;2;150;150;150m││[0m[0m    colour across their two cells; the same cells give the same         [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    pixels. tools/screens.mjs and screen-kit are no longer used.        [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m  [0m[0;38;2;112;112;112m  fathers#114[0m[0m                                                         [0m[0;38;2;150;150;150m││[0m
 [0;38;2;150;150;150m││[0m[0m                                                                        [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m                                                                        [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m                    [0m[0;1m←→[0m[0;38;2;112;112;112m tool[0m[0m   [0m[0;1m↑↓[0m[0;38;2;112;112;112m scroll[0m[0m   [0m[0;1mesc[0m[0;38;2;112;112;112m close[0m[0m                 [0m[0;38;2;112;112;112m17%[0m[0m [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m                    [0m[0;1m←→[0m[0;38;2;112;112;112m tool[0m[0m   [0m[0;1m↑↓[0m[0;38;2;112;112;112m scroll[0m[0m   [0m[0;1mesc[0m[0;38;2;112;112;112m close[0m[0m                 [0m[0;38;2;112;112;112m16%[0m[0m [0m[0;38;2;150;150;150m││[0m
 [0;38;2;150;150;150m╰╰────────────────────────────────────────────────────────────────────────╯╯[0m
 [0m [0m[0;1mGodfather[0m[0;38;2;112;112;112m what's new?[0m[0m     [0m[0;1m↑↓[0m[0;38;2;112;112;112m select[0m[0m   [0m[0;1m?[0m[0;38;2;112;112;112m help[0m[0m   [0m[0;1mq[0m[0;38;2;112;112;112m quit[0m[0m     [0m[0;38;2;112;112;112m11:59:39[0m[0m  [0m[0;38;2;21;128;61m● live[0m[0m [0m

@@ -19,6 +19,11 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Changed
 
+- Screenshots and the README media come from `tools/raster.py`, Godfather's own cell rasterizer, with no browser,
+  terminal or machine slot: box drawing and blocks are geometry snapped to each cell, so rounded corners and joins
+  meet their lines and bars have no seams at fractional cell widths; emoji such as 🆗 are drawn in colour across
+  their two cells; the same cells give the same pixels. `tools/screens.mjs` and screen-kit are no longer used
+  (fathers#114).
 - `what's new?` in the footer has one muted style, the key hints', whether or not anything is unread, and one space
   after `Godfather`; what's new itself still marks unread entries (owner, 2026-11-13).
 - A request is known by Slotfather's `lease_id` (fathers#101) for its selection, colour and details, and by its pid

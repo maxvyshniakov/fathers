@@ -2,10 +2,10 @@
 """Slotfather's recorded navigation scene in Godfather's real interactive dashboard, for the README media.
 
     python3 tools/dashboard-demo.py [--once] [--width N] [--height N]    the scene, live or one frame
-    python3 tools/dashboard-demo.py --screenshot | --animation           README media through screen-kit
+    python3 tools/dashboard-demo.py --screenshot | --animation           README media through tools/raster.py
 
 The scene and its recordings are Slotfather's (tools/fixtures/README.md says where they come from), moved with the
-dashboard; capture and export belong to screen-kit, this file only supplies the data. No tool is run: the model
+dashboard; tools/raster.py draws the frames this file makes with the real reducer and renderer. No tool is run: the model
 goes straight to the overview, as the Slotfather adapter would decode it from `status --json --full`.
 """
 from __future__ import annotations
@@ -15,13 +15,11 @@ import copy
 import datetime as dt
 import json
 import os
-import shutil
-import subprocess
 import sys
 import time
 import types
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Union
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,9 +39,10 @@ def judge(memory: dict[str, Any]) -> None:
         and memory["swap_free"] < MIN_FREE_SWAP_MB
 
 
-def load_scene(advance: bool = False) -> tuple[Any, dict[str, Any]]:
+def load_scene(advance: bool = False, elapsed: Callable[[], float] | None = None) -> tuple[Any, dict[str, Any]]:
     """(the app module with the scene patched in, its first model): the demo's clock frozen at the scene's moment,
-    or advancing from it, recorded machine samples replayed over the fixed queue."""
+    or advancing from it, recorded machine samples replayed over the fixed queue. `elapsed` (seconds since the
+    start) stands in for the wall clock, so frames drawn at chosen moments are the same every time."""
     from godfather import app, sources, tui
     from godfather.views import common, details, machine, overview
 
@@ -64,10 +63,11 @@ def load_scene(advance: bool = False) -> tuple[Any, dict[str, Any]]:
     machine.HISTORY_WINDOW = 60  # short demo zoom; the legend reports seconds per column
     origin = model["updated"]
     started = time.monotonic()
+    since = elapsed or (lambda: time.monotonic() - started)
     history_anchor = origin + dt.timedelta(seconds=10 if advance else 0)
 
     def current() -> dt.datetime:
-        return origin + dt.timedelta(seconds=10 + time.monotonic() - started) if advance else origin
+        return origin + dt.timedelta(seconds=10 + since()) if advance else origin
 
     class Clock(dt.datetime):
         @classmethod
@@ -89,9 +89,9 @@ def load_scene(advance: bool = False) -> tuple[Any, dict[str, Any]]:
     def sample() -> dict[str, Any]:
         fresh = copy.deepcopy(model)
         fresh["updated"] = current()
-        elapsed = max(0, time.monotonic() - started) if advance else 0
+        moment = max(0, since()) if advance else 0
         for observation in profiles:
-            if observation["offset"] > elapsed + 2:  # skip process-startup warmup
+            if observation["offset"] > moment + 2:  # skip process-startup warmup
                 break
             fresh["averages"] = observation["averages"]
             fresh["memory"].update(observation["memory"])
@@ -148,6 +148,102 @@ def scene_news(app: Any) -> tuple[Any, dict[str, str]]:
     return found, read
 
 
+# The README animation (fathers#114: drawn by tools/raster.py, no terminal): (seconds, keys or a wheel scroll down over
+# DETAILS as (column, row, notches)), at four frames a second for 11.5 seconds, as the screen-kit recipe it replaces drove it.
+Step = tuple[float, Union[str, tuple[int, int, int]]]
+NAVIGATION: list[Step] = [
+    (.4, "j"), (3.7, "j"), (4, "j"), (4.3, "j"), (6.8, (149, 11, 4)), (8.3, "g"), (9, "j"), (9.4, (149, 11, 6)),
+    (10.4, "g")]
+MEDIA = (176, 50)  # columns and rows of the README media
+FPS, DURATION, STILL = 4, 11.5, 1.0  # the animation's rate and length; the still is the screen one second in
+
+
+def frames(steps: list[Step], times: list[float], width: int, height: int) -> list[str]:
+    """The live dashboard's screens at `times` (seconds) with `steps` pressed, in colour: the real reducer and
+    renderer over the scene, its clock moved by hand and every load done at once, so each run gives the same
+    frames."""
+    from godfather import state as _state
+    from godfather.tui import Canvas
+    from godfather.views import overview
+
+    moment = [0.0]
+    app, _ = load_scene(advance=True, elapsed=lambda: moment[0])
+    screen = app.Scene()
+    current = _state.AppState(interval=1)
+    fetched = -1.0
+
+    def send(event: Any) -> None:
+        nonlocal current
+        current, effects = _state.reduce(current, event, moment[0])
+        for effect in effects:
+            if effect.kind == "load-details":
+                lane, cwd = app.load_details(effect.item)
+                send(_state.DetailsLoaded(effect.key, lane, cwd, None))
+            elif effect.kind == "load-news":
+                send(_state.NewsLoaded(app.load_news()))
+            elif effect.kind == "load-model":
+                send(_state.ModelLoaded(*screen.load()))
+
+    def draw() -> str:
+        canvas = Canvas(width, height)
+        overview.render(canvas, current, moment[0], screen.notice())
+        send(_state.Drawn(_state.Frame(canvas.width, canvas.height, canvas.tables, canvas.version_at,
+                                       tuple(canvas.hint_hits), canvas.order, tuple(canvas.filter_hits))))
+        return canvas.render(True)
+
+    send(_state.NewsLoaded(app.load_news()))
+    pending = sorted(steps, key=lambda step: step[0])
+    found: list[str] = []
+    for at in times:
+        moment[0] = at
+        if at - fetched >= current.interval:
+            send(_state.ModelLoaded(*screen.load()))
+            fetched = at
+        draw()  # the frame the keys land on, as on screen
+        while pending and pending[0][0] <= at:
+            _, keys = pending.pop(0)
+            if isinstance(keys, tuple):
+                column, row, notches = keys
+                for _ in range(notches):
+                    send(_state.Mouse(65, column, row, True))
+            else:
+                send(_state.Key(keys))
+        send(_state.Tick())
+        found.append(draw())
+    return found
+
+
+def write_media(animation: bool) -> None:
+    """README media in both of the owner's themes, through tools/raster.py: the still (assets/dashboard.png) or the
+    navigation animation (assets/dashboard.webp)."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("godfather_raster", ROOT / "tools/raster.py")
+    assert spec and spec.loader
+    raster = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(raster)
+    from godfather import theme, tui
+    from godfather.views import common
+
+    os.environ["TZ"] = "Etc/GMT-2"
+    time.tzset()
+    for variant, name in (("", "seti"), ("-light", "prolight")):
+        palette = raster.THEMES[name]
+        os.environ.update(GODFATHER_TERMINAL_BG="#%02x%02x%02x" % palette.background,
+                          GODFATHER_TERMINAL_FG="#%02x%02x%02x" % palette.foreground, GODFATHER_THEME="auto")
+        tui.set_theme(theme.from_environment())
+        common.use_marks(False)
+        draw = raster.Raster(*MEDIA, palette)
+        if animation:
+            times = [step / FPS for step in range(round(DURATION * FPS))]
+            target = ROOT / f"assets/dashboard{variant}.webp"
+            raster.save_webp([draw.frame(text) for text in frames(NAVIGATION, times, *MEDIA)], target, FPS)
+        else:
+            target = ROOT / f"assets/dashboard{variant}.png"
+            raster.save_png(draw.frame(frames([], [STILL], *MEDIA)[0]), target)
+        print(target)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     export = parser.add_mutually_exclusive_group()
@@ -158,20 +254,7 @@ def main() -> None:
     parser.add_argument("--height", type=int, default=43)
     args = parser.parse_args()
     if args.screenshot or args.animation:
-        tool = shutil.which("screen-kit")
-        if not tool:
-            parser.error("Install the screen-kit CLI first (bun link in its checkout).")
-        base = "dashboard-navigation" if args.animation else "dashboard"
-        extension = "webp" if args.animation else "png"
-        for variant in ("", "-light"):  # the same scene in a dark and a light terminal theme (#14)
-            name = base + variant
-            destination = ROOT / "assets/screens" / name
-            result = subprocess.run([tool, "capture", "--config", str(ROOT / "tools/screens.mjs"), "--only", name,
-                                     "--out", str(destination)], cwd=ROOT, text=True, capture_output=True)
-            if result.returncode:
-                raise SystemExit(result.stderr)
-            shutil.copyfile(destination / f"{name}.{extension}", ROOT / f"assets/dashboard{variant}.{extension}")
-            print(ROOT / f"assets/dashboard{variant}.{extension}")
+        write_media(args.animation)
         return
     os.environ["TZ"] = "Etc/GMT-2"
     time.tzset()

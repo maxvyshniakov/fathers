@@ -36,7 +36,7 @@ EXPECTED = ROOT / "tests" / "fixtures" / "expected"  # the scene with expected r
 NEWS = ROOT / "tests" / "fixtures" / "news"
 GOLDENS = ROOT / "tests" / "goldens"
 COMMIT = "9f600e1c0ffee"  # Godfather's own install commit in what's new, so a commit changes no golden
-THEMES = {"seti": ("#111213", "#cacecd"), "prolight": ("#ffffff", "#191919")}  # tools/screens.mjs
+THEMES = {"seti": ("#111213", "#cacecd"), "prolight": ("#ffffff", "#191919")}  # tools/raster.py THEMES
 SCREENS = {  # name: (width, height, overlay); what's new's filter after a colon
     "overview-156x43": (156, 43, None), "overview-100x40": (100, 40, None), "overview-76x40": (76, 40, None),
     "overview-156x20": (156, 20, None), "help-156x43": (156, 43, "help"), "settings-156x43": (156, 43, "settings"),
@@ -236,6 +236,21 @@ def goldens() -> dict[str, str]:
     return found
 
 
+# fathers#114: box drawing and blocks as tools/raster.py draws them, no text, so the pixels are the same everywhere
+RASTER = ["╭─┬──╮ ▀▂▄", "│ │  ┃ ▇█🮅", "├─┼──┤ ▌▐░", "│ │  ╹ ▖▟▒", "╰─┴──╯ ╱╲┄"]
+
+
+def raster_goldens() -> dict[str, Any]:
+    """tests/goldens/raster/: the geometry frame in each theme, its lines in the theme's border grey."""
+    tool = load(ROOT / "tools" / "raster.py", "godfather_raster")
+    found: dict[str, Any] = {}
+    for name in THEMES:
+        palette = tool.THEMES[name]
+        text = "\n".join("\x1b[0;38;2;90;92;93m" + line + "\x1b[0m" for line in RASTER)
+        found[f"geometry.{name}.png"] = tool.Raster(10, len(RASTER), palette).frame(text)
+    return found
+
+
 def main(argv: list[str]) -> int:
     if argv == ["--check"]:
         bad = [name for name, text in goldens().items()
@@ -248,7 +263,16 @@ def main(argv: list[str]) -> int:
     GOLDENS.mkdir(parents=True, exist_ok=True)
     for name, text in goldens().items():
         (GOLDENS / name).write_text(text)
-    print(f"wrote {SCENE.relative_to(ROOT)} and {len(SCREENS) * 3} goldens in {GOLDENS.relative_to(ROOT)}")
+    try:
+        pictures = raster_goldens()
+    except ImportError:
+        print("Pillow is missing: tests/goldens/raster/ left as it is (requirements-dev.txt)", file=sys.stderr)
+        pictures = {}
+    for name, image in pictures.items():
+        (GOLDENS / "raster").mkdir(exist_ok=True)
+        image.save(GOLDENS / "raster" / name, format="PNG")
+    print(f"wrote {SCENE.relative_to(ROOT)} and {len(SCREENS) * 3 + len(pictures)} goldens in "
+          f"{GOLDENS.relative_to(ROOT)}")
     return 0
 
 

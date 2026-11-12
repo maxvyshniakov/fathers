@@ -63,8 +63,14 @@ python3 -m unittest discover -s tests -t tests     # unit, golden, fixture and l
 python3 tools/check.py                              # Ruff and strict Pyright against tools/type-baseline.json
 python3 tools/goldens.py                            # rewrite tests/goldens/ after a deliberate visible change
 python3 tools/dashboard-demo.py                     # the README scene, live; --screenshot / --animation: media
-python3 tools/compare_media.py OLD.png NEW.png OUT.png  # cell-by-cell screenshot diff, side by side (needs Pillow)
+python3 tools/raster.py --goldens OUTDIR            # every golden screen as a PNG, for review
+python3 tools/compare_media.py OLD.png NEW.png OUT.png  # cell-by-cell screenshot diff, side by side
 ```
+
+Pictures come from `tools/raster.py` (Pillow, in requirements-dev.txt), with no terminal or browser: it draws the
+colour text Godfather prints, box drawing and blocks as geometry snapped to the cell and emoji from the system's
+colour emoji font, the same pixels for the same cells. A live screen:
+`godfather --once --color --width 100 --height 40 | python3 tools/raster.py - screen.png`.
 
 `GODFATHER_FIXTURES=DIR` replaces every tool call with recorded replies (`tests/fixtures/scene/` is the README
 scene) and records writes instead of making them. `tests/test_parity.py` compares Godfather, cell by cell but the

@@ -1,3 +1,4 @@
 # Development only; installed commands continue to use the Python standard library.
 ruff==0.14.3
 pyright==1.1.407
+pillow==13.0.0  # tools/raster.py: screenshots and README media (fathers#114)

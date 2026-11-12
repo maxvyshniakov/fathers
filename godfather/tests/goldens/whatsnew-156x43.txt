@@ -25,19 +25,19 @@
 │  11:55:26    ▫       agent-a1c75285bdf│                                                                          │ted                                    │
 │  11:55:24    ▪       desktop          │  CHANGED                                                                 │rification_plan.py, tools/verify.py,   │
 │  11:55:00    ▫       desktop          │                                                                          │main-module.sh, tools/test-build-      │
-│  11:54:54    ▪       desktop          │  • what's new? in the footer has one muted style, the key hints',        │odule.py, tools/app-build.py,          │
-│  11:54:06    ▪       agent-a1c75285bdf│    whether or not anything is unread, and one space after Godfather;     │st-app-build.py, tools/cargo-test.py,  │
-│  11:54:02    ▫       agent-a1c75285bdf│    what's new itself still marks unread entries (owner, 2026-11-13).     │elopment.md, tools/test-cargo-build-   │
-│  11:53:54    ▪       agent-ae72d94beb6│                                                                          │, tools/test-heavy.py,                 │
-│  11:53:08    ▪       agent-a1c75285bdf│  • A request is known by Slotfather's lease_id (fathers#101) for its     │rgo_build_cache.py                     │
-│  11:52:53    ▫       agent-a1c75285bdf│    selection, colour and details, and by its pid and start only with     │                                       │
-│  11:52:30    ▫       desktop          │    an older Slotfather that gives none.                                  │                                       │
+│  11:54:54    ▪       desktop          │  • Screenshots and the README media come from tools/raster.py,           │odule.py, tools/app-build.py,          │
+│  11:54:06    ▪       agent-a1c75285bdf│    Godfather's own cell rasterizer, with no browser, terminal or         │st-app-build.py, tools/cargo-test.py,  │
+│  11:54:02    ▫       agent-a1c75285bdf│    machine slot: box drawing and blocks are geometry snapped to each     │elopment.md, tools/test-cargo-build-   │
+│  11:53:54    ▪       agent-ae72d94beb6│    cell, so rounded corners and joins meet their lines and bars have     │, tools/test-heavy.py,                 │
+│  11:53:08    ▪       agent-a1c75285bdf│    no seams at fractional cell widths; emoji such as 🆗 are drawn in     │rgo_build_cache.py                     │
+│  11:52:53    ▫       agent-a1c75285bdf│    colour across their two cells; the same cells give the same pixels.   │                                       │
+│  11:52:30    ▫       desktop          │    tools/screens.mjs and screen-kit are no longer used.  fathers#114     │                                       │
 │  11:52:25    ▪       desktop          │                                                                          │───────────────────────────────────────╯
-│  11:51:40    ▪       agent-a1c75285bdf│  • The footer's key hints are centred between its left and right         │───────── unleased 0.4 · no admission ─╮
-│  11:51:40    ▫       post-merge-456-re│    content at every width, and a narrow footer drops tab panel and s     │                                       │
-│  11:51:24    ▫       agent-a1c75285bdf│    settings before ? help.  fathers#102                                  │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
+│  11:51:40    ▪       agent-a1c75285bdf│  • what's new? in the footer has one muted style, the key hints',        │───────── unleased 0.4 · no admission ─╮
+│  11:51:40    ▫       post-merge-456-re│    whether or not anything is unread, and one space after Godfather;     │                                       │
+│  11:51:24    ▫       agent-a1c75285bdf│    what's new itself still marks unread entries (owner, 2026-11-13).     │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
 │  11:49:34    ▫▫      data-grid        │                                                                          │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
 │  11:48:31    ▪▪      data-grid        │                                                                          │░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
-│                                       │                     ←→ tool   ↑↓ scroll   esc close                  19% │          −80s     avg 4.4/6      now  │
+│                                       │                     ←→ tool   ↑↓ scroll   esc close                  18% │          −80s     avg 4.4/6      now  │
 ╰───────────────────────────────────────╰──────────────────────────────────────────────────────────────────────────╯───────────────────────────────────────╯
  Godfather what's new?                            ↑↓ select   tab panel   s settings   ? help   q quit                             updated 11:59:39  ● live
