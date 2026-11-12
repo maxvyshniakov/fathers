@@ -24,6 +24,11 @@ tool's files. Its own entries come from the CHANGELOG.md it ships with.
 - It is read-only and fast: Godfather runs it when it starts and each time the overlay opens, in the background,
   with a 2 s timeout per call (a tool that times out on every fallback costs up to 6 s before its row settles).
 
+Lanefather also gives its `## Unreleased` bullets, first, as `{"version": null, "date": null, "unreleased": true,
+"source": "<the installed commit>", ...}` (owner decision, fathers#104), so its news since the installed commit
+shows before it has a release; its releases before 0.2.0 carry a build suffix (`0.1.0+7eca44a`), since each
+installed as 0.1.0. Its contract: [lanefather/docs/api.md](../../../lanefather/docs/api.md).
+
 Who provides it: junkfather (fathers#105), slotfather (fathers#103), lanefather (fathers#104).
 
 ## Without `changelog --json`
