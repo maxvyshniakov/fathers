@@ -300,6 +300,24 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
                     self.assertGreaterEqual(events["x"] - 1, view.NARROW_MACHINE, "MACHINE keeps its least width")
                     self.assertEqual(lines[machine].index("╭─ EVENTS"), events["x"])
 
+    def test_side_by_side_machine_keeps_its_own_height_and_the_details_get_the_rest(self) -> None:
+        view = tool()
+        for height in (60, 44, 34):
+            with self.subTest(height=height):
+                canvas = view.Canvas(100, height)
+                view.dashboard_draw(canvas, sample_model())
+                lines = canvas.render(False).splitlines()
+                top = next(y for y, line in enumerate(lines) if line.startswith("╭─ MACHINE "))
+                bottom = next(y for y in range(top + 1, height) if lines[y].startswith("╰"))
+                self.assertEqual(view.MACHINE_HEIGHT, bottom - top + 1, "MACHINE at its own height, chart and all")
+                self.assertIn("now", lines[bottom - 1], "its axis right over the bottom border: no blank rows")
+                events = canvas.tables["events"]
+                self.assertEqual((top, view.MACHINE_HEIGHT), (events["y"], events["height"]), "EVENTS beside it")
+                details, queue = canvas.tables["details"], canvas.tables["requests"]
+                self.assertEqual(top, details["y"] + details["height"], "the details right above")
+                self.assertEqual(height - 1 - 5 - queue["height"] - view.MACHINE_HEIGHT, details["height"],
+                                 "the details take what QUEUE and MACHINE leave")
+
     def test_tab_skips_panels_that_are_not_drawn(self) -> None:
         view = tool()
         canvas = view.Canvas(80, 20)

@@ -2052,12 +2052,14 @@ def dashboard_draw(canvas: Canvas, model: dict[str, Any] | None, selected: int =
                 y += right[name]
     else:  # one column: QUEUE, the details, then MACHINE and EVENTS side by side, or MACHINE alone (owner)
         machine_width = narrow_machine_width(width)
-        if machine_width < width:
-            heights = allocate(available, [("requests", min(requests, 10), requests), ("detail", 5, 10),
-                                           ("bottom", 6, available)])
-        else:  # no room for EVENTS beside MACHINE: it goes, and the details take what MACHINE leaves
-            heights = allocate(available, [("requests", min(requests, 10), requests), ("bottom", 6, MACHINE_HEIGHT),
-                                           ("detail", 5, available)])
+        # The bottom row is MACHINE's own height (EVENTS beside it scrolls in the same); QUEUE gets its rows and the
+        # details what is left (owner, 2026-11-12). Short of room, each gives way down to its minimum.
+        heights = allocate(available, [("requests", min(requests, 10), requests), ("detail", 5, 5),
+                                       ("bottom", 6, MACHINE_HEIGHT)])
+        extra = heights.get("bottom", 0) - MACHINE_HEIGHT
+        if extra > 0:  # MACHINE never grows past its own height: the rest goes to the details
+            heights["bottom"] = MACHINE_HEIGHT
+            heights["detail" if "detail" in heights else "requests"] += extra
         y = top
         for name in ("requests", "detail", "bottom"):
             if name not in heights:

@@ -286,9 +286,10 @@ share one line,
 critical), and on a narrow panel the numbers alone, a critical one in red; the narrowest drops the marks. Memory and swap never go while MACHINE is shown.
 
 **One column** (under 110 columns): SLOTS, QUEUE and the details stack; below them MACHINE and EVENTS sit side by
-side, MACHINE on the left at half the width and at least 44 columns, EVENTS in the rest. Where EVENTS would get
-under 38 columns (a terminal under 83 columns wide), it goes, MACHINE takes the whole width and the details the
-height EVENTS left; a hidden EVENTS is no Tab stop. Tab goes by columns as everywhere: QUEUE, the details, EVENTS.
+side, MACHINE on the left at half the width and at least 44 columns, EVENTS in the rest. The row is MACHINE's own
+height, its chart included; EVENTS scrolls in the same, and QUEUE and then the details take the height above it.
+Where EVENTS would get under 38 columns (a terminal under 83 columns wide), it goes and MACHINE takes the whole
+width; a hidden EVENTS is no Tab stop. Tab goes by columns as everywhere: QUEUE, the details, EVENTS.
 
 Refreshing can reap dead queue entries, like `status`. Selecting and
 scrolling never grants a lease, cancels work or kills a process.
