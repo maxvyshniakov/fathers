@@ -21,6 +21,9 @@
                                      in REF..HEAD names (lanefather.tickets, [tickets] release_comment)
   results key|lookup|record REV (--full | --checks A,B)
                                      check results by tree and plan (lanefather.results, docs/results.md)
+  stats [--days N] [--lane ID] [--json]
+                                     per-check p50/p90, red runs and flakes from the run history
+                                     (lanefather.history), which done leaves alone
   list [--all] [--json]
   status [--json]                    every registered project's lanes on this machine (lanefather.status)
   settings [check|set|reset KEY [VALUE]] [--json]
@@ -44,6 +47,7 @@ from . import (
     config,
     done,
     gc,
+    history,
     land,
     lanes,
     promote,
@@ -209,6 +213,11 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--receipt", help="with record: the report or run that holds the result")
     p.add_argument("--json", action="store_true")
     p.set_defaults(run=results.command)
+    p = commands.add_parser("stats", help="per-check durations (p50, p90), red runs and flakes from the run history")
+    p.add_argument("--days", type=float, default=7, help="the window in days (default 7; 0: everything kept)")
+    p.add_argument("--lane", help="only this lane's runs")
+    p.add_argument("--json", action="store_true", help="the version-1 report")
+    p.set_defaults(run=history.command)
     p = commands.add_parser("list", help="lanes that are not done, with claims, receipts, disk and load")
     p.add_argument("--all", action="store_true", help="include done lanes")
     p.add_argument("--json", action="store_true", help="the lane records with their worktree and receipt state, the "

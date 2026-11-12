@@ -30,7 +30,7 @@ from .gitops import main_checkout
 VERSION = 1
 REFRESH = 600
 FORGET = 7 * 86400
-READ_ONLY = ("capabilities", "status", "settings", "show")
+READ_ONLY = ("capabilities", "status", "settings", "show", "stats")
 
 
 def path() -> Path:

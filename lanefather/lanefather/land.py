@@ -211,7 +211,7 @@ def land(args: Any) -> int:
                    source="post-merge", toolchain=toolchain, lane=args.id, sha=merge, receipt=str(post),
                    reused=[*lane_verified, *tree_verified],
                    origins={**checks.origins(lane_verified, str(state.receipt_path(args.id))),
-                            **checks.origins(tree_verified, "")})
+                            **checks.origins(tree_verified, "")}, phase="post-merge")
     # Reloaded: a review hand-over may have changed the record during the smoke.
     with state.locked("state"):
         record = state.load(args.id)

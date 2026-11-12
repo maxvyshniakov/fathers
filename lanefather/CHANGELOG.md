@@ -15,3 +15,8 @@ Versions: `lanefather/__init__.py` names the version; an installed release also 
 - Every slot request Lanefather makes names its run type for Slotfather's expected durations (fathers#107): `plan`,
   the results store's key of the plan it runs (fathers#91), and `checks`, how many checks it runs, beside the
   `phase` it already named (check, post-merge, rerun, gate, perf, or a promote step's name).
+- The run history (fathers#92): each check's start, end, status and duration, the run id its slot lease names in its
+  meta (`run`, with `tree`), and flakes (a check that failed and then passed on the same tree, rerun by itself or in
+  a later run, with the failed JUnit tests when the check names a report) go to `<state>/history/<YYYY-MM>.jsonl`,
+  which `done` leaves alone; twelve months are kept. Receipts name their runs in `leases`. `lanefather stats [--days
+  N] [--lane ID] [--json]` reports per-check p50 and p90, red runs and flakes.

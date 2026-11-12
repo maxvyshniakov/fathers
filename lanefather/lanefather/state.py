@@ -6,6 +6,8 @@
   <state>/<id>.post-merge.json      the post-merge smoke's receipt
   <state>/<id>.review.json          the lane's review
   <state>/promote-<sha>.gate.json   a batch gate; perf-<sha>.perf.json a perf run
+  <state>/results/<tree>.json        check results by tree and plan (lanefather.results, fathers#91)
+  <state>/history/<YYYY-MM>.jsonl    the run history: per-check runs and flakes (lanefather.history, fathers#92)
   <state>/ledger.log, logs/, reviews/, .<name>.lock
 
 Schema 1 is the format Straylight's tools/lane wrote before the move (#648): a record without `schema` is schema 1,

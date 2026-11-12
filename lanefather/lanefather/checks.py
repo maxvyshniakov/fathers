@@ -20,8 +20,9 @@ import subprocess
 import time
 from types import FrameType
 from typing import Any, TextIO
+import uuid
 
-from . import claims, config, host, journal, plan, queue, settings, slots, state, worktrees
+from . import claims, config, history, host, journal, plan, queue, settings, slots, state, worktrees
 from . import results as result_store
 from .errors import LaneError
 from .gitops import current_branch, dirty, git, git_ok
@@ -127,10 +128,14 @@ def run_suites(root: Any, suites: list[str], label: str, jobs: int, full: bool =
         kind = plan_meta(ids, root)
     else:
         kind = plan_meta([f"suite:{s}" for s in suites], root, suite_count(root, suites))
-    env = verify_env(label, phase, ticket=ticket, **(meta or {}), **kind)
+    # verify queues for its own --jobs-slot lease; label, priority, ticket and tags name the run (#650). The run id
+    # and tree in the lease's meta tie the lease to the receipt and the history (fathers#92).
+    run_id, tree = new_run_id(), tree_of(root)
+    env = verify_env(label, phase, ticket=ticket, **(meta or {}), **kind, run=run_id,
+                     **({"tree": tree} if tree else {}))
     what = "the full gate" if full else ", ".join(suites) + (f" ({len(ids)} checks)" if ids is not None else "")
     print(f"lane: running {what} in {root} (log {log}); queue: slotfather status", flush=True)
-    started, load = time.monotonic(), {"start": host.load_averages()}
+    started, load, started_at = time.monotonic(), {"start": host.load_averages()}, journal.now()
     with open(log, "w") as handle:
         status = subprocess.run(argv, cwd=root, env=env, stdout=handle, stderr=subprocess.STDOUT).returncode
     seconds = round(time.monotonic() - started, 1)
@@ -138,6 +143,9 @@ def run_suites(root: Any, suites: list[str], label: str, jobs: int, full: bool =
     failed_checks: list[str] = []
     text = log.read_text(errors="replace")
     reports, report = report_of(text)
+    history.record_run(report, lane=(meta or {}).get("lane"), phase=phase, tree=tree, run=run_id, started=started_at,
+                       finished=journal.now(), seconds=seconds, checks=ids)
+    lease = {"run": run_id, **({"lease": report["lease"]} if report and report.get("lease") else {})}
     if report:
         failed_checks = [row["id"] for row in report.get("checks", []) if row.get("status") not in PASSING]
     # verify voids a run whose environment failed (the toolchain refused or changed, #571): no suite of it passed,
@@ -159,7 +167,7 @@ def run_suites(root: Any, suites: list[str], label: str, jobs: int, full: bool =
               f"{stopped['not_run']} heavier checks did not start ({log})", flush=True)
     results: Rows = [{"suite": suite, "status": "failed" if suite in failed else "not_run" if suite in unstarted
                       else "passed", "exit": status,
-                      "seconds": seconds, "load_wait": load_wait, "load": load, "log": str(log),
+                      "seconds": seconds, "load_wait": load_wait, "load": load, "log": str(log), **lease,
                       "failed_checks": failing[suite] if suite in failed else [],
                       **({"report": reports[-1].strip()} if reports else {}),
                       **({"environment": environment} if environment else {}),
@@ -168,7 +176,9 @@ def run_suites(root: Any, suites: list[str], label: str, jobs: int, full: bool =
     void = bool(environment) or (bool(status) and not any(failing.values()))
     checks: dict[str, dict[str, Any]] = {} if ids is None or selected is None else {
         check: {"suite": suite, "status": "void" if void else rows.get(check, {}).get("status", "not_run"),
-                "log": str(log)}
+                "log": str(log), **lease,
+                **({"seconds": rows[check]["seconds"]} if isinstance(rows.get(check, {}).get("seconds"), (int, float))
+                   else {})}
         for suite in suites for check in selected[suite]}
     stamp = {"stamped": False, "reason": "the run failed"} if status or environment else stamp_result(text, full)
     return results, checks, plan.triage(root, Path(reports[-1].strip()).parent) if status and reports else None, stamp
@@ -184,6 +194,14 @@ def reusable(previous: Record, delta: dict[str, Any]) -> dict[str, dict[str, Any
     return {check: dict(entry, reused_from=entry.get("reused_from") or previous["tree"])
             for check, entry in (previous.get("check_results") or {}).items()
             if entry.get("status") == "passed" and check not in changed}
+
+
+def new_run_id() -> str:
+    return uuid.uuid4().hex[:12]
+
+
+def tree_of(root: Any) -> str | None:
+    return git(root, "rev-parse", "HEAD^{tree}", check=False) or None
 
 
 def same_tree(wanted: dict[str, str], tree: str, toolchain: Any) -> dict[str, dict[str, Any]]:
@@ -317,7 +335,9 @@ class Rerun:
                  meta: dict[str, Any] | None = None, ticket: str | None = None):
         self.root, self.ids, self.label, self.jobs = root, ids, label, jobs
         self.log = journal.log_path(label)
-        self.meta = {"check": ",".join(ids), **(meta or {}), **plan_meta(ids, root)}
+        self.run_id, self.tree = new_run_id(), tree_of(root)
+        self.meta = {"check": ",".join(ids), **(meta or {}), **plan_meta(ids, root), "run": self.run_id,
+                     **({"tree": self.tree} if self.tree else {})}
         self.ticket = ticket
         self.verify = [plan.verify_path(root), "--checks", ",".join(ids), "--keep-going", "--jobs", str(jobs)]
         priority, source = slots.phase_priority("rerun")
@@ -326,11 +346,13 @@ class Rerun:
                                      **self.meta},
                                priority=priority, ticket=ticket) if queued else self.verify
         self.child: subprocess.Popen[bytes] | None = None
+        self.started, self.clock = journal.now(), time.monotonic()
         self.handle: TextIO | None = None
 
     def start(self) -> None:
         print(f"lane: rerunning {', '.join(self.ids)} in {self.root} on {self.jobs} slot(s) (log {self.log})",
               flush=True)
+        self.started, self.clock = journal.now(), time.monotonic()
         self.handle = open(self.log, "w")  # noqa: SIM115 - closed in finish, after the child exits
         self.child = subprocess.Popen(self.argv, cwd=self.root, stdout=self.handle, stderr=subprocess.STDOUT,
                                       env=verify_env(self.label, "rerun", ticket=self.ticket, **self.meta))
@@ -344,7 +366,11 @@ class Rerun:
         if self.argv != self.verify and status == slots.TIMED_OUT and not reports:
             raise RerunUnavailable(f"no lease of {self.jobs} slot(s) within {rerun_wait():g} s (slotfather status)")
         run = Path(reports[-1].strip()).parent if reports else None
-        return (state.read_json(run / "report.json") if run else None), self.log, run
+        report = state.read_json(run / "report.json") if run else None
+        history.record_run(report, lane=self.meta.get("lane"), phase="rerun", tree=self.tree, run=self.run_id,
+                           started=self.started, finished=journal.now(),
+                           seconds=round(time.monotonic() - self.clock, 1), checks=self.ids)
+        return report, self.log, run
 
     def stop(self) -> None:
         """SIGTERM to a child still running (verify stops its jobs on it), SIGKILL 30 s later."""
@@ -442,8 +468,10 @@ def classify(record: Record, worktree: str, base: str, fresh: Rows,
             if problem:
                 entries[check_id] = {"check": check_id, "class": "unclassified", "reason": problem}
             elif row["status"] == "passed":
+                first_row = report_row(report, check_id)
                 entries[check_id] = {"check": check_id, "class": "flaky-under-load", "load": load,
-                                     "alone": {"status": "passed", "log": str(log)}}
+                                     "alone": {"status": "passed", "log": str(log)},
+                                     **({"junit": first_row["junit"]} if first_row.get("junit") else {})}
             elif row["status"] in RED_ALONE:
                 still_red.append(check_id)
                 entries[check_id] = {"check": check_id, "alone": {"status": row["status"], "log": str(log),
@@ -690,11 +718,18 @@ def check(args: Any) -> int:
                             "jobs_decision": decision, "results": results, "triage": triaged,
                             "classification": classification, "first": first, "changed_red_tests": changed_tests,
                             "stopped": stopped, "status": status, "host": info, "started": started,
+                            "leases": leases_of(fresh),
                             "finished": journal.now()})
     # fathers#91: what ran, and what was reused for this tree, is on record for any later run of the tree. A check
-    # that failed and passed rerun by itself stays failed here: the merge runs it again (#640).
+    # that failed and passed rerun by itself stays failed here: the merge runs it again (#640); the history marks it
+    # a flake (fathers#92).
     result_store.record(tree, recordable(check_results), source="check", toolchain=toolchain, lane=args.id,
-                        sha=head, receipt=str(path), reused=list(reused), origins=origins(reused, str(path)))
+                        sha=head, receipt=str(path), reused=list(reused), origins=origins(reused, str(path)),
+                        phase="check")
+    for entry in (classification or {}).get("checks", []):
+        if entry.get("class") == "flaky-under-load":
+            history.flake(entry["check"], lane=args.id, tree=tree, failed_at=started, how="rerun-alone",
+                          junit=entry.get("junit"), phase="check")
     classes = ",".join(f"{e['check']}={e['class']}" for e in (classification or {}).get("checks", []))
     journal.ledger(f"check {args.id} tree={tree} {status} suites={','.join(suites) or '-'} "
                    f"checks={len(check_results) - len(reused)} reused={len(reused)} jobs={decision['jobs']} "
@@ -722,6 +757,16 @@ def check(args: Any) -> int:
               f"{stopped['not_run']} heavier checks did not start. Fix them, commit and run {prog} check again.")
     print(f"Receipt {status} for tree {tree}: {path}")
     return 0 if status == "green" else 1
+
+
+def leases_of(fresh: Rows) -> list[dict[str, Any]]:
+    """The verify runs of a receipt: each one's run id and, when its report named one, its slot lease (fathers#92)."""
+    found: dict[str, dict[str, Any]] = {}
+    for result in fresh:
+        if result.get("run"):
+            found.setdefault(result["run"], {"run": result["run"], **({"lease": result["lease"]}
+                                                                      if result.get("lease") else {})})
+    return list(found.values())
 
 
 def lane_run(record: Record, worktree: str, base: str, suites: list[str], remaining: dict[str, list[str]] | None,

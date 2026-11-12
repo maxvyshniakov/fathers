@@ -84,9 +84,10 @@ def entries(tree: str) -> list[dict[str, Any]]:
 def record(tree: str, checks: dict[str, str], *, source: str, toolchain: Any = None, full: bool = False,
            status: str | None = None, lane: str | None = None, sha: str | None = None, receipt: str | None = None,
            reused: list[str] | None = None, origins: dict[str, dict[str, Any]] | None = None,
-           extra: dict[str, Any] | None = None) -> dict[str, Any]:
+           extra: dict[str, Any] | None = None, phase: str | None = None) -> dict[str, Any]:
     """Record one run's check statuses on the tree; returns the entry. `status` defaults to green when every check
-    passed. A record never fails its caller's command: an unwritable store only loses the reuse."""
+    passed. A record never fails its caller's command: an unwritable store only loses the reuse. A check that passes
+    here after its newest result on the tree, under this environment, failed is a flake in the history (fathers#92)."""
     green = all(s == PASSED for s in checks.values()) and (bool(checks) or full)
     entry: dict[str, Any] = {
         "checks": dict(checks), "full": full, "env": env_hash(toolchain),
@@ -99,12 +100,28 @@ def record(tree: str, checks: dict[str, str], *, source: str, toolchain: Any = N
     try:
         with state.locked("results"):
             found = entries(tree)
+            before = newest(found, entry["env"])
             found.append(entry)
             state.write_json(path_for(tree), {"v": VERSION, "tree": tree, "entries": found[-KEEP_ENTRIES:]})
             prune()
     except (OSError, ValueError):
-        pass
+        return entry
+    from . import history
+    for check, given in checks.items():
+        prior = before.get(check)
+        if given == PASSED and prior and prior["status"] == "failed" and check not in (reused or ()):
+            history.flake(check, lane=lane, tree=tree, failed_at=prior.get("at"), how="later-run", phase=phase)
     return entry
+
+
+def newest(found: list[dict[str, Any]], env: str) -> dict[str, dict[str, Any]]:
+    """Each check's newest status among the entries, under the environment."""
+    latest_of: dict[str, dict[str, Any]] = {}
+    for entry in found:
+        if entry.get("env") == env:
+            for check, status in entry["checks"].items():
+                latest_of[check] = {"status": status, "at": entry.get("at")}
+    return latest_of
 
 
 def prune(days: int = RETENTION_DAYS) -> None:
