@@ -17,7 +17,7 @@ lanefather gc [--dry-run] [--json]         merged idle worktrees and unused bran
 lanefather promote <sha> [--ship] [--no-push] [--install [--deploy HOST]]
 lanefather sync [--drop-local]
 lanefather perf <sha>
-lanefather released <version> --since REF [--head REF]   comment a published version on the issues it fixes
+lanefather shipped <version> --since REF [--head REF]    comment a published version on the issues it fixes
 lanefather list [--all] [--json]
 lanefather show <id> [--state-dir DIR] [--project-dir DIR] [--json]   read-only lane context
 lanefather status [--json]                every registered project's lanes on this machine, read-only
@@ -142,7 +142,7 @@ Opt-in rules for a lane registered with `--ticket N`, so the issue shows its lan
 integrated_label = true   # after a green post-merge smoke: label the issue `integrated`, created when missing
 land_comment = true       # ...and comment the merge, its branch, whether origin has it, the checks and the preview
 fixes_trailer = true      # the landing merge's message ends with `Fixes #N`: GitHub closes N when it reaches main
-release_comment = true    # promote --ship and `released`: comment main's SHA or the version on each fixed issue
+release_comment = true    # promote --ship and `shipped`: comment main's SHA or the version on each fixed issue
                           # and remove its `integrated` label
 preview = "https://preview.example.com/{short}"   # optional; {sha} {short} {branch} {ticket} {lane}
 repo = "owner/name"       # optional; default: origin's GitHub repository
@@ -152,7 +152,7 @@ repo = "owner/name"       # optional; default: origin's GitHub repository
 have yet (a remote-tracking branch, as last fetched, that contains it) is said to be local only and is not linked. A
 red smoke leaves the issue unmarked for the fix's land. The issues a release closes are those a `Fixes #N` line in
 the shipped range names: origin's `main` before the push to the SHA for `promote --ship`, `--since` to `--head` for
-`lanefather released <version>`, which a project's release process runs after it publishes. Each of them loses its `integrated` label, which no longer holds once it is released. `gh` runs without a
+`lanefather shipped <version>`, which a project's release process runs after it publishes. Each of them loses its `integrated` label, which no longer holds once it is released. `gh` runs without a
 prompt with `--repo`; a failure warns and goes to the ledger and never fails the land, promote or release. `start`
 and `next --start` warn about a lane registered with `--ticket none` while any rule is on, and `done` does not count
 land's comment as the lane's evidence. The capability is `tickets.lifecycle`.

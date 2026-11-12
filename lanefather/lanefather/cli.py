@@ -17,7 +17,7 @@
   promote <sha> [--ship] [--no-push] [--install [--deploy HOST]]
   sync [--drop-local]
   perf <sha>                         the batch gate, promotion, sync and the perf suite (lanefather.promote)
-  released <version> --since REF     after a release publish: comment the version on each issue a Fixes #N line
+  shipped <version> --since REF      after a release publish: comment the version on each issue a Fixes #N line
                                      in REF..HEAD names (lanefather.tickets, [tickets] release_comment)
   list [--all] [--json]
   status [--json]                    every registered project's lanes on this machine (lanefather.status)
@@ -150,12 +150,12 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("sha")
     p.add_argument("--remote", default="origin", help="whose main a red run bisects from (default: origin)")
     p.set_defaults(run=promote.perf)
-    p = commands.add_parser("released", help="after a release publish: comment the version on each issue its "
-                                             "Fixes #N lines close ([tickets] release_comment)")
+    p = commands.add_parser("shipped", help="after a release publish: comment the version on each issue its "
+                                            "Fixes #N lines close ([tickets] release_comment)")
     p.add_argument("version", help="the published version, for example v1.4.0")
     p.add_argument("--since", required=True, metavar="REF", help="the previous release (tag or commit)")
     p.add_argument("--head", default="HEAD", metavar="REF", help="the released commit (default: HEAD)")
-    p.set_defaults(run=tickets.released)
+    p.set_defaults(run=tickets.shipped)
     p = commands.add_parser("review", help="the lane's one independent review (Sol, or Opus when Codex is low), its "
                                            "marks and its fix lane; --overall for promote --ship")
     p.add_argument("id", nargs="?")

@@ -6,7 +6,7 @@
 - `integrated_label`, `land_comment`: after a green post-merge smoke, land labels the issue `integrated` (done and in
   the integration branch, not yet on main or released) and comments the merge, its branch, whether origin has it (a
   local-only SHA does not resolve on GitHub, so it is not linked), the checks it passed and the preview.
-- `release_comment`: promote --ship, and `released` after a project's release publish, comment the main SHA or the
+- `release_comment`: promote --ship, and `shipped` after a project's release publish, comment the main SHA or the
   version on each issue a `Fixes #N` line in the shipped range names, and take its `integrated` label off.
 
 gh runs without a prompt against the project's repository. A gh failure warns and goes to the ledger; it never fails
@@ -237,7 +237,7 @@ def release_comments(cwd: str, common: str, base: str, head: str, version: str |
     return commented
 
 
-def released(args: Any) -> int:
+def shipped(args: Any) -> int:
     """After a project's release publish: comment the version on each issue its range fixes."""
     cwd = os.getcwd()
     if not rules().release_comment:

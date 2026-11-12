@@ -1,4 +1,4 @@
-"""Tests of the ticket lifecycle (lanefather.tickets, #25): what land, promote --ship and released tell a lane's issue
+"""Tests of the ticket lifecycle (lanefather.tickets, #25): what land, promote --ship and shipped tell a lane's issue
 through a stand-in gh first on PATH, in scratch Git repositories (support.py)."""
 from __future__ import annotations
 
@@ -199,14 +199,14 @@ class LandTests(TicketCase):
 
 
 class ReleaseTests(TicketCase):
-    def test_released_comments_the_version_on_each_issue_a_fixes_line_names(self):
+    def test_shipped_comments_the_version_on_each_issue_a_fixes_line_names(self):
         base = self.tip()
         self.checked()
         self.lane("land", "a")
         self.commit(self.integration, {"docs/notes.md": "x\n"}, "Fix the guide\n\nfixes #77")
         self.commit(self.integration, {"docs/notes.md": "y\n"}, "Fix the guide again\n\nFixes #77\nRefs #12")
         head = self.tip()
-        output = self.lane("released", "v1.4.0", "--since", base)
+        output = self.lane("shipped", "v1.4.0", "--since", base)
         self.assertIn("release v1.4.0: commented on 2 of 2 issues it fixes (#404, #77)", output)
         released = f"Released in `v1.4.0` ([`{head[:10]}`](https://github.com/fixture/straylight/commit/{head}))."
         self.assertEqual(self.land_comments("77"), [released])
@@ -246,7 +246,7 @@ class ReleaseTests(TicketCase):
         self.checked()
         self.lane("land", "a")
         self.env["FAKE_TICKETS_FAIL"] = "--remove-label"
-        output = self.lane("released", "v1.4.0", "--since", base)
+        output = self.lane("shipped", "v1.4.0", "--since", base)
         self.assertIn("lane: warning: release v1.4.0: #404: remove label integrated: gh issue edit exited 1: HTTP 502",
                       output)
         self.assertIn("tickets release v1.4.0 warning: #404: remove label integrated", self.ledger())
@@ -257,7 +257,7 @@ class ReleaseTests(TicketCase):
         base = self.tip()
         self.commit(self.integration, {"docs/notes.md": "x\n"}, "Fix the guide\n\nFixes #77")
         self.env["FAKE_TICKETS_FAIL"] = "comment"
-        output = self.lane("released", "v1.4.0", "--since", base)
+        output = self.lane("shipped", "v1.4.0", "--since", base)
         self.assertIn("lane: warning: release v1.4.0: #77: gh issue comment exited 1", output)
         self.assertIn("tickets release v1.4.0 warning: #77", self.ledger())
 
@@ -265,7 +265,7 @@ class ReleaseTests(TicketCase):
 class ConfigOffTests(TicketCase):
     tickets = ""
 
-    def test_without_the_table_land_and_released_leave_the_issue_alone(self):
+    def test_without_the_table_land_and_shipped_leave_the_issue_alone(self):
         base = self.tip()
         output = self.lane("start", "b", "--ticket", "none", "--base", "integrate/q", "--claims", "calls/**")
         self.assertNotIn("warning", output)
@@ -275,7 +275,7 @@ class ConfigOffTests(TicketCase):
         self.assertNotIn("integrated", output)
         self.assertEqual(self.gh_calls(), [])
         self.commit(self.integration, {"docs/notes.md": "x\n"}, "Fix the guide\n\nFixes #77")
-        output = self.lane("released", "v1.4.0", "--since", base)
+        output = self.lane("shipped", "v1.4.0", "--since", base)
         self.assertIn("release_comment is off", output)
         self.assertEqual(self.gh_calls(), [])
 
