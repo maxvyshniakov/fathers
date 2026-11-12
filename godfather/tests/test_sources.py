@@ -93,7 +93,7 @@ class UnsupportedTests(FixtureCase):
         self.reply("capabilities --json", {"code": 2, "stderr": "slotfather: unknown command capabilities"})
         screen = app.Screen()
         text = self.frame(screen)
-        self.assertIn("no dashboard contract (slotfather: unknown command capabilities); update slotfather", text)
+        self.assertIn("slotfather: no dashboard contract (capabilities --json exited 2); update slotfather", text)
 
     def test_only_unknown_snapshot_versions_need_a_newer_godfather(self) -> None:
         found = replies(self.root)["capabilities --json"]

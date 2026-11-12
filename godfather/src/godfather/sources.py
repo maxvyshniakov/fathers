@@ -186,7 +186,9 @@ class Source:
         if code != 0 or not isinstance(value, dict):
             self.capabilities = None
             self.state = "unsupported"
-            self.problem = f"{self.name}: no dashboard contract ({problem or f'capabilities exited {code}'}); " \
+            # A tool without the command prints its usage: the exit code says enough; a timeout says why itself
+            why = problem if code in (124, 125, 126) or (code == 0 and problem) else f"capabilities --json exited {code}"
+            self.problem = f"{self.name}: no dashboard contract ({why}); " \
                            f"update {self.name}"
             return
         self.version = str(value.get("version") or "?")
