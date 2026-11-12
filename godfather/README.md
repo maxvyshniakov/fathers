@@ -68,9 +68,10 @@ python3 tools/compare_media.py OLD.png NEW.png OUT.png  # cell-by-cell screensho
 Godfather on the README scene, Seti and Pro Light: no cell differs above the footer) and the EVENTS change.
 
 `GODFATHER_FIXTURES=DIR` replaces every tool call with recorded replies (`tests/fixtures/scene/` is the README
-scene) and records writes instead of making them. `tests/test_parity.py` renders Slotfather's own demo scene with
-Slotfather's in-tree dashboard and with Godfather from the same model and compares every row but the footer; it
-runs where a Slotfather checkout is (`SLOTFATHER_SRC`, default `~/slotfather/src`).
+scene) and records writes instead of making them. `tests/test_parity.py` compares Godfather, cell by cell but the
+footer and EVENTS, with Slotfather's in-tree dashboard on Slotfather's own demo scene, from the same model; that
+dashboard is gone upstream, so its output is a frozen fixture from Slotfather 37c4df7
+([tests/fixtures/parity/](tests/fixtures/parity)).
 
 ## Versions
 

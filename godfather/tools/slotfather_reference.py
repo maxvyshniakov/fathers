@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""A stand-in for Slotfather's SF-1 commands, built from a Slotfather checkout, for tests and media only.
+"""A stand-in for Slotfather's SF-1 commands, built from Slotfather's old in-tree dashboard, for the parity fixture.
 
-    SLOTFATHER_SRC=~/slotfather/src python3 tools/slotfather_reference.py capabilities --json
-    SLOTFATHER_SRC=~/slotfather/src python3 tools/slotfather_reference.py status --json --full
+    SLOTFATHER_SRC=DIR/src python3 tools/slotfather_reference.py capabilities --json
+    SLOTFATHER_SRC=DIR/src python3 tools/slotfather_reference.py status --json --full
 
 It imports the in-tree dashboard (slotfather.dashboard.dashboard_model()) and prints its model serialised as
-docs/contracts/slotfather.md says, so Godfather can be checked against Slotfather's own model before slotfather#26
-lands, and so the parity tests can render one model with both. Any other command goes to the real `slotfather`.
-Godfather itself never imports Slotfather; only this tool does.
+docs/contracts/slotfather.md says; tests/parity_reference.py uses it to write the parity fixture's
+`status --json --full` reply. That dashboard is gone upstream (slotfather#28): DIR must be an archive of Slotfather
+37c4df7, the last commit with it (`mkdir DIR && git -C ~/slotfather archive 37c4df7 | tar -x -C DIR`). Any other
+command goes to the real `slotfather`. Godfather itself never imports Slotfather; only this tool does.
 """
 from __future__ import annotations
 
@@ -19,10 +20,21 @@ import sys
 from pathlib import Path
 from typing import Any
 
-SOURCE = os.path.expanduser(os.environ.get("SLOTFATHER_SRC") or "~/slotfather/src")
+SOURCE = os.path.expanduser(os.environ.get("SLOTFATHER_SRC", ""))
+MISSING = ("needs SLOTFATHER_SRC=DIR/src, DIR an archive of Slotfather 37c4df7, the last commit with the in-tree "
+           "dashboard (slotfather#28 removed it): mkdir DIR && git -C ~/slotfather archive 37c4df7 | tar -x -C DIR")
+
+
+def checkout(source: str) -> None:
+    """Exit with how to get Slotfather 37c4df7 unless `source` has its in-tree dashboard and demo."""
+    root = Path(source) if source else None
+    if root is None or not (root / "slotfather" / "dashboard.py").is_file() or \
+            not (root.parent / "tools" / "dashboard-demo.py").is_file():
+        sys.exit(f"{Path(sys.argv[0]).name}: {MISSING}" + (f" (not at {source})" if source else ""))
 
 
 def load() -> Any:
+    checkout(SOURCE)
     sys.path.insert(0, SOURCE)
     import slotfather.dashboard as dashboard  # noqa: PLC0415 - from the checkout named above
 

@@ -17,12 +17,6 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 FAKE = ROOT / "tests" / "fake_slotfather.py"
-SLOTFATHER_SRC = Path(os.path.expanduser(os.environ.get("SLOTFATHER_SRC") or "~/slotfather/src"))
-
-
-def slotfather_checkout() -> bool:
-    return (SLOTFATHER_SRC / "slotfather" / "dashboard.py").is_file() and \
-        (SLOTFATHER_SRC.parent / "tools" / "dashboard-demo.py").is_file()
 
 
 def frozen(moment: dt.datetime) -> Any:

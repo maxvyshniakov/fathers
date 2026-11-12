@@ -1,34 +1,47 @@
-"""Godfather draws what Slotfather's in-tree dashboard draws, from the same model, but the footer and EVENTS.
+"""Godfather draws what Slotfather's in-tree dashboard drew, from the same model, but the footer and EVENTS.
 
-Slotfather renders its own demo scene (tests/parity_reference.py, in a subprocess with the checkout on sys.path);
-the same model goes through `status --json --full` (tools/slotfather_reference.py, the SF-1 stand-in) into fixture
-mode, Godfather's adapter decodes it, and Godfather renders it at the same moment. Every cell, character and style,
-must be identical, emoji and ASCII, wide, one-column and narrow, but the footer (its name and version) and the
-EVENTS panel, whose columns Godfather changed on purpose after the move (time · slots · label · result, owner
-2026-11-12); help likewise in every section but EVENTS. Skipped without a Slotfather checkout (SLOTFATHER_SRC,
-default ~/slotfather/src); it must be the Slotfather the move matches, 346db8e or a later one with the same dashboard
-(`git -C ~/slotfather archive 346db8e | tar -x -C DIR`, then SLOTFATHER_SRC=DIR/src).
+Slotfather's dashboard is gone upstream (slotfather#28, 81abd86); its last commit with one, 37c4df7, rendered its own
+demo scene once into tests/fixtures/parity/ (tests/parity_reference.py; README there), frozen: the frames and cells
+it drew, its help, and the same model as a `status --json --full` reply (tools/slotfather_reference.py, the SF-1
+stand-in). Godfather reads that reply in fixture mode, its adapter decodes it, and Godfather renders it at the same
+moment. Every cell, character and style, must be identical, emoji and ASCII, wide, one-column and narrow, but the
+footer (its name and version) and the EVENTS panel, whose columns Godfather changed on purpose after the move (time ·
+slots · label · result, owner 2026-11-12); help likewise in every section but EVENTS. A missing or unreadable fixture
+fails the test; it never skips.
 """
 from __future__ import annotations
 
+import gzip
 import json
 import os
-import subprocess
-import sys
-import tempfile
 import unittest
+import zlib
 from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from helpers import ROOT, SLOTFATHER_SRC, frozen_at, slotfather_checkout, timezone
+from helpers import ROOT, frozen_at, timezone
 
 from godfather import app, sources, tui
 from godfather.adapters import slotfather as adapter
 from godfather.views import overview
 
 
-@unittest.skipUnless(slotfather_checkout(), "needs a Slotfather checkout at SLOTFATHER_SRC")
+FIXTURE = ROOT / "tests" / "fixtures" / "parity"
+
+
+def read(name: str) -> Any:
+    path = FIXTURE / name
+    try:
+        if name.endswith(".gz"):
+            with gzip.open(path, "rt", encoding="utf-8") as handle:
+                return json.load(handle)
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, EOFError, zlib.error) as error:
+        raise AssertionError(f"parity fixture {path} unreadable ({error}); it is frozen from Slotfather 37c4df7, "
+                             f"see {FIXTURE / 'README.md'}") from error
+
+
 class ParityTests(unittest.TestCase):
     out: Path
     frames: dict[str, str]
@@ -36,21 +49,12 @@ class ParityTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.tmp = tempfile.TemporaryDirectory()
-        cls.out = Path(cls.tmp.name)
-        environ = {key: value for key, value in os.environ.items()
-                   if not key.startswith(("SLOTFATHER_", "GODFATHER_", "COLORFGBG", "NO_COLOR"))}
-        environ["SLOTFATHER_SRC"] = str(SLOTFATHER_SRC)
-        subprocess.run([sys.executable, str(ROOT / "tests" / "parity_reference.py"), str(cls.out)], check=True,
-                       env=environ, cwd=cls.tmp.name, capture_output=True, text=True)
-        cls.frames = json.loads((cls.out / "frames.json").read_text())
-        cls.cells = json.loads((cls.out / "cells.json").read_text())
-        cls.help = json.loads((cls.out / "help.json").read_text())
-        cls.scene = json.loads((cls.out / "scene.json").read_text())
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        cls.tmp.cleanup()
+        cls.out = FIXTURE
+        cls.frames = read("frames.json.gz")
+        cls.cells = read("cells.json.gz")
+        cls.help = read("help.json")
+        cls.scene = read("scene.json")
+        read("slotfather/replies.json")
 
     def setUp(self) -> None:
         keep = {key: value for key, value in os.environ.items()

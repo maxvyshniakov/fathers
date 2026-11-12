@@ -1,6 +1,7 @@
-"""Slotfather's side of the parity test, run in a subprocess with a Slotfather checkout on sys.path.
+"""Writes the parity test's frozen fixture, tests/fixtures/parity/, from Slotfather 37c4df7 (see the README there).
 
-    SLOTFATHER_SRC=~/slotfather/src python3 tests/parity_reference.py OUT
+    mkdir DIR && git -C ~/slotfather archive 37c4df7 | tar -x -C DIR
+    SLOTFATHER_SRC=DIR/src python3 tests/parity_reference.py OUT
 
 Loads Slotfather's own demo scene (tools/dashboard-demo.py, frozen at its moment), renders it with Slotfather's
 in-tree dashboard at every size the test compares, and writes, from that same model:
@@ -19,11 +20,11 @@ import importlib.util
 import json
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = Path(os.path.expanduser(os.environ.get("SLOTFATHER_SRC") or "~/slotfather/src")).resolve()
 SIZES = ((156, 43), (176, 50), (120, 40), (100, 40), (82, 30), (60, 24), (40, 12))
 
 
@@ -36,11 +37,18 @@ def load(path: Path, name: str):
 
 
 def main(out: Path) -> int:
+    for key in [key for key in os.environ if key.startswith(("SLOTFATHER_", "GODFATHER_", "COLORFGBG", "NO_COLOR"))
+                and key != "SLOTFATHER_SRC"]:
+        del os.environ[key]  # the theme and settings come from the scene, never this shell
+    out = out.resolve()
+    os.chdir(tempfile.mkdtemp())
     os.environ["TZ"] = "Etc/GMT-2"
     time.tzset()
-    sys.path.insert(0, str(SOURCE))
-    demo = load(SOURCE.parent / "tools" / "dashboard-demo.py", "slotfather_demo")
     reference = load(ROOT / "tools" / "slotfather_reference.py", "slotfather_reference")
+    reference.checkout(reference.SOURCE)
+    source = Path(reference.SOURCE).resolve()
+    sys.path.insert(0, str(source))
+    demo = load(source.parent / "tools" / "dashboard-demo.py", "slotfather_demo")
     dashboard, model = demo.load_scene(advance=False)
     dashboard.set_theme(dashboard._theme.from_environment(environ=dict(os.environ)))
     frames: dict[str, str] = {}
