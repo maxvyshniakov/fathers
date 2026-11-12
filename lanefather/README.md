@@ -13,7 +13,7 @@ and keeps its evidence outside the disposable worktrees.
 | --- | --- |
 | Parallel tasks unexpectedly edit the same files | Lanes declare path claims and dependencies; registration checks conflicts, and checking widens claims to the actual diff. |
 | A task says “tests passed” but its code changed afterwards | A verification receipt identifies the committed tree and configured check results. |
-| Every task reruns everything while integration keeps moving | Lane checks, post-merge verification and the batch gate have distinct evidence and reuse rules; a result belongs to a tree and a plan, so a tree already verified with a plan is not checked again ([results](docs/results.md)). |
+| Every task reruns everything while integration keeps moving | Lane checks, post-merge verification and the batch gate have distinct evidence and reuse rules; a result belongs to a tree and a plan, so a tree already verified with a plan on a platform is not checked again there ([results](docs/results.md)). |
 | Several agents push or move shared branches at once | Landing and promotion use a shared lock; an optional reference-transaction hook guards agent updates to `dev` and `main`. |
 | Finished work leaves branches, processes and build folders behind | `done` and conservative `gc` check ownership, merge state and worktree use before cleanup. |
 

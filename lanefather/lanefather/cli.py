@@ -226,6 +226,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--status", help="with record: green or red for --full, passed or failed for --checks")
     p.add_argument("--source", default="manual", help="with record: who produced the result (external:SOURCE)")
     p.add_argument("--receipt", help="with record: the report or run that holds the result")
+    p.add_argument("--platform", help="the platform the result is for, <os>-<arch> such as linux-x64 (default: this "
+                                      "host's); a result stands only for its own platform")
     p.add_argument("--json", action="store_true")
     p.set_defaults(run=results.command)
     p = commands.add_parser("stats", help="per-check durations (p50, p90), red runs and flakes from the run history")

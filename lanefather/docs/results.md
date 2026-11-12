@@ -1,7 +1,8 @@
 # Results by tree and plan
 
-A check result belongs to a **tree and a plan**, not to a branch or a commit (owner rule, fathers#91). When the
-same tree has already passed the same plan anywhere on this machine, Lanefather does not run it again: `check`,
+A check result belongs to a **tree and a plan**, not to a branch or a commit (owner rule, fathers#91), and a plan
+names the **platform** it runs on: a tree counts as verified only for the OS and architecture it was checked on
+(owner decision 2026-11-13). When the same tree has already passed the same plan on this platform, Lanefather does not run it again: `check`,
 the post-merge smoke of `land` and the batch gate of `promote` look the key up before they run, and each reused
 result names where it came from.
 
@@ -13,7 +14,8 @@ This page is the interface other tools build on: Repo-Kit's pre-push gate and CI
 | Part | Value |
 | --- | --- |
 | tree | `git rev-parse <commit>^{tree}` |
-| env | `sha256` of `{"toolchain": T, "v": 1}` as canonical JSON (sorted keys, no spaces); `T` is the resolution of the project's `toolchain` command, or `null` when the project pins none |
+| platform | `<os>-<arch>` in Node's names (`process.platform`-`process.arch`): `darwin-arm64`, `linux-x64`. This host's by default (`LANEFATHER_PLATFORM` stands in for it); `--platform` asks for or records another |
+| env | `sha256` of `{"platform": P, "toolchain": T, "v": 1}` as canonical JSON (sorted keys, no spaces); `T` is the resolution of the project's `toolchain` command, or `null` when the project pins none |
 | plan | `sha256` of `{"checks": C, "env": E, "v": 1}` as canonical JSON; `C` is the sorted list of check ids, or the string `"full"` for the full gate |
 
 The tree holds every file a check reads, its configuration (`.lanefather.toml`, the verify adapter, lockfiles)
@@ -22,6 +24,8 @@ included, so a changed configuration is a changed tree. `env` covers what the tr
 - same tree, same plan: reused;
 - same tree, a plan with a check that never ran there: that check runs (`lookup` answers not verified);
 - same tree, another toolchain: nothing is reused;
+- same tree, same plan, another platform: nothing is reused. A green gate on the Mac does not stand for the Linux
+  run, and a second run of the tree on the same platform is still skipped;
 - another tree: nothing is reused by key. (`check` still reuses within a lane, and a smoke reuses a check whose
   inputs the merge did not change; both are the plan's own reasoning, recorded as such.)
 
@@ -48,18 +52,18 @@ toolchain pin, the checkout must pin what `REV` pins; otherwise the command refu
 project's state directory, `<state>/results/<tree>.json`.
 
 ```text
-lanefather results key    REV (--full | --checks A,B) [--json]
-lanefather results lookup REV (--full | --checks A,B) [--json]
+lanefather results key    REV (--full | --checks A,B) [--platform OS-ARCH] [--json]
+lanefather results lookup REV (--full | --checks A,B) [--platform OS-ARCH] [--json]
 lanefather results record REV (--full --status green|red | --checks A=passed,B=failed) --source NAME
-                          [--receipt PATH-OR-URL] [--json]
+                          [--receipt PATH-OR-URL] [--platform OS-ARCH] [--json]
 ```
 
 `key` prints the key and touches no state. `lookup` exits 0 when the plan is verified on the tree, 1 when it
 is not, and 1 with a `lane:` message for an unknown revision. Its `--json` answer, version 1:
 
 ```json
-{"v": 1, "tree": "<40 hex>", "plan": "<64 hex>", "env": "<64 hex>", "verified": true,
- "reason": "the full gate passed on this tree (gate, 2026-11-12T10:00:00Z)",
+{"v": 1, "tree": "<40 hex>", "plan": "<64 hex>", "env": "<64 hex>", "platform": "darwin-arm64", "verified": true,
+ "reason": "the full gate passed on this tree on darwin-arm64 (gate, 2026-11-12T10:00:00Z)",
  "results": {"full": {"checks": {}, "full": true, "status": "green", "source": "gate", "sha": "...",
                       "receipt": "/path/to/promote-1234567890.gate.json", "at": "..."}}}
 ```
@@ -75,15 +79,21 @@ Lanefather produced, under source `external:NAME`; Lanefather's own sources are 
   `lanefather results record <sha> --full --status green --source repo-kit --receipt <report path>`. Record a
   red run too (`--status red`): a newer red result keeps a stale green one from standing.
 - **CI (GitHub-hosted runners)** has no local store. Its equivalent is the commit status or check run of any commit
-  with the same tree: a green run posts its status, and a later run on a commit whose tree matches skips its heavy
-  jobs with a link to it. To compare plans across both worlds, use the same plan string: `--full` is `"full"`,
-  and the toolchain is `null` for a project without a `toolchain` command, so a runner without Lanefather can
+  with the same tree on the same platform: a green run posts its status with the platform in its context, and a
+  later run on that platform, on a commit whose tree matches, skips its heavy jobs with a link to it. To compare
+  plans across both worlds, use the same plan string: `--full` is `"full"`, the toolchain is `null` for a project
+  without a `toolchain` command and the platform is the runner's `<os>-<arch>`, so a runner without Lanefather can
   compute `plan` with `sha256` alone.
-- A plan change (another check selection, another toolchain) gives another `plan`; never reuse across plans.
+- A plan change (another check selection, toolchain or platform) gives another `plan`; never reuse across plans.
 
 ## Compatibility
 
-New after Lanefather 0.1.0 (fathers#91). Older releases neither read nor write `<state>/results/`; a project
+New after Lanefather 0.1.0 (fathers#91). Entries name their `platform` (2026-11-13), and `env` and `plan` hash it;
+the answers of `key` and `lookup` gain `platform`, nothing is removed. An entry an earlier release of this
+interface wrote names no platform and counts for none: a state directory can be shared, so the store cannot tell
+which host wrote it. Each check of such a tree runs once more and records its platform; the older entry stays in
+the file, and an older release still reads its own entries and skips the new ones, whose `env` it does not
+compute. Releases before the interface neither read nor write `<state>/results/`; a project
 pinned to one keeps running every check, and the two can share a state directory. Receipts gain keys
 (`reused_by`, `reused_source`, `reused_receipt`, `reused_lane` and `reused_at` on reused checks; `skipped` on a
 post-merge receipt), none removed. The `v` field changes only with a migration of the store in place.

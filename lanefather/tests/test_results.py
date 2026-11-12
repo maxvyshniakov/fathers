@@ -59,8 +59,8 @@ class ResultKeyTableTests(unittest.TestCase):
         self.assertNotEqual(results.plan_hash(results.FULL), results.plan_hash(["full"]))
         # The documented recipe (docs/results.md): a runner without Lanefather computes the same key.
         import hashlib
-        env = hashlib.sha256(b'{"toolchain":null,"v":1}').hexdigest()
-        self.assertEqual(results.plan_hash(results.FULL),
+        env = hashlib.sha256(b'{"platform":"linux-x64","toolchain":null,"v":1}').hexdigest()
+        self.assertEqual(results.plan_hash(results.FULL, platform="linux-x64"),
                          hashlib.sha256(('{"checks":"full","env":"' + env + '","v":1}').encode()).hexdigest())
 
     def test_a_newer_red_result_hides_an_older_pass_and_a_newer_pass_stands_again(self):
@@ -113,6 +113,103 @@ class ResultKeyTableTests(unittest.TestCase):
         self.assertFalse(results.lookup(TREE_A, ["unit"])["verified"])
         results.record(TREE_A, {"unit": "passed"}, source="check")
         self.assertTrue(results.lookup(TREE_A, ["unit"])["verified"])
+
+
+class PlatformTests(unittest.TestCase):
+    """A tree is verified only for the platform it was checked on (owner decision 2026-11-13): a result from macOS
+    never stands for Linux, and a second run on the same platform is still skipped."""
+
+    def setUp(self):
+        from lanefather import config
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="lane-results-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        patcher = unittest.mock.patch.dict(os.environ, {"LANEFATHER_STATE": str(self.tmp / "state")})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        config.use(config.Config())
+        self.addCleanup(config.use, None)
+
+    def test_the_table(self):
+        from lanefather import results
+        results.record(TREE_A, {"lint": "passed", "unit": "passed"}, source="check", platform="darwin-arm64")
+        results.record(TREE_A, {}, full=True, status="green", source="gate", platform="darwin-arm64")
+        results.record(TREE_B, {}, full=True, status="green", source="gate", platform="linux-x64")
+        rows = [
+            # (tree, plan, platform asking, verified)
+            (TREE_A, ["lint", "unit"], "darwin-arm64", True),    # same platform: the rerun is skipped
+            (TREE_A, ["lint", "unit"], "linux-x64", False),      # a Mac result is not a Linux result
+            (TREE_A, ["lint", "unit"], "darwin-x64", False),     # nor one of another architecture
+            (TREE_A, results.FULL, "darwin-arm64", True),
+            (TREE_A, results.FULL, "linux-x64", False),
+            (TREE_B, results.FULL, "linux-x64", True),           # a Linux result stands for Linux
+            (TREE_B, results.FULL, "darwin-arm64", False),       # and not for the Mac
+        ]
+        for tree, plan, platform, verified in rows:
+            with self.subTest(tree=tree[:1], plan=plan, platform=platform):
+                answer = results.lookup(tree, plan, platform=platform)
+                self.assertEqual(answer["verified"], verified, answer["reason"])
+                self.assertEqual(answer["platform"], platform)
+                if plan != results.FULL:
+                    self.assertEqual(set(results.passed(tree, platform=platform)), set(plan) if verified else set())
+
+    def test_the_plan_key_names_the_platform(self):
+        from lanefather import results
+        self.assertNotEqual(results.plan_hash(["a"], platform="darwin-arm64"),
+                            results.plan_hash(["a"], platform="linux-x64"))
+        self.assertNotEqual(results.env_hash(None, "linux-x64"), results.env_hash(None, "linux-arm64"))
+        entry = results.record(TREE_A, {"a": "passed"}, source="check", platform="linux-x64")
+        self.assertEqual((entry["platform"], entry["plan"]), ("linux-x64", results.plan_hash(["a"],
+                                                                                              platform="linux-x64")))
+
+    def test_the_host_platform_is_its_os_and_architecture_and_the_default(self):
+        from lanefather import results
+        rows = [("Darwin", "arm64", "darwin-arm64"), ("Linux", "x86_64", "linux-x64"), ("Linux", "aarch64", "linux-arm64"),
+                ("Linux", "AMD64", "linux-x64"), ("Windows", "AMD64", "win32-x64")]
+        for system, machine, expected in rows:
+            with self.subTest(system=system, machine=machine), \
+                    unittest.mock.patch("platform.system", return_value=system), \
+                    unittest.mock.patch("platform.machine", return_value=machine):
+                self.assertEqual(results.host_platform(), expected)
+        with unittest.mock.patch.dict(os.environ, {"LANEFATHER_PLATFORM": "linux-x64"}):
+            self.assertEqual(results.host_platform(), "linux-x64")
+            results.record(TREE_A, {"a": "passed"}, source="check")
+            self.assertTrue(results.lookup(TREE_A, ["a"])["verified"])
+        with unittest.mock.patch.dict(os.environ, {"LANEFATHER_PLATFORM": "darwin-arm64"}):
+            self.assertFalse(results.lookup(TREE_A, ["a"])["verified"])
+        with unittest.mock.patch.dict(os.environ, {"LANEFATHER_PLATFORM": "Linux x64"}), \
+                self.assertRaises(ValueError):
+            results.host_platform()
+
+    def test_an_entry_without_a_platform_matches_no_platform(self):
+        """An older release's entry names no platform, and the store cannot tell which host wrote it: the state
+        directory may be shared, so it counts as no match, and the check runs once more."""
+        import hashlib
+
+        from lanefather import results, state
+        legacy_env = hashlib.sha256(b'{"toolchain":null,"v":1}').hexdigest()
+        legacy = {"checks": {"unit": "passed"}, "full": False, "env": legacy_env, "plan": "p" * 64, "status": "green",
+                  "source": "check", "at": "2026-11-12T10:00:00Z"}
+        legacy_full = dict(legacy, checks={}, full=True)
+        state.write_json(results.path_for(TREE_A), {"v": 1, "tree": TREE_A, "entries": [legacy, legacy_full]})
+        for platform in ("darwin-arm64", "linux-x64"):
+            with self.subTest(platform=platform):
+                self.assertFalse(results.lookup(TREE_A, ["unit"], platform=platform)["verified"])
+                self.assertFalse(results.lookup(TREE_A, results.FULL, platform=platform)["verified"])
+                self.assertEqual(results.passed(TREE_A, platform=platform), {})
+        # A new entry beside it is read, and the file keeps the older entry for the older release.
+        results.record(TREE_A, {"unit": "passed"}, source="check", platform="linux-x64")
+        self.assertTrue(results.lookup(TREE_A, ["unit"], platform="linux-x64")["verified"])
+        self.assertEqual(len(results.entries(TREE_A)), 3)
+
+    def test_an_entry_whose_platform_and_environment_disagree_is_not_trusted(self):
+        """A hand-edited or foreign entry naming one platform under another platform's environment counts for
+        neither."""
+        from lanefather import results, state
+        forged = {"checks": {"unit": "passed"}, "full": False, "env": results.env_hash(None, "darwin-arm64"),
+                  "platform": "linux-x64", "plan": "p" * 64, "status": "green", "source": "check", "at": "x"}
+        state.write_json(results.path_for(TREE_A), {"v": 1, "tree": TREE_A, "entries": [forged]})
+        self.assertFalse(results.lookup(TREE_A, ["unit"], platform="linux-x64")["verified"])
+        self.assertFalse(results.lookup(TREE_A, ["unit"], platform="darwin-arm64")["verified"])
 
 
 class TreeReuseTests(LaneCase):
@@ -239,6 +336,17 @@ class TreeReuseTests(LaneCase):
         self.assertEqual((full["verified"], full["plan"]), (True, key["plan"]))
         self.assertEqual(full["results"]["full"]["source"], "external:repo-kit")
         self.assertIn("give exactly one of --full or --checks", self.lane("results", "lookup", head, ok=False))
+        # Another platform asks: the same tree and plan are not verified there; it records its own result.
+        linux = json.loads(self.lane("results", "lookup", head, "--full", "--platform", "linux-x64", "--json",
+                                     ok=False))
+        self.assertEqual((linux["verified"], linux["platform"]), (False, "linux-x64"))
+        self.assertNotEqual(linux["plan"], key["plan"])
+        self.assertEqual(full["platform"], key["platform"])
+        self.lane("results", "record", head, "--full", "--status", "green", "--source", "ci", "--platform", "linux-x64")
+        self.assertTrue(json.loads(self.lane("results", "lookup", head, "--full", "--platform", "linux-x64",
+                                             "--json"))["verified"])
+        self.assertIn("not a platform", self.lane("results", "lookup", head, "--full", "--platform", "Linux",
+                                                  ok=False))
 
 
 if __name__ == "__main__":

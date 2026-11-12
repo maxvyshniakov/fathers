@@ -8,6 +8,12 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- A check result stands only for the platform it ran on (owner decision 2026-11-13): the results store's entries
+  name their `platform` (`<os>-<arch>`, such as `darwin-arm64` or `linux-x64`), its `env` and `plan` hash it, and a
+  lookup from another platform reuses nothing, so a green gate on the Mac never skips the Linux run, while a second
+  run of the tree on the same platform is still skipped. `lanefather results key|lookup|record --platform` asks
+  for or records another platform; `LANEFATHER_PLATFORM` stands in for the host's. An entry an earlier release
+  wrote names no platform and matches none: its checks run once more ([docs/results.md](docs/results.md)).
 - Check results belong to a tree and a plan (fathers#91): `check`, the post-merge smoke and the batch gate record
   each result in `<state>/results/<tree>.json`, and a check that already passed on the same tree under the same
   toolchain, in any lane, is not run again; the receipt and the output name the run that stands for it. `promote`
