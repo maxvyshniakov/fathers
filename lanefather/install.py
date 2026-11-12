@@ -99,8 +99,10 @@ def install(share: Path, bin_dir: Path, python: str) -> Path:
     shutil.copytree(SOURCE / "lanefather", pending / "lanefather",
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     shutil.copytree(SOURCE / "hooks", pending / "hooks")
-    # `lanefather changelog --json` reads the release's own changelog (fathers#104).
-    shutil.copy2(SOURCE / "CHANGELOG.md", pending / "lanefather" / "CHANGELOG.md")
+    # `lanefather changelog --json` reads the release's own changelog (fathers#104); a source without one ships none
+    # and the command answers source null.
+    if (SOURCE / "CHANGELOG.md").is_file():
+        shutil.copy2(SOURCE / "CHANGELOG.md", pending / "lanefather" / "CHANGELOG.md")
     (pending / "lanefather" / "COMMIT").write_text(built + "\n")
     files = shipping_files(pending)
     manifest = {"v": 1, "commit": built, "files": files, "sha256": payload_digest(files)}
