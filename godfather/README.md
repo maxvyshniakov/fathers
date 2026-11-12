@@ -11,8 +11,8 @@ processes agents start).
 </picture>
 
 **Status: 0.1.0.** The main screen is Slotfather's dashboard, moved here with no visible change but the footer:
-`Godfather · what's new?` (`v` or a click) opens every tool's installed version and one timeline of their
-changelogs. Lanes, processes, the merged event feed and row actions come in the next slices of
+`Godfather  what's new?` (`v` or a click) opens one timeline of every tool's changelog, an install from main's
+unreleased entries included. Lanes, processes, the merged event feed and row actions come in the next slices of
 [SPEC.md](SPEC.md), each as its tool supports the contract.
 
 ## Install and run

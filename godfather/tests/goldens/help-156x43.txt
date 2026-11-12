@@ -11,7 +11,7 @@
 │                                       │    wheel       scroll the panel under the pointer                       ┃│                                       │
 │  ⏸️    prof51                         │    s           settings                                                 ┃│ight/.claude/worktrees/agent-afa3816b  │
 │  ⏸️    lane-555-host-rename-names     │    ?           help                                                     ┃│2                                      │
-│                                       │    v           what's new (or click Godfather · what's new?)            ┃│ight/.claude/worktrees/agent-afa3816b  │
+│                                       │    v           what's new (or click Godfather  what's new?)             ┃│ight/.claude/worktrees/agent-afa3816b  │
 ╰───────────────────────────────────────│    esc         close an overlay                                         ┃│2/verify.sh --checks desktop-tests     │
 ╭─ EVENTS ──── slots ─ label ───────────│    q           quit                                                     ┃│oing --jobs 1                          │
 │                                       │    shift+drag  select text                                               │ight                                   │
@@ -40,4 +40,4 @@
 │  11:48:31    ▪▪      data-grid        │                                                                          │░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                                       │                      ↑↓ scroll   esc close   q quit                  36% │          −80s     avg 4.4/6      now  │
 ╰───────────────────────────────────────╰──────────────────────────────────────────────────────────────────────────╯───────────────────────────────────────╯
- Godfather · what's new?                           ↑↓ select   tab panel   s settings   ? help   q quit                            updated 11:59:39  ● live
+ Godfather  what's new?                            ↑↓ select   tab panel   s settings   ? help   q quit                            updated 11:59:39  ● live

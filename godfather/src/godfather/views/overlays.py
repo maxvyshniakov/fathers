@@ -43,7 +43,7 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
         ("wheel", "scroll the panel under the pointer"),
         ("s", "settings"),
         ("?", "help"),
-        ("v", "what's new (or click Godfather · what's new?)"),
+        ("v", "what's new (or click Godfather  what's new?)"),
         ("esc", "close an overlay"),
         ("q", "quit"),
         ("shift+drag", "select text"),
@@ -141,15 +141,12 @@ def help_lines(width: int) -> list[Line]:
     return lines
 
 
-# What's new (fathers#102): the installed versions, then one timeline of every tool's releases, newest first, or one
+# What's new (fathers#102): one timeline of every tool's entries, Unreleased ones included, newest first, or one
 # tool's (its filter). Owner's layout of 2026-11-12: one left column for the release title, the section heading and
 # the bullet; wrapped lines hang two cells in; a ticket reference dimmed at the bullet's end.
 
 TEXT_MOST = 72  # the text's most cells, in any overlay width
 REFERENCE = re.compile(r"\s*\(((?:[\w.-]+)?#\d+(?:,\s*(?:[\w.-]+)?#\d+)*)\)(\.?)\s*$")
-UNRELEASED = "not released yet"
-INSTALLED_STATES = {"stale": ("↻ restart to update", "warn"), "absent": ("not installed", "dim"),
-                    "failed": ("no answer", "bad"), "reading": ("…", "dim")}
 
 
 def reference(text: str) -> tuple[str, str]:
@@ -187,63 +184,46 @@ def sections(lines: list[Line], items: list[_news.Item], width: int) -> None:
         bullet(lines, item.text, width)
 
 
-def installed_lines(news: _news.News) -> list[Line]:
-    """The versions: one row per tool, a stale or old one highlighted with what to do."""
-    column = max(text_width(_news.title(row.tool)) for row in news.installed) + 2 if news.installed else 0
-    lines: list[Line] = []
-    for row in news.installed:
-        name = _news.title(row.tool)
-        line: Line = [(name, "bold"), (" " * (column - text_width(name)), "text")]
-        if row.version:
-            line.append((row.version, "text"))
-        if row.state == "versions":
-            line.append((f"  versions only — update {name}", "warn"))
-        elif row.state in INSTALLED_STATES:
-            note, style = INSTALLED_STATES[row.state]
-            if row.state == "failed" and row.problem:
-                note = f"no answer ({row.problem})"
-            line.append((("  " if row.version else "") + note, style))
-        lines.append(line)
-    return lines
-
-
 def filters(news: _news.News) -> list[str]:
     """The overlay's filters: all, then each tool with entries, in TOOLS order."""
     tools: set[str] = {item.tool for item in news.items}
-    if news.unreleased:
-        tools.add("godfather")
     return ["all", *(tool for tool in _news.TOOLS if tool in tools)]
 
 
 def news_lines(width: int, news: _news.News, read: Optional[_news.Read] = None, tool: str = "all") -> list[Line]:
-    """What's new at `width` (at most TEXT_MOST): the versions, then the releases of every tool or of `tool`, newest
-    first, each titled `Tool version · date`, `installed` on the one installed and `new` on one with unread entries;
-    a single tool's view starts with its Unreleased entries, if any, under `not released yet`."""
+    """What's new at `width` (at most TEXT_MOST): one timeline (fathers#102: no versions block; a stale install is
+    the footer's ↻), the releases of every tool or of `tool`, newest first, each titled `Tool version · date`, an
+    install from main's Unreleased entries `Tool · unreleased · installed <commit>`; `installed` marks what is
+    installed (the Unreleased entries where a tool has them) and `new` a release with unread entries."""
     width = min(width, TEXT_MOST)
     read = {} if read is None else read
-    lines = installed_lines(news)
+    lines: list[Line] = []
     versions = {row.tool: row.version for row in news.installed}
     unread = set(_news.unread(news, read))
     items = [item for item in news.items if tool in ("all", item.tool)]
-    if tool == "godfather" and news.unreleased:
-        add_heading(lines, [(UNRELEASED, "dim")])
-        del lines[-1]  # sections() puts the one blank line after the title
-        sections(lines, list(news.unreleased), width)
+    from_main = {item.tool for item in items if item.unreleased}
     releases: dict[tuple[str, str], list[_news.Item]] = {}
     for item in items:
         releases.setdefault((item.tool, item.version), []).append(item)
     for (name, version), entries in releases.items():
-        title: Line = [(_news.title(name) + " ", "text"), (version, "bold")]
-        if entries[0].date:
-            title += [(" · ", "dim"), (entries[0].date, "dim")]
-        if versions.get(name) == version:
-            title += [(" · ", "dim"), ("installed", "accent")]
+        first = entries[0]
+        if first.unreleased:
+            title: Line = [(_news.title(name), "text"), (" · ", "dim"), ("unreleased", "bold")]
+            if first.date:
+                title += [(" · ", "dim"), (first.date, "dim")]
+            title += [(" · ", "dim"), ("installed" + (f" {first.commit}" if first.commit else ""), "accent")]
+        else:
+            title = [(_news.title(name) + " ", "text"), (version, "bold")]
+            if first.date:
+                title += [(" · ", "dim"), (first.date, "dim")]
+            if versions.get(name) == version and name not in from_main:
+                title += [(" · ", "dim"), ("installed", "accent")]
         if any(entry in unread for entry in entries):
             title += [(" · ", "dim"), ("new", "ok")]
         add_heading(lines, title)
         del lines[-1]  # sections() puts the one blank line after the title
         sections(lines, entries, width)
-    if not items and not (tool == "godfather" and news.unreleased):
+    if not items:
         add_heading(lines, [("Nothing in the changelogs yet.", "dim")])
         del lines[-1]
     return lines
@@ -319,14 +299,23 @@ def draw_overlay(canvas: Canvas, kind: str, offset: int = 0, tab: int = 0, news:
 
 
 def filters_border(panel: Panel, shown: list[str], tab: int) -> None:
-    """With more than one filter, their names in the top border, the shown one bright; ←/→ switch them."""
+    """With more than one filter, their names in the top border, the shown one bright; ←/→ or a click switch them.
+    Each name's cells, as drawn, go to Canvas.filter_hits: the one registry clicks are tested against."""
     if len(shown) < 2:
         return
     current = tab % len(shown)
     parts: list[Part] = []
     for index, name in enumerate(shown):
         parts += ([(" · ", "dim")] if index else []) + [(_news.title(name), "title" if index == current else "dim")]
-    panel.border(parts, "WHAT'S NEW", margin=3)
+    at = panel.border(parts, "WHAT'S NEW", margin=3)
+    if at is None:
+        return
+    x = at + 1  # border() pads the parts with a space
+    for index, name in enumerate(shown):
+        x += text_width(" · ") if index else 0
+        end = x + text_width(_news.title(name))
+        panel.canvas.filter_hits.append((panel.rect[0], x, end, index))
+        x = end
 
 
 def draw_help(canvas: Canvas, offset: int = 0) -> None:

@@ -14,7 +14,8 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   quit), and the hourly sweep reports booted simulators, running containers and serve routes no one owns, without
   stopping them.
 - `junkfather changelog --json [--since VERSION]` gives the installed release's changelog entries, newest first, for
-  Godfather's what's new.
+  Godfather's what's new; the Unreleased ones come first, with no version and the installed commit, because an
+  install from main is what they describe.
 
 ### Changed
 

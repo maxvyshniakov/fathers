@@ -391,6 +391,57 @@ class WhatsNewTests(Case):
         state, _ = self.send(state, self.tool.NewsLoaded(news.News((), ())))
         self.assertEqual(0, state.overlay.tab, "gone: back to all")
 
+    def opened(self) -> tuple[Any, Any]:
+        """What's new open over the overview, drawn: the state and the canvas it drew."""
+        state = dataclasses.replace(self.screen(), news=self.news())
+        state, _ = self.keys(state, "v")
+        canvas = self.tool.Canvas(156, 43)
+        self.tool.render(canvas, state, 0.0)
+        state, _ = self.tool.reduce(state, self.tool.Drawn(helpers.frame_of(canvas)), 0.0)
+        return state, canvas
+
+    def test_the_filters_hit_test_is_the_cells_each_name_was_drawn_in(self) -> None:
+        state, canvas = self.opened()
+        row = canvas.help_view.y
+        line = "".join(cell[0] for cell in canvas.cells[row])
+        labels = ["All", "Slotfather", "Junkfather"]
+        start = line.index(" · ".join(labels))
+        expected: list[tuple[int, int, int, int]] = []
+        x = start
+        for tab, label in enumerate(labels):
+            expected.append((row, x, x + len(label), tab))
+            x += len(label) + len(" · ")
+        self.assertEqual(tuple(expected), state.frame.filters, "from the drawing, not recomputed")
+        for _, begin, end, tab in expected:
+            self.assertEqual([tab] * (end - begin), [state.frame.filter_at(x, row) for x in range(begin, end)])
+        between = [state.frame.filter_at(x, row) for x in (start - 1, start + len("All") + 1, x - len(" · ") + 1)]
+        self.assertEqual([None, None, None], between, "the space and the separators are not targets")
+        self.assertIsNone(state.frame.filter_at(start, row + 1), "only the border row")
+
+    def test_a_click_on_a_filter_shows_that_tool_as_the_arrows_do(self) -> None:
+        state, canvas = self.opened()
+        state, _ = self.keys(state, "j")
+        clicks: list[Any] = []
+        filters: tuple[tuple[int, int, int, int], ...] = state.frame.filters
+        for _, _, end, tab in filters[::-1]:
+            clicked, effects = self.send(state, self.tool.Mouse(0, end - 1, canvas.help_view.y, True))
+            self.assertEqual([], effects, "a filter click neither closes nor saves")
+            clicks.append(clicked.overlay)
+            arrows, _ = self.keys(state, *(["right"] * tab)) if tab else (dataclasses.replace(
+                state, overlay=self.tool.Changelog(0)), [])
+            self.assertEqual(arrows.overlay, clicked.overlay, "the same as ←→, from the filter's top")
+        self.assertEqual([self.tool.Changelog(2), self.tool.Changelog(1), self.tool.Changelog(0)], clicks)
+        released, _ = self.send(state, self.tool.Mouse(0, filters[1][1], canvas.help_view.y, False))
+        self.assertEqual(state.overlay, released.overlay, "a release does nothing")
+
+    def test_a_click_on_the_footers_whats_new_opens_it(self) -> None:
+        state = dataclasses.replace(self.screen(), news=self.news())
+        row, begin, end = state.frame.version_at
+        self.assertEqual((42, 1, 1 + len("Godfather  what's new?")), (row, begin, end))
+        for x in (begin, end - 1):
+            opened, effects = self.send(state, self.tool.Mouse(0, x, row, True))
+            self.assertEqual((self.tool.Changelog(), ["load-news"]), (opened.overlay, effects))
+
     def test_a_click_outside_closes_and_marks_read_too(self) -> None:
         state = dataclasses.replace(self.screen(), news=self.news())
         state, _ = self.keys(state, "v")

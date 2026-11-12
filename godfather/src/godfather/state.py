@@ -97,9 +97,14 @@ class Frame:
     version_at: Optional[tuple[int, int, int]] = None
     hints: tuple[tuple[int, int, int, str], ...] = ()
     order: tuple[str, ...] = ("requests",)  # Tab's order, as layout.overview() placed the panels
+    filters: tuple[tuple[int, int, int, int], ...] = ()  # what's new's tool filters: (row, from, to, tab)
 
     def hint_at(self, x: int, y: int) -> Optional[str]:
         return next((press for row, start, end, press in reversed(self.hints) if row == y and start <= x < end), None)
+
+    def filter_at(self, x: int, y: int) -> Optional[int]:
+        """The tool filter a click in what's new's top border lands on, None between them."""
+        return next((tab for row, start, end, tab in self.filters if row == y and start <= x < end), None)
 
 
 @dataclass(frozen=True)
@@ -222,7 +227,7 @@ def overlay_box(state: AppState, overlay: Union[Help, Changelog]) -> OverlayView
 
 
 def unread(state: AppState) -> bool:
-    """Any tool has entries not read yet: the footer's what's new is in the accent colour."""
+    """Any tool has entries not read yet: the footer's what's new? is in the text colour, not muted."""
     return bool(_news.unread(state.news, state.read))
 
 

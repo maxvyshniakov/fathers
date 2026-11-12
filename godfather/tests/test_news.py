@@ -81,7 +81,7 @@ class ToolTests(Fixtures):
 
 
 class TimelineTests(Fixtures):
-    def test_one_timeline_newest_first_godfather_own_unreleased_apart(self) -> None:
+    def test_one_timeline_newest_first_unreleased_on_top(self) -> None:
         (self.root / "slotfather").mkdir()
         (self.root / "slotfather" / "replies.json").write_text(json.dumps({"changelog --json": changelog(
             "slotfather", "0.2.0", [("0.2.0", "2026-11-12", "Added", "s2"), ("0.1.0", "2026-11-01", "Added", "s1")])}))
@@ -91,26 +91,80 @@ class TimelineTests(Fixtures):
         found = news.load(OWN, stale=True)
         self.assertEqual(["godfather", "slotfather", "lanefather", "junkfather"], [r.tool for r in found.installed])
         self.assertEqual(["stale", "ok", "absent", "ok"], [r.state for r in found.installed])
-        self.assertEqual([("godfather", "0.1.0", "godfather opens the dashboard."), ("slotfather", "0.2.0", "s2"),
+        self.assertEqual([("godfather", "", "Not out yet (fathers#17)."),
+                          ("godfather", "0.1.0", "godfather opens the dashboard."), ("slotfather", "0.2.0", "s2"),
                           ("junkfather", "0.1.0", "j1"), ("slotfather", "0.1.0", "s1")],
-                         [(i.tool, i.version, i.text) for i in found.items], "by date, a date's tools in order")
-        self.assertEqual([news.Item("godfather", "", "", "Fixed", "Not out yet (fathers#17).")], list(found.unreleased))
+                         [(i.tool, i.version, i.text) for i in found.items],
+                         "Unreleased without an install date on top, then by date, a date's tools in order")
+        own = found.items[0]
+        self.assertTrue(own.unreleased)
+        self.assertEqual(("", "0.1.0"), (own.date, own.base), "the installed version it is built on")
+
+    def test_a_tools_unreleased_entries_carry_the_installed_commit_and_sort_by_install_date(self) -> None:
+        reply = {"v": 1, "tool": "slotfather", "version": "0.1.0", "source": None, "entries": [
+            {"version": None, "unreleased": True, "date": None, "source": "81abd86c0ffee0", "section": "Added",
+             "text": "`status --json`."},
+            {"version": None, "unreleased": True, "date": "2026-11-10", "section": "Fixed", "text": "dated."},
+            {"version": None, "unreleased": True, "section": "Fixed"},
+            {"version": "0.1.0", "unreleased": True, "section": "Fixed", "text": "a version too: not the contract"},
+            {"version": "0.1.0", "date": "2026-11-01", "section": "Added", "text": "s1"}]}
+        found = news.from_reply("slotfather", reply)
+        assert found is not None
+        self.assertEqual([news.Item("slotfather", "", "", "Added", "status --json.", "81abd86", "0.1.0"),
+                          news.Item("slotfather", "", "2026-11-10", "Fixed", "dated.", "", "0.1.0"),
+                          news.Item("slotfather", "0.1.0", "2026-11-01", "Added", "s1")], found[1])
+        ordered = news.ordered([news.Item("junkfather", "0.2.0", "2026-11-12", "Added", "j"), *found[1]])
+        self.assertEqual(["status --json.", "j", "dated.", "s1"], [i.text for i in ordered],
+                         "no install date: on top; an install date places it among the releases")
 
 
 class ReadTests(Fixtures):
-    NEWS = news.News((), (news.Item("slotfather", "0.2.0", "d", "Added", "a"),
-                          news.Item("slotfather", "0.10.0", "d", "Added", "b"),
+    NEWS = news.News((), (news.Item("slotfather", "0.10.0", "d", "Added", "b"),
+                          news.Item("slotfather", "0.2.0", "d", "Added", "a"),
                           news.Item("junkfather", "0.1.0", "d", "Added", "c")))
 
     def test_unread_is_newer_than_the_tools_read_version_all_without_one(self) -> None:
         self.assertEqual(3, len(news.unread(self.NEWS, {})))
         self.assertEqual(["b", "c"], [i.text for i in news.unread(self.NEWS, {"slotfather": "0.9.0"})])
+        self.assertEqual(["b", "c"], [i.text for i in news.unread(self.NEWS, {"slotfather": "0.2.0"})])
         self.assertEqual([], news.unread(None, {}))
 
     def test_marking_read_takes_each_tools_newest_and_keeps_the_rest(self) -> None:
         marked = news.mark_read(self.NEWS, {"lanefather": "0.3.0"})
         self.assertEqual({"slotfather": "0.10.0", "junkfather": "0.1.0", "lanefather": "0.3.0"}, marked)
         self.assertEqual([], news.unread(self.NEWS, marked))
+
+    def test_unreleased_entries_are_read_by_their_install_and_new_again_after_another(self) -> None:
+        def item(commit: str, text: str) -> news.Item:
+            return news.Item("slotfather", "", "", "Added", text, commit, "0.1.0")
+        found = news.News((), (item("81abd86", "u"), news.Item("slotfather", "0.1.0", "d", "Added", "a")))
+        self.assertEqual(["u"], [i.text for i in news.unread(found, {"slotfather": "0.1.0"})])
+        marked = news.mark_read(found, {"slotfather": "0.1.0"})
+        self.assertEqual({"slotfather": "0.1.0+81abd86"}, marked)
+        self.assertEqual([], news.unread(found, marked), "its releases up to the base are read too")
+        later = news.News((), (item("9f600e1", "u"), *found.items[1:]))
+        self.assertEqual(["u"], [i.text for i in news.unread(later, marked)], "another install: new again")
+        self.assertEqual({"slotfather": "0.1.0+9f600e1"}, news.mark_read(later, marked))
+
+    def test_build_versions_order_by_date_then_the_changelogs_order_never_by_the_hash(self) -> None:
+        reply = {"v": 1, "tool": "lanefather", "version": "0.1.0", "source": None, "entries": [
+            {"version": None, "unreleased": True, "date": None, "source": "705018b6a9ffc5a9", "section": "Added",
+             "text": "u"},
+            {"version": "0.1.0+1138486", "date": "2026-11-12", "section": "Added", "text": "b2"},
+            {"version": "0.1.0+7eca44a", "date": "2026-11-11", "section": "Added", "text": "b1"},
+            {"version": "0.1.0+9", "date": "2026-11-11", "section": "Added", "text": "b0"},
+            {"version": "0.1.0", "date": "2026-11-11", "section": "Added", "text": "a"}]}
+        found = news.from_reply("lanefather", reply)
+        assert found is not None
+        items = news.ordered(list(reversed(found[1])))
+        self.assertEqual(["u", "b2", "a", "b0", "b1"], [i.text for i in items],
+                         "a date's releases in the order they are given, not by 7eca44a's or 9's digits")
+        items = news.ordered(found[1])
+        self.assertEqual(["u", "b2", "b1", "b0", "a"], [i.text for i in items])
+        timeline = news.News((), items)
+        self.assertEqual(["u", "b2", "b1"], [i.text for i in news.unread(timeline, {"lanefather": "0.1.0+9"})],
+                         "unread: above the release read in the timeline")
+        self.assertEqual({"lanefather": "0.1.0+705018b"}, news.mark_read(timeline, {}))
 
     def test_the_read_state_round_trips_in_godfathers_state_dir(self) -> None:
         self.assertEqual({}, news.load_read())

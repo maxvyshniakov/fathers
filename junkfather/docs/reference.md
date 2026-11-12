@@ -64,8 +64,10 @@ A command run with `GODFATHER_ACTOR` set carries `via: "godfather"`.
   `processes: null`. It changes nothing.
 - `junkfather changelog --json [--since VERSION]`: the installed release's CHANGELOG.md for Godfather's what's new
   (`godfather/docs/contracts/changelog.md`): `{v: 1, tool: "junkfather", version, source, entries: [{version, date,
-  section, text}]}`, newest first. Unreleased is left out, an entry's continuation lines join it and its markdown
-  stays; `--since` keeps only releases newer than that version. `source` is the file read, `null` (with no entries)
+  section, text}]}`, newest first. The Unreleased entries come first, since installs come from main, as `{version:
+  null, unreleased: true, date: null, source: <installed commit>, section, text}` (`source` is `null` from a
+  checkout); an entry's continuation lines join it and its markdown stays; `--since` keeps only releases newer than
+  that version, and the Unreleased entries. `source` is the file read, `null` (with no entries)
   when the release has none. It reads one file and changes nothing.
 
 ## Ending an entry

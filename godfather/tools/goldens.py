@@ -32,6 +32,7 @@ sys.path.insert(0, str(ROOT / "src"))
 SCENE = ROOT / "tests" / "fixtures" / "scene"
 NEWS = ROOT / "tests" / "fixtures" / "news"
 GOLDENS = ROOT / "tests" / "goldens"
+COMMIT = "9f600e1c0ffee"  # Godfather's own install commit in what's new, so a commit changes no golden
 THEMES = {"seti": ("#111213", "#cacecd"), "prolight": ("#ffffff", "#191919")}  # tools/screens.mjs
 SCREENS = {  # name: (width, height, overlay); what's new's filter after a colon
     "overview-156x43": (156, 43, None), "overview-100x40": (100, 40, None), "overview-76x40": (76, 40, None),
@@ -46,7 +47,8 @@ def scene_news() -> tuple[Any, dict[str, str], dict[str, str]]:
     """What's new as the fixture tools answer it, with everything read, and with Slotfather's newest unread."""
     from godfather import news
 
-    with mock.patch.dict(os.environ, {"GODFATHER_FIXTURES": str(NEWS)}):
+    with mock.patch.dict(os.environ, {"GODFATHER_FIXTURES": str(NEWS)}), \
+            mock.patch("godfather.version.running_identity", return_value={"commit": COMMIT, "version": "0.1.0"}):
         found = news.load((SCENE / "CHANGELOG.md").read_text(), stale=False)
     read = news.mark_read(found, {})
     return found, read, dict(read, slotfather="0.1.0")

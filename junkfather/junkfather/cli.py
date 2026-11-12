@@ -333,13 +333,20 @@ def capabilities(store: Store) -> Dict[str, Any]:
             "dashboard": dashboard}
 
 
+def installed_commit() -> Optional[str]:
+    """The installed release's commit (12 characters), None from a checkout."""
+    found = commit().strip(" ()")
+    return found if found and found != "checkout" else None
+
+
 def changelog_path() -> str:
     return os.path.join(_launch.PACKAGE_ROOT, "CHANGELOG.md")
 
 
 def changelog_command(since: Optional[str]) -> int:
     """Godfather's changelog contract: {v, tool, version, source, entries: [{version, date, section, text}]},
-    newest first, Unreleased left out; no changelog in the release gives no entries and source null."""
+    newest first, the Unreleased entries first with version null, `unreleased` true and the installed commit as
+    their `source`; no changelog in the release gives no entries and source null."""
     if since is not None and not _changelog.valid_version(since):
         raise Usage(f"--since takes a version like 0.1.0, not {since!r}")
     path = changelog_path()
@@ -350,7 +357,7 @@ def changelog_command(since: Optional[str]) -> int:
     except (OSError, UnicodeDecodeError):
         text, source = "", None
     print(json.dumps({"v": 1, "tool": "junkfather", "version": __version__, "source": source,
-                      "entries": _changelog.entries(text, since)}, sort_keys=True))
+                      "entries": _changelog.entries(text, since, installed_commit())}, sort_keys=True))
     return 0
 
 

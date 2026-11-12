@@ -124,7 +124,7 @@ class ParityTests(unittest.TestCase):
         ours = {title: [list(entry) for entry in entries] for title, entries in overlays.HELP}
         theirs = {title: entries for title, entries in self.help}
         self.assertEqual(list(theirs), list(ours), "the same sections in the same order")
-        what = ["v", "what's new (or click Godfather · what's new?)"]  # fathers#102: the changelog became what's new
+        what = ["v", "what's new (or click Godfather  what's new?)"]  # fathers#102: the changelog became what's new
         self.assertIn(what, ours["KEYS"])
         ours["KEYS"][ours["KEYS"].index(what)] = ["v", "changelog (or click the version)"]
         snail = ["🐌", "batch: unattended work, after the rest"]  # owner, 2026-11-12: batch is a snail, not a turtle
@@ -148,7 +148,7 @@ class ParityTests(unittest.TestCase):
         hints = "↑↓ select   tab panel   s settings   ? help   q quit"
         self.assertIn(hints, old)
         self.assertIn(hints, new)
-        self.assertTrue(new.startswith(" Godfather · what's new? "), new)  # fathers#102
+        self.assertTrue(new.startswith(" Godfather  what's new? "), new)  # fathers#102
         self.assertEqual(old[old.index("updated"):], new[new.index("updated"):])
 
 

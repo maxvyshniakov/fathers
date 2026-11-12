@@ -125,10 +125,12 @@ def load_scene(advance: bool = False) -> tuple[Any, dict[str, Any]]:
 
 def scene_news(app: Any) -> tuple[Any, dict[str, str]]:
     """What's new from the recorded tool replies, never the real tools or read state: everything read, or with
-    GODFATHER_DEMO_UNREAD=1 Slotfather's newest release unread (the footer in the accent colour)."""
+    GODFATHER_DEMO_UNREAD=1 Slotfather's newest entries unread (the footer's what's new? not muted)."""
     from godfather import news
 
-    with mock.patch.dict(os.environ, {"GODFATHER_FIXTURES": str(NEWS)}):
+    with mock.patch.dict(os.environ, {"GODFATHER_FIXTURES": str(NEWS)}), \
+            mock.patch("godfather.version.running_identity",
+                       return_value={"commit": "9f600e1c0ffee", "version": "0.1.0"}):
         found = news.load(stale=False)
     read = news.mark_read(found, {})
     if os.environ.get("GODFATHER_DEMO_UNREAD"):

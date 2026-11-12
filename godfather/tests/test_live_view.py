@@ -152,14 +152,14 @@ class VersionTests(LiveCase):
         entry(first)
         command = [sys.executable, str(root / "godfather"), "--interval", "0.3"]
         screen = self.start(rows=30, columns=140, argv=command)
-        screen.until(lambda _: "Godfather · what's new? " in screen.rows().get(30, ""), 8, "the footer's what's new")
+        screen.until(lambda _: "Godfather  what's new? " in screen.rows().get(30, ""), 8, "the footer's what's new")
         self.assertNotIn("↻", screen.rows().get(30, ""))
         entry(second)  # a reinstall replaces the entry point; this process keeps its release
         screen.until(lambda _: "what's new? ↻" in screen.rows().get(30, ""), 8, "↻ after the reinstall")
         mark = screen.mark()
         screen.write(b"v")
-        text = screen.receive("WHAT'S NEW", "restart to update", since=mark)
-        self.assertIn("installed", text, "the running release's title")
+        text = screen.receive("WHAT'S NEW", "installed", since=mark)
+        self.assertNotIn("restart to update", text, "fathers#102: the footer's ↻ says it")
         self.assertEqual(0, screen.quit())
 
 

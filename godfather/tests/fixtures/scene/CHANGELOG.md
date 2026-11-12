@@ -6,18 +6,19 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Added
 
-- The footer says `Godfather · what's new?`, in the accent colour while any tool has changelog entries not read
-  yet and muted otherwise; a click or `v` opens what's new: the installed versions of Godfather, Slotfather,
-  Lanefather and Junkfather (a stale one with what to do), then one timeline of every tool's releases, newest
-  first, filtered by tool with ← →. Closing it marks everything read (`~/.local/state/godfather/news.json`). Each
-  tool is asked through its `changelog --json`; one without it shows its version only (fathers#102).
+- The footer says `Godfather  what's new?`, `what's new?` in the text colour while any tool has changelog entries
+  not read yet and muted like the key hints otherwise; a click or `v` opens what's new: one timeline of every
+  tool's changelog, newest first, filtered by tool with ← → or a click on a tool's name. An install from main
+  shows its Unreleased entries, which are what it runs, under `Slotfather · unreleased · installed 81abd86`. Closing it marks
+  everything read (`~/.local/state/godfather/news.json`). Each tool is asked through its `changelog --json`; one
+  without it adds nothing (fathers#102).
 
 ### Changed
 
 - The footer's key hints are centred between its left and right content at every width, and a narrow footer drops
   `tab panel` and `s settings` before `? help` (fathers#102).
 - The changelog overlay became what's new: one left column, caps section headings, ticket references dimmed at
-  the end of an entry; Godfather's own view keeps its unreleased entries under `not released yet` (fathers#102).
+  the end of an entry (fathers#102).
 - The batch priority mark is 🐌 instead of 🐢; the ASCII mark stays `~`.
 
 ### Fixed

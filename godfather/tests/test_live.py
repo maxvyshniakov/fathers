@@ -443,8 +443,9 @@ class WhatsNewLayoutTests(unittest.TestCase):
 
     def news(self) -> Any:
         from godfather import news
-        _, items, unreleased = news.own(self.TEXT, stale=False)
-        return news.News((news.Installed("godfather", "0.1.0", "ok"),), news.ordered(items), tuple(unreleased))
+        _, items = news.own(self.TEXT, stale=False)
+        items = [dataclasses.replace(item, commit="81abd86") if item.unreleased else item for item in items]
+        return news.News((news.Installed("godfather", "0.1.0", "ok"),), news.ordered(items))
 
     def lines(self, width: int, tool_filter: str = "all", read: Any = None) -> list[list[tuple[str, str]]]:
         return tool().news_lines(width, self.news(), read, tool_filter)
@@ -469,34 +470,43 @@ class WhatsNewLayoutTests(unittest.TestCase):
             "• A new thing with code and a link, continued here.  fathers#17", "", "• Second.", "", "FIXED", "",
             "• A long entry that has to wrap because it says a great deal more than",
             "  one line of the overlay can hold at all.  fathers#21", "", "",
-            "Godfather 0.1.0 · 2026-11-11 · installed", "", "REMOVED", "", "• An old key."], text[start:])
+            "Godfather 0.1.0 · 2026-11-11", "", "REMOVED", "", "• An old key."], text[start:])
         self.assertTrue(all(len(line) <= 72 for line in text), "at most 72 cells, even in a wider overlay")
         title = dict((part[0], part[1]) for part in lines[start])
         self.assertEqual(("text", "bold", "dim", "ok"), (title["Godfather "], title["0.2.0"], title["2026-12-01"],
                                                          title["new"]))
-        self.assertEqual("accent", dict(lines[text.index("Godfather 0.1.0 · 2026-11-11 · installed")])["installed"])
+        self.assertEqual(["Godfather · unreleased · installed 81abd86 · new", "", "FIXED", "", "• Not out yet.", "", ""],
+                         text[:start], "an install from main: its Unreleased entries are what is installed")
+        self.assertEqual(("text", "bold", "accent"), tuple(dict(lines[0])[key] for key in
+                                                           ("Godfather", "unreleased", "installed 81abd86")))
         self.assertEqual([("ADDED", "dim")], lines[start + 2], "caps, the dim label colour, not bold")
         bullet = lines[start + 4]
         self.assertEqual(("  fathers#17", "dim"), bullet[-1], "the reference dimmed, two cells after the text")
-        self.assertNotIn("Not out yet.", " ".join(text), "Unreleased stays out of the combined timeline")
         self.assertFalse(any("**" in line or "`" in line or "](" in line for line in text), "no raw markdown")
 
-    def test_godfathers_own_view_starts_with_what_is_not_released_yet(self) -> None:
+    def test_godfathers_own_view_has_the_same_unreleased_header(self) -> None:
         text = ["".join(part[0] for part in parts) for parts in self.lines(70, "godfather")]
-        self.assertEqual(["not released yet", "", "FIXED", "", "• Not out yet.", "", "", "Godfather 0.2.0 · 2026-12-01 · new"],
-                         text[text.index("not released yet"):text.index("not released yet") + 8])
+        self.assertEqual(["Godfather · unreleased · installed 81abd86 · new", "", "FIXED", "", "• Not out yet.", "",
+                          "", "Godfather 0.2.0 · 2026-12-01 · new"], text[:8])
+        self.assertNotIn("not released yet", text)
 
-    def test_the_versions_come_first_a_stale_or_old_one_with_what_to_do(self) -> None:
+    def test_a_release_is_installed_when_the_tool_has_no_unreleased_entries(self) -> None:
+        from godfather import news
+        found = news.News((news.Installed("slotfather", "0.2.0", "ok"),),
+                          (news.Item("slotfather", "0.2.0", "2026-11-12", "Added", "s2"),))
+        text = ["".join(part[0] for part in parts) for parts in tool().news_lines(70, found, {"slotfather": "0.2.0"})]
+        self.assertEqual("Slotfather 0.2.0 · 2026-11-12 · installed", text[0])
+
+    def test_only_the_timeline_no_versions_block_even_for_a_stale_or_old_tool(self) -> None:
         from godfather import news
         found = news.News((news.Installed("godfather", "0.1.0", "stale"), news.Installed("slotfather", "0.2.0", "ok"),
                            news.Installed("lanefather", None, "absent"),
                            news.Installed("junkfather", "0.1.0", "versions"),
                            news.Installed("nofather", None, "failed", "nofather changelog --json exited 1")), ())
         text = ["".join(part[0] for part in parts) for parts in tool().news_lines(70, found)]
-        self.assertEqual(["Godfather   0.1.0  ↻ restart to update", "Slotfather  0.2.0", "Lanefather  not installed",
-                          "Junkfather  0.1.0  versions only — update Junkfather",
-                          "Nofather    no answer (nofather changelog --json exited 1)", "", "",
-                          "Nothing in the changelogs yet."], text)
+        self.assertEqual(["Nothing in the changelogs yet."], text, "fathers#102: a stale install is the footer's ↻")
+        text = ["".join(part[0] for part in parts) for parts in self.lines(200)]
+        self.assertEqual("Godfather · unreleased · installed 81abd86 · new", text[0], "the timeline starts at the top")
 
     def test_whats_new_in_the_footer_is_the_click_target_and_the_dialog_closes(self) -> None:
         view = tool()
@@ -504,7 +514,7 @@ class WhatsNewLayoutTests(unittest.TestCase):
         view.dashboard_draw(canvas, None)
         row, start, end = canvas.version_at
         footer = "".join(cell[0] for cell in canvas.cells[row])
-        self.assertEqual("Godfather · what's new?", footer[start:end])
+        self.assertEqual("Godfather  what's new?", footer[start:end])
         for x in (start, end - 1):
             state, _ = view.reduce(drawn_state(canvas), view.Mouse(0, x, row, True), 0.0)
             self.assertEqual(view.Changelog(), state.overlay, "a click on what's new opens it")

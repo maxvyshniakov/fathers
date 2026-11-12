@@ -66,7 +66,8 @@ def parse_changelog(text: str) -> list[Release]:
 
 
 def version_key(version: str) -> tuple[int, ...]:
-    return tuple(int(part) for part in re.findall(r"\d+", version)) or (-1,)
+    """A version's numbers, its build metadata (`+1138486`, a commit) left out: never ordered by a hash."""
+    return tuple(int(part) for part in re.findall(r"\d+", version.split("+")[0])) or (-1,)
 
 
 def released(version: str) -> bool:
@@ -77,12 +78,25 @@ def released(version: str) -> bool:
 
 @dataclass(frozen=True)
 class Item:
-    """One changelog entry. `version` is empty for Godfather's own Unreleased entries."""
+    """One changelog entry. An Unreleased one (installs come from main, so it is what is installed) has no
+    `version`; its `commit` is the installed commit, `base` the installed version, and `date` the install date or
+    empty."""
     tool: str
     version: str
     date: str
     section: str
     text: str
+    commit: str = ""
+    base: str = ""
+
+    @property
+    def unreleased(self) -> bool:
+        return not self.version
+
+    def token(self) -> str:
+        """What the read state keeps for a tool read up to this entry: its version, or for an Unreleased one the
+        installed version and commit (`0.1.0+81abd86`), so a later install's Unreleased entries are new again."""
+        return f"{self.base}+{self.commit or 'unreleased'}" if self.unreleased else self.version
 
 
 @dataclass(frozen=True)
@@ -98,41 +112,42 @@ class Installed:
 @dataclass(frozen=True)
 class News:
     installed: tuple[Installed, ...]
-    items: tuple[Item, ...]  # every tool's released entries, newest first (date, then TOOLS, then version)
-    unreleased: tuple[Item, ...] = ()  # Godfather's own Unreleased entries, for its single-tool view
+    items: tuple[Item, ...]  # every tool's entries, Unreleased ones too, newest first (ordered())
 
 
 def ordered(items: list[Item]) -> tuple[Item, ...]:
-    """Newest first: by date, a date's tools in TOOLS order, a tool's releases by version; entries keep their order
-    within a release."""
+    """Newest first: by date (an Unreleased entry by its install date, above every dated one without it), a date's
+    tools in TOOLS order, a tool's Unreleased entries above its releases, then the order its changelog gives (newest
+    first), never by version: `0.1.0+1138486` and `0.1.0+7eca44a` differ only by a build hash."""
     rank = {tool: index for index, tool in enumerate(TOOLS)}
     indexed = list(enumerate(items))
-    indexed.sort(key=lambda pair: (pair[1].date, -rank.get(pair[1].tool, len(TOOLS)), version_key(pair[1].version),
-                                   -pair[0]), reverse=True)
+    indexed.sort(key=lambda pair: (pair[1].date or ("~" if pair[1].unreleased else ""),
+                                   -rank.get(pair[1].tool, len(TOOLS)), pair[1].unreleased, -pair[0]), reverse=True)
     return tuple(item for _, item in indexed)
 
 
-def own(text: Optional[str] = None, stale: Optional[bool] = None) -> tuple[Installed, list[Item], list[Item]]:
-    """Godfather's row, its released entries and its Unreleased ones, from its own CHANGELOG.md."""
+def own(text: Optional[str] = None, stale: Optional[bool] = None) -> tuple[Installed, list[Item]]:
+    """Godfather's row and its entries, Unreleased ones too (the running commit's), from its own CHANGELOG.md."""
     text = _version.changelog_text() if text is None else text
     if stale is None:
         installed = _version.installed_source()
         stale = installed is not None and installed != _version.running_source()
+    commit = str(_version.running_identity().get("commit") or "")[:7]
     items: list[Item] = []
-    unreleased: list[Item] = []
     for release in parse_changelog(text):
         for section, entries in release.sections:
             for entry in entries:
                 if released(release.version) and release.date:  # a dated release, as `changelog --json` says
                     items.append(Item("godfather", release.version, release.date, section, entry))
                 elif release.version.lower() == "unreleased":
-                    unreleased.append(Item("godfather", "", "", section, entry))
-    return Installed("godfather", _version.VERSION, "stale" if stale else "ok"), items, unreleased
+                    items.append(Item("godfather", "", "", section, entry, commit, _version.VERSION))
+    return Installed("godfather", _version.VERSION, "stale" if stale else "ok"), items
 
 
 def from_reply(tool: str, value: Any) -> Optional[tuple[str, list[Item]]]:
     """A `changelog --json` reply as (version, entries), or None where it is not the contract: another `v` or tool,
-    no version, entries that are not a list. An entry missing a string field is skipped."""
+    no version, entries that are not a list. An entry missing a string field is skipped; an Unreleased one
+    (`unreleased: true`, `version` null) needs only its section and text, and its `source` is the installed commit."""
     if not isinstance(value, dict):
         return None
     reply = cast(dict[str, Any], value)
@@ -142,6 +157,13 @@ def from_reply(tool: str, value: Any) -> Optional[tuple[str, list[Item]]]:
     items: list[Item] = []
     for entry in cast(list[Any], reply["entries"]):
         found: dict[str, Any] = cast(dict[str, Any], entry) if isinstance(entry, dict) else {}
+        if found.get("unreleased") is True:
+            section, text, date, commit = (found.get(name) for name in ("section", "text", "date", "source"))
+            if found.get("version") is None and isinstance(section, str) and section and isinstance(text, str) \
+                    and text:
+                items.append(Item(tool, "", date if isinstance(date, str) else "", section, plain(text),
+                                  commit[:7] if isinstance(commit, str) else "", str(reply["version"])))
+            continue
         fields: list[Any] = [found.get(name) for name in ("version", "date", "section", "text")]
         if all(isinstance(field, str) and field for field in fields):
             version, date, section, text = cast(list[str], fields)
@@ -170,40 +192,64 @@ def tool(name: str) -> tuple[Installed, list[Item]]:
 
 def load(text: Optional[str] = None, stale: Optional[bool] = None) -> News:
     """Every tool's news, Godfather's first: what the overlay and the footer show."""
-    row, items, unreleased = own(text, stale)
+    row, items = own(text, stale)
     rows = [row]
     for name in TOOLS[1:]:
         found, more = tool(name)
         rows.append(found)
         items += more
-    return News(tuple(rows), ordered(items), tuple(unreleased))
+    return News(tuple(rows), ordered(items))
 
 
 def placeholder(text: Optional[str] = None) -> News:
     """Before the tools have answered: Godfather's own news, the others being read."""
-    row, items, unreleased = own(text, False)
-    return News((row, *(Installed(name, None, "reading") for name in TOOLS[1:])), ordered(items), tuple(unreleased))
+    row, items = own(text, False)
+    return News((row, *(Installed(name, None, "reading") for name in TOOLS[1:])), ordered(items))
 
 
 # Read state
 
-Read = dict[str, str]  # tool: the newest version read
+Read = dict[str, str]  # tool: the newest version read, or `version+commit` once its Unreleased entries were read
+
+
+def read_version(value: str) -> tuple[int, ...]:
+    return version_key(value.split("+")[0])
 
 
 def unread(news: Optional[News], read: Read) -> list[Item]:
-    """The entries newer than their tool's read version; all of a tool's while it has none."""
+    """The entries not read yet; all of a tool's while it has none. An Unreleased entry until its install's token is
+    read; a release above the one read in the timeline (newest first), or by version where the one read is gone."""
     if news is None:
         return []
-    return [item for item in news.items
-            if item.tool not in read or version_key(item.version) > version_key(read[item.tool])]
+    found: list[Item] = []
+    passed: set[str] = set()  # tools whose read release the timeline has reached
+    for item in news.items:
+        value = read.get(item.tool)
+        if value is None:
+            found.append(item)
+        elif item.unreleased:
+            if value != item.token():
+                found.append(item)
+        elif item.version == value or item.tool in passed:
+            passed.add(item.tool)
+        elif any(other.tool == item.tool and other.version == value for other in news.items):
+            found.append(item)  # above the release read
+        elif version_key(item.version) > read_version(value):
+            found.append(item)
+    return found
 
 
 def mark_read(news: Optional[News], read: Read) -> Read:
-    """Every tool read up to its newest entry; a tool with none keeps what it had."""
+    """Every tool read up to its newest entry, its Unreleased ones where it has them; a tool with none keeps what it
+    had."""
     marked = dict(read)
-    for item in news.items if news is not None else ():
-        if item.tool not in marked or version_key(item.version) > version_key(marked[item.tool]):
-            marked[item.tool] = item.version
+    newest: dict[str, Item] = {}
+    for item in news.items if news is not None else ():  # newest first: a tool's first entry, Unreleased above all
+        best = newest.get(item.tool)
+        if best is None or (item.unreleased and not best.unreleased):
+            newest[item.tool] = item
+    for name, item in newest.items():
+        marked[name] = item.token()
     return marked
 
 

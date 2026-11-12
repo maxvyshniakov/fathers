@@ -159,7 +159,7 @@ def draw_machine(canvas: Canvas, rect: Rect, model: Model) -> None:
     panel = Panel(canvas, rect).frame("MACHINE")
     note = machine_note(model)
     for parts in (note, note[2:]):  # all of it, else the admission alone, else nothing
-        if panel.border(parts, "MACHINE"):
+        if panel.border(parts, "MACHINE") is not None:
             break
     slots = int(model["slots"])
     resources = machine_resources(model)

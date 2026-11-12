@@ -33,17 +33,19 @@ def footer_hints(focus: str) -> list[Part]:
     return [("↑↓", "select" if focus == "requests" else "scroll"), *FOOTER_HINTS[1:]]
 
 
-WHATS_NEW = f"{_version.NAME} · what's new?"
+WHATS_NEW = "what's new?"
 
 
 def draw_footer(canvas: Canvas, model: Optional[Model], error: Optional[str], message: Optional[str],
                 unread: bool = False) -> None:
-    """`Godfather · what's new?` (fathers#102: the accent while any tool has unread entries, else muted; ↻ after it
+    """`Godfather  what's new?` (fathers#102: the name in the title style; what's new? in the text colour while any
+    tool has unread entries, else muted like the hints, never the accent; ↻ after it
     while a newer install waits for a restart; a click opens what's new), the hints, then the refresh failure or a
     notice (fathers#24: a notice never says the refresh failed, nor makes the status stale), then the last update and
     the status."""
     installed = _common.stale_install(model)
-    Footer(canvas).draw((WHATS_NEW + (" ↻" if installed else ""), "accent" if unread else "dim"),
+    Footer(canvas).draw([(_version.NAME, "title"), ("  " + WHATS_NEW + (" ↻" if installed else ""),
+                                                      "text" if unread else "dim")],
                         footer_hints(canvas.focus), ("● stale", "bad") if error else ("● live", "ok"),
                         clock(model["updated"]) if model else "",
                         (message, "bad") if message else (f"refresh failed: {error}", "bad") if error else ("", ""))

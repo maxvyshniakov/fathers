@@ -276,8 +276,8 @@ class WhatsNewTests(FixtureCase):
         self.assertIn("All · Slotfather", text.split("\n")[canvas.help_view.y])  # type: ignore[union-attr]
         self.assertRegex(text, r"Slotfather 0\.2\.0 · 2026-11-12 · installed · new")
         self.assertIn("• capabilities --json.", text)
-        self.assertRegex(text, r"Lanefather +not installed")
-        self.assertRegex(text, r"Junkfather +0\.1\.0  versions only — update Junkfather")
+        for gone in ("not installed", "versions only", "Junkfather 0.1.0"):
+            self.assertNotIn(gone, text, "fathers#102: only the timeline")
 
 
 if __name__ == "__main__":

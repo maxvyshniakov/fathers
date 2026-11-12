@@ -22,7 +22,7 @@ def judged(memory: dict[str, Any]) -> dict[str, Any]:
 
 HINTS = ["↑↓ select", "tab panel", "s settings", "? help", "q quit"]
 DROPS = ["tab panel", "s settings", "↑↓ select", "? help"]  # the order a narrow footer drops them in
-LABEL = "Godfather · what's new?"
+LABEL = "Godfather  what's new?"
 
 
 def model() -> dict[str, Any]:
@@ -75,14 +75,19 @@ class FooterTests(unittest.TestCase):
         self.assertIn("↑↓ select   ? help   q quit", self.footer(76))
         self.assertIn("updated", self.footer(100))
 
-    def test_whats_new_is_the_accent_while_anything_is_unread_else_muted(self) -> None:
+    def test_whats_new_is_the_text_colour_while_anything_is_unread_else_muted_never_the_accent(self) -> None:
         from godfather import news as _news
         news = _news.News((), (_news.Item("slotfather", "0.2.0", "2026-11-12", "Added", "x"),))
-        for read, style in (({}, "accent"), ({"slotfather": "0.1.0"}, "accent"), ({"slotfather": "0.2.0"}, "dim")):
+        name, after = len("Godfather"), len("  what's new?")
+        for read, style in (({}, "text"), ({"slotfather": "0.1.0"}, "text"), ({"slotfather": "0.2.0"}, "dim")):
             with self.subTest(read=read):
                 cells = self.styled(120, news=news, read=read)
-                self.assertEqual({style}, {cell[1] for cell in cells[1:1 + len(LABEL)]})
-        self.assertEqual("dim", self.styled(120)[1][1], "nothing loaded yet: muted")
+                self.assertEqual({"title"}, {cell[1] for cell in cells[1:1 + name]}, "the name, as before fathers#102")
+                self.assertEqual({style}, {cell[1] for cell in cells[1 + name:1 + name + after]})
+        cells = self.styled(120)
+        self.assertEqual("dim", cells[1 + name + 2][1], "nothing loaded yet: muted")
+        line = "".join(cell[0] for cell in cells)
+        self.assertEqual("dim", cells[line.index("? help") + 2][1], "muted like the key hints")
 
     def test_no_counter_and_the_restart_mark_after_it(self) -> None:
         self.assertNotRegex(self.footer(120)[:30], r"\d")

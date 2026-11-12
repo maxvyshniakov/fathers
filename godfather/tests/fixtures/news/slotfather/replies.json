@@ -8,6 +8,22 @@
    "source": "/Users/me/.local/lib/slotfather/releases/0.2.0-4d5e6f/CHANGELOG.md",
    "entries": [
     {
+     "version": null,
+     "unreleased": true,
+     "date": null,
+     "source": "81abd86c0ffe",
+     "section": "Added",
+     "text": "`slotfather run --label` names a lease on the dashboard and in `status --json` (fathers#97)."
+    },
+    {
+     "version": null,
+     "unreleased": true,
+     "date": null,
+     "source": "81abd86c0ffe",
+     "section": "Fixed",
+     "text": "A waiting request that loses its terminal leaves the queue at once (fathers#96)."
+    },
+    {
      "version": "0.2.0",
      "date": "2026-11-12",
      "section": "Added",

@@ -65,15 +65,16 @@ class Panel:
         self.canvas.fill(*self.rect)
         return self.frame(title, note)
 
-    def border(self, parts: list[Part], title: str, margin: int = 2) -> bool:
+    def border(self, parts: list[Part], title: str, margin: int = 2) -> Optional[int]:
         """`parts` set into the top border at the right, padded by a space each side, where they fit `margin` cells
-        after the title; False where they do not."""
+        after the title: the column of that leading space; None where they do not fit."""
         y, x, _, width = self.rect
         size = sum(text_width(text) for text, _ in parts) + 2
         if x + 2 + text_width(f" {title} ") + margin + size > x + width - 2:
-            return False
-        self.canvas.segments(y, x + width - 2 - size, [(" ", "text"), *parts, (" ", "text")], size)
-        return True
+            return None
+        start = x + width - 2 - size
+        self.canvas.segments(y, start, [(" ", "text"), *parts, (" ", "text")], size)
+        return start
 
     def bottom(self, text: str, style: str) -> None:
         """A note set into the bottom border on the left."""
@@ -275,16 +276,17 @@ FOOTER_PAD = 2  # the least blank cells between the hints and what is left and r
 
 
 class Footer:
-    """The screen's last row: `Godfather · what's new?` on the left (a click opens what's new), the status on the
+    """The screen's last row: `Godfather  what's new?` on the left (a click opens what's new), the status on the
     right (the last update, live or stale), and the key hints centred between the two at every width, the least
     needed dropped first when narrow; a failure or notice after them. Clicks on the hints press their keys."""
 
     def __init__(self, canvas: Canvas) -> None:
         self.canvas, self.row = canvas, canvas.height - 1
 
-    def draw(self, label: Part, hints: list[Part], status: Part, stamp: str = "", message: Part = ("", "")) -> None:
+    def draw(self, label: list[Part], hints: list[Part], status: Part, stamp: str = "",
+             message: Part = ("", "")) -> None:
         canvas, y = self.canvas, self.row
-        left = canvas.put(y, 1, label[0], label[1], max(0, canvas.width - 2))
+        left = canvas.segments(y, 1, label, max(0, canvas.width - 2))
         if left > 1:
             canvas.version_at = (y, 1, left)
         end = canvas.width - 1
