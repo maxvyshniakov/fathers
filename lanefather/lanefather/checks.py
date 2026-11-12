@@ -651,24 +651,29 @@ def receipt_paths(receipt: dict[str, Any]) -> set[str]:
     return {p for row in rows for p in row.get("paths", [])} | {p for paths in reasons.values() for p in paths}
 
 
-def fix_plan(lane_plan: dict[str, Any], parent: dict[str, Any]) -> dict[str, Any]:
+def fix_plan(lane_plan: dict[str, Any], parent: dict[str, Any], known: set[str] | None = None) -> dict[str, Any]:
     """A review-fix lane's plan (fathers#93), changed in place: its own diff's plan when every path it changes is in
     the parent lane's diff; otherwise the plan of both diffs, the union of the two selections. Returns what the
     receipt records about it."""
     parent_paths = receipt_paths(parent)
     outside = sorted(p for p in lane_plan["paths"] if p not in parent_paths)
+    # A tree whose plan names whole suites has no checks to join: None, neither inside nor the union.
+    union = bool(outside) if lane_plan.get("selection") is not None else (None if outside else False)
     about: dict[str, Any] = {"lane": parent["lane"], "tree": parent.get("tree"), "outside_parent": outside,
-                             "union": bool(outside) and lane_plan.get("selection") is not None}
-    if not about["union"]:
+                             "union": union}
+    if not union:
         return about
     rows = {row["id"]: row for row in lane_plan["selection"]}
-    added = [row for row in parent["selection"] if row["id"] not in rows]
-    lane_plan["full"] = bool(lane_plan.get("full") or parent.get("full"))
+    # A check the fix lane's tree no longer defines (a lane since renamed or removed it) stays out (review).
+    added = [row for row in parent["selection"] if row["id"] not in rows and (known is None or row["id"] in known)]
+    dropped = [row["id"] for row in parent["selection"] if known is not None and row["id"] not in known]
     lane_plan["selection"] = [*lane_plan["selection"],
                               *({"id": r["id"], "suite": r["suite"], "paths": r.get("paths", [])} for r in added)]
     lane_plan["selected"] = plan.suites_of(lane_plan["selection"])
     lane_plan["by_suite"] = plan.by_suite(lane_plan["selection"])
     about["added"] = [r["id"] for r in added]
+    if dropped:
+        about["dropped"] = dropped
     return about
 
 
@@ -721,12 +726,15 @@ def check(args: Any) -> int:
     lane_plan = plan.plan_for(worktree, base)
     # fathers#93: a review-fix lane runs the plan of its fix, widened to both diffs when the fix leaves the parent's.
     parent = fix_parent(record)
-    fix_of = fix_plan(lane_plan, parent) if parent else None
+    fix_of = fix_plan(lane_plan, parent, plan.known_checks(worktree)) if parent else None
     if fix_of:
+        outside_list = ", ".join(fix_of["outside_parent"][:3]) + (", ..." if len(fix_of["outside_parent"]) > 3
+                                                                  else "")
         print(f"lane: review-fix lane of {fix_of['lane']}: " + (
-            f"the plan of both diffs, since the fix changes {', '.join(fix_of['outside_parent'][:3])}"
-            + (", ..." if len(fix_of["outside_parent"]) > 3 else "") + f" outside {fix_of['lane']}'s diff"
-            if fix_of["union"] else "the plan of its fix, inside the parent's diff"), flush=True)
+            f"the plan of both diffs, since the fix changes {outside_list} outside {fix_of['lane']}'s diff"
+            if fix_of["union"] else "the plan of its fix, inside the parent's diff" if fix_of["union"] is False
+            else f"its own plan: the fix changes {outside_list} outside the parent's diff, but this tree's plan "
+                 "names whole suites"), flush=True)
     suites: list[str] = lane_plan["selected"]
     selected: dict[str, list[str]] | None = lane_plan["by_suite"]
     reused: dict[str, dict[str, Any]] = {}
@@ -741,7 +749,9 @@ def check(args: Any) -> int:
         # The parent's passes stand for each check no change since the parent's head selects, as an earlier
         # receipt of the lane's own would.
         wanted = {c for ids in selected.values() for c in ids}
-        reused.update({c: dict(e, reused_by="parent") for c, e in
+        parent_receipt = str(state.receipt_path(parent["lane"]))
+        reused.update({c: dict(e, reused_by="parent", reused_lane=e.get("reused_lane") or parent["lane"],
+                               reused_receipt=e.get("reused_receipt") or parent_receipt) for c, e in
                        reusable(parent, plan.plan_for(worktree, parent["head"])).items()
                        if c in wanted and c not in reused})
     if selected is not None and not args.rerun:

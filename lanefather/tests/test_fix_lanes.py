@@ -60,6 +60,39 @@ class FixLaneTests(LaneCase):
                          (True, ["lib-check", "native-check"]))
         self.assertEqual(receipt["status"], "green")
 
+    def test_a_check_the_delta_since_the_parent_selects_runs_and_an_old_parent_receipt_still_plans(self):
+        worktree = self.fix_lane()
+        # A parent receipt from before `paths`: the paths that chose its checks stand for its diff.
+        parent = self.receipt("a")
+        del parent["paths"]
+        (self.state / "a.receipt.json").write_text(json.dumps(parent))
+        self.commit(worktree, {"docs/install.md": "journey\n", "lib/api.txt": "foo\nbaz\nqux\n"}, "fix(review)")
+        runs = len(self.verify_runs())
+        self.lane("check", "a-review-fixes", cwd=worktree)
+        # lib/api.txt changed since the parent's head: lib-check runs; native-check stands as the parent's pass.
+        self.assertEqual(self.verify_runs()[runs:], ["checks structure-check,lib-check,host-journeys-check"])
+        receipt = self.receipt("a-review-fixes")
+        self.assertEqual(receipt["fix_of"]["outside_parent"], ["docs/install.md"])
+        native = receipt["check_results"]["native-check"]
+        self.assertEqual((native["reused_by"], native["reused_lane"], native["reused_receipt"]),
+                         ("parent", "a", str(self.state / "a.receipt.json")))
+        self.assertNotIn("reused_by", receipt["check_results"]["lib-check"])
+
+    def test_a_rerun_or_a_parent_without_per_check_results_reuses_nothing(self):
+        worktree = self.fix_lane()
+        self.commit(worktree, {"docs/install.md": "journey\n"}, "fix(review)")
+        runs = len(self.verify_runs())
+        self.lane("check", "a-review-fixes", "--rerun", cwd=worktree)
+        self.assertEqual(self.verify_runs()[runs:],
+                         ["checks structure-check,host-journeys-check,lib-check,native-check"])
+        parent = self.receipt("a")
+        del parent["check_results"]
+        (self.state / "a.receipt.json").write_text(json.dumps(parent))
+        self.commit(worktree, {"docs/install.md": "journey, again\n"}, "fix(review): again")
+        output = self.lane("check", "a-review-fixes", cwd=worktree)
+        self.assertNotIn("review-fix lane of a", output)
+        self.assertNotIn("fix_of", self.receipt("a-review-fixes"))
+
     def test_promote_still_runs_the_batch_gate_after_a_fix_lane(self):
         worktree = self.fix_lane()
         self.commit(worktree, {"lib/api.txt": "foo\nbaz\nqux\n"}, "fix(review): keep baz")
