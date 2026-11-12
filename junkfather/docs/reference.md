@@ -100,14 +100,21 @@ stops it with argv run without a shell, with a timeout (`STOP_TIMEOUT`, 120 s, p
 
 After the stop the resource must be seen gone within the grace (at least 5 s); otherwise, or when a stop command
 fails or times out, the result is `failed`, the entry keeps running with `last_error`, and `resource.stop_failed` is
-written. A quit by bundle id cannot tell two Safari Technology Preview instances apart, so with another instance
-running the stop fails and both keep running: a person's own windows are never closed.
+written; a later step that fails (`docker rm` after a stop) makes `resource.stopped` a warning with `warning`. A
+reap runs no stop command while whether the resource runs cannot be told: the result is `failed`, and the sweep or
+the next reap tries again.
+
+A quit by bundle id cannot tell two Safari Technology Preview instances apart, so the stop runs only while the owned
+instance is the only one (same pid and start time); otherwise it fails and every instance keeps running.
+`own-resource` refuses `safari-tp`: an instance that already runs cannot be told from a person's own browser. Known
+limit: a window a person opens into the agent's own instance (LaunchServices reuses it) closes with that instance.
 
 `own --kind KIND -- CMD` runs CMD (attached, up to 10 minutes), passes its output and a failing exit status through,
-and owns what CMD made: what it names (a UDID in its arguments, the id `docker run -d` prints) when that newly
-appeared, else what newly appeared or changed in the kind's listing within 15 s (`tailscale serve --bg 6475`
-repoints `https:443`; an `open -g` starts a new main process). Without a listing from before, only what CMD names
-counts. Nothing new, nothing owned. One entry per resource: owning one a live entry holds is refused, as is one that
+and owns what CMD made: what it names (a UDID in its arguments, the id `docker run -d` prints, the route a
+`tailscale serve` command sets: `--https=6475`, or `https:443` for a bare `--bg 6475`) once it shows as new or
+changed; otherwise exactly one item new or changed in one listing right after CMD (for `safari-tp`, within 15 s, a
+main process that started after CMD did). Two unnamed new items, or no listing from before and nothing named, own
+nothing: another agent's or a person's resource could be among them. Nothing new, nothing owned. One entry per resource: owning one a live entry holds is refused, as is one that
 does not run.
 
 ## Owners and liveness

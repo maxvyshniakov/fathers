@@ -90,6 +90,8 @@ class SimulatorTests(ResourceCase):
         kinds = [(e["kind"], e["subject"]["type"], e["subject"]["id"]) for e in self.events()]
         self.assertIn(("resource.owned", "resource", f"simulator:{SIM}"), kinds)
         self.assertIn(("resource.stopped", "resource", f"simulator:{SIM}"), kinds)
+        stopped = next(e for e in self.events() if e["kind"] == "resource.stopped")
+        self.assertEqual([f"xcrun simctl shutdown {SIM}: exit 0"], stopped["details"]["steps"])
 
     def test_subagent_stop_shuts_down_that_subagents_simulator(self):
         claude = self.fake_claude("s1")
@@ -114,6 +116,14 @@ class SimulatorTests(ResourceCase):
         self.assertIn("failing on purpose", kept["last_error"]["error"])
         failed = [e for e in self.events() if e["kind"] == "resource.stop_failed"]
         self.assertEqual(["error"], [e["level"] for e in failed])
+
+    def test_a_reap_runs_no_stop_while_whether_it_runs_cannot_be_told(self):
+        entry = self.own("--kind", "simulator", "--", "xcrun", "simctl", "boot", SIM)
+        self.change_fake(fail=[["xcrun", "simctl", "list"]])
+        result = self.cli("reap", "--id", entry["id"], "--json", env=self.env)
+        self.assertEqual("failed", json.loads(result.stdout)["results"][0]["result"])
+        self.assertFalse([c for c in self.fake_state()["calls"] if c[:3] == ["xcrun", "simctl", "shutdown"]])
+        self.assertEqual("running", self.state_of(entry["id"]))
 
     def test_a_failed_boot_or_nothing_new_owns_nothing(self):
         self.change_fake(fail=[["xcrun", "simctl", "boot"]])
@@ -157,6 +167,8 @@ class SimulatorTests(ResourceCase):
         self.assertEqual([(expired["id"], "ttl expired", "stopped")],
                          [(r["id"], r["reason"], r["result"]) for r in swept["reaped"]])
         self.assertEqual("Shutdown", self.fake_state()["sims"][OTHER_SIM]["state"])
+        self.assertEqual([], [i for i in swept["unowned_resources"] if i["kind"] == "simulator"],
+                         "what this sweep stopped is not reported as unowned")
 
     def test_sweep_reaps_the_simulator_of_a_session_that_ended(self):
         claude = self.fake_claude("s1")
@@ -189,6 +201,29 @@ class DockerTests(ResourceCase):
         self.assertEqual(ident, self.store.entries()[-1]["resource"]["id"])
         self.assertEqual(1, self.cli("own-resource", "--kind", "docker", "--id", "nope", env=self.env).returncode)
 
+    def test_a_failed_rm_after_a_stop_is_a_warning_not_a_silent_success(self):
+        entry = self.own("--kind", "docker", "--remove", "--", "docker", "run", "-d", "nginx")
+        self.change_fake(fail=[["docker", "rm"]])
+        self.assertEqual(0, self.cli("reap", "--id", entry["id"], env=self.env).returncode)
+        (stopped,) = [e for e in self.events() if e["kind"] == "resource.stopped"]
+        self.assertEqual("warn", stopped["level"])
+        self.assertIn("failing on purpose", stopped["details"]["warning"])
+
+    def test_own_resource_refuses_a_container_while_docker_ps_fails(self):
+        self.cli("own", "--kind", "docker", "--", "docker", "run", "-d", "redis", env=self.env)
+        self.store.update(self.store.entries()[0]["id"], lambda e: e.update(state="reaped"))
+        self.change_fake(fail=[["docker", "ps"]])
+        refused = self.cli("own-resource", "--kind", "docker", "--id", "box0", env=self.env)
+        self.assertEqual(1, refused.returncode)
+        self.assertIn("cannot be listed", refused.stderr)
+
+    def test_two_unnamed_new_containers_are_not_taken(self):
+        result = self.cli("own", "--kind", "docker", "--", "sh", "-c",
+                          "docker run -d a >/dev/null && docker run -d b >/dev/null", env=self.env)
+        self.assertEqual(1, result.returncode)
+        self.assertIn("2 new docker items appeared together", result.stderr)
+        self.assertEqual([], self.store.entries())
+
     def test_unowned_running_containers_are_reported_never_stopped(self):
         self.change_fake(containers={"a" * 64: {"name": "theirs", "image": "postgres", "running": True},
                                      "b" * 64: {"name": "exited", "image": "x", "running": False}})
@@ -216,6 +251,38 @@ class TailscaleTests(ResourceCase):
         self.assertIn(["tailscale", "serve", "--https=6475", "off", "--yes"], self.fake_state()["calls"])
         status = json.loads(self.cli("status", "--json", env=self.env).stdout)
         self.assertEqual(["https:443"], [i["id"] for i in status["unowned_resources"]])
+
+    def test_a_route_is_reported_once_even_across_a_sweep_that_cannot_list_it(self):
+        self.assertEqual(0, self.cli("sweep", "--quiet", env=self.env).returncode)
+        self.change_fake(fail=[["tailscale", "serve", "status"]])
+        swept = json.loads(self.cli("sweep", "--json", env=self.env).stdout)
+        self.assertTrue(any("tailscale-serve: cannot be listed" in n for n in swept["notes"]))
+        self.change_fake(fail=[])
+        self.assertEqual(0, self.cli("sweep", "--quiet", env=self.env).returncode)
+        self.assertEqual(1, len([e for e in self.events() if e["kind"] == "unowned.reported"
+                                 and e["subject"]["type"] == "resource"]))
+
+    def test_a_tcp_route_is_owned_and_removed_by_its_own_flag(self):
+        entry = self.own("--kind", "tailscale-serve", "--", "tailscale", "serve", "--bg", "--tcp=5432", "5432")
+        self.assertEqual("tcp:5432", entry["resource"]["id"])
+        self.assertEqual(0, self.cli("reap", "--id", entry["id"], env=self.env).returncode)
+        self.assertIn(["tailscale", "serve", "--tcp=5432", "off", "--yes"], self.fake_state()["calls"])
+        self.assertEqual(["https:443"], list(self.fake_state()["routes"]))
+
+    def test_routes_another_command_adds_meanwhile_are_not_taken(self):
+        result = self.cli("own", "--kind", "tailscale-serve", "--", "sh", "-c",
+                          "tailscale serve --bg --https=7000 7000 && tailscale serve --bg --https=7001 7001",
+                          env=self.env)
+        self.assertEqual(1, result.returncode)
+        self.assertEqual([], self.store.entries())
+
+    def test_the_route_a_serve_command_names(self):
+        named = resources.KINDS["tailscale-serve"].named
+        self.assertEqual(["https:443"], named(["tailscale", "serve", "--bg", "6475"], ""))
+        self.assertEqual(["https:6475"], named(["tailscale", "serve", "--bg", "--https=6475", "6475"], ""))
+        self.assertEqual(["http:80/api"], named(["tailscale", "serve", "--bg", "--http", "80", "--set-path=api",
+                                                  "3000"], ""))
+        self.assertEqual([], named(["tailscale", "serve", "status", "--json"], ""))
 
     def test_serve_bg_that_repoints_a_served_port_owns_that_route(self):
         entry = self.own("--kind", "tailscale-serve", "--", "tailscale", "serve", "--bg", "6475")
@@ -253,9 +320,23 @@ class SafariTests(ResourceCase):
         entry = self.own("--kind", "safari-tp", "--", "open", "-n", "-g", "-a", "Safari Technology Preview")
         result = self.cli("reap", "--id", entry["id"], "--json", "--grace", "1", env=self.env)
         self.assertEqual("failed", json.loads(result.stdout)["results"][0]["result"])
-        self.assertIn("instances run", (self.store.load(entry["id"]) or {})["last_error"]["error"])
+        self.assertIn("not the only one", (self.store.load(entry["id"]) or {})["last_error"]["error"])
         self.assertTrue(self.runs(theirs.pid) and self.runs(entry["resource"]["pid"]), "both keep running")
         self.assertFalse([c for c in self.fake_state()["calls"] if c[0] == "osascript"])
+
+
+    def test_no_quit_when_ours_is_gone_and_another_instance_runs(self):
+        theirs = self.spawn(str(self.app), start_new_session=True)
+        self.wait_for(lambda: self.runs(theirs.pid), what="the person's instance")
+        with self.assertRaises(ValueError):
+            resources.KINDS["safari-tp"].stop({"id": "999999", "pid": 999999, "start": "Mon Jan  1 00:00:00 2024"}, 1)
+
+    def test_own_resource_never_takes_a_running_instance(self):
+        self.spawn(str(self.app), start_new_session=True)
+        refused = self.cli("own-resource", "--kind", "safari-tp", "--id", resources.STP_BUNDLE, env=self.env)
+        self.assertEqual(1, refused.returncode)
+        self.assertIn("person's own browser", refused.stderr)
+        self.assertEqual([], self.store.entries())
 
 
 class CommandKindTests(ResourceCase):
@@ -273,6 +354,21 @@ class CommandKindTests(ResourceCase):
         gone = self.cli("own-resource", "--kind", "command", "--id", "m", "--alive", f"test -e '{marker}'",
                         "--stop", "true", env=self.env)
         self.assertEqual(1, gone.returncode)
+
+
+class ProcessOwnUnchangedTests(Case):
+    def test_a_process_entry_and_its_event_keep_the_0_1_0_fields(self):
+        self.assertEqual(0, self.cli("own", "--ttl", "1m", "--", "true").returncode)
+        (entry,) = self.store.entries()
+        self.assertEqual({"v", "id", "label", "argv", "cwd", "created", "ttl", "expires", "keep", "owner", "mode",
+                          "state", "pid", "pgid", "start", "seen", "group", "known", "handed", "supervisor", "log",
+                          "claim_note", "ended", "exit"}, set(entry))
+        self.assertNotIn("resource", entry)
+        self.assertEqual(("attached", "exited", True), (entry["mode"], entry["state"], entry["group"]))
+        events = [json.loads(line) for line in (self.state / "events.jsonl").read_text().splitlines()]
+        self.assertEqual(["entry.owned", "entry.exited"], [e["kind"] for e in events])
+        self.assertEqual({"argv", "cwd", "ttl", "keep", "mode", "pgid", "log"}, set(events[0]["details"]))
+        self.assertEqual({"type", "id", "pid"}, set(events[0]["subject"]))
 
 
 class EventKindsTests(ResourceCase):

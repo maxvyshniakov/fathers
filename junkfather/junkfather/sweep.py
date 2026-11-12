@@ -188,6 +188,7 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
     report["unowned"] = unowned(table, cwds, owned, scratch_roots(), agent_sessions(table))
     found, unknown = _resources.unowned(snapshot, _resources.owned_keys(store))
     report["unowned_resources"] = found
+    report["unlisted"] = unknown
     report["notes"] += [f"{kind}: cannot be listed, so its unowned resources are not reported" for kind in unknown]
     if not dry_run:
         record(store, report)
@@ -218,6 +219,7 @@ def sweep_resource(store: Store, entry: Dict[str, Any], snapshot: "_resources.Sn
     if reason:
         result = _reap.reap(store, entry["id"], reason, grace=grace, dry_run=dry_run, actor=_events.tool("sweep"))
         report["reaped"].append(result)
+        snapshot.listed.pop(str(resource.get("kind")), None)  # the report lists that kind again, after the stop
         if result["result"] in _reap.STOPPED:
             return
     report["running"] += 1
@@ -228,8 +230,11 @@ def record(store: Store, report: Dict[str, Any]) -> None:
     before = read_json(store.root / "unowned.json")
     seen = {(i.get("pid"), i.get("start")) for i in (before.get("items") or [])} if isinstance(before, dict) else set()
     seen_resources = {i.get("key") for i in (before.get("resources") or [])} if isinstance(before, dict) else set()
+    # A kind that could not be listed keeps its last report, so the next sweep does not report it as new again.
+    kept = [i for i in (before.get("resources") or []) if isinstance(i, dict)
+            and i.get("kind") in (report.get("unlisted") or [])] if isinstance(before, dict) else []
     write_atomic(store.root / "unowned.json", {"v": VERSION, "at": report["at"], "items": report["unowned"],
-                                                "resources": report["unowned_resources"]})
+                                                "resources": report["unowned_resources"] + kept})
     actor = _events.tool("sweep")
     for item in report["unowned"]:
         if (item["pid"], item["start"]) not in seen:

@@ -86,8 +86,8 @@ def parser() -> argparse.ArgumentParser:
     ownership(p)
     p.add_argument("--kind", choices=tuple(_resources.KINDS), required=True)
     p.add_argument("--id", required=True, dest="resource_id",
-                   help="simulator UDID, container id or name, serve route (https:6475), "
-                        f"{_resources.STP_BUNDLE}, or a name for --kind command")
+                   help="simulator UDID, container id or name, serve route (https:6475), or a name for --kind "
+                        "command (safari-tp only through own --kind safari-tp)")
     p.add_argument("--alive", help="--kind command: exits 0 while it runs, 1 once it is gone (split as argv)")
     p.add_argument("--stop", help="--kind command: ends it (split as argv, never through a shell)")
     p.add_argument("--remove", action="store_true", help="with --kind docker: docker rm the container after its stop")
@@ -295,7 +295,8 @@ def status(store: Store) -> Dict[str, Any]:
     resources = [{k: item.get(k) for k in ("kind", "id", "name", "why")}
                  for item in listed.get("resources") or [] if isinstance(item, dict)]
     return {"v": STATUS_VERSION, "host": _events.host(), "time": _events.now(), "entries": rows,
-            "unowned": unowned, "unowned_resources": resources, "sweep": {"time": _iso(last.get("at")), "result": last.get("result")},
+            "unowned": unowned, "unowned_resources": resources,
+            "sweep": {"time": _iso(last.get("at")), "result": last.get("result")},
             "errors": [] if table is not None else ["the process table cannot be read"]}
 
 

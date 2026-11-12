@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""`tailscale serve status --json`, `serve --bg [--PROTO=PORT] [--set-path=P] TARGET` and `serve --PROTO=PORT ... off`,
+with routes kept as {"PROTO:PORT[/PATH]": target} in the fake state."""
 import json
 import os
 import sys
@@ -6,33 +8,35 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from _fake import begin, save  # noqa: E402
 
+PROTOS = ("https", "http", "tcp", "tls-terminated-tcp")
 state, args = begin("tailscale")
 routes = state.setdefault("routes", {})
 if args[:3] == ["serve", "status", "--json"]:
-    if not routes:
-        print("{}")
-        sys.exit(0)
     tcp, web = {}, {}
     for route, target in routes.items():
         proto, _, rest = route.partition(":")
         port, slash, path = rest.partition("/")
+        if proto in ("tcp", "tls-terminated-tcp"):
+            tcp[port] = {"TCPForward": target, **({"TerminateTLS": "host"} if proto != "tcp" else {})}
+            continue
         tcp[port] = {"HTTPS": True} if proto == "https" else {"HTTP": True}
         web.setdefault(f"host.ts.net:{port}", {"Handlers": {}})["Handlers"]["/" + path if slash else "/"] = \
             {"Proxy": target}
-    print(json.dumps({"TCP": tcp, "Web": web}, indent=2))
+    print(json.dumps({"TCP": tcp, "Web": web} if routes else {}, indent=2))
 elif args[:1] == ["serve"]:
-    options = {a.split("=", 1)[0]: a.split("=", 1)[1] for a in args[1:] if a.startswith("--") and "=" in a}
+    options = {a[2:].split("=", 1)[0]: a.split("=", 1)[1] for a in args[1:] if a.startswith("--") and "=" in a}
     words = [a for a in args[1:] if not a.startswith("--")]
-    port = options.get("--https", "443")
-    path = options.get("--set-path", "")
-    route = f"https:{port}" + (path if path and path != "/" else "")
+    proto = next((p for p in PROTOS if p in options), "https")
+    port = options.get(proto, "443")
+    path = options.get("set-path", "")
+    route = f"{proto}:{port}" + (path if path and path != "/" else "")
     if words == ["off"]:
         if route not in routes:
             print("error: handler does not exist", file=sys.stderr)
             sys.exit(1)
         del routes[route]
     elif "--bg" in args and len(words) == 1:
-        routes[route] = f"http://127.0.0.1:{words[0]}"
+        routes[route] = f"127.0.0.1:{words[0]}" if proto.endswith("tcp") else f"http://127.0.0.1:{words[0]}"
     else:
         print(f"tailscale: unexpected {args}", file=sys.stderr)
         sys.exit(1)

@@ -122,8 +122,7 @@ class Simulator(Kind):
             for device in devices if isinstance(devices, list) else []:
                 if isinstance(device, dict) and isinstance(device.get("udid"), str) \
                         and device.get("state") not in (None, "Shutdown"):
-                    found[device["udid"]] = {"name": device.get("name"), "state": device.get("state"),
-                                             "runtime": str(runtime).rsplit(".", 1)[-1]}
+                    found[device["udid"]] = {"name": device.get("name"), "runtime": str(runtime).rsplit(".", 1)[-1]}
         return found
 
     def resolve(self, given: str, listed: Listing) -> Tuple[Optional[Dict[str, Any]], str]:
@@ -160,7 +159,9 @@ class Docker(Kind):
         full, _, name = ran.out.strip().partition("\t")
         if not CONTAINER.match(full):
             return None, f"docker inspect {given} gave no container id"
-        if listed is not None and full not in listed:
+        if listed is None:
+            return None, "running containers cannot be listed (docker ps failed)"
+        if full not in listed:
             return None, f"container {given} is not running"
         return {"kind": self.name, "id": full, "name": name.lstrip("/") or None,
                 **({"image": listed[full].get("image")} if listed else {})}, ""
@@ -205,6 +206,30 @@ class TailscaleServe(Kind):
         if path and path != "/":
             argv.append(f"--set-path={path}")
         return [argv + ["off", "--yes"]]
+
+    def named(self, argv: List[str], out: str) -> List[str]:
+        """The route a `tailscale serve` command sets: its --PROTO=PORT (or --PROTO PORT) and --set-path, else the
+        default `https:443` (`tailscale serve --bg 6475`)."""
+        if "serve" not in argv:
+            return []
+        words = argv[argv.index("serve") + 1:]
+        options: Dict[str, str] = {}
+        for index, word in enumerate(words):
+            name, equals, value = word.partition("=")
+            if not equals and name in ("--https", "--http", "--tcp", "--tls-terminated-tcp", "--set-path") \
+                    and index + 1 < len(words):
+                value = words[index + 1]
+            if name.startswith("--"):
+                options[name[2:]] = value
+        if "service" in options or any(w in ("status", "reset", "drain", "clear", "off") for w in words):
+            return []
+        proto = next((p for p in ("https", "http", "tcp", "tls-terminated-tcp") if options.get(p)), None)
+        port = options[proto] if proto else "443"
+        path = options.get("set-path") or ""
+        if path and not path.startswith("/"):
+            path = "/" + path
+        route = f"{proto or 'https'}:{port}" + ("" if path in ("", "/") else path)
+        return [route] if ROUTE.match(route) else []
 
 
 def routes(status: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
@@ -266,9 +291,9 @@ class SafariTP(Kind):
         if listed is None:
             raise ValueError("the process table cannot be read")
         mine = str(resource.get("pid"))
-        if mine in listed and listed[mine].get("start") == resource.get("start") and len(listed) > 1:
-            raise ValueError(f"{len(listed)} Safari Technology Preview instances run; a quit could close another's "
-                             "windows, so this one is left running")
+        if set(listed) != {mine} or listed[mine].get("start") != resource.get("start"):
+            raise ValueError(f"{len(listed)} Safari Technology Preview instance(s) run and ours is not the only one; "
+                             "a quit could close someone else's windows, so nothing was quit")
         return [["osascript", "-e", f'tell application id "{STP_BUNDLE}" to quit']]
 
 
@@ -370,6 +395,11 @@ def own_resource(store: Store, kind: str, given: str, ttl: float, keep: str, lab
                  remove: bool = False) -> int:
     """`own-resource`: record a resource that runs now."""
     found = KINDS[kind]
+    if kind == "safari-tp":
+        print("junkfather own-resource: refusing safari-tp: an instance that runs cannot be told from a person's own "
+              "browser; launch it through junkfather own --kind safari-tp -- open -g -a 'Safari Technology Preview'",
+              file=sys.stderr)
+        return 1
     if kind == "command":
         if not alive or not stop:
             print("junkfather own-resource: --kind command needs --alive CMD and --stop CMD", file=sys.stderr)
@@ -403,6 +433,7 @@ def own_wrapped(store: Store, kind: str, argv: List[str], ttl: float, keep: str,
     found = KINDS[kind]
     table = _table()
     before = found.listing(table)
+    started = time.time()
     try:
         done = subprocess.run(argv, capture_output=True, text=True, timeout=CREATE_TIMEOUT, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
@@ -419,24 +450,12 @@ def own_wrapped(store: Store, kind: str, argv: List[str], ttl: float, keep: str,
         print(f"junkfather: {shlex.join(argv)} exited {done.returncode}; nothing owned", file=sys.stderr)
         return done.returncode
     named = found.named(argv, done.stdout)
-    deadline = time.monotonic() + SETTLE
-    made: List[str] = []
-    while True:
-        after = found.listing(_table())
-        if after is not None:
-            # Without a listing from before, only what the command names counts: never everything that runs.
-            # New, or changed (`tailscale serve --bg 6475` points an already served https:443 elsewhere).
-            new = [i for i in after if before is not None and (i not in before or before[i] != after[i])]
-            made = [i for i in named if i in after and (before is None or i in new)] or ([] if named else new)
-            if made:
-                break
-        if time.monotonic() >= deadline:
-            break
-        time.sleep(0.5)
+    made, why = made_by(found, before, named, started, table)
     if not made:
-        print(f"junkfather: {shlex.join(argv)} made no new {kind} that junkfather can see; nothing owned (own one "
-              f"that runs: junkfather own-resource --kind {kind} --id ID)", file=sys.stderr)
+        print(f"junkfather: {shlex.join(argv)}: {why}; nothing owned (own one that runs: junkfather own-resource "
+              f"--kind {kind} --id ID)", file=sys.stderr)
         return 1
+    after = found.listing(_table())
     code = 0
     for ident in made:
         resource = {"kind": kind, "id": ident, **(after or {}).get(ident, {})}
@@ -449,6 +468,37 @@ def own_wrapped(store: Store, kind: str, argv: List[str], ttl: float, keep: str,
         elif not quiet:
             announce(entry, out=sys.stderr)
     return code
+
+
+def made_by(found: Kind, before: Listing, named: List[str], started: float, table: Optional[_procs.Table]
+            ) -> Tuple[List[str], str]:
+    """What the command made, or [] and why not. What it names counts once it shows as new or changed; otherwise
+    exactly one new or changed item, from one listing right after it (safari-tp: within SETTLE seconds, its main
+    process started after the command did). Never everything that runs, never two unnamed items at once: another
+    agent's or a person's resource could be among them."""
+    deadline = time.monotonic() + SETTLE
+    while True:
+        after = found.listing(_table())
+        if after is not None:
+            fresh = [i for i in after if before is not None and (i not in before or before[i] != after[i])]
+            if named:
+                made = [i for i in named if i in after and (before is None or i in fresh)]
+                if made:
+                    return made, ""
+            elif before is not None:
+                if found.name == "safari-tp":
+                    fresh = [i for i in fresh if (_procs.started_at(str(after[i].get("start") or "")) or 0)
+                             >= int(started) - 1]
+                if len(fresh) == 1:
+                    return fresh, ""
+                if len(fresh) > 1:
+                    return [], f"{len(fresh)} new {found.name} items appeared together, and it names none of them"
+        if (named or found.name == "safari-tp") and time.monotonic() < deadline:
+            time.sleep(0.5)
+            continue
+        if before is None and not named:
+            return [], f"the {found.name} listing could not be read before it ran, and it names nothing"
+        return [], f"it made no new {found.name} that junkfather can see"
 
 
 def _table() -> Optional[_procs.Table]:
@@ -468,6 +518,8 @@ def stop(resource: Mapping[str, Any], grace: float, alive: Callable[[], Optional
     first = alive()
     if first is False:
         return {"result": "gone", "steps": []}
+    if first is None:
+        return {"result": "failed", "steps": [], "error": "whether it runs cannot be told; nothing was run"}
     try:
         commands = KINDS[str(resource.get("kind"))].stop(resource, grace)
     except (KeyError, ValueError, NotImplementedError) as error:
@@ -488,7 +540,8 @@ def stop(resource: Mapping[str, Any], grace: float, alive: Callable[[], Optional
         pause(0.5)
         state = alive()
     if state is False:
-        return {"result": "stopped", "steps": steps}
+        later = [step["error"] for step in steps[1:] if step.get("error")]
+        return {"result": "stopped", "steps": steps, **({"warning": "; ".join(later)} if later else {})}
     return {"result": "failed", "steps": steps,
             "error": "it still runs after its stop command" if state else "whether it still runs cannot be told"}
 
@@ -519,11 +572,18 @@ def reap(store: Store, entry: Entry, reason: str, grace: float, dry_run: bool,
                    {"reason": reason, "left": [], "error": outcome.get("error"), "steps": outcome["steps"]})
     _events.write(store.root, "resource.stopped" if done else "resource.stop_failed", subject(entry),
                   actor or _events.caller(), {"reason": reason, "result": result, "resource": resource,
-                                              "steps": outcome["steps"],
-                                              **({"error": outcome["error"]} if outcome.get("error") else {})},
-                  None if done else "error")
+                                              "steps": [step_text(step) for step in outcome["steps"]],
+                                              **({"error": outcome["error"]} if outcome.get("error") else {}),
+                                              **({"warning": outcome["warning"]} if outcome.get("warning") else {})},
+                  ("warn" if outcome.get("warning") else None) if done else "error")
     return {"id": entry_id, "result": result, "reason": reason if done else f"{reason}; {outcome.get('error')}",
             "pids": [], "how": describe(resource)}
+
+
+def step_text(step: Mapping[str, Any]) -> str:
+    """One stop step for an event (an argv list would nest past the schema's depth): its command and exit."""
+    text = f"{shlex.join(str(word) for word in step.get('argv') or [])}: exit {step.get('exit')}"
+    return text + (f" ({step['error']})" if step.get("error") else "")
 
 
 # The sweep's report
