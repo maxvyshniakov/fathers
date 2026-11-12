@@ -158,10 +158,11 @@ def filled_basis(basis: dict[str, Any]) -> dict[str, Any]:
     return found
 
 
-def status_rows(basis: dict[str, Any], queue: dict[str, Any] | None) -> list[tuple[str, str, str]]:
+def status_rows(basis: dict[str, Any], queue: dict[str, Any] | None,
+                where: str | None = None) -> list[tuple[str, str, str]]:
     """The STATUS block, (label, value, style): `queue` is {"slots", "free", "used", "waiting"} as the queue's last
-    look read them (None: unavailable), `basis` filled_basis()."""
-    rows = [("queue", location(), "text")]
+    look read them (None: unavailable), `basis` filled_basis(), `where` the queue's directory as shown (location())."""
+    rows = [("queue", location() if where is None else where, "text")]
     if queue:
         rows.append(("slots", f"{queue['slots']} total · {queue.get('free', 0)} free · "
                               f"{queue.get('used', 0)} held · {queue.get('waiting', 0)} waiting", "text"))
@@ -222,7 +223,7 @@ class Reading:
             stored = json.loads(files["order.json"] or b"{}")
         except ValueError:
             stored = {}
-        self.stored = set(cast(dict[str, Any], stored)) if isinstance(stored, dict) else set()
+        self.stored: set[str] = set(cast(dict[str, Any], stored)) if isinstance(stored, dict) else set()
         self.queue: dict[str, Any] | None = None
         self.held, self.waiting = 0, cast(list[int], [])
         with contextlib.suppress(_config.SlotError, OSError):
@@ -281,7 +282,8 @@ class Reading:
              "writable": writable, "revision": token, "when": {"capacity.mode": ["fixed"]},
              "description": DESCRIPTIONS["amount.fixed"]},
             {"key": "capacity.gib_per_slot", "label": "GiB per slot", "type": "number",
-             "value": self.amount_for("memory"), "default": _config.AUTO_GIB_PER_SLOT, "min": 0.5, "max": None,
+             "value": self.amount_for("memory"), "default": _config.AUTO_GIB_PER_SLOT, "min": 0, "min_exclusive": True,
+             "max": None,
              "step": 0.5, "unit": "GiB", "source": source, "writable": writable, "revision": token,
              "when": {"capacity.mode": ["memory", "lower"]}, "description": DESCRIPTIONS["amount.memory"]}]
         basis = filled_basis(self.basis)

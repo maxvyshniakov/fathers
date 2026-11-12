@@ -5,7 +5,6 @@ from __future__ import annotations
 import sys as _path_sys
 from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
-_path_sys.path.insert(0, str(_Path(__file__).resolve().parent / "vendor"))
 from slotfather import events as sf_events
 
 import hashlib
@@ -18,7 +17,7 @@ import unittest
 from typing import Any
 from unittest import mock
 
-import eventcheck  # tests/vendor/eventcheck.py, Godfather's validator, vendored unchanged
+from vendor import eventcheck  # tests/vendor/eventcheck.py, Godfather's validator, vendored unchanged
 from test_classes import YIELDER
 from test_slotfather import TOOL, SlotCase
 
@@ -84,10 +83,10 @@ class EventLogTests(SlotCase):
         self.wait_for(lambda: "waiting: 4 slot(s) late" in self.status(), "late to queue")
         self.assertEqual(0, self.tool("reprioritize", "late", "interactive", GODFATHER_ACTOR="godfather/0.1.0").returncode)
         self.release("quick")
+        self.started("late")  # interactive now: it goes before the gate, which resumes after it
+        self.release("late")
         self.wait_for(lambda: "resume gate" in self.events(), "the gate to resume")
         self.release("gate")
-        self.started("late")
-        self.release("late")
         for process in (gate, quick, late):
             self.finish(process)
         # A lease whose holder died, reaped by the next look
@@ -95,6 +94,9 @@ class EventLogTests(SlotCase):
         (self.state / "queue" / f"{90:010d}-{pid}.json").write_text(json.dumps(
             {"pid": pid, "start": start + "x", "count": 1, "label": "ghost", "cmd": "fake", "since": "2026-11-12T00:00:00Z",
              "state": "held", "granted": "2026-11-12T00:00:10Z"}))
+        (self.state / "queue" / f"{91:010d}-{pid}.json").write_text(json.dumps(
+            {"pid": pid, "start": start + "x", "count": 1, "label": "shade", "cmd": "fake",
+             "since": "2026-11-12T00:00:00Z", "state": "waiting"}))
         self.tool("status")
         # A long wait: a waiter that says it has waited
         holder = self.request("hog", 4)
@@ -109,11 +111,14 @@ class EventLogTests(SlotCase):
         for process in (holder, waiter, waiter_long):
             self.finish(process)
         self.assertEqual(0, self.tool("slots", "5").returncode)
+        self.assertEqual(0, self.tool("slots", "reset").returncode)
         self.assertEqual(0, self.tool("order", "--safety", "4").returncode)
+        self.assertEqual(0, self.tool("order", "--safety", "4").returncode)  # changes nothing: no event
 
         events = self.lines()
         kinds = [event["kind"] for event in events]
-        for kind in ("lease.granted", "lease.released", "lease.reaped", "request.reprioritized", "request.waiting_long",
+        for kind in ("lease.granted", "lease.released", "lease.reaped", "request.reaped", "request.reprioritized",
+                     "request.waiting_long",
                      "lease.yield_asked", "lease.yielded", "capacity.changed", "order.changed"):
             self.assertIn(kind, kinds)
         self.assertTrue(set(kinds) <= set(sf_events.KINDS), set(kinds) - set(sf_events.KINDS))
@@ -146,7 +151,14 @@ class EventLogTests(SlotCase):
         self.assertEqual(("gate", "quick"), (asked["subject"]["label"], asked["details"]["for"]["label"]))
         self.assertEqual("quick", by_kind["lease.yielded"][0]["details"]["to"]["label"])
         self.assertEqual(5, by_kind["capacity.changed"][0]["details"]["slots"])
+        self.assertEqual((None, "automatic"), (by_kind["capacity.changed"][1]["details"]["saved"],
+                                               by_kind["capacity.changed"][1]["details"]["mode"]))
         self.assertEqual({"saved": {"safety": 4.0}}, by_kind["order.changed"][-1]["details"])
+        self.assertEqual(1, sum(1 for e in by_kind["order.changed"] if e["details"] == {"saved": {"safety": 4.0}}))
+        self.assertTrue(all("via" not in e["actor"] for e in by_kind["lease.granted"]),
+                        "a grant made by Godfather's reprioritize is the holder's, not Godfather's")
+        self.assertEqual(("warn", "shade"), (by_kind["request.reaped"][0]["level"],
+                                             by_kind["request.reaped"][0]["subject"]["label"]))
 
     def test_a_waiter_that_gives_up_has_left(self) -> None:
         holder = self.request("hog", 4)

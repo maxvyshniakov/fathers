@@ -83,7 +83,8 @@ class AskYieldTests(SlotCase):
         for argv, words in (((str(held["pid"]), "--start", "Mon Jan  1 00:00:00 2001"), "is not the process started"),
                             ((str(held["pid"]), "--start", held["start"]), "did not take --yieldable"),
                             ((str(stranger), "--start", began), "holds no lease"),
-                            ((str(held["pid"]),), "takes the holder's pid and --start START")):
+                            ((str(held["pid"]),), "takes the holder's pid and --start START"),
+                            ((str(held["pid"]), "--start"), "--start takes the process's start time")):
             with self.subTest(argv=argv):
                 result = self.tool("ask-yield", *argv)
                 self.assertEqual(2, result.returncode)

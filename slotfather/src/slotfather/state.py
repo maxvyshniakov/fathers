@@ -105,20 +105,20 @@ def write(path: Path, entry: Any) -> None:
     pending.replace(path)
 
 
-def record(directory: Path, entry: dict, outcome: str, status: int | None = None,
-           usage: dict | None = None) -> dict[str, Any]:
+def record(directory: Path, entry: dict[str, Any], outcome: str, status: int | None = None,
+           usage: dict[str, Any] | None = None) -> dict[str, Any]:
     """Add a request that left the queue to history.jsonl: released (it ran), left (it gave up waiting) or reaped
     (its holder died), with what its process tree used where the holder measured it. Callers hold the queue lock.
     Returns the line's fields (the events of events.py read them)."""
     ended = time.time()
     queued, granted = _config.seconds(entry.get("since")), _config.seconds(entry.get("granted"))
-    item = {"v": _config.HISTORY_VERSION, "label": entry.get("label"), "cmd": entry.get("cmd"), "cwd": entry.get("cwd"),
+    item: dict[str, Any] = {"v": _config.HISTORY_VERSION, "label": entry.get("label"), "cmd": entry.get("cmd"), "cwd": entry.get("cwd"),
             "count": entry.get("count"), "pid": entry.get("pid"), "queued": entry.get("since"),
             "granted": entry.get("granted"), "ended": _config.now(), "outcome": outcome,
             "waited": None if queued is None else round((granted or ended) - queued),
             "ran": None if granted is None else round(ended - granted), "status": status,
-            "priority": _config.priority_of(cast(dict[str, Any], entry))}
-    ticket = _config.ticket_of(cast(dict[str, Any], entry))
+            "priority": _config.priority_of(entry)}
+    ticket = _config.ticket_of(entry)
     if ticket is not None:
         item["ticket"] = ticket
     with contextlib.suppress(_config.SlotError, OSError):
@@ -130,7 +130,7 @@ def record(directory: Path, entry: dict, outcome: str, status: int | None = None
         item.update(yields=int(entry["yields"]), yielded=round(yielded + (max(0.0, ended - away) if away else 0), 2))
     if entry.get("until"):
         item["until"] = entry["until"]  # when its client would have given up (run --wait): the replay's patience
-    fields = cast(dict[str, Any], entry)
+    fields = entry
     if fields.get("aged") in _config.PRIORITIES:
         item["aged"] = fields["aged"]  # the class it was granted in after ageing; `priority` stays the one it asked
     if fields.get("reprioritized") in _config.PRIORITIES:
@@ -239,13 +239,13 @@ def marker(path: Path) -> Path:
     return path.with_suffix(".yield")
 
 
-def asked(path: Path) -> dict | None:
+def asked(path: Path) -> dict[str, Any] | None:
     """The yield request for the entry at `path`, or None."""
     try:
         found = json.loads(marker(path).read_text())
     except (OSError, ValueError):
         return None
-    return found if isinstance(found, dict) else None
+    return cast(dict[str, Any], found) if isinstance(found, dict) else None
 
 
 def epoch(value: Any) -> float | None:
@@ -346,7 +346,8 @@ def configure(changes: dict[str, dict[str, Any] | None], *,
                     pending.replace(path)
             raise _config.SlotError(f"cannot save settings: {error}") from None
         from . import events
-        for name in changed:
+        after = configuration_bytes(directory)
+        for name in [name for name in changed if after.get(name) != before.get(name)]:  # a no-op save is no event
             if name == "capacity.json":
                 with contextlib.suppress(_config.SlotError, OSError):
                     basis = _config.capacity_basis()
@@ -354,7 +355,7 @@ def configure(changes: dict[str, dict[str, Any] | None], *,
                                 {"saved": values[name], "mode": basis["mode"], "slots": basis["slots"]})
             else:
                 events.emit(directory, "order.changed", {"type": "order", "id": "order"},
-                            {"reset": True} if values[name] is None else {"saved": values[name]})
+                            {"reset": True} if changes[name] is None else {"saved": changes[name]})
         # Grant now what the new settings start, as a release does: waiters look less often the longer they wait.
         with contextlib.suppress(_config.SlotError, OSError):
             cast(Any, leases).grant(directory, platform.processes())

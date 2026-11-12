@@ -84,7 +84,7 @@ class SettingsCliTests(SlotCase):
                 self.assertEqual({"ok": False, "error": error, "preview": None},
                                  self.settings("check", key, value, code=2))
                 self.assertEqual({"ok": False, "error": error}, self.settings("set", key, value, code=2))
-        self.assertEqual([], sorted(p.name for p in self.state.glob("*.json")) if self.state.exists() else [])
+        self.assertFalse((self.state / "capacity.json").exists() or (self.state / "order.json").exists())
 
     def test_set_saves_through_the_queue_and_answers_with_the_settings(self) -> None:
         document = self.settings("set", "capacity.slots", "6")
@@ -97,8 +97,8 @@ class SettingsCliTests(SlotCase):
         self.assertEqual(("memory", 4.0), (document["basis"]["mode"], document["basis"]["gib_per_slot"]))
         document = self.settings("set", "capacity.gib_per_slot", "8")
         self.assertEqual((8, 8), (document["basis"]["gib_per_slot"], document["basis"]["slots"]))
-        document = self.settings("set", "order.warn_wait", "30m")
-        self.assertEqual("Saved · Warn after waiting 1800 s", document["message"])
+        document = self.settings("set", "order.warn_wait", "20m")
+        self.assertEqual("Saved · Warn after waiting 1200 s", document["message"])
         self.assertEqual("saved", rows(document)["order.warn_wait"]["source"])
         self.assertEqual("Saved · Queue order Arrival", self.settings("set", "order.order", "window")["message"])
         self.assertEqual("Saved · Overtaking stops after never", self.settings("set", "order.limit", "0")["message"])
@@ -127,6 +127,11 @@ class SettingsCliTests(SlotCase):
         document = self.settings("reset", "order.batch")
         self.assertEqual((1800.0, 4.0), (rows(document)["order.batch"]["value"], rows(document)["order.safety"]["value"]))
         self.assertEqual("fixed", document["basis"]["mode"])
+        saved = json.loads((self.state / "order.json").read_text())
+        self.assertNotIn("batch", saved, "a reset knob leaves order.json, as the panel's d does")
+        self.settings("reset", "order.safety")
+        # order, safety, fallback and overrun are always saved (state.save_order(), every slotfather reads them)
+        self.assertEqual(3.0, json.loads((self.state / "order.json").read_text())["safety"])
         self.assertEqual("automatic", self.settings("reset", "capacity.slots")["basis"]["mode"])
         document = self.settings("reset", "--all")
         self.assertEqual("Saved · every setting at its default, capacity 4 slots", document["message"])

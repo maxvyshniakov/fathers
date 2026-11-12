@@ -113,7 +113,7 @@ def memory_facts() -> dict[str, Any]:
             return {"swap_free": free, "swap_total": None, "level": level}
         return {"swap_free": None, "swap_total": None, "level": None}
     if _platform.linux():  # no pressure level: MemAvailable and PSI, as the memory policy reads them
-        facts = _platform.linux_memory()
+        facts = cast(dict[str, Any], cast(Any, _platform).linux_memory())
         return {"swap_total": facts["swap_total"], "swap_free": facts["swap_free"], "level": None,
                 "available": facts["available"], "total": facts["total"], "psi_some": facts["psi_some"],
                 "psi_full": facts["psi_full"], "cgroup_available": facts.get("cgroup_available"),
@@ -123,7 +123,8 @@ def memory_facts() -> dict[str, Any]:
     with contextlib.suppress(OSError, ValueError, subprocess.TimeoutExpired):
         physical = _platform.sysctl("hw.memsize")
         stats = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=2)
-        found.update(total=int(physical) / (1024 * 1024), used=macos_used_memory(stats.stdout))
+        if physical is not None:
+            found.update(total=int(physical) / (1024 * 1024), used=macos_used_memory(stats.stdout))
     return found
 
 
@@ -199,10 +200,11 @@ def describe_events(events: list[dict[str, Any]], directory: Path, live: list[di
     settles whether a release was a lease ending or a waiter giving up, which queue.log alone cannot say once it is
     longer than the part queue_events() reads; a waiter that gave up changed no held slots."""
     by_pid: dict[int, list[dict[str, Any]]] = {}
-    for item in _state.tail_objects(directory / "history.jsonl", EVENT_HISTORY):
+    history = cast(list[dict[str, Any]], cast(Any, _state).tail_objects(directory / "history.jsonl", EVENT_HISTORY))
+    for item in history:
         pid = item.get("pid")
         if isinstance(pid, int):
-            by_pid.setdefault(pid, []).append(cast(dict[str, Any], item))
+            by_pid.setdefault(pid, []).append(item)
     running = {cast(int, entry["pid"]): entry for entry in live if isinstance(entry.get("pid"), int)}
 
     def near(stamp: Any, when: datetime.datetime) -> bool:
@@ -320,7 +322,7 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
                 "reprioritized": entry.get("reprioritized") if entry.get("reprioritized") in _config.PRIORITIES else None,
                 "est_start": datetime.datetime.fromtimestamp(foreseen["est_start"], datetime.timezone.utc)
                 if foreseen.get("est_start") is not None else None,
-                "granted": parse_utc(entry.get("granted")), "passable": kind == "waiting" and _schedule.overtakable(entry),
+                "granted": parse_utc(entry.get("granted")), "passable": kind == "waiting" and bool(cast(Any, _schedule).overtakable(entry)),
                 "all": bool(entry.get("all")),
                 "style": "text" if kind == "waiting" else "legacy"}
 
@@ -361,8 +363,8 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
     own_held = sum(h["count"] for h in holders if h["kind"] == "held")
     return {"directory": str(directory), "slots": slots, "saved": saved, "basis": look.basis, "cores": machine,
             "averages": averages, "draining": _query.draining(used, slots),
-            "advice": _query.size(slots, machine, slots, averages, min(used, slots),
-                                  bool(waiters) and admission == 0),
+            "advice": cast(dict[str, Any], cast(Any, _query).size(slots, machine, slots, averages, min(used, slots),
+                                                                  bool(waiters) and admission == 0)),
             "holders": holders, "waiters": waiters, "used": used, "free": free, "memory_block": memory_block,
             "admission": admission,
             "order": order, "start": start, "reserved": reserved, "limit": settings["limit"],
@@ -410,10 +412,10 @@ def dashboard_json(model: dict[str, Any]) -> dict[str, Any]:
 def full_status(directory: Path | None = None) -> dict[str, Any]:
     """`status --json --full`: `status --json` (version 2, as it is for older readers) and the dashboard block,
     both from one look at the queue, with the host and the time."""
-    import socket
+    from .events import host
     look = _query.look(directory)
     found = _query.status_json(look.directory, look=look)
-    found.update(host=socket.gethostname().split(".")[0].lower(), time=stamp(datetime.datetime.now(datetime.timezone.utc)),
+    found.update(host=host(), time=stamp(datetime.datetime.now(datetime.timezone.utc)),
                  dashboard=dashboard_json(dashboard_model(look)))
     return found
 

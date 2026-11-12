@@ -11,7 +11,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Any
+from typing import Any, cast
 
 from . import config as _config
 from . import events as _events
@@ -154,11 +154,11 @@ def ask_yield(pid: int, start: str, directory: Path | None = None) -> tuple[dict
         if int(entry.get("yields") or 0) >= _config.YIELDS_MAX:
             raise _config.SlotError(f"{entry.get('label')} (pid {pid}) has yielded {_config.YIELDS_MAX} times, the most")
         before = _state.asked(path)
-        if before is not None:
-            return entry, before, True
+        if before is not None and any(p.stem == before.get("by") and e.get("state") != "held" for p, e in live):
+            return entry, before, True  # a request that stands; one naming a waiter gone is replaced below
         settings = _schedule.order_settings(directory, environment=False)
         moment = time.time()
-        own = CLASS_RANK[entry.get("aged") if entry.get("aged") in _config.PRIORITIES else _config.priority_of(entry)]
+        own = CLASS_RANK[_config.priority_of(entry)]  # its own class, as schedule.yield_asks() compares it
         waiters = [(p, e) for p, e in live if e.get("state") != "held"]
         ranked = _schedule.ranked([e for _, e in waiters], settings, moment)
         paths = {id(e): p for p, e in waiters}
@@ -424,6 +424,7 @@ class Lease:
                 _state.marker(self.path).unlink(missing_ok=True)
                 _idle.path(self.path).unlink(missing_ok=True)
                 if isinstance(entry, dict):
+                    entry = cast(dict[str, Any], entry)
                     ran = entry.get("state") == "held" or bool(entry.get("yields"))  # a yielded lease ran
                     item = _state.record(directory, entry, "released" if ran else "left", self.status, self.usage)
                     if ran:
@@ -436,7 +437,7 @@ class Lease:
                                      {"count": self.count, "gave_up_after": item.get("waited")}, _events.holder(entry))
                 else:  # the entry was gone already: queue.log has its release, nothing more is known
                     _events.emit(directory, "lease.released", {"type": "request", "id": self.path.stem},
-                                 {"count": self.count})
+                                 {"count": self.count, "unknown": True})
                 # Hand the slots on now: waiters look at the queue less often the longer they wait.
                 with contextlib.suppress(_config.SlotError, OSError):
                     grant(directory, _platform.processes())

@@ -206,7 +206,7 @@ def memory_slots(gib: float | None, per_slot: float) -> int | None:
     return max(1, math.floor(round(gib) / per_slot + 1e-9))
 
 
-def capacity_basis() -> dict:
+def capacity_basis() -> dict[str, Any]:
     """The capacity and how it was found: {"slots", "saved", "mode", "cores", "cpu_slots", "memory_gib",
     "gib_per_slot", "memory_slots"}. Mode "fixed" is a saved count, "memory" one slot per gib_per_slot GiB, "lower"
     the lower of the CPU and memory budgets, "automatic" the lower at AUTO_GIB_PER_SLOT; atomic publication keeps

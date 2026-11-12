@@ -46,7 +46,7 @@ import stat
 import subprocess
 import sys
 import time
-from typing import NamedTuple
+from typing import Any, NamedTuple, cast
 
 
 from . import config as _config
@@ -1044,10 +1044,11 @@ def sweep(directory: Path, live: bool = False, dev_servers: bool = False, only: 
                 _state.log(directory, f"sweep {item['action']} {item['class']} pid {item['pid']} ({item['kind']}, "
                                   f"age {_config.duration(item['age'])}, {len(item['tree'])} process(es)): "
                                   f"{item['cmd'][:120]}")
-                _events.emit(directory, "process.swept", {"type": "process", "id": str(item["pid"]), "pid": item["pid"]},
-                             {"action": item["action"], "class": item["class"], "kind": item["kind"],
-                              "age": round(item["age"]), "processes": len(item["tree"]),
-                              "cmd": _events.command(item["cmd"])},
+                swept = cast(dict[str, Any], item)
+                _events.emit(directory, "process.swept", {"type": "process", "id": str(swept["pid"]), "pid": swept["pid"]},
+                             {"action": swept["action"], "class": swept["class"], "kind": swept["kind"],
+                              "age": round(float(swept["age"])), "processes": len(cast(list[Any], swept["tree"])),
+                              "cmd": _events.command(swept["cmd"])},
                              dict(_events.actor(kind="tool"), via="sweep"), level="warn")
     enabled = set(found_settings["classes"])
     docker = containers(found_settings) if "container" in enabled and only is None else \

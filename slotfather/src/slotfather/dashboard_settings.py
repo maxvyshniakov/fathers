@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import contextlib
 import math
-import os
 import textwrap
 import time
 from typing import TYPE_CHECKING, Any, Callable, NamedTuple, cast
@@ -22,8 +21,8 @@ from . import keys as _keys
 if TYPE_CHECKING:
     from .dashboard import Canvas
 
-from .settings import (CAPACITY_PER_CORE, KNOBS, MODE_LABELS, MODES, NEVER, ORDER_FIELDS, ORDER_LABELS,  # noqa: F401
-                       UNITS, number, plural)
+from .settings import KNOBS, MODE_LABELS, MODES, NEVER, ORDER_FIELDS, ORDER_LABELS, UNITS, number
+from .settings import CAPACITY_PER_CORE as CAPACITY_PER_CORE  # re-exported: the panel's limit, as before
 from . import settings as _shared
 
 # One flat list (owner, 2026-11-11), the STATUS block above it
@@ -526,7 +525,7 @@ class Settings:
             basis["memory_gib"] = self.memory_gib
         queue = None if not model else {"slots": model["slots"], "free": model.get("free", 0),
                                         "used": model.get("used", 0), "waiting": len(model.get("waiters", []))}
-        for label, text, style in _shared.status_rows(basis, queue):
+        for label, text, style in _shared.status_rows(basis, queue, self.location()):
             rows.append(Row("", ((2, label, "dim"), (2 + STATUS_LABEL, text, style))))
         return rows
 

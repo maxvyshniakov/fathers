@@ -32,16 +32,20 @@ from typing import Any, NamedTuple, cast
 
 
 from . import config as _config
-from .board import (HISTORY_WINDOW, JOINER, dashboard_admission, dashboard_model, dashboard_text,  # noqa: F401
-                    describe_events, held_history, macos_used_memory, memory_facts, memory_low, parse_utc,
-                    process_tree, process_usage, queue_events, span, swap_low)
+from .board import HISTORY_WINDOW, JOINER, dashboard_model, dashboard_text, memory_low, span, swap_low
+# Re-exported for the tests and tools that read them here (dashboard.describe_events(), ...)
+from .board import dashboard_admission as dashboard_admission
+from .board import describe_events as describe_events
+from .board import held_history as held_history
+from .board import macos_used_memory as macos_used_memory
+from .board import memory_facts as memory_facts
+from .board import parse_utc as parse_utc
+from .board import process_tree as process_tree
+from .board import process_usage as process_usage
+from .board import queue_events as queue_events
 from . import dashboard_settings as _settings
 from . import keys as _keys
 from . import lane_context as _lane_context
-from . import platform as _platform
-from . import query as _query
-from . import schedule as _schedule
-from . import state as _state
 from . import theme as _theme
 from . import version as _version
 
@@ -1062,7 +1066,7 @@ def enrich_details(item: dict[str, Any]) -> None:
         item["lane"] = _lane_context.fetch(context, item.get("workdir") or "")
 
 
-def machine_memory_status(memory: dict) -> tuple[str, str]:
+def machine_memory_status(memory: dict[str, Any]) -> tuple[str, str]:
     """RAM/pressure health only; swap has a separate status and never colours RAM by itself (board.memory_low())."""
     low = memory_low(memory)
     if low is None:
@@ -2037,7 +2041,7 @@ def load_details(item: dict[str, Any]) -> tuple[Any, str | None]:
 
 
 def load_model(_: Any = None) -> tuple[dict[str, Any], str | None]:
-    return cast(dict[str, Any], dashboard_model()), installed_source()
+    return dashboard_model(), installed_source()
 
 
 class DetailsCache:
@@ -2429,7 +2433,7 @@ def dashboard_command(argv: list[str]) -> int:
         use_marks("utf" not in (sys.stdout.encoding or "").lower())
         size_now = shutil.get_terminal_size((120, 40))
         canvas = Canvas(width or size_now.columns, height or size_now.lines)
-        dashboard_draw(canvas, cast(dict[str, Any], model), cwd=process_cwd(items[0]["pid"]) if items and items[0]["kind"] != "waiting"
+        dashboard_draw(canvas, model, cwd=process_cwd(items[0]["pid"]) if items and items[0]["kind"] != "waiting"
                        else None)
         tty = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
         print(canvas.render(colour if colour is not None else tty,

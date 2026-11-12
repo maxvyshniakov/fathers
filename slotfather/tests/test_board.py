@@ -11,7 +11,7 @@ import importlib
 import json
 import os
 import time
-from typing import Any
+from typing import Any, cast
 from unittest import mock
 
 from test_slotfather import ROOT, SlotCase
@@ -28,9 +28,9 @@ def encoded(value: Any) -> Any:
         utc = value.astimezone(datetime.timezone.utc)
         return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond // 1000:03d}Z"
     if isinstance(value, dict):
-        return {key: encoded(item) for key, item in value.items()}
+        return {key: encoded(item) for key, item in cast(dict[str, Any], value).items()}
     if isinstance(value, (list, tuple)):
-        return [encoded(item) for item in value]
+        return [encoded(item) for item in cast(list[Any], value)]
     return value
 
 
@@ -95,8 +95,8 @@ class BoardTests(SlotCase):
                          (holder["asked"], holder["yieldable"], holder["priority"], holder["context"]))
         self.assertRegex(holder["asked_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$")
         self.assertIsInstance(holder["key"], list)
-        self.assertTrue(all(isinstance(row, list) and len(row) == 4 for row in holder["tree"]))
-        self.assertTrue(all(isinstance(step, list) and len(step) == 3 for step in block["history"]))
+        self.assertTrue(all(isinstance(row, list) and len(cast(list[Any], row)) == 4 for row in holder["tree"]))
+        self.assertTrue(all(isinstance(step, list) and len(cast(list[Any], step)) == 3 for step in block["history"]))
         for label in ("holder", "other"):
             self.release(label)
         for process in processes:
@@ -110,7 +110,8 @@ class BoardTests(SlotCase):
         self.assertEqual(3, len(found["entries"]))
         for entry in found["entries"]:
             row = rows[(entry["pid"], entry["since"])]
-            self.assertEqual((entry["yield_asked"] or {}).get("label") or "", row["asked"], entry["label"])
+            asked = cast(dict[str, Any], entry["yield_asked"] or {})
+            self.assertEqual(asked.get("label") or "", row["asked"], entry["label"])
             self.assertEqual(entry["idle_since"] is None, row["idle_since"] is None)
             self.assertEqual(entry["state"] == "held", row["kind"] == "held")
         waiter = next(entry for entry in found["entries"] if entry["id"] == stem)
@@ -125,7 +126,7 @@ class BoardTests(SlotCase):
         self.started("holder")
         full = self.full()
         plain = json.loads(self.tool("status", "--json").stdout)
-        self.assertEqual(sorted(plain) + ["dashboard", "host", "time"], sorted(full))
+        self.assertEqual(sorted([*plain, "dashboard", "host", "time"]), sorted(full))
         self.assertEqual(2, full["v"])
         self.assertRegex(full["host"], r"^[a-z0-9-]+$")
         self.assertRegex(full["time"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$")

@@ -80,13 +80,15 @@ def request(entry: dict[str, Any], entry_path: Path | None = None) -> dict[str, 
 
 def actor(pid: int | None = None, lane: str | None = None, kind: str = "process") -> dict[str, Any]:
     """Who caused it: a process (this one unless `pid`), with its lane where it names one, and `via: godfather` when
-    Godfather ran the command (GODFATHER_ACTOR)."""
+    this process is a command Godfather ran (GODFATHER_ACTOR); never for another process, such as a holder whose
+    grant this command's look made."""
+    own = pid is None or pid == os.getpid()
     found: dict[str, Any] = {"type": kind, "pid": pid if pid is not None else os.getpid()}
     if kind == "tool":
         found["name"] = "slotfather"
     if lane:
         found["lane"] = lane
-    if (os.environ.get("GODFATHER_ACTOR") or "").startswith("godfather"):
+    if own and (os.environ.get("GODFATHER_ACTOR") or "").startswith("godfather"):
         found["via"] = "godfather"
     return found
 
@@ -104,9 +106,11 @@ def line(kind: str, subject: dict[str, Any], details: dict[str, Any], who: dict[
     if level and level != "info":
         event["level"] = level
     data = (json.dumps(event, sort_keys=True, allow_nan=False, ensure_ascii=False) + "\n").encode("utf-8")
-    if len(data) > LINE_MAX:  # never a torn or oversized line: the details go, the event stays
+    if len(data) > LINE_MAX:  # never an oversized line: the details go, the event stays
         event["details"] = {"truncated": True}
         data = (json.dumps(event, sort_keys=True, allow_nan=False, ensure_ascii=False) + "\n").encode("utf-8")
+    if len(data) > LINE_MAX:  # a subject or actor too large even so: no line at all
+        raise ValueError("event too large")
     return data
 
 

@@ -66,8 +66,8 @@ nothing else. The block:
 - an event: `when`, `verb` (`granted`, `released`, `left`, `reaped`, `priority`, `waiting`), `count`, `pid`,
   `delta` (the change to held slots), `label`, `detail`, and `state` or `unsure` where queue.log alone cannot say.
 
-Presentation stays with the reader: holder colours, the lane of a request (Lanefather) and a holder's working
-directory are not in the block.
+Presentation stays with the reader: holder colours, the lane of a request (Lanefather) and a holder's current
+working directory (lsof) are not in the block; a row's `workdir` is the directory the request was made in.
 
 **`slotfather settings`** reads and changes the shared settings (capacity.json and order.json) with the same
 validation, ownership check and queue lock as `slotfather slots` and `slotfather order`; the in-tree Settings panel
@@ -94,7 +94,7 @@ slotfather settings reset (KEY | --all) [--revision R] --json
      {"key": "capacity.slots", "label": "Slots", "type": "integer", "value": 4, "default": null, "min": 1,
       "max": 48, "step": 1, "unit": "slots", "when": {"capacity.mode": ["fixed"]}, ...},
      {"key": "capacity.gib_per_slot", "label": "GiB per slot", "type": "number", "value": 4.0, "default": 4.0,
-      "min": 0.5, "max": null, "step": 0.5, "unit": "GiB", "when": {"capacity.mode": ["memory", "lower"]}, ...}]},
+      "min": 0, "min_exclusive": true, "max": null, "step": 0.5, "unit": "GiB", "when": {"capacity.mode": ["memory", "lower"]}, ...}]},
    {"id": "order", "title": "Queue order", "settings": [
      {"key": "order.order", "label": "Queue order", "type": "choice", "value": "backfill", ...},
      {"key": "order.warn_wait", "label": "Warn after waiting", "type": "duration", "value": 1800.0,
@@ -115,8 +115,9 @@ slotfather settings reset (KEY | --all) [--revision R] --json
 - `basis` is the capacity basis with the memory budget filled in by the automatic rule where Fixed does not
   work it out, as STATUS' budgets row shows it.
 - `revision` is opaque: one token for the three capacity keys (capacity.json), one for the order keys
-  (order.json). With `--revision` a `set` or `reset` saves only while that file is unchanged; without it, order
-  settings merge with whatever else is saved.
+  (order.json). With `--revision` a `set` or `reset` saves only while that file is unchanged (`reset --all
+  --revision R` checks capacity.json's); without it, order settings merge with whatever else is saved.
+  `min_exclusive: true` means the value must be above `min`.
 - `check` replies `{"ok", "error", "preview"}`, and `slots` for a capacity key: the capacity the value gives, with
   a preview such as `→ 6 slots · will start 1 waiting` or `→ 2 slots · will drain 1: running work keeps its slots`.
   Errors use the panel's words (`Enter a whole number of slots, at least 1.`, `At most 48 slots (4 per core).`).
@@ -132,8 +133,9 @@ UTC with milliseconds), `host`, `source` (`slotfather`), `kind`, `subject`, `act
 `level`. Each site that writes a queue.log line also appends its event, after the change; queue.log and
 history.jsonl are unchanged, and an event that cannot be written never fails or alters the operation. Lines are
 appended with one write (O_APPEND, mode 0600), carry no control characters, and stay under 16 KiB (a larger
-event keeps `details: {"truncated": true}`); past 4 MiB the log becomes `events.jsonl.1` under an flock on
-`events.lock`. Nothing is written into another user's queue. `subject` is the request (`type: request`, `id` its
+event keeps `details: {"truncated": true}`, and one still too large is not written); past 4 MiB the log becomes `events.jsonl.1` under an flock on
+`events.lock`. Nothing is written into another user's queue: a process of another user (root through a guest
+agent) that changes that queue leaves its queue.log line without an event. `subject` is the request (`type: request`, `id` its
 entry's name as `status --json` gives it, `label`, `pid`) unless said otherwise; `actor` is the holder process
 (with `lane` from its metadata) for what a lease's own client does, `type: tool` (`name: slotfather`) for what a
 look at the queue decides, the command's process otherwise, with `via: godfather` when `GODFATHER_ACTOR` names
@@ -143,7 +145,7 @@ SHA-256 (compared with `$GODFATHER_DIR/src/godfather/eventcheck.py` when that is
 | Kind | When | `details` |
 | --- | --- | --- |
 | `lease.granted` | a request is granted, or a yielded lease again (`resumed`) | `count`, `priority`, `waited`, `served` when ageing moved it, `meta` |
-| `lease.released` | a lease ends | `count`, `exit`, `ran`, `cpu`, `rss_peak_mb` |
+| `lease.released` | a lease ends | `count`, `exit`, `ran`, `cpu`, `rss_peak_mb`; only `count` and `unknown: true` when its entry was already gone |
 | `request.left` | a waiter gives up (`--wait`, a signal) | `count`, `gave_up_after` |
 | `lease.reaped`, `request.reaped` | a holder that died is reaped (level warn) | `count`, `ran`, `waited`, `reason` |
 | `request.reprioritized` | `slotfather reprioritize` | `from`, `to`, `state` |
@@ -151,8 +153,8 @@ SHA-256 (compared with `$GODFATHER_DIR/src/godfather/eventcheck.py` when that is
 | `lease.yield_asked` | a waiter, or `ask-yield` (`by_hand`), asks a lease to yield | `count`, `for` (`id`, `label`, `priority`) |
 | `lease.yield_withdrawn` | that request is withdrawn | — |
 | `lease.yielded` | the lease yields | `count`, `to` (`id`, `label`), `yields` |
-| `capacity.changed` | a capacity is saved or reset (subject `capacity`) | `saved` (capacity.json, `null` for reset), `mode`, `slots` |
-| `order.changed` | order settings are saved or reset (subject `order`) | `saved` (the changed keys) or `reset: true` |
+| `capacity.changed` | a capacity is saved or reset (a save that changes nothing is no event, as for order) (subject `capacity`) | `saved` (capacity.json, `null` for reset), `mode`, `slots` |
+| `order.changed` | order settings are saved or reset (subject `order`) | `saved` (the keys the change named) or `reset: true` |
 | `process.swept` | `sweep --live` stops a leftover process (subject `process`, level warn) | `action`, `class`, `kind`, `age`, `processes`, `cmd` |
 
 **Dashboard actions** (`capabilities.dashboard.actions`): `reprioritize` and `ask-yield`, each identity-checked
