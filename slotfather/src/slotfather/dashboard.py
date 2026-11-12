@@ -47,7 +47,8 @@ from . import version as _version
 
 SPARK = "▁▂▃▄▅▆▇█"
 CHART_ROWS, MIN_CHART_ROWS = 4, 2  # the chart's rows when there is room; fewer than two, it goes (owner)
-MACHINE_HEIGHT = 9 + CHART_ROWS  # frame, status, a gap, 3 resource rows, a gap, the chart and its axis line
+MACHINE_HEIGHT = 7 + CHART_ROWS  # frame, 3 resource rows, a gap, the chart and its axis line
+LABEL_COLUMN = 12  # a MACHINE row: its health mark, a gap, the label, then the bar this far in
 HISTORY_WINDOW = 3600  # seconds of queue.log the utilisation strip rebuilds
 LOG_TAIL = 262144  # bytes of queue.log read per refresh
 WIDE = 110  # columns from which the panels sit side by side
@@ -62,7 +63,7 @@ def set_theme(theme: _theme.Theme) -> None:
     current_theme = theme
 
 
-ASCII = str.maketrans({"🮅": "#", "■": "#", "▪": "#", "◌": "o", "□": "o", "▫": "o", "▶": ">", "▉": "#", "▌": "+", "▐": "|", "█": "#", "▓": "%", "▒": "=", "░": ".", "·": ".", "●": "*", "…": "~", "─": "-", "│": "|",
+ASCII = str.maketrans({"🆗": "+", "🔥": "!", "🮅": "#", "■": "#", "▪": "#", "◌": "o", "□": "o", "▫": "o", "▶": ">", "▉": "#", "▌": "+", "▐": "|", "█": "#", "▓": "%", "▒": "=", "░": ".", "·": ".", "●": "*", "…": "~", "─": "-", "│": "|",
                        "╭": "+", "╮": "+", "╰": "+", "╯": "+", "↑": "^", "↓": "v", "↗": "/", "↘": "\\", "→": ">",
                        "←": "<", "≈": "~", "×": "x", "—": "-", "⏸": "=", "▭": "o", "−": "-", "╻": "#", "╹": "#",  "┃": "#", "▁": "_", "▂": "_", "▃": "-", "▄": "-",
                        "▅": "=", "▆": "=", "▇": "#"})
@@ -1050,12 +1051,16 @@ marks = {key: emoji for key, (emoji, _) in MARKS.items()}  # what this terminal 
 # A request's priority (owner, 2026-11-11): its own column after the state; normal has none, so the column is blank
 PRIORITY_MARKS = {"interactive": ("⚡", "!"), "batch": ("🐢", "~")}
 priority_marks = {key: emoji for key, (emoji, _) in PRIORITY_MARKS.items()}
+# A MACHINE resource's health (owner, 2026-11-12): ok, or critical by the rules that turn its bar red
+HEALTH_MARKS = {"ok": ("🆗", "+"), "hot": ("🔥", "!")}
+health_marks = {key: emoji for key, (emoji, _) in HEALTH_MARKS.items()}
 
 
 def use_marks(ascii_only: bool, joined: bool = True) -> None:
     """The QUEUE state column for this terminal: ASCII where it has no UTF-8, 👴 for 👨‍🦳 where it does not join."""
     marks.update({key: plain if ascii_only else emoji for key, (emoji, plain) in MARKS.items()})
     priority_marks.update({key: plain if ascii_only else emoji for key, (emoji, plain) in PRIORITY_MARKS.items()})
+    health_marks.update({key: plain if ascii_only else emoji for key, (emoji, plain) in HEALTH_MARKS.items()})
     if not ascii_only and not joined:
         marks["legacy"] = OLD_FALLBACK
 
@@ -1368,47 +1373,30 @@ def machine_memory_status(memory: dict) -> tuple[str, str]:
     return "memory unknown", "dim"
 
 
-def machine_status(model: dict, width: int) -> list[tuple[str, str]]:
-    memory = model["memory"]
-    ram = machine_memory_status(memory)
-    if memory.get("swap_total") == 0:
-        swap = ("swap off", "status-normal")
-    elif memory.get("swap_free") is None:
-        swap = ("swap unknown", "dim")
-    elif memory["swap_free"] < _config.number_setting("MIN_FREE_SWAP_MB", _config.MIN_FREE_SWAP_MB):
-        swap = ("swap low", "bad")
-    else:
-        swap = ("swap ok", "status-normal")
+def machine_note(model: dict[str, Any]) -> list[tuple[str, str]]:
+    """MACHINE's top border, on the right (owner, 2026-11-12): the load outside leases and whether the queue admits
+    work, the admission red when it blocks."""
     admission = model.get("admission")
     permit = (("admission: ?", "dim") if admission is None else ("no admission", "bad") if not admission
               else (f"admission: {admission} slots", "status-normal"))
-    outside = model["advice"]["unleased_load"]
-    fields = [ram, swap, (f"unleased load: {outside:.1f}", "status-normal"), permit]
-    separator = " · "
-    if sum(text_width(text) for text, _ in fields) + 9 > width:
-        fields[0] = (ram[0].replace("memory", "mem").replace("unknown", "?"), ram[1])
-        fields[1] = (swap[0].replace("unknown", "?"), swap[1])
-        fields[2] = (f"unleased {outside:.1f}", "status-normal")
-        separator = "  "
-        if sum(text_width(text) for text, _ in fields) + 6 > width:
-            separator = " "
-    parts = []
-    for index, field in enumerate(fields):
-        if index:
-            parts.append((separator, "dim"))
-        parts.append(field)
-    return parts
+    return [(f"unleased {model['advice']['unleased_load']:.1f}", "status-normal"), (" · ", "dim"), permit]
 
 
 def draw_machine(canvas: Canvas, y: int, x: int, height: int, width: int, model: dict) -> None:
     canvas.box(y, x, height, width, "MACHINE")
+    note = machine_note(cast(dict[str, Any], model))
+    for parts in (note, note[2:]):  # all of it, else the admission alone, else nothing
+        size = sum(text_width(text) for text, _ in parts) + 2
+        if x + 2 + text_width(" MACHINE ") + 2 + size <= x + width - 2:
+            canvas.segments(y, x + width - 2 - size, [(" ", "text"), *parts, (" ", "text")], size)
+            break
     inner, slots = width - 6, model["slots"]
     load1 = model["averages"][0]
     memory = model["memory"]
     ram_status = machine_memory_status(memory)
     def usage_parts(used: float, total: float, critical: bool) -> list:
         label = f"used {megabytes(used)} of {megabytes(total)}"
-        bar_width = min(12, max(0, inner - 10 - text_width(label) - 1))
+        bar_width = min(12, max(0, inner - LABEL_COLUMN - text_width(label) - 1))
         return ramp_bar(used / total, bar_width, critical) + [(" " + label if bar_width else label, "text")]
 
     if memory["swap_total"] == 0:
@@ -1433,9 +1421,11 @@ def draw_machine(canvas: Canvas, y: int, x: int, height: int, width: int, model:
     # Critical where the one-minute load leaves less than one slot's share of the cores free (#15 review): by load
     # alone, so a fully leased but quiet machine is not red
     load_hot = cast(bool, model["cores"] - load1 < model["cores"] / slots)
+    load_text = f"{load1:.1f} · {model['cores']} cores"
+    load_bar = min(12, max(0, inner - LABEL_COLUMN - text_width(load_text) - 1))  # as narrow as the text needs
     lines: list[tuple[str, list[tuple[str, str]]]] = [
-        ("load 1m", ramp_bar(cast(float, load1 / model["cores"]), 12, load_hot)
-         + [(f" {load1:.1f} · {model['cores']} cores", "text")]),
+        ("load 1m", ramp_bar(cast(float, load1 / model["cores"]), load_bar, load_hot)
+         + [((" " if load_bar else "") + load_text, "text")]),
         ("memory", cast(list[tuple[str, str]], memory_parts)), ("swap", cast(list[tuple[str, str]], swap_parts))]
     chart_width = max(1, inner)
     buckets = history_buckets(model["history"], chart_width)
@@ -1445,17 +1435,16 @@ def draw_machine(canvas: Canvas, y: int, x: int, height: int, width: int, model:
     # 4 → 3 → 2 rows and then entirely (never one row); then the resource rows become one compact line; memory and
     # swap never go.
     interior = height - 2
-    full = interior >= 2 + len(lines)
-    chart_rows = min(CHART_ROWS, interior - 2 - len(lines) - 2) if full else 0
+    full = interior >= len(lines)
+    chart_rows = min(CHART_ROWS, interior - len(lines) - 2) if full else 0
     chart_rows = chart_rows if chart_rows >= MIN_CHART_ROWS else 0
-    row = y + 1
-    if interior >= 2 or full:  # the status line, unless only the compact resource line fits
-        canvas.segments(row, x + 3, machine_status(model, inner), inner)
-        row += 2 if (full or interior >= 3) else 1
+    row = y + 1  # right under the top border, which carries the status (owner, 2026-11-12)
+    critical = {"load 1m": load_hot, "memory": memory_low, "swap": swap_low}
     if full:
         for name, parts in lines:
-            canvas.put(row, x + 3, name, "dim")
-            canvas.segments(row, x + 13, parts, inner - 10)
+            canvas.put(row, x + 3, health_marks["hot" if critical[name] else "ok"], "text", 2)
+            canvas.put(row, x + 6, name, "dim")
+            canvas.segments(row, x + 3 + LABEL_COLUMN, parts, inner - LABEL_COLUMN)
             row += 1
     elif interior >= 1:
         resources: list[tuple[str, float | None, str, bool]] = [
@@ -1499,11 +1488,15 @@ def compact_resources(resources: list[tuple[str, float | None, str, bool]], widt
     """Load, memory and swap on one line (owner, 2026-11-12) when MACHINE is too short for their rows: short ramp
     bars (6 to 4 cells, red when critical), else the numbers alone, a critical one in red. Never drops one."""
     parts: list[tuple[str, str]] = []
-    for bar_width, separator in ((6, " · "), (5, " · "), (4, " · "), (0, " · "), (0, "  ")):
+    forms = [(6, " · ", True), (5, " · ", True), (4, " · ", True), (0, " · ", True), (0, "  ", True), (0, " ", True),
+             (0, " ", False)]  # the last, on the narrowest panel, without the marks: never without a value
+    for bar_width, separator, marked in forms:
         parts = []
         for index, (label, fraction, value, critical) in enumerate(resources):
             if index:
                 parts.append((separator, "dim"))
+            if marked:
+                parts.append((health_marks["hot" if critical else "ok"] + " ", "text"))
             parts.append((label + " ", "dim"))
             if bar_width and fraction is not None:
                 parts += ramp_bar(fraction, bar_width, critical) + [(" ", "text")]

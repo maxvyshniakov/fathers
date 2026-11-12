@@ -56,7 +56,8 @@ class MarkTests(unittest.TestCase):
         self.assertEqual("⏸️", self.tool.marks["waiting"], "⏸️ with VS16")
 
     def test_every_emoji_is_one_two_cell_glyph(self) -> None:
-        for emoji in [*self.tool.marks.values(), *self.tool.priority_marks.values(), self.tool.OLD_FALLBACK]:
+        for emoji in [*self.tool.marks.values(), *self.tool.priority_marks.values(), *self.tool.health_marks.values(),
+                      self.tool.OLD_FALLBACK]:
             self.assertEqual([emoji], self.tool.clusters(emoji), emoji)
             self.assertEqual(2, self.tool.text_width(emoji), emoji)
         self.assertEqual(["a", "👨‍🦳", "b"], self.tool.clusters("a👨‍🦳b"), "the ZWJ sequence stays one glyph")

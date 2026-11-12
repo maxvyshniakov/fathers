@@ -238,11 +238,11 @@ Solarized whose bright black is close to the background. `SLOTFATHER_THEME` sets
 
 ## Machine
 
-- **memory / swap status:** the normal text colour is normal, red is a condition that can block
-  additional leases. The memory bar also reflects memory health.
-- **unleased load:** estimated load not explained by the CPU share of held slots.
+- **health marks:** 🆗 before load 1m, memory and swap while they are fine, 🔥 while
+  critical (memory low and swap low can block additional leases).
+- **unleased load** (top border): estimated load not explained by the CPU share of held slots.
   It uses the lower of the one- and five-minute load averages.
-- **admission:** slots a generic new request can get immediately, considering
+- **admission** (top border): slots a generic new request can get immediately, considering
   queue order and memory checks. It is not a count of worker processes.
 - **load 1m:** one-minute system load, shown beside the core count.
   Load counts runnable and waiting tasks; it is not CPU busy percentage and can
@@ -253,7 +253,7 @@ Solarized whose bright black is close to the background. `SLOTFATHER_THEME` sets
   history chart's ramp at its place along the bar, so a half-full bar
   runs from cyan to the middle and a nearly full one ends red-orange. A bar is entirely
   red (the bad token) while its resource is critical: memory low, swap low
-  (the conditions that turn the status word red), or a one-minute load that leaves
+  (the conditions that put 🔥 before the row), or a one-minute load that leaves
   less than one slot's share of the cores free (by load alone: a fully leased but
   quiet machine is not red).
 
@@ -273,11 +273,14 @@ narrow chart drops `full`, then `peak`; the axis stays. Whole slots can still
 produce fractional block heights when graph height and capacity differ.
 Historical over-capacity values are retained in `peak`.
 
-MACHINE does not scroll, so it keeps no blank padding rows: the status line sits right under its top border and
-the axis right under the chart. Short of rows, the chart gives up height first, four rows to three to two and
+MACHINE does not scroll, so it keeps no blank padding rows: load, memory and swap start right under its top
+border, and the axis sits right under the chart. Each row starts with its health: 🆗, or 🔥 when critical by the
+rules that turn its bar red (`+` and `!` in ASCII). The load outside leases and the admission state sit on the
+right of the top border, `unleased 3.5 · no admission`, the admission red while it blocks; a narrow border keeps
+the admission alone. Short of rows, the chart gives up height first, four rows to three to two and
 then entirely (never one row, and its axis goes with it). Shorter still, load, memory and swap share one line,
-`load ■■■■ 26.8/12 · mem ■■■ 24.1/32G · swap ■■ 7.6/9G`, with short bars in the same ramp (red when critical),
-and on a narrow panel the numbers alone, a critical one in red. Memory and swap never go while MACHINE is shown.
+`🆗 load ■■■■ 26.8/12 · 🔥 mem ■■■ 24.1/32G · 🆗 swap ■■ 7.6/9G`, with short bars in the same ramp (red when
+critical), and on a narrow panel the numbers alone, a critical one in red; the narrowest drops the marks. Memory and swap never go while MACHINE is shown.
 
 **One column** (under 110 columns): SLOTS, QUEUE and the details stack; below them MACHINE and EVENTS sit side by
 side, MACHINE on the left at half the width and at least 44 columns, EVENTS in the rest. Where EVENTS would get

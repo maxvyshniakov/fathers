@@ -837,43 +837,54 @@ class MachineStatusTests(unittest.TestCase):
                          "a normal probe ranked first may use the idle-host exemption")
 
 
-    def test_compact_status_keeps_admission_visible(self):
-        tool=load_dashboard()
-        model=dict(admission=0,advice=dict(unleased_load=4.5),
-                   memory=dict(level=2,swap_total=1024,swap_free=128))
-        for width in (44,46):
-            parts=tool.machine_status(model,width)
-            text="".join(part for part,_ in parts)
-            self.assertLessEqual(tool.text_width(text),width)
-            self.assertIn("no admission",text)
-            self.assertIn("swap low",text)
-
-
-    def test_status_row_separates_memory_swap_and_real_admission_then_gaps_before_bars(self):
+    def test_the_status_moves_into_the_top_border_and_each_row_has_its_health_mark(self):
         tool=load_dashboard()
         now=datetime.datetime.now(datetime.timezone.utc)
-        for level,free,admission,memory_word,swap_word in ((1,800,2,"memory ok","swap ok"),
-                                                        (2,800,0,"memory low","swap ok"),
-                                                        (1,128,0,"memory ok","swap low")):
-            with self.subTest(level=level,free=free):
+        for level,free,load,admission,marks in ((1,800,4,2,("🆗","🆗","🆗")),
+                                               (2,800,4,0,("🆗","🔥","🆗")),
+                                               (1,128,11.5,0,("🔥","🆗","🔥"))):
+            with self.subTest(level=level,free=free,load=load):
                 canvas=tool.Canvas(110,24)
-                model=dict(slots=6,cores=12,averages=(4,4,4),admission=admission,
+                model=dict(slots=6,cores=12,averages=(load,4,4),admission=admission,
                            advice=dict(unleased_load=4.5,jobs=1),memory_block=None,
                            memory=dict(level=level,used=768,total=1024,swap_total=1024,swap_free=free),
                            history=[(now-datetime.timedelta(hours=1),now,1)])
                 tool.draw_machine(canvas,0,0,24,110,model)
                 lines=canvas.lines(False)
-                self.assertIn(memory_word,lines[1]);self.assertIn(swap_word,lines[1])  # right under the top border
-                self.assertIn("unleased load: 4.5",lines[1])
-                self.assertIn(f"admission: {admission}" if admission else "no admission",lines[1])
-                self.assertFalse(lines[2][1:-1].strip())
-                self.assertIn("load 1m",lines[3])
-                self.assertNotIn("advise",canvas.render(False))
-                self.assertNotIn("memory_block",canvas.render(False))
-                # #14: normal status is the terminal's own foreground (no colour code), a block ANSI red
-                self.assertIn("\x1b[0munleased load: 4.5",canvas.lines(True)[1])
-                self.assertNotIn("38;5;255",canvas.lines(True)[2])
-                if not admission:self.assertIn(tool.sgr("bad",False)+"no admission",canvas.lines(True)[1])
+                permit=f"admission: {admission} slots" if admission else "no admission"
+                self.assertTrue(lines[0].rstrip().endswith(f" unleased 4.5 · {permit} ─╮"),lines[0])
+                for row,(name,mark) in enumerate(zip(("load 1m","memory","swap"),marks),1):
+                    self.assertEqual(mark,canvas.cells[row][3][0],f"{name}: right under the top border")
+                    self.assertEqual(name,"".join(cell[0] for cell in canvas.cells[row][6:6+len(name)]))
+                self.assertNotIn("memory ok",canvas.render(False),"no status row")
+                coloured=canvas.lines(True)[0]
+                self.assertIn("\x1b[0munleased 4.5",coloured,"in the text colour")
+                self.assertIn(tool.sgr("bad" if not admission else "status-normal",False)+permit,coloured,
+                              "red when it blocks")
+                tool.use_marks(True)
+                ascii_canvas=tool.Canvas(110,24)
+                tool.draw_machine(ascii_canvas,0,0,24,110,model)
+                plain=ascii_canvas.lines(False,ascii_only=True)
+                self.assertEqual("".join("!" if mark=="🔥" else "+" for mark in marks),
+                                 "".join(plain[row][3] for row in (1,2,3)),"ASCII: + and !")
+                tool.use_marks(False)
+
+    def test_a_narrow_border_keeps_the_admission_and_drops_the_unleased_load(self):
+        tool=load_dashboard()
+        model=dict(slots=6,cores=12,averages=(4,4,4),admission=0,advice=dict(unleased_load=4.5,jobs=1),
+                   memory_block=None,memory=dict(level=1,used=768,total=1024,swap_total=1024,swap_free=800),history=[])
+        for width,shown in ((60,"unleased 4.5 · no admission"),(34,"no admission"),(24,None)):
+            with self.subTest(width=width):
+                canvas=tool.Canvas(width,13)
+                tool.draw_machine(canvas,0,0,13,width,model)
+                top=canvas.lines(False)[0]
+                self.assertTrue(top.startswith("╭─ MACHINE "))
+                if shown:
+                    self.assertTrue(top.endswith(f" {shown} ─╮"),top)
+                    if shown=="no admission":
+                        self.assertNotIn("unleased",top)
+                else:
+                    self.assertNotIn("admission",top)
 
 
 class MemoryBarTests(unittest.TestCase):
@@ -886,8 +897,8 @@ class MemoryBarTests(unittest.TestCase):
                           memory=dict(level=1, used=768, total=1024, swap_total=512, swap_free=128),
                           history=[(now-datetime.timedelta(hours=1), now, 4)]))
         lines = canvas.render(False).splitlines()
-        self.assertEqual(13, len(lines))
-        self.assertIn("memory ok", lines[1], "the status line right under the top border")
+        self.assertEqual(11, len(lines))
+        self.assertIn("load 1m", lines[1], "the rows right under the top border")
         text = "\n".join(lines)
         self.assertIn("used 768 MB of 1.0 GB", text)
         self.assertIn("used 384 MB of 512 MB", text)
@@ -949,8 +960,8 @@ class MemoryBarTests(unittest.TestCase):
     def test_full_capacity_is_the_ramps_red_end_in_the_shortest_chart(self):
         tool=load_dashboard()
         now=datetime.datetime.now(datetime.timezone.utc)
-        canvas=tool.Canvas(90,11)
-        tool.draw_machine(canvas,0,0,11,90,dict(slots=4,cores=12,averages=(1,2,3),
+        canvas=tool.Canvas(90,9)
+        tool.draw_machine(canvas,0,0,9,90,dict(slots=4,cores=12,averages=(1,2,3),
                           advice=dict(unleased_load=0,jobs=2),memory_block=None,
                           memory=dict(level=1,used=768,total=1024,swap_total=512,swap_free=128),
                           history=[(now-datetime.timedelta(hours=1),now,4)]))
@@ -972,7 +983,7 @@ class MemoryBarTests(unittest.TestCase):
 
     def test_the_chart_gives_up_rows_first_four_three_two_then_none(self):
         tool=load_dashboard()
-        for height,chart in ((13,4),(12,3),(11,2),(10,0),(9,0),(7,0)):
+        for height,chart in ((11,4),(10,3),(9,2),(8,0),(7,0),(5,0)):
             with self.subTest(height=height):
                 lines=self.machine(tool,height)
                 rows=sum(1 for line in lines if any(glyph in line for glyph in tool.SPARK))
@@ -983,20 +994,25 @@ class MemoryBarTests(unittest.TestCase):
 
     def test_short_of_rows_the_resources_share_one_line_and_never_drop_memory_or_swap(self):
         tool=load_dashboard()
-        for height in (6,5,4,3):
+        for height in (4,3):
             with self.subTest(height=height):
                 lines=self.machine(tool,height)
                 compact=next(line for line in lines if "load " in line)
-                self.assertRegex(compact,r"load ■\S* 3\.0/12 · mem ■\S* 24\.1/32G · swap ■\S* 7\.6/9G")
+                self.assertRegex(compact,r"🆗 load ■\S* 3\.0/12 · 🆗 mem ■\S* 24\.1/32G · 🆗 swap ■\S* 7\.6/9G")
                 self.assertFalse(any("load 1m" in line for line in lines),"one line, not rows")
-                self.assertEqual(height>3,any("memory ok" in line or "mem ok" in line for line in lines),
-                                 "the status line while there is a row for it")
-        narrow=self.machine(tool,5,width=tool.NARROW_MACHINE)
+        tool.use_marks(True)
+        self.machine(tool,3)
+        self.assertRegex(next(line for line in self.canvas.lines(False,ascii_only=True) if "load " in line),
+                         r"\+ load #\S* 3\.0/12 \. \+ mem #\S* 24\.1/32G \. \+ swap #\S* 7\.6/9G")
+        tool.use_marks(False)
+        narrow=self.machine(tool,3,width=60)
         line=next(line for line in narrow if "load " in line)
-        self.assertRegex(line,r"load 3\.0/12 +mem 24\.1/32G +swap 7\.6/9G","too narrow for bars: the numbers")
+        self.assertRegex(line,r"🆗 load 3\.0/12 (· )?🆗 mem 24\.1/32G (· )?🆗 swap 7\.6/9G","too narrow for bars: the numbers")
         self.assertNotIn("■",line)
+        narrowest=next(line for line in self.machine(tool,3,width=tool.NARROW_MACHINE) if "load " in line)
+        self.assertRegex(narrowest,r"load 3\.0/12 mem 24\.1/32G swap 7\.6/9G","the narrowest drops the marks")
         for width in (90,60,tool.NARROW_MACHINE):  # never narrower in any layout
-            for height in range(3,16):
+            for height in range(3,14):
                 with self.subTest(width=width,height=height):
                     text="\n".join(self.machine(tool,height,width=width))
                     self.assertRegex(text,r"mem(ory)?\b","memory shown")
@@ -1005,17 +1021,18 @@ class MemoryBarTests(unittest.TestCase):
     def test_critical_values_are_red_in_the_compact_forms(self):
         tool=load_dashboard()
         hot=dict(level=4,used=32000,total=32768,swap_total=9216,swap_free=10)  # memory low, swap low
-        for width,red in ((90,"bar"),(44,"value")):
+        for width,red in ((90,"bar"),(60,"value")):
             with self.subTest(width=width):
-                lines=self.machine(tool,5,width=width,memory=hot,load=12)
+                lines=self.machine(tool,3,width=width,memory=hot,load=12)
                 y=next(i for i,line in enumerate(lines) if "load " in line)
                 cells=self.canvas.cells[y]
-                text="".join(cell[0] for cell in cells)
+                text="".join(cell[0] or "\0" for cell in cells)  # one character a cell: placeholders kept
                 for label in ("load","mem","swap"):
-                    start=text.index(label+" ")+len(label)+1
-                    styles={cell[1] for cell in cells[start:start+6] if cell[0] not in (" ","")}
+                    at=text.index(label+" ")
+                    styles={cell[1] for cell in cells[at+len(label)+1:at+len(label)+7] if cell[0] not in (" ","")}
                     self.assertIn("bad",styles,f"{label}: critical in red ({red})")
-                    self.assertEqual("dim",cells[text.index(label+" ")][1],"labels muted")
+                    self.assertEqual("dim",cells[at][1],"labels muted")
+                    self.assertEqual("🔥",cells[at-3][0],"the critical mark before it")
 
     def test_resource_bars_follow_the_chart_ramp_and_turn_red_when_critical(self):
         tool=surfaces(load_dashboard())
@@ -1038,7 +1055,7 @@ class MemoryBarTests(unittest.TestCase):
             return canvas
         canvas=machine()
         def bar_styles(name: str) -> set[str]:
-            row=next(i for i,line in enumerate(canvas.lines(False)) if f"  {name}" in line)
+            row=next(i for i,line in enumerate(canvas.lines(False)) if f" {name} " in line)
             return {cell[1] for cell in canvas.cells[row][13:25] if cell[0]=="■" and cell[1]!="track"}
         self.assertEqual({"bad"},bar_styles("load 1m"),"20.3 on 12 cores leaves no room: all red")
         self.assertEqual({"bad"},bar_styles("swap"),"swap low: all red")
@@ -1065,7 +1082,7 @@ class MemoryBarTests(unittest.TestCase):
                                   advice=dict(unleased_load=0,jobs=1,capacity=0),memory_block=None,
                                   memory=dict(level=1,used=512,total=1024,swap_total=0,swap_free=None),
                                   history=[(now-datetime.timedelta(hours=1),now,8)]))
-                row=next(i for i,line in enumerate(canvas.lines(False)) if "  load 1m" in line)
+                row=next(i for i,line in enumerate(canvas.lines(False)) if " load 1m " in line)
                 styles={cell[1] for cell in canvas.cells[row][13:25] if cell[0]=="■" and cell[1]!="track"}
                 self.assertEqual(critical,styles=={"bad"},f"load {load} on 8 cores, 8 slots: {styles}")
 
