@@ -225,15 +225,19 @@ class ReviewGateTests(ReviewGateCase):
         self.lane("review", "a")
         tip = self.tip()
         output = self.lane("promote", tip, "--no-push", "--wait", "0", ok=False)
-        self.assertIn("batch gate green", output, "the gate runs while reviews finish")
-        self.assertIn("lane a (#404): 2 of 2 review findings unmarked (#1, #2)", output)
+        # fathers#109: unmarked P1/P2 findings of a finished review hold the batch gate too, naming the commands.
+        self.assertNotIn("batch gate green", output)
+        self.assertIn("unmarked P1/P2 review findings hold the batch gate and dev", output)
+        self.assertIn("lane a (#404): finding #1 P1 lib/api.txt:2 baz is defined but nothing calls it", output)
+        self.assertIn("lane a (#404): finding #2 P2", output)
         self.assertNotIn("lane clean", output)
         self.assertNotEqual(self.git(self.repo, "rev-parse", "dev"), tip)
         self.assertIn("not a commit", self.lane("review", "a", "--mark", "2", "fixed:0123456789", ok=False))
         self.assertIn("give the reason", self.lane("review", "a", "--mark", "1", "rejected:", ok=False))
         self.lane("review", "a", "--mark", "1", "rejected:baz is the new entry point")
-        self.assertIn("1 of 2 review findings unmarked (#2)", self.lane("promote", tip, "--no-push", "--wait", "0",
-                                                                         ok=False))
+        held = self.lane("promote", tip, "--no-push", "--wait", "0", ok=False)
+        self.assertIn("lane a (#404): finding #2 P2", held)
+        self.assertNotIn("finding #1", held)
         fix = self.commit(self.integration, {"calls/main.txt": "foo\nbaz\n"}, "fix: call baz")
         self.lane("review", "a", "--mark", "2", f"fixed:{fix[:12]}")
         marks = [f["mark"] for f in self.review("a")["findings"]]

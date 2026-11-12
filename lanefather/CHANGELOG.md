@@ -36,8 +36,14 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   the package it misuses (`package`), for the agent-friction journal; the reviewer is asked for both, `review`
   shows the category, and receipts without it read as before.
 
+
 ### Changed
 
+- Unmarked P1 and P2 review findings hold the batch gate, not only the move of dev, and P3 findings no longer
+  block (fathers#109, owner decision): the refusal lists each finding with the two commands that mark it, P3 findings
+  are reported, and `[review] blocks = ["P1", "P2", "P3"]` keeps P3 blocking. `lanefather findings <sha> [--since
+  REF] [--json]` answers the same rule for a publish Lanefather does not run (Repo-Kit's `release:publish`);
+  `--force-reason` overrides and is logged.
 - Lanefather lives in the fathers repository with Slotfather, Junkfather and Godfather: `python3 install.py
   lanefather` from its root installs it, and its documentation links point there.
 

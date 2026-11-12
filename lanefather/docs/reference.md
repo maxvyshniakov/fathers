@@ -62,6 +62,7 @@ self-contained configuration in the README for a Repo-Kit consumer.
 | `rules_dir`, `coding_standards`, `steering`, `report_doc` | rule/standards inputs and the report-link text |
 | `unclaimed`, `merge_config` | paths no lane claims; `git -c` settings for land's merge |
 | `[checks]` `verify`, `plan_module`, `triage`, `toolchain`, `slot_env` | the check contract below |
+| `[review]` `blocks` | the unmarked review finding severities that hold the batch gate, promote and `findings` (default `["P1", "P2"]`; fathers#109) |
 | `[checks]` `gate_only` | check-id patterns (fnmatch) the post-merge smoke leaves to the batch gate, such as tooling self-tests (fathers#94) |
 | `[lane]` `targets`, `cache_partitions` | build directories `done` removes |
 | `[gate]` `stamp_tool`, `stamp_file`, `pre_push_hook` | the verified-tree stamp of the full gate |

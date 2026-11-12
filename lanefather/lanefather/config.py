@@ -97,6 +97,8 @@ class Config:
     slot_env: str = "LANEFATHER_SLOT"
     # Check ids (fnmatch patterns) the post-merge smoke leaves to the batch gate: tooling self-tests (fathers#94).
     gate_only: tuple[str, ...] = ()
+    # The severities of an unmarked review finding that hold the batch gate, promote and a publish (fathers#109).
+    review_blocks: tuple[str, ...] = ("P1", "P2")
     # [slots.priority]: a phase's (or `default`) Slotfather priority, below the environment's (lanefather#24).
     slot_priority: tuple[tuple[str, str], ...] = ()
     cache_name: str = "lanefather"
@@ -222,7 +224,7 @@ def _steps(data: dict[str, Any], key: str) -> tuple[Step, ...]:
 
 TOP_KEYS = ("project", "command", "state_dir", "legacy_env_prefix", "shared_env", "report_doc", "queue_name",
             "coding_standards", "rules_dir", "steering", "unclaimed", "merge_config", "checks", "lane", "gate",
-            "promote", "hooks", "env", "gc", "admission", "tickets", "slots")
+            "promote", "hooks", "env", "gc", "admission", "tickets", "slots", "review")
 TABLE_KEYS = {
     "admission": ("provider",),
     "checks": ("verify", "plan_module", "triage", "toolchain", "toolchain_pin", "slot_env", "gate_only"),
@@ -233,7 +235,17 @@ TABLE_KEYS = {
     "gc": ("after_remove", "after_remove_report"),
     "tickets": ("integrated_label", "land_comment", "fixes_trailer", "release_comment", "preview", "repo"),
     "slots": ("priority",),
+    "review": ("blocks",),
 }
+
+
+def _severities(table: dict[str, Any]) -> tuple[str, ...]:
+    """`[review] blocks`: the unmarked finding severities that block (fathers#109), P1 and P2 by default."""
+    found = _strings(table, "blocks", Config().review_blocks)
+    unknown = [s for s in found if s not in ("P1", "P2", "P3")]
+    if unknown:
+        raise LaneError(f"{CONFIG_NAME}: [review] blocks takes P1, P2 and P3, not {', '.join(unknown)}")
+    return found
 
 
 def _known(table: dict[str, Any], name: str, keys: tuple[str, ...]) -> None:
@@ -269,9 +281,10 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
     admission: dict[str, Any] = data.get("admission", {})
     tickets: dict[str, Any] = data.get("tickets", {})
     slot_table: dict[str, Any] = data.get("slots", {})
+    review: dict[str, Any] = data.get("review", {})
     for name, table in (("checks", checks), ("lane", lane), ("gate", gate), ("promote", promote), ("hooks", hooks),
                         ("env", env), ("gc", gc), ("admission", admission), ("tickets", tickets),
-                        ("slots", slot_table)):
+                        ("slots", slot_table), ("review", review)):
         if not isinstance(table, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
             raise LaneError(f"{CONFIG_NAME}: [{name}] must be a table")
     if not all(isinstance(v, str) for v in env.values()):
@@ -279,7 +292,7 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
     _known(data, "", TOP_KEYS)
     for name, table in (("checks", checks), ("lane", lane), ("gate", gate), ("promote", promote),
                         ("hooks", hooks), ("gc", gc), ("admission", admission), ("tickets", tickets),
-                        ("slots", slot_table)):
+                        ("slots", slot_table), ("review", review)):
         _known(table, name, TABLE_KEYS[name])
     for key in ("install", "deploy"):
         steps: list[Any] = promote.get(key, []) if isinstance(promote.get(key), list) else []
@@ -321,6 +334,7 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         toolchain_pin=_string(checks, "toolchain_pin", default.toolchain_pin),
         slot_env=_string(checks, "slot_env", default.slot_env),
         gate_only=_strings(checks, "gate_only", default.gate_only),
+        review_blocks=_severities(review),
         slot_priority=_slot_priority(slot_table),
         cache_name=_string(lane, "cache_name", default.cache_name),
         lane_targets=_strings(lane, "targets", default.lane_targets),

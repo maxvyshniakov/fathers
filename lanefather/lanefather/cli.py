@@ -13,6 +13,7 @@
   review <id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane]
   review --overall <sha> --since <base>
                                      the independent review (lanefather.review)
+  findings <sha> [--since REF]       whether a review holds the SHA (unmarked P1/P2 findings), for a publish
   done <id>                          after landing: stop what the lane left running, remove its worktree,
                                      branches, build directories and scratch
   promote <sha> [--ship] [--no-push] [--install [--deploy HOST]]
@@ -183,6 +184,13 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--force-reason", help="review again although the lane has a review, or register the fix lane "
                                           "over the lane cap; logged")
     p.set_defaults(run=review.review)
+    p = commands.add_parser("findings", help="whether a review holds a SHA: unfinished reviews and unmarked blocking "
+                                             "findings, as promote applies them, for a publish (fathers#109)")
+    p.add_argument("sha")
+    p.add_argument("--since", metavar="REF", help="lanes landed after REF (default: local dev)")
+    p.add_argument("--json", action="store_true", help="the version-1 report")
+    p.add_argument("--force-reason", help="answer 0 although a review holds the SHA; logged")
+    p.set_defaults(run=review.findings)
     p = commands.add_parser("done", help="remove a landed lane's worktree, branches, targets and scratch")
     p.add_argument("id")
     p.add_argument("--force-reason", help="clean up a lane that is not landed or lacks a ticket comment; logged")

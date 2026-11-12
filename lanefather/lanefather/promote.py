@@ -565,6 +565,16 @@ def promote_sha(args: Any) -> int:
     if args.ship and cfg.ship_refuses and git(cwd, "ls-tree", "--name-only", f"{sha}:{cfg.ship_refuses}",
                                               check=False):
         raise LaneError(f"promote --ship refused: {sha[:10]} still has {cfg.ship_refuses}/; {cfg.ship_refusal}")
+    # fathers#109: an unmarked blocking finding of a finished review holds the batch gate too; a review still
+    # running does not (#570: the gate runs while reviews finish).
+    report = review.gate_report(cwd, common, sha)
+    for entry in report["reported"]:
+        print(f"lane: reported, does not block: {entry['line']}", flush=True)
+    blocking = [e["line"] for e in report["blocking"]]
+    if blocking and not args.force_reason:
+        raise LaneError(f"promote refused: unmarked {'/'.join(report['blocks'])} review findings hold the batch "
+                        "gate and dev:\n- " + "\n- ".join(blocking) + f"\nThen rerun {prog} promote {sha[:10]}. "
+                        "--force-reason overrides, logged")
     # Only fully gated trees are promoted. Repositories without the stamp tooling have their own pre-push gate.
     if (cfg.stamp_tool and git_ok(cwd, "cat-file", "-e", f"{sha}:{cfg.verify}")
             and git_ok(cwd, "cat-file", "-e", f"{sha}:{cfg.stamp_tool}")):

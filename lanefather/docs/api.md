@@ -10,6 +10,7 @@ change, a removed or changed one changes `v`.
 | `lanefather settings --json` | Godfather | Godfather's settings contract |
 | `lanefather results key\|lookup\|record` | Repo-Kit's gates and CI | [results](results.md) |
 | `lanefather stats --json` | people, dashboards | below |
+| `lanefather findings <sha> --json` | Repo-Kit's `release:publish` | below |
 | `lanefather changelog --json` | Godfather's what's new | below |
 
 ## `lanefather changelog --json [--since VERSION]`
@@ -35,6 +36,27 @@ Git and no state: it reads one file.
   markdown as written.
 - `--since VERSION` keeps the releases newer than VERSION, and Unreleased.
 - Releases installed before 0.2.0 all said 0.1.0; the changelog tells them apart as `0.1.0+<commit>`.
+
+## `lanefather findings <sha> [--since REF] [--json] [--force-reason R]`
+
+Whether a review holds the SHA, as the batch gate and `promote` apply it (fathers#109), for a publish Lanefather does
+not run. It reads the lanes landed in the SHA and not in `--since` (default: local `dev`; a publish passes its last
+release). Exit 0 when nothing holds it, 1 when something does; `--force-reason` answers 0 and logs the override in
+ledger.log.
+
+```json
+{"v": 1, "sha": "<sha>", "since": "<sha or null>", "blocks": ["P1", "P2"], "held": true,
+ "unfinished": [{"lane": "a", "ticket": "12", "line": "lane a (#12): review running since ..."}],
+ "blocking": [{"lane": "a", "ticket": "12", "n": 1, "severity": "P1", "title": "...", "file": "src/x.ts",
+               "line": "lane a (#12): finding #1 P1 src/x.ts:3 ...: lanefather review a --mark 1 fixed:<merge> | ..."}],
+ "reported": [{"severity": "P3", "...": "..."}]}
+```
+
+- `unfinished`: a review missing, running or failed. `blocking`: an unmarked finding of a severity `[review] blocks`
+  names (P1 and P2 by default), or one marked fixed by a merge that is not in the SHA. `reported`: other unmarked
+  findings, shown, never blocking. `line` is the text to print, with the two commands that mark the finding.
+- `promote` refuses the batch gate on `blocking` (a running review does not hold the gate) and the move of dev on
+  both.
 
 ## `lanefather stats [--days N] [--lane ID] --json`
 
