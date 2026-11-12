@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+"""`tell application id ... to quit`: ends every fake Safari Technology Preview instance."""
+import os
+import signal
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from _fake import begin, save  # noqa: E402
+
+state, args = begin("osascript")
+for pid in state.get("stp") or []:
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        pass
+state["stp"] = []
+save(state)

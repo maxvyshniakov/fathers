@@ -1,14 +1,16 @@
 """events.jsonl in Godfather's schema v1, from real commands; status --json and capabilities --json."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+from pathlib import Path
 import stat
 import unittest
 
 from support import Case
 
-import eventschema
+import eventcheck
 from junkfather import events
 
 
@@ -34,7 +36,7 @@ class EventLogTests(Case):
                                      ).returncode)
         raw = (self.state / "events.jsonl").read_text().splitlines()
         for line in raw:
-            self.assertEqual([], eventschema.validate(json.loads(line), line, strict=True), line)
+            self.assertEqual([], eventcheck.validate_line(line, strict=True), line)
         found = self.lines()
         kinds = [e["kind"] for e in found]
         for kind in ("entry.owned", "entry.exited", "entry.extended", "entry.handed", "entry.reaped",
@@ -74,13 +76,13 @@ class EventLogTests(Case):
             Store.entries = original  # type: ignore
         (event,) = self.lines()
         self.assertEqual(("hook.failed", "error"), (event["kind"], event["level"]))
-        self.assertEqual([], eventschema.validate(event, strict=True))
+        self.assertEqual([], eventcheck.validate(event, strict=True))
 
     def test_control_characters_and_long_commands_are_cleaned(self):
         events.write(self.state, "entry.owned", {"type": "entry", "id": "j1", "label": "a\x1b[31mred"},
                      events.tool("sweep"), {"argv": ["x" * 1000], "deep": {"a": {"b": {"c": {"d": 1}}}}})
         (event,) = self.lines()
-        self.assertEqual([], eventschema.validate(event, strict=True))
+        self.assertEqual([], eventcheck.validate(event, strict=True))
         self.assertEqual("a [31mred", event["subject"]["label"])
         self.assertEqual(400, len(event["details"]["argv"][0]))
 
@@ -91,10 +93,17 @@ class EventLogTests(Case):
         self.assertTrue((self.state / "events.jsonl.1").exists())
         self.assertEqual(1, len(self.lines()))
 
-    @unittest.skipUnless(os.path.isfile(os.path.join(os.environ.get("GODFATHER_DIR", "/nonexistent"), "eventcheck.py")),
-                         "godfather has no eventcheck.py yet")
+    def test_the_vendored_validator_is_the_recorded_copy(self):
+        here = Path(__file__).resolve().parent
+        recorded = (here / "eventcheck.py.sha256").read_text().split()[0]
+        self.assertEqual(recorded, hashlib.sha256((here / "eventcheck.py").read_bytes()).hexdigest())
+
+    @unittest.skipUnless(os.path.isfile(os.path.join(os.environ.get("GODFATHER_DIR", "/nonexistent"), "src",
+                                                     "godfather", "eventcheck.py")), "GODFATHER_DIR is not set")
     def test_the_vendored_validator_matches_godfathers(self):
-        self.fail("TODO: vendor godfather's eventcheck.py and its SHA-256, then compare them here")
+        canonical = Path(os.environ["GODFATHER_DIR"], "src", "godfather", "eventcheck.py").read_bytes()
+        self.assertEqual(canonical, (Path(__file__).resolve().parent / "eventcheck.py").read_bytes(),
+                         "godfather's eventcheck.py changed: vendor it again and record its SHA-256")
 
 
 class DashboardContractTests(Case):

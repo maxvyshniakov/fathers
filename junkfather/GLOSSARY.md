@@ -1,6 +1,8 @@
 # Glossary
 
-- **Entry**: one owned process group, with its owner, TTL and identity. `junkfather list` shows entries.
+- **Entry**: one owned process group or resource, with its owner, TTL and identity. `junkfather list` shows entries.
+- **Resource**: something that outlives the process that made it (a booted simulator, a container, a `tailscale serve`
+  route, a Safari Technology Preview instance); its kind's own command checks and stops it.
 - **Leader**: the process an entry started (or adopted); the group it leads is the entry's group.
 - **Owner**: the agent session (Claude Code or Codex), subagent and lane that started an entry, or the process that
   ran junkfather outside an agent.
@@ -14,3 +16,5 @@
 - **Claim**: the PreToolUse hook's record of which subagent ran a Bash command naming junkfather.
 - **Orphaned**: an entry whose owner session is gone.
 - **Unowned process**: a process in an agent's scratchpad or worktree that no entry holds; reported, never reaped.
+- **Unowned resource**: a booted simulator, running container or serve route that no entry owns; reported, never
+  stopped.

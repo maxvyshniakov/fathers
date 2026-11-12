@@ -4,6 +4,16 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ## Unreleased
 
+### Added
+
+- junkfather owns resources that outlive the command that made them. `junkfather own --kind KIND -- CMD` runs CMD
+  and owns the simulator, container, `tailscale serve` route or Safari Technology Preview instance it made (kinds
+  `simulator`, `docker`, `tailscale-serve`, `safari-tp`); `junkfather own-resource --kind KIND --id ID` owns one that
+  runs, and `--kind command --alive CMD --stop CMD` covers anything else. Their owner's end, their TTL and `reap`
+  stop them through the kind's own command (`simctl shutdown`, `docker stop`, that serve route `off`, the app's
+  quit), and the hourly sweep reports booted simulators, running containers and serve routes no one owns, without
+  stopping them.
+
 ## 0.1.0 - 2026-11-12
 
 ### Added

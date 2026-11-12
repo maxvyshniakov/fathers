@@ -6,7 +6,8 @@ opened with O_APPEND, mode 0600; past 4 MiB the log becomes `events.jsonl.1` und
 event is written after the change it describes, and one that cannot be written never fails the action.
 
 Kinds (docs/reference.md, Events): entry.owned, entry.adopted, entry.exited, entry.extended, entry.handed,
-entry.reaped, entry.reap_failed, unowned.reported, unowned.reaped, sweep.finished, hook.failed.
+entry.reaped, entry.reap_failed, resource.owned, resource.stopped, resource.stop_failed, unowned.reported,
+unowned.reaped, sweep.finished, hook.failed.
 """
 from __future__ import annotations
 
@@ -25,7 +26,8 @@ ROTATE = 4 << 20
 LINE_MAX = 16 << 10
 TEXT_MAX = 400
 KINDS = ("entry.owned", "entry.adopted", "entry.exited", "entry.extended", "entry.handed", "entry.reaped",
-         "entry.reap_failed", "unowned.reported", "unowned.reaped", "sweep.finished", "hook.failed")
+         "entry.reap_failed", "resource.owned", "resource.stopped", "resource.stop_failed", "unowned.reported",
+         "unowned.reaped", "sweep.finished", "hook.failed")
 CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 

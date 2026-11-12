@@ -8,7 +8,8 @@ An entry is one owned process group, `entries/<id>.json` under `$JUNKFATHER_STAT
 | Field | Meaning |
 | --- | --- |
 | `id`, `label`, `argv`, `cwd`, `created` | what was started, where and when |
-| `mode` | `attached` (junkfather is the parent), `detached` (a supervisor is), `adopted` (no parent of ours) |
+| `mode` | `attached` (junkfather is the parent), `detached` (a supervisor is), `adopted` (no parent of ours), `resource` (no process: see Resources) |
+| `resource` | `resource` entries: `{kind, id, name, ...}` and what its kind needs (`remove`; `pid`, `start` for safari-tp; `alive`, `stop` argv for command) |
 | `pid`, `pgid`, `start`, `seen` | the leader: its pid, group, start time (`ps lstart`, C locale) and command as `ps` showed it at launch |
 | `group` | whether the leader leads its own group (true for `own`; for `adopt`, only when pid = pgid) |
 | `known` | `[pid, start]` of every member seen while it ran: what a reap may signal once the leader is gone |
@@ -38,12 +39,16 @@ characters. An event follows the change it describes; one that cannot be written
 | `entry.handed` | entry | `from`, `to` (kind, session, agent, lane) |
 | `entry.reaped` | entry | `reason`, `result`, `how`, `signals` (`TERM`, `KILL`), `pids` |
 | `entry.reap_failed` (error) | entry | processes outlived SIGKILL; the entry keeps running; `left` |
-| `unowned.reported` (warn) | process | a sweep listed it for the first time; `cmd`, `cwd`, `root`, `why`, `start`, `age` |
+| `resource.owned` | resource | `own --kind` or `own-resource`; `resource`, `argv`, `cwd`, `ttl`, `keep` |
+| `resource.stopped` | resource | its stop ran and it is gone (or was gone already); `reason`, `result`, `resource`, `steps` |
+| `resource.stop_failed` (error) | resource | a stop command failed or timed out, or it still runs; the entry keeps running; `error`, `steps` |
+| `unowned.reported` (warn) | process or resource | a sweep listed it for the first time; a process: `cmd`, `cwd`, `root`, `why`, `start`, `age`; a resource: `kind`, `id`, `name`, `why` |
 | `unowned.reaped` | process | `reap --pid --force`; `cmd`, `start`, `result`, `pids` |
 | `sweep.finished` | sweep | `reaped`, `failed`, `gone`, `running`, `unowned`, `pruned`, `errors` |
 | `hook.failed` (error) | hook | the hook hit an error and let the event pass; `error` |
 
-The subject of an entry is `{"type": "entry", "id", "label", "pid"}`. The actor is the owner (`agent` with
+The subject of an entry is `{"type": "entry", "id", "label", "pid"}`; of a resource `{"type": "resource", "id":
+"KIND:ID", "kind", "entry", "label"}`. The actor is the owner (`agent` with
 `session`, `agent`, `pid`, `lane`; or `process`) for own and adopt, the caller for reap, hand and extend, and
 `{"type": "tool", "name": "junkfather", "via": "sweep" | "hook" | "supervisor"}` for what junkfather does on its own.
 A command run with `GODFATHER_ACTOR` set carries `via: "godfather"`.
@@ -54,8 +59,9 @@ A command run with `GODFATHER_ACTOR` set carries `via: "godfather"`.
   ["status", "--json"], versions: [1], poll: 5}, events: {path, versions: [1], kinds}, actions: ["reap", "extend"],
   changelog}}`. No `settings` block yet: settings commands are a later release.
 - `junkfather status --json`: `{v: 1, host, time, entries: [the list --json rows of running entries], unowned:
-  [{pid, start, cmd, cwd, root, why, age, alive}] from the last sweep, sweep: {time, result}, errors}`. It changes
-  nothing.
+  [{pid, start, cmd, cwd, root, why, age, alive}] from the last sweep, unowned_resources: [{kind, id, name, why}]
+  from the last sweep, sweep: {time, result}, errors}`. A resource entry's row has `resource: {kind, id, name}` and
+  `processes: null`. It changes nothing.
 
 ## Ending an entry
 
@@ -76,6 +82,33 @@ A command run with `GODFATHER_ACTOR` set carries `via: "godfather"`.
   for "they ended"). Start times are read in UTC, whatever the caller's `TZ`.
 - **Never** a process junkfather did not start or adopt, except `reap --pid PID --force` on a pid the last sweep
   listed as unowned, with the same start time and still unowned.
+
+## Resources
+
+A resource outlives the process that made it. Its entry has `mode: "resource"` and no process group; owner, TTL,
+keep, hand-over, `reap` (by id, owner, subagent, lane), the hooks and the sweep treat it like any entry. Each kind
+lists what runs (one call per sweep), tells whether one resource runs (unknown never marks it gone nor reaps it), and
+stops it with argv run without a shell, with a timeout (`STOP_TIMEOUT`, 120 s, plus the grace):
+
+| Kind | Id | Runs while | Stop |
+| --- | --- | --- | --- |
+| `simulator` | UDID | `xcrun simctl list -j devices` shows it not `Shutdown` | `xcrun simctl shutdown UDID` |
+| `docker` | the full container id (`own-resource` takes a name or short id) | `docker ps` lists it | `docker stop -t GRACE ID`, then `docker rm ID` with `--remove` |
+| `tailscale-serve` | `PROTO:PORT[/PATH]` (`https:6475`, `https:443/docs`, `tcp:5432`) | `tailscale serve status --json` has that route | `tailscale serve --PROTO=PORT [--set-path=PATH] off --yes`: that route only |
+| `safari-tp` | its main process's pid | that pid runs with its recorded start time | `osascript`: `tell application id "com.apple.SafariTechnologyPreview" to quit`, only while it is the only instance |
+| `command` | a name | `--alive` exits 0 (1: gone; anything else: unknown) | `--stop` |
+
+After the stop the resource must be seen gone within the grace (at least 5 s); otherwise, or when a stop command
+fails or times out, the result is `failed`, the entry keeps running with `last_error`, and `resource.stop_failed` is
+written. A quit by bundle id cannot tell two Safari Technology Preview instances apart, so with another instance
+running the stop fails and both keep running: a person's own windows are never closed.
+
+`own --kind KIND -- CMD` runs CMD (attached, up to 10 minutes), passes its output and a failing exit status through,
+and owns what CMD made: what it names (a UDID in its arguments, the id `docker run -d` prints) when that newly
+appeared, else what newly appeared or changed in the kind's listing within 15 s (`tailscale serve --bg 6475`
+repoints `https:443`; an `open -g` starts a new main process). Without a listing from before, only what CMD names
+counts. Nothing new, nothing owned. One entry per resource: owning one a live entry holds is refused, as is one that
+does not run.
 
 ## Owners and liveness
 
@@ -116,8 +149,11 @@ path in their command is under `/private/tmp/claude-<uid>/`, `/tmp/claude-<uid>/
 `.claude/worktrees/` or `.codex/worktrees/` directory. Left out: agent sessions, processes with a terminal, anything
 below a live agent session (its shells, MCP and language servers at work), and any process whose tree holds a
 terminal's process or an agent session (a tmux server). A browser or server left behind has been adopted by launchd,
-so it is reported; one item per tree and process group. The report goes to
-`unowned.json` and never stops anything.
+so it is reported; one item per tree and process group. It also reports booted simulators, running containers and
+`tailscale serve` routes that no live entry owns (not Safari Technology Preview, which is as often a person's own
+browser), once each in `unowned.reported`; a kind whose tool is not installed is skipped, and one that cannot be
+listed is noted. A resource entry whose kind says it is gone is marked `gone`. The report goes to `unowned.json`
+and never stops anything; there is no `--force` for a resource.
 
 ## Boundaries
 

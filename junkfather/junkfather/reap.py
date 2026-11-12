@@ -139,6 +139,12 @@ def reap(store: Store, entry_id: str, reason: str, grace: float = GRACE, dry_run
     entry = store.load(entry_id)
     if entry is None:
         return {"id": entry_id, "result": "unknown", "reason": reason, "pids": [], "how": ""}
+    if entry.get("mode") == "resource":
+        if entry.get("state") != "running":
+            return {"id": entry_id, "result": "skipped", "reason": f"already {entry.get('state')}", "pids": [],
+                    "how": ""}
+        from . import resources
+        return resources.reap(store, entry, reason, grace, dry_run, actor)
     if entry.get("state") == "starting" or (entry.get("state") == "running" and not entry.get("pid")):
         return {"id": entry_id, "result": "skipped", "reason": "still starting", "pids": [], "how": ""}
     if entry.get("state") != "running":
@@ -151,18 +157,8 @@ def reap(store: Store, entry_id: str, reason: str, grace: float = GRACE, dry_run
     if dry_run:
         return {"id": entry_id, "result": "would-stop" if targets else "gone", "reason": reason,
                 "pids": [p.pid for p in targets], "how": how}
-    me = os.getpid()
-    mine = (table.get(me) or _procs.Proc(me, 0, 0, 0, "", "", "")).start
-
-    def mark(e: Entry) -> Optional[bool]:
-        if e.get("state") != "running":
-            return False
-        e["state"] = "reaping"
-        e["reaping"] = {"reason": reason, "at": time.time(), "by": me, "by_start": mine}
-        return None
-
-    marked = store.update(entry_id, mark)
-    if marked is None or marked.get("state") != "reaping" or (marked.get("reaping") or {}).get("by") != me:
+    me = begin_reap(store, entry_id, reason, table)
+    if me is None:
         return {"id": entry_id, "result": "skipped", "reason": "another reaper has it", "pids": [], "how": how}
     pids: List[int] = []
     outcome: Dict[str, Any] = {"result": "gone", "signalled": [], "left": []}
@@ -187,21 +183,8 @@ def reap(store: Store, entry_id: str, reason: str, grace: float = GRACE, dry_run
         "stopped" if "stopped" in results else "gone"
     outcome["result"] = result
 
-    def finish(e: Entry) -> Optional[bool]:
-        if e.get("state") != "reaping" or (e.get("reaping") or {}).get("by") != me:
-            return False
-        done = result in STOPPED
-        e["state"] = "reaped" if done else "running"
-        e.pop("reaping", None)
-        if done:
-            e["ended"] = time.time()
-            e["end"] = {"reason": reason, "result": result, "how": how, "pids": pids}
-        else:
-            e["last_error"] = {"at": time.time(), "reason": reason, "left": outcome.get("left"),
-                               "error": outcome.get("error")}
-        return None
-
-    store.update(entry_id, finish)
+    end_reap(store, entry_id, me, result in STOPPED, {"reason": reason, "result": result, "how": how, "pids": pids},
+             {"reason": reason, "left": outcome.get("left"), "error": outcome.get("error")})
     signals = {"stopped": ["TERM"], "killed": ["TERM", "KILL"], "failed": ["TERM", "KILL"]}.get(result, [])
     done = result in STOPPED
     _events.write(store.root, "entry.reaped" if done else "entry.reap_failed", _events.subject(entry),
@@ -210,3 +193,45 @@ def reap(store: Store, entry_id: str, reason: str, grace: float = GRACE, dry_run
                                               **({"error": outcome["error"]} if outcome.get("error") else {})},
                   None if done else "error")
     return {"id": entry_id, "result": result, "reason": reason, "pids": pids, "how": how}
+
+
+def begin_reap(store: Store, entry_id: str, reason: str, table: Optional[_procs.Table] = None) -> Optional[int]:
+    """running -> reaping, held by this process; its pid, or None when the entry no longer runs or another reaper
+    has it."""
+    me = os.getpid()
+    if table is None:
+        try:
+            table = _procs.Table.read()
+        except _procs.ProcError:
+            table = None
+    mine = ((table.get(me) if table is not None else None) or _procs.Proc(me, 0, 0, 0, "", "", "")).start
+
+    def mark(e: Entry) -> Optional[bool]:
+        if e.get("state") != "running":
+            return False
+        e["state"] = "reaping"
+        e["reaping"] = {"reason": reason, "at": time.time(), "by": me, "by_start": mine}
+        return None
+
+    marked = store.update(entry_id, mark)
+    if marked is None or marked.get("state") != "reaping" or (marked.get("reaping") or {}).get("by") != me:
+        return None
+    return me
+
+
+def end_reap(store: Store, entry_id: str, me: int, done: bool, end: Dict[str, Any], error: Dict[str, Any]) -> None:
+    """reaping -> reaped (with `end`) when done, else back to running (with `last_error`); only for the reaper that
+    holds it."""
+    def finish(e: Entry) -> Optional[bool]:
+        if e.get("state") != "reaping" or (e.get("reaping") or {}).get("by") != me:
+            return False
+        e["state"] = "reaped" if done else "running"
+        e.pop("reaping", None)
+        if done:
+            e["ended"] = time.time()
+            e["end"] = end
+        else:
+            e["last_error"] = {"at": time.time(), **error}
+        return None
+
+    store.update(entry_id, finish)

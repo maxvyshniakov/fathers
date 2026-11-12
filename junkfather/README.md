@@ -1,6 +1,7 @@
 # junkfather
 
-Owns the long-lived processes agents start (preview servers, browsers, drivers, watchers) and ends them when
+Owns the long-lived processes agents start (preview servers, browsers, drivers, watchers), and the resources that
+outlive them (booted simulators, containers, `tailscale serve` routes, Safari Technology Preview), and ends them when
 their owner ends or their time is up. It keeps [Slotfather](https://github.com/maxvyshniakov/slotfather) (machine
 capacity) and [Lanefather](https://github.com/maxvyshniakov/lanefather) (lanes) out of process cleanup.
 
@@ -31,18 +32,35 @@ Copy this into an agent brief:
 > - Need more time: `junkfather extend <id> --ttl 1h`. See what you own: `junkfather list`.
 > - A process you started without junkfather: `junkfather adopt <pid> --ttl 1h`.
 > - Never `kill` a process junkfather lists; use `junkfather reap --id <id>`.
+>
+> Something that outlives the command that made it (a booted simulator, a `docker run -d` container, a
+> `tailscale serve --bg` route, a Safari Technology Preview opened with `open -g`): put `--kind` before `--`, and
+> junkfather runs the command, then owns what it made and ends it the same way, through that kind's own stop:
+>
+> ```sh
+> junkfather own --kind simulator --ttl 1h -- xcrun simctl boot <udid>
+> junkfather own --kind docker --remove -- docker run -d -p 5432:5432 postgres   # --remove: docker rm after stop
+> junkfather own --kind tailscale-serve -- tailscale serve --bg --https=6475 6475
+> junkfather own --kind safari-tp -- open -g -a "Safari Technology Preview"
+> ```
+>
+> One that already runs: `junkfather own-resource --kind simulator --id <udid> --ttl 1h` (or `--kind docker --id
+> <container>`, `--kind tailscale-serve --id https:6475`). `list`, `reap`, `extend`, `hand` and `--keep-for` work
+> as for processes.
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
 | `own [--ttl 2h] [--keep-for owner\|session] [--label L] [--lane L] [--detach [--log F]] -- CMD...` | starts CMD in a process group of its own and records it with its owner, TTL, pgid, command and cwd |
+| `own --kind simulator\|docker\|tailscale-serve\|safari-tp [--remove] … -- CMD...` | runs CMD, then owns the resource it made (it outlives CMD) |
+| `own-resource --kind KIND --id ID [--remove] […]` | owns a resource that runs now; `--kind command --alive CMD --stop CMD` for any other |
 | `adopt PID [--ttl …]` | records a running process; its group when it leads one, else it and its descendants |
 | `list [--all] [--json]` | what runs, whose it is, its age, its TTL left, how many processes it has |
 | `reap --id ID` / `--owner SESSION\|AGENT [--agent A]` / `--lane L` / `--pid PID [--force]` | ends entries: SIGTERM, a grace period (`--grace`, 10 s), SIGKILL; `--expired`, `--dry-run`, `--json` |
 | `hand ID --to SESSION\|self` | gives an entry to another session |
 | `extend ID --ttl D` | a new TTL from now |
-| `sweep [--dry-run] [--json] [--quiet]` | reaps expired and orphaned entries, reports unowned agent processes |
+| `sweep [--dry-run] [--json] [--quiet]` | reaps expired and orphaned entries, reports unowned agent processes and unowned simulators, containers and serve routes |
 | `sweep --plist` | the hourly launchd agent |
 | `hook` | the Claude Code / Codex lifecycle hook (JSON on stdin) |
 | `status --json`, `capabilities --json` | the snapshot and capabilities for [Godfather](https://github.com/maxvyshniakov/godfather)'s dashboard |

@@ -213,15 +213,15 @@ def status(code: Optional[int]) -> int:
     return code if code >= 0 else 128 - code
 
 
-def own(store: Store, argv: List[str], ttl: float, keep: str, label: Optional[str], env: Mapping[str, str],
-        detach: bool = False, log: Optional[str] = None, quiet: bool = False, agent: Optional[str] = None,
-        lane: Optional[str] = None) -> int:
-    cwd = os.getcwd()
+def owner_of(store: Store, env: Mapping[str, str], words: List[str], agent: Optional[str] = None,
+             lane: Optional[str] = None) -> Dict[str, Any]:
+    """The owner of what this command starts: the detected session, its subagent from the claim holding `words`
+    (junkfather's own arguments), and the --lane/--agent overrides."""
     try:
         table: Optional[_procs.Table] = _procs.Table.read()
     except _procs.ProcError:
         table = None
-    who = _owner.detect(env, table, cwd)
+    who = _owner.detect(env, table, os.getcwd())
     if lane:
         who["lane"] = lane
     if agent:
@@ -229,10 +229,18 @@ def own(store: Store, argv: List[str], ttl: float, keep: str, label: Optional[st
     elif who["kind"] == "claude" and env.get("JUNKFATHER_AGENT"):
         who["agent"] = env["JUNKFATHER_AGENT"]
     elif who["kind"] == "claude" and who.get("session"):
-        claim, note = _owner.find_claim(store, who["session"], ["own", *argv])
+        claim, note = _owner.find_claim(store, who["session"], words)
         if claim is not None:
             who["agent"], who["agent_type"] = claim.get("agent"), claim.get("agent_type")
         who["claim_note"] = note
+    return who
+
+
+def own(store: Store, argv: List[str], ttl: float, keep: str, label: Optional[str], env: Mapping[str, str],
+        detach: bool = False, log: Optional[str] = None, quiet: bool = False, agent: Optional[str] = None,
+        lane: Optional[str] = None) -> int:
+    cwd = os.getcwd()
+    who = owner_of(store, env, ["own", *argv], agent, lane)
     entry = new_entry(store, argv, ttl, keep, label, who, "detached" if detach else "attached", cwd)
     if detach:
         entry["log"] = log or str(store.logs_dir / f"{entry['id']}.log")

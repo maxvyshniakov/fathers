@@ -2,6 +2,10 @@
 them when their owner ends or their TTL passes.
 
   junkfather own [--ttl 2h] [--keep-for owner|session] [--label L] [--lane L] [--detach [--log FILE]] -- CMD...
+  junkfather own --kind simulator|docker|tailscale-serve|safari-tp [--remove] [--ttl ...] -- CMD...
+                 (runs CMD, then owns the resource it made: xcrun simctl boot UDID, docker run -d ..., ...)
+  junkfather own-resource --kind KIND --id ID [--remove] [--ttl 2h] [--keep-for ...] [--label L] [--lane L]
+  junkfather own-resource --kind command --id NAME --alive CMD --stop CMD [...]   (CMD split as argv, no shell)
   junkfather adopt PID [--ttl 2h] [--keep-for owner|session] [--label L] [--lane L]
   junkfather list [--all] [--json]
   junkfather status --json   (list --json, the last sweep's unowned processes and its time and result)
@@ -23,6 +27,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import sys
 import time
 from typing import Any, Dict, List, Optional
@@ -34,6 +39,7 @@ from . import launch as _launch
 from . import owner as _owner
 from . import procs as _procs
 from . import reap as _reap
+from . import resources as _resources
 from . import sweep as _sweep
 from .state import Entry, Store
 
@@ -67,10 +73,24 @@ def parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("own", help="start a command as an owned process group")
     ownership(p)
+    p.add_argument("--kind", choices=_resources.WRAPPABLE,
+                   help="the command makes a resource that outlives it (simctl boot, docker run -d, tailscale serve "
+                        "--bg, open -a 'Safari Technology Preview'): run it, then own that resource")
+    p.add_argument("--remove", action="store_true", help="with --kind docker: docker rm the container after its stop")
     p.add_argument("--detach", action="store_true", help="run it under a supervisor and return at once")
     p.add_argument("--log", help="with --detach: where its output goes (default logs/<id>.log)")
     p.add_argument("--quiet", action="store_true", help="no line on start")
     p.add_argument("argv", nargs=argparse.REMAINDER)
+
+    p = sub.add_parser("own-resource", help="own a resource that runs now (a simulator, container, serve route)")
+    ownership(p)
+    p.add_argument("--kind", choices=tuple(_resources.KINDS), required=True)
+    p.add_argument("--id", required=True, dest="resource_id",
+                   help="simulator UDID, container id or name, serve route (https:6475), "
+                        f"{_resources.STP_BUNDLE}, or a name for --kind command")
+    p.add_argument("--alive", help="--kind command: exits 0 while it runs, 1 once it is gone (split as argv)")
+    p.add_argument("--stop", help="--kind command: ends it (split as argv, never through a shell)")
+    p.add_argument("--remove", action="store_true", help="with --kind docker: docker rm the container after its stop")
 
     p = sub.add_parser("adopt", help="own a process that already runs")
     ownership(p)
@@ -135,8 +155,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                 raise Usage("own needs a command after --")
             if args.log and not args.detach:
                 raise Usage("--log goes with --detach")
+            if args.remove and args.kind != "docker":
+                raise Usage("--remove goes with --kind docker")
+            if args.kind:
+                if args.detach:
+                    raise Usage("--kind runs its command attached: the resource outlives it")
+                who = _launch.owner_of(store, os.environ, ["own", *command], args.agent, args.lane)
+                return _resources.own_wrapped(store, args.kind, command, args.ttl, args.keep_for, args.label, who,
+                                              args.remove, args.quiet)
             return _launch.own(store, command, args.ttl, args.keep_for, args.label, os.environ, args.detach,
                                args.log, args.quiet, args.agent, args.lane)
+        if args.command == "own-resource":
+            return own_resource_command(store, args)
         if args.command == "adopt":
             return _launch.adopt(store, args.pid, args.ttl, args.keep_for, args.label, os.environ, args.lane,
                                  args.agent)
@@ -179,6 +209,21 @@ def commit() -> str:
         return " (checkout)"
 
 
+def own_resource_command(store: Store, args: argparse.Namespace) -> int:
+    if args.remove and args.kind != "docker":
+        raise Usage("--remove goes with --kind docker")
+    if (args.alive or args.stop) and args.kind != "command":
+        raise Usage("--alive and --stop go with --kind command")
+    try:
+        alive = shlex.split(args.alive) if args.alive else None
+        stop = shlex.split(args.stop) if args.stop else None
+    except ValueError as error:
+        raise Usage(f"--alive/--stop: {error}") from None
+    who = _launch.owner_of(store, os.environ, ["own-resource", args.resource_id], args.agent, args.lane)
+    return _resources.own_resource(store, args.kind, args.resource_id, args.ttl, args.keep_for, args.label, who,
+                                   alive, stop, args.remove)
+
+
 # list
 
 def table_or_none() -> Optional[_procs.Table]:
@@ -190,7 +235,8 @@ def table_or_none() -> Optional[_procs.Table]:
 
 def row(entry: Entry, table: Optional[_procs.Table], now: float) -> Dict[str, Any]:
     alive = None
-    if table is not None and entry.get("state") in RUNNING:
+    resource = entry.get("resource") if entry.get("mode") == "resource" else None
+    if table is not None and entry.get("state") in RUNNING and resource is None:
         alive = len(_reap.members(entry, table)[0])
     owner = entry.get("owner") or {}
     return {"id": entry["id"], "state": entry.get("state"), "owner": _owner.describe(owner),
@@ -200,7 +246,8 @@ def row(entry: Entry, table: Optional[_procs.Table], now: float) -> Dict[str, An
             "ttl_left": float(entry.get("expires") or now) - now, "keep": entry.get("keep"),
             "pid": entry.get("pid"), "pgid": entry.get("pgid"), "processes": alive, "label": entry.get("label"),
             "mode": entry.get("mode"), "cwd": entry.get("cwd"), "argv": entry.get("argv"), "log": entry.get("log"),
-            "end": entry.get("end"), "exit": entry.get("exit")}
+            "end": entry.get("end"), "exit": entry.get("exit"),
+            "resource": {k: resource.get(k) for k in ("kind", "id", "name")} if isinstance(resource, dict) else None}
 
 
 def list_command(store: Store, everything: bool, as_json: bool) -> int:
@@ -217,7 +264,8 @@ def list_command(store: Store, everything: bool, as_json: bool) -> int:
     for r in rows:
         ttl = _launch.duration(r["ttl_left"]) if r["state"] in RUNNING else "-"
         owner = r["owner"] + ("" if r["owner_alive"] is not False else " (gone)")
-        command = (f"[{r['label']}] " if r["label"] else "") + " ".join(r["argv"] or [])
+        what = _resources.describe(r["resource"]) if r["resource"] else " ".join(r["argv"] or [])
+        command = (f"[{r['label']}] " if r["label"] else "") + what
         count = "-" if r["processes"] is None else str(r["processes"])
         print(f"{r['id']:8} {str(r['state']):8} {owner[:34]:34} {_launch.duration(r['age']):>7} {ttl:>7} "
               f"{str(r['keep']):7} {str(r['pid'] or '-'):>6} {count:>5}  {command[:80]}")
@@ -244,8 +292,10 @@ def status(store: Store) -> Dict[str, Any]:
         unowned.append({"pid": item.get("pid"), "start": item.get("start"), "cmd": item.get("cmd"),
                         "cwd": item.get("cwd"), "root": item.get("root"), "why": item.get("why"),
                         "age": None if started is None else max(0.0, now - started), "alive": alive})
+    resources = [{k: item.get(k) for k in ("kind", "id", "name", "why")}
+                 for item in listed.get("resources") or [] if isinstance(item, dict)]
     return {"v": STATUS_VERSION, "host": _events.host(), "time": _events.now(), "entries": rows,
-            "unowned": unowned, "sweep": {"time": _iso(last.get("at")), "result": last.get("result")},
+            "unowned": unowned, "unowned_resources": resources, "sweep": {"time": _iso(last.get("at")), "result": last.get("result")},
             "errors": [] if table is not None else ["the process table cannot be read"]}
 
 

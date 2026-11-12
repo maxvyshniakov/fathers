@@ -14,6 +14,10 @@ a terminal, junkfather and its ancestors, anything below a live agent session (i
 at work) and any process whose tree holds a terminal's process or an agent session (a tmux server and its panes).
 A browser or server left behind has been adopted by launchd, so it is reported. Each is reported once per tree, with
 the commands to own or end it; the list goes to unowned.json, which `junkfather reap --pid PID --force` checks.
+
+Resource entries (resources.py) are marked gone when their kind says so, reaped past their TTL or when their owner
+is gone, and left alone while whether they run cannot be told. Booted simulators, running containers and serve
+routes no entry owns are reported in unowned.json's `resources`, never stopped.
 """
 from __future__ import annotations
 
@@ -29,6 +33,7 @@ from . import events as _events
 from . import owner as _owner
 from . import procs as _procs
 from . import reap as _reap
+from . import resources as _resources
 from .state import Store, VERSION, read_json, write_atomic
 
 KEEP_FINISHED = 7 * 86400.0
@@ -115,7 +120,7 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
           now: Optional[float] = None, grace: float = _reap.GRACE) -> Dict[str, Any]:
     now = time.time() if now is None else now
     report: Dict[str, Any] = {"v": VERSION, "at": now, "dry_run": dry_run, "reaped": [], "gone": [], "pruned": 0,
-                              "running": 0, "unowned": [], "errors": []}
+                              "running": 0, "unowned": [], "unowned_resources": [], "notes": [], "errors": []}
     try:
         table = table or _procs.Table.read()
     except _procs.ProcError as error:
@@ -124,6 +129,7 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
     if sessions is None:
         sessions = _owner.registry()
     owned: set = set()
+    snapshot = _resources.Snapshot(table)
     for entry in store.entries():
         state = entry.get("state")
         reaping = entry.get("reaping") or {}
@@ -141,6 +147,9 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
             if now - float(entry.get("created") or now) > 60 and not dry_run:
                 store.update(entry["id"], lambda e: e.update(state="failed", ended=now, error="never started")
                              if e.get("state") == "starting" else False)
+            continue
+        if entry.get("mode") == "resource":
+            sweep_resource(store, entry, snapshot, report, now, sessions, grace, dry_run)
             continue
         members, how = _reap.members(entry, table)
         supervisor = entry.get("supervisor") or {}
@@ -177,16 +186,50 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
         if not cwds:
             report["errors"].append("lsof listed no working directory; paths in commands only")
     report["unowned"] = unowned(table, cwds, owned, scratch_roots(), agent_sessions(table))
+    found, unknown = _resources.unowned(snapshot, _resources.owned_keys(store))
+    report["unowned_resources"] = found
+    report["notes"] += [f"{kind}: cannot be listed, so its unowned resources are not reported" for kind in unknown]
     if not dry_run:
         record(store, report)
     return report
+
+
+def sweep_resource(store: Store, entry: Dict[str, Any], snapshot: "_resources.Snapshot", report: Dict[str, Any],
+                   now: float, sessions: Optional[List[Dict[str, Any]]], grace: float, dry_run: bool) -> None:
+    """A resource entry: gone when its kind says so, reaped past its TTL or when its owner is gone, left alone while
+    whether it runs cannot be told."""
+    resource = entry.get("resource") or {}
+    alive = snapshot.alive(resource)
+    if alive is False:
+        if not dry_run:
+            store.update(entry["id"], lambda e: e.update(state="gone", ended=now)
+                         if e.get("state") == "running" else False)
+        report["gone"].append({"id": entry["id"], "how": _resources.describe(resource)})
+        return
+    if alive is None:
+        report["running"] += 1
+        report["notes"].append(f"{entry['id']}: whether {_resources.describe(resource)} runs cannot be told")
+        return
+    reason = None
+    if now >= float(entry.get("expires") or 0):
+        reason = "ttl expired"
+    elif _owner.alive(entry.get("owner") or {}, snapshot.table, sessions) is False:
+        reason = f"owner gone ({_owner.describe(entry.get('owner') or {})})"
+    if reason:
+        result = _reap.reap(store, entry["id"], reason, grace=grace, dry_run=dry_run, actor=_events.tool("sweep"))
+        report["reaped"].append(result)
+        if result["result"] in _reap.STOPPED:
+            return
+    report["running"] += 1
 
 
 def record(store: Store, report: Dict[str, Any]) -> None:
     """unowned.json, sweep.json and the sweep's events: one unowned.reported per process not reported before."""
     before = read_json(store.root / "unowned.json")
     seen = {(i.get("pid"), i.get("start")) for i in (before.get("items") or [])} if isinstance(before, dict) else set()
-    write_atomic(store.root / "unowned.json", {"v": VERSION, "at": report["at"], "items": report["unowned"]})
+    seen_resources = {i.get("key") for i in (before.get("resources") or [])} if isinstance(before, dict) else set()
+    write_atomic(store.root / "unowned.json", {"v": VERSION, "at": report["at"], "items": report["unowned"],
+                                                "resources": report["unowned_resources"]})
     actor = _events.tool("sweep")
     for item in report["unowned"]:
         if (item["pid"], item["start"]) not in seen:
@@ -194,6 +237,13 @@ def record(store: Store, report: Dict[str, Any]) -> None:
                                                            "pid": item["pid"]}, actor,
                           {"cmd": item["cmd"], "cwd": item["cwd"], "root": item["root"], "why": item["why"],
                            "start": item["start"], "age": item["age"], "also": item.get("also") or []}, "warn")
+    for item in report["unowned_resources"]:
+        if item["key"] not in seen_resources:
+            subject = {"type": "resource", "id": item["key"], "kind": item["kind"]}
+            if item.get("name"):
+                subject["label"] = str(item["name"])
+            _events.write(store.root, "unowned.reported", subject, actor,
+                          {k: v for k, v in item.items() if k != "key"}, "warn")
     summary = result_of(report)
     write_atomic(store.root / "sweep.json", {"v": VERSION, "at": report["at"], "result": summary})
     _events.write(store.root, "sweep.finished", {"type": "sweep", "id": _events.now()}, actor, summary,
@@ -204,7 +254,8 @@ def result_of(report: Dict[str, Any]) -> Dict[str, Any]:
     return {"reaped": [r["id"] for r in report["reaped"] if r["result"] in _reap.STOPPED],
             "failed": [r["id"] for r in report["reaped"] if r["result"] == "failed"],
             "gone": [g["id"] for g in report["gone"]], "running": report["running"],
-            "unowned": len(report["unowned"]), "pruned": report["pruned"], "errors": report["errors"]}
+            "unowned": len(report["unowned"]), "unowned_resources": len(report.get("unowned_resources") or []),
+            "pruned": report["pruned"], "errors": report["errors"], "notes": report.get("notes") or []}
 
 
 def refresher(known: List[List[Any]]):
@@ -254,8 +305,14 @@ def text(report: Dict[str, Any], quiet: bool = False) -> str:
         lines.append(f"unowned pid {item['pid']} ({age}{under}{also}; {item['why']}): {item['cmd'][:160]}")
         lines.append(f"  own it: junkfather adopt {item['pid']} --ttl 1h   end it: junkfather reap --pid "
                      f"{item['pid']} --force")
+    for item in report.get("unowned_resources") or []:
+        lines.append(f"unowned {_resources.describe(item)}: {item['why']}")
+        lines.append(f"  own it: junkfather own-resource --kind {item['kind']} --id {item['id']} --ttl 1h")
+    for note in report.get("notes") or []:
+        lines.append(f"note: {note}")
     lines.append(f"{report['running']} running, {len([r for r in report['reaped'] if r['result'] in _reap.STOPPED])} "
-                 f"reaped, {len(report['gone'])} gone, {len(report['unowned'])} unowned reported"
+                 f"reaped, {len(report['gone'])} gone, {len(report['unowned'])} unowned reported, "
+                 f"{len(report.get('unowned_resources') or [])} unowned resources"
                  + (" (dry run)" if report["dry_run"] else ""))
     return "\n".join(lines)
 

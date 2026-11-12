@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from _fake import begin, save  # noqa: E402
+
+state, args = begin("tailscale")
+routes = state.setdefault("routes", {})
+if args[:3] == ["serve", "status", "--json"]:
+    if not routes:
+        print("{}")
+        sys.exit(0)
+    tcp, web = {}, {}
+    for route, target in routes.items():
+        proto, _, rest = route.partition(":")
+        port, slash, path = rest.partition("/")
+        tcp[port] = {"HTTPS": True} if proto == "https" else {"HTTP": True}
+        web.setdefault(f"host.ts.net:{port}", {"Handlers": {}})["Handlers"]["/" + path if slash else "/"] = \
+            {"Proxy": target}
+    print(json.dumps({"TCP": tcp, "Web": web}, indent=2))
+elif args[:1] == ["serve"]:
+    options = {a.split("=", 1)[0]: a.split("=", 1)[1] for a in args[1:] if a.startswith("--") and "=" in a}
+    words = [a for a in args[1:] if not a.startswith("--")]
+    port = options.get("--https", "443")
+    path = options.get("--set-path", "")
+    route = f"https:{port}" + (path if path and path != "/" else "")
+    if words == ["off"]:
+        if route not in routes:
+            print("error: handler does not exist", file=sys.stderr)
+            sys.exit(1)
+        del routes[route]
+    elif "--bg" in args and len(words) == 1:
+        routes[route] = f"http://127.0.0.1:{words[0]}"
+    else:
+        print(f"tailscale: unexpected {args}", file=sys.stderr)
+        sys.exit(1)
+    save(state)
+else:
+    sys.exit(1)
