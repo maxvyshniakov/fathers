@@ -716,12 +716,17 @@ def check(args: Any) -> int:
     previous = state.read_json(path)
     # A receipt and its results certify the toolchain they ran with (#571): another one, or none now, voids them.
     toolchain = plan.toolchain_state(worktree)
-    same_rust = previous is not None and previous.get("toolchain") == toolchain
+    # ... and the platform they ran on (owner decision 2026-11-13): a receipt naming another, or none, voids them.
+    platform = result_store.host_platform()
+    same_rust = (previous is not None and previous.get("toolchain") == toolchain
+                 and result_store.receipt_platform(previous, worktree) == platform)
     if previous and previous.get("tree") == tree and previous.get("status") == "green" and not args.rerun:
         if same_rust:
-            print(f"Receipt current: green for tree {tree} ({path})")
+            print(f"Receipt current: green for tree {tree} on {platform} ({path})")
             return 0
-        print("lane: the Rust toolchain changed since the receipt (#571); running the checks again")
+        print(f"lane: the receipt was not made on {platform}; running the checks again"
+              if previous.get("toolchain") == toolchain else
+              "lane: the Rust toolchain changed since the receipt (#571); running the checks again")
     base = plan_base(record, worktree)
     lane_plan = plan.plan_for(worktree, base)
     # fathers#93: a review-fix lane runs the plan of its fix, widened to both diffs when the fix leaves the parent's.
@@ -745,6 +750,7 @@ def check(args: Any) -> int:
         reused = {c: e for c, e in reusable(previous, plan.plan_for(worktree, previous["head"])).items()
                   if c in wanted}
     if (selected is not None and parent and not args.rerun and parent.get("toolchain") == toolchain
+            and result_store.receipt_platform(parent) == platform
             and parent.get("head") and git_ok(worktree, "cat-file", "-e", parent["head"])):
         # The parent's passes stand for each check no change since the parent's head selects, as an earlier
         # receipt of the lane's own would.
@@ -797,7 +803,8 @@ def check(args: Any) -> int:
                             "reasons": lane_plan["reasons"], "checks": selected, "selection": lane_plan["selection"],
                             "check_results": check_results, "unowned": lane_plan.get("unowned", []),
                             "full": lane_plan["full"], "outside_claims": outside, "claims_added": added,
-                            "claim_overlaps": overlaps, "toolchain": toolchain, "jobs": decision["jobs"],
+                            "claim_overlaps": overlaps, "toolchain": toolchain, "platform": platform,
+                            "jobs": decision["jobs"],
                             "jobs_decision": decision, "results": results, "triage": triaged,
                             "classification": classification, "first": first, "changed_red_tests": changed_tests,
                             "stopped": stopped, "status": status, "host": info, "started": started,
@@ -807,7 +814,8 @@ def check(args: Any) -> int:
     # fathers#91: what ran, and what was reused for this tree, is on record for any later run of the tree. A check
     # that failed and passed rerun by itself stays failed here: the merge runs it again (#640); the history marks it
     # a flake (fathers#92).
-    result_store.record(tree, recordable(check_results), source="check", toolchain=toolchain, lane=args.id,
+    result_store.record(tree, recordable(check_results), source="check", toolchain=toolchain, platform=platform,
+                        lane=args.id,
                         sha=head, receipt=str(path), reused=list(reused), origins=origins(reused, str(path)),
                         phase="check")
     for entry in (classification or {}).get("checks", []):

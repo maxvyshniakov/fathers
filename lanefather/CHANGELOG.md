@@ -13,7 +13,10 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   lookup from another platform reuses nothing, so a green gate on the Mac never skips the Linux run, while a second
   run of the tree on the same platform is still skipped. `lanefather results key|lookup|record --platform` asks
   for or records another platform; `LANEFATHER_PLATFORM` stands in for the host's. An entry an earlier release
-  wrote names no platform and matches none: its checks run once more ([docs/results.md](docs/results.md)).
+  wrote names no platform and matches none: its checks run once more ([docs/results.md](docs/results.md)). Lane
+  and post-merge receipts name their platform as well, and one from another platform is not current; an older
+  receipt counts as this host's when the lane's worktree is here. The `plan` in
+  slot requests changes with it, so each run type's duration history starts once more.
 - Check results belong to a tree and a plan (fathers#91): `check`, the post-merge smoke and the batch gate record
   each result in `<state>/results/<tree>.json`, and a check that already passed on the same tree under the same
   toolchain, in any lane, is not run again; the receipt and the output name the run that stands for it. `promote`

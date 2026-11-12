@@ -82,8 +82,10 @@ Lanefather produced, under source `external:NAME`; Lanefather's own sources are 
   with the same tree on the same platform: a green run posts its status with the platform in its context, and a
   later run on that platform, on a commit whose tree matches, skips its heavy jobs with a link to it. To compare
   plans across both worlds, use the same plan string: `--full` is `"full"`, the toolchain is `null` for a project
-  without a `toolchain` command and the platform is the runner's `<os>-<arch>`, so a runner without Lanefather can
-  compute `plan` with `sha256` alone.
+  without a `toolchain` command and the platform is the runner's `<os>-<arch>` in Node's names, so a runner without
+  Lanefather can compute `plan` with `sha256` alone. From GitHub's runner variables: `RUNNER_OS` `Linux`, `macOS`,
+  `Windows` give `linux`, `darwin`, `win32`, and `RUNNER_ARCH` `X64`, `ARM64` give `x64`, `arm64`
+  (`linux-x64`). Lanefather takes the machine's architecture, also under Rosetta.
 - A plan change (another check selection, toolchain or platform) gives another `plan`; never reuse across plans.
 
 ## Compatibility
@@ -96,4 +98,8 @@ the file, and an older release still reads its own entries and skips the new one
 compute. Releases before the interface neither read nor write `<state>/results/`; a project
 pinned to one keeps running every check, and the two can share a state directory. Receipts gain keys
 (`reused_by`, `reused_source`, `reused_receipt`, `reused_lane` and `reused_at` on reused checks; `skipped` on a
-post-merge receipt), none removed. The `v` field changes only with a migration of the store in place.
+post-merge receipt), none removed. Lane and post-merge receipts name their `platform` too; a receipt naming another platform is not current, and its
+results stand for nothing on this platform. A receipt an earlier release wrote names none: it counts as made on
+this host when the lane's worktree, where the check ran, is here, and as unknown (no match) otherwise. Slot requests carry the new `plan` key, so Slotfather's
+run-type history of a plan starts once more after the upgrade. The `v` field changes only with a migration of the
+store in place.

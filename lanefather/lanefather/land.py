@@ -204,7 +204,8 @@ def land(args: Any) -> int:
         kind, rows = plan.post_merge_selection(checkout, merged_plan)
         merge_tree = git(checkout, "rev-parse", "HEAD^{tree}")
         # #640: what the lane's green receipt already verified does not run again.
-        kind, rows, narrowing = plan.narrow_smoke(checkout, receipt, record["landed"], merge_tree, kind, rows)
+        kind, rows, narrowing = plan.narrow_smoke(checkout, receipt, record["landed"], merge_tree, kind, rows,
+                                                  record.get("worktree"))
         lane_verified = narrowing.pop("lane_verified", {})
         # fathers#91: a smoke check that already passed on the merge tree, under this toolchain, does not run again.
         toolchain = plan.toolchain_state(checkout)
@@ -228,6 +229,7 @@ def land(args: Any) -> int:
     info = host()
     state.write_json(post, {"version": 1, "lane": args.id, "merge": merge, "base": previous,
                             "tree": merge_tree, "checkout": checkout, "kind": kind,
+                            "platform": result_store.host_platform(),
                             "jobs": jobs, "jobs_decision": decision, "suites": suites, "full": False,
                             "reasons": merged_plan["reasons"], "checks": selected, "selection": rows,
                             "narrowing": narrowing, "skipped": skips,

@@ -170,7 +170,8 @@ def toolchain_state(root: Any) -> dict[str, Any] | None:
         return {"refused": f"unreadable resolution: {result.stdout.strip()[:200]}"}
 
 
-def lane_basis(receipt: dict[str, Any] | None, landed: dict[str, Any], toolchain: Any) -> str | None:
+def lane_basis(receipt: dict[str, Any] | None, landed: dict[str, Any], toolchain: Any,
+               worktree: Any = None) -> str | None:
     """Why the lane's receipt cannot stand for part of its merge's smoke (#640), or None when it can: green, for
     the tree the lane landed, with per-check results, and run with the toolchain the smoke resolves (#571)."""
     if not receipt:
@@ -184,11 +185,14 @@ def lane_basis(receipt: dict[str, Any] | None, landed: dict[str, Any], toolchain
         return "the lane's receipt has no per-check results"
     if receipt.get("toolchain") != toolchain:
         return "the Rust toolchain changed since the lane check"
+    from . import results
+    if results.receipt_platform(receipt, worktree) != results.host_platform():
+        return f"the lane check did not run on {results.host_platform()}"
     return None
 
 
 def narrow_smoke(checkout: Any, receipt: dict[str, Any] | None, landed: dict[str, Any], merge_tree: str, kind: str,
-                 rows: Rows | None) -> tuple[str, Rows | None, dict[str, Any]]:
+                 rows: Rows | None, worktree: Any = None) -> tuple[str, Rows | None, dict[str, Any]]:
     """The part of the post-merge selection `rows` that the merge still needs after the lane's green receipt
     (#640): (kind, rows, narrowing).
 
@@ -202,7 +206,7 @@ def narrow_smoke(checkout: Any, receipt: dict[str, Any] | None, landed: dict[str
     not cover the landed tree (lane_basis) leaves the rows as they were, with the reason."""
     if rows is None:
         return kind, rows, {"narrowed": False, "reason": "the tree's plan names whole suites"}
-    reason = lane_basis(receipt, landed, toolchain_state(checkout))
+    reason = lane_basis(receipt, landed, toolchain_state(checkout), worktree)
     if reason or receipt is None:
         return kind, rows, {"narrowed": False, "reason": reason}
     basis = {"receipt_tree": receipt["tree"], "receipt_head": receipt.get("head"), "lane_tip": landed["tip"]}

@@ -164,7 +164,7 @@ class PlatformTests(unittest.TestCase):
     def test_the_host_platform_is_its_os_and_architecture_and_the_default(self):
         from lanefather import results
         rows = [("Darwin", "arm64", "darwin-arm64"), ("Linux", "x86_64", "linux-x64"), ("Linux", "aarch64", "linux-arm64"),
-                ("Linux", "AMD64", "linux-x64"), ("Windows", "AMD64", "win32-x64")]
+                ("Linux", "AMD64", "linux-x64"), ("Windows", "AMD64", "win32-x64"), ("Linux", "armv7l", "linux-arm")]
         for system, machine, expected in rows:
             with self.subTest(system=system, machine=machine), \
                     unittest.mock.patch("platform.system", return_value=system), \
@@ -176,9 +176,15 @@ class PlatformTests(unittest.TestCase):
             self.assertTrue(results.lookup(TREE_A, ["a"])["verified"])
         with unittest.mock.patch.dict(os.environ, {"LANEFATHER_PLATFORM": "darwin-arm64"}):
             self.assertFalse(results.lookup(TREE_A, ["a"])["verified"])
+        from lanefather.errors import LaneError
         with unittest.mock.patch.dict(os.environ, {"LANEFATHER_PLATFORM": "Linux x64"}), \
-                self.assertRaises(ValueError):
+                self.assertRaises(LaneError):
             results.host_platform()
+        # Python under Rosetta reports x86_64 on an Apple silicon Mac: the machine's architecture counts.
+        with unittest.mock.patch("platform.system", return_value="Darwin"), \
+                unittest.mock.patch("platform.machine", return_value="x86_64"), \
+                unittest.mock.patch.object(results, "apple_silicon", return_value=True):
+            self.assertEqual(results.host_platform(), "darwin-arm64")
 
     def test_an_entry_without_a_platform_matches_no_platform(self):
         """An older release's entry names no platform, and the store cannot tell which host wrote it: the state
@@ -200,6 +206,24 @@ class PlatformTests(unittest.TestCase):
         results.record(TREE_A, {"unit": "passed"}, source="check", platform="linux-x64")
         self.assertTrue(results.lookup(TREE_A, ["unit"], platform="linux-x64")["verified"])
         self.assertEqual(len(results.entries(TREE_A)), 3)
+
+    def test_a_receipt_names_its_platform_or_the_host_whose_worktree_ran_it(self):
+        """A lane check runs in the lane's worktree, so a receipt an earlier release wrote was made on the host that
+        has that worktree; without it the platform is unknown and matches none."""
+        from lanefather import results
+        here = str(self.tmp)
+        with unittest.mock.patch.dict(os.environ, {"LANEFATHER_PLATFORM": "linux-x64"}):
+            rows = [
+                ({"platform": "darwin-arm64"}, here, "darwin-arm64"),
+                ({"platform": "darwin-arm64"}, None, "darwin-arm64"),
+                ({"tree": "t"}, here, "linux-x64"),               # older receipt, its worktree is on this host
+                ({"tree": "t"}, str(self.tmp / "gone"), None),    # older receipt, worktree elsewhere: unknown
+                ({"tree": "t"}, None, None),
+                (None, here, None),
+            ]
+            for receipt, worktree, expected in rows:
+                with self.subTest(receipt=receipt, worktree=worktree):
+                    self.assertEqual(results.receipt_platform(receipt, worktree), expected)
 
     def test_an_entry_whose_platform_and_environment_disagree_is_not_trusted(self):
         """A hand-edited or foreign entry naming one platform under another platform's environment counts for
@@ -256,6 +280,27 @@ class TreeReuseTests(LaneCase):
         results = self.receipt("c")["check_results"]
         self.assertEqual(results["structure-check"]["reused_by"], "tree")
         self.assertNotIn("reused_by", results["lib-check"])
+
+    def test_a_lane_checked_on_another_platform_runs_its_checks_again(self):
+        """Neither the lane's receipt nor the tree's results from the Mac stand for Linux; a second check on Linux
+        is current again (review of the platform change)."""
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        with unittest.mock.patch.dict(self.env, {"LANEFATHER_PLATFORM": "darwin-arm64"}):
+            self.lane("check", "a")
+            self.assertEqual(self.receipt("a")["platform"], "darwin-arm64")
+            self.assertIn("Receipt current", self.lane("check", "a"))
+        runs = len(self.verify_runs())
+        with unittest.mock.patch.dict(self.env, {"LANEFATHER_PLATFORM": "linux-x64"}):
+            output = self.lane("check", "a")
+            self.assertNotIn("Receipt current", output)
+            self.assertGreater(len(self.verify_runs()), runs)
+            receipt = self.receipt("a")
+            self.assertEqual(receipt["platform"], "linux-x64")
+            self.assertFalse(any(r.get("reused_by") for r in receipt["check_results"].values()), receipt)
+            self.assertIn("Receipt current", self.lane("check", "a"))
+        with unittest.mock.patch.dict(self.env, {"LANEFATHER_PLATFORM": "Linux"}):
+            self.assertIn("not a platform", self.lane("check", "a", ok=False))
 
     def test_a_smoke_check_that_passed_on_the_merge_tree_does_not_run_again(self):
         worktree = self.created("a", "lib/**")

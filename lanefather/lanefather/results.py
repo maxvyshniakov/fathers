@@ -51,7 +51,7 @@ TREE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 PLATFORM = re.compile(r"^[a-z0-9]+-[a-z0-9_]+$")
 SYSTEMS = {"darwin": "darwin", "linux": "linux", "windows": "win32"}
 MACHINES = {"x86_64": "x64", "amd64": "x64", "x64": "x64", "arm64": "arm64", "aarch64": "arm64", "i386": "ia32",
-            "i686": "ia32", "x86": "ia32"}
+            "i686": "ia32", "x86": "ia32", "armv7l": "arm", "armv6l": "arm", "ppc64le": "ppc64", "s390x": "s390x"}
 
 
 def canonical(value: Any) -> str:
@@ -59,18 +59,32 @@ def canonical(value: Any) -> str:
 
 
 def host_platform() -> str:
-    """This host's platform, `<os>-<arch>` (darwin-arm64, linux-x64); LANEFATHER_PLATFORM stands in for it."""
+    """This host's platform, `<os>-<arch>` (darwin-arm64, linux-x64); LANEFATHER_PLATFORM stands in for it. The
+    machine's architecture counts: Python under Rosetta reports x86_64 on an Apple silicon Mac."""
     from . import config
     given = config.current().env("PLATFORM")
     if given:
-        return checked_platform(given)
+        return checked_platform(given, "LANEFATHER_PLATFORM")
     system, machine = host.system().lower(), host.machine().lower()
-    return checked_platform(f"{SYSTEMS.get(system, system)}-{MACHINES.get(machine, machine)}")
+    if system == "darwin" and machine == "x86_64" and apple_silicon():
+        machine = "arm64"
+    return checked_platform(f"{SYSTEMS.get(system, system)}-{MACHINES.get(machine, machine)}", "this host")
 
 
-def checked_platform(given: str) -> str:
+def apple_silicon() -> bool:
+    import subprocess
+    try:
+        found = subprocess.run(["sysctl", "-n", "hw.optional.arm64"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return found.stdout.strip() == "1"
+
+
+def checked_platform(given: str, where: str = "--platform") -> str:
+    from .errors import LaneError
     if not PLATFORM.match(given):
-        raise ValueError(f"not a platform: {given!r} (give <os>-<arch>, such as linux-x64 or darwin-arm64)")
+        raise LaneError(f"{where}: not a platform: {given!r} (give <os>-<arch> in Node's names, such as linux-x64 or "
+                        f"darwin-arm64)")
     return given
 
 
@@ -86,6 +100,17 @@ def plan_hash(checks: Any, toolchain: Any = None, platform: str | None = None) -
     selection = FULL if checks == FULL else sorted(set(checks))
     return hashlib.sha256(canonical({"v": VERSION, "checks": selection, "env": env_hash(toolchain, platform)}
                                     ).encode()).hexdigest()
+
+
+def receipt_platform(receipt: dict[str, Any] | None, worktree: Any = None) -> str | None:
+    """The platform a lane or post-merge receipt was made on: its `platform`; for a receipt an earlier release wrote,
+    this host's when the worktree the check ran in is a directory here (a lane check runs in the lane's worktree, so
+    the host that has it made the receipt), otherwise None, which matches no platform."""
+    if not receipt:
+        return None
+    if receipt.get("platform"):
+        return str(receipt["platform"])
+    return host_platform() if worktree and Path(str(worktree)).is_dir() else None
 
 
 def under(entry: dict[str, Any], env: str, platform: str) -> bool:
@@ -124,7 +149,11 @@ def record(tree: str, checks: dict[str, str], *, source: str, toolchain: Any = N
     passed. A record never fails its caller's command: an unwritable store only loses the reuse. A check that passes
     here after its newest result on the tree, under this environment, failed is a flake in the history (fathers#92).
     `platform` is where the run ran, this host by default."""
-    platform = platform or host_platform()
+    from .errors import LaneError
+    try:
+        platform = platform or host_platform()
+    except LaneError:
+        return {"checks": dict(checks), "full": full, "source": source, "recorded": False}
     green = all(s == PASSED for s in checks.values()) and (bool(checks) or full)
     entry: dict[str, Any] = {
         "checks": dict(checks), "full": full, "platform": platform, "env": env_hash(toolchain, platform),
@@ -286,7 +315,7 @@ def command(args: Any) -> int:
     tree = resolve_tree(cwd, args.rev)
     try:
         platform = checked_platform(args.platform) if getattr(args, "platform", None) else host_platform()
-    except ValueError as error:
+    except LaneError as error:
         raise LaneError(f"results: {error}") from None
     if args.action == "record":
         statuses: dict[str, str] = {}
