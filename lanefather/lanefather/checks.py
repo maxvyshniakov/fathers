@@ -615,6 +615,49 @@ def integration_refs(record: Record, worktree: str) -> list[str]:
     return list(dict.fromkeys(refs))
 
 
+def fix_parent(record: Record) -> dict[str, Any] | None:
+    """The receipt of the lane a review-fix lane fixes, when it has per-check results; None otherwise."""
+    parent = record.get("review_fix_of")
+    if not parent:
+        return None
+    receipt = state.read_json(state.receipt_path(parent))
+    if not receipt or receipt.get("selection") is None or receipt.get("check_results") is None:
+        return None
+    return dict(receipt, lane=parent)
+
+
+def receipt_paths(receipt: dict[str, Any]) -> set[str]:
+    """The paths a receipt's plan covered: its `paths`, or for a receipt from before them, the paths that chose its
+    checks."""
+    listed: Any = receipt.get("paths")
+    if isinstance(listed, list):
+        return {str(p) for p in listed}  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
+    rows: list[dict[str, Any]] = receipt.get("selection") or []
+    reasons: dict[str, list[str]] = receipt.get("reasons") or {}
+    return {p for row in rows for p in row.get("paths", [])} | {p for paths in reasons.values() for p in paths}
+
+
+def fix_plan(lane_plan: dict[str, Any], parent: dict[str, Any]) -> dict[str, Any]:
+    """A review-fix lane's plan (fathers#93), changed in place: its own diff's plan when every path it changes is in
+    the parent lane's diff; otherwise the plan of both diffs, the union of the two selections. Returns what the
+    receipt records about it."""
+    parent_paths = receipt_paths(parent)
+    outside = sorted(p for p in lane_plan["paths"] if p not in parent_paths)
+    about: dict[str, Any] = {"lane": parent["lane"], "tree": parent.get("tree"), "outside_parent": outside,
+                             "union": bool(outside) and lane_plan.get("selection") is not None}
+    if not about["union"]:
+        return about
+    rows = {row["id"]: row for row in lane_plan["selection"]}
+    added = [row for row in parent["selection"] if row["id"] not in rows]
+    lane_plan["full"] = bool(lane_plan.get("full") or parent.get("full"))
+    lane_plan["selection"] = [*lane_plan["selection"],
+                              *({"id": r["id"], "suite": r["suite"], "paths": r.get("paths", [])} for r in added)]
+    lane_plan["selected"] = plan.suites_of(lane_plan["selection"])
+    lane_plan["by_suite"] = plan.by_suite(lane_plan["selection"])
+    about["added"] = [r["id"] for r in added]
+    return about
+
+
 def plan_base(record: Record, worktree: str) -> str:
     """The newest merge-base of the lane's HEAD (lanefather#3): with its base, or with an integration branch tip
     when that merge-base descends from the former. A lane registered at a literal commit keeps it after it merges
@@ -662,6 +705,14 @@ def check(args: Any) -> int:
         print("lane: the Rust toolchain changed since the receipt (#571); running the checks again")
     base = plan_base(record, worktree)
     lane_plan = plan.plan_for(worktree, base)
+    # fathers#93: a review-fix lane runs the plan of its fix, widened to both diffs when the fix leaves the parent's.
+    parent = fix_parent(record)
+    fix_of = fix_plan(lane_plan, parent) if parent else None
+    if fix_of:
+        print(f"lane: review-fix lane of {fix_of['lane']}: " + (
+            f"the plan of both diffs, since the fix changes {', '.join(fix_of['outside_parent'][:3])}"
+            + (", ..." if len(fix_of["outside_parent"]) > 3 else "") + f" outside {fix_of['lane']}'s diff"
+            if fix_of["union"] else "the plan of its fix, inside the parent's diff"), flush=True)
     suites: list[str] = lane_plan["selected"]
     selected: dict[str, list[str]] | None = lane_plan["by_suite"]
     reused: dict[str, dict[str, Any]] = {}
@@ -671,6 +722,14 @@ def check(args: Any) -> int:
         wanted = {c for ids in selected.values() for c in ids}
         reused = {c: e for c, e in reusable(previous, plan.plan_for(worktree, previous["head"])).items()
                   if c in wanted}
+    if (selected is not None and parent and not args.rerun and parent.get("toolchain") == toolchain
+            and parent.get("head") and git_ok(worktree, "cat-file", "-e", parent["head"])):
+        # The parent's passes stand for each check no change since the parent's head selects, as an earlier
+        # receipt of the lane's own would.
+        wanted = {c for ids in selected.values() for c in ids}
+        reused.update({c: dict(e, reused_by="parent") for c, e in
+                       reusable(parent, plan.plan_for(worktree, parent["head"])).items()
+                       if c in wanted and c not in reused})
     if selected is not None and not args.rerun:
         # fathers#91: a check that passed on this very tree under this toolchain, in any lane or run, stands.
         reused.update(same_tree({c: s for s, ids in selected.items() for c in ids if c not in reused}, tree,
@@ -718,6 +777,7 @@ def check(args: Any) -> int:
                             "jobs_decision": decision, "results": results, "triage": triaged,
                             "classification": classification, "first": first, "changed_red_tests": changed_tests,
                             "stopped": stopped, "status": status, "host": info, "started": started,
+                            "paths": lane_plan["paths"], **({"fix_of": fix_of} if fix_of else {}),
                             "leases": leases_of(fresh),
                             "finished": journal.now()})
     # fathers#91: what ran, and what was reused for this tree, is on record for any later run of the tree. A check

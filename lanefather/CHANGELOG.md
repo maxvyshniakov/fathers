@@ -20,3 +20,7 @@ Versions: `lanefather/__init__.py` names the version; an installed release also 
   a later run, with the failed JUnit tests when the check names a report) go to `<state>/history/<YYYY-MM>.jsonl`,
   which `done` leaves alone; twelve months are kept. Receipts name their runs in `leases`. `lanefather stats [--days
   N] [--lane ID] [--json]` reports per-check p50 and p90, red runs and flakes.
+- A review-fix lane checks only what its fix touches (fathers#93): the plan of its own diff when every path it changes
+  is in the parent lane's diff, otherwise the plan of both diffs; either way the parent's passed results stand for
+  each check no change since the parent's head selects. The receipt says which (`fix_of`). Land, the smoke and
+  promote's batch gate are unchanged.
