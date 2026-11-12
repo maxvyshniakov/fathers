@@ -32,6 +32,7 @@ not there:
 {"v": 1, "tool": "slotfather", "version": "0.1.0",
  "dashboard": {"v": 1, "tag": "slot",
    "snapshot": {"argv": ["status", "--json", "--full"], "versions": [2], "poll": 1},
+   "settings": {"versions": [1]},
    "actions": ["reprioritize"],
    "changelog": "/Users/me/.local/lib/slotfather/releases/<release>/slotfather/CHANGELOG.md"}}
 ```
@@ -66,6 +67,63 @@ nothing else. The block:
 
 Presentation stays with the reader: holder colours, the lane of a request (Lanefather) and a holder's working
 directory are not in the block.
+
+**`slotfather settings`** reads and changes the shared settings (capacity.json and order.json) with the same
+validation, ownership check and queue lock as `slotfather slots` and `slotfather order`; the in-tree Settings panel
+takes its labels, checks and previews from the same module:
+
+```text
+slotfather settings --json                                the settings and the queue's STATUS rows
+slotfather settings check KEY VALUE --json                validate without saving
+slotfather settings set KEY VALUE [--revision R] --json   save
+slotfather settings reset (KEY | --all) [--revision R] --json
+```
+
+```json
+{"v": 1, "tool": "slotfather", "writable": true, "reason": null,
+ "status": [{"label": "queue", "value": "~/.local/state/slotfather", "style": "text"},
+            {"label": "slots", "value": "4 total · 3 free · 1 held · 0 waiting", "style": "text"}, ...],
+ "basis": {"mode": "automatic", "slots": 4, "cpu_slots": 4, "cores": 12, "memory_slots": 8, "memory_gib": 32.0,
+           "gib_per_slot": 4.0, "saved": false, "cgroup": null},
+ "sections": [
+   {"id": "capacity", "title": "Capacity", "settings": [
+     {"key": "capacity.mode", "label": "Capacity", "type": "choice", "value": "automatic", "default": "automatic",
+      "choices": [{"value": "automatic", "label": "Automatic"}, ...], "source": "default", "writable": true,
+      "revision": "absent", "description": "..."},
+     {"key": "capacity.slots", "label": "Slots", "type": "integer", "value": 4, "default": null, "min": 1,
+      "max": 48, "step": 1, "unit": "slots", "when": {"capacity.mode": ["fixed"]}, ...},
+     {"key": "capacity.gib_per_slot", "label": "GiB per slot", "type": "number", "value": 4.0, "default": 4.0,
+      "min": 0.5, "max": null, "step": 0.5, "unit": "GiB", "when": {"capacity.mode": ["memory", "lower"]}, ...}]},
+   {"id": "order", "title": "Queue order", "settings": [
+     {"key": "order.order", "label": "Queue order", "type": "choice", "value": "backfill", ...},
+     {"key": "order.warn_wait", "label": "Warn after waiting", "type": "duration", "value": 1800.0,
+      "default": 1800.0, "min": 0.0, "max": null, "step": 300, "unit": "s", "zero": "never",
+      "effective": 900.0, "source": "env SLOTFATHER_WARN_WAIT", "writable": true, "revision": "sha256:...",
+      "description": "..."}, ...]}]}
+```
+
+- Keys, in the panel's order: `capacity.mode` (`automatic`, `fixed`, `memory`, `lower`), `capacity.slots` (saves
+  Fixed with that count), `capacity.gib_per_slot` (saves the current memory mode with that amount; refused in
+  another mode), `order.order` (`backfill`, `window`) and `order.KNOB` for `safety`, `fallback`, `overrun`,
+  `limit`, `interactive`, `batch`, `aging_batch`, `aging_normal`, `warn_wait`, `idle_cpu`, `idle_after`,
+  `yield_after`. `when` says under which capacity mode a row is shown. A mode set alone keeps the current
+  slots (Fixed) or GiB per slot (the automatic 4 GiB when there is none).
+- `value` is the saved value, the environment ignored; `effective`, present only when this environment tightens it,
+  is the value that applies here, and `source` then names the variable (else `saved` or `default`). Durations are
+  seconds; `set` and `check` also take `90s`, `30m`, `1.5h`. `zero` names what 0 means.
+- `basis` is the capacity basis with the memory budget filled in by the automatic rule where Fixed does not
+  work it out, as STATUS' budgets row shows it.
+- `revision` is opaque: one token for the three capacity keys (capacity.json), one for the order keys
+  (order.json). With `--revision` a `set` or `reset` saves only while that file is unchanged; without it, order
+  settings merge with whatever else is saved.
+- `check` replies `{"ok", "error", "preview"}`, and `slots` for a capacity key: the capacity the value gives, with
+  a preview such as `→ 6 slots · will start 1 waiting` or `→ 2 slots · will drain 1: running work keeps its slots`.
+  Errors use the panel's words (`Enter a whole number of slots, at least 1.`, `At most 48 slots (4 per core).`).
+- `set` and `reset` reply with the whole settings object plus `ok: true` and `message` (the panel's confirmation,
+  `Saved · capacity 6 slots`). `reset --all` resets both files.
+- Exit codes: 0 done; 2 invalid, with `{"ok": false, "error"}`; 3 a stale revision, with the whole current
+  settings object, `ok: false`, `conflict: true` and `error`; 4 another user's queue, with `{"ok": false,
+  "error"}` (`settings --json` there has `writable: false`, its `reason`, and every row `writable: false`).
 
 ## Process queries
 

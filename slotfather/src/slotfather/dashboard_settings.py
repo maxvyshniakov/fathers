@@ -9,65 +9,34 @@ enough of them end. The refresh interval and the colour theme belong to this das
 from __future__ import annotations
 
 import contextlib
-import io
 import math
 import os
 import textwrap
 import time
 from typing import TYPE_CHECKING, Any, Callable, NamedTuple, cast
 
-from . import cli, config, platform, schedule, state
+from . import config, platform, schedule, state
 from . import theme as _theme
 from . import keys as _keys
 
 if TYPE_CHECKING:
     from .dashboard import Canvas
 
-MODES = ("automatic", "fixed", "memory", "lower")
-MODE_LABELS = {"automatic": "Automatic", "fixed": "Fixed", "memory": "Memory", "lower": "CPU + memory"}
-ORDER_LABELS = {"backfill": "Backfill", "window": "Arrival"}
-# Each setting's label and arrow step; the unit goes beside the value (UNITS), not in the label. Display text only:
-# the keys, order.json, the CLI flags and the environment keep their names.
-KNOBS = {"safety": ("Backfill margin", 0.5), "limit": ("Overtaking stops after", 60),
-         "fallback": ("Unknown job runtime", 60), "overrun": ("Overrun estimate", 0.1),
-         "interactive": ("Interactive head start", 60), "batch": ("Batch held back", 60),
-         "yield_after": ("Ask to yield after", 30), "idle_cpu": ("Idle when below", 0.05),
-         "idle_after": ("Idle for", 60), "aging_batch": ("Batch promoted after", 300),
-         "aging_normal": ("Normal promoted after", 300), "warn_wait": ("Warn after waiting", 300)}
-UNITS = {"safety": "×", "overrun": "×", "limit": " s", "fallback": " s", "interactive": " s", "batch": " s",
-         "yield_after": " s", "idle_after": " s", "idle_cpu": " cores", "interval": " s", "aging_batch": " s",
-         "aging_normal": " s", "warn_wait": " s"}
+from .settings import (CAPACITY_PER_CORE, KNOBS, MODE_LABELS, MODES, NEVER, ORDER_FIELDS, ORDER_LABELS,  # noqa: F401
+                       UNITS, number, plural)
+from . import settings as _shared
+
 # One flat list (owner, 2026-11-11), the STATUS block above it
-FIELDS = ("mode", "amount", "order", "safety", "fallback", "overrun", "limit", "interactive", "batch", "aging_batch",
-          "aging_normal", "warn_wait", "idle_cpu", "idle_after", "yield_after", "interval", "theme")
-NEVER = ("limit", "aging_batch", "aging_normal", "warn_wait")  # 0 is off: shown as "never"
+FIELDS = ("mode", "amount") + ORDER_FIELDS + ("interval", "theme")
 LOCAL = ("interval", "theme")  # this dashboard's own settings, never written to the shared queue
 CHOICES = ("mode", "order", "theme")
-DESCRIPTIONS = {
-    "mode": "Shared by every client. Automatic: the lower of the CPU and memory budgets.",
-    "amount.fixed": "Total slots for every client. Applies at the next grant; a shrink drains.",
-    "amount.memory": "One slot per this many GiB of memory. Applies at the next grant.",
-    "order": "Backfill lets short work pass; Arrival serves in arrival order.",
-    "safety": "Multiplier on expected runtimes for backfill; at least 1.",
-    "limit": "After this a waiting head lets nothing pass; 0: its reserved start alone.",
-    "fallback": "Assumed runtime of work with no history.",
-    "overrun": "Remaining runtime as a share of elapsed time once a run overruns.",
-    "interactive": "How far interactive requests move ahead; 0: not at all.",
-    "batch": "How far batch requests move back; 0: not at all.",
-    "aging_batch": "A waiting batch request is served as normal after this; 0: never.",
-    "aging_normal": "A waiting normal request is served as interactive after this; 0: never.",
-    "warn_wait": "A request waiting this long says so and is flagged; 0: never.",
-    "yield_after": "Before a yieldable holder is asked to yield; 0: nobody is asked.",
-    "idle_cpu": "A lease below this for the idle time is idle (💤); 0: never.",
-    "idle_after": "Below the idle cores this long: idle, and asked if it can yield.",
-    "interval": "Seconds between refreshes, 0.1 to 60 · this dashboard only.",
-    "theme": "Auto, Terminal (palette only) or Built-in colours · this dashboard only.",
-}
+DESCRIPTIONS = {**_shared.DESCRIPTIONS,
+                "interval": "Seconds between refreshes, 0.1 to 60 · this dashboard only.",
+                "theme": "Auto, Terminal (palette only) or Built-in colours · this dashboard only."}
 DEFAULT_INTERVAL = 1.0
 FLASH_SECONDS = 4.0  # how long a confirmation shows, and how long a first D stays armed
 SETTLE_SECONDS = 1.0  # quiet after an arrow change before it is saved
 READ_EVERY = 1.0  # seconds between looks at the shared settings while the panel is open
-CAPACITY_PER_CORE = 4  # the most slots the panel saves: this many per core
 STATUS_LABEL = 13  # columns of a status label
 FIELD_LABEL = 28  # columns of a setting's label, its gutter included
 MIN_WIDTH, MIN_HEIGHT = 30, 12  # below this the panel only says to enlarge the terminal
@@ -89,14 +58,6 @@ class Pending(NamedTuple):
     at: float
     token: bytes | None = None
     mode: str = ""
-
-
-def number(value: float) -> str:
-    return f"{value:g}"
-
-
-def plural(count: int, word: str) -> str:
-    return f"{count} {word}{'' if count == 1 else 's'}"
 
 
 class Settings:
@@ -239,41 +200,25 @@ class Settings:
         self.focus, self.editing, self.reveal = "mode", False, True
 
     def most_slots(self) -> int:
-        return CAPACITY_PER_CORE * config.cores()
+        return _shared.most_slots()
 
     def check(self, key: str, text: str) -> tuple[Any, str]:
-        """(value, "") for typed text that `key` accepts, else (None, why not)."""
+        """(value, "") for typed text that `key` accepts, else (None, why not) (settings.parse())."""
         if key not in self.fields() or key in CHOICES:
             return None, "This setting takes no typed value."
-        try:
-            value = config.parse_duration(text) if key in config.DURATION_KNOBS else float(text)  # 30m, 1.5h
-        except ValueError:
-            value = math.nan
-        if key == "amount" and self.mode() == "fixed":
-            if not (text.isascii() and text.isdigit() and int(text) >= 1):
-                return None, "Enter a whole number of slots, at least 1."
-            if int(text) > self.most_slots():
-                return None, f"At most {self.most_slots()} slots ({CAPACITY_PER_CORE} per core)."
-            return int(text), ""
-        if not math.isfinite(value):
-            return None, "Enter a number."
-        if key == "amount":
-            return (value, "") if value > 0 else (None, "Enter GiB per slot, more than 0.")
         if key == "interval":
+            try:
+                value = float(text)
+            except ValueError:
+                value = math.nan
+            if not math.isfinite(value):
+                return None, "Enter a number."
             return (value, "") if 0.1 <= value <= 60 else (None, "Enter seconds from 0.1 to 60.")
-        least = config.ORDER_KNOBS[key][1]
-        return (value, "") if value >= least else (None, f"Enter a number of at least {least:g}.")
+        return _shared.parse(key, text, self.mode())
 
     def capacity_value(self, mode: str, amount: Any) -> dict[str, Any] | None:
-        """What `slotfather slots` would save for the mode and amount; raises SlotError where it would refuse,
-        or where it gives more slots than the panel saves."""
-        arguments = ["reset"] if mode == "automatic" else [str(amount)] if mode == "fixed" else [mode, str(amount)]
-        with contextlib.redirect_stderr(io.StringIO()):
-            found = cli.slots_value(arguments)
-        if found and found["slots"] > self.most_slots():
-            raise config.SlotError(f"{found['slots']} slots is above the most the panel saves, "
-                                   f"{self.most_slots()} ({CAPACITY_PER_CORE} per core).")
-        return found
+        """What `slotfather slots` would save for the mode and amount (settings.capacity_value())."""
+        return _shared.capacity_value(mode, amount)
 
     def capacity_of(self, key: str, value: Any) -> tuple[str, Any]:
         """(mode, amount) for a value of a capacity field."""
@@ -285,16 +230,11 @@ class Settings:
         return int(found["slots"]) if found else config.automatic_capacity()
 
     def drain_note(self, slots: int) -> str:
-        drain = max(0, self.held - slots)
-        return f"will drain {drain}: running work keeps its slots" if drain else ""
+        return _shared.drain_note(slots, self.held)
 
     def starts(self, slots: int) -> int:
         """How many waiting requests a capacity of `slots` lets start now by slot counts alone, in queue order."""
-        free, started = slots - self.held, 0
-        for count in self.waiting:
-            if 0 < count <= free:
-                free, started = free - count, started + 1
-        return started
+        return _shared.starts(slots, self.held, self.waiting)
 
     def effect(self, key: str, value: Any) -> tuple[str, str]:
         """What a capacity value would do, (text, style): the slots, what drains or starts, or why it is refused."""
@@ -302,10 +242,7 @@ class Settings:
             slots = self.slots_of(key, value)
         except config.SlotError as error:
             return "✗ " + str(error), "bad"
-        drain, start = self.drain_note(slots), self.starts(slots)
-        if drain:
-            return f"→ {plural(slots, 'slot')} · {drain}", "warn"
-        return f"→ {plural(slots, 'slot')}" + (f" · will start {start} waiting" if start else ""), "dim"
+        return _shared.effect(slots, self.held, self.waiting)
 
     def preview(self) -> tuple[str, str]:
         """What the text being typed would do, (text, style): its effect, or why it is refused."""
@@ -580,40 +517,21 @@ class Settings:
     # Drawing
 
     def status_rows(self, model: dict[str, Any] | None) -> list[Row]:
-        def row(label: str, text: str, style: str = "text") -> Row:
-            return Row("", ((2, label, "dim"), (2 + STATUS_LABEL, text, style)))
-
         rows = [Row("", ((0, "STATUS", "title"), (7, "· read-only, live", "dim")))]
-        rows.append(row("queue", self.location()))
-        if model:
-            rows.append(row("slots", f"{model['slots']} total · {model.get('free', 0)} free · "
-                                     f"{model.get('used', 0)} held · {len(model.get('waiters', []))} waiting"))
-        else:
-            rows.append(row("slots", "queue unavailable", "dim"))
         # The capacity the queue's last look read under its lock; this panel's own reading only without a model.
-        basis = cast(dict[str, Any], (model or {}).get("basis") or self.basis)
-        per = number(basis["gib_per_slot"] or 0)
-        how = {"fixed": "saved, fixed count", "memory": f"saved, one per {per} GiB of memory",
-               "lower": f"saved, lower of CPU and one per {per} GiB",
-               "automatic": "automatic, lower of the two budgets"}[basis["mode"]]
-        rows.append(row("capacity", f"{basis['slots']} slots · {how}"))
-        budget_slots = basis["memory_slots"] if basis["memory_slots"] is not None else self.memory_budget
-        memory = basis["memory_gib"] if basis["memory_gib"] is not None else self.memory_gib
-        budget = (f"CPU {basis['cpu_slots']} ({basis['cores']} cores) · memory "
-                  + (f"{budget_slots}" if budget_slots is not None else "unknown")
-                  + (f" ({number(memory)} GiB)" if memory is not None else ""))
-        rows.append(row("budgets", budget))
-        drain = max(0, self.held - int(model["slots"])) if model else 0
-        rows.append(row("draining", f"{drain} slots · nothing starts until at most {model['slots']} are held"
-                        if drain and model else "none", "warn" if drain else "dim"))
-        overrides = ["SLOTFATHER_" + name for name in ("CORES", "MEMORY_GIB", "CGROUP") if config.setting(name)]
-        if overrides:
-            rows.append(row("environment", ", ".join(overrides), "dim"))
+        basis = dict(cast(dict[str, Any], (model or {}).get("basis") or self.basis))
+        if basis["memory_slots"] is None:
+            basis["memory_slots"] = self.memory_budget
+        if basis["memory_gib"] is None:
+            basis["memory_gib"] = self.memory_gib
+        queue = None if not model else {"slots": model["slots"], "free": model.get("free", 0),
+                                        "used": model.get("used", 0), "waiting": len(model.get("waiters", []))}
+        for label, text, style in _shared.status_rows(basis, queue):
+            rows.append(Row("", ((2, label, "dim"), (2 + STATUS_LABEL, text, style))))
         return rows
 
     def location(self) -> str:
-        directory, home = str(config.state_dir()), os.path.expanduser("~")
-        return "~" + directory[len(home):] if directory.startswith(home + os.sep) else directory
+        return _shared.location()
 
     def field_rows(self, key: str, value_column: int) -> list[Row]:
         """The field's row; while it is typed or pending, a second row says what the value would do, or why not."""

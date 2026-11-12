@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import hashlib
 import json
 import math
 import os
@@ -281,14 +282,21 @@ def configuration_bytes(directory: Path) -> dict[str, bytes | None]:
     return result
 
 
+def revision(data: bytes | None) -> str:
+    """An opaque token for a settings file as read (configuration_bytes()): its SHA-256, or "absent"."""
+    return "absent" if data is None else "sha256:" + hashlib.sha256(data).hexdigest()
+
+
 class Conflict(_config.SlotError):
     """A settings file changed since the caller read it (configure()'s `expected`): nothing was saved."""
 
 
 def configure(changes: dict[str, dict[str, Any] | None], *,
-              expected: dict[str, bytes | None] | None = None) -> None:
+              expected: dict[str, bytes | None] | None = None, revisions: dict[str, str] | None = None) -> None:
     """CLI and dashboard share validation, ownership, conflict checking and queue admission locking. A change
-    applies at once, also while requests run or wait; the waiters it lets start are granted before this returns."""
+    applies at once, also while requests run or wait; the waiters it lets start are granted before this returns.
+    `expected` names files as their bytes were read, `revisions` as settings.revision() tokens (`settings set
+    --revision`); a file changed since is a Conflict and nothing is saved."""
     from . import leases, platform, schedule
     directory = _config.state_dir()
     if set(changes) - {"capacity.json", "order.json"}:
@@ -299,6 +307,8 @@ def configure(changes: dict[str, dict[str, Any] | None], *,
     with locked(directory):
         before = configuration_bytes(directory)
         changed_since = [name for name, value in (expected or {}).items() if before.get(name) != value]
+        changed_since += [name for name, token in (revisions or {}).items()
+                          if name not in changed_since and revision(before.get(name)) != token]
         if changed_since:  # per file: a caller expects only the files it read and means to replace
             raise Conflict(f"{', '.join(changed_since)} changed in another process; nothing was saved")
         values = dict(changes)

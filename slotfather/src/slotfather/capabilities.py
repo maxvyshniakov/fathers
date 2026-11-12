@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from . import version as _version
+from .settings import VERSION as SETTINGS_VERSION
 
 VERSION = 1  # this reply's own version
 DASHBOARD_VERSION = 1  # the `dashboard` block below
@@ -27,7 +28,7 @@ def capabilities() -> dict[str, Any]:
     dashboard: dict[str, Any] = {
         "v": DASHBOARD_VERSION, "tag": "slot",
         "snapshot": {"argv": ["status", "--json", "--full"], "versions": STATUS_VERSIONS, "poll": 1},
-        "actions": ["reprioritize"]}
+        "settings": {"versions": [SETTINGS_VERSION]}, "actions": ["reprioritize"]}
     found = changelog()
     if found is not None:
         dashboard["changelog"] = found

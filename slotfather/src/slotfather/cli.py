@@ -5,6 +5,7 @@
   slotfather yield                                                   inside a yieldable lease: yield if asked
   slotfather status [--json [--pid PID | --full]]                    running and waiting requests, in queue order
   slotfather capabilities --json                                     what a dashboard (Godfather) can read and run here
+  slotfather settings [check|set|reset ...] --json                   the shared settings as data, and changes to them
   slotfather reprioritize PID|LABEL interactive|normal|batch         move a request to another class, keeping its place
   slotfather procs --json [--cwd PATH] [--pid PID]                  read-only process, lease and session ancestry
   slotfather lane-admission --json                                    stateless lifetime lane policy, stdin JSON
@@ -123,6 +124,8 @@ USAGE = ("usage: slotfather                     (in a terminal: the live dashboa
          "                        [--aging-batch S] [--aging-normal S] [--warn-wait S] | reset   (S: 90, 90s, 30m, 1.5h)\n"
          "       slotfather stats [--since WHEN] [--label GLOB] [--by both|label|kind] [--top N] [--json]\n"
          "       slotfather slots [N|memory GIB|lower GIB|reset]\n"
+         "       slotfather settings --json | settings check KEY VALUE --json | settings set KEY VALUE [--revision R] --json\n"
+         "                           | settings reset (KEY|--all) [--revision R] --json\n"
          "       slotfather procs --json [--cwd PATH] [--pid PID] | version [--json] | capabilities --json\n"
          "       slotfather sweep [--live [--dev-servers]] [--json] [--quiet] [--pid PID]... | sweep config [KEY VALUE]...\n"
          "                        | sweep --plist [--live [--dev-servers]] [--interval SECONDS]\n"
@@ -382,6 +385,9 @@ def main(argv: list[str] | None = None) -> int:
             from .capabilities import capabilities
             print(json.dumps(capabilities(), sort_keys=True))
             return 0
+        if command == "settings":
+            from .settings import command as settings_command
+            return settings_command(rest)
         if command == "procs":
             from .procs import command as procs_command
             return procs_command(rest)
