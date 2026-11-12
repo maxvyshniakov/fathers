@@ -17,7 +17,7 @@ PACKAGES = ("slotfather", "lanefather", "junkfather", "godfather")
 
 def main(argv: list[str]) -> int:
     if not argv or argv[0] not in PACKAGES:
-        print(__doc__.strip(), file=sys.stderr)
+        print((__doc__ or "").strip(), file=sys.stderr)
         return 0 if argv[:1] in (["-h"], ["--help"]) else 2
     installer = Path(__file__).resolve().parent / argv[0] / "install.py"
     os.execv(sys.executable, [sys.executable, str(installer), *argv[1:]])

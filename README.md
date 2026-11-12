@@ -28,7 +28,7 @@ runner installs Slotfather alone (`python3 slotfather/install.py --user runner -
 
 - `slotfather/`, `lanefather/`, `junkfather/`, `godfather/`: one package each, with its own `install.py`, version,
   `CHANGELOG.md`, `README.md`, `GLOSSARY.md`, `docs/` and `tests/`. Run a package's checks from its directory
-  (`docs/agents/checks.md` there).
+  (`docs/agents/checks.md` there; Godfather's README, Develop).
 - `common/`: code the packages share today. It holds [`eventcheck.py`](common/eventcheck.py), the validator of the
   shared event schema that every package's tests import.
 - [`GLOSSARY.md`](GLOSSARY.md): the terms the tools share; each package's glossary holds its own.

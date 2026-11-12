@@ -48,6 +48,10 @@ def runs(**estimates: float) -> Callable[[dict[str, Any]], Optional[float]]:
     return estimate
 
 
+# The repository's history, found from the package directory (the .git directory is the fathers repository's root).
+HAS_HISTORY = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--is-inside-work-tree"],
+                             capture_output=True).returncode == 0
+
 class PlanCase(unittest.TestCase):
     def setUp(self):
         patcher = mock.patch.dict(os.environ, SETTINGS)
@@ -563,16 +567,16 @@ class OrderTests(SlotCase):
             self.finish(process)
 
 
-@unittest.skipUnless((ROOT / ".git").exists(), "needs the git history for the previous slotfather")
+@unittest.skipUnless(HAS_HISTORY, "needs the git history for the previous slotfather")
 class MixedVersionTests(SlotCase):
-    """An older slotfather (bfa114b, the window order) on the same queue: its entries and outputs stay as they were,
+    """An older slotfather (9fe4069, before the move bfa114b: the window order) on the same queue: its entries and outputs stay as they were,
     and a waiter it queued starts as soon as a new client looks at the queue."""
 
-    OLD = "bfa114b"
+    OLD = "9fe40692f977b3f6c098bf90067fbf49e9470250"
 
     def setUp(self):
         super().setUp()
-        found = subprocess.run(["git", "-C", str(ROOT), "show", f"{self.OLD}:slotfather"], capture_output=True)
+        found = subprocess.run(["git", "-C", str(ROOT), "show", f"{self.OLD}:./slotfather"], capture_output=True)
         if found.returncode:
             self.skipTest(f"{self.OLD} is not in this checkout")
         self.old = self.tmp / "slotfather-old"

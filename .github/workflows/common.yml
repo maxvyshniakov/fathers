@@ -1,0 +1,61 @@
+name: common
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'common/**'
+      - 'install.py'
+      - '.github/workflows/common.yml'
+  pull_request:
+    paths:
+      - 'common/**'
+      - 'install.py'
+      - '.github/workflows/common.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: common-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: common and install.py (Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            python: '3.9'
+          - os: ubuntu-latest
+            python: '3.12'
+    steps:
+      - name: Check out
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Ruff and strict Pyright on common/ and install.py
+        if: matrix.python == '3.12'
+        run: |
+          python -m pip install -r godfather/requirements-dev.txt
+          ruff check common install.py
+          pyright -p common
+      - name: eventcheck runs as a script; install.py dispatches
+        run: |
+          printf '{}\n' > bad.jsonl
+          set +e
+          python common/eventcheck.py --strict bad.jsonl; test $? -eq 1 || exit 1
+          python install.py; test $? -eq 2 || exit 1
+          python install.py nosuch; test $? -eq 2 || exit 1
+          set -e
+          python install.py --help
+          python install.py godfather --help

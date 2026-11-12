@@ -1,0 +1,5 @@
+{
+  "include": ["eventcheck.py", "../install.py"],
+  "pythonVersion": "3.9",
+  "typeCheckingMode": "strict"
+}

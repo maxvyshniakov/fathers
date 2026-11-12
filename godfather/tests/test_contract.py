@@ -50,6 +50,8 @@ class ContractTests(unittest.TestCase):
             environ["PATH"] = f"{bin_dir}:{environ.get('PATH', '')}"
         found = capabilities(environ)
         if not isinstance(found, dict) or adapter.unsupported(found):
+            # The sibling package is this commit's Slotfather: a broken one fails here instead of skipping.
+            self.assertNotEqual(EXECUTABLE, str(SIBLING), f"../slotfather/slotfather capabilities --json: {found!r}")
             self.skipTest("slotfather with capabilities --json and a dashboard block (SF-1) is not installed")
         self.capabilities = found
         patcher = mock.patch.dict(os.environ, environ, clear=True)
@@ -69,6 +71,7 @@ class ContractTests(unittest.TestCase):
 
     def test_settings_read_check_set_and_conflict(self) -> None:
         if not adapter.settings_supported(self.capabilities):
+            self.assertNotEqual(EXECUTABLE, str(SIBLING), "../slotfather/slotfather lacks settings (SF-2)")
             self.skipTest("slotfather settings (SF-2) is not installed")
         client = adapter.SettingsClient(sources.which("slotfather"))
         dialog = settings_view.Settings(1.0, client=client)

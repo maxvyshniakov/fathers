@@ -37,6 +37,10 @@ def clean_environment(**values) -> dict:
     return {**{k: v for k, v in os.environ.items() if not k.startswith("SLOTFATHER_")}, **values}
 
 
+# The repository's history, found from the package directory (the .git directory is the fathers repository's root).
+HAS_HISTORY = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--is-inside-work-tree"],
+                             capture_output=True).returncode == 0
+
 class ProcParsingTests(unittest.TestCase):
     def test_meminfo_reads_every_counter_in_kilobytes(self):
         found = sf_platform.meminfo((PROC / "calm" / "meminfo").read_text())
@@ -299,11 +303,11 @@ class MemoryCapacityCommandTests(SlotCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("4 of 4 slots held", result.stdout)
 
-    @unittest.skipUnless((ROOT / ".git").exists(), "needs the git history for the previous slotfather")
+    @unittest.skipUnless(HAS_HISTORY, "needs the git history for the previous slotfather")
     def test_an_older_client_reads_the_saved_count(self):
-        found = subprocess.run(["git", "-C", str(ROOT), "show", "0af7546:slotfather"], capture_output=True)
+        found = subprocess.run(["git", "-C", str(ROOT), "show", "0266277a04e6ea14f6e4305f552b38439cf5adc8:./slotfather"], capture_output=True)
         if found.returncode:
-            self.skipTest("0af7546 is not in this checkout")
+            self.skipTest("0266277 (slotfather 0af7546) is not in this checkout")
         old = self.tmp / "slotfather-old"
         old.write_bytes(found.stdout)
         old.chmod(0o755)
