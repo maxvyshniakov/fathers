@@ -1,0 +1,1 @@
+{"pid": 2492, "count": 1, "label": "lane-momentum-gesture-latency", "cmd": "sh -c bunx tsc", "since": "2026-11-11T23:20:34Z", "state": "held", "priority": "interactive", "granted": "2026-11-11T23:20:55Z", "start": ""}

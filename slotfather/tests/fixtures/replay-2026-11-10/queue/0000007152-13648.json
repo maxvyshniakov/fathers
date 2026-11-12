@@ -1,0 +1,1 @@
+{"pid": 13648, "start": "", "count": 1, "label": "ff-batch3", "cmd": "bash batch3.sh", "since": "2026-11-10T20:39:40Z", "state": "waiting", "priority": "interactive", "ticket": "61", "cwd": "/w"}

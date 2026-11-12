@@ -1,0 +1,1 @@
+{"pid": 65253, "start": "", "count": 6, "label": "lane-480-offline-expiry-alone", "cmd": "verify.sh --checks desktop-tests --keep-going --jobs 1", "since": "2026-11-10T20:07:52Z", "state": "waiting", "priority": "interactive", "ticket": "480", "all": true, "until": "2026-11-10T21:02:52Z", "cwd": "/w"}

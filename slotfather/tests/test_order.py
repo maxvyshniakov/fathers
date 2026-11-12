@@ -1,0 +1,634 @@
+#!/usr/bin/env python3
+"""Queue order (#643): which waiters start now. plan() on fixed queues, the run-time estimates it reads from the
+history, the order through real processes, and an older slotfather sharing the queue."""
+from __future__ import annotations
+import sys as _path_sys
+from pathlib import Path as _Path
+_path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
+from slotfather import config as sf_config
+from slotfather import state as sf_state
+from slotfather import schedule as sf_schedule
+
+
+import json
+import os
+import pathlib
+import subprocess
+import tempfile
+import time
+import unittest
+from unittest import mock
+from typing import Any, Callable, Optional
+
+from test_slotfather import ROOT, TOOL, SlotCase, WORK
+
+
+M = 1_800_000_000.0  # the moment plan() decides at
+SETTINGS = {"SLOTFATHER_OVERTAKE_WINDOW": "600", "SLOTFATHER_MEMORY_GIB": "64"}  # every other knob at its default unless a test sets it
+
+
+def stamp(offset: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(M + offset))
+
+
+def waiter(label: str, count: int, queued: float) -> dict[str, Any]:
+    """A waiter that queued `queued` seconds before M (negative: earlier)."""
+    return {"label": label, "count": count, "cmd": label, "since": stamp(queued), "state": "waiting"}
+
+
+def holder(label: str, count: int, granted: float) -> dict[str, Any]:
+    return {"label": label, "count": count, "cmd": label, "since": stamp(granted), "granted": stamp(granted),
+            "state": "held"}
+
+
+def runs(**estimates: float) -> Callable[[dict[str, Any]], Optional[float]]:
+    """estimate(entry) from label -> seconds; other labels are unknown."""
+    def estimate(entry: dict[str, Any]) -> float | None:
+        return estimates.get(entry["label"])
+    return estimate
+
+
+class PlanCase(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, SETTINGS)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for key in [k for k in os.environ if k.startswith("SLOTFATHER_") and k not in SETTINGS]:
+            os.environ.pop(key)
+        self.settings: dict[str, Any] = dict(sf_config.ORDER_DEFAULTS)  # what `slotfather order` saves
+
+    def started(self, waiters: list[dict[str, Any]], held: list[dict[str, Any]], order: str | None = None, slots: int = 6,
+                **estimates: float) -> list[str]:
+        found = sf_schedule.plan(waiters, held, slots, M, order, runs(**estimates), settings=self.settings)
+        return [e["label"] for e in found.grants]
+
+
+class WindowOrderTests(PlanCase):
+    def test_a_waiter_that_does_not_fit_lets_later_ones_pass_until_its_window_ends(self):
+        held = [holder("one", 1, -60)]
+        self.assertEqual(["small"], self.started([waiter("gate", 6, -100), waiter("small", 1, -50)], held, "window"))
+        self.assertEqual([], self.started([waiter("gate", 6, -700), waiter("small", 1, -50)], held, "window"))
+
+    def test_its_reason_names_the_waiter_and_the_end_of_the_window(self):
+        found = sf_schedule.plan([waiter("gate", 6, -100)], [holder("one", 1, -60)], 6, M, "window")
+        self.assertIn("5 of 6 slots free; requests that fit may pass gate until", str(found.reason))
+        found = sf_schedule.plan([waiter("gate", 6, -700)], [holder("one", 1, -60)], 6, M, "window")
+        self.assertEqual("5 of 6 slots free", found.reason)
+
+
+class BackfillTests(PlanCase):
+    """A gate (all six slots) waits past its window behind `one`, which holds one slot and should run an hour."""
+
+    def setUp(self):
+        super().setUp()
+        self.held = [holder("one", 1, -600)]  # 3000 s of its expected 3600 left
+        self.settings["limit"] = 0  # its own test below
+
+    def test_a_later_request_starts_only_if_it_ends_before_the_head_can_start(self):
+        queue = [waiter("gate", 6, -700), waiter("short", 1, -10), waiter("long", 1, -5)]
+        self.assertEqual(["short"], self.started(queue, self.held, one=3600, short=900, long=1200))
+
+    def test_its_estimate_counts_three_times_by_default(self):
+        queue = [waiter("gate", 6, -700), waiter("short", 1, -10)]
+        self.assertEqual([], self.started(queue, self.held, one=3600, short=1001))
+        self.settings["safety"] = 1
+        self.assertEqual(["short"], self.started(queue, self.held, one=3600, short=2999))
+
+    def test_an_unknown_run_counts_the_fallback(self):
+        queue = [waiter("gate", 6, -700), waiter("new", 1, -10)]
+        self.assertEqual([], self.started(queue, self.held, one=3600))
+        self.settings["fallback"] = 60
+        self.assertEqual(["new"], self.started(queue, self.held, one=3600))
+
+    def test_an_unknown_holder_counts_the_fallback_too(self):
+        queue = [waiter("gate", 6, -700), waiter("short", 1, -10)]
+        self.assertEqual(["short"], self.started(queue, self.held, short=900))  # one: 3600 - 600 s left
+        self.assertEqual([], self.started(queue, self.held, short=1001))
+
+    def test_a_holder_past_its_estimate_is_expected_to_run_on_for_half_what_it_ran(self):
+        held = [holder("one", 1, -3000)]  # expected 600 s, so 1500 s more
+        queue = [waiter("gate", 6, -700), waiter("short", 1, -10)]
+        self.assertEqual(["short"], self.started(queue, held, one=600, short=500))
+        self.assertEqual([], self.started(queue, held, one=600, short=501))
+        self.settings["overrun"] = 0
+        self.assertEqual([], self.started(queue, held, one=600, short=10), "it could end any moment")
+
+    def test_the_head_starts_when_the_held_lease_it_waits_for_ends_whatever_passes_it(self):
+        found = sf_schedule.plan([waiter("gate", 6, -700), waiter("short", 1, -10)], self.held, 6, M, None,
+                        runs(one=3600, short=60), reserve_head=True, settings=self.settings)
+        self.assertEqual(("gate", M + 3000), (found.head and found.head["label"], found.start))
+        self.assertIn("gate is next, and a later request that fits starts first only if it ends before gate can",
+                      str(found.reason))
+
+    def test_nothing_passes_a_head_that_has_waited_the_limit_and_a_pass_must_end_before_it(self):
+        self.settings["limit"] = 2700.0  # the limit before reservations, now off by default
+        queue = [waiter("gate", 6, -2700), waiter("short", 1, -10)]
+        self.assertEqual([], self.started(queue, self.held, one=3600, short=1))
+        queue = [waiter("gate", 6, -2000), waiter("short", 1, -10)]  # 700 s to the limit
+        self.assertEqual(["short"], self.started(queue, self.held, one=3600, short=233))
+        self.assertEqual([], self.started(queue, self.held, one=3600, short=234))
+        self.settings["limit"] = 0
+        self.assertEqual(["short"], self.started(queue, self.held, one=3600, short=900))
+
+    def test_past_the_limit_not_even_slots_the_head_will_not_need_are_given(self):
+        self.settings["limit"] = 2700.0
+        held = [holder("a", 2, -10), holder("b", 2, -10)]
+        queue = [waiter("head", 3, -2800), waiter("long", 1, -10)]
+        self.assertEqual([], self.started(queue, held, a=600, b=6000, long=99999))
+
+    def test_slots_the_head_will_not_need_whichever_lease_ends_first_take_any_request(self):
+        held = [holder("a", 2, -10), holder("b", 2, -10)]  # a ends first: then 4 slots are free, the head needs 3
+        queue = [waiter("head", 3, -700), waiter("long", 1, -10), waiter("long2", 1, -5)]
+        self.assertEqual(["long"], self.started(queue, held, a=600, b=6000, long=99999, long2=99999))
+
+    def test_spare_slots_count_as_if_the_largest_leases_were_the_ones_still_running(self):
+        # #643 review: x and z should end within ten minutes, y in two hours; one slot is free. By the expected
+        # order one slot is spare when z ends, but if y ends early and z overruns, a two-hour request in that
+        # slot would keep the head waiting for z.
+        held = [holder("x", 2, -10), holder("z", 2, -10), holder("y", 1, -10)]
+        queue = [waiter("head", 4, -700), waiter("long", 1, -10)]
+        self.assertEqual([], self.started(queue, held, x=300, z=600, y=7200, long=7200))
+
+    def test_a_head_whose_client_gives_up_before_its_start_holds_nobody_back(self):
+        # Today twice: a lane's `-n all --wait 1800` rerun behind a gate that ran on for two hours held fitting
+        # smokes back for twenty minutes each, then left without running.
+        gate = dict(waiter("gate", 6, -700), until=stamp(1000))  # its client gives up in 1000 s; one ends in 3000
+        queue = [gate, waiter("smoke", 1, -10)]
+        self.assertEqual(["smoke"], self.started(queue, self.held, one=3600, smoke=1200))
+        found = sf_schedule.plan(queue, self.held, 6, M, None, runs(one=3600, smoke=99999), settings=self.settings)
+        self.assertEqual((["smoke"], None), ([e["label"] for e in found.grants], found.head))
+        self.assertIsNone(sf_schedule.plan([gate], self.held, 6, M, None, runs(one=3600), reserve_head=True,
+                                  settings=self.settings).head)
+        self.assertIn("gate gives up at", str(sf_schedule.plan([gate], self.held, 6, M, None, runs(one=3600),
+                                                      settings=self.settings).reason))
+        later = dict(gate, until=stamp(3000))  # it still waits when one is expected to end: it is the head
+        self.assertEqual([], self.started([later, waiter("smoke", 1, -10)], self.held, one=3600, smoke=1200))
+
+    def test_the_next_waiter_that_does_not_fit_is_the_head_then(self):
+        gate = dict(waiter("gate", 6, -800), until=stamp(1000))
+        queue = [gate, waiter("pair", 3, -700), waiter("smoke", 1, -10)]
+        held = [holder("one", 4, -600)]  # 3000 s left: pair (3) does not fit either, and it waits
+        found = sf_schedule.plan(queue, held, 6, M, None, runs(one=3600, smoke=1200), reserve_head=True,
+                        settings=self.settings)
+        self.assertEqual(("pair", M + 3000), (found.head and found.head["label"], found.start))
+        self.assertEqual(["smoke"], [e["label"] for e in found.grants], "slots pair will not need at its start")
+
+    def test_a_head_past_its_limit_that_would_give_up_first_holds_nobody_back_either(self):
+        # 2026-11-10 (#5): three `-n all --wait 3300` reruns were the head for the last ten minutes of their wait,
+        # past the limit, behind checks that ran on for an hour, and left without running while slots stood idle.
+        self.settings["limit"] = 2700.0
+        big = dict(waiter("big", 6, -2800), until=stamp(1000))  # one is expected to end in 3000 s
+        self.assertEqual(["long"], self.started([big, waiter("long", 1, -10)], self.held, one=3600, long=7200))
+        later = dict(big, until=stamp(3001))  # it still waits when one is expected to end: past the limit, as before
+        self.assertEqual([], self.started([later, waiter("long", 1, -10)], self.held, one=3600, long=1))
+
+    def test_a_head_keeps_its_head_while_a_held_lease_has_no_known_run_and_starts_when_it_ends_early(self):
+        # Review of 649e879: counting the fallback for an unknown run gave the head up on a pessimistic guess and
+        # made its give-up come true. Unknown, the lease may end any moment.
+        held = [holder("one", 1, -300)]
+        big = dict(waiter("big", 6, -700), until=stamp(1000))
+        self.assertEqual([], self.started([big, waiter("long", 1, -10)], held, long=7200))
+        later = sf_schedule.plan([big, waiter("long", 1, -10)], [], 6, M + 300, None, runs(long=7200),
+                                 settings=self.settings)  # one ended after 600 s, before big gives up
+        self.assertEqual(["big"], [e["label"] for e in later.grants])
+
+    def test_a_head_counts_the_overrun_of_held_leases_for_whether_it_can_start_before_it_gives_up(self):
+        # `one` should have ended 2400 s ago: by the overrun it runs on for 1500 s more (#5: the leases a rerun
+        # waited for ran on past their estimates, and its start kept slipping until it gave up).
+        held = [holder("one", 1, -3000)]
+        big = dict(waiter("big", 6, -700), until=stamp(1000))
+        self.assertEqual(["long"], self.started([big, waiter("long", 1, -10)], held, one=600, long=7200))
+        self.assertEqual([], self.started([dict(big, until=stamp(1501)), waiter("long", 1, -10)], held, one=600,
+                                          long=7200))
+        held = [holder("one", 1, -600), holder("two", 2, -100)]  # one ends in 3000 s, two in 100 s
+        self.assertEqual(["long"], self.started([big, waiter("long", 1, -10)], held, one=3600, two=200, long=7200))
+        self.assertEqual([], self.started([dict(big, until=stamp(3001)), waiter("long", 1, -10)], held, one=3600,
+                                          two=200, long=7200))
+
+    def test_a_lease_back_in_the_queue_after_a_yield_keeps_its_head(self):
+        """Its `until` was its first wait's: it does not give up now."""
+        back = dict(holder("gate", 6, -3000), state="waiting", until=stamp(-2000), yields=1,
+                    yielded_at=stamp(-700), rank=M - 700)
+        self.assertEqual([], self.started([back, waiter("smoke", 1, -10)], self.held, one=3600, smoke=1200))
+
+    def test_within_its_window_a_waiter_lets_requests_that_fit_pass_as_before(self):
+        queue = [waiter("gate", 6, -100), waiter("long", 1, -10)]
+        self.assertEqual(["long"], self.started(queue, self.held, one=3600, long=99999))
+
+    def test_requests_that_fit_are_granted_in_order_before_any_head(self):
+        queue = [waiter("a", 2, -30), waiter("b", 3, -20), waiter("c", 1, -10)]
+        self.assertEqual(["a", "b"], self.started(queue, self.held))
+
+    def test_slots_held_in_an_earlier_queue_have_no_known_end_and_nothing_passes(self):
+        found = sf_schedule.plan([waiter("gate", 6, -700), waiter("short", 1, -10)], [], 6, M, None, runs(short=1), other=2,
+                        settings=self.settings)
+        self.assertEqual([], found.grants)
+
+    def test_a_new_request_gets_no_slots_behind_the_head_unless_its_run_is_known_to_be_short(self):
+        waiters = [waiter("gate", 6, -700)]
+        with mock.patch.object(sf_config, "now", return_value=stamp(0)), mock.patch.object(time, "time", return_value=M):
+            self.assertEqual(0, sf_schedule.room(waiters, 5, self.held, runs(one=3600), settings=self.settings))
+            self.assertEqual(0, sf_schedule.room(waiters, 5))
+            self.assertEqual(5, sf_schedule.room([waiter("gate", 6, -100)], 5, self.held, runs(one=3600),
+                                        settings=self.settings))
+            self.assertEqual(5, sf_schedule.room(waiters, 5, self.held, runs(one=3600, mine=60), settings=self.settings,
+                                        label="mine", command="make mine"))
+            self.settings["fallback"] = 60
+            self.assertEqual(5, sf_schedule.room(waiters, 5, self.held, runs(one=3600), settings=self.settings))
+
+
+class CapacityChangeTests(PlanCase):
+    """A capacity saved while the queue is busy counts at the next plan (#7): a grown one starts waiters that now
+    fit; a shrunk one preempts nothing, and nothing starts until the held slots are within it."""
+
+    def test_a_grown_capacity_starts_waiters_that_now_fit(self):
+        held = [holder("a", 2, -60), holder("b", 2, -60)]
+        queue = [waiter("w", 2, -30)]
+        self.assertEqual([], self.started(queue, held, slots=4))
+        self.assertEqual(["w"], self.started(queue, held, slots=6))
+
+    def test_a_shrunk_capacity_starts_nothing_until_the_held_slots_are_within_it(self):
+        queue = [waiter("w", 1, -30)]
+        for count, expected in ((4, []), (3, []), (2, []), (1, ["w"])):
+            with self.subTest(held=count):
+                held = [holder(f"h{n}", 1, -60) for n in range(count)]
+                self.assertEqual(expected, self.started(queue, held, slots=2))
+        found = sf_schedule.plan(queue, [holder(f"h{n}", 1, -60) for n in range(4)], 2, M, settings=self.settings)
+        self.assertIn("0 of 2 slots free", str(found.reason))
+
+    def test_a_head_behind_a_drain_starts_once_enough_leases_end_to_bring_held_within_the_capacity(self):
+        held = [holder("a", 2, -10), holder("b", 2, -10), holder("c", 2, -10)]  # 6 held of 4: 2 drain
+        found = sf_schedule.plan([waiter("head", 2, -700)], held, 4, M, None, runs(a=610, b=1210, c=1810),
+                                 reserve_head=True, settings=self.settings)
+        assert found.head is not None
+        self.assertEqual(("head", M + 1200), (found.head["label"], found.start), "a's end only drains")
+
+    def test_a_whole_machine_lease_keeps_a_grown_capacity_to_itself(self):
+        whole = dict(holder("whole", 4, -60), all=True)  # granted all 4, then the capacity grew to 6
+        self.assertEqual((6, 4), (sf_schedule.holds(whole, 6), sf_schedule.holds(holder("four", 4, -60), 6)))
+        self.assertEqual([], self.started([waiter("w", 1, -30)], [whole], slots=6))
+        self.assertEqual(["w"], self.started([waiter("w", 1, -30)], [holder("four", 4, -60)], slots=6))
+        with mock.patch.object(sf_config, "now", return_value=stamp(0)), mock.patch.object(time, "time", return_value=M):
+            self.assertEqual(0, sf_schedule.room([], 0, [whole], settings=self.settings, slots=6))
+
+    def test_a_drain_counts_when_an_interactive_waiter_asks_yieldable_holders(self):
+        self.settings["yield_after"] = 60
+        asker = dict(waiter("ask", 1, -600), priority="interactive")
+        estimate = runs(batch=99999, normal=99999)
+        # 4 held of 2: the batch lease's 2 would leave 2 held, still no room for the asker, so nobody is asked.
+        held = [dict(holder("batch", 2, -600), priority="batch", yieldable=True), holder("normal", 2, -600)]
+        self.assertEqual([], sf_schedule.yield_asks([asker], held, 2, M, estimate, settings=self.settings))
+        # 4 held of 2 again, the batch lease holding 3: its yield leaves 1 held, and the asker starts.
+        held = [dict(holder("batch", 3, -600), priority="batch", yieldable=True), holder("normal", 1, -600)]
+        found = sf_schedule.yield_asks([asker], held, 2, M, estimate, settings=self.settings)
+        self.assertEqual([("batch", "ask")], [(h["label"], w["label"]) for h, w in found])
+
+    def test_a_head_that_gives_up_before_a_drain_ends_holds_nobody_back(self):
+        held = [holder("a", 2, -10), holder("b", 2, -10), holder("c", 2, -10)]
+        head = dict(waiter("head", 2, -700), until=stamp(900))  # a ends at 600, but only b's end at 1200 frees two
+        found = sf_schedule.plan([head], held, 4, M, None, runs(a=610, b=1210, c=1810), reserve_head=True,
+                                 settings=self.settings)
+        self.assertIsNone(found.head)
+
+
+class SettingsTests(unittest.TestCase):
+    """The order's settings are the queue's, saved beside it like the capacity; a client's environment can only
+    make them stricter, or fall back to the window order."""
+
+    def setUp(self):
+        self.dir = pathlib.Path(tempfile.mkdtemp(prefix="slotfather-order-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.dir, ignore_errors=True))
+        patcher = mock.patch.dict(os.environ, {"SLOTFATHER_DIR": str(self.dir)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for key in [k for k in os.environ if k.startswith("SLOTFATHER_") and k != "SLOTFATHER_DIR"]:
+            os.environ.pop(key)
+
+    def test_the_defaults_hold_until_something_is_saved(self):
+        self.assertEqual({**sf_config.ORDER_DEFAULTS, "saved": False}, sf_schedule.order_settings())
+
+    def test_saved_settings_are_every_clients(self):
+        sf_state.save_order({"order": "backfill", "safety": 4, "limit": 1800, "fallback": 7200, "overrun": 0.25})
+        self.assertEqual({**sf_config.ORDER_DEFAULTS, "order": "backfill", "safety": 4, "limit": 1800, "fallback": 7200,
+                          "overrun": 0.25, "saved": True}, sf_schedule.order_settings())
+
+    def test_the_environment_can_only_tighten_them(self):
+        sf_state.save_order(dict(sf_config.ORDER_DEFAULTS))
+        loose = {"SLOTFATHER_BACKFILL_SAFETY": "1", "SLOTFATHER_BACKFILL_LIMIT": "0",
+                 "SLOTFATHER_BACKFILL_FALLBACK": "60", "SLOTFATHER_BACKFILL_OVERRUN": "5",
+                 "SLOTFATHER_QUEUE": "backfill"}
+        with mock.patch.dict(os.environ, loose):
+            found = sf_schedule.order_settings()
+        self.assertEqual({**sf_config.ORDER_DEFAULTS, "saved": True}, found)
+        tight = {"SLOTFATHER_BACKFILL_SAFETY": "5", "SLOTFATHER_BACKFILL_LIMIT": "600",
+                 "SLOTFATHER_BACKFILL_FALLBACK": "7200", "SLOTFATHER_BACKFILL_OVERRUN": "0.1"}
+        with mock.patch.dict(os.environ, tight):
+            found = sf_schedule.order_settings()
+        self.assertEqual((5, 600, 7200, 0.1), (found["safety"], found["limit"], found["fallback"], found["overrun"]))
+
+    def test_the_environment_may_fall_back_to_the_window_order_but_not_leave_it(self):
+        with mock.patch.dict(os.environ, {"SLOTFATHER_QUEUE": "window"}):
+            self.assertEqual("window", sf_schedule.order_settings()["order"])
+        sf_state.save_order({**sf_config.ORDER_DEFAULTS, "order": "window"})
+        with mock.patch.dict(os.environ, {"SLOTFATHER_QUEUE": "backfill"}):
+            self.assertEqual("window", sf_schedule.order_settings()["order"])
+
+    def test_a_limit_from_the_environment_counts_where_none_is_saved(self):
+        sf_state.save_order({**sf_config.ORDER_DEFAULTS, "limit": 0})
+        with mock.patch.dict(os.environ, {"SLOTFATHER_BACKFILL_LIMIT": "900"}):
+            self.assertEqual(900, sf_schedule.order_settings()["limit"])
+
+    def test_an_unreadable_file_is_the_window_order(self):
+        (self.dir / "order.json").write_text("{not json")
+        self.assertEqual("window", sf_schedule.order_settings()["order"])
+
+
+class EstimateTests(unittest.TestCase):
+    def test_a_label_loses_its_ticket_or_agent_id(self):
+        for label, expected in (("lane-636-measure-seeded", "lane"), ("post-merge-638-plan-narrow", "post-merge"),
+                                ("agent-a17b708a4e705e421", "agent"), ("sid-kit-wt-646", "sid-kit-wt"),
+                                ("sid-kit-wt-button-spinner", "sid-kit-wt-button-spinner"), ("", ""), (None, "")):
+            with self.subTest(label=label):
+                self.assertEqual(expected, sf_schedule.family(label))
+
+    def test_the_closest_kind_that_ran_gives_the_median_of_its_recent_runs(self):
+        checks = lambda n: "/w/verify.sh --checks " + ",".join(f"c{i}" for i in range(n)) + " --jobs 1"
+        found = sf_schedule.Estimates([("lane-1-a", checks(140), 4000), ("lane-1-a", checks(140), 5000),
+                              ("lane-2-b", checks(130), 4600), ("lane-3-c", checks(4), 60),
+                              ("post-merge-1-a", checks(140), 700), ("sid-kit", "bun x.mjs", 30)])
+        self.assertEqual(4500, found.of("lane-1-a", checks(140)), "same label and kind")
+        self.assertEqual(4500, found.of("lane-9-new", checks(140)), "same family and kind, before the kind alone")
+        self.assertEqual(4000, found.of("smoke", checks(140)), "same kind under any label: 4000, 5000, 700")
+        self.assertEqual(4600, found.of("lane-9-new", checks(150)), "a lane check of about that size")
+        self.assertEqual(60, found.of("lane-9-new", checks(5)))
+        self.assertEqual(700, found.of("post-merge-9-x", checks(129)), "the same family, about that size")
+        self.assertEqual(4300, found.of("smoke", checks(129)), "about that size under any label")
+        self.assertEqual(30, found.of("sid-kit", "node other.mjs"), "same label")
+        self.assertIsNone(found.of("unheard", "make all"))
+
+    def test_only_the_last_runs_of_a_kind_count(self):
+        found = sf_schedule.Estimates([("a", "make x", 1000)] * 30 + [("a", "make x", 10)] * sf_config.ESTIMATE_RUNS)
+        self.assertEqual(10, found.of("a", "make x"))
+
+    def test_the_history_gives_every_run_and_skips_requests_that_never_ran(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory)
+            v1 = {"label": "old", "cmd": "make build", "count": 1, "queued": "2026-11-02T10:00:00Z",
+                  "granted": "2026-11-02T10:01:00Z", "ended": "2026-11-02T10:11:00Z", "outcome": "released",
+                  "waited": 60, "ran": 600}
+            left = {**v1, "label": "gave-up", "granted": None, "ran": None, "outcome": "left"}
+            v2 = {**v1, "v": 2, "label": "new", "ran": 30, "cpu": 12.0}
+            (path / "history.jsonl.1").write_text(json.dumps(v1) + "\n")
+            (path / "history.jsonl").write_text(json.dumps(left) + "\n" + "torn {\n" + json.dumps(v2) + "\n")
+            found = sf_schedule.history_estimates(path)
+            self.assertEqual((600, 30, None), (found.of("old", "make build"), found.of("new", "other"),
+                                               found.of("gave-up", "x y")))
+
+
+    def test_a_reaped_or_abandoned_lease_is_no_run_of_its_kind(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory)
+            ran = {"v": 2, "label": "ci", "cmd": "sh heavy.sh check", "count": 1, "queued": "2026-11-03T10:00:00Z",
+                   "granted": "2026-11-03T10:00:00Z", "ended": "2026-11-03T10:05:00Z", "outcome": "released",
+                   "waited": 0, "ran": 300}
+            # An orphan of a hung CI job: its holder died and the lease was reaped when a look noticed, 2800 s on.
+            orphan = {**ran, "ended": "2026-11-03T10:46:40Z", "outcome": "reaped", "ran": 2800, "status": None}
+            left = {**ran, "outcome": "left", "ran": 1500}  # granted and left: not a run either, whatever wrote it
+            (path / "history.jsonl").write_text("".join(json.dumps(item) + "\n" for item in
+                                                        (ran, orphan, orphan, left, ran)))
+            for found in (sf_schedule.history_estimates(path), sf_schedule.cached_estimates(path)):
+                self.assertEqual(300, found.of("ci", "sh heavy.sh check"))
+                self.assertEqual([300.0, 300.0], found.runs[("label", "ci", sf_schedule.kind("sh heavy.sh check"))])
+            self.assertEqual(sf_config.ESTIMATES_VERSION, json.loads((path / "estimates.json").read_text())["v"])
+
+    def test_estimates_kept_by_an_earlier_version_are_worked_out_again(self):
+        """estimates.json written by a version that counted reaped leases, for the same history: not used."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory)
+            line = {"label": "a", "cmd": "make a", "count": 1, "granted": "2026-11-02T10:01:00Z", "ran": 600,
+                    "outcome": "released"}
+            (path / "history.jsonl").write_text(json.dumps(line) + "\n" +
+                                                json.dumps({**line, "ran": 2800, "outcome": "reaped"}) + "\n")
+            self.assertEqual(600, sf_schedule.cached_estimates(path).of("a", "make a"))
+            saved = json.loads((path / "estimates.json").read_text())
+            old = {"stamp": saved["stamp"], "runs": sf_schedule.Estimates([("a", "make a", 600), ("a", "make a", 2800)]).save()}
+            (path / "estimates.json").write_text(json.dumps(old))
+            sf_schedule._estimates.clear()  # another process
+            self.assertEqual(600, sf_schedule.cached_estimates(path).of("a", "make a"))
+            self.assertEqual(sf_config.ESTIMATES_VERSION, json.loads((path / "estimates.json").read_text()).get("v"))
+
+    def test_the_estimates_are_kept_beside_the_history_until_it_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory)
+            line = {"label": "a", "cmd": "make a", "count": 1, "granted": "2026-11-02T10:01:00Z", "ran": 600}
+            (path / "history.jsonl").write_text(json.dumps(line) + "\n")
+            self.assertEqual(600, sf_schedule.cached_estimates(path).of("a", "make a"))
+            self.assertTrue((path / "estimates.json").is_file())
+            sf_schedule._estimates.clear()  # another process
+            with mock.patch.object(sf_schedule, "history_estimates", side_effect=AssertionError("read the history again")):
+                self.assertEqual(600, sf_schedule.cached_estimates(path).of("a", "make a"))
+            with open(path / "history.jsonl", "a") as handle:
+                handle.write(json.dumps({**line, "ran": 60}) + "\n")
+            self.assertEqual(330, sf_schedule.cached_estimates(path).of("a", "make a"))
+
+
+class KindTests(unittest.TestCase):
+    def test_a_runner_or_a_shell_keeps_the_word_that_says_what_it_runs(self):
+        for command, expected in (("bun run build", "bun run build"), ("npm run test -- --watch", "npm run test"),
+                                  ("uv run pytest -q", "uv run pytest"), ("env FOO=1 BAR=2 cargo test -p x",
+                                                                         "cargo test"),
+                                  ("sh -c bun run build && bun run storybook:build", "sh -c bun run build"),
+                                  ("bash -lc ./verify.sh --checks a,b", "bash -lc verify.sh --checks [2]"),
+                                  ("python3 -m unittest discover", "python3 -m unittest"),
+                                  ("npx vitest --config vitest.config.ts run", "npx vitest")):
+            with self.subTest(command=command):
+                self.assertEqual(expected, sf_schedule.kind(command))
+
+
+class OrderTests(SlotCase):
+    """The order through real processes: a gate waits for every slot behind `one`, which the history says runs an
+    hour; `short` has run in a second before."""
+
+    def seed(self, **ran):
+        self.state.mkdir(parents=True, exist_ok=True)
+        lines = [{"label": label, "cmd": " ".join(("sh", "-c", WORK, "work", label)), "count": 1,
+                  "queued": "2026-11-02T10:00:00Z", "granted": "2026-11-02T10:00:00Z",
+                  "ended": "2026-11-02T11:00:00Z", "outcome": "released", "waited": 0, "ran": seconds}
+                 for label, seconds in ran.items()]
+        (self.state / "history.jsonl").write_text("".join(json.dumps(line) + "\n" for line in lines))
+
+    def gate_behind_one(self):
+        self.seed(one=3600, short=1)
+        one = self.request("one", 1)
+        self.started("one")
+        gate = self.request("gate", "all")
+        self.assertIn("gate is next, and a later request that fits starts first only if it ends before gate",
+                      self.output_line(gate))
+        return one, gate
+
+    def test_a_short_request_starts_before_a_gate_that_waits_past_its_window(self):
+        one, gate = self.gate_behind_one()
+        unknown = self.request("unknown", 1, "bash", "-c", WORK, "work", "unknown")  # a kind never run
+        self.wait_for(lambda: "waiting: 1 slot(s) unknown" in self.status(), "the unknown request to queue")
+        short = self.request("short", 1)
+        self.started("short")
+        self.release("short")
+        self.finish(short)
+        self.assertEqual("0", self.tool("available").stdout.strip(), "a request of unknown run waits")
+        self.assertNotIn("start unknown", self.events())
+        self.release("one")
+        self.started("gate")
+        self.release("gate")
+        self.started("unknown")
+        self.release("unknown")
+        for process in (one, gate, unknown):
+            self.finish(process)
+        self.assertEqual(["start one", "start short", "end short", "end one", "start gate", "end gate",
+                          "start unknown", "end unknown"], self.events())
+
+    def test_a_waiter_with_a_wait_says_when_it_gives_up_and_a_gate_that_would_give_up_first_holds_nobody(self):
+        self.seed(one=3600, short=1200)
+        one = self.request("one", 1)
+        self.started("one")
+        gate = self.request("gate", "all", options=("--wait", "600"))
+        self.wait_for(lambda: "waiting: 4 slot(s) gate" in self.status(), "the gate to queue")
+        entries = [json.loads(path.read_text()) for path in (self.state / "queue").glob("*.json")]
+        until = [sf_config.seconds(e.get("until")) for e in entries if e["label"] == "gate"][0]
+        self.assertAlmostEqual(time.time() + 600, until, delta=5)
+        short = self.request("short", 1)  # 3 x 1200 s would not end before one, but gate gives up first
+        self.started("short")
+        for label in ("short", "one"):
+            self.release(label)
+        for process in (short, one):
+            self.finish(process)
+        self.started("gate")
+        self.release("gate")
+        self.finish(gate)
+        lines = [json.loads(line) for line in (self.state / "history.jsonl").read_text().splitlines()]
+        self.assertEqual([until], [sf_config.seconds(line.get("until")) for line in lines if line["label"] == "gate"])
+        self.assertEqual([None], [line.get("until") for line in lines if line["label"] == "short" and line.get("v")])
+
+    def test_available_and_advise_answer_for_the_callers_command_when_it_is_given(self):
+        one, gate = self.gate_behind_one()
+        short = ("--label", "short", "--", "sh", "-c", WORK, "work", "short")
+        self.assertEqual("0", self.tool("available").stdout.strip(), "a command of unknown run: the fallback")
+        self.assertEqual("3", self.tool("available", *short).stdout.strip())
+        unknown = json.loads(self.tool("advise").stdout)
+        known = json.loads(self.tool("advise", "--max", "2", *short, SLOTFATHER_LOADAVG="0").stdout)
+        self.assertEqual((True, None), (unknown["waiting"], unknown["run_estimate"]))
+        self.assertEqual((False, 1, 2), (known["waiting"], known["run_estimate"], known["jobs"]))
+        for label in ("one", "gate"):
+            self.release(label)
+        for process in (one, gate):
+            self.finish(process)
+
+    def test_the_order_is_saved_for_every_client_and_reset(self):
+        classes = ("interactive 1800 s ahead, batch 1800 s behind, yield after 120 s; idle below 0.1 cores for 300 s; "
+                   "batch ages after 1800 s, normal after 3600 s; warn after 1800 s waiting; memory pressure warning "
+                   "admits one 1-slot lease at a time")
+        self.assertEqual(f"backfill: safety 3, limit 0 s, fallback 3600 s, overrun 0.5; {classes} (default)",
+                         self.tool("order").stdout.strip())
+        self.assertEqual(f"window: safety 3, limit 0 s, fallback 3600 s, overrun 0.5; {classes} (saved)",
+                         self.tool("order", "window").stdout.strip())
+        self.assertEqual(f"backfill: safety 4, limit 1800 s, fallback 3600 s, overrun 0.5; {classes} (saved)",
+                         self.tool("order", "backfill", "--safety", "4", "--limit", "1800").stdout.strip())
+        self.assertEqual({"order": "backfill", "safety": 4.0, "limit": 1800.0, "fallback": 3600.0, "overrun": 0.5},
+                         json.loads((self.state / "order.json").read_text()))
+        for bad in (("--safety", "0.5"), ("--limit", "-1"), ("--overrun", "x"), ("fifo",), ("--limit",),
+                    ("--warning-admits", "2"), ("--warning-admits", "0.5")):
+            with self.subTest(bad=bad):
+                refused = self.tool("order", *bad)
+                self.assertEqual(2, refused.returncode, refused.stdout)
+        self.assertIn("safety 4,", self.tool("order").stdout, "a refused change saves nothing")
+        self.assertIn("(default)", self.tool("order", "reset").stdout)
+        self.assertFalse((self.state / "order.json").exists())
+
+    def test_the_window_order_holds_the_short_request_back(self):
+        self.env["SLOTFATHER_QUEUE"] = "window"
+        self.seed(one=3600, short=1)
+        one = self.request("one", 1)
+        self.started("one")
+        gate = self.request("gate", "all")
+        self.wait_for(lambda: "waiting: 4 slot(s) gate" in self.status(), "the gate to queue")
+        short = self.request("short", 1)
+        self.wait_for(lambda: "waiting: 1 slot(s) short" in self.status(), "the short request to queue")
+        time.sleep(0.6)  # a few looks at the queue
+        self.assertNotIn("start short", self.events())
+        self.release("one")
+        self.started("gate")
+        self.release("gate")
+        self.started("short")
+        self.release("short")
+        for process in (one, gate, short):
+            self.finish(process)
+
+
+@unittest.skipUnless((ROOT / ".git").exists(), "needs the git history for the previous slotfather")
+class MixedVersionTests(SlotCase):
+    """An older slotfather (bfa114b, the window order) on the same queue: its entries and outputs stay as they were,
+    and a waiter it queued starts as soon as a new client looks at the queue."""
+
+    OLD = "bfa114b"
+
+    def setUp(self):
+        super().setUp()
+        found = subprocess.run(["git", "-C", str(ROOT), "show", f"{self.OLD}:slotfather"], capture_output=True)
+        if found.returncode:
+            self.skipTest(f"{self.OLD} is not in this checkout")
+        self.old = self.tmp / "slotfather-old"
+        self.old.write_bytes(found.stdout)
+        self.old.chmod(0o755)
+
+    def old_request(self, label, count):
+        argv = [str(self.old), "run", "-n", str(count), "--label", label, "--", "sh", "-c", WORK, "work", label]
+        process = subprocess.Popen(argv, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                   start_new_session=True)
+        self.processes.append(process)
+        return process
+
+    def test_a_waiter_of_the_old_version_is_backfilled_and_both_versions_read_the_queue_alike(self):
+        OrderTests.seed(self, one=3600, short=1)
+        one = self.old_request("one", 1)
+        self.started("one")
+        gate = self.request("gate", "all")
+        self.wait_for(lambda: "waiting: 4 slot(s) gate" in self.status(), "the gate to queue")
+        short = self.old_request("short", 1)
+        self.started("short")  # the old client alone would hold it behind the gate
+        for tool in (TOOL, str(self.old)):
+            listing = subprocess.run([tool, "status"], env=self.env, capture_output=True, text=True).stdout
+            self.assertRegex(listing, r"held: 1 slot\(s\) one pid=\d+ since=\S+ cmd=sh -c")
+            self.assertIn("waiting: 4 slot(s) gate", listing)
+            self.assertIn("2 of 4 slots held", listing)
+            self.assertEqual("0", subprocess.run([tool, "available"], env=self.env, capture_output=True,
+                                                 text=True).stdout.strip())
+            advice = json.loads(subprocess.run([tool, "advise"], env=self.env, capture_output=True, text=True).stdout)
+            self.assertEqual((2, True), (advice["held"], advice["waiting"]))
+        for label in ("short", "one"):
+            self.release(label)
+        self.started("gate")
+        self.release("gate")
+        for process in (one, gate, short):
+            self.finish(process)
+        history = [json.loads(line)["label"] for line in (self.state / "history.jsonl").read_text().splitlines()]
+        self.assertEqual(["one", "short"], history[:2], "the seed")
+        self.assertEqual(["gate", "one", "short"], sorted(history[2:]), "both versions record their requests")
+
+
+class DashboardOrderTests(SlotCase):
+    def test_a_waiting_gate_is_in_the_dashboard_block_with_an_estimated_start(self):
+        OrderTests.seed(self, one=3600)
+        one = self.request("one", 1)
+        self.started("one")
+        gate = self.request("gate", "all")
+        self.wait_for(lambda: "waiting: 4 slot(s) gate" in self.status(), "the gate to queue")
+        block = json.loads(self.tool("status", "--json", "--full").stdout)["dashboard"]
+        self.assertIsNotNone(block["start"], "the real queue supplies its estimate")
+        self.assertEqual(["gate"], [item["label"] for item in block["waiters"]])
+        for label in ("one", "gate"):
+            self.release(label)
+        for process in (one, gate):
+            self.finish(process)
+
+
+if __name__ == "__main__":
+    unittest.main()

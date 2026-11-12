@@ -1,0 +1,1 @@
+{"pid": 30338, "start": "", "count": 6, "label": "data-grid-perf-61-confirm", "cmd": "series.sh", "since": "2026-11-10T19:06:09Z", "state": "waiting", "priority": "batch", "all": true, "yieldable": true, "cwd": "/w"}
