@@ -25,6 +25,7 @@ import time
 from typing import Any
 
 from . import checks, config, events, host, journal, plan, review, slots, state, tickets, worktrees
+from . import results as result_store
 from .errors import LaneError
 from .gitops import common_dir, git, git_ok, worktree_list
 from .landing import landing
@@ -57,6 +58,19 @@ def verified(cwd: str, common: str, sha: str) -> bool:
     if not (Path(top) / cfg.pre_push_hook).is_file() or not script.is_file():
         return False
     return subprocess.run([str(script), "check", sha], cwd=top, capture_output=True).returncode == 0
+
+
+def verified_why(cwd: str, sha: str) -> str:
+    """Why a verified tree needs no gate: the green full gate the results store holds for it (fathers#91), else its
+    stamp."""
+    tree = git(cwd, "rev-parse", sha + "^{tree}")
+    top = git(cwd, "rev-parse", "--show-toplevel", check=False) or cwd
+    entry = result_store.full_green(tree, plan.toolchain_state(top))
+    if entry is None:
+        return f"tree {tree[:10]} is stamped"
+    source = f"the batch gate of {str(entry.get('sha'))[:10]}" if entry.get("source") == "gate" else entry.get("source")
+    return (f"{source} passed tree {tree[:10]} at {entry.get('at')}"
+            + (f"; receipt {entry['receipt']}" if entry.get("receipt") else ""))
 
 
 def bisect_list(cwd: str, common: str, sha: str,
@@ -137,6 +151,12 @@ def run_batch_gate(cwd: str, common: str, sha: str, jobs: int | None) -> None:
         "results": [{"suite": "full gate", "status": "passed" if green else "failed", "seconds": seconds,
                      "load_wait": load_wait, "load": load, "log": str(log), "failed_checks": failed}],
         "log": str(log), "host": info, "started": started, "finished": journal.now()})
+    # fathers#91: the gate's result belongs to the tree; a later promote of any commit with it reads why it is verified.
+    rows = {row["id"]: row.get("status") for row in (report or {}).get("checks", []) if row.get("id")}
+    result_store.record(git(cwd, "rev-parse", sha + "^{tree}"),
+                   {c: v for c, v in rows.items() if v in ("passed", "failed")}, source="gate", full=True,
+                   status="green" if green else "red", toolchain=plan.toolchain_state(path), sha=sha,
+                   receipt=str(state.state_dir() / f"{label}.gate.json"))
     journal.ledger(f"promote-gate {sha} {'green' if green else 'red'} jobs={jobs} seconds={seconds:.0f}"
                    f"{' stamped' if stamp['stamped'] else ''} {host.host_fields(info)}",
                    kind="gate.finished", level="info" if green else "error", subject={"type": "commit", "id": sha},
@@ -539,7 +559,7 @@ def promote_sha(args: Any) -> int:
     if (cfg.stamp_tool and git_ok(cwd, "cat-file", "-e", f"{sha}:{cfg.verify}")
             and git_ok(cwd, "cat-file", "-e", f"{sha}:{cfg.stamp_tool}")):
         if verified(cwd, common, sha):
-            print(f"lane: {sha[:10]}'s tree is already verified; no batch gate needed")
+            print(f"lane: {sha[:10]}'s tree is already verified ({verified_why(cwd, sha)}); no batch gate needed")
         else:
             batch_gate(cwd, common, sha, args.jobs)
     # The gate runs while reviews finish; only the move of dev waits for them (#570).

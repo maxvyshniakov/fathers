@@ -19,6 +19,8 @@
   perf <sha>                         the batch gate, promotion, sync and the perf suite (lanefather.promote)
   shipped <version> --since REF      after a release publish: comment the version on each issue a Fixes #N line
                                      in REF..HEAD names (lanefather.tickets, [tickets] release_comment)
+  results key|lookup|record REV (--full | --checks A,B)
+                                     check results by tree and plan (lanefather.results, docs/results.md)
   list [--all] [--json]
   status [--json]                    every registered project's lanes on this machine (lanefather.status)
   settings [check|set|reset KEY [VALUE]] [--json]
@@ -46,6 +48,7 @@ from . import (
     lanes,
     promote,
     registry,
+    results,
     review,
     runtime,
     settings,
@@ -195,6 +198,17 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--revision", help="with set or reset: refuse when the settings changed since this revision")
     p.add_argument("--json", action="store_true")
     p.set_defaults(run=settings.settings)
+    p = commands.add_parser("results", help="check results by tree and plan (docs/results.md): the key, whether a "
+                                            "plan is verified on a tree, or a result produced outside Lanefather")
+    p.add_argument("action", choices=("key", "lookup", "record"))
+    p.add_argument("rev", help="a commit, branch or tree")
+    p.add_argument("--full", action="store_true", help="the full gate")
+    p.add_argument("--checks", metavar="A,B", help="check ids; for record, A=passed,B=failed")
+    p.add_argument("--status", help="with record: green or red for --full, passed or failed for --checks")
+    p.add_argument("--source", default="manual", help="with record: who produced the result (external:SOURCE)")
+    p.add_argument("--receipt", help="with record: the report or run that holds the result")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(run=results.command)
     p = commands.add_parser("list", help="lanes that are not done, with claims, receipts, disk and load")
     p.add_argument("--all", action="store_true", help="include done lanes")
     p.add_argument("--json", action="store_true", help="the lane records with their worktree and receipt state, the "

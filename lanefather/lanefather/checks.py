@@ -22,6 +22,7 @@ from types import FrameType
 from typing import Any, TextIO
 
 from . import claims, config, host, journal, plan, queue, settings, slots, state, worktrees
+from . import results as result_store
 from .errors import LaneError
 from .gitops import current_branch, dirty, git, git_ok
 from .state import Record
@@ -160,6 +161,23 @@ def reusable(previous: Record, delta: dict[str, Any]) -> dict[str, dict[str, Any
     return {check: dict(entry, reused_from=entry.get("reused_from") or previous["tree"])
             for check, entry in (previous.get("check_results") or {}).items()
             if entry.get("status") == "passed" and check not in changed}
+
+
+def same_tree(wanted: dict[str, str], tree: str, toolchain: Any) -> dict[str, dict[str, Any]]:
+    """The wanted checks ({id: suite}) whose newest result on the tree, under the toolchain, passed (fathers#91), as
+    reused check results naming the run that stands for them."""
+    if not wanted:
+        return {}
+    stored = result_store.passed(tree, toolchain)
+    return {c: {"suite": suite, "status": "passed", "log": stored[c].get("receipt", ""), "reused_from": tree,
+                "reused_by": "tree", **{f"reused_{k}": stored[c][k] for k in ("source", "receipt", "lane", "at")
+                                        if stored[c].get(k)}}
+            for c, suite in wanted.items() if c in stored}
+
+
+def recordable(check_results: dict[str, dict[str, Any]]) -> dict[str, str]:
+    """The statuses the results store keeps: a pass or a failure of the check itself."""
+    return {c: e["status"] for c, e in check_results.items() if e.get("status") in ("passed", "failed")}
 
 
 def combined_results(suites: list[str], selected: dict[str, list[str]] | None, fresh: Rows,
@@ -588,6 +606,10 @@ def check(args: Any) -> int:
         wanted = {c for ids in selected.values() for c in ids}
         reused = {c: e for c, e in reusable(previous, plan.plan_for(worktree, previous["head"])).items()
                   if c in wanted}
+    if selected is not None and not args.rerun:
+        # fathers#91: a check that passed on this very tree under this toolchain, in any lane or run, stands.
+        reused.update(same_tree({c: s for s, ids in selected.items() for c in ids if c not in reused}, tree,
+                                toolchain))
     outside = [p for p in lane_plan["paths"] if not claims.unclaimed(p)
                and not any(claims.matches(c, p) for c in record["claims"])]
     added, overlaps = claims.widen_claims(args.id, outside)
@@ -632,6 +654,12 @@ def check(args: Any) -> int:
                             "classification": classification, "first": first, "changed_red_tests": changed_tests,
                             "stopped": stopped, "status": status, "host": info, "started": started,
                             "finished": journal.now()})
+    # fathers#91: what ran, and what was reused for this tree, is on record for any later run of the tree. A check
+    # that passed rerun by itself is a pass of the tree.
+    flaky = [e["check"] for e in (classification or {}).get("checks", []) if e.get("class") == "flaky-under-load"]
+    statuses = dict(recordable(check_results), **{c: "passed" for c in flaky if c in check_results})
+    result_store.record(tree, statuses, source="check", toolchain=toolchain, lane=args.id, sha=head, receipt=str(path),
+                   reused=list(reused))
     classes = ",".join(f"{e['check']}={e['class']}" for e in (classification or {}).get("checks", []))
     journal.ledger(f"check {args.id} tree={tree} {status} suites={','.join(suites) or '-'} "
                    f"checks={len(check_results) - len(reused)} reused={len(reused)} jobs={decision['jobs']} "
@@ -641,7 +669,9 @@ def check(args: Any) -> int:
                             "checks": len(check_results) - len(reused), "reused": len(reused),
                             "jobs": decision["jobs"], "receipt": str(path)})
     for result in results:
-        note = (f" (reused from tree {result['reused_from'][:10]})" if result.get("reused_from")
+        note = (" (passed on this tree before: " + str(result.get("log") or "an earlier run") + ")"
+                if result.get("reused_from") == tree
+                else f" (reused from tree {result['reused_from'][:10]})" if result.get("reused_from")
                 else f" ({len(result['reused'])} of {len(result['checks'])} checks reused)" if result.get("reused")
                 else "")
         failed = f" failed checks: {', '.join(result['failed_checks'])}" if result.get("failed_checks") else ""

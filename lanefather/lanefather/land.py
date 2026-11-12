@@ -15,6 +15,7 @@ import subprocess
 from typing import Any
 
 from . import checks, config, done, journal, plan, review, state, tickets, worktrees
+from . import results as result_store
 from .errors import LaneError
 from .gitops import current_branch, dirty, git, git_ok, main_checkout
 from .host import given_jobs, host, host_fields, post_merge_jobs
@@ -49,6 +50,20 @@ def touched_lines(failed: list[tuple[str, str]], integration: str, merge: str) -
         names = [f"{r['id']} (#{r['ticket']})" for r in landed if covers(r["id"], item, suite)]
         lines.append(f"  {item}: {', '.join(names) or 'no recorded lane'}")
     return lines
+
+
+def smoke_reuse(kind: str, rows: list[dict[str, Any]] | None, merge_tree: str, toolchain: Any,
+                ) -> tuple[str, list[dict[str, Any]] | None, dict[str, dict[str, Any]], dict[str, str]]:
+    """The smoke rows left once each check that already passed on the merge tree is taken out (fathers#91): (kind,
+    rows, the reused results, why each was skipped). Nothing left is kind "skip"."""
+    if not rows:
+        return kind, rows, {}, {}
+    wanted = {row["id"]: row["suite"] for row in rows}
+    reused = checks.same_tree(wanted, merge_tree, toolchain)
+    skips = {c: "passed on this merge tree before (" + str(e.get("reused_source") or "an earlier run")
+             + (f", {e['reused_receipt']}" if e.get("reused_receipt") else "") + ")" for c, e in reused.items()}
+    kept = [row for row in rows if row["id"] not in reused]
+    return ("skip" if reused and not kept else kind), kept, reused, skips
 
 
 def merge_problem(args: Any, tip: str, tree: str, receipt: dict[str, Any] | None) -> str | None:
@@ -166,6 +181,9 @@ def land(args: Any) -> int:
         # #640: what the lane's green receipt already verified does not run again.
         kind, rows, narrowing = plan.narrow_smoke(checkout, receipt, record["landed"], merge_tree, kind, rows)
         lane_verified = narrowing.pop("lane_verified", {})
+        # fathers#91: a smoke check that already passed on the merge tree, under this toolchain, does not run again.
+        toolchain = plan.toolchain_state(checkout)
+        kind, rows, tree_verified, skips = smoke_reuse(kind, rows, merge_tree, toolchain)
         suites, selected = ((merged_plan["selected"], None) if rows is None
                             else (plan.suites_of(rows), plan.by_suite(rows)))
         info = host()
@@ -185,9 +203,13 @@ def land(args: Any) -> int:
                             "tree": merge_tree, "checkout": checkout, "kind": kind,
                             "jobs": jobs, "jobs_decision": decision, "suites": suites, "full": False,
                             "reasons": merged_plan["reasons"], "checks": selected, "selection": rows,
-                            "narrowing": narrowing, "check_results": {**lane_verified, **check_results},
+                            "narrowing": narrowing, "skipped": skips,
+                            "check_results": {**lane_verified, **tree_verified, **check_results},
                             "results": results, "triage": triaged, "status": status, "verified_tree": stamp,
                             "host": info, "finished": journal.now()})
+    result_store.record(merge_tree, checks.recordable({**lane_verified, **tree_verified, **check_results}),
+                   source="post-merge", toolchain=toolchain, lane=args.id, sha=merge, receipt=str(post),
+                   reused=[*lane_verified, *tree_verified])
     # Reloaded: a review hand-over may have changed the record during the smoke.
     with state.locked("state"):
         record = state.load(args.id)
@@ -196,15 +218,18 @@ def land(args: Any) -> int:
     verified = len(lane_verified)
     journal.ledger(f"post-merge {args.id} {status} {kind} jobs={jobs} suites={','.join(suites) or '-'} "
                    + (f"lane_verified={verified} " if narrowing.get("narrowed") else "")
+                   + (f"not_rerun={len(skips)} " if skips else "")
                    + f"{host_fields(info)} merge={merge}",
                    kind="lane.post_merge", level="info" if status == "green" else "error", lane=record,
                    details={"status": status, "scope": kind, "jobs": jobs, "suites": suites,
-                            "lane_verified": verified, "merge": merge, "receipt": str(post)})
+                            "lane_verified": verified, "skipped": skips, "merge": merge, "receipt": str(post)})
     ids = [c for s in suites for c in selected[s]] if selected is not None else None
     what = (", ".join(ids) if ids is not None and len(ids) <= 8 else f"{len(ids)} checks" if ids is not None
             else ", ".join(suites)) or "no suites affected"
     prefix = {"smoke": "smoke: ", "narrowed": "narrowed smoke: "}.get(kind, "")
-    if kind == "skip" and merge_tree == narrowing["receipt_tree"]:
+    if kind == "skip" and not narrowing.get("narrowed"):
+        what = "skipped: " + "; ".join(f"{c}: {why}" for c, why in skips.items())
+    elif kind == "skip" and merge_tree == narrowing["receipt_tree"]:
         what = f"skipped: the lane's green receipt verified the merge tree {merge_tree[:10]}"
     elif kind == "skip":
         brought = ", ".join(narrowing["integration_paths"][:3]) + (", ..." if len(narrowing["integration_paths"]) > 3
@@ -215,6 +240,8 @@ def land(args: Any) -> int:
         what += f"; the lane's receipt stands for {verified} more"
     elif narrowing.get("reason") and rows:
         what += f"; whole, since {narrowing['reason']}"
+    if skips and kind != "skip" or skips and narrowing.get("narrowed"):
+        what += f"; {len(skips)} not run again ({', '.join(f'{c}: {why}' for c, why in skips.items())})"
     print(f"Landed {record['branch']} as {merge[:10]} on {current_branch(integration) or integration}; "
           f"post-merge {status} ({prefix}{what})")
     # #25: the lane's issue shows the land once its smoke is green; a gh failure only warns.
