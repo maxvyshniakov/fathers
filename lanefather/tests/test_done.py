@@ -130,6 +130,9 @@ class DoneTests(LaneCase):
 
 class AutoDoneTests(LaneCase):
     """#446: land finishes the lane after a green post-merge smoke, so it no longer counts toward the lane cap."""
+    # End to end: every command as its own process (fathers#95).
+    process_cli = True
+
 
     def agent_lane(self, lane_id, claim):
         self.start(lane_id, claim)

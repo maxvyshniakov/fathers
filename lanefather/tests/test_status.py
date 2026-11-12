@@ -13,6 +13,9 @@ from support import LaneCase
 
 
 class StatusTests(LaneCase):
+    # End to end: every command as its own process (fathers#95).
+    process_cli = True
+
     def status(self) -> dict[str, Any]:
         return json.loads(self.lane("status", "--json", cwd=self.tmp))
 

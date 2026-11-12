@@ -8,6 +8,9 @@ from support import RUST_STUB, LaneCase
 
 
 class ShowTests(LaneCase):
+    # End to end: every command as its own process (fathers#95).
+    process_cli = True
+
     def test_show_exports_project_ticket_checks_and_review_without_mutation(self):
         worktree = self.created('context', 'lib/**')
         self.git(self.repo, 'remote', 'add', 'origin', 'git@github.com:example/project.with-dots.git')

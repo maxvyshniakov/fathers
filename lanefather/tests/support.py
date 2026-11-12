@@ -478,13 +478,28 @@ def template_repository() -> pathlib.Path:
     return repo
 
 
-def run_in_process(argv: list[str], cwd: Any, env: dict[str, str]) -> tuple[int, str]:
+class InProcessTimeout(Exception):
+    """A command run in process outlived its timeout, as subprocess.run(timeout=) would raise."""
+
+
+def run_in_process(argv: list[str], cwd: Any, env: dict[str, str], timeout: float = 120) -> tuple[int, str]:
     """`python -m lanefather ARGV` in this process (fathers#95): the same environment, working directory and
     file descriptors 1 and 2, so the output of the commands lanefather starts is captured as a process's would be.
-    Returns (exit status, stdout followed by stderr)."""
+    Returns (exit status, stdout followed by stderr). The run's configuration, modules and sys.path do not outlive
+    it, and a run past `timeout` seconds raises InProcessTimeout (a SIGALRM in the main thread)."""
+    import signal
+
     from lanefather import claims, cli, config
     saved_env, saved_cwd, saved_path = dict(os.environ), os.getcwd(), list(sys.path)
-    outputs = [tempfile.TemporaryFile(), tempfile.TemporaryFile()]
+    saved_modules = set(sys.modules)
+    saved_config = config._current  # pyright: ignore[reportPrivateUsage]
+
+    def expired(_signum: int, _frame: Any) -> None:
+        raise InProcessTimeout(f"lanefather {' '.join(argv)} ran longer than {timeout:g} s")
+
+    previous_alarm = signal.signal(signal.SIGALRM, expired)
+    signal.setitimer(signal.ITIMER_REAL, timeout)
+    outputs = [tempfile.TemporaryFile(), tempfile.TemporaryFile()]  # noqa: SIM115 - closed after the run
     saved_fds = [os.dup(1), os.dup(2)]
     sys.stdout.flush()
     sys.stderr.flush()
@@ -500,12 +515,18 @@ def run_in_process(argv: list[str], cwd: Any, env: dict[str, str]) -> tuple[int,
         try:
             code = cli.main(argv)
         except SystemExit as error:
+            if isinstance(error.code, str):
+                print(error.code, file=sys.stderr)  # as the interpreter prints a string exit code
             code = error.code if isinstance(error.code, int) else 0 if error.code is None else 1
+        except InProcessTimeout:
+            raise
         except Exception:  # a crash, as the process would print it
             import traceback
             traceback.print_exc()
             code = 1
     finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_alarm)
         sys.stdout.flush()
         sys.stderr.flush()
         os.dup2(saved_fds[0], 1)
@@ -516,7 +537,12 @@ def run_in_process(argv: list[str], cwd: Any, env: dict[str, str]) -> tuple[int,
         os.environ.clear()
         os.environ.update(saved_env)
         sys.path[:] = saved_path
-        config.use(None)
+        # A project hook's sibling modules come from that test's scratch repository: none stays cached for the next.
+        for name in set(sys.modules) - saved_modules:
+            origin = str(getattr(sys.modules[name], "__file__", None) or "")
+            if origin and not origin.startswith((sys.prefix, sys.base_prefix, str(ROOT))):
+                del sys.modules[name]
+        config.use(saved_config)
     texts: list[str] = []
     for handle in outputs:
         handle.seek(0)
@@ -599,7 +625,7 @@ class LaneCase(unittest.TestCase):
                                   env=self.env, capture_output=True, text=True, timeout=timeout)
             code, output = proc.returncode, proc.stdout + proc.stderr
         else:
-            code, output = run_in_process(list(args), cwd or self.integration, self.env)
+            code, output = run_in_process(list(args), cwd or self.integration, self.env, timeout)
         if ok is not None:
             self.assertEqual(code == 0, ok, f"lane {' '.join(args)} exit {code}:\n{output}")
         return output
