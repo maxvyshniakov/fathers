@@ -14,6 +14,7 @@ import contextlib
 import math
 import os
 import textwrap
+import threading
 import time
 from typing import TYPE_CHECKING, Any, Callable, NamedTuple, cast
 
@@ -124,8 +125,15 @@ def argument(value: Any) -> str:
 class Settings:
     def __init__(self, interval: float, theme: str = _theme.DEFAULT_MODE, clock: Callable[[], float] = time.monotonic,
                  client: SettingsClient | None = None, problem: Callable[[], str | None] = lambda: None,
-                 local_only: bool = False):
+                 local_only: bool = False, background: bool = False):
         self.clock = clock
+        # background: the once-a-second reads run on a thread and land on a later draw (the live view), so a key
+        # never waits for `slotfather settings`; tests read in line
+        self.background = background
+        self.lock = threading.Lock()
+        self.reading = False
+        self.incoming: tuple[int, dict[str, Any] | None, str | None] | None = None
+        self.generation = 0  # bumped by every reply this panel took itself, so an older read is dropped
         # local_only: Slotfather is absent or has no settings contract; only this dashboard's own rows show
         self.local_only = local_only
         self.client = client if client is not None else SettingsClient()
@@ -153,6 +161,7 @@ class Settings:
         self.reply: dict[str, Any] = {}  # the last `settings --json`
         self.rows_by_key: dict[str, dict[str, Any]] = {}
         self.checked: dict[tuple[str, str], dict[str, Any]] = {}  # `settings check` replies by (key, value)
+        self.checked_under: str | None = None  # the capacity revision those replies were given under
         self.saved: dict[str, Any] = {}
         self.effective: dict[str, Any] = {}
         self.memory_budget: int | None = None
@@ -178,24 +187,79 @@ class Settings:
         basis = reply.get("basis")
         if not isinstance(basis, dict) or "capacity.mode" not in rows:
             raise SettingsError("slotfather settings: no capacity in the reply; update slotfather")
+        self.generation += 1  # a read started before this one is older: dropped when it lands (collect())
         self.reply, self.rows_by_key, self.basis = reply, rows, cast(dict[str, Any], basis)
         self.capacity_bytes = cast(Any, rows["capacity.mode"].get("revision"))
         self.saved = {key[len("order."):]: row.get("value") for key, row in rows.items() if key.startswith("order.")}
         self.effective = {key[len("order."):]: row.get("effective", row.get("value")) for key, row in rows.items()
                           if key.startswith("order.")}
         self.memory_budget, self.memory_gib = self.basis.get("memory_slots"), self.basis.get("memory_gib")
-        self.checked = {}
+        revision = self.capacity_bytes
+        if any(key[0].startswith("capacity.") for key in self.checked) and self.checked_under != revision:
+            self.checked = {}  # what a capacity value gives depends on the capacity read
+        self.checked_under = revision
         self.read_at = self.clock()
         self.settle_focus()
 
     def refresh(self) -> None:
         """Reads the shared settings again, at most once a second, and never under a field being typed. A capacity
-        change pending since before another client changed capacity.json becomes a conflict: dropped, and said."""
+        change pending since before another client changed capacity.json becomes a conflict: dropped, and said. In
+        the background, a read that finished is taken here and the next one started."""
+        if self.background:
+            self.collect()
         if self.editing or self.clock() - self.read_at < READ_EVERY:
             return
+        if self.background:
+            self.start_read()
+            return
+        try:
+            reply = None if self.local_only else self.client.read()
+        except SettingsError as error:
+            self.reread(None, str(error))
+            return
+        self.reread(reply, None)
+
+    def start_read(self) -> None:
+        if self.local_only:
+            self.read_at = self.clock()
+            return
+        with self.lock:
+            if self.reading:
+                return
+            self.reading = True
+            generation = self.generation
+        self.read_at = self.clock()
+
+        def work() -> None:
+            reply, problem = None, None
+            try:
+                reply = self.client.read()
+            except SettingsError as error:
+                problem = str(error)
+            with self.lock:
+                self.incoming, self.reading = (generation, reply, problem), False
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def collect(self) -> None:
+        with self.lock:
+            found, self.incoming = self.incoming, None
+        if found is None:
+            return
+        generation, reply, problem = found
+        if generation == self.generation:  # not taken over by a save since it started
+            self.reread(reply, problem)
+
+    def reread(self, reply: dict[str, Any] | None, problem: str | None) -> None:
         pending = self.pending
         try:
-            self.read()
+            if problem is not None:
+                raise SettingsError(problem)
+            if reply is None:
+                self.read_at = self.clock()
+                self.settle_focus()
+            else:
+                self.take(reply)
         except SettingsError as error:
             self.say(str(error), "bad")
             self.read_at = self.clock()

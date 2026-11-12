@@ -117,6 +117,8 @@ class Screen:
         if source.snapshot is None:
             return None, source.problem
         model = dict(source.snapshot, installed=_version.installed_source())
+        for name in ("holders", "waiters"):  # this frame's colours and lanes stay off the cached snapshot
+            model[name] = [dict(item) for item in source.snapshot[name]]
         if source.state == "stale" and source.failed_at is not None:
             model["stale_since"] = datetime.datetime.fromtimestamp(source.failed_at, datetime.timezone.utc)
         return model, source.problem if source.state == "stale" else None
@@ -147,7 +149,7 @@ class Screen:
         if self.source.state in ("ok", "stale") and _slotfather.settings_supported(self.source.capabilities):
             client = SettingsClient(self.source.executable)
         return _settings.Settings(interval, theme, client=client, problem=lambda: self.source.problem,
-                                  local_only=client is None)
+                                  local_only=client is None, background=True)
 
 
 DETAILS_FRESH = 5.0  # seconds a request's loaded details are shown as they are; older ones load again, quietly
@@ -488,7 +490,7 @@ def once(width: int | None, height: int | None, colour: bool | None, interval: f
     _overview.dashboard_draw(canvas, model, error=error, cwd=cwd, notice=screen.notice())
     tty = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
     print(canvas.render(colour if colour is not None else tty, ascii_only))
-    return 0
+    return 1 if model is None else 0  # the frame says why: no tool, no contract, or a failed snapshot
 
 
 def command(argv: list[str]) -> int:

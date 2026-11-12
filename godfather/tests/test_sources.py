@@ -144,6 +144,37 @@ class FailingTests(FixtureCase):
         self.assertIn("Queue unavailable: slotfather: no queue", text)
 
 
+class RediscoveryTests(FixtureCase):
+    def test_a_failed_capabilities_call_after_a_good_one_keeps_the_screen_stale(self) -> None:
+        screen = app.Screen()
+        self.assertIn("lane-644-build-once", self.frame(screen))
+        self.reply("capabilities --json", {"code": 124, "stderr": "slotfather capabilities --json took longer than 2 s"})
+        screen.source.checked = -1e9  # discovery is due
+        text = self.frame(screen)
+        self.assertIn("lane-644-build-once", text, "the screen stays")
+        self.assertNotIn("update slotfather", text)
+        self.assertIsNotNone(screen.source.capabilities, "the contract it answered with before is kept")
+        self.assertEqual("ok", screen.source.state, "its snapshot still answers")
+        self.reply("status --json --full", {"code": 124, "stderr": "took longer than 5 s"})
+        screen.source.checked = -1e9
+        text = self.frame(screen)
+        self.assertIn("stale since", text, "both slow: the last good screen, stale")
+        self.assertIn("lane-644-build-once", text)
+
+    def test_a_small_terminal_is_dimmed_when_stale_too(self) -> None:
+        screen = app.Screen()
+        self.frame(screen, 40, 12)
+        self.reply("status --json --full", {"code": 1, "stderr": "slotfather: queue unreadable"})
+        self.frame(screen, 40, 12)
+        self.assertEqual({"dim"}, {cell[1] for row in self.canvas.cells[:-1] for cell in row if str(cell[0]).strip()})
+
+    def test_a_snapshot_that_prints_nothing_says_so(self) -> None:
+        screen = app.Screen()
+        self.reply("status --json --full", {"code": 0, "stdout": ""})
+        _, error = screen.load()
+        self.assertEqual("slotfather status --json --full printed nothing", error)
+
+
 class SlowSnapshotTests(unittest.TestCase):
     def test_a_snapshot_over_five_seconds_is_a_failure(self) -> None:
         fake = FakeSlotfather({"sleep": {"status": 2}})

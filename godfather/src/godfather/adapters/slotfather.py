@@ -49,13 +49,6 @@ def changelog(capabilities: Optional[dict[str, Any]]) -> Optional[str]:
     return path if isinstance(path, str) and path.startswith("/") else None
 
 
-def poll_seconds(capabilities: Optional[dict[str, Any]], default: float) -> float:
-    """Slotfather's poll hint, clamped to 1–10 s; Refresh every (default) when it gives none."""
-    block = (capabilities or {}).get("dashboard") or {}
-    hint = (block.get("snapshot") or {}).get("poll") if isinstance(block, dict) else None
-    return default if not isinstance(hint, (int, float)) else max(1.0, min(10.0, float(hint)))
-
-
 def parse_time(value: Any) -> Optional[datetime.datetime]:
     """An RFC 3339 time (`2026-11-12T04:25:56Z`, with or without fractions, `Z` or an offset) as an aware UTC
     datetime; None for null or anything else."""
@@ -147,6 +140,8 @@ def decode(snapshot: Any) -> dict[str, Any]:
             or datetime.datetime.now(datetime.timezone.utc)
         averages = block.get("averages")
         model["averages"] = tuple(float(value) for value in averages) if isinstance(averages, list) else (0.0, 0.0, 0.0)
+        if not isinstance(model.get("overtake_window"), (int, float)) or isinstance(model["overtake_window"], bool):
+            raise Unsupported("dashboard.overtake_window is not a number of seconds")
         for name in ("slots", "cores", "used", "free"):
             if not isinstance(model.get(name), int) or isinstance(model.get(name), bool):
                 raise Unsupported(f"dashboard.{name} is not a whole number")

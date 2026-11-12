@@ -98,7 +98,7 @@ class ParityTests(unittest.TestCase):
             with self.subTest(name):
                 canvas = self.canvas(width, height, ascii_only == "1", int(selected))
                 events = canvas.tables.get("events")
-                masked = set()
+                masked: set[tuple[int, int]] = set()
                 if events:
                     masked = {(row, column) for row in range(events["y"], events["y"] + events["height"])
                               for column in range(events["x"], events["x"] + events["width"])}

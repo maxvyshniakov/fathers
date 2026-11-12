@@ -11,7 +11,7 @@ from typing import Any, Optional, cast
 
 VERSION = "0.1.0"  # the release; CHANGELOG.md says what each one changed
 NAME = "Godfather"
-INSTALLED_RELEASE = re.compile(r"sys\.path\.insert\(0, '([^']+)'\)")
+INSTALLED_RELEASE = re.compile(r"""sys\.path\.insert\(0, (?:'([^']+)'|"([^"]+)")\)""")
 
 _identity: dict[str, Any] = {}
 
@@ -69,7 +69,7 @@ def installed_source(entry: Optional[str] = None) -> Optional[str]:
         found = INSTALLED_RELEASE.search(Path(entry or sys.argv[0]).read_text())
         if found is None:
             return None
-        data: Any = json.loads((Path(found[1]) / "godfather" / "version.json").read_text())
+        data: Any = json.loads((Path(found[1] or found[2]) / "godfather" / "version.json").read_text())
     except (OSError, ValueError, UnicodeDecodeError):
         return None
     digest = cast(dict[str, Any], data).get("source_sha256") if isinstance(data, dict) else None
@@ -81,7 +81,7 @@ def installed_release() -> Optional[Path]:
     with contextlib.suppress(OSError, UnicodeDecodeError):
         found = INSTALLED_RELEASE.search(Path(sys.argv[0]).read_text())
         if found:
-            return Path(found[1]) / "godfather"
+            return Path(found[1] or found[2]) / "godfather"
     return None
 
 

@@ -50,7 +50,7 @@ class InstallTests(unittest.TestCase):
         self.assertRegex(result.stdout, r"^godfather 0\.1\.0 \([0-9a-f]{7}(\+dirty)?\) source [0-9a-f]{64}\n$")
         once = subprocess.run([str(entry), "--once", "--width", "80", "--height", "12"], capture_output=True,
                               text=True, env={"PATH": "/usr/bin:/bin", "HOME": str(self.home)})
-        self.assertEqual(0, once.returncode, once.stderr)
+        self.assertEqual(1, once.returncode, "no tool: the frame says so, the exit code too")
         self.assertIn("No tool found", once.stdout)
 
     def test_a_reinstall_reuses_an_identical_release_and_replaces_the_entry_atomically(self) -> None:
@@ -97,6 +97,23 @@ class InstallTests(unittest.TestCase):
         old.chmod(0o755)
         with self.assertRaisesRegex(self.tool.InstallError, "is Python 3.8; godfather needs 3.9 or later"):
             self.tool.interpreter(str(old))
+
+    def test_a_virtual_environment_named_with_python_is_refused_too(self) -> None:
+        venv = self.home / "python3"
+        venv.write_text("#!/bin/sh\necho 3.12 True\n")
+        venv.chmod(0o755)
+        with self.assertRaisesRegex(self.tool.InstallError, "belongs to a virtual environment"):
+            self.tool.interpreter(str(venv))
+
+    def test_a_release_path_with_a_quote_still_tells_a_newer_install(self) -> None:
+        from godfather import version
+
+        release = self.home / "it's" / "release"
+        (release / "godfather").mkdir(parents=True)
+        (release / "godfather" / "version.json").write_text('{"source_sha256": "abc"}')
+        entry = self.home / "entry"
+        entry.write_bytes(self.tool.wrapper(release, sys.executable))
+        self.assertEqual("abc", version.installed_source(str(entry)))
 
     def test_options_are_checked(self) -> None:
         for argv in (["--bin"], ["--python", "a", "--python", "b"], ["--user", "x"]):

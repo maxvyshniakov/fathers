@@ -40,7 +40,6 @@ MACHINE_GAP, MACHINE_CHART_MIN = 2, 24  # between the rows and a chart beside th
 # column, the gap and the chart's least width (owner, 2026-11-12: picked by rendering)
 MACHINE_SIDE_WIDTH = 6 + MACHINE_LABEL + MACHINE_BAR_SIDE + 1 + 9 + MACHINE_GAP + MACHINE_CHART_MIN
 HISTORY_WINDOW = 3600  # seconds of queue.log the utilisation strip rebuilds
-LOG_TAIL = 262144  # bytes of queue.log read per refresh
 WIDE = 110  # columns from which the panels sit side by side
 
 
@@ -1225,6 +1224,8 @@ def dashboard_draw(canvas: Canvas, model: dict[str, Any] | None, selected: int =
         draw_slots(canvas, min(2, height - 4), 3, width - 6, model)
         if 6 < height - 1:
             canvas.put(6, 3, "Enlarge the terminal for leases and the queue", "dim", width - 6)
+        if model.get("stale_since"):
+            dim_panels(canvas)
         if help_open:
             draw_open_overlay(canvas, help_open, model, changelog_tab)
         if settings is not None:
@@ -1281,13 +1282,18 @@ def dashboard_draw(canvas: Canvas, model: dict[str, Any] | None, selected: int =
                 draw_panel(canvas, "machine", y, 0, heights[name], width, model, selected, cwd, moment)
             y += heights[name]
     if stale:  # the last good picture, dimmed, until a snapshot arrives again
-        for row in canvas.cells[:height - 1]:
-            for cell in row:
-                cell[1] = "dim"
+        dim_panels(canvas)
     if help_open:
         draw_open_overlay(canvas, help_open, model, changelog_tab)
     if settings is not None:
         settings.draw(canvas, model)
+
+
+def dim_panels(canvas: Canvas) -> None:
+    """Every cell above the footer in the muted token: a stale snapshot's picture."""
+    for row in canvas.cells[:canvas.height - 1]:
+        for cell in row:
+            cell[1] = "dim"
 
 
 def draw_notice(canvas: Canvas, lines: list[str]) -> None:

@@ -177,6 +177,12 @@ class Source:
             self.state, self.problem, self.capabilities, self.version = "absent", None, None, None
             return
         code, value, problem = run_json(self.name, ["capabilities", "--json"], CAPABILITIES_TIMEOUT, found)
+        if (code != 0 or not isinstance(value, dict)) and self.state in ("ok", "stale") \
+                and self.capabilities is not None:
+            # It answered before: a slow or failed answer now (a loaded machine) leaves the screen as it was, stale,
+            # rather than replacing it with "update slotfather"; the next discovery asks again.
+            self.took(None, problem or f"{self.name} capabilities exited {code}")
+            return
         if code != 0 or not isinstance(value, dict):
             self.capabilities = None
             self.state = "unsupported"
@@ -202,6 +208,8 @@ class Source:
         code, value, problem = run_json(self.name, self.snapshot_argv(), SNAPSHOT_TIMEOUT, self.executable)
         if code != 0:
             raise SnapshotError(problem or f"{self.name} {' '.join(self.snapshot_argv())} exited {code}")
+        if value is None:
+            raise SnapshotError(problem or f"{self.name} {' '.join(self.snapshot_argv())} printed nothing")
         return value
 
     def took(self, value: Optional[dict[str, Any]], failure: Optional[str]) -> None:

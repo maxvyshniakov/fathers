@@ -1,12 +1,17 @@
 """The Settings panel (#7), moved from Slotfather: rendered as text and driven by keys and the mouse, against a fake
-`slotfather settings` (tests/fake_slotfather.py) that keeps Slotfather's capacity rules and messages.
+`slotfather settings` (tests/fake_slotfather.py) that keeps Slotfather's capacity rules and messages, or, with
+GODFATHER_REAL_SLOTFATHER=/path/to/slotfather, against that real Slotfather (SF-2) in an isolated SLOTFATHER_DIR.
 
 Snapshots live in tests/snapshots/ and are Slotfather's own, unchanged; `SNAPSHOT_UPDATE=1` rewrites them after a
 deliberate layout change."""
 from __future__ import annotations
 
+import json
 import os
 import re
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
@@ -30,9 +35,53 @@ def busy(slots: int, held: int, waiting: int) -> dict[str, Any]:
     return {"slots": slots, "free": max(0, slots - held), "used": held, "waiters": [{}] * waiting, "holders": []}
 
 
+REAL = os.environ.get("GODFATHER_REAL_SLOTFATHER")
+
+
+class RealSlotfather:
+    """A real Slotfather with FakeSlotfather's interface: an isolated queue, its argv logged by a wrapper."""
+
+    def __init__(self, executable: str) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.state = self.root / "state"
+        self.calls = self.root / "calls.jsonl"
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        wrapper = self.bin / "slotfather"
+        wrapper.write_text(f"#!{sys.executable}\nimport json, os, sys\n"
+                           f"open({str(self.calls)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
+                           f"os.execv({executable!r}, [{executable!r}, *sys.argv[1:]])\n")
+        wrapper.chmod(0o755)
+
+    def environ(self) -> dict[str, str]:
+        return {"PATH": f"{self.bin}:/usr/bin:/bin", "HOME": str(self.root), "SLOTFATHER_DIR": str(self.state),
+                "SLOTFATHER_LEGACY_DIRS": "", "SLOTFATHER_CORES": "12", "SLOTFATHER_MEMORY_GIB": "64",
+                "XDG_CONFIG_HOME": str(self.root / "config")}
+
+    def argv(self) -> list[list[str]]:
+        if not self.calls.exists():
+            return []
+        return [json.loads(line) for line in self.calls.read_text().splitlines()]
+
+    def read(self) -> dict[str, Any]:
+        def load(name: str) -> Any:
+            path = self.state / name
+            return json.loads(path.read_text()) if path.exists() else None
+        return {"capacity": load("capacity.json"), "order": load("order.json") or {}}
+
+    def run(self, *args: str) -> Any:
+        return subprocess.run([str(self.bin / "slotfather"), *args], capture_output=True, text=True,
+                              env=self.environ())
+
+    def close(self) -> None:
+        self.tmp.cleanup()
+
+
 class PanelCase(unittest.TestCase):
     def setUp(self) -> None:
-        self.fake = FakeSlotfather()
+        self.real = bool(REAL)
+        self.fake: Any = RealSlotfather(REAL) if REAL else FakeSlotfather()
         self.addCleanup(self.fake.close)
         patcher = mock.patch.dict(os.environ, self.fake.environ(), clear=True)
         patcher.start()
@@ -45,6 +94,8 @@ class PanelCase(unittest.TestCase):
 
     def tool(self, *args: str) -> Any:
         """What `slotfather slots N`, `slots memory G` and `order ...` saved, written into the fake's state."""
+        if self.real:
+            return self.fake.run(*args)
         state = self.fake.read()
         if args[0] == "slots":
             state["capacity"] = {"slots": int(args[1])} if len(args) == 2 else \
@@ -360,8 +411,9 @@ class KeyTests(PanelCase):
         dialog = self.dialog()
         dialog.focus = "safety"
         self.assertEqual("changed", dialog.key("d"))
-        self.assertEqual(("window", None), (self.saved_order()["order"], self.saved_order().get("safety")),
-                         "settings reset order.safety: back to Slotfather's default")
+        self.assertEqual("window", self.saved_order()["order"])
+        self.assertIn(self.saved_order().get("safety"), (None, 3.0),
+                      "settings reset order.safety: back to Slotfather's default, dropped or written")
         self.assertRegex(self.panel(dialog, idle()), r"Backfill margin +3×")
         self.assertEqual({"slots": 6}, self.saved_capacity())
         dialog.focus = "amount"
@@ -517,6 +569,8 @@ class KeyTests(PanelCase):
         dialog = self.dialog()
         dialog.key("right")
         dialog.key("\r")  # Fixed, 4 slots
+        if self.real:
+            self.skipTest("the real Slotfather reads this machine's memory")
         self.fake.update(memory_gib=None)  # Slotfather cannot tell the machine's memory
         dialog.read_at = -1e9
         dialog.key("right")  # Memory needs the machine's memory
@@ -554,6 +608,8 @@ class ContractTests(PanelCase):
         self.assertEqual([["settings", "set", "order.safety", "3.5", "--json"]], self.writes())
 
     def test_a_read_only_queue_says_so_and_saves_nothing(self) -> None:
+        if self.real:
+            self.skipTest("another user's queue needs another user")
         self.fake.update(writable=False)
         dialog = KeyTests.dialog(self)  # type: ignore[arg-type]
         dialog.focus = "safety"
@@ -570,6 +626,28 @@ class ContractTests(PanelCase):
         self.assertRegex(text, r"Refresh every +1 s")
         self.assertNotIn("Capacity", text)
         self.assertEqual([], self.fake.argv(), "Slotfather is never asked")
+
+    def test_in_the_background_a_read_never_blocks_a_draw_and_lands_on_a_later_one(self) -> None:
+        import time
+        dialog = self.settings.Settings(1.0, clock=self.clock, background=True)
+        self.tool("order", "window")
+        self.fake.update(sleep={"settings": 0.6})
+        self.clock.now += self.settings.READ_EVERY
+        started = time.monotonic()
+        self.assertRegex(self.panel(dialog, idle()), r"Queue order +Backfill", "the read runs on its thread")
+        self.assertLess(time.monotonic() - started, 0.4)
+        deadline = time.monotonic() + 5
+        while dialog.reading and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertRegex(self.panel(dialog, idle()), r"Queue order +Arrival", "the next draw takes it")
+
+    def test_a_background_read_older_than_a_save_is_dropped(self) -> None:
+        dialog = self.settings.Settings(1.0, clock=self.clock, background=True)
+        dialog.incoming = (dialog.generation - 1, {"sections": []}, None)  # started before the last reply
+        dialog.focus = "safety"
+        self.panel(dialog, idle())
+        self.assertEqual("safety", dialog.focus)
+        self.assertIsNone(dialog.flash, "nothing said about a reply nobody needs")
 
     def test_a_stale_snapshot_says_why_in_status(self) -> None:
         dialog = self.settings.Settings(1.0, problem=lambda: "slotfather status --json --full took longer than 5 s")

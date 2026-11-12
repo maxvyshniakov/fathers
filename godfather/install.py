@@ -51,11 +51,14 @@ def interpreter(python: str | None = None) -> str:
     else:
         python = sys.executable  # as invoked, not resolved: a version-manager link keeps following upgrades
     try:
-        found = subprocess.run([python, "-c", "import sys; print('%d.%d' % sys.version_info[:2])"],
-                               capture_output=True, text=True, timeout=20).stdout.strip()
+        found, _, inside = subprocess.run(
+            [python, "-c", "import sys; print('%d.%d' % sys.version_info[:2], sys.prefix != sys.base_prefix)"],
+            capture_output=True, text=True, timeout=20).stdout.strip().partition(" ")
         version = tuple(int(part) for part in found.split("."))
     except (OSError, ValueError, subprocess.TimeoutExpired):
         raise InstallError(f"cannot run {python} as Python") from None
+    if inside == "True":
+        raise InstallError(f"{python} belongs to a virtual environment; name a Python outside it")
     if version < MIN_PYTHON:
         raise InstallError(f"{python} is Python {found}; godfather needs {MIN_PYTHON[0]}.{MIN_PYTHON[1]} or later")
     return python
