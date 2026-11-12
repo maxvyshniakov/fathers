@@ -10,7 +10,8 @@
     "assets",
     ".venv",
     "tools/slotfather_reference.py",
-    "tests/parity_reference.py"
+    "tests/parity_reference.py",
+    "tools/compare_media.py"
   ],
   "extraPaths": [
     "src",

@@ -61,7 +61,11 @@ python3 -m unittest discover -s tests -t tests     # unit, golden, fixture and l
 python3 tools/check.py                              # Ruff and strict Pyright against tools/type-baseline.json
 python3 tools/goldens.py                            # rewrite tests/goldens/ after a deliberate visible change
 python3 tools/dashboard-demo.py                     # the README scene, live; --screenshot / --animation: media
+python3 tools/compare_media.py OLD.png NEW.png OUT.png  # cell-by-cell screenshot diff, side by side (needs Pillow)
 ```
+
+[docs/slice-1/](docs/slice-1) holds the side-by-side screenshots that checked the move (Slotfather's dashboard and
+Godfather on the README scene, Seti and Pro Light: no cell differs above the footer) and the EVENTS change.
 
 `GODFATHER_FIXTURES=DIR` replaces every tool call with recorded replies (`tests/fixtures/scene/` is the README
 scene) and records writes instead of making them. `tests/test_parity.py` renders Slotfather's own demo scene with
