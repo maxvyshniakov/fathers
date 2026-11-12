@@ -10,7 +10,9 @@ Versions and release rules: [README.md](README.md#versions).
 
 - `godfather` opens Slotfather's dashboard, moved here unchanged: SLOTS, QUEUE, DETAILS, EVENTS and MACHINE in
   the wide and one-column layouts, focus and Tab order, scrollbars, emoji and ASCII marks, the theme modes, help,
-  Settings, mouse and the kitty keyboard protocol on any layout. Only the footer's name and version differ.
+  Settings, mouse and the kitty keyboard protocol on any layout, as of slotfather 346db8e (the details' floor in
+  one column, MACHINE's padding without its chart, mem showing memory pressure). Only the footer's name and
+  version differ.
 - It reads Slotfather through its CLI alone: `slotfather capabilities --json`, `status --json --full` every
   Refresh every, and `settings --json`, `check`, `set` and `reset` for Settings. It never imports Slotfather and
   never reads its state files.

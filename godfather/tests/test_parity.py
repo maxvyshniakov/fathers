@@ -6,7 +6,8 @@ mode, Godfather's adapter decodes it, and Godfather renders it at the same momen
 must be identical, emoji and ASCII, wide, one-column and narrow, but the footer (its name and version) and the
 EVENTS panel, whose columns Godfather changed on purpose after the move (time · slots · label · result, owner
 2026-11-12); help likewise in every section but EVENTS. Skipped without a Slotfather checkout (SLOTFATHER_SRC,
-default ~/slotfather/src).
+default ~/slotfather/src); it must be the Slotfather the move matches, 346db8e or a later one with the same dashboard
+(`git -C ~/slotfather archive 346db8e | tar -x -C DIR`, then SLOTFATHER_SRC=DIR/src).
 """
 from __future__ import annotations
 

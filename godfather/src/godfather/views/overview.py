@@ -726,6 +726,9 @@ def machine_note(model: dict[str, Any]) -> list[tuple[str, str]]:
     return [(f"unleased {model['advice']['unleased_load']:.1f}", "status-normal"), (" · ", "dim"), permit]
 
 
+PRESSURE_LEVELS = {1: ("normal", 1), 2: ("warning", 2), 4: ("critical", 3)}  # kern.memorystatus_vm_pressure_level
+
+
 class Resource(NamedTuple):
     """A MACHINE row: its short label, how full (None: unknown), its used/total value in full and short, and whether
     it is critical by the rules that turn its bar red."""
@@ -749,7 +752,19 @@ def machine_resources(model: dict[str, Any]) -> list[Resource]:
     if used is None and total and memory.get("available") is not None:
         used = max(0, total - memory["available"])
     low = machine_memory_status(memory)[1] == "bad"
-    if total and used is not None:
+    level = memory.get("level")
+    psi = [memory.get(f"psi_{kind}") for kind in ("some", "full")]
+    if level is not None:
+        # macOS (owner, 2026-11-12): what admission reads, the kernel's pressure level, not used RAM, which the
+        # file cache keeps near full: a three-step gauge, the level's word as the value
+        word, step = PRESSURE_LEVELS.get(int(level), ("critical", 3))
+        found.append(Resource("mem", step / 3, word, word, low))
+    elif low and memory.get("psi_low") and any(value is not None for value in psi):
+        # Linux, where PSI holds admission back (Slotfather's `psi_low`, by its limits): the pressure it reads,
+        # beside MemAvailable's bar
+        value = f"psi {max(value for value in psi if value is not None):.0f}%"
+        found.append(Resource("mem", (used / total) if total and used is not None else None, value, value, low))
+    elif total and used is not None:
         found.append(Resource("mem", used / total, f"{gigabytes(used)}/{gigabytes(total, True)}G",
                               f"{round(used / 1024)}/{round(total / 1024)}G", low))
     else:
@@ -818,11 +833,12 @@ def draw_machine(canvas: Canvas, y: int, x: int, height: int, width: int, model:
         return
     # Stacked: a blank row, the three rows, the chart and its axis line, which the bottom frame follows directly.
     # Short of rows (owner, 2026-11-12) the chart gives up height first, 4 → 3 → 2 rows and then entirely (never one
-    # row); then the blank row; then the rows become one compact line; memory and swap never go.
+    # row); then the blank rows; then the rows become one compact line; memory and swap never go. Without the chart
+    # a blank row stays under the rows as well as over them (owner); with room for one only, it is the lower one.
     full = interior >= rows
-    padded = interior >= 1 + rows
-    chart_rows = min(CHART_ROWS, interior - 1 - rows - 1) if padded else 0
+    chart_rows = min(CHART_ROWS, interior - 1 - rows - 1)
     chart_rows = chart_rows if chart_rows >= MIN_CHART_ROWS else 0
+    padded = interior >= rows + (1 if chart_rows else 2)
     row = y + 2 if padded else y + 1
     if full:
         draw_resource_rows(canvas, row, x + 3, inner, resources)
@@ -1028,7 +1044,9 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
     ]),
     ("MACHINE", [
         ("load", "the 1-minute load average / cores (not CPU %)"),
-        ("mem · swap", "used / total, in GB"),
+        ("mem", "the kernel's memory pressure: normal, warning, critical (Linux: used / total)"),
+        ("swap", "used / total, in GB"),
+        ("", "Admission follows memory pressure, not used RAM, which the file cache keeps near full."),
         ("🆗 · 🔥", "fine · critical"),
         ("unleased", "demand outside leased work"),
         ("admission", "slots a new request could get now"),
@@ -1156,6 +1174,32 @@ def narrow_machine_width(width: int) -> int:
 
 
 
+QUEUE_FLOOR, DETAILS_FLOOR = 6 + 4, 9 + 4  # rows each keeps in one column (owner): content, frame and padding
+
+
+def narrow_heights(available: int, requests: int, machine: int) -> dict[str, int]:
+    """One column's heights (owner, 2026-11-12): QUEUE at least QUEUE_FLOOR, the details at least DETAILS_FLOOR (a
+    long queue scrolls rather than squeezing them), MACHINE's row at its own height; then QUEUE grows to its rows
+    and the details take the rest. Where the floors do not fit, the earlier minimums apply."""
+    heights = {"requests": min(requests, QUEUE_FLOOR), "detail": DETAILS_FLOOR, "bottom": 6}
+    if sum(heights.values()) > available:  # too short for the floors: the earlier minimums, in their order
+        heights = allocate(available, [("requests", min(requests, 10), requests), ("detail", 5, 5),
+                                       ("bottom", 6, machine)])
+        extra = heights.get("bottom", 0) - machine
+        if extra > 0:  # MACHINE never grows past its own height: the rest goes to the details
+            heights["bottom"] = machine
+            heights["detail" if "detail" in heights else "requests"] += extra
+        return heights
+    left = available - sum(heights.values())
+    for name, natural in (("bottom", machine), ("requests", requests)):
+        if name in heights and left > 0:
+            extra = min(left, max(0, natural - heights[name]))
+            heights[name], left = heights[name] + extra, left - extra
+    if left > 0:
+        heights["detail" if "detail" in heights else "requests"] += left
+    return heights
+
+
 # The footer's hints in their order: navigation, panels, configuration, help, quit last; a narrow footer drops them
 # in DROP_ORDER, quit last to go. On a scrollable panel the arrows scroll.
 FOOTER_HINTS: tuple[tuple[str, str], ...] = (("↑↓", "select"), ("tab", "panel"), ("s", "settings"), ("?", "help"),
@@ -1261,12 +1305,7 @@ def dashboard_draw(canvas: Canvas, model: dict[str, Any] | None, selected: int =
         machine_width = narrow_machine_width(width)
         # The bottom row is MACHINE's own height (EVENTS beside it scrolls in the same); QUEUE gets its rows and the
         # details what is left (owner, 2026-11-12). Short of room, each gives way down to its minimum.
-        heights = allocate(available, [("requests", min(requests, 10), requests), ("detail", 5, 5),
-                                       ("bottom", 6, machine_height(machine_width))])
-        extra = heights.get("bottom", 0) - machine_height(machine_width)
-        if extra > 0:  # MACHINE never grows past its own height: the rest goes to the details
-            heights["bottom"] = machine_height(machine_width)
-            heights["detail" if "detail" in heights else "requests"] += extra
+        heights = narrow_heights(available, requests, machine_height(machine_width))
         y = top
         for name in ("requests", "detail", "bottom"):
             if name not in heights:

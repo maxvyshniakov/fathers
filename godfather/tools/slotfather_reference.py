@@ -57,6 +57,11 @@ def block(dashboard: Any, model: dict[str, Any]) -> dict[str, Any]:
     memory["low"] = None if status == "dim" else status == "bad"
     swap = [r for r in dashboard.machine_resources(model) if r.label == "swap"]
     memory["swap_low"] = bool(swap and swap[0].critical)
+    config = dashboard._config
+    limits = (config.number_setting("MAX_PSI_SOME", config.MAX_PSI_SOME),
+              config.number_setting("MAX_PSI_FULL", config.MAX_PSI_FULL))
+    memory["psi_low"] = any(isinstance(memory.get(f"psi_{kind}"), (int, float)) and memory[f"psi_{kind}"] >= limit
+                            for kind, limit in zip(("some", "full"), limits))
     found["memory"] = memory
     found["overtake_window"] = dashboard._config.overtake_window()
     found["v"] = 1

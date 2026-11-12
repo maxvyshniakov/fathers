@@ -27,7 +27,7 @@ and `dashboard`, which is the in-tree `dashboard.dashboard_model()` dict seriali
 
 - every `datetime` is an RFC 3339 string in UTC (`2026-11-12T04:25:56.204Z`) or `null`;
 - tuples become arrays;
-- nothing is added or renamed, except the four policy facts below that the renderer used to read from
+- nothing is added or renamed, except the five policy facts below that the renderer used to read from
   Slotfather's config.
 
 ```text
@@ -52,6 +52,8 @@ dashboard:
                                     low       bool | null   machine_memory_status() says "memory low"
                                                             (null: unknown)
                                     swap_low  bool          free swap under SLOTFATHER_MIN_FREE_SWAP_MB
+                                    psi_low   bool          Linux: PSI at or over SLOTFATHER_MAX_PSI_SOME / _FULL,
+                                                            so MACHINE's mem row shows `psi N%` (slotfather 346db8e)
   history            [[start, end, slots]]   held_history() steps
   events             [event]      the last 60 described events, oldest first (transitional, until slice 3)
   updated            time
