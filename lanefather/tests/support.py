@@ -443,6 +443,88 @@ def project(repo: pathlib.Path) -> Iterator[Any]:
         config.use(None)
 
 
+_TEMPLATE: list[pathlib.Path] = []
+
+
+def template_repository() -> pathlib.Path:
+    """The fixture repository with its base commit, built once per test process; each test copies it (fathers#95)."""
+    if _TEMPLATE:
+        return _TEMPLATE[0]
+    repo = pathlib.Path(tempfile.mkdtemp(prefix="lane-template-")) / "straylight"
+    atexit.register(shutil.rmtree, repo.parent, True)
+    repo.mkdir()
+    environment = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, env=environment)
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.name", "Lane Test")
+    git("config", "user.email", "lane@example.com")
+    for name, text in FILES.items():
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    (repo / "verify.sh").write_text(FAKE_VERIFY)
+    (repo / "verify.sh").chmod(0o755)
+    # Straylight's process scan (#661) as the project's process_scan hook, until slotfather procs answers.
+    shutil.copy2(FIXTURES / "process_scan.py", repo / "tools" / "process_scan.py")
+    # The real stamp tooling, which verify.py runs after a green full gate.
+    for name in ("tools/verified-tree.sh", "tools/verified-tree-ledger.py"):
+        shutil.copy2(FIXTURES / pathlib.Path(name).name, repo / name)
+    git("add", ".")
+    git("commit", "-qm", "base")
+    _TEMPLATE.append(repo)
+    return repo
+
+
+def run_in_process(argv: list[str], cwd: Any, env: dict[str, str]) -> tuple[int, str]:
+    """`python -m lanefather ARGV` in this process (fathers#95): the same environment, working directory and
+    file descriptors 1 and 2, so the output of the commands lanefather starts is captured as a process's would be.
+    Returns (exit status, stdout followed by stderr)."""
+    from lanefather import claims, cli, config
+    saved_env, saved_cwd, saved_path = dict(os.environ), os.getcwd(), list(sys.path)
+    outputs = [tempfile.TemporaryFile(), tempfile.TemporaryFile()]
+    saved_fds = [os.dup(1), os.dup(2)]
+    sys.stdout.flush()
+    sys.stderr.flush()
+    code = 1
+    try:
+        os.environ.clear()
+        os.environ.update(env)
+        os.chdir(cwd)
+        os.dup2(outputs[0].fileno(), 1)
+        os.dup2(outputs[1].fileno(), 2)
+        config.use(None)
+        claims._head_kinds.clear()  # pyright: ignore[reportPrivateUsage]
+        try:
+            code = cli.main(argv)
+        except SystemExit as error:
+            code = error.code if isinstance(error.code, int) else 0 if error.code is None else 1
+        except Exception:  # a crash, as the process would print it
+            import traceback
+            traceback.print_exc()
+            code = 1
+    finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.dup2(saved_fds[0], 1)
+        os.dup2(saved_fds[1], 2)
+        for fd in saved_fds:
+            os.close(fd)
+        os.chdir(saved_cwd)
+        os.environ.clear()
+        os.environ.update(saved_env)
+        sys.path[:] = saved_path
+        config.use(None)
+    texts: list[str] = []
+    for handle in outputs:
+        handle.seek(0)
+        texts.append(handle.read().decode(errors="replace"))
+        handle.close()
+    return code, texts[0] + texts[1]
+
+
 class LaneCase(unittest.TestCase):
     def setUp(self):
         self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="lane-tool-"))
@@ -487,20 +569,9 @@ class LaneCase(unittest.TestCase):
                         FIXTURE_VERIFY_LOG=str(self.verify_log), FAKE_GH_COMMENTS=str(self.comments),
                         FAKE_GH_LOG=str(self.tmp / "gh.log"), SLOTFATHER_LOADAVG="0.1",
                         FAKE_SLOTFATHER_LOG=str(self.tmp / "slotfather.log"))
-        self.repo.mkdir()
-        self.git(self.repo, "init", "-q", "-b", "main")
-        self.git(self.repo, "config", "user.name", "Lane Test")
-        self.git(self.repo, "config", "user.email", "lane@example.com")
-        for name, text in FILES.items():
-            self.write(self.repo, name, text)
-        self.write(self.repo, "verify.sh", FAKE_VERIFY).chmod(0o755)
-        # Straylight's process scan (#661) as the project's process_scan hook, until slotfather procs answers.
-        shutil.copy2(FIXTURES / "process_scan.py", self.repo / "tools" / "process_scan.py")
-        # The real stamp tooling, which verify.py runs after a green full gate.
-        for name in ("tools/verified-tree.sh", "tools/verified-tree-ledger.py"):
-            shutil.copy2(FIXTURES / pathlib.Path(name).name, self.repo / name)
-        self.git(self.repo, "add", ".")
-        self.git(self.repo, "commit", "-qm", "base")
+        # The base repository is built once per test process and copied for each test (fathers#95): a copy is a
+        # fraction of git init, the fixture files and a commit.
+        shutil.copytree(template_repository(), self.repo, symlinks=True)
         self.integration = self.repo / ".claude" / "worktrees" / "integrate-q"
         self.git(self.repo, "worktree", "add", "-q", "-b", "integrate/q", str(self.integration))
 
@@ -515,12 +586,22 @@ class LaneCase(unittest.TestCase):
         path.write_text(text)
         return path
 
-    def lane(self, *args: str, cwd: Any = None, ok: bool | None = True, timeout: float = 120) -> str:
-        proc = subprocess.run([sys.executable, "-m", "lanefather", *args], cwd=cwd or self.integration, env=self.env,
-                              capture_output=True, text=True, timeout=timeout)
-        output = proc.stdout + proc.stderr
+    # A class that needs the command as its own process (signals, locks held across calls, the launcher) sets this;
+    # LANEFATHER_TEST_PROCESS=1 runs every call as a process, the end-to-end form of the whole suite.
+    process_cli = False
+
+    def lane(self, *args: str, cwd: Any = None, ok: bool | None = True, timeout: float = 120,
+             process: bool | None = None) -> str:
+        if process is None:
+            process = self.process_cli or bool(os.environ.get("LANEFATHER_TEST_PROCESS"))
+        if process:
+            proc = subprocess.run([sys.executable, "-m", "lanefather", *args], cwd=cwd or self.integration,
+                                  env=self.env, capture_output=True, text=True, timeout=timeout)
+            code, output = proc.returncode, proc.stdout + proc.stderr
+        else:
+            code, output = run_in_process(list(args), cwd or self.integration, self.env)
         if ok is not None:
-            self.assertEqual(proc.returncode == 0, ok, f"lane {' '.join(args)} exit {proc.returncode}:\n{output}")
+            self.assertEqual(code == 0, ok, f"lane {' '.join(args)} exit {code}:\n{output}")
         return output
 
     def start(self, lane_id: str, *claims: str, extra: tuple[str, ...] = (), ok: bool = True) -> str:
