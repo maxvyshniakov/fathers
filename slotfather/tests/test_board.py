@@ -11,6 +11,7 @@ import importlib
 import json
 import os
 import time
+import unittest
 from typing import Any, cast
 from unittest import mock
 
@@ -84,7 +85,7 @@ class BoardTests(SlotCase):
         self.assertEqual(1, block.pop("v"))
         self.assertEqual(0.0, block.pop("overtake_window"), "SLOTFATHER_OVERTAKE_WINDOW=0 in the fixture")
         memory = block["memory"]
-        self.assertEqual((False, False), (memory.pop("low"), memory.pop("swap_low")))
+        self.assertEqual((False, False, False), (memory.pop("low"), memory.pop("swap_low"), memory.pop("psi_low")))
         for row in model["holders"] + model["waiters"]:
             self.assertIn(row.pop("style"), ("text", "legacy"), "presentation stays out of the block")
         self.assertEqual(steady(encoded(model)), steady(block))
@@ -150,3 +151,27 @@ class BoardTests(SlotCase):
         self.assertEqual(str(ROOT / "CHANGELOG.md"), dashboard["changelog"])
         self.assertIn("reprioritize", dashboard["actions"])
         self.assertEqual(2, self.tool("capabilities").returncode, "only --json")
+
+
+class MemoryFactsTests(unittest.TestCase):
+    """The block's policy facts on Linux, where PSI and MemAvailable decide, not a pressure level."""
+
+    def block(self, memory: dict[str, Any], **env: str) -> dict[str, Any]:
+        board = importlib.import_module("slotfather.board")
+        with mock.patch.dict(os.environ, env, clear=True):
+            return cast(dict[str, Any], board.dashboard_json({"holders": [], "waiters": [], "memory": memory})["memory"])
+
+    def test_psi_at_its_limit_is_low_on_linux(self) -> None:
+        linux = {"swap_total": 2048.0, "swap_free": 1024.0, "level": None, "available": 8000.0, "total": 16000.0,
+                 "psi_some": 4.0, "psi_full": 0.0, "cgroup_available": None, "cgroup": None}
+        self.assertEqual((False, False, False), tuple(self.block(linux)[k] for k in ("low", "swap_low", "psi_low")))
+        some = dict(linux, psi_some=10.0)
+        self.assertEqual((True, True), (self.block(some)["low"], self.block(some)["psi_low"]),
+                         "SLOTFATHER_MAX_PSI_SOME defaults to 10")
+        self.assertTrue(self.block(dict(linux, psi_full=5.0))["psi_low"], "and _FULL to 5")
+        self.assertFalse(self.block(some, SLOTFATHER_MAX_PSI_SOME="20")["psi_low"])
+        self.assertTrue(self.block(dict(linux, swap_free=100.0))["swap_low"])
+
+    def test_macos_has_no_psi(self) -> None:
+        mac = {"swap_total": 10240.0, "swap_free": 5000.0, "level": 2.0, "total": 32768.0, "used": 20000.0}
+        self.assertEqual((True, False), (self.block(mac)["low"], self.block(mac)["psi_low"]))

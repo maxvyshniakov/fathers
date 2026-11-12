@@ -142,6 +142,15 @@ def memory_low(memory: dict[str, Any]) -> bool | None:
     return None
 
 
+def psi_low(memory: dict[str, Any]) -> bool:
+    """Linux: PSI memory some or full at or over SLOTFATHER_MAX_PSI_SOME / _FULL, so MACHINE's mem row shows the
+    pressure that holds admission back (`psi N%`); False where PSI is not reported (macOS)."""
+    limits = (_config.number_setting("MAX_PSI_SOME", _config.MAX_PSI_SOME),
+              _config.number_setting("MAX_PSI_FULL", _config.MAX_PSI_FULL))
+    values = (memory.get("psi_some"), memory.get("psi_full"))
+    return any(isinstance(value, (int, float)) and value >= limit for value, limit in zip(values, limits))
+
+
 def swap_low(memory: dict[str, Any]) -> bool:
     """Free swap under SLOTFATHER_MIN_FREE_SWAP_MB, where swap is on and its free amount known."""
     if not float(memory.get("swap_total") or 0) or memory.get("swap_free") is None:
@@ -397,13 +406,14 @@ PRESENTATION = ("style", "lane")  # an item's fields that are the renderer's, ne
 def dashboard_json(model: dict[str, Any]) -> dict[str, Any]:
     """The `dashboard` block of `status --json --full` (docs/api.md): the model as plain JSON data with its own
     `v`, the rows without their presentation fields, and the policy facts the screen reads from Slotfather's
-    config: the overtaking window and whether memory and swap are low."""
+    config: the overtaking window and whether memory, swap and PSI are low."""
     block = cast(dict[str, Any], plain({key: value for key, value in model.items() if key not in ("holders", "waiters")}))
     for name in ("holders", "waiters"):
         block[name] = [plain({key: value for key, value in row.items() if key not in PRESENTATION})
                        for row in cast(list[dict[str, Any]], model[name])]
     memory = cast(dict[str, Any], model["memory"])
-    block["memory"] = dict(block["memory"], low=memory_low(memory), swap_low=swap_low(memory))
+    block["memory"] = dict(block["memory"], low=memory_low(memory), swap_low=swap_low(memory),
+                           psi_low=psi_low(memory))
     block["overtake_window"] = _config.overtake_window()
     block["v"] = BLOCK_VERSION
     return block

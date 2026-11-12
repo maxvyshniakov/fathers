@@ -32,7 +32,7 @@ from typing import Any, NamedTuple, cast
 
 
 from . import config as _config
-from .board import HISTORY_WINDOW, JOINER, dashboard_model, dashboard_text, memory_low, span, swap_low
+from .board import HISTORY_WINDOW, JOINER, dashboard_model, dashboard_text, memory_low, psi_low, span, swap_low
 # Re-exported for the tests and tools that read them here (dashboard.describe_events(), ...)
 from .board import dashboard_admission as dashboard_admission
 from .board import describe_events as describe_events
@@ -1116,9 +1116,7 @@ def machine_resources(model: dict[str, Any]) -> list[Resource]:
         # file cache keeps near full: a three-step gauge, the level's word as the value
         word, step = PRESSURE_LEVELS.get(int(level), ("critical", 3))
         found.append(Resource("mem", step / 3, word, word, low))
-    elif low and any(value is not None and value >= limit for value, limit in zip(psi, (
-            _config.number_setting("MAX_PSI_SOME", _config.MAX_PSI_SOME),
-            _config.number_setting("MAX_PSI_FULL", _config.MAX_PSI_FULL)))):
+    elif low and psi_low(memory):
         # Linux, where PSI holds admission back: the pressure it reads, beside MemAvailable's bar
         value = f"psi {max(value for value in psi if value is not None):.0f}%"
         found.append(Resource("mem", (used / total) if total and used is not None else None, value, value, low))

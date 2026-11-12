@@ -53,7 +53,9 @@ nothing else. The block:
   `averages` (`[l1, l5, l15]`), `draining`, `advice` (as `slotfather advise` computes it), `holders` and `waiters`
   (rows, in the order the dashboard shows them), `used`, `free`, `memory_block` (why new leases wait for memory,
   or `null`), `admission`, `order`, `start` and `reserved` (the head's expected and reserved start), `limit`,
-  `memory` (the memory facts, plus `low`: `true`/`false`, `null` when unknown, and `swap_low`), `history`
+  `memory` (the memory facts, plus `low`: `true`/`false`, `null` when unknown; `swap_low`: free swap under
+  SLOTFATHER_MIN_FREE_SWAP_MB; and `psi_low`: on Linux, PSI memory some or full at or over SLOTFATHER_MAX_PSI_SOME /
+  _FULL, so the mem row shows `psi N%`, always `false` on macOS, whose `level` passes through), `history`
   (`[[start, end, slots]]`, the occupancy steps of the last two hours), `events` (the last 60 described events
   of queue.log, oldest first; transitional, removed in the first release after a Godfather that reads
   `events.jsonl` is installed), `updated` and `overtake_window` (seconds);
