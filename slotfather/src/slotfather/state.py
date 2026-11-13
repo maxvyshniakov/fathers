@@ -100,16 +100,22 @@ def entries(directory: Path) -> list[tuple[Path, dict[str, Any]]]:
 
 
 def write(path: Path, entry: Any) -> None:
-    """Writes `entry` as JSON to `path` whole: a .pending file is written and fsynced, renamed over `path`, and the
-    directory fsynced, so a crash leaves the old file or the new one, never an empty one (fathers#123)."""
+    """Writes `entry` as JSON to `path` whole: a .pending file is written in full and fsynced, renamed over `path`,
+    and the directory fsynced, so a crash leaves the old file or the new one, never an empty or cut one
+    (fathers#123). A write that fails (a full disk) removes the .pending file and leaves `path` as it was. fsync,
+    not macOS's F_FULLFSYNC, deliberately: it survives a crash of the system, and a lease's grant must not wait
+    tens of milliseconds for the drive's cache on every write; a power cut may lose the last writes on macOS."""
     pending = path.with_name(path.name + ".pending")
-    fd = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
     try:
-        os.write(fd, (json.dumps(entry) + "\n").encode("utf-8"))
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    pending.replace(path)
+        with open(pending, "w", encoding="utf-8") as handle:  # a file object writes all of it or raises
+            handle.write(json.dumps(entry) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        pending.replace(path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            pending.unlink()
+        raise
     with contextlib.suppress(OSError):  # a file system that cannot sync a directory keeps the rename as it is
         directory = os.open(path.parent, os.O_RDONLY)
         try:
@@ -191,17 +197,33 @@ def record(directory: Path, entry: dict[str, Any], outcome: str, status: int | N
 
 def append_bounded(path: Path, line: str, limit: int) -> None:
     """Append a line; past `limit` bytes the file becomes <name>.1, replacing the previous one, so at most two
-    files' worth stays. Readers read <name>.1 first, then <name>."""
+    files' worth stays. Readers read <name>.1 first, then <name>. The rotation holds an flock on the file it wrote
+    and renames only while that file is still <name>: of two writers that both find it over the limit, the second
+    finds it rotated already and leaves <name>.1 alone (fathers#123 review)."""
     fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o644)
     try:
         size = os.fstat(fd).st_size
         # A torn earlier write (a holder killed mid-line) must not swallow this line: start it on a line of its own.
         prefix = b"\n" if size and os.pread(fd, 1, size - 1) != b"\n" else b""
         os.write(fd, prefix + line.encode("utf-8"))  # one write, at the end even with other appenders
+        if os.fstat(fd).st_size > limit:
+            rotate_bounded(path, fd, limit)
     finally:
         os.close(fd)
-    if path.stat().st_size > limit:
-        path.replace(path.with_name(path.name + ".1"))
+
+
+def rotate_bounded(path: Path, fd: int, limit: int) -> None:
+    """Renames `path` to <name>.1 when `fd` (open on the file this writer appended to) is still `path` and over
+    `limit`, under an flock on that file."""
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        mine, current = os.fstat(fd), os.stat(path)
+        if (mine.st_dev, mine.st_ino) == (current.st_dev, current.st_ino) and current.st_size > limit:
+            path.replace(path.with_name(path.name + ".1"))
+    except FileNotFoundError:
+        pass
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
 
 
 def objects(lines: Iterable[str | bytes]) -> list[dict[str, Any]]:

@@ -42,7 +42,7 @@ A pinned installation shares one user's directory even when a service changes `H
 | File | Format and compatibility |
 | --- | --- |
 | `schema.json` | State schema 1. Unstamped queues are adopted without rewriting entries; unknown versions are refused before mutation. Old clients ignore the stamp and can release existing leases. |
-| `queue/*.json`, `sequence`, `.lock` | Existing queue format: atomic JSON entries and a shared advisory lock. PID plus process start time identifies a holder. Entries and `sequence` are written whole: fsynced, renamed, then the directory fsynced. A new request's sequence is past every entry in the queue as well as the file's, so a torn `sequence` (older clients write it in place) never puts it ahead. An entry that does not read is left in place and listed by `status` as `unreadable`. |
+| `queue/*.json`, `sequence`, `.lock` | Existing queue format: atomic JSON entries and a shared advisory lock. PID plus process start time identifies a holder. Current entries add `started` (epoch seconds; see Stable surfaces). Entries and `sequence` are written whole: fsynced, renamed, then the directory fsynced. A new request's sequence is past every entry in the queue as well as the file's, so a torn `sequence` (older clients write it in place) never puts it ahead. An entry that does not read is left in place and listed by `status` as `unreadable`. |
 | `capacity.json`, `order.json` | Shared settings. Keep old keys and meanings; older clients ignore added fields. |
 | `queue/*.yield` | Cooperative requests, never permission to stop a holder. |
 | `queue.log[.1]` | Timestamped grants, releases and reaping; retained event syntax supports existing history readers. Past 4 MiB it becomes `queue.log.1`, replacing the older one, under the queue lock; older clients keep appending to whichever file is current. |
@@ -67,12 +67,18 @@ not a reason to rewrite queue state. Derived caches may be rebuilt rather than m
 - `status --json` and `procs --json` use version 2 with priority and ticket request fields.
 - Process identity is a PID plus its start time. A recycled PID must never inherit a lease
   or permission to stop a process.
-- A holder's start time is `ps -o lstart` in the C locale on every system (fathers#122), whatever the
-  client's `LC_ALL` or `LC_TIME`. Mixed versions: clients before it ran macOS's `ps` in the caller's locale. A
-  current client matches such an entry by its clock time, day and year (`platform.same_start()`), so an older
-  client's lease is never reaped while its holder runs. An older client reads a current client's entry as before
-  only in the C or `en_US` locale, whose words are the same; one in another locale can reap it, so upgrade
-  every client of a queue before running any in such a locale.
+- A holder's identity on disk (fathers#122): `start` is `ps -o lstart` as every older client of that system
+  writes it (Linux: the C locale; macOS: the client's own locale and time zone), and current clients add
+  `started`, the start in epoch seconds (macOS libproc; Linux `/proc`), which older clients read past.
+  Current clients compare with one function (`platform.same_holder()`): `started` against the pid's own start
+  where both are known, so neither locale nor time zone matters between them; otherwise `start` as text, then by
+  its clock time, day, year and numeric or C-locale month (`platform.same_start()`). Older clients compare `start`
+  as text, exactly as before, so during an upgrade an older and a current client read each other's leases as
+  two older clients in the same locales and time zones would: no worse than before.
+- A process table ps cannot give (it fails, times out, or leaves out its caller) reaps nothing (fathers#121). A
+  request already in the queue skips that look and looks again, as do the other long-running looks; a command
+  that has not queued yet (`run`, `session start`, `ask-yield`, `reprioritize`, `status`, `sweep`) fails at once
+  with the reason and changes nothing.
 - Installed commands bind to an immutable package release; replacement entry points do not
   change code underneath an already running old client. Releases are retained while old
   clients may still use them.
