@@ -116,14 +116,15 @@ def launchd(command: Path) -> Path:
     write_atomic(plist, text, 0o644)
     domain = f"gui/{os.getuid()}"
     subprocess.run(["launchctl", "bootout", f"{domain}/com.junkfather.sweep"], capture_output=True)
-    loaded = subprocess.run(["launchctl", "bootstrap", domain, str(plist)], capture_output=True, text=True)
-    for attempt in range(4):  # bootout finishes asynchronously; an early bootstrap fails with error 5
+    attempt = 0
+    while True:  # bootout finishes asynchronously; an early bootstrap fails with error 5
+        loaded = subprocess.run(["launchctl", "bootstrap", domain, str(plist)], capture_output=True, text=True)
         if not loaded.returncode:
             break
         time.sleep(0.5 * (attempt + 1))
-        loaded = subprocess.run(["launchctl", "bootstrap", domain, str(plist)], capture_output=True, text=True)
-    if loaded.returncode:
-        raise InstallError(f"launchctl bootstrap: {loaded.stderr.strip()}")
+        attempt += 1
+        if attempt == 5:
+            raise InstallError(f"launchctl bootstrap: {loaded.stderr.strip()}")
     return plist
 
 
