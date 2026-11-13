@@ -31,7 +31,7 @@ from . import entry as _entry
 from . import events as _events
 from . import procs as _procs
 from . import safety as _safety
-from .defaults import GRACE
+from . import settings as _settings
 from .procs import command_matches
 from .entry import Entry
 from .state import Store
@@ -96,7 +96,7 @@ def members(entry: Entry, table: _procs.Table, uid: Optional[int] = None, force:
     return sorted(_safety.signallable(found.values(), table, uid), key=lambda p: p.pid), how
 
 
-def stop(targets: List[_procs.Proc], grace: float = GRACE,
+def stop(targets: List[_procs.Proc], grace: Optional[float] = None,
          look: Optional[Callable[[List[int]], Dict[int, Tuple[str, str]]]] = None,
          kill: Callable[[int, int], None] = os.kill, now: Callable[[], float] = time.monotonic,
          pause: Callable[[float], None] = time.sleep) -> Dict[str, Any]:
@@ -105,6 +105,7 @@ def stop(targets: List[_procs.Proc], grace: float = GRACE,
     Returns {"result": stopped|killed|gone|failed, "signalled": [...], "left": [...]}; failed also when the process
     table cannot be read, since then nothing says the targets ended."""
     look = look or (lambda pids: _procs.identities(pids, command=True))
+    grace = _settings.value("reap.grace") if grace is None else grace
     expected = {p.pid: p for p in targets}
 
     def remaining(pids: List[int]) -> List[int]:
@@ -145,7 +146,7 @@ def stop(targets: List[_procs.Proc], grace: float = GRACE,
 Stopper = Callable[[List[_procs.Proc], float], Dict[str, Any]]  # stop(), or a test's stand-in
 
 
-def reap(store: Store, entry_id: str, reason: str, grace: float = GRACE, dry_run: bool = False,
+def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None, dry_run: bool = False,
          force: bool = False, table: Optional[_procs.Table] = None, stopper: Optional[Stopper] = None,
          actor: Optional[Dict[str, Any]] = None, reader: Optional[Callable[[], _procs.Table]] = None,
          report_failure: bool = True) -> Dict[str, Any]:
@@ -154,6 +155,7 @@ def reap(store: Store, entry_id: str, reason: str, grace: float = GRACE, dry_run
     serves the first read only; every later round reads the machine again (`reader`). `report_failure` False: a
     failure is recorded on the entry (`last_error`) but writes no `entry.reap_failed` event (a retry in a streak)."""
     reader = reader or _procs.Table.read
+    grace = _settings.value("reap.grace", store.root) if grace is None else grace
     stopper = stopper or stop
     entry = store.load(entry_id)
     if entry is None:
@@ -223,7 +225,8 @@ def reap(store: Store, entry_id: str, reason: str, grace: float = GRACE, dry_run
     return {"id": entry_id, "result": result, "reason": reason, "pids": pids, "how": how}
 
 
-def reap_unowned(store: Store, pid: int, table: _procs.Table, force: bool, reason: str, grace: float = GRACE,
+def reap_unowned(store: Store, pid: int, table: _procs.Table, force: bool, reason: str,
+                 grace: Optional[float] = None,
                  dry_run: bool = False, via: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
     """Stop an unowned process: only with `force`, only one the last sweep listed, only when it is still the same
     process (start time and command) and still unowned (safety.force_refusal). None, after saying why on stderr, when
@@ -247,7 +250,7 @@ def reap_unowned(store: Store, pid: int, table: _procs.Table, force: bool, reaso
     if dry_run:
         return [{"id": f"pid {pid}", "result": "would-stop", "reason": "forced", "pids": [p.pid for p in targets],
                  "how": "unowned"}]
-    outcome = stop(targets, grace)
+    outcome = stop(targets, _settings.value("reap.grace", store.root) if grace is None else grace)
     _events.write(store.root, "unowned.reaped", {"type": "process", "id": str(pid), "pid": pid},
                   _events.caller(via), {"cmd": proc.cmd, "start": proc.start, "reason": reason,
                                         "result": outcome["result"], "pids": [p.pid for p in targets]},

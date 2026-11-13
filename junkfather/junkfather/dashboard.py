@@ -15,6 +15,7 @@ from . import owner as _owner
 from . import procs as _procs
 from . import reap as _reap
 from . import resources as _resources
+from . import settings as _settings
 from .entry import Entry
 from .state import Store, as_dict, as_list, read_json
 from .text import duration, iso
@@ -153,7 +154,7 @@ def capabilities(store: Store) -> Dict[str, Any]:
         "v": 1, "tag": "junk", "snapshot": {"argv": ["status", "--json"], "versions": [STATUS_VERSION], "poll": 5},
         "events": {"path": str((store.root / "events.jsonl").resolve()), "versions": [_events.VERSION],
                    "kinds": list(_events.KINDS)},
-        "actions": ["reap", "extend"]}
+        "settings": {"versions": [_settings.VERSION]}, "actions": ["reap", "extend"]}
     changelog = _release.changelog_path()
     if os.path.isfile(changelog):
         dashboard["changelog"] = changelog

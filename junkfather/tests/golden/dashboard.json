@@ -37,6 +37,11 @@
        1
       ]
      },
+     "settings": {
+      "versions": [
+       1
+      ]
+     },
      "snapshot": {
       "argv": [
        "status",
