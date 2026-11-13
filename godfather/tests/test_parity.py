@@ -6,7 +6,8 @@ it drew, its help, and the same model as a `status --json --full` reply (tools/s
 stand-in). Godfather reads that reply in fixture mode, its adapter decodes it, and Godfather renders it at the same
 moment. Every cell, character and style, must be identical, emoji and ASCII, wide, one-column and narrow, but the
 footer (its name and version) and the EVENTS panel, whose columns Godfather changed on purpose after the move (time ·
-slots · label · result, owner 2026-11-12); help likewise in every section but EVENTS. A missing or unreadable fixture
+slots · label · result, owner 2026-11-12), and the focused panel's top and bottom rules, heavy since fathers#139;
+help likewise in every section but EVENTS. A missing or unreadable fixture
 fails the test; it never skips.
 """
 from __future__ import annotations
@@ -40,6 +41,9 @@ def read(name: str) -> Any:
     except (OSError, ValueError, EOFError, zlib.error) as error:
         raise AssertionError(f"parity fixture {path} unreadable ({error}); it is frozen from Slotfather 37c4df7, "
                              f"see {FIXTURE / 'README.md'}") from error
+
+
+RESTED = {"┍": "╭", "┑": "╮", "┕": "╰", "┙": "╯", "━": "─"}  # a focused frame's rules as a resting one's
 
 
 class ParityTests(unittest.TestCase):
@@ -105,11 +109,16 @@ class ParityTests(unittest.TestCase):
                     masked = {(row, column) for row in range(events["y"], events["y"] + events["height"])
                               for column in range(events["x"], events["x"] + events["width"])}
                 self.assertEqual(len(expected), canvas.height)
+                # QUEUE holds the focus where it is drawn: its rules are heavy (fathers#139)
+                focused = canvas.tables.get("requests", dict(x=0, y=-1, width=0, height=0))
+                rules = {focused["y"], focused["y"] + focused["height"] - 1}
                 for row in range(height - 1):
                     for column in range(width):
                         if (row, column) not in masked:
-                            self.assertEqual(expected[row][column], canvas.cells[row][column],
-                                             f"{name}: row {row}, column {column}")
+                            cell = canvas.cells[row][column]
+                            if row in rules and focused["x"] <= column < focused["x"] + focused["width"]:
+                                cell = [RESTED.get(str(cell[0]), cell[0]), *cell[1:]]
+                            self.assertEqual(expected[row][column], cell, f"{name}: row {row}, column {column}")
                 if events:  # the same frame and place, other columns
                     for row, column in ((events["y"], events["x"]), (events["y"] + events["height"] - 1,
                                                                      events["x"] + events["width"] - 1)):

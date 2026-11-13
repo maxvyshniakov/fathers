@@ -19,6 +19,9 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Changed
 
+- The panel Tab focuses shows without colour too: its top and bottom borders are heavy rules (`┍━ QUEUE ━━┑`, `=`
+  in ASCII) as well as blue, and its sides stay light, so the heavy `┃` still marks only the selected row
+  (fathers#139).
 - Screenshots and the README media come from `tools/raster.py`, Godfather's own cell rasterizer, with no browser,
   terminal or machine slot: box drawing and blocks are geometry snapped to each cell, so rounded corners and joins
   meet their lines and bars have no seams at fractional cell widths; emoji such as 🆗 are drawn in colour across

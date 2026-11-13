@@ -3,7 +3,7 @@
 │  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  ╭───────────╮  ╭──────────╮  │ │  label      lane-644-build-once                            │
 │  lane-644-bui…  lane-465-sta…  desktop                                              free  │ │  status     running · 1 slot                               │
 ╰─────────────────────────────────────╭─ SETTINGS ─────────────────────── saved at once · applies at the next grant ─╮                                     │
-╭─ QUEUE ─────────────────────────────│                                                                              │                                     │
+┍━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│                                                                              │                                     │
 │                                     │ STATUS · read-only, live                                                     │                                     │
 ┃  ▶️    lane-644-build-once          │   queue        ~/.local/state/slotfather                                     │ 0.9 of 2 cores                      │
 │  ▶️    lane-465-state-definitions-re│   slots        6 total · 2 free · 4 held · 2 waiting                         │ waited 19m34s · running 35m10s      │
@@ -12,7 +12,7 @@
 │  ⏸️    prof51                       │   draining     none                                                          │ht/.claude/worktrees/agent-afa3816b  │
 │  ⏸️    lane-555-host-rename-names   │   environment  SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB                       │                                     │
 │                                     │ ──────────────────────────────────────────────────────────────────────────   │ht/.claude/worktrees/agent-afa3816b  │
-╰─────────────────────────────────────┃ ▶ Capacity                  ‹ Fixed ›                                        ┃verify.sh --checks desktop-tests     │
+┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┃ ▶ Capacity                  ‹ Fixed ›                                        ┃verify.sh --checks desktop-tests     │
 ╭─ EVENTS ──── slots ─ label ─────────│   Slots                     6                                                │ng --jobs 1                          │
 │                                     │   Queue order               Backfill                                         │ht                                   │
 │  11:59:35    ▫       agent-ae72d94be│   Backfill margin           3×                                               │                                     │

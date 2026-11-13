@@ -3,7 +3,7 @@
 ││                                                                        ││
 ││  Godfather · unreleased · installed 9f600e1                           ┃││
 ╰│                                                                       ┃│╯
-╭│  ADDED                                                                ┃│╮
+┍│  ADDED                                                                ┃│┑
 ││                                                                       ┃││
 ┃│  • The footer says Godfather what's new?; a click or v opens what's   ┃│┃
 ││    new: one timeline of every tool's changelog, newest first,         ╹││
@@ -12,7 +12,7 @@
 ││    under Slotfather · unreleased · installed 81abd86. Closing it       ││
 ││    marks everything read (~/.local/state/godfather/news.json). Each    ││
 ││    tool is asked through its changelog --json; one without it adds     ││
-╰│    nothing.  fathers#102                                               │╯
+┕│    nothing.  fathers#102                                               │┙
 ╭│                                                                        │╮
 ││  • Expected durations from Slotfather's run types (fathers#108): a     ││
 ││    running QUEUE row shows 12m / ~18m, its time against the expected   ││

@@ -3,7 +3,7 @@
 │  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅│                                                                          │-build-once                            │
 │  lane-644-bui…  lane-465-sta…  desktop│  Godfather · unreleased · installed 9f600e1                             ┃│· 1 slot                               │
 ╰───────────────────────────────────────│                                                                         ┃│                                       │
-╭─ QUEUE ───────────────────────────────│  ADDED                                                                  ┃│                                       │
+┍━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│  ADDED                                                                  ┃│                                       │
 │                                       │                                                                         ┃│                                       │
 ┃  ▶️    lane-644-build-once            │  • The footer says Godfather what's new?; a click or v opens what's     ┃│░░ 0.9 of 2 cores                      │
 │  ▶️    lane-465-state-definitions-revi│    new: one timeline of every tool's changelog, newest first, filtered  ┃│ · waited 19m34s · running 35m10s      │
@@ -12,7 +12,7 @@
 │  ⏸️    prof51                         │    Slotfather · unreleased · installed 81abd86. Closing it marks        ┃│ight/.claude/worktrees/agent-afa3816b  │
 │  ⏸️    lane-555-host-rename-names     │    everything read (~/.local/state/godfather/news.json). Each tool is   ┃│2                                      │
 │                                       │    asked through its changelog --json; one without it adds nothing.     ╹│ight/.claude/worktrees/agent-afa3816b  │
-╰───────────────────────────────────────│    fathers#102                                                           │2/verify.sh --checks desktop-tests     │
+┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    fathers#102                                                           │2/verify.sh --checks desktop-tests     │
 ╭─ EVENTS ──── slots ─ label ───────────│                                                                          │oing --jobs 1                          │
 │                                       │  • Expected durations from Slotfather's run types (fathers#108): a       │ight                                   │
 │  11:59:35    ▫       agent-ae72d94beb6│    running QUEUE row shows 12m / ~18m, its time against the expected     │                                       │

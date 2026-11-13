@@ -12,7 +12,8 @@ sequences in the owner's two themes (`.seti.ansi`, Seti dark; `.prolight.ansi`, 
 (156×43), at 100 and at 76 columns (one column), short (156×20), the help and Settings overlays, and what's new
 (fathers#102); and, from tests/fixtures/expected/ (the scene with lease ids, expected runs and an event log of an
 outlier and slower trends, fathers#108), the overview at 100 columns with an overrun lease and with a waiter
-selected. tests/fixtures/news/ is what the tools answer for what's new (`changelog --json`, or only their
+selected; and the overview with Tab's focus on EVENTS, and at 76 columns on DETAILS (fathers#139).
+tests/fixtures/news/ is what the tools answer for what's new (`changelog --json`, or only their
 version); the overview screens have everything read (the footer muted), the `unread-` ones and what's new have
 Slotfather's newest release unread.
 """
@@ -45,6 +46,8 @@ SCREENS = {  # name: (width, height, overlay); what's new's filter after a colon
     "whatsnew-godfather-156x43": (156, 43, "changelog:godfather"),
     # fathers#108: an overrun lease selected, then a waiter with an expected run; EVENTS with an outlier and trends
     "expected-100x40": (100, 40, "expected:0"), "expected-waiting-100x40": (100, 40, "expected:3"),
+    # fathers#139: Tab's focus on EVENTS, and at 76 columns (no EVENTS there) on DETAILS
+    "focus-events-156x43": (156, 43, "focus:events"), "focus-details-76x40": (76, 40, "focus:details"),
 }
 
 
@@ -190,12 +193,14 @@ def render(name: str, theme: str | None) -> str:
     from godfather.views import common, overlays, overview
 
     width, height, overlay = SCREENS[name]
-    selected = 0
+    selected, focus = 0, "requests"
+    if overlay and overlay.startswith("focus:"):
+        focus, overlay = overlay.partition(":")[2], None
     folder = SCENE
     if overlay and overlay.startswith("expected"):
         folder, selected, overlay = EXPECTED, int(overlay.partition(":")[2]), None
     found, everything, unread = scene_news()
-    read = everything if name.startswith(("overview-", "help-", "settings-", "expected")) else unread
+    read = everything if name.startswith(("overview-", "help-", "settings-", "expected", "focus-")) else unread
     scene = json.loads((folder / "scene.json").read_text())
     with environment(theme, folder):
         palette = themes.from_environment()
@@ -221,6 +226,7 @@ def render(name: str, theme: str | None) -> str:
         elif overlay:
             shown = state.Help()
         canvas = tui.Canvas(width, height, palette, common.marks_for(False))
+        canvas.focus = focus
         overview.dashboard_draw(canvas, model, selected, shown, cwd="~/straylight", news=found, read=read,
                                 moment=moment)
         return canvas.render(theme is not None)
