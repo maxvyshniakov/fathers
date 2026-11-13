@@ -12,13 +12,13 @@ import os
 from pathlib import Path
 import re
 import subprocess
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import unittest
 from unittest import mock
 
 from support import ROOT, Case, proc, table
 
-from junkfather import changelog, events, procs, sweep
+from junkfather import changelog, events, launch, procs, reap, resources, sweep
 
 GOLDEN = Path(__file__).resolve().parent / "golden"
 VOLATILE = {"age", "ttl_left", "at", "time", "created", "expires", "ended"}
@@ -27,6 +27,7 @@ START = re.compile(r"\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Ju
 ISO = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z")
 EPOCH = re.compile(r"\b1\d{9}(\.\d+)?\b")
 ENTRY = re.compile(r"\bj[0-9a-f]{6}\b")
+TTY = re.compile(r"\bttys?\d+\b")
 
 
 class Recorder:
@@ -42,8 +43,8 @@ class Recorder:
             self.pids.append(pid)
         return pid
 
-    def run(self, *args: str, env: Dict[str, str]) -> subprocess.CompletedProcess:
-        result = self.case.cli(*args, env=env)
+    def run(self, *args: str, env: Dict[str, str], input: Optional[str] = None) -> subprocess.CompletedProcess:
+        result = self.case.cli(*args, env=env, input=input)
         self.steps.append({"args": list(args), "code": result.returncode, "out": result.stdout,
                            "err": result.stderr})
         return result
@@ -70,6 +71,7 @@ class Recorder:
         text = START.sub("<start>", text)
         text = ISO.sub("<time>", text)
         text = EPOCH.sub("<t>", text)
+        text = TTY.sub("<tty>", text)
         ids: Dict[str, str] = {}
         text = ENTRY.sub(lambda m: ids.setdefault(m[0], f"<id{len(ids) + 1}>"), text)
         for index, pid in enumerate([os.getpid(), *self.pids]):
@@ -160,7 +162,6 @@ class GoldenTests(Case):
     def test_refusals(self):
         r = self.record
         child = self.child()
-        r.run("adopt", "1", env=self.as_claude)
         r.run("adopt", str(os.getpid()), env=self.as_claude)
         r.run("adopt", "999999", env=self.as_claude)
         r.run("reap", "--pid", str(child.pid), env=self.as_claude)
@@ -257,6 +258,190 @@ class GoldenTests(Case):
         self.assertEqual(changelog.entries(text, None, None), data["entries"])
         self.record.steps[-1]["out"] = json.dumps({k: v for k, v in data.items() if k != "entries"}, sort_keys=True)
         self.compare("dashboard")
+
+
+    # Added in the review round (fathers#77 to #80): the safety paths, a supervisor revive and a claim-named
+    # subagent. Generated on 0d14d9e's code like the rest.
+
+    def test_the_sweep_report_skips_what_the_policy_spares(self):
+        """reportable, below_session and untouchable_tree inside a real sweep, and the unowned resources report."""
+        me = os.getpid()
+        root = "/golden/scratch"
+        A, B = "Thu Nov 12 09:00:00 2026", "Thu Nov 12 08:00:00 2026"
+        here = table(
+            proc(me, ppid=1, start=A, cmd="python3"),
+            proc(500, start=B, cmd="/x/.local/share/claude/versions/2.1.0"),
+            proc(510, ppid=500, start=B, cmd="node mcp-server"),  # below a live session
+            proc(600, start=B, cmd="node server.js"), proc(601, ppid=600, start=B, cmd="node worker"),
+            proc(700, start=B, cmd="sh -c tmux"), proc(701, ppid=700, tty="ttys009", start=B, cmd="zsh"),
+            proc(710, start=B, cmd="sh -c agent"), proc(711, ppid=710, start=B, cmd="/usr/local/bin/codex"),
+            proc(800, start=B, cmd=f"/Applications/Browser --profile={root}/s1/profile"),
+            proc(900, uid=os.getuid() + 1, start=B, cmd="node other"),
+            proc(910, tty="ttys010", start=B, cmd="vim"),
+            proc(920, start=B, cmd="sleep 600"),
+            proc(930, start=B, cmd="python3 -m http.server"),
+            moment=1_900_000_000.0)
+        cwds = {510: f"{root}/s1", 600: f"{root}/s1", 601: f"{root}/s1", 700: f"{root}/s1", 701: f"{root}/s1",
+                710: f"{root}/s1", 711: f"{root}/s1", 900: f"{root}/s1", 910: f"{root}/s1", 920: f"{root}/s1",
+                930: "/repo/.claude/worktrees/w1"}
+        owned = {"v": 1, "id": "j0000a1", "state": "running", "pid": 920, "pgid": 920, "start": B, "seen": "sleep 600",
+                 "group": True, "known": [[920, B]], "argv": ["sleep", "600"], "expires": 1_900_003_600.0,
+                 "keep": "owner", "owner": {}, "created": 1_899_999_000.0, "mode": "detached", "ttl": 3600.0}
+        held = {**owned, "id": "j0000a2", "pid": None, "pgid": None, "known": [], "mode": "resource", "group": False,
+                "resource": {"kind": "simulator", "id": "UDID-HELD"}}
+        self.store.save(owned)
+        self.store.save(held)
+        listings = {"simulator": {"UDID-HELD": {"name": "iPhone"}, "UDID-FREE": {"name": "iPad"}},
+                    "docker": None, "tailscale-serve": {"https:443": {"target": "http://127.0.0.1:6006"}},
+                    "safari-tp": {"4242": {"pid": 4242}}}
+        with mock.patch.dict(os.environ, {"JUNKFATHER_SCRATCH_ROOTS": root}), \
+                mock.patch.object(resources, "tool", lambda name: "/usr/bin/true"), \
+                mock.patch.object(resources.Snapshot, "listing", lambda snap, kind: listings.get(kind)):
+            report = sweep.sweep(self.store, table=here, cwds=cwds, sessions=[], now=1_900_000_000.0)
+        self.record.steps.append({"sweep": report, "text": sweep.text(report),
+                                  "unowned.json": json.loads((self.state / "unowned.json").read_text())})
+        self.record.snapshot("swept")
+        self.compare("sweep_policy")
+
+    def test_members_leave_out_what_no_reap_may_touch(self):
+        me = os.getpid()
+        A = "Thu Nov 12 09:00:00 2026"
+        here = table(
+            proc(1, ppid=0, start=A, cmd="launchd"), proc(me, ppid=1, start=A, cmd="python3"),
+            proc(300, start=A, cmd="node server.js"),
+            proc(301, ppid=300, pgid=300, start=A, cmd="node worker"),
+            proc(302, ppid=300, pgid=300, tty="ttys003", start=A, cmd="zsh"),
+            proc(303, ppid=302, pgid=300, start=A, cmd="vim"),
+            proc(304, ppid=300, start=A, cmd="/usr/local/bin/codex exec"),
+            proc(305, ppid=304, start=A, cmd="node codex-helper"),
+            proc(306, ppid=300, pgid=300, uid=os.getuid() + 1, start=A, cmd="node other-user"),
+            proc(307, ppid=301, start=A, cmd="chrome --headless"),
+            proc(400, start=A, cmd="node gone-leader"))
+        cases = {
+            "group": {"pid": 300, "pgid": 300, "start": A, "seen": "node server.js", "group": True,
+                      "known": [[300, A]]},
+            "known only": {"pid": 399, "pgid": 399, "start": A, "seen": "x", "group": True,
+                           "known": [[301, A], [302, A], [400, A]],
+                           "known_seen": [[301, A, "node worker"], [302, A, "zsh"], [400, A, "node renamed"]]},
+            "reused": {"pid": 300, "pgid": 300, "start": "Mon Jan  1 00:00:00 2024", "seen": "node server.js",
+                       "group": True, "known": [[300, "Mon Jan  1 00:00:00 2024"], [301, A]]},
+            "changed": {"pid": 300, "pgid": 300, "start": A, "seen": "python3 other.py", "group": True,
+                        "known": [[300, A], [307, A]], "known_seen": [[300, A, "python3 other.py"],
+                                                                      [307, A, "chrome --headless"]]},
+        }
+        for name, entry in cases.items():
+            for force in (False, True):
+                found, how = reap.members(entry, here, force=force)
+                self.record.steps.append({"members": name, "force": force, "how": how,
+                                          "pids": [p.pid for p in found]})
+        self.compare("members")
+
+    def test_refusals_of_agents_terminals_and_held_pids(self):
+        r = self.record
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir()
+        fake = bin_dir / "claude"
+        fake.symlink_to("/bin/sleep")
+        agent = self.spawn(str(fake), "600", start_new_session=True)
+        r.pid(agent.pid)
+        shell = self.spawn("sh", "-c", '"${0}ude" 600; true', str(fake)[:-3], start_new_session=True)
+        r.pid(shell.pid)
+        script = self.spawn("script", "-q", "/dev/null", "sleep", "600", stdin=subprocess.PIPE,
+                            start_new_session=True)
+        r.pid(script.pid)
+        below = self.below(shell.pid)
+        sleeper = self.below(script.pid)
+        held = self.child()
+        self.wait_for(lambda: (procs.Table.read().get(agent.pid) or proc(0, cmd="")).cmd.endswith(" 600"),
+                      what="the agent stand-in")
+        r.run("adopt", str(agent.pid), env=self.as_claude)
+        r.run("adopt", str(sleeper), env=self.as_claude)
+        r.run("adopt", str(shell.pid), env=self.as_claude)
+        r.run("adopt", str(below), env=self.as_claude)
+        r.run("adopt", str(held.pid), "--ttl", "1h", env=self.as_claude)
+        (entry,) = self.store.entries()
+        self.store.update(entry["id"], lambda e: e.update(state="reaping"))
+        here = procs.Table.read()
+        self.state.mkdir(parents=True, exist_ok=True)
+        for pid in (agent.pid, shell.pid, sleeper, held.pid):
+            current = here.get(pid) or proc(0)
+            (self.state / "unowned.json").write_text(json.dumps(
+                {"v": 1, "items": [{"pid": pid, "start": current.start, "cmd": current.cmd}]}))
+            r.run("reap", "--pid", str(pid), "--force", env=self.as_claude)
+        r.snapshot("refused")
+        self.store.update(entry["id"], lambda e: e.update(state="running"))
+        r.run("reap", "--id", entry["id"], "--grace", "2", env=self.as_claude)
+        r.snapshot("reaped")
+        self.compare("refusals_live")
+
+    def below(self, parent: int) -> int:
+        """The child of `parent` once it runs its `600` command, registered with the recorder and killed at the end
+        if it is still that process."""
+        found: List[int] = []
+
+        def ready() -> bool:
+            found[:] = [p.pid for p in procs.Table.read().descendants(parent) if p.cmd.endswith(" 600")]
+            return bool(found)
+        self.wait_for(ready, what="the child")
+        pid = self.record.pid(found[0])
+        start = procs.identities([pid]).get(pid)
+
+        def kill() -> None:
+            if start is not None and procs.identities([pid]).get(pid) == start:
+                try:
+                    os.kill(pid, 9)
+                except OSError:
+                    pass
+        self.addCleanup(kill)
+        return pid
+
+    def test_a_supervisor_revives_a_gone_entry(self):
+        class Quiet(launch.Catcher):
+            def __init__(self) -> None:
+                self.signum = None
+
+        child = self.child()
+        record = launch.new_entry(self.store, ["sleep", "600"], 3600.0, "owner", "revived", {"kind": "process"},
+                                  "attached", str(self.tmp))
+        self.store.save(record)
+        launch.record_child(self.store, record["id"], child, os.getpid())
+        self.store.update(record["id"], lambda e: e.update(state="gone", ended=1.0, known=[]))
+        self.record.snapshot("gone")
+        seen: List[Any] = []
+
+        def pause(_seconds: float) -> None:
+            seen.append(self.store.load(record["id"]))
+            child.kill()
+            child.wait()
+
+        launch.Supervisor(self.store, record["id"], child, quiet=True, catcher=Quiet(), clock=lambda: 0.0,
+                          pause=pause).run()
+        self.record.steps.append({"while running": seen[0]})
+        self.record.snapshot("exited")
+        self.compare("revive")
+
+    def test_a_claim_names_the_subagent_that_owns_and_reaps(self):
+        r = self.record
+        command = "junkfather own --detach --ttl 1h -- sleep 600"
+        r.run("hook", input=json.dumps({"hook_event_name": "PreToolUse", "session_id": "s1", "tool_name": "Bash",
+                                        "tool_use_id": "toolu_golden", "agent_id": "agent-a",
+                                        "agent_type": "Explore", "tool_input": {"command": command}}),
+              env=self.as_claude)
+        owned = r.run("own", "--detach", "--ttl", "1h", "--", "sleep", "600", env=self.as_claude)
+        entry = self.store.load(owned.stdout.split()[1]) or {}
+        r.pid(entry["pid"])
+        r.pid(entry["supervisor"]["pid"])
+        r.run("own", "--detach", "--ttl", "1h", "--", "sleep", "600", env=self.as_claude)
+        second = [e for e in self.store.entries() if e["id"] != entry["id"]][0]
+        r.pid(second["pid"])
+        r.pid(second["supervisor"]["pid"])
+        r.snapshot("owned")
+        r.run("reap", "--owner", "s1", "--agent", "agent-a", "--grace", "2", env=self.as_claude)
+        r.run("reap", "--owner", "s1", "--grace", "2", env=self.as_claude)
+        supervisors = [entry["supervisor"]["pid"], second["supervisor"]["pid"]]
+        self.wait_for(lambda: not any(self.runs(pid) for pid in supervisors), what="the supervisors to end")
+        r.snapshot("reaped")
+        self.compare("claim")
 
 
 if __name__ == "__main__":

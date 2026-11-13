@@ -1,0 +1,297 @@
+[
+ {
+  "args": [
+   "adopt",
+   "<pid2>"
+  ],
+  "code": 1,
+  "err": "junkfather adopt: refusing pid <pid2>: an agent session\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "adopt",
+   "<pid6>"
+  ],
+  "code": 1,
+  "err": "junkfather adopt: refusing pid <pid6>: a process with a terminal (<tty>)\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "adopt",
+   "<pid3>"
+  ],
+  "code": 1,
+  "err": "junkfather adopt: refusing pid <pid3>: its tree holds a terminal's process or an agent session\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "adopt",
+   "<pid5>"
+  ],
+  "code": 1,
+  "err": "junkfather adopt: refusing pid <pid5>: an agent session\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "adopt",
+   "<pid7>",
+   "--ttl",
+   "1h"
+  ],
+  "code": 0,
+  "err": "",
+  "out": "junkfather: <id1> adopted pid <pid7> (its group) for claude s1, ttl 60m; stop it: junkfather reap --id <id1>\n"
+ },
+ {
+  "args": [
+   "reap",
+   "--pid",
+   "<pid2>",
+   "--force"
+  ],
+  "code": 1,
+  "err": "junkfather reap: refusing pid <pid2>: not a process junkfather may stop\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "reap",
+   "--pid",
+   "<pid3>",
+   "--force"
+  ],
+  "code": 1,
+  "err": "junkfather reap: refusing pid <pid3>: its tree holds a terminal's process or an agent session\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "reap",
+   "--pid",
+   "<pid6>",
+   "--force"
+  ],
+  "code": 1,
+  "err": "junkfather reap: refusing pid <pid6>: not a process junkfather may stop\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "reap",
+   "--pid",
+   "<pid7>",
+   "--force"
+  ],
+  "code": 1,
+  "err": "junkfather reap: refusing pid <pid7>: an entry owns it now (reap that entry)\n",
+  "out": ""
+ },
+ {
+  "entries": [
+   {
+    "argv": [
+     "sleep 600"
+    ],
+    "claim_note": "",
+    "created": "<v>",
+    "cwd": "<root>",
+    "expires": "<v>",
+    "group": true,
+    "handed": [],
+    "id": "<id1>",
+    "keep": "owner",
+    "known": [
+     [
+      <pid7>,
+      "<start>"
+     ]
+    ],
+    "known_seen": [
+     [
+      <pid7>,
+      "<start>",
+      "sleep 600"
+     ]
+    ],
+    "label": null,
+    "log": null,
+    "mode": "adopted",
+    "owner": {
+     "agent": null,
+     "agent_type": null,
+     "kind": "claude",
+     "lane": null,
+     "pid": <pid1>,
+     "pid_start": "<start>",
+     "session": "s1"
+    },
+    "pgid": <pid7>,
+    "pid": <pid7>,
+    "seen": "sleep 600",
+    "start": "<start>",
+    "state": "reaping",
+    "supervisor": null,
+    "ttl": 3600.0,
+    "v": 1
+   }
+  ],
+  "events": [
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "cmd": "sleep 600",
+     "group": true,
+     "keep": "owner",
+     "pgid": <pid7>,
+     "ttl": 3600.0
+    },
+    "host": "<host>",
+    "kind": "entry.adopted",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "pid": <pid7>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   }
+  ],
+  "snapshot": "refused"
+ },
+ {
+  "args": [
+   "reap",
+   "--id",
+   "<id1>",
+   "--grace",
+   "2"
+  ],
+  "code": 0,
+  "err": "",
+  "out": "<id1>: stopped (reap; pids <pid7>; leader)\n"
+ },
+ {
+  "entries": [
+   {
+    "argv": [
+     "sleep 600"
+    ],
+    "claim_note": "",
+    "created": "<v>",
+    "cwd": "<root>",
+    "end": {
+     "how": "leader",
+     "pids": [
+      <pid7>
+     ],
+     "reason": "reap",
+     "result": "stopped"
+    },
+    "ended": "<v>",
+    "expires": "<v>",
+    "group": true,
+    "handed": [],
+    "id": "<id1>",
+    "keep": "owner",
+    "known": [
+     [
+      <pid7>,
+      "<start>"
+     ]
+    ],
+    "known_seen": [
+     [
+      <pid7>,
+      "<start>",
+      "sleep 600"
+     ]
+    ],
+    "label": null,
+    "log": null,
+    "mode": "adopted",
+    "owner": {
+     "agent": null,
+     "agent_type": null,
+     "kind": "claude",
+     "lane": null,
+     "pid": <pid1>,
+     "pid_start": "<start>",
+     "session": "s1"
+    },
+    "pgid": <pid7>,
+    "pid": <pid7>,
+    "seen": "sleep 600",
+    "start": "<start>",
+    "state": "reaped",
+    "supervisor": null,
+    "ttl": 3600.0,
+    "v": 1
+   }
+  ],
+  "events": [
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "cmd": "sleep 600",
+     "group": true,
+     "keep": "owner",
+     "pgid": <pid7>,
+     "ttl": 3600.0
+    },
+    "host": "<host>",
+    "kind": "entry.adopted",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "pid": <pid7>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "how": "leader",
+     "left": [],
+     "pids": [
+      <pid7>
+     ],
+     "reason": "reap",
+     "result": "stopped",
+     "signals": [
+      "TERM"
+     ]
+    },
+    "host": "<host>",
+    "kind": "entry.reaped",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "pid": <pid7>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   }
+  ],
+  "snapshot": "reaped"
+ }
+]

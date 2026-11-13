@@ -58,6 +58,14 @@ class RefusalTests(Case):
         self.assertEqual("", result.stdout)
         return result.stderr
 
+    def test_another_users_process_is_never_adopted(self):
+        """Any process of another user (none under a single-user container: then there is nothing to test)."""
+        other = next((p for p in procs.Table.read().procs.values() if p.uid != os.getuid() and p.pid > 1), None)
+        if other is None:
+            self.skipTest("no process of another user runs here")
+        self.assertEqual(f"junkfather adopt: refusing pid {other.pid}: another user's process\n",
+                         self.refused("adopt", str(other.pid)))
+
     def test_an_agent_session_is_never_adopted(self):
         agent = self.spawn(str(self.claude), "600", start_new_session=True)
         self.started(agent)
