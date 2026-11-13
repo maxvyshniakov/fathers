@@ -8,6 +8,13 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- `gc` collects the worktrees Claude Code and Codex sessions leave under `.claude/worktrees`, not only `agent-*`
+  and `lane-*` ones (fathers#44): the patterns are project config, `[gc] dirs` (default `agent-*`, `lane-*`,
+  `.claude/worktrees/*`, `codex-*`) and `[gc] branches` (default `worktree-agent-*`, `lane/*`, `claude/*`,
+  `codex/*`). The rules are unchanged (merged, clean, idle for 2 h, unused, no open lane), so with the defaults a
+  detached or feature-branch worktree there that meets them is removed too; a `.keep` file, a lock or narrower
+  patterns keep it. A merged branch is deleted only when the branch patterns name it, and a worktree that holds
+  another worktree is kept.
 - A check result stands only for the platform it ran on (owner decision 2026-11-13): the results store's entries
   name their `platform` (`<os>-<arch>`, such as `darwin-arm64` or `linux-x64`), its `env` and `plan` hash it, and a
   lookup from another platform reuses nothing, so a green gate on the Mac never skips the Linux run, while a second

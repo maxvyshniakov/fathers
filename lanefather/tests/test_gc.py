@@ -12,7 +12,7 @@ from typing import Any
 from support import LaneCase
 
 
-class GcTests(LaneCase):
+class GcCase(LaneCase):
     def candidate(self, name: str = "old", *, age: bool = True) -> Path:
         path = self.repo / ".claude/worktrees" / f"agent-{name}"
         self.git(self.repo, "worktree", "add", "-q", "-b", f"worktree-agent-{name}", str(path), "integrate/q")
@@ -28,6 +28,9 @@ class GcTests(LaneCase):
 
     def collect(self, *args: str) -> dict[str, Any]:
         return json.loads(self.lane("gc", "--json", *args))
+
+
+class GcTests(GcCase):
 
     def test_gc_removes_only_merged_idle_worktrees_and_their_unused_branches(self):
         old = self.candidate()
@@ -200,3 +203,91 @@ class GcTests(LaneCase):
                 self.assertEqual(report["errors"], [])
                 self.assertEqual(report["freed"], preview["freed"],
                                  "legacy stdout is diagnostic, even when it resembles a report")
+
+
+class SessionWorktreeTests(GcCase):
+    """Claude Code and Codex session worktrees are collected under the same rules (fathers#44)."""
+
+    def session(self, name: str, branch: str | None, *, age: bool = True) -> Path:
+        path = self.repo / ".claude/worktrees" / name
+        if branch:
+            self.git(self.repo, "worktree", "add", "-q", "-b", branch, str(path), "integrate/q")
+        else:
+            self.git(self.repo, "worktree", "add", "-q", "--detach", str(path), "integrate/q")
+        if age:
+            self.age(path)
+        return path
+
+    def branches(self) -> str:
+        return self.git(self.repo, "branch", "--list")
+
+    def test_merged_clean_idle_claude_and_codex_worktrees_are_removed_with_their_branches(self):
+        claude = self.session("affectionate-hypatia-145d8b", "claude/affectionate-hypatia-145d8b")
+        codex = self.session("codex-item-compact-spacing", "codex/item-compact-spacing")
+        report = self.collect()
+        self.assertFalse(claude.exists())
+        self.assertFalse(codex.exists())
+        removed = {(a["kind"], a["path"]) for a in report["removed"]}
+        self.assertIn(("branch", "claude/affectionate-hypatia-145d8b"), removed)
+        self.assertIn(("branch", "codex/item-compact-spacing"), removed)
+        self.assertNotIn("claude/", self.branches())
+        self.assertNotIn("codex/", self.branches())
+        self.assertTrue(self.integration.exists(), "the integration worktree stays")
+        self.assertTrue((self.repo / ".git").is_dir(), "the main checkout stays")
+
+    def test_unmerged_dirty_recent_and_used_session_worktrees_are_kept(self):
+        unmerged = self.session("brave-turing-1a2b3c", "claude/brave-turing-1a2b3c")
+        self.commit(unmerged, {"lib/api.txt": "unmerged"})
+        self.age(unmerged)
+        dirty = self.session("codex-dirty", "codex/dirty")
+        self.write(dirty, "lib/api.txt", "unsaved")
+        self.age(dirty)
+        recent = self.session("eager-lovelace-4d5e6f", "claude/eager-lovelace-4d5e6f", age=False)
+        used = self.session("codex-used", "codex/used")
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], cwd=used)
+        self.addCleanup(lambda: (child.kill(), child.wait()))
+        report = self.collect()
+        for path in (unmerged, dirty, recent, used):
+            self.assertTrue(path.exists(), str(path))
+        reasons = {Path(a["path"]).name: a["reason"] for a in report["kept"]}
+        self.assertIn("not merged", reasons["brave-turing-1a2b3c"])
+        self.assertIn("uncommitted", reasons["codex-dirty"])
+        self.assertIn("active", reasons["eager-lovelace-4d5e6f"])
+        self.assertIn(str(child.pid), reasons["codex-used"])
+        for branch in ("claude/brave-turing-1a2b3c", "codex/dirty", "claude/eager-lovelace-4d5e6f", "codex/used"):
+            self.assertIn(branch, self.branches())
+
+    def test_a_branch_outside_the_patterns_outlives_its_removed_worktree(self):
+        feature = self.session("feature-work", "feature/work")
+        detached = self.session("smoke-0", None)
+        self.collect()
+        self.assertFalse(feature.exists())
+        self.assertFalse(detached.exists())
+        self.assertIn("feature/work", self.branches(), "only a branch the patterns name is deleted")
+
+    def test_the_patterns_are_project_config(self):
+        claude = self.session("affectionate-hypatia-145d8b", "claude/affectionate-hypatia-145d8b")
+        old = self.candidate()
+        cfg = self.integration / ".lanefather.toml"
+        cfg.write_text(cfg.read_text() + '\n[gc]\ndirs = ["agent-*"]\nbranches = ["worktree-agent-*"]\n')
+        report = self.collect()
+        self.assertFalse(old.exists())
+        self.assertTrue(claude.exists())
+        self.assertIn("claude/affectionate-hypatia-145d8b", self.branches())
+        reason = next(a["reason"] for a in report["kept"] if a["path"] == str(claude.resolve()))
+        self.assertIn("[gc] dirs", reason)
+
+    def test_a_worktree_holding_another_worktree_is_kept(self):
+        outer = self.session("codex-outer", "codex/outer")
+        inner = outer / ".claude/worktrees/codex-inner"
+        self.git(self.repo, "worktree", "add", "-q", "-b", "codex/inner", str(inner), "integrate/q")
+        self.write(inner, "lib/api.txt", "unsaved inside")
+        self.age(inner)
+        # The fixture ignores .claude/, as projects do, so the outer worktree reads clean.
+        self.age(outer)
+        report = self.collect()
+        self.assertTrue(inner.exists())
+        self.assertEqual((inner / "lib/api.txt").read_text(), "unsaved inside")
+        self.assertTrue(outer.exists())
+        reason = next(a["reason"] for a in report["kept"] if a["path"] == str(outer.resolve()))
+        self.assertIn("holds the worktree", reason)
