@@ -36,7 +36,7 @@ from . import procs as _procs
 from . import reap as _reap
 from . import resources as _resources
 from . import safety as _safety
-from .defaults import KEEP_FINISHED, REAPING_STUCK, STARTING_STUCK
+from .defaults import GRACE, KEEP_FINISHED, REAPING_STUCK, STARTING_STUCK
 from .state import Store, VERSION, read_json, write_atomic
 from .text import duration
 LABEL = "com.junkfather.sweep"
@@ -114,7 +114,7 @@ def agent_sessions(table: _procs.Table) -> Dict[int, bool]:
 
 def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = None,
           cwds: Optional[Dict[int, str]] = None, sessions: Optional[List[Dict[str, Any]]] = None,
-          now: Optional[float] = None, grace: float = _reap.GRACE) -> Dict[str, Any]:
+          now: Optional[float] = None, grace: float = GRACE) -> Dict[str, Any]:
     now = time.time() if now is None else now
     report: Dict[str, Any] = {"v": VERSION, "at": now, "dry_run": dry_run, "reaped": [], "gone": [], "pruned": 0,
                               "running": 0, "unowned": [], "unowned_resources": [], "notes": [], "errors": []}

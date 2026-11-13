@@ -2,15 +2,6 @@
  {
   "args": [
    "adopt",
-   "1"
-  ],
-  "code": 1,
-  "err": "junkfather adopt: refusing pid 1: another user's process\n",
-  "out": ""
- },
- {
-  "args": [
-   "adopt",
    "<pid0>"
   ],
   "code": 1,

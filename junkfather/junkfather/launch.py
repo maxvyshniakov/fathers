@@ -32,10 +32,10 @@ from . import reap as _reap
 from . import safety as _safety
 from .defaults import DETACH_WAIT, KNOWN_EVERY, POLL, RETRY_FIRST, RETRY_MAX, SIGNAL_GRACE
 from .entry import new as new_entry
+from .release import PACKAGE_ROOT
 from .text import duration
 from .state import Entry, Store
 
-PACKAGE_ROOT = str(Path(__file__).resolve().parent.parent)
 
 
 def retry_delay(failures: int) -> float:
@@ -49,7 +49,7 @@ def self_command(*args: str) -> List[str]:
     return [sys.executable, "-c", code, *args]
 
 
-def end_child(child: subprocess.Popen, grace: float = 3.0) -> None:
+def end_child(child: subprocess.Popen, grace: float = SIGNAL_GRACE) -> None:
     """Stop our own child's group through its handle: an unwaited child keeps its pid and group id from reuse."""
     for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, 2.0)):
         if child.poll() is not None:
@@ -217,7 +217,7 @@ def own(store: Store, argv: List[str], ttl: float, keep: str, label: Optional[st
     try:
         child = subprocess.Popen(argv, start_new_session=True)
     except OSError as error:
-        _entry.failed(store, entry["id"], str(error))
+        _entry.failed(store, entry["id"], str(error), start_error=True)
         print(f"junkfather: cannot start {shlex.join(argv)}: {error}", file=sys.stderr)
         return 127
     if record_child(store, entry["id"], child, os.getpid()) is None:
@@ -271,7 +271,7 @@ def supervise(store: Store, entry_id: str) -> int:
         with open(os.devnull, "rb") as null:
             child = subprocess.Popen(entry["argv"], stdin=null, start_new_session=True, cwd=entry["cwd"])
     except OSError as error:
-        _entry.failed(store, entry_id, str(error))
+        _entry.failed(store, entry_id, str(error), start_error=True)
         print(f"junkfather: cannot start {shlex.join(entry['argv'])}: {error}", file=sys.stderr)
         return 127
     if record_child(store, entry_id, child, os.getpid()) is None:
@@ -292,13 +292,13 @@ def adopt(store: Store, pid: int, ttl: float, keep: str, label: Optional[str], e
         print(f"junkfather adopt: {error}", file=sys.stderr)
         return 1
     proc = table.get(pid)
-    refusal = _safety.refusal("adopt", pid, table, store, lambda candidate: any(
+    refusal = _safety.adopt_refusal(pid, table, lambda candidate: any(
         e.get("state") == _entry.RUNNING and e.get("pid") == candidate for e in store.entries()))
     if refusal:
         print(f"junkfather adopt: refusing pid {pid}: {refusal}", file=sys.stderr)
         return 1
     assert proc is not None
-    who = _owner.resolve(env, table, os.getcwd(), store, ["adopt", str(pid)], lane, agent, claims=False)
+    who = _owner.resolve(env, table, os.getcwd(), store, lane=lane, agent=agent, claims=False)
     entry = _entry.adopted(store, new_entry(store, [proc.cmd], ttl, keep, label, who, "adopted", os.getcwd()), proc,
                            [proc, *table.descendants(pid, prune=_safety.unsafe)])
     _events.write(store.root, "entry.adopted", _events.subject(entry), _events.actor_of(who),

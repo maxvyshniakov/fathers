@@ -1,0 +1,377 @@
+[
+ {
+  "sweep": {
+   "at": "<v>",
+   "dry_run": false,
+   "errors": [],
+   "gone": [],
+   "notes": [
+    "docker: cannot be listed, so its unowned resources are not reported"
+   ],
+   "pruned": 0,
+   "reaped": [],
+   "running": 2,
+   "unlisted": [
+    "docker"
+   ],
+   "unowned": [
+    {
+     "age": "<v>",
+     "also": [],
+     "cmd": "node server.js",
+     "cwd": "/golden/scratch/s1",
+     "pgid": 600,
+     "pid": 600,
+     "ppid": 1,
+     "root": "/golden/scratch/",
+     "start": "<start>",
+     "tree": [
+      600,
+      601
+     ],
+     "why": "working directory in /golden/scratch/"
+    },
+    {
+     "age": "<v>",
+     "also": [],
+     "cmd": "/Applications/Browser --profile=/golden/scratch/s1/profile",
+     "cwd": null,
+     "pgid": 800,
+     "pid": 800,
+     "ppid": 1,
+     "root": "/golden/scratch/",
+     "start": "<start>",
+     "tree": [
+      800
+     ],
+     "why": "command names a path in /golden/scratch/"
+    },
+    {
+     "age": "<v>",
+     "also": [],
+     "cmd": "python3 -m http.server",
+     "cwd": "/repo/.claude/worktrees/w1",
+     "pgid": 930,
+     "pid": 930,
+     "ppid": 1,
+     "root": ".claude/worktrees",
+     "start": "<start>",
+     "tree": [
+      930
+     ],
+     "why": "working directory in .claude/worktrees"
+    }
+   ],
+   "unowned_resources": [
+    {
+     "id": "UDID-FREE",
+     "key": "simulator:UDID-FREE",
+     "kind": "simulator",
+     "name": "iPad",
+     "why": "a running simulator no entry owns"
+    },
+    {
+     "id": "https:443",
+     "key": "tailscale-serve:https:443",
+     "kind": "tailscale-serve",
+     "target": "http://127.0.0.1:6006",
+     "why": "a running tailscale-serve no entry owns"
+    }
+   ],
+   "v": 1
+  },
+  "text": "unowned pid 600 (age 1221d9h; working directory in /golden/scratch/): node server.js\n  own it: junkfather adopt 600 --ttl 1h   end it: junkfather reap --pid 600 --force\nunowned pid 800 (age 1221d9h; command names a path in /golden/scratch/): /Applications/Browser --profile=/golden/scratch/s1/profile\n  own it: junkfather adopt 800 --ttl 1h   end it: junkfather reap --pid 800 --force\nunowned pid 930 (age 1221d9h; working directory in .claude/worktrees): python3 -m http.server\n  own it: junkfather adopt 930 --ttl 1h   end it: junkfather reap --pid 930 --force\nunowned simulator UDID-FREE (iPad): a running simulator no entry owns\n  own it: junkfather own-resource --kind simulator --id UDID-FREE --ttl 1h\nunowned tailscale-serve https:443: a running tailscale-serve no entry owns\n  own it: junkfather own-resource --kind tailscale-serve --id https:443 --ttl 1h\nnote: docker: cannot be listed, so its unowned resources are not reported\n2 running, 0 reaped, 0 gone, 3 unowned reported, 2 unowned resources",
+  "unowned.json": {
+   "at": "<v>",
+   "items": [
+    {
+     "age": "<v>",
+     "also": [],
+     "cmd": "node server.js",
+     "cwd": "/golden/scratch/s1",
+     "pgid": 600,
+     "pid": 600,
+     "ppid": 1,
+     "root": "/golden/scratch/",
+     "start": "<start>",
+     "tree": [
+      600,
+      601
+     ],
+     "why": "working directory in /golden/scratch/"
+    },
+    {
+     "age": "<v>",
+     "also": [],
+     "cmd": "/Applications/Browser --profile=/golden/scratch/s1/profile",
+     "cwd": null,
+     "pgid": 800,
+     "pid": 800,
+     "ppid": 1,
+     "root": "/golden/scratch/",
+     "start": "<start>",
+     "tree": [
+      800
+     ],
+     "why": "command names a path in /golden/scratch/"
+    },
+    {
+     "age": "<v>",
+     "also": [],
+     "cmd": "python3 -m http.server",
+     "cwd": "/repo/.claude/worktrees/w1",
+     "pgid": 930,
+     "pid": 930,
+     "ppid": 1,
+     "root": ".claude/worktrees",
+     "start": "<start>",
+     "tree": [
+      930
+     ],
+     "why": "working directory in .claude/worktrees"
+    }
+   ],
+   "resources": [
+    {
+     "id": "UDID-FREE",
+     "key": "simulator:UDID-FREE",
+     "kind": "simulator",
+     "name": "iPad",
+     "why": "a running simulator no entry owns"
+    },
+    {
+     "id": "https:443",
+     "key": "tailscale-serve:https:443",
+     "kind": "tailscale-serve",
+     "target": "http://127.0.0.1:6006",
+     "why": "a running tailscale-serve no entry owns"
+    }
+   ],
+   "v": 1
+  }
+ },
+ {
+  "entries": [
+   {
+    "argv": [
+     "sleep",
+     "600"
+    ],
+    "created": "<v>",
+    "expires": "<v>",
+    "group": true,
+    "id": "<id1>",
+    "keep": "owner",
+    "known": [
+     [
+      <pid2>,
+      "<start>"
+     ]
+    ],
+    "known_seen": [
+     [
+      <pid2>,
+      "<start>",
+      "sleep 600"
+     ]
+    ],
+    "mode": "detached",
+    "owner": {},
+    "pgid": <pid2>,
+    "pid": <pid2>,
+    "seen": "sleep 600",
+    "start": "<start>",
+    "state": "running",
+    "ttl": 3600.0,
+    "v": 1
+   },
+   {
+    "argv": [
+     "sleep",
+     "600"
+    ],
+    "created": "<v>",
+    "expires": "<v>",
+    "group": false,
+    "id": "<id2>",
+    "keep": "owner",
+    "known": [],
+    "mode": "resource",
+    "owner": {},
+    "pgid": null,
+    "pid": null,
+    "resource": {
+     "id": "UDID-HELD",
+     "kind": "simulator"
+    },
+    "seen": "sleep 600",
+    "start": "<start>",
+    "state": "running",
+    "ttl": 3600.0,
+    "v": 1
+   }
+  ],
+  "events": [
+   {
+    "actor": {
+     "name": "junkfather",
+     "type": "tool",
+     "via": "sweep"
+    },
+    "details": {
+     "age": "<v>",
+     "also": [],
+     "cmd": "node server.js",
+     "cwd": "/golden/scratch/s1",
+     "root": "/golden/scratch/",
+     "start": "<start>",
+     "why": "working directory in /golden/scratch/"
+    },
+    "host": "<host>",
+    "kind": "unowned.reported",
+    "level": "warn",
+    "source": "junkfather",
+    "subject": {
+     "id": "600",
+     "pid": 600,
+     "type": "process"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "name": "junkfather",
+     "type": "tool",
+     "via": "sweep"
+    },
+    "details": {
+     "age": "<v>",
+     "also": [],
+     "cmd": "/Applications/Browser --profile=/golden/scratch/s1/profile",
+     "cwd": null,
+     "root": "/golden/scratch/",
+     "start": "<start>",
+     "why": "command names a path in /golden/scratch/"
+    },
+    "host": "<host>",
+    "kind": "unowned.reported",
+    "level": "warn",
+    "source": "junkfather",
+    "subject": {
+     "id": "800",
+     "pid": 800,
+     "type": "process"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "name": "junkfather",
+     "type": "tool",
+     "via": "sweep"
+    },
+    "details": {
+     "age": "<v>",
+     "also": [],
+     "cmd": "python3 -m http.server",
+     "cwd": "/repo/.claude/worktrees/w1",
+     "root": ".claude/worktrees",
+     "start": "<start>",
+     "why": "working directory in .claude/worktrees"
+    },
+    "host": "<host>",
+    "kind": "unowned.reported",
+    "level": "warn",
+    "source": "junkfather",
+    "subject": {
+     "id": "930",
+     "pid": 930,
+     "type": "process"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "name": "junkfather",
+     "type": "tool",
+     "via": "sweep"
+    },
+    "details": {
+     "id": "UDID-FREE",
+     "kind": "simulator",
+     "name": "iPad",
+     "why": "a running simulator no entry owns"
+    },
+    "host": "<host>",
+    "kind": "unowned.reported",
+    "level": "warn",
+    "source": "junkfather",
+    "subject": {
+     "id": "simulator:UDID-FREE",
+     "kind": "simulator",
+     "label": "iPad",
+     "type": "resource"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "name": "junkfather",
+     "type": "tool",
+     "via": "sweep"
+    },
+    "details": {
+     "id": "https:443",
+     "kind": "tailscale-serve",
+     "target": "http://127.0.0.1:6006",
+     "why": "a running tailscale-serve no entry owns"
+    },
+    "host": "<host>",
+    "kind": "unowned.reported",
+    "level": "warn",
+    "source": "junkfather",
+    "subject": {
+     "id": "tailscale-serve:https:443",
+     "kind": "tailscale-serve",
+     "type": "resource"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "name": "junkfather",
+     "type": "tool",
+     "via": "sweep"
+    },
+    "details": {
+     "errors": [],
+     "failed": [],
+     "gone": [],
+     "notes": [
+      "docker: cannot be listed, so its unowned resources are not reported"
+     ],
+     "pruned": 0,
+     "reaped": [],
+     "running": 2,
+     "unowned": 3,
+     "unowned_resources": 2
+    },
+    "host": "<host>",
+    "kind": "sweep.finished",
+    "source": "junkfather",
+    "subject": {
+     "id": "<time>",
+     "type": "sweep"
+    },
+    "time": "<v>",
+    "v": 1
+   }
+  ],
+  "snapshot": "swept"
+ }
+]

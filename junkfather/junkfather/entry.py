@@ -84,10 +84,14 @@ def started(store: Store, entry_id: str, leader: _procs.Proc, supervisor: Dict[s
         **known_fields([leader])))
 
 
-def failed(store: Store, entry_id: str, error: str, now: Optional[float] = None) -> Optional[Entry]:
-    """starting -> failed: its command could not start, its identity could not be read, or it never started."""
+def failed(store: Store, entry_id: str, error: str, now: Optional[float] = None, start_error: bool = False
+           ) -> Optional[Entry]:
+    """starting -> failed: its command could not start, its identity could not be read, or it never started.
+    `start_error`: the command's own start failed, whose error replaces a failure the sweep recorded meanwhile
+    ("never started"), as it always did."""
     at = time.time() if now is None else now
-    return _move(store, entry_id, _from(STARTING), lambda e: e.update(state=FAILED, ended=at, error=error))
+    allowed = _from(STARTING, FAILED) if start_error else _from(STARTING)
+    return _move(store, entry_id, allowed, lambda e: e.update(state=FAILED, ended=at, error=error))
 
 
 def adopted(store: Store, entry: Entry, leader: _procs.Proc, members: Sequence[_procs.Proc]) -> Entry:
@@ -167,17 +171,21 @@ def extended(store: Store, entry_id: str, ttl: float, now: Optional[float] = Non
     return _move(store, entry_id, _from(*OPEN), lambda e: e.update(ttl=ttl, expires=at + ttl))
 
 
-def handed(store: Store, entry_id: str, target: Dict[str, Any], now: Optional[float] = None) -> Optional[Entry]:
-    """A running or starting entry now belongs to `target` (kept for that owner); the target takes the entry's lane
-    when it has none, and `handed` records the move. `target` is updated in place."""
+def handed(store: Store, entry_id: str, target: Dict[str, Any], now: Optional[float] = None
+           ) -> Optional[Tuple[Entry, Dict[str, Any]]]:
+    """A running or starting entry now belongs to a copy of `target` (kept for that owner), which takes the entry's
+    lane when it has none; `handed` records the move. Returns the entry (its new owner in `owner`) and the previous
+    owner."""
     at = time.time() if now is None else now
+    before: Dict[str, Any] = {}
 
     def change(e: Entry) -> None:
-        before = dict(e.get("owner") or {})
-        target["lane"] = target.get("lane") or before.get("lane")
-        e.setdefault("handed", []).append({"at": at, "from": dict(before), "to": dict(target)})
-        e["owner"], e["keep"] = target, "owner"
-    return _move(store, entry_id, _from(*OPEN), change)
+        before.update(e.get("owner") or {})
+        owner = {**target, "lane": target.get("lane") or before.get("lane")}
+        e.setdefault("handed", []).append({"at": at, "from": dict(before), "to": dict(owner)})
+        e["owner"], e["keep"] = owner, "owner"
+    entry = _move(store, entry_id, _from(*OPEN), change)
+    return None if entry is None else (entry, before)
 
 
 def noted_error(store: Store, entry_id: str, error: Dict[str, Any], now: Optional[float] = None) -> Optional[Entry]:

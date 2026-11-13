@@ -27,7 +27,7 @@ import os
 from pathlib import Path
 import re
 import time
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from . import procs as _procs
 from . import safety as _safety
@@ -111,8 +111,9 @@ def detect(env: Mapping[str, str], table: Optional[_procs.Table], cwd: str, me: 
     return owner
 
 
-def resolve(env: Mapping[str, str], table: Optional[_procs.Table], cwd: str, store: Store, words: List[str],
-            lane: Optional[str] = None, agent: Optional[str] = None, claims: bool = True) -> Owner:
+def resolve(env: Mapping[str, str], table: Optional[_procs.Table], cwd: str, store: Store,
+            words: Sequence[str] = (), lane: Optional[str] = None, agent: Optional[str] = None,
+            claims: bool = True) -> Owner:
     """The owner of what a command starts or adopts: the detected session (`detect`), the --lane and --agent
     overrides, and with `claims` (own, own-resource) the subagent from JUNKFATHER_AGENT or from the claim holding
     `words` (junkfather's own arguments), with `claim_note` saying why there is none. `adopt` takes no claim: it
@@ -127,7 +128,7 @@ def resolve(env: Mapping[str, str], table: Optional[_procs.Table], cwd: str, sto
     elif who["kind"] == "claude" and env.get("JUNKFATHER_AGENT"):
         who["agent"] = env["JUNKFATHER_AGENT"]
     elif who["kind"] == "claude" and who.get("session"):
-        claim, note = find_claim(store, who["session"], words)
+        claim, note = find_claim(store, who["session"], list(words))
         if claim is not None:
             who["agent"], who["agent_type"] = claim.get("agent"), claim.get("agent_type")
         who["claim_note"] = note

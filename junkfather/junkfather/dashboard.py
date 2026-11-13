@@ -1,4 +1,4 @@
-"""What junkfather shows a dashboard (Godfather; docs/reference.md, Dashboard contract): a row per entry
+"""What Junkfather shows a dashboard (Godfather; docs/reference.md, Dashboard contract): a row per entry
 (`list --json`), the snapshot (`status --json`) and the capabilities (`capabilities --json`). Their shapes only ever
 gain fields."""
 from __future__ import annotations
@@ -8,7 +8,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from . import __version__
-from . import changelog as _changelog
+from . import release as _release
 from . import entry as _entry
 from . import events as _events
 from . import owner as _owner
@@ -80,16 +80,16 @@ def _record(store: Store, name: str) -> Dict[str, Any]:
 
 
 def capabilities(store: Store) -> Dict[str, Any]:
-    """`capabilities --json`: what this junkfather offers a dashboard."""
+    """`capabilities --json`: what this Junkfather offers a dashboard."""
     dashboard: Dict[str, Any] = {
         "v": 1, "tag": "junk", "snapshot": {"argv": ["status", "--json"], "versions": [STATUS_VERSION], "poll": 5},
         "events": {"path": str((store.root / "events.jsonl").resolve()), "versions": [_events.VERSION],
                    "kinds": list(_events.KINDS)},
         "actions": ["reap", "extend"]}
-    changelog = _changelog.changelog_path()
+    changelog = _release.changelog_path()
     if os.path.isfile(changelog):
         dashboard["changelog"] = changelog
-    return {"v": 1, "tool": "junkfather", "version": __version__, "commit": _changelog.commit().strip(" ()"),
+    return {"v": 1, "tool": "junkfather", "version": __version__, "commit": _release.commit().strip(" ()"),
             "dashboard": dashboard}
 
 
