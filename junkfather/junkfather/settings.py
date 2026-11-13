@@ -15,14 +15,15 @@ Durations take seconds or 90s, 30m, 2h, 1d. The environment variables that move 
 read-only rows (`env.JUNKFATHER_STATE`, ...). The file is written atomically and durably under the state lock;
 `revision` is the SHA-256 of the file as read, and a `set` or `reset` with a stale one changes nothing.
 
-Exit codes: 0 done, 2 invalid, 3 conflict (the reply is the current settings), 5 read-only. 4 is not used: it
+Exit codes: 0 done, 1 not saved for another reason (a full disk), 2 invalid, 3 conflict (the reply is the current
+settings, with "conflict": true), 5 read-only. 4 is not used: it
 means "another user's queue" in Slotfather's settings (fathers#118, owner decision of 2026-11-13).
 
 Every reader calls `value()` when it runs, so a saved value applies to the next command without a restart.
 """
 from __future__ import annotations
 
-import contextlib
+import errno
 import hashlib
 import json
 import os
@@ -37,7 +38,7 @@ from .text import UNITS, duration, iso
 
 VERSION = 1
 FILE = "settings.json"
-INVALID, CONFLICT, READ_ONLY = 2, 3, 5
+FAILED, INVALID, CONFLICT, READ_ONLY = 1, 2, 3, 5
 
 
 class SettingError(Exception):
@@ -59,13 +60,13 @@ class Knob(NamedTuple):
 
 
 KNOBS: Tuple[Knob, ...] = (
-    Knob("own.default_ttl", "own", "Default TTL", defaults.TTL, 1, defaults.TTL_MAX, 300, False,
+    Knob("own.default_ttl", "own", "Default TTL", defaults.TTL, defaults.TTL_MIN, defaults.TTL_MAX, 300, False,
          "How long own, own-resource and adopt keep what they start when the command gives no --ttl."),
     Knob("sweep.interval", "sweep", "Sweep every", defaults.SWEEP_INTERVAL, defaults.SWEEP_INTERVAL_MIN,
          defaults.SWEEP_INTERVAL_MAX, 300, True,
          "The hourly sweep agent's interval; the loaded agent takes a new one when reinstalled "
          "(install.py --launchd)."),
-    Knob("reap.grace", "reap", "Grace before SIGKILL", defaults.GRACE, 0, defaults.GRACE_MAX, 1, False,
+    Knob("reap.grace", "reap", "Grace before SIGKILL", defaults.GRACE, defaults.GRACE_MIN, defaults.GRACE_MAX, 1, False,
          "Between SIGTERM and SIGKILL when reap has no --grace; the sweep and the supervisor use it too."),
 )
 BY_KEY = {knob.key: knob for knob in KNOBS}
@@ -104,9 +105,7 @@ def parse(knob: Knob, text: str) -> float:
         raise SettingError(f"{knob.key}: {text!r} is not a duration; give seconds, or 90s, 30m, 2h, 1d")
     seconds = float(found[1]) * UNITS[found[2]]
     if not knob.least <= seconds <= knob.most:
-        raise SettingError(f"{knob.key}: {text!r} must be from {duration(knob.least)} to {duration(knob.most)}"
-                           if knob.least >= 1 else
-                           f"{knob.key}: {text!r} must be from {number(knob.least)} to {number(knob.most)} seconds")
+        raise SettingError(f"{knob.key}: {text!r} must be from {duration(knob.least)} to {duration(knob.most)}")
     if knob.whole and not seconds.is_integer():
         raise SettingError(f"{knob.key}: {text!r} must be whole seconds")
     return number(seconds)
@@ -130,25 +129,47 @@ def _stored(raw: bytes) -> Dict[str, Any]:
     return dict(as_dict(found.get("settings")))
 
 
-def saved(root: Optional[Path] = None, raw: Optional[bytes] = None) -> Dict[str, float]:
-    """The valid saved values; an unreadable file or value counts as unset."""
+_warned: List[str] = []  # the files this process has said once it cannot read
+
+
+def _warn_once(root: Optional[Path], problem: str) -> None:
+    """Say on stderr, once per process and file, that saved settings are not applied (value() callers only: the
+    defaults would otherwise replace a person's longer grace or TTL without a word)."""
+    where = str(path(root))
+    if where not in _warned:
+        _warned.append(where)
+        print(f"junkfather: {where}: {problem}; using the defaults", file=sys.stderr)
+
+
+def forget_warnings() -> None:
+    """Let the next unreadable file be said again (tests; a command is one process and says it once)."""
+    _warned.clear()
+
+
+def saved(root: Optional[Path] = None, raw: Optional[bytes] = None, warn: bool = False) -> Dict[str, float]:
+    """The valid saved values; an unreadable file or value counts as unset (with `warn`, said once on stderr)."""
     try:
         stored = _stored(_raw(root) if raw is None else raw)
-    except SettingError:
+    except SettingError as error:
+        if warn:
+            _warn_once(root, str(error).replace(f"{FILE} ", "", 1))
         return {}
     found: Dict[str, float] = {}
     for key, item in stored.items():
         knob = BY_KEY.get(key)
         if knob is not None and isinstance(item, (int, float)) and not isinstance(item, bool):
-            with contextlib.suppress(SettingError):
+            try:
                 found[key] = parse(knob, str(item))
+            except SettingError as error:
+                if warn:
+                    _warn_once(root, f"saved {error}")
     return found
 
 
 def value(key: str, root: Optional[Path] = None) -> float:
     """The value of a setting now: the saved one, else its default. `root` is the state directory (default
     $JUNKFATHER_STATE). Read on every call, at the point of use."""
-    return saved(root).get(key, BY_KEY[key].default)
+    return saved(root, warn=True).get(key, BY_KEY[key].default)
 
 
 def _writable(root: Path) -> Optional[str]:
@@ -287,7 +308,10 @@ def command(store: Store, action: Optional[str], key: Optional[str], text: Optio
         return reply({**document(store.root), "ok": True, "error": None}, as_json)
     except SettingError as error:
         if error.code == CONFLICT:
-            return reply({**document(store.root), "ok": False, "error": str(error)}, as_json, CONFLICT)
+            return reply({**document(store.root), "ok": False, "conflict": True, "error": str(error)}, as_json,
+                         CONFLICT)
         return reply({"v": VERSION, "ok": False, "error": str(error), "preview": None}, as_json, error.code)
-    except OSError as error:  # a file that cannot be written: nothing was saved
-        return reply({"v": VERSION, "ok": False, "error": f"settings: {error}", "preview": None}, as_json, READ_ONLY)
+    except OSError as error:  # nothing was saved
+        code = READ_ONLY if error.errno in (errno.EACCES, errno.EPERM, errno.EROFS) else FAILED
+        return reply({"v": VERSION, "ok": False, "error": f"settings could not be saved: {error}", "preview": None},
+                     as_json, code)

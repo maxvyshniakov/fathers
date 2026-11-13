@@ -8,6 +8,7 @@ from __future__ import annotations
 
 # Owning
 TTL = 7200.0  # `own`, `own-resource` and `adopt` without --ttl (setting own.default_ttl)
+TTL_MIN = 60.0  # the shortest default TTL the setting saves (one slip would reap everything at once)
 TTL_MAX = 7 * 86400.0  # the longest default TTL the setting saves
 DETACH_WAIT = 15.0  # `own --detach` waits this long for the supervisor to start the command
 STARTING_STUCK = 60.0  # a sweep fails an entry still starting after this long ("never started")
@@ -21,6 +22,7 @@ RETRY_MAX = 60.0  # the longest wait between two tries
 
 # Reaping
 GRACE = 10.0  # between SIGTERM and SIGKILL (`reap --grace`; setting reap.grace)
+GRACE_MIN = 1.0  # the shortest grace the setting saves (0 is SIGKILL right after SIGTERM, on every path)
 GRACE_MAX = 600.0  # the longest grace the setting saves
 PS_TIMEOUT = 10.0  # a ps or lsof call may take this long
 

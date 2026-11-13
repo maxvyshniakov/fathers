@@ -94,9 +94,9 @@ junkfather settings reset (KEY | --all) [--revision R] [--json]
 
 | Key | Default | Range | Used by |
 | --- | --- | --- | --- |
-| `own.default_ttl` | 7200 s | 1 s to 7 days | `own`, `own-resource`, `adopt` without `--ttl` |
+| `own.default_ttl` | 7200 s | 60 s to 7 days | `own`, `own-resource`, `adopt` without `--ttl` |
 | `sweep.interval` | 3600 s | 60 s to 1 day, whole seconds | `sweep --plist` without `--interval`; the loaded agent keeps its interval until `install.py --launchd` reloads it |
-| `reap.grace` | 10 s | 0 to 600 s | `reap` without `--grace`, the sweep, the supervisor's TTL reap |
+| `reap.grace` | 10 s | 1 to 600 s | `reap` without `--grace`, the sweep, the supervisor's TTL reap |
 
 Values are durations in seconds (typed as seconds or `90s`, `30m`, `2h`, `1d`), saved in `settings.json` in the state
 directory (`{"v": 1, "settings": {KEY: seconds}}`), written atomically and durably under the state lock. Each reader
@@ -107,8 +107,10 @@ sections: [{id, title, settings: [{key, label, type: "duration", value, default,
 writable, revision, description}]}]}`; `revision` is the SHA-256 of the file as read, one for all three settings.
 `set` and `reset` reply with the document plus `ok` and `error`.
 
-Exit codes: 0 done, 2 invalid, 3 conflict (a stale `--revision`; the reply is the current settings), 5 read-only (an
-environment row, or a settings file that is not Junkfather's or not writable, which is never overwritten). 4 is
+Exit codes: 0 done, 1 not saved for another reason (a full disk, an I/O error), 2 invalid, 3 conflict (a stale
+`--revision`; the reply is the current settings with `"conflict": true`), 5 read-only (an environment row, or a
+settings file that is not Junkfather's or not writable, which is never overwritten). A command that uses a setting
+while the file cannot be read, or holds a value out of range, says so once on stderr and uses the default. 4 is
 Slotfather's "another user's queue" (fathers#118) and is not used here.
 
 ## Ending an entry
