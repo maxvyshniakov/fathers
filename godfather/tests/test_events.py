@@ -65,7 +65,7 @@ class TailTests(unittest.TestCase):
         self.assertEqual([], self.numbers(), "still torn")
         self.append(whole[20:])
         self.assertEqual([2], self.numbers())
-        self.assertEqual({"invalid": 0, "version": 0, "host": 0}, self.tail.skipped)
+        self.assertEqual({"invalid": 0, "version": 0, "host": 0, "source": 0}, self.tail.skipped)
 
     def test_a_rotation_loses_no_line_and_repeats_none(self) -> None:
         self.append(line(1) + line(2))
@@ -93,10 +93,40 @@ class TailTests(unittest.TestCase):
         self.assertEqual([3], self.numbers())
 
     def test_invalid_unknown_version_and_other_host_lines_are_skipped_and_counted(self) -> None:
-        self.append("not json\n" + line(1) + line(2, v=2) + line(3, host="vm110") + "[1, 2]\n"
+        self.append("not json\n" + line(1) + line(2, v=2) + line(3, host="vm110") + line(5, source="lanefather")
+                    + "[1, 2]\n"
                     + json.dumps({"v": 1}) + "\n" + line(4))
         self.assertEqual([1, 4], self.numbers())
-        self.assertEqual({"invalid": 3, "version": 1, "host": 1}, self.tail.skipped)
+        self.assertEqual({"invalid": 3, "version": 1, "host": 1, "source": 1}, self.tail.skipped)
+
+    def test_a_host_name_that_changes_with_the_network_is_followed(self) -> None:
+        """fathers#84 review: the tools name the host on every write; a Tail made for this machine looks it up on
+        every read, so a new network name does not empty EVENTS for the rest of the session."""
+        from unittest import mock
+
+        tail = events.Tail("slotfather", self.path)
+        self.addCleanup(tail.close)
+        with mock.patch("socket.gethostname", return_value="Wintermute.local"):
+            self.append(line(1, host="wintermute"))
+            self.assertEqual([1], [event.details["n"] for event in tail.read()])
+        with mock.patch("socket.gethostname", return_value="wintermute-2.lan"):
+            self.append(line(2, host="wintermute") + line(3, host="wintermute-2"))
+            self.assertEqual([3], [event.details["n"] for event in tail.read()])
+        self.assertEqual(1, tail.skipped["host"])
+
+    def test_one_read_takes_at_most_its_share_and_the_rest_next_time(self) -> None:
+        from unittest import mock
+
+        self.append(line(1))
+        self.numbers()
+        self.append("".join(line(n) for n in range(2, 12)))
+        with mock.patch.object(events, "READ_MAX", len(line(2)) * 3):
+            first = self.numbers()
+            os.replace(self.path, self.path.with_name("events.jsonl.1"))
+            self.append(line(12))
+            later = [self.numbers() for _ in range(5)]
+        self.assertEqual([2, 3, 4], first)
+        self.assertEqual(list(range(2, 13)), first + [n for found in later for n in found], "none lost or repeated")
 
     def test_hostile_lines_never_reach_a_reader_nor_stop_it(self) -> None:
         escape = line(1, subject={"type": "request", "id": "r1", "label": "\x1b]52;c;cGF3bmVk\x07"})
@@ -157,7 +187,7 @@ class FeedTests(unittest.TestCase):
             self.assertEqual([4, 1, 2, 6, 5, 3], [event.details["n"] for event in feed.events()])
             feed.follow("lanefather", None)
             self.assertEqual([1, 2, 6, 3], [event.details["n"] for event in feed.events()])
-            self.assertEqual({"slotfather": {"invalid": 0, "version": 0, "host": 0}}, feed.skipped())
+            self.assertEqual({"slotfather": {"invalid": 0, "version": 0, "host": 0, "source": 0}}, feed.skipped())
             feed.close()
 
 

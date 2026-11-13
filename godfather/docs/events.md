@@ -59,8 +59,11 @@ it reads in `versions`):
 - by inode and offset; after a rename to `events.jsonl.1` it reads the rest of the old file, then the new one from
   its start, so a rotation loses no line and repeats none; a log truncated in place is read again from its start;
 - a last line without its newline waits until it is whole; a line that never ends within 16 KiB is skipped;
-- lines that fail the validator (lenient), name another `v`, or another `host` than this machine's are skipped and
-  counted per source, for Settings' STATUS; nothing is printed about them, and nothing stops the reader;
+- lines that fail the validator (lenient), name another `v`, another `host` than this machine's (looked up on every
+  read, as the tools do on every write: a Mac's name follows its network) or another `source` than the log's tool
+  are skipped and counted per source; EVENTS' bottom border says how many and why, nothing is printed, and nothing
+  stops the reader;
+- one read takes at most 1 MiB of a log; the rest comes with the next;
 - on start, the newest 600 events or 256 KiB per source, whichever is less, the end of `events.jsonl.1` included
   while the current log is shorter;
 - growth is checked by `stat` every 250 ms (`godfather events --follow`) or at each refresh (the dashboard);

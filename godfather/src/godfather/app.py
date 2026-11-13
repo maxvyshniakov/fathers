@@ -146,8 +146,10 @@ class Screen:
         # capabilities name no log shows none and says why
         model["events"] = self.events()
         model["sources"] = list(self.followed)
-        if not _events.log_path(source.capabilities):
-            model["events_note"] = _events_view.TOO_OLD
+        model["events_skipped"] = self.feed.skipped()
+        if not _events.log_path(source.capabilities):  # no event log of a version this Godfather reads: why
+            named = isinstance(_events.dashboard_block(source.capabilities).get("events"), dict)
+            model["events_note"] = _events_view.TOO_NEW if named else _events_view.TOO_OLD
         for name in ("holders", "waiters"):  # this frame's colours and lanes stay off the cached snapshot
             model[name] = [dict(item) for item in source.snapshot[name]]
         if source.state == "stale" and source.failed_at is not None:
@@ -472,8 +474,10 @@ def events_command(argv: list[str]) -> int:
     except KeyboardInterrupt:
         pass
     except BrokenPipeError:  # `godfather events | head`
-        with contextlib.suppress(OSError):
-            sys.stdout = open(os.devnull, "w")
+        with contextlib.suppress(OSError):  # the interpreter's own flush at exit then writes nowhere
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+            os.close(devnull)
     finally:
         feed.close()
     return 0

@@ -18,3 +18,4 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E402"]  # tests put src/ on sys.path (helpers) before importing the package
+"src/godfather/eventcheck.py" = ["PLR0124"]  # common/eventcheck.py byte for byte (tests/test_events.py): its NaN test

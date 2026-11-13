@@ -66,6 +66,48 @@ class ReplayTests(unittest.TestCase):
                          (model["events"], model["sources"], model["events_note"]),
                          "no fallback to the snapshot's described events")
 
+    def test_a_slotfather_whose_log_has_only_newer_versions_needs_a_newer_godfather(self) -> None:
+        import shutil
+        import tempfile
+        from pathlib import Path
+
+        tool = goldens_tool()
+        folder = Path(tempfile.mkdtemp(prefix="godfather-new-"))
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        shutil.copytree(tool.SCENE, folder / "scene")
+        replies_path = folder / "scene" / "slotfather" / "replies.json"
+        replies = json.loads(replies_path.read_text())
+        replies["capabilities --json"]["json"]["dashboard"]["events"]["versions"] = [2]
+        replies_path.write_text(json.dumps(replies))
+        with tool.environment(None, folder / "scene"):
+            from godfather import app
+
+            model, _ = app.Screen().load()
+        assert model is not None
+        self.assertEqual("slotfather's events need a newer godfather", model["events_note"])
+
+    def test_a_rows_identity_survives_reading_its_log_again(self) -> None:
+        """fathers#84 review: a Tail made anew numbers lines from one again; `↑ N new` must not take that for new
+        rows."""
+        import tempfile
+        from pathlib import Path
+
+        from godfather import events
+
+        lines = [json.dumps(item) + "\n" for item in (mixed()[0], mixed()[3])]
+        keys: list[list[Any]] = []
+        with tempfile.TemporaryDirectory() as folder:
+            for name, text in (("whole", "".join(lines)), ("later", lines[1])):  # the first line rotated away
+                log = Path(folder) / name
+                log.write_text(text)
+                feed = events.Feed("mbp")
+                feed.follow("slotfather", str(log))
+                feed.poll()
+                keys.append([row["key"] for row in events.rows(feed.events(), TAGS)])
+                feed.close()
+        self.assertEqual(keys[0][1], keys[1][0], "the same event, the same identity")
+        self.assertNotEqual(keys[0][0], keys[0][1])
+
     def test_every_slotfather_kind_today_has_a_result(self) -> None:
         log = [logged("lease.granted", NOW, "a", 1, count=1, waited=3),
                logged("lease.released", NOW, "a", 1, count=1, exit=0, ran=60),
@@ -239,6 +281,29 @@ class MixedViewTests(unittest.TestCase):
         self.assertIn("EVENTS ── slotfather too old for events ──", lines[0])
         self.assertEqual("", "".join(line.strip("│ ") for line in lines[1:-1]))
 
+    def test_a_filter_is_named_even_when_its_note_does_not_fit_and_beside_why_there_are_none(self) -> None:
+        """fathers#84 review: a filter that hides rows is always visible."""
+        long = "x" * 40
+        _, lines = self.draw(60, self.tool.Filter("lanefather", long))
+        self.assertIn('EVENTS ── lanefather · "xxx', lines[0])
+        self.assertRegex(lines[0], r"x… ─*╮$", "cut with an ellipsis, the corner kept")
+        canvas = self.tool.Canvas(100, 8)
+        self.tool.draw_events(canvas, Rect(0, 0, 8, 100), {"events": [], "sources": SOURCES[1:],
+                                                          "events_note": "slotfather too old for events"},
+                              NOW, self.tool.Filter("junkfather"))
+        self.assertIn("EVENTS ── slotfather too old for events · junkfather ──", canvas.render(False))
+
+    def test_skipped_lines_are_counted_in_the_bottom_border(self) -> None:
+        canvas = self.tool.Canvas(100, 8)
+        model = {"events": rows_of(mixed(), TAGS), "sources": SOURCES,
+                 "events_skipped": {"slotfather": {"invalid": 0, "version": 0, "host": 3, "source": 0},
+                                    "lanefather": {"invalid": 1, "version": 0, "host": 0, "source": 0}}}
+        self.tool.draw_events(canvas, Rect(0, 0, 8, 100), model, NOW)
+        last = canvas.render(False).splitlines()[-1]
+        self.assertTrue(last.endswith(" 4 lines skipped: invalid, other host ─╯"), last)
+        y, x = 7, last.index("4 lines")
+        self.assertEqual("warn", canvas.cells[y][x][1])
+
     def test_the_help_lists_f_and_slash_and_the_footer_hints_stay(self) -> None:
         keys = dict(entry[:2] for entry in self.tool.HELP[0][1])
         self.assertIn("f", keys)
@@ -284,6 +349,12 @@ class FilterReducerTests(unittest.TestCase):
         self.assertEqual(("710", False), (state.events_filter.text, state.events_filter.editing))
         state = self.keys(state, "f", "/", "esc")
         self.assertEqual(self.tool.Filter("slotfather"), state.events_filter, "esc clears the text, not the source")
+
+    def test_esc_clears_a_filter_enter_kept(self) -> None:
+        state = self.keys(self.state(), "f", "/", "7", "\r")
+        self.assertEqual(self.tool.Filter("slotfather", "7"), state.events_filter)
+        state = self.keys(state, "esc")
+        self.assertEqual(self.tool.Filter("slotfather"), state.events_filter, "the text goes, the source stays")
 
     def test_typed_text_stays_as_typed_on_another_layout(self) -> None:
         state = self.keys(self.state(), "/", "й")

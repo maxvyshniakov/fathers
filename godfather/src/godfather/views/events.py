@@ -20,10 +20,12 @@ from . import common as _common
 from .common import Model, cell_run, cells_width
 
 DETAIL_MIN, DETAIL_MAX = 6, 28  # the detail column's least and greatest width; it grows to its longest value
+LABEL_LEAST = 6  # the label's least width with several sources, once the event has shrunk
 EVENT_MAX, EVENT_MIN = 10, 5  # the event column's greatest and least width
 TIME_WIDTH, TIME_MIXED = 10, 9  # the time column (`11:59:35`, `Wed 11:59`); with several sources it gives a cell
 SOURCE_STYLES = {"slot": "source-slot", "lane": "source-lane", "junk": "source-junk"}  # theme tokens by tag
-TOO_OLD = "slotfather too old for events"
+TOO_OLD = "slotfather too old for events"  # its capabilities name no event log
+TOO_NEW = "slotfather's events need a newer godfather"  # they name one of no schema version this one reads
 
 
 @dataclass(frozen=True)
@@ -58,17 +60,38 @@ def source_style(tag: str) -> str:
     return SOURCE_STYLES.get(tag, "dim")
 
 
-def filter_note(model: Model, found: Filter) -> Optional[Part]:
-    """The top border's note: why there are no events, else the active filter (`all sources`, `lanefather`,
-    `"710"`) where there is more than one source or a filter is set."""
+def filter_note(model: Model, found: Filter) -> list[Part]:
+    """The top border's note: why there are no events, then the active filter (`all sources`, `lanefather`,
+    `"710"`) where there is more than one source or a filter is set; both where both apply (fathers#84 review: a
+    filter that hides rows is always named)."""
+    parts: list[Part] = []
     if model.get("events_note"):
-        return str(model["events_note"]), "warn"
+        parts.append((str(model["events_note"]), "warn"))
     if len(present(model)) < 2 and not found.active():
-        return None
+        return parts
     words = [found.source or "all sources"] if found.source or len(present(model)) > 1 else []
     if found.text:
         words.append(f'"{found.text}"')
-    return " · ".join(words), "text" if found.active() else "dim"
+    if words:
+        parts += [(" · ", "dim")] if parts else []
+        parts.append((" · ".join(words), "text" if found.active() else "dim"))
+    return parts
+
+
+def skipped_note(model: Model) -> Optional[Part]:
+    """Lines the reader skipped since Godfather started, and why (`3 lines skipped: other host`), so a log whose
+    lines all go unread says so (fathers#84 review)."""
+    from ..events import SKIP_WORDS
+
+    counts: dict[str, int] = {}
+    for found in cast(dict[str, dict[str, int]], model.get("events_skipped") or {}).values():
+        for reason, count in found.items():
+            counts[reason] = counts.get(reason, 0) + int(count)
+    total = sum(counts.values())
+    if not total:
+        return None
+    why = ", ".join(SKIP_WORDS.get(reason, reason) for reason, count in counts.items() if count)
+    return f" {total} line{'s' if total != 1 else ''} skipped: {why} ", "warn"
 
 
 def event_result(row: dict[str, Any]) -> list[Part]:
@@ -131,11 +154,14 @@ def columns(width: int, rows: list[dict[str, Any]], results: list[list[Part]], m
             spec.append(("pid", "pid", max([3] + pids), True, 0))
         if room(spec, width) >= FLEXIBLE_MIN:
             break
-    # Narrower still, these shrink and never go: the event to eight cells (`released`), the detail to eight
-    # (`ok 5m41s`), then both to their least
-    for key, least in (("event", 8), ("detail", 8), ("event", EVENT_MIN), ("detail", DETAIL_MIN)):
-        if room(spec, width) < FLEXIBLE_MIN:
-            spec = [(name, title, max(least, size + room(spec, width) - FLEXIBLE_MIN) if name == key else size,
+    # Narrower still, these shrink and never go: the event to eight cells (`released`); with several sources the
+    # label then gives way down to LABEL_LEAST before the detail, which says how it went (`2 findings · 9m`); then
+    # the detail to eight (`ok 5m41s`), then both to their least
+    label = LABEL_LEAST if mixed else FLEXIBLE_MIN
+    for key, least, keep in (("event", 8, FLEXIBLE_MIN), ("detail", 8, label), ("event", EVENT_MIN, label),
+                             ("detail", DETAIL_MIN, label)):
+        if room(spec, width) < keep:
+            spec = [(name, title, max(least, size + room(spec, width) - keep) if name == key else size,
                      right, rank) for name, title, size, right, rank in spec]
     return spec
 
@@ -164,14 +190,17 @@ def draw_events(canvas: Canvas, rect: Rect, model: Model, moment: Optional[datet
     size = table.width("slots", 0)
     note = filter_note(model, found)
     table.header(panel, "EVENTS")
-    if note is not None:
+    if note:
         border_note(panel, table, note)
+    skipped = skipped_note(model)
     offset, visible = panel.viewport(len(rows))
     if found.editing:
         canvas.segments(rect.y + rect.height - 1, rect.x + 2, [(" / ", "key"), (found.text, "text"), ("_ ", "key")],
                         max(0, rect.width - 4))
     elif visible and offset and canvas.fresh_events:
         panel.bottom(f" ↑ {canvas.fresh_events} new ", "text" if panel.focused else "dim")
+    if skipped is not None and not found.editing and text_width(skipped[0]) + 16 <= rect.width:
+        canvas.right(rect.y + rect.height - 1, rect.x + rect.width - 2, *skipped)
     if not rows and not model.get("events_note"):
         panel.put(0, "No events match the filter" if found.active() else "No events logged yet", "dim")
     for line, position in panel.rows(offset, visible, len(rows)):
@@ -198,19 +227,25 @@ def clipped(table: Table, width: int) -> Table:
                   if x < width])
 
 
-def border_note(panel: Panel, table: Table, note: Part) -> None:
+def border_note(panel: Panel, table: Table, note: list[Part]) -> None:
     """The note set into the top border after the title (`EVENTS ── all sources ──`), over the column labels it
-    reaches, which give way: the labels after it stay over their columns."""
+    reaches, which give way: the labels after it stay over their columns. A note longer than the border is cut with
+    an ellipsis, never left out."""
     canvas, (y, x, _, width) = panel.canvas, panel.rect
     start = x + 3 + text_width("EVENTS") + 1
-    end = start + 2 + text_width(note[0]) + 2
-    if end > x + width - 2:
+    room = x + width - 2 - (start + 3) - 1  # the cells between its leading space and the corner, less a space
+    if room < 2:
         return
-    labels = [x + 3 + column + (max(0, size - text_width(title)) if right else 0)
-              for _, title, column, size, right in table.placed[1:] if title]
+    size = min(room, sum(text_width(text) for text, _ in note))
+    end = start + 3 + size + 1
+    labels = [x + 3 + column + (max(0, label_size - text_width(title)) if right else 0)
+              for _, title, column, label_size, right in table.placed[1:] if title]
     resume = next((label - 1 for label in labels if label - 1 > end), x + width - 1)
     rule = (FOCUS_FRAME if panel.focused else REST_FRAME)[1]
     canvas.put(y, start, rule * (resume - start), "accent" if panel.focused else "frame")
     canvas.put(y, start + 2, " ", "text")
-    canvas.put(y, start + 3, note[0], note[1])
-    canvas.put(y, start + 3 + text_width(note[0]), " ", "text")
+    if size < sum(text_width(text) for text, _ in note):  # cut: the whole note as one run, ending in …
+        canvas.put(y, start + 3, "".join(text for text, _ in note), note[-1][1], size)
+    else:
+        canvas.segments(y, start + 3, note, size)
+    canvas.put(y, start + 3 + size, " ", "text")
