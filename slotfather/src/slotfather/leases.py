@@ -59,7 +59,7 @@ def process_table(directory: Path, log: bool = True) -> Table:
 def reap(directory: Path, table: Table) -> list[tuple[Path, dict[str, Any]]]:
     """Live entries in queue order; removes those whose holder exited or crashed (in another user's queue it only
     leaves them out). An entry this client does not know (entry.unknown(); fathers#19) is in neither: it is left
-    alone, never reaped, and the queue is planned as if it were absent."""
+    alone and never reaped; the plan reserves its slots while its holder runs (reserved(), used_elsewhere())."""
     live: list[tuple[Path, dict[str, Any]]] = []
     readonly = _state.foreign_owner(directory) is not None
     for path, entry in _state.entries(directory):
@@ -95,6 +95,23 @@ def legacy_holders(table: Table) -> list[tuple[Path, dict[str, Any], int]]:
 
 def legacy_used(table: Table) -> int:
     return sum(count for _, _, count in legacy_holders(table))
+
+
+def reserved(directory: Path, table: Table) -> list[tuple[Path, dict[str, Any], int]]:
+    """Entries at `directory` this client does not know (state.unknown()) whose holder is alive: (path, entry, the
+    slots it reserves, entry.reserved()). Nothing else may take those slots: the entry may be a newer client's lease
+    (fathers#19 review). One whose holder cannot be checked reserves nothing."""
+    found: list[tuple[Path, dict[str, Any], int]] = []
+    for path, entry in _state.unknown(directory):
+        count = _entry.reserved(entry)
+        if count and _platform.alive(entry, table):
+            found.append((path, entry, count))
+    return found
+
+
+def used_elsewhere(directory: Path, table: Table) -> int:
+    """The slots held without a known entry of this queue: by earlier queues' leases and by live unknown entries."""
+    return legacy_used(table) + sum(count for _, _, count in reserved(directory, table))
 
 
 def ask(directory: Path, live: list[tuple[Path, dict[str, Any]]], held: list[dict[str, Any]],
@@ -192,7 +209,7 @@ def ask_yield(pid: int, start: str, directory: Path | None = None) -> tuple[dict
             behind = _schedule.rank_time(waiter, settings, moment) + _config.YIELD_BEHIND
             trial = _schedule.plan([*(e for e in ranked), _entry.trial_yielded(entry, behind)], held,
                                    _config.total(), moment, estimate=_schedule.estimator(directory),
-                                   other=legacy_used(table), settings=settings)
+                                   other=used_elsewhere(directory, table), settings=settings)
             if any(g is waiter for g in trial.grants):
                 chosen = waiter
                 break
@@ -234,7 +251,7 @@ def yield_lease(path: Path, out=sys.stderr) -> bool:
             held = [e for p, e in live if _entry.is_held(e) and p != path]
             waiters = [e for p, e in live if _entry.is_waiting(e)] + [_entry.trial_yielded(entry, behind)]
             trial = _schedule.plan(waiters, held, _config.total(), time.time(), estimate=_schedule.estimator(directory),
-                         other=legacy_used(table), settings=settings)
+                         other=used_elsewhere(directory, table), settings=settings)
             if not any(e is asker for e in trial.grants):
                 asker = None
         if asker is None:  # it started, left or would still not start; the next look would withdraw the request
@@ -351,7 +368,7 @@ def grant(directory: Path, table: Table) -> str | None:
     held, waiters = _entry.split(e for _, e in live)
     paths = {id(e): path for path, e in live}
     estimate = _schedule.estimator(directory)
-    other = legacy_used(table)
+    other = used_elsewhere(directory, table)
     slots = _config.total()
     moment = time.time()
     settings = _schedule.order_settings(directory)

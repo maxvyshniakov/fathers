@@ -67,6 +67,8 @@ ASKED = "asked"  # held, with a yield request standing
 UNKNOWN = "unknown"  # an entry this client does not know (unknown()): left alone
 
 NEEDED = (("pid", int), ("start", str), ("count", int), ("since", str))  # what the scheduler reads of every entry
+POSITIVE = ("pid", "count")  # of those, the ones that must be above zero
+IDENTITY = NEEDED[:3]  # what a process query reads: no arrival
 
 
 class Phase(NamedTuple):
@@ -74,21 +76,47 @@ class Phase(NamedTuple):
     idle: bool  # a held lease below the idle threshold for the idle duration (idle.idle_since())
 
 
-def unknown(entry: Mapping[str, Any]) -> str | None:
+def unknown(entry: Mapping[str, Any], needed: tuple[tuple[str, type], ...] = NEEDED) -> str | None:
     """Why this client does not know an entry, or None when it does (fathers#19): a state other than waiting and
     held (a newer client's, perhaps), no state, or a field the scheduler needs (NEEDED) missing or of another type.
-    Such an entry may be a live lease of a newer client: it is never granted, reaped, ranked or deleted, its slots
-    count neither held nor free, and `status` shows it."""
+    Such an entry may be a live lease of a newer client: it is never granted, reaped, ranked or deleted
+    automatically; while its holder is alive its count is reserved (reserved()), and `status` shows it. The one rule
+    of what a known entry is: procs.lease_entries() and the scheduler read it alike (valid_identity())."""
     if "state" not in entry:
         return "no state"
     state = entry.get("state")
     if state not in (WAITING, HELD):
         return f"state {state!r}" if isinstance(state, str) else "a state that is not text"
-    for field, kind in NEEDED:
+    for field, kind in needed:
         value = entry.get(field)
         if type(value) is not kind:
             return f"no {field}" if value is None else f"a {field} that is not {kind.__name__}"
+        if field in POSITIVE and isinstance(value, int) and value <= 0:
+            return f"a {field} that is not positive"
     return None
+
+
+def checkable(entry: Mapping[str, Any]) -> bool:
+    """Whether an entry names a holder whose liveness can be checked: a positive int pid and a start (platform.alive()
+    then decides). An unknown entry without them reserves nothing and is never provably dead."""
+    pid = entry.get("pid")
+    return type(pid) is int and pid > 0 and isinstance(entry.get("start"), str)
+
+
+def reserved(entry: Mapping[str, Any]) -> int:
+    """The slots an unknown entry reserves while its holder is alive (fathers#19 review): its count, a positive int;
+    0 where it has none or its holder cannot be checked (checkable())."""
+    count = entry.get("count")
+    return count if type(count) is int and count > 0 and checkable(entry) else 0
+
+
+def yielded_of(entry: Mapping[str, Any]) -> float:
+    """The seconds a lease has spent back in the queue (`yielded`); 0 where it has none, or a value that is not a
+    finite number, as a foreign writer could leave."""
+    value: object = entry.get("yielded")
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+        return float(value)
+    return 0.0
 
 
 def is_held(entry: Mapping[str, Any]) -> bool:
@@ -124,14 +152,14 @@ def split(entries: Iterable[Record]) -> tuple[list[Record], list[Record]]:
 
 
 def valid_identity(entry: object) -> bool:
-    """Whether a raw entry names its holder as process queries need it: a positive pid, a start, a known state and
-    a positive count (procs.lease_entries(); install.py keeps its own copy of this rule)."""
+    """Whether a raw entry names its holder as process queries need it: known by the same rule as the scheduler's
+    (unknown(), without the arrival: a positive pid and count, a known state) with a start that is not empty (procs.lease_entries(); install.py keeps its own copy
+    of the identity part)."""
     if not isinstance(entry, dict):
         return False
     found = cast(Record, entry)
-    pid, start, count = found.get("pid"), found.get("start"), found.get("count")
-    return type(pid) is int and pid > 0 and isinstance(start, str) and bool(start.strip()) and \
-        found.get("state") in (HELD, WAITING) and type(count) is int and count > 0
+    start = found.get("start")
+    return unknown(found, IDENTITY) is None and isinstance(start, str) and bool(start.strip())
 
 
 # Accessors: each field read as every writer may have left it.
@@ -274,7 +302,7 @@ def reservation(entry: Mapping[str, Any]) -> float | None:
 def held_for(entry: Mapping[str, Any], moment: float) -> float:
     """How long a lease has run: since its first grant, less the time it spent yielded."""
     granted = _config.seconds(entry.get("granted"))
-    return 0.0 if granted is None else max(0.0, moment - granted - float(entry.get("yielded") or 0))
+    return 0.0 if granted is None else max(0.0, moment - granted - yielded_of(entry))
 
 
 # Transitions: the one definition of each. They change the entry they are given (or return a copy, for a trial),
@@ -325,7 +353,7 @@ def resume(entry: Record, moment: float | None = None) -> None:
         return
     again = entry.get("granted")
     back = moment if moment is not None else _config.seconds(again) or time.time()
-    entry["yielded"] = round(float(entry.get("yielded") or 0) + max(0.0, back - away), 2)
+    entry["yielded"] = round(yielded_of(entry) + max(0.0, back - away), 2)
     entry.update(resumed=again, granted=entry.get("first_granted") or again)
     for key in ("yielded_at", "first_granted", "rank"):
         entry.pop(key, None)

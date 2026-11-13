@@ -123,7 +123,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 - A queue entry this Slotfather does not know (a state other than waiting or held, no state, or no pid, start,
   since or count) is left alone, since it may be a newer client's lease: it is no longer granted as a waiter, reaped
   or deleted, and no longer stops every client's look with a `KeyError`. `status`, `status --json` and the dashboard
-  block show it as `unknown` with a warning; its slots count neither held nor free.
+  block show it as `unknown` with a warning. While its holder runs its slots stay reserved (held, not free); once
+  its holder is gone `status` says to remove the file, and `procs --json` and the installer read it as absent with
+  a warning instead of failing.
 - Queue entries and the `sequence` file are written whole and synced to disk, so a crash no longer leaves an empty
   entry or loses the counter; a torn `sequence` no longer puts a new request ahead of those already waiting. An
   entry that cannot be read is left in place and `status` lists it as `unreadable`.

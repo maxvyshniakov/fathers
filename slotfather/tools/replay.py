@@ -395,16 +395,19 @@ class Replay:
             request = self.requests[number] if number is not None else None
             if kind == "arrive":
                 cls = self.classes[number]
-                waiting[number] = {"id": number, "label": request["label"], "cmd": request["cmd"],
-                                   "count": min(request["count"], self.slots), "since": stamp(request["arrival"]),
-                                   "state": sf_entry.WAITING, "priority": cls,
-                                   "yieldable": client_yields(request, cls, self.slots)}
+                give_up = request.get("give_up")
+                # as the queue writes a new request (entry.new_request()), with its client's wait (run --wait)
+                waiting[number] = sf_entry.new_request(
+                    number + 1, "", min(request["count"], self.slots), "", "", "", stamp(request["arrival"]),
+                    "normal", f"replay-{number}", yieldable=client_yields(request, cls, self.slots),
+                    until=stamp(give_up) if give_up is not None and self.policy.get("until", True) else None)
+                # its recorded label, command (None where none was recorded) and class, in their places
+                waiting[number]["label"] = request["label"]
+                waiting[number]["cmd"] = request["cmd"]
+                waiting[number]["priority"] = cls
+                waiting[number]["id"] = number
                 result[number]["defers"] = whole_batch(waiting[number], self.slots)
                 remaining[number] = self.run_of(request)
-                give_up = request.get("give_up")
-                if give_up is not None and self.policy.get("until", True):
-                    # Its client's wait (run --wait), which the queue knows from its entry.
-                    waiting[number]["until"] = stamp(give_up)
                 give_up = leaves_at(request)
                 if give_up is not None:
                     heapq.heappush(events, (give_up, 1, order, "leave", number))

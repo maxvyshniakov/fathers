@@ -231,7 +231,7 @@ class Reading:
             from . import query as _query
             look = _query.look(directory)
             slots = int(look.basis["slots"])
-            self.held = _query.held_slots(look.live, look.legacy, slots)
+            self.held = _query.held_slots(look.live, [*look.legacy, *look.reserved], slots)
             waiters = [e for e in look.live if _entry.is_waiting(e)]
             _schedule.fit(waiters, slots)
             if self.effective["order"] == "backfill":

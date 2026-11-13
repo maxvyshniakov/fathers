@@ -8,6 +8,7 @@ import sys as _path_sys
 from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 
+import contextlib
 import io
 import json
 import random
@@ -128,22 +129,42 @@ class InstallerCopyTests(unittest.TestCase):
                     found = ValueError
                 self.assertEqual(expected, found)
 
-    def test_the_installer_accepts_the_states_the_package_knows(self) -> None:
+    def test_the_installer_reads_identities_as_the_package_does(self) -> None:
+        # install.py's identity rule (require_idle, queue_updates) against entry.valid_identity() and unknown(): an
+        # entry the package can identify the installer accepts; one it cannot (no pid, no start, a bad pid) both
+        # refuse; one of an unknown state whose holder is gone the installer reads as absent, as procs does.
         directory = _Path(tempfile.mkdtemp(prefix="slotfather-entry-"))
         self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
         (directory / "queue").mkdir()
         path = directory / "queue" / "0000000001-7.json"
-        for state in ("held", "waiting", "paused"):
-            with self.subTest(state=state):
-                path.write_text(json.dumps(waiter(state=state)))
-                known = sf_entry.valid_identity(waiter(state=state))
-                try:
-                    install.require_idle(directory, {})
-                    accepted = True
-                except install.InstallError:
-                    accepted = False
-                self.assertEqual(known, accepted)
-
+        cases: list[tuple[dict[str, Any], str]] = [
+            (waiter(), "accepted"), (waiter(state="held", priority="normal"), "accepted"),
+            (waiter(state="paused"), "absent"), ({k: v for k, v in waiter().items() if k != "state"}, "absent"),
+            ({k: v for k, v in waiter().items() if k != "pid"}, "refused"),
+            ({k: v for k, v in waiter().items() if k != "start"}, "refused"),
+            (waiter(pid="7"), "refused"), (waiter(pid=0), "refused")]
+        # require_idle() checks an old queue's idleness only: a pid 0 names no process there, so it is no holder
+        idle_only = {id(cases[-1][0])}
+        for entry, expected in cases:
+            with self.subTest(entry=entry):
+                path.write_text(json.dumps(entry))
+                if expected == "accepted":
+                    self.assertTrue(sf_entry.valid_identity(entry))
+                elif expected == "absent":
+                    self.assertIsNotNone(sf_entry.unknown(entry))
+                    self.assertTrue(sf_entry.checkable(entry), "its holder can be checked: here it is gone")
+                else:
+                    self.assertFalse(sf_entry.valid_identity(entry) or sf_entry.checkable(entry))
+                for check in (install.require_idle, install.queue_updates):
+                    err = io.StringIO()
+                    try:
+                        with contextlib.redirect_stderr(err):
+                            check(directory, {})
+                        found = "absent" if str(path) in err.getvalue() else "accepted"
+                    except install.InstallError:
+                        found = "refused"
+                    want = "accepted" if check is install.require_idle and id(entry) in idle_only else expected
+                    self.assertEqual(want, found, check.__name__)
 
 AGES_OFF = {"aging_batch": 0.0, "aging_normal": 0.0}  # a grant's class is its own: no `aged` to work out
 

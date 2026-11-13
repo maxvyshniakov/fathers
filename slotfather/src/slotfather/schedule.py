@@ -703,7 +703,7 @@ def forecast(waiters: list[Entry], held: list[Entry], slots: int, moment: float,
     def expected(entry: Entry) -> float | None:
         if id(entry) in ends:  # running: until its end
             granted = _config.seconds(entry.get("granted"))
-            return None if granted is None else ends[id(entry)] - granted - float(entry.get("yielded") or 0)
+            return None if granted is None else ends[id(entry)] - granted - _entry.yielded_of(entry)
         return estimate(entry)
 
     found: dict[int, float] = {}
