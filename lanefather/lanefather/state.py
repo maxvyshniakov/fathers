@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 import contextlib
+import errno
 import fcntl
 import json
 import os
@@ -46,13 +47,18 @@ class Store:
         environment's LANEFATHER_STATE, else the project's state_dir."""
         self.directory = directory or Path(os.path.expanduser(project.env("STATE") or project.state_dir))
 
-    def lanes(self, *, strict: bool = False) -> list[Record]:
+    def lanes(self, *, strict: bool = False, damaged: list[Path] | None = None) -> list[Record]:
+        """The lane records. A record a write cut short raises, so nothing that admits, claims or collects acts on
+        a partial set; a read-only listing passes `damaged` to get the healthy lanes and the damaged paths."""
         found: list[Record] = []
         for path in sorted(self.directory.glob("*.json")):
             if path.name.count(".") == 1:
                 record = read_json(path, reject_duplicates=strict)
                 if record is None and read_json(path) is None and path.exists():
-                    raise LaneError(cut_short(path))
+                    if damaged is None:
+                        raise LaneError(cut_short(path))
+                    damaged.append(path)
+                    continue
                 if record is not None and "id" in record:
                     if strict and (record["id"] != path.stem or record.get("status") not in (*OCCUPYING, *LANDED)):
                         raise LaneError(f"lane state {path} has invalid identity or status; collection refuses")
@@ -108,6 +114,9 @@ def read_json(path: Path, *, reject_duplicates: bool = False) -> dict[str, Any] 
     return data if isinstance(data, dict) else None  # pyright: ignore[reportUnknownVariableType]
 
 
+UNSYNCABLE = {errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP}
+
+
 def cut_short(path: Path) -> str:
     return (f"lane state {path} is unreadable, empty or not a JSON object: a write was cut short or the file is "
             "damaged. Restore the record or remove the file; until then it is not read as a lane, and start does not "
@@ -134,14 +143,16 @@ def atomic_write(path: Path, text: str, mode: int | None = None) -> None:
     except BaseException:
         pending.unlink(missing_ok=True)
         raise
-    # The rename lasts once the directory entry does; a file system that cannot sync a directory has done what it
-    # can.
-    with contextlib.suppress(OSError):
-        folder = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(folder)
-        finally:
-            os.close(folder)
+    # The rename lasts once the directory entry does. A file system that cannot sync a directory says so with
+    # EINVAL or ENOTSUP and has done what it can; any other failure (EIO) is the caller's to see.
+    folder = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(folder)
+    except OSError as error:
+        if error.errno not in UNSYNCABLE:
+            raise
+    finally:
+        os.close(folder)
 
 
 def write_json(path: Path, data: Any) -> None:

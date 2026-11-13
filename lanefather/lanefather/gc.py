@@ -4,6 +4,11 @@ The candidates are the worktrees under the main checkout's .claude/worktrees who
 project's [gc] dirs and branches (agent, lane, Claude Code and Codex session worktrees by default, fathers#44); the
 branches deleted are the merged ones the branch patterns name that no worktree or lane uses.
 
+Agent and lane worktrees (AGENT_DIRS, AGENT_BRANCHES) are throwaway: merged into origin or a local integrate/*
+branch, clean, idle and unused is enough. Any other candidate is a session worktree an owner may come back to, so
+it is kept unless its HEAD reached origin/dev or origin/main, it has a commit of its own, and it holds no ignored
+file outside [gc] disposable. No candidate that holds another worktree or Git repository is removed.
+
 One Project value owns the configuration, state snapshot and process source for this pass. Git and slotfather's
 project adapter supply observations; cleanup policy lives here, rather than in a project's janitor. Project build
 caches and scratchpads are outside this module: [gc] after_remove runs only after a worktree was actually removed.
@@ -16,6 +21,7 @@ import fnmatch
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import time
 from typing import Any, cast
@@ -25,6 +31,11 @@ from .errors import LaneError
 from .gitops import common_dir, git, git_ok, main_checkout, worktree_list
 
 IDLE_SECONDS = 2 * 3600
+# The worktrees and branches gc collected before fathers#44, under the rules it had then.
+AGENT_DIRS = ("agent-*", "lane-*")
+AGENT_BRANCHES = ("worktree-agent-*", "lane/*")
+# A HEAD reflog entry that records work done in the worktree, not a checkout or reset.
+OWN_WORK = ("commit", "merge", "cherry-pick", "rebase", "pull", "revert", "am")
 
 
 @dataclass
@@ -86,8 +97,9 @@ class Project:
             for branch in git(self._root, "for-each-ref", "--format=%(refname:short)", "refs/heads/").splitlines():
                 if not self._branch_collected(branch) or branch in in_use:
                     continue
+                agent = any(fnmatch.fnmatchcase(branch, p) for p in AGENT_BRANCHES)
                 if not any(git_ok(self._root, "merge-base", "--is-ancestor", f"refs/heads/{branch}", t)
-                           for t in targets):
+                           for t in (targets if agent else upstream(targets))):
                     continue
                 try:
                     if not dry_run:
@@ -113,6 +125,9 @@ class Project:
         lock = entry.get("locked")
         if lock is not None and not lock.startswith("claude agent"):
             return f"locked: {lock}"
+        holder = re.search(r"\(pid (\d+)\)", lock or "")
+        if holder and _alive(int(holder[1])):
+            return f"locked by a live claude agent (pid {holder[1]})"
         if not os.path.isdir(path) or os.path.islink(path):
             return "missing or symbolic-link worktree"
         if Path(path, ".keep").exists():
@@ -120,14 +135,36 @@ class Project:
         activity = _last_activity(path)
         if time.time() - activity < IDLE_SECONDS:
             return f"active {(time.time() - activity) / 3600:.1f} h ago (under 2 h)"
-        if not any(git_ok(path, "merge-base", "--is-ancestor", "HEAD", t) for t in targets):
+        session = not (any(fnmatch.fnmatchcase(os.path.basename(path), p) for p in AGENT_DIRS)
+                       or any(fnmatch.fnmatchcase(branch, p) for p in AGENT_BRANCHES))
+        if session:
+            if not any(git_ok(path, "merge-base", "--is-ancestor", "HEAD", t) for t in upstream(targets)):
+                return "HEAD is not merged into origin/dev or origin/main"
+        elif not any(git_ok(path, "merge-base", "--is-ancestor", "HEAD", t) for t in targets):
             return "HEAD is not merged"
         if git(path, "--no-optional-locks", "status", "--porcelain"):
             return "uncommitted or untracked changes"
+        if session and not self._settings.gc_collect_uncommitted_sessions and not _own_work(path):
+            return ("no commit of its own: the session may still be open "
+                    "([gc] collect_uncommitted_sessions = true collects it)")
+        if session:
+            held = self._ignored(path)
+            if held:
+                return f"ignored files: {', '.join(held[:3])}{' ...' if len(held) > 3 else ''} (not [gc] disposable)"
+        nested = _nested_repository(path)
+        if nested:
+            return f"it holds a Git repository at {nested}"
         if isinstance(self._processes, procs.NoSource):
             return "no process source; worktree use is unknown"
         _, held = self._processes.sort_for_removal(path)
         return "in use by " + "; ".join(held[:3]) if held else None
+
+    def _ignored(self, path: str) -> list[str]:
+        """The ignored paths in the worktree that no [gc] disposable pattern names a component of."""
+        found = git(path, "--no-optional-locks", "status", "--porcelain", "--ignored")
+        return [line[3:] for line in found.splitlines() if line.startswith("!! ")
+                and not any(fnmatch.fnmatchcase(part, p) for part in line[3:].rstrip("/").split("/")
+                            for p in self._settings.gc_disposable)]
 
     def _dir_collected(self, path: str) -> bool:
         """A pattern with a '/' matches the path from the main checkout, one without the directory's name."""
@@ -191,6 +228,40 @@ class Project:
                     result.freed += report["freed"]
                 except ValueError as error:
                     result.errors.append(f"after_remove {path}: invalid cleanup report: {error}")
+
+
+def upstream(targets: list[str]) -> list[str]:
+    """The targets that are origin's: work merged only into a local integrate/* branch is not yet upstream."""
+    return [t for t in targets if t.startswith("refs/remotes/")]
+
+
+def _own_work(path: str) -> bool:
+    """Whether the worktree's HEAD reflog records a commit, merge or rebase made in it; without a reflog, no."""
+    found = subprocess.run(["git", "-C", path, "reflog", "show", "--format=%gs", "HEAD", "--"],
+                           capture_output=True, text=True)
+    return found.returncode == 0 and any(line.startswith(OWN_WORK) for line in found.stdout.splitlines())
+
+
+def _nested_repository(path: str) -> str | None:
+    """The first Git repository or worktree (a .git file or directory) below the worktree's top, ignored
+    directories included: removing the worktree would delete it."""
+    for folder, directories, files in os.walk(path):
+        if folder == path:
+            directories[:] = [d for d in directories if d != ".git"]
+            continue
+        if ".git" in directories or ".git" in files:
+            return os.path.relpath(folder, path)
+    return None
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def _last_activity(path: str) -> float:
