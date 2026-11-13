@@ -5,6 +5,7 @@
 - The installed `lanefather`, run in this repository; [.lanefather.toml](../../.lanefather.toml) gives it the project,
   its own Store (`~/.local/state/lanefather/fathers/lanes`) and the verify command `tools/lane-check`.
 - Once per machine, before the first lane: `bun install` in the main checkout (the lane checks use its Repo-Kit).
+  It, and every lane check's own frozen install, also activates the pre-push gate (`core.hooksPath`).
 - Start: `lanefather start <id> --ticket <N> --base integrate/<batch> --claims '<package>/**' --create`; the lane's
   worktree is `.claude/worktrees/lane-<id>` of the main checkout.
 - Check: `lanefather check <id>` plans the lane's diff with `tools/lane-check` (each changed package's checks, and
