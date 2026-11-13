@@ -133,7 +133,7 @@ def require_idle(directory, table):
     for path in (directory / "queue").glob("*.json"):
         try:
             entry = json.loads(path.read_text())
-            if unknown_and_gone(path, entry, table):
+            if unknown_and_gone(cast(Path, path), entry, cast(dict[int, str], table)):
                 continue
             pid, start, state = entry["pid"], entry["start"], entry["state"]
             if type(pid) is not int or not isinstance(start, str) or state not in KNOWN_STATES:

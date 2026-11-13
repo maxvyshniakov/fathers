@@ -91,7 +91,7 @@ def unknown(entry: Mapping[str, Any], needed: tuple[tuple[str, type], ...] = NEE
         value = entry.get(field)
         if type(value) is not kind:
             return f"no {field}" if value is None else f"a {field} that is not {kind.__name__}"
-        if field in POSITIVE and value <= 0:
+        if field in POSITIVE and isinstance(value, int) and value <= 0:
             return f"a {field} that is not positive"
     return None
 
@@ -113,8 +113,10 @@ def reserved(entry: Mapping[str, Any]) -> int:
 def yielded_of(entry: Mapping[str, Any]) -> float:
     """The seconds a lease has spent back in the queue (`yielded`); 0 where it has none, or a value that is not a
     finite number, as a foreign writer could leave."""
-    value = entry.get("yielded")
-    return float(value) if type(value) in (int, float) and math.isfinite(value) else 0.0
+    value: object = entry.get("yielded")
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+        return float(value)
+    return 0.0
 
 
 def is_held(entry: Mapping[str, Any]) -> bool:

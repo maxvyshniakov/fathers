@@ -398,8 +398,8 @@ class Replay:
                 give_up = request.get("give_up")
                 # as the queue writes a new request (entry.new_request()), with its client's wait (run --wait)
                 waiting[number] = sf_entry.new_request(
-                    number + 1, "", min(request["count"], self.slots), request["label"], request["cmd"], "",
-                    stamp(request["arrival"]), cls, f"replay-{number}",
+                    number + 1, "", min(request["count"], self.slots), str(request["label"]), str(request["cmd"]), "",
+                    stamp(request["arrival"]), str(cls), f"replay-{number}",
                     yieldable=client_yields(request, cls, self.slots),
                     until=stamp(give_up) if give_up is not None and self.policy.get("until", True) else None)
                 waiting[number]["id"] = number
