@@ -9,6 +9,8 @@ the state and returns the new state and its effects; a key a mode does not list 
     changelog  what's new: the same, v and Esc close, ? switches to help; ←→ and Tab switch its tool filter;
              opening it asks every tool again, closing it marks everything read (state.closed_news())
     settings the Settings panel's own keys (views/settings.py); typed values are not taken as hotkeys
+    filter   EVENTS' text field, opened by `/` (fathers#84): what is typed goes into it, Backspace deletes, Enter
+             keeps the filter, Esc clears it; on the main screen and a panel `f` cycles EVENTS' source filter
 
 A key is a hotkey by its US-QWERTY position (#13) everywhere but while a Settings value is typed. A click on a footer
 hint is that hint's key, in every mode."""
@@ -19,8 +21,9 @@ from typing import Any, Callable, Union, cast
 
 from . import keys as _keys
 from . import layout as _layout
-from .state import (LOAD_NEWS, OPEN_SETTINGS, QUIT, AppState, Changelog, Help, Key, Mouse, Result, SettingsOverlay, items, move,
-                    overlay_box, settings_effects)
+from .state import (LOAD_NEWS, OPEN_SETTINGS, QUIT, AppState, Changelog, Help, Key, Mouse, Result, SettingsOverlay, filtered,
+                    items, move, overlay_box, settings_effects)
+from .views import events as _events_view
 from .views import overlays as _overlays
 
 Handler = Callable[[AppState, str], Result]
@@ -84,8 +87,46 @@ def scroll_panel(state: AppState, key: str) -> Result:
     return dataclasses.replace(state, scroll={**state.scroll, state.focus: max(0, min(last, offset))}), []
 
 
+def events_shown(state: AppState) -> bool:
+    return "events" in state.frame.tables
+
+
+def cycle_source(state: AppState, _: str) -> Result:
+    """`f`: EVENTS' source filter, all, then each present source in the order slotfather, lanefather, junkfather."""
+    if not events_shown(state):
+        return state, []
+    names = [None, *(name for name, _ in _events_view.present(state.model))]
+    now = state.events_filter.source
+    after = names[(names.index(now) + 1) % len(names)] if now in names else None
+    return filtered(state, dataclasses.replace(state.events_filter, source=after)), []
+
+
+def open_filter(state: AppState, _: str) -> Result:
+    """`/`: EVENTS' text field, in its bottom border, with the filter as it is."""
+    if not events_shown(state):
+        return state, []
+    return dataclasses.replace(state, events_filter=dataclasses.replace(state.events_filter, editing=True)), []
+
+
+def type_filter(state: AppState, key: str) -> Result:
+    """A key in EVENTS' text field: a character is typed, Backspace deletes one, Enter keeps the filter and closes
+    the field, Esc clears it and closes the field; other keys do nothing."""
+    current = state.events_filter
+    if key == "esc":
+        return filtered(state, _events_view.Filter(current.source)), []
+    if key in ("\r", "\n"):
+        return dataclasses.replace(state, events_filter=dataclasses.replace(current, editing=False)), []
+    if key in ("\x7f", "\x08"):
+        return filtered(state, dataclasses.replace(current, text=current.text[:-1])), []
+    if len(key) == 1 and key.isprintable() and len(current.text) < FILTER_MAX:
+        return filtered(state, dataclasses.replace(current, text=current.text + key)), []
+    return state, []
+
+
+FILTER_MAX = 40  # characters EVENTS' text filter takes
+
 MAIN: dict[str, Handler] = {
-    "q": quit_, "Q": quit_,
+    "q": quit_, "Q": quit_, "f": cycle_source, "/": open_filter,
     "\t": focus_step(1), "back_tab": focus_step(-1),
     "?": open_help, "v": open_changelog, "s": open_settings,
     "j": select(lambda index, _: index + 1), "down": select(lambda index, _: index + 1),
@@ -143,6 +184,8 @@ def mode(state: AppState) -> str:
     """The mode keys are read in: the open overlay, else the main screen by its focus."""
     if state.overlay is not None:
         return state.overlay.kind
+    if state.events_filter.editing:
+        return "filter"
     return "main" if state.focus == "requests" else "panel"
 
 
@@ -151,6 +194,8 @@ def press(state: AppState, key: str) -> Result:
     overlay = state.overlay
     if isinstance(overlay, SettingsOverlay):
         return settings_key(state, key if overlay.panel.editing else _keys.hotkey(key))
+    if overlay is None and state.events_filter.editing:  # typed text stays as typed
+        return type_filter(state, key)
     key = _keys.hotkey(key)
     return TABLE[mode(state)].get(key, same)(state, key)
 

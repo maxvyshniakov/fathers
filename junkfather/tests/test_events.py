@@ -113,7 +113,7 @@ class DashboardContractTests(Case):
                           board["actions"]))
         self.assertEqual(str(self.state / "events.jsonl"), board["events"]["path"])
         self.assertEqual([1], board["events"]["versions"])
-        self.assertNotIn("settings", board, "settings are not offered yet")
+        self.assertEqual({"versions": [1]}, board["settings"], "the settings contract (fathers#75)")
         self.assertTrue(os.path.isfile(board["changelog"]))
 
 

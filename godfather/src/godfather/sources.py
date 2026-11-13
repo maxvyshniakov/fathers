@@ -4,9 +4,10 @@ Godfather never imports a tool's modules and never reads a file in a tool's stat
 `<tool> ARGS...` and reads what it prints. GODFATHER_FIXTURES=DIR replaces every such call with a recorded reply:
 
     DIR/<tool>/replies.json   {"capabilities --json": {"code": 0, "json": {...}}, "status --json --full": ...}
-    DIR/host.json             {"cwd": {"PID": "/path"}}   (optional: a holder's working directory, for lsof)
+    DIR/host.json             {"cwd": {"PID": "/path"}, "host": "mbp"}   (optional: a holder's working directory,
+                              for lsof; the host name the event logs are read for)
 
-A tool is present in fixture mode when DIR/<tool>/ exists. A call with no recorded reply exits 127. A call that
+A tool is present in fixture mode when DIR/<tool>/ exists; its event log is DIR/<tool>/events.jsonl. A call with no recorded reply exits 127. A call that
 would change something (`settings set`, `settings reset`, an action) is recorded in `recorded` (and appended to
 GODFATHER_FIXTURES_RECORD, a JSON-lines file, when set) and answered from the replies like any other, never run.
 """
@@ -108,38 +109,11 @@ def run_json(tool: str, argv: list[str], timeout: float, executable: Optional[st
     return reply.code, value, problem
 
 
-LOG_TAIL = 256 * 1024  # bytes of an event log read from its end
-
-
-def tail_log(tool: str, path: str, size: int = LOG_TAIL) -> tuple[str, ...]:
-    """The last lines of a tool's event log (`capabilities --json` gives its path; docs/events.md), at most `size`
-    bytes from its end, a line cut by that start dropped; () when it cannot be read. In fixture mode the log is
+def event_log(tool: str, path: str) -> Path:
+    """Where a tool's event log is read (docs/events.md): the path its capabilities give, or in fixture mode
     DIR/<tool>/events.jsonl. The one file of a tool Godfather reads, and only by the path the tool gives."""
     root = fixtures()
-    target = root / tool / "events.jsonl" if root is not None else Path(path)
-    try:
-        info = target.stat()
-        stamp = (str(target), size, info.st_ino, info.st_size, info.st_mtime_ns)
-        if stamp in _tails:  # polled every second: read again only when the log changed (the same tuple)
-            return _tails[stamp]
-        with open(target, "rb") as handle:
-            start = max(0, handle.seek(0, os.SEEK_END) - size)
-            handle.seek(max(0, start - 1))
-            data = handle.read()
-    except OSError:
-        return ()
-    if start:  # the byte before the part read says whether its first line is whole
-        cut, data = data[:1] != b"\n", data[1:]
-    else:
-        cut = False
-    lines = data.decode("utf-8", "replace").splitlines()
-    found = tuple(line for line in lines[1 if cut else 0:] if line.strip())
-    _tails.clear()
-    _tails[stamp] = found
-    return found
-
-
-_tails: dict[tuple[Any, ...], tuple[str, ...]] = {}  # the last log read, by what its stat said
+    return root / tool / "events.jsonl" if root is not None else Path(path)
 
 
 def process_cwd(pid: Any) -> Optional[str]:
@@ -187,7 +161,10 @@ class Source:
 
     @property
     def tag(self) -> str:
-        return str(self.adapter.TAG)
+        """Its EVENTS tag: the one its capabilities give, else the adapter's."""
+        from . import events as _events
+
+        return _events.tag_of(self.capabilities, self.name) if self.capabilities else str(self.adapter.TAG)
 
     def due(self) -> bool:
         """Whether discovery should run again: every 60 s, and when the executable resolves elsewhere (10 s)."""

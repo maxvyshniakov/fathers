@@ -9,8 +9,9 @@ import signal
 import subprocess
 import sys
 import time
+from typing import Any, Dict, Optional
 
-from support import ROOT, Case
+from support import ROOT, Case, plain
 
 from junkfather import procs
 
@@ -28,7 +29,7 @@ class OwnTests(Case):
         self.assertEqual(7, result.returncode)
         self.assertEqual("out\n", result.stdout)
         self.assertIn("err", result.stderr)
-        (entry,) = self.store.entries()
+        (entry,) = map(plain, self.store.entries())
         self.assertEqual(("exited", 7, "attached"), (entry["state"], entry["exit"], entry["mode"]))
         self.assertEqual(entry["pid"], entry["pgid"], "its own process group")
 
@@ -36,7 +37,7 @@ class OwnTests(Case):
         runner = self.spawn(sys.executable, "-m", "junkfather", "own", "--ttl", "1h", "--", "sh", "-c",
                             "sleep 600 & sleep 601", cwd=ROOT, env=self.env)
         self.wait_for(lambda: any(e.get("state") == "running" for e in self.store.entries()), what="running")
-        (entry,) = self.store.entries()
+        (entry,) = map(plain, self.store.entries())
         self.wait_for(lambda: len(procs.Table.read().group(entry["pgid"])) >= 3, what="the group")
         group = [p.pid for p in procs.Table.read().group(entry["pgid"])]
         runner.send_signal(signal.SIGTERM)
@@ -71,11 +72,13 @@ class HookTests(Case):
         self.claude = self.fake_claude("s1")
         self.session_env = self.claude_env("s1", self.claude)
 
-    def own_as(self, agent, *options, argv=("sleep", "600")):
+    def own_as(self, agent: Optional[str], *options: str, argv: "tuple[str, ...]" = ("sleep", "600")
+               ) -> Dict[str, Any]:
         """What a subagent's Bash call does: the PreToolUse hook writes its claim, then the command runs."""
         command = "junkfather own --detach " + " ".join(options) + " -- " + " ".join(argv)
+        fields: Dict[str, Any] = {"agent_id": agent} if agent else {}
         self.hook("PreToolUse", "s1", tool_name="Bash", tool_input={"command": command},
-                  tool_use_id=f"toolu_{time.time_ns()}", **({"agent_id": agent} if agent else {}))
+                  tool_use_id=f"toolu_{time.time_ns()}", **fields)
         return self.own_detached(self.session_env, *options, argv=argv)
 
     def test_the_claim_names_the_subagent(self):
@@ -109,7 +112,7 @@ class HookTests(Case):
         other = self.fake_claude("s2")
         result = self.cli("hand", entry["id"], "--to", "s2")
         self.assertEqual(0, result.returncode, result.stderr)
-        handed = self.store.load(entry["id"]) or {}
+        handed = self.loaded(entry["id"])
         self.assertEqual(("s2", None, other.pid), (handed["owner"]["session"], handed["owner"]["agent"],
                                                     handed["owner"]["pid"]))
         self.assertEqual("s1", handed["handed"][0]["from"]["session"])
@@ -137,7 +140,7 @@ class TtlAndOrphanTests(Case):
     def test_the_supervisor_ends_an_entry_at_its_ttl(self):
         entry = self.own_detached(self.env, "--ttl", "2s")
         self.wait_for(lambda: self.state_of(entry["id"]) == "reaped", what="the TTL")
-        self.assertEqual("ttl expired", (self.store.load(entry["id"]) or {})["end"]["reason"])
+        self.assertEqual("ttl expired", self.loaded(entry["id"])["end"]["reason"])
         self.assertFalse(self.runs(entry["pid"]))
 
     def test_sweep_reaps_an_adopted_entry_past_its_ttl(self):
@@ -174,7 +177,7 @@ class TtlAndOrphanTests(Case):
     def test_a_reused_pid_is_not_reaped_by_a_sweep(self):
         child = self.spawn("sleep", "600", start_new_session=True)
         self.assertEqual(0, self.cli("adopt", str(child.pid), "--ttl", "1s").returncode)
-        (entry,) = self.store.entries()
+        (entry,) = map(plain, self.store.entries())
         self.store.update(entry["id"], lambda e: e.update(start="Mon Jan  1 00:00:00 2024", known=[]))
         time.sleep(1.2)
         swept = json.loads(self.cli("sweep", "--json").stdout)
@@ -195,7 +198,7 @@ class AdoptTests(Case):
         self.wait_for(lambda: len(procs.Table.read().descendants(shell.pid)) >= 2, what="children")
         first, second = sorted(p.pid for p in procs.Table.read().descendants(shell.pid))
         self.assertEqual(0, self.cli("adopt", str(first), "--ttl", "1h").returncode)
-        (entry,) = self.store.entries()
+        (entry,) = map(plain, self.store.entries())
         self.assertFalse(entry["group"])
         self.assertEqual(0, self.cli("reap", "--id", entry["id"]).returncode)
         self.assertFalse(self.runs(first))

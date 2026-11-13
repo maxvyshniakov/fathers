@@ -54,12 +54,13 @@ def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, ov
                    error: Optional[str] = None, cwd: Optional[str] = None, scroll: Optional[dict[str, int]] = None,
                    notice: Optional[list[str]] = None, message: Optional[str] = None,
                    failure: Optional[str] = None, news: Any = None, read: Optional[dict[str, str]] = None,
-                   moment: Optional[datetime.datetime] = None) -> None:
+                   moment: Optional[datetime.datetime] = None, events_filter: Optional[_events.Filter] = None) -> None:
     """The whole screen at `moment` (where None, the model's own update time: the screen never reads the clock).
     `overlay` is the one open (state.Help, Changelog or SettingsOverlay); `error` the refresh's
     failure, `message` a passing notice; `notice` stands in for the panels when Slotfather is absent or unsupported;
     `failure` is why the selected request's details did not load. A stale model (`stale_since`) is drawn dimmed, with
-    the time it went stale in SLOTS' border. `news` and `read` are what's new and its read versions."""
+    the time it went stale in SLOTS' border. `news` and `read` are what's new and its read versions; `events_filter`
+    EVENTS' source and text filters (fathers#84)."""
     canvas.scroll = scroll if scroll is not None else {}
     if moment is None and model is not None:
         moment = cast(Optional[datetime.datetime], model.get("updated"))
@@ -71,13 +72,13 @@ def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, ov
         canvas.put(2, 3, f"Queue unavailable: {error}" if error else "Reading the queue…",
                    "bad" if error else "dim", canvas.width - 6)
     if model is not None:
-        draw_panels(canvas, model, selected, cwd, failure, cast(datetime.datetime, moment))
+        draw_panels(canvas, model, selected, cwd, failure, cast(datetime.datetime, moment), events_filter)
     if overlay is not None:
         draw_overlay(canvas, overlay, model, news, read)
 
 
 def draw_panels(canvas: Canvas, model: Model, selected: int, cwd: Optional[str], failure: Optional[str],
-                moment: datetime.datetime) -> None:
+                moment: datetime.datetime, events_filter: Optional[_events.Filter] = None) -> None:
     screen = _layout.overview(canvas.width, canvas.height, _queue.queue_rows(model), _layout.machine_height)
     panels = screen.panels
     canvas.order = screen.order
@@ -91,7 +92,7 @@ def draw_panels(canvas: Canvas, model: Model, selected: int, cwd: Optional[str],
         if name == "requests":
             _queue.draw_requests(canvas, rect, model, selected, moment)
         elif name == "events":
-            _events.draw_events(canvas, rect, model, moment)
+            _events.draw_events(canvas, rect, model, moment, events_filter)
         elif name == "details":
             _details.draw_detail(canvas, rect, model, selected, cwd, moment, failure)
         elif name == "machine":
@@ -145,4 +146,5 @@ def render(canvas: Canvas, state: AppState, now: float, notice: Optional[list[st
         else:
             cwd, failure = known.cwd, known.error
     dashboard_draw(canvas, state.model, index, state.overlay, state.refresh.error, cwd, state.scroll, notice,
-                   state.notice.text if state.notice else None, failure, state.news, state.read, state.moment)
+                   state.notice.text if state.notice else None, failure, state.news, state.read, state.moment,
+                   state.events_filter)

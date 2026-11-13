@@ -3,9 +3,14 @@ name = "slotfather"
 version = "0.1.0"  # the newest release in CHANGELOG.md; src/slotfather/version.py VERSION matches it
 
 [tool.ruff]
+extend = "../tools/ruff.toml"
 target-version = "py39"
 extend-include = ["slotfather", "slotfather-stats", "slotfather-sweep"]
 exclude = [".git", "__pycache__", ".venv", "assets"]
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "B"]
+# The shared rules (../tools/ruff.toml) this package does not pass yet; drop a code once its findings are fixed.
+ignore = [
+    "E501", "I001", "PLR0124", "PLW0602", "PLW2901", "RUF012", "RUF015", "RUF021", "RUF100", "SIM102", "SIM105",
+    "SIM115", "SIM117", "UP015", "UP035", "UP036", "UP037", "UP045",
+]

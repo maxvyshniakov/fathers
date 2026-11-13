@@ -22,7 +22,7 @@ import signal
 import subprocess
 import sys
 import time
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional, TextIO
 
 from . import entry as _entry
 from . import events as _events
@@ -34,7 +34,8 @@ from .defaults import DETACH_WAIT, KNOWN_EVERY, POLL, RETRY_FIRST, RETRY_MAX, SI
 from .entry import new as new_entry
 from .release import PACKAGE_ROOT
 from .text import duration
-from .state import Entry, Store
+from .entry import Entry
+from .state import Store
 
 
 
@@ -49,7 +50,7 @@ def self_command(*args: str) -> List[str]:
     return [sys.executable, "-c", code, *args]
 
 
-def end_child(child: subprocess.Popen, grace: float = SIGNAL_GRACE) -> None:
+def end_child(child: subprocess.Popen[bytes], grace: float = SIGNAL_GRACE) -> None:
     """Stop our own child's group through its handle: an unwaited child keeps its pid and group id from reuse."""
     for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, 2.0)):
         if child.poll() is not None:
@@ -64,7 +65,7 @@ def end_child(child: subprocess.Popen, grace: float = SIGNAL_GRACE) -> None:
             pass
 
 
-def record_child(store: Store, entry_id: str, child: subprocess.Popen, supervisor: int) -> Optional[Entry]:
+def record_child(store: Store, entry_id: str, child: subprocess.Popen[bytes], supervisor: int) -> Optional[Entry]:
     """Fill in the leader's identity right after it started (Popen returns once the exec succeeded). Without a
     readable process table, or when the entry stopped starting meanwhile (a reap of its owner), the child is
     stopped and the entry fails: an entry whose identity is unknown could never be reaped safely."""
@@ -84,11 +85,10 @@ def record_child(store: Store, entry_id: str, child: subprocess.Popen, superviso
     if entry is None or entry.get("state") != _entry.RUNNING or entry.get("pid") != child.pid:
         end_child(child)
         return None
-    if entry is not None:
-        _events.write(store.root, "entry.owned", _events.subject(entry), _events.actor_of(entry.get("owner")),
-                      {"argv": entry.get("argv"), "cwd": entry.get("cwd"), "ttl": entry.get("ttl"),
-                       "keep": entry.get("keep"), "mode": entry.get("mode"), "pgid": entry.get("pgid"),
-                       "log": entry.get("log")})
+    _events.write(store.root, "entry.owned", _events.subject(entry), _events.actor_of(entry.get("owner")),
+                  {"argv": entry.get("argv"), "cwd": entry.get("cwd"), "ttl": entry.get("ttl"),
+                   "keep": entry.get("keep"), "mode": entry.get("mode"), "pgid": entry.get("pgid"),
+                   "log": entry.get("log")})
     return entry
 
 
@@ -97,7 +97,7 @@ class Supervisor:
     fails is tried again after a capped backoff (retry_delay), and only the first failure of a streak is an event.
     Tests inject `clock` (monotonic), `pause` and `reaper`."""
 
-    def __init__(self, store: Store, entry_id: str, child: subprocess.Popen, quiet: bool = False,
+    def __init__(self, store: Store, entry_id: str, child: subprocess.Popen[bytes], quiet: bool = False,
                  attached: bool = True, catcher: Optional["Catcher"] = None,
                  clock: Callable[[], float] = time.monotonic, pause: Callable[[float], None] = time.sleep,
                  reaper: Optional[Callable[..., Dict[str, Any]]] = None):
@@ -229,9 +229,9 @@ def own(store: Store, argv: List[str], ttl: float, keep: str, label: Optional[st
     return Supervisor(store, entry["id"], child, quiet, catcher=catcher).run()
 
 
-def announce(entry: Entry, pid: int, out=None) -> None:
+def announce(entry: Entry, pid: int, out: Optional[TextIO] = None) -> None:
     keep = "" if entry["keep"] == "owner" else f", kept for the {entry['keep']}"
-    note = f" ({entry['claim_note']})" if entry.get("claim_note") else ""
+    note = f" ({entry.get('claim_note')})" if entry.get("claim_note") else ""
     log = f", log {entry['log']}" if entry.get("log") else ""
     print(f"junkfather: {entry['id']} owns pid {pid} (pgid {pid}) for {_owner.describe(entry['owner'])}{note}, "
           f"ttl {duration(entry['ttl'])}{keep}{log}; stop it: junkfather reap --id {entry['id']}",
@@ -239,6 +239,8 @@ def announce(entry: Entry, pid: int, out=None) -> None:
 
 
 def start_detached(store: Store, entry: Entry, quiet: bool) -> int:
+    if entry["log"] is None:
+        raise ValueError(f"{entry['id']}: a detached entry needs a log")  # own --detach always gives it one
     log = Path(entry["log"])
     log.parent.mkdir(parents=True, exist_ok=True)
     with open(os.devnull, "rb") as null, open(log, "ab") as out:
@@ -246,13 +248,14 @@ def start_detached(store: Store, entry: Entry, quiet: bool) -> int:
                          start_new_session=True, close_fds=True, cwd=entry["cwd"])
     deadline = time.monotonic() + DETACH_WAIT
     while time.monotonic() < deadline:
-        current = store.load(entry["id"]) or {}
-        if current.get("state") == _entry.FAILED:
+        current = store.load(entry["id"])
+        if current is not None and current.get("state") == _entry.FAILED:
             print(f"junkfather: cannot start {shlex.join(entry['argv'])}: {current.get('error')}", file=sys.stderr)
             return 127
-        if current.get("pid"):
+        pid = current.get("pid") if current is not None else None
+        if current is not None and pid:
             if not quiet:
-                announce(current, current["pid"], out=sys.stdout)
+                announce(current, pid, out=sys.stdout)
             return 0
         time.sleep(0.05)
     print(f"junkfather: the supervisor of {entry['id']} did not start the command in {DETACH_WAIT:.0f} s; "

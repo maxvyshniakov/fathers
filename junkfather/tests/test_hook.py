@@ -2,17 +2,19 @@
 from __future__ import annotations
 
 import time
+from typing import List, Optional
 
-from support import Case
+from support import Case, as_entry
 
 from junkfather import hook
 
 
 class PlanTests(Case):
-    def entry(self, entry_id, agent=None, keep="owner", session="s1", expires=None, state="running"):
-        self.store.save({"id": entry_id, "state": state, "keep": keep, "created": time.time(),
+    def entry(self, entry_id: str, agent: Optional[str] = None, keep: str = "owner", session: str = "s1",
+              expires: Optional[float] = None, state: str = "running") -> None:
+        self.store.save(as_entry({"id": entry_id, "state": state, "keep": keep, "created": time.time(),
                          "expires": expires or time.time() + 3600,
-                         "owner": {"kind": "claude", "session": session, "agent": agent}})
+                         "owner": {"kind": "claude", "session": session, "agent": agent}}))
 
     def test_subagent_stop_reaps_only_when_that_agent_owns_something_not_kept(self):
         self.entry("j1", agent="a1", keep="session")
@@ -38,7 +40,7 @@ class PlanTests(Case):
         self.assertIn("--expired", hook.plan({"hook_event_name": "Stop", "session_id": "s1"}, self.store) or [])
 
     def test_pre_tool_use_claims_only_commands_that_name_junkfather(self):
-        spawned = []
+        spawned: List[List[str]] = []
         for command in ("ls -la", "junkfather own -- vite"):
             hook.handle({"hook_event_name": "PreToolUse", "session_id": "s1", "tool_use_id": f"t{len(command)}",
                          "agent_id": "a1", "tool_name": "Bash", "tool_input": {"command": command}}, self.store,
@@ -49,7 +51,7 @@ class PlanTests(Case):
 
     def test_a_reap_runs_detached(self):
         self.entry("j1", agent="a1")
-        spawned = []
+        spawned: List[List[str]] = []
         hook.handle({"hook_event_name": "SubagentStop", "session_id": "s1", "agent_id": "a1"}, self.store,
                     spawn=spawned.append)
         self.assertEqual(1, len(spawned))

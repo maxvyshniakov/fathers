@@ -32,7 +32,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from . import procs as _procs
 from . import safety as _safety
 from .defaults import CLAIM_AMBIGUOUS, CLAIM_KEEP, CLAIM_WINDOW
-from .state import Store, read_json, write_atomic
+from .state import Store, as_dict, read_json, write_atomic
 
 
 Owner = Dict[str, Any]
@@ -50,8 +50,9 @@ def lane_of(env: Mapping[str, str], cwd: str) -> Optional[str]:
             return env[name]
     records = env.get("JUNKFATHER_LANE_RECORDS")
     if not records:
-        config = read_json(Path(env.get("MASTACK_CONFIG") or Path.home() / ".config" / "mastack") / "hooks.json")
-        records = config.get("lane_records") if isinstance(config, dict) else None
+        config = as_dict(read_json(Path(env.get("MASTACK_CONFIG") or Path.home() / ".config" / "mastack")
+                                   / "hooks.json"))
+        records = config.get("lane_records")
     if not isinstance(records, str) or not records:
         return None
     root = os.path.realpath(cwd)
@@ -61,10 +62,11 @@ def lane_of(env: Mapping[str, str], cwd: str) -> Optional[str]:
         return None
     best: Optional[Tuple[int, str]] = None
     for name in names:
-        data = read_json(Path(os.path.expanduser(records)) / name) if name.endswith(".json") else None
-        if not isinstance(data, dict) or not isinstance(data.get("worktree"), str) or not data.get("id"):
+        data = as_dict(read_json(Path(os.path.expanduser(records)) / name) if name.endswith(".json") else None)
+        worktree = data.get("worktree")
+        if not isinstance(worktree, str) or not data.get("id"):
             continue
-        tree = os.path.realpath(data["worktree"])
+        tree = os.path.realpath(worktree)
         if (root == tree or root.startswith(tree.rstrip("/") + "/")) and data.get("status") not in ("done", "released"):
             if best is None or len(tree) > best[0]:
                 best = (len(tree), str(data["id"]))
@@ -190,11 +192,11 @@ def registry(directory: Optional[Path] = None) -> Optional[List[Dict[str, Any]]]
         names = os.listdir(directory)
     except OSError:
         return None
-    found = []
+    found: List[Dict[str, Any]] = []
     for name in names:
         if name.endswith(".json"):
-            data = read_json(directory / name)
-            if isinstance(data, dict) and isinstance(data.get("pid"), int):
+            data = as_dict(read_json(directory / name))
+            if isinstance(data.get("pid"), int):
                 found.append(data)
     return found
 
@@ -244,7 +246,7 @@ def claim_path(store: Store, session: str, tool_use: str) -> Path:
 
 def write_claim(store: Store, data: Mapping[str, Any], now: Optional[float] = None) -> Optional[Path]:
     session, tool_use = data.get("session_id"), data.get("tool_use_id")
-    command = (data.get("tool_input") or {}).get("command") if isinstance(data.get("tool_input"), dict) else None
+    command = as_dict(data.get("tool_input")).get("command")
     if not (isinstance(session, str) and isinstance(tool_use, str) and isinstance(command, str)):
         return None
     try:
@@ -307,10 +309,10 @@ def find_claim(store: Store, session: str, words: List[str], now: Optional[float
         names = os.listdir(directory)
     except OSError:
         return None, "no claim (is the junkfather PreToolUse hook installed?)"
-    claims = []
+    claims: List[Dict[str, Any]] = []
     for name in names:
-        data = read_json(directory / name) if name.endswith(".json") else None
-        if isinstance(data, dict) and isinstance(data.get("command"), str) \
+        data = as_dict(read_json(directory / name) if name.endswith(".json") else None)
+        if isinstance(data.get("command"), str) \
                 and isinstance(data.get("at"), (int, float)) and 0 <= now - data["at"] <= CLAIM_WINDOW \
                 and words not in (data.get("used") or []) and score(data["command"], words) == len(words):
             claims.append(data)

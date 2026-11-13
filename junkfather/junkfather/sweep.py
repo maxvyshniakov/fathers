@@ -27,7 +27,7 @@ import plistlib
 import re
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from . import entry as _entry
 from . import events as _events
@@ -36,8 +36,10 @@ from . import procs as _procs
 from . import reap as _reap
 from . import resources as _resources
 from . import safety as _safety
-from .defaults import GRACE, KEEP_FINISHED, REAPING_STUCK, STARTING_STUCK
-from .state import Store, VERSION, read_json, write_atomic
+from . import settings as _settings
+from .defaults import KEEP_FINISHED, REAPING_STUCK, STARTING_STUCK
+from .entry import Entry
+from .state import Store, VERSION, as_dict, as_list, read_json, write_atomic
 from .text import duration
 LABEL = "com.junkfather.sweep"
 WORKTREES = ("/.claude/worktrees/", "/.codex/worktrees/")
@@ -66,7 +68,7 @@ def points_into(path: str, roots: List[str]) -> Optional[str]:
     return None
 
 
-def unowned(table: _procs.Table, cwds: Dict[int, str], owned: set, roots: List[str],
+def unowned(table: _procs.Table, cwds: Dict[int, str], owned: Set[int], roots: List[str],
             sessions_alive: Dict[int, bool], uid: Optional[int] = None) -> List[Dict[str, Any]]:
     uid = os.getuid() if uid is None else uid
     skip = _safety.protected(table)
@@ -114,8 +116,9 @@ def agent_sessions(table: _procs.Table) -> Dict[int, bool]:
 
 def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = None,
           cwds: Optional[Dict[int, str]] = None, sessions: Optional[List[Dict[str, Any]]] = None,
-          now: Optional[float] = None, grace: float = GRACE) -> Dict[str, Any]:
+          now: Optional[float] = None, grace: Optional[float] = None) -> Dict[str, Any]:
     now = time.time() if now is None else now
+    grace = _settings.value("reap.grace", store.root) if grace is None else grace
     report: Dict[str, Any] = {"v": VERSION, "at": now, "dry_run": dry_run, "reaped": [], "gone": [], "pruned": 0,
                               "running": 0, "unowned": [], "unowned_resources": [], "notes": [], "errors": []}
     try:
@@ -125,7 +128,7 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
         return report
     if sessions is None:
         sessions = _owner.registry()
-    owned: set = set()
+    owned: Set[int] = set()
     snapshot = _resources.Snapshot(table)
     for entry in store.entries():
         state = entry.get("state")
@@ -136,7 +139,8 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
                 _entry.release_stuck(store, entry["id"])
             state = _entry.RUNNING
         if state not in _entry.OPEN:
-            if entry.get("ended") and now - float(entry["ended"]) > KEEP_FINISHED and not dry_run:
+            ended = entry.get("ended")
+            if ended and now - float(ended) > KEEP_FINISHED and not dry_run:
                 prune(store, entry)
                 report["pruned"] += 1
             continue
@@ -190,11 +194,11 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
     return report
 
 
-def sweep_resource(store: Store, entry: Dict[str, Any], snapshot: "_resources.Snapshot", report: Dict[str, Any],
+def sweep_resource(store: Store, entry: Entry, snapshot: "_resources.Snapshot", report: Dict[str, Any],
                    now: float, sessions: Optional[List[Dict[str, Any]]], grace: float, dry_run: bool) -> None:
     """A resource entry: gone when its kind says so, reaped past its TTL or when its owner is gone, left alone while
     whether it runs cannot be told."""
-    resource = entry.get("resource") or {}
+    resource: Dict[str, Any] = entry.get("resource") or {}
     alive = snapshot.alive(resource)
     if alive is False:
         if not dry_run:
@@ -221,12 +225,13 @@ def sweep_resource(store: Store, entry: Dict[str, Any], snapshot: "_resources.Sn
 
 def record(store: Store, report: Dict[str, Any]) -> None:
     """unowned.json, sweep.json and the sweep's events: one unowned.reported per process not reported before."""
-    before = read_json(store.root / "unowned.json")
-    seen = {(i.get("pid"), i.get("start")) for i in (before.get("items") or [])} if isinstance(before, dict) else set()
-    seen_resources = {i.get("key") for i in (before.get("resources") or [])} if isinstance(before, dict) else set()
+    before = as_dict(read_json(store.root / "unowned.json"))
+    items: List[Dict[str, Any]] = [as_dict(i) for i in as_list(before.get("items"))]
+    resources: List[Dict[str, Any]] = [as_dict(i) for i in as_list(before.get("resources"))]
+    seen = {(i.get("pid"), i.get("start")) for i in items}
+    seen_resources = {i.get("key") for i in resources}
     # A kind that could not be listed keeps its last report, so the next sweep does not report it as new again.
-    kept = [i for i in (before.get("resources") or []) if isinstance(i, dict)
-            and i.get("kind") in (report.get("unlisted") or [])] if isinstance(before, dict) else []
+    kept = [i for i in resources if i and i.get("kind") in (report.get("unlisted") or [])]
     write_atomic(store.root / "unowned.json", {"v": VERSION, "at": report["at"], "items": report["unowned"],
                                                 "resources": report["unowned_resources"] + kept})
     actor = _events.tool("sweep")
@@ -257,7 +262,7 @@ def result_of(report: Dict[str, Any]) -> Dict[str, Any]:
             "pruned": report["pruned"], "errors": report["errors"], "notes": report.get("notes") or []}
 
 
-def prune(store: Store, entry: Dict[str, Any]) -> None:
+def prune(store: Store, entry: Entry) -> None:
     try:
         store.path(entry["id"]).unlink()
     except OSError:
@@ -271,7 +276,7 @@ def prune(store: Store, entry: Dict[str, Any]) -> None:
 
 
 def text(report: Dict[str, Any], quiet: bool = False) -> str:
-    lines = []
+    lines: List[str] = []
     for result in report["reaped"]:
         verb = "would reap" if result["result"] == "would-stop" else "reaped"  # text, not a state
         lines.append(f"{verb} {result['id']}: "
@@ -287,10 +292,10 @@ def text(report: Dict[str, Any], quiet: bool = False) -> str:
         lines.append(f"unowned pid {item['pid']} ({age}{under}{also}; {item['why']}): {item['cmd'][:160]}")
         lines.append(f"  own it: junkfather adopt {item['pid']} --ttl 1h   end it: junkfather reap --pid "
                      f"{item['pid']} --force")
-    for item in report.get("unowned_resources") or []:
+    for item in as_list(report.get("unowned_resources")):
         lines.append(f"unowned {_resources.describe(item)}: {item['why']}")
         lines.append(f"  own it: junkfather own-resource --kind {item['kind']} --id {item['id']} --ttl 1h")
-    for note in report.get("notes") or []:
+    for note in as_list(report.get("notes")):
         lines.append(f"note: {note}")
     lines.append(f"{report['running']} running, {len([r for r in report['reaped'] if r['result'] in _reap.STOPPED])} "
                  f"reaped, {len(report['gone'])} gone, {len(report['unowned'])} unowned reported, "

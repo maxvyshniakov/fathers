@@ -5,7 +5,6 @@ by lease id."""
 from __future__ import annotations
 
 import datetime as dt
-import json
 import os
 import tempfile
 import unittest
@@ -15,6 +14,7 @@ from unittest import mock
 
 import helpers  # noqa: F401  # pyright: ignore[reportUnusedImport] - src/ on sys.path
 import view as _view
+from helpers import logged, rows_of
 from test_state import Case, entry, model
 
 from godfather import sources
@@ -52,13 +52,19 @@ def snapshot(holders: list[dict[str, Any]], waiters: Optional[list[dict[str, Any
     return found
 
 
-def released(when: dt.datetime, pid: int, detail: str = "exit 0, ran 34m00s", label: str = "gate") -> dict[str, Any]:
-    return {"when": when, "verb": "released", "count": 1, "pid": pid, "delta": -1, "label": label, "detail": detail}
+def released(when: dt.datetime, pid: int, ran: float = 2040, label: str = "gate",
+             lease: Optional[str] = None) -> dict[str, Any]:
+    """A lease.released line of Slotfather's event log (exit 0)."""
+    found = logged("lease.released", when, label, pid, count=1, exit=0, ran=ran)
+    if lease:
+        found["subject"]["lease_id"] = lease
+    return found
 
 
-def log_line(kind: str, when: dt.datetime, key: str, details: dict[str, Any]) -> str:
-    return json.dumps({"v": 1, "time": stamp(when), "host": "mbp", "source": "slotfather", "kind": kind,
-                       "subject": {"type": "run_type", "id": key}, "actor": {"type": "tool"}, "details": details})
+def run_event(kind: str, when: dt.datetime, key: str, details: dict[str, Any]) -> dict[str, Any]:
+    found = logged(kind, when, ident=key, **details)
+    found["subject"] = {"type": "run_type", "id": key}
+    return found
 
 
 TREND = {"verdict": "slower", "p50_recent": 1416.0, "p50_before": 1080.0, "ratio": 1.31, "recent": 10, "before": 30,
@@ -101,80 +107,52 @@ class AdapterTests(unittest.TestCase):
                                                 entries=[{"pid": 41, "since": since, "lease_id": "a", "expected": bad}]))
                 self.assertIsNone(found["holders"][0]["expected"])
 
-    def test_run_events_are_read_from_log_lines_and_the_rest_skipped(self) -> None:
-        lines = [log_line("run.trend", NOW, "straylight · gate", TREND),
-                 log_line("lease.granted", NOW, "x", {}),
-                 '{"v": 2, "kind": "run.trend"}', "not json", "",
-                 log_line("run.outlier", NOW, "straylight · gate",
-                          {"lease_id": "a1", "ran": 2040.0, "p50": 1080.0, "p90": 1860.0, "ended": stamp(NOW),
-                           "later": [1000, 1100, 1050]})]
-        found = adapter.run_events(lines)
-        self.assertEqual([("run.trend", "straylight · gate"), ("run.outlier", "straylight · gate")],
-                         [(event["kind"], event["key"]) for event in found])
-        self.assertEqual(NOW, found[0]["when"])
-
-    def test_an_outlier_marks_the_release_it_was_and_a_slower_trend_the_release_that_turned_it(self) -> None:
+    def test_an_outlier_marks_the_release_of_its_lease_and_a_slower_trend_the_release_that_turned_it(self) -> None:
         base = NOW - dt.timedelta(minutes=30)
-        events = [released(base, 1), released(base + dt.timedelta(minutes=5), 2),
-                  released(base + dt.timedelta(minutes=10), 3)]
-        runs = adapter.run_events([
-            log_line("run.outlier", base + dt.timedelta(minutes=20), "straylight · gate",
-                     {"lease_id": "x", "ran": 2040.0, "ended": stamp(base + dt.timedelta(minutes=5, seconds=1))}),
-            log_line("run.trend", base + dt.timedelta(minutes=10, seconds=1), "straylight · gate", TREND)])
-        merged = adapter.merge_runs(events, runs)
-        self.assertEqual([None, "outlier", "slower", None], [event.get("run") for event in merged])
+        log = [released(base, 1, lease="a1"), released(base + dt.timedelta(minutes=5), 2, lease="a2"),
+               released(base + dt.timedelta(minutes=10), 3, lease="a3"),
+               run_event("run.trend", base + dt.timedelta(minutes=10, seconds=1), "straylight · gate", TREND),
+               run_event("run.outlier", base + dt.timedelta(minutes=20), "straylight · gate",
+                         {"lease_id": "a2", "ran": 2040.0, "ended": stamp(base + dt.timedelta(minutes=9))})]
+        merged = rows_of(log)
+        self.assertEqual([None, "outlier", "slower", None], [row.get("run") for row in merged],
+                         "the outlier by its lease id, not by its end")
         trend = merged[3]
-        self.assertEqual(("trend", "straylight · gate", TREND), (trend["verb"], trend["label"], trend["trend"]))
-        self.assertEqual(events[0]["detail"], merged[0]["detail"], "the events themselves are not changed")
-        self.assertNotIn("run", events[1])
+        self.assertEqual(("run.trend", "straylight · gate", TREND), (trend["kind"], trend["label"], trend["trend"]))
+        self.assertNotIn("run.outlier", [row["kind"] for row in merged], "an outlier is a mark, not a row")
+
+    def test_an_outlier_without_a_lease_id_marks_the_release_at_its_end(self) -> None:
+        log = [released(NOW, 1), run_event("run.outlier", NOW + dt.timedelta(minutes=1), "gate",
+                                           {"ran": 2040.0, "ended": stamp(NOW + dt.timedelta(seconds=1))})]
+        self.assertEqual(["outlier"], [row.get("run") for row in rows_of(log)])
 
     def test_a_release_after_the_trend_or_two_in_its_window_get_no_mark_and_no_events_no_trend_rows(self) -> None:
-        trend = adapter.run_events([log_line("run.trend", NOW, "straylight · gate", TREND)])
-        after = adapter.merge_runs([released(NOW - dt.timedelta(minutes=1), 9),
-                                    released(NOW + dt.timedelta(seconds=1), 1)], trend)
-        self.assertEqual([None, "trend", None], [e.get("run") if e["verb"] != "trend" else "trend" for e in after])
-        two = adapter.merge_runs([released(NOW, 1), released(NOW - dt.timedelta(seconds=1), 2)], trend)
-        self.assertEqual([None, None], [e.get("run") for e in two if e["verb"] == "released"])
-        self.assertEqual([], adapter.merge_runs([], trend))
+        trend = run_event("run.trend", NOW, "straylight · gate", TREND)
+        after = rows_of([released(NOW - dt.timedelta(minutes=1), 9), trend, released(NOW + dt.timedelta(seconds=1), 1)])
+        self.assertEqual([None, "trend", None], [row.get("run") if row["kind"] != "run.trend" else "trend"
+                                                 for row in after])
+        two = rows_of([released(NOW - dt.timedelta(seconds=1), 2), released(NOW, 1), trend])
+        self.assertEqual([None, None], [row.get("run") for row in two if row["kind"] == "lease.released"])
+        self.assertEqual([], rows_of([trend]))
 
     def test_a_trend_older_than_the_events_shown_is_left_out_and_a_steady_one_marks_nothing(self) -> None:
-        events = [released(NOW, 1)]
-        runs = adapter.run_events([
-            log_line("run.trend", NOW - dt.timedelta(hours=2), "old", TREND),
-            log_line("run.trend", NOW + dt.timedelta(seconds=1), "straylight · gate", dict(TREND, verdict="steady"))])
-        merged = adapter.merge_runs(events, runs)
-        self.assertEqual([None, "straylight · gate"], [event.get("run") or event.get("trend") and event["label"]
-                                                       for event in merged])
+        merged = rows_of([run_event("run.trend", NOW - dt.timedelta(hours=2), "old", TREND), released(NOW, 1),
+                          run_event("run.trend", NOW + dt.timedelta(seconds=1), "straylight · gate",
+                                    dict(TREND, verdict="steady"))])
+        self.assertEqual([None, "straylight · gate"], [row.get("run") or row.get("trend") and row["label"]
+                                                       for row in merged])
 
 
-class LogTailTests(unittest.TestCase):
-    def test_the_log_is_read_from_its_end_and_a_cut_first_line_dropped(self) -> None:
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "events.jsonl"
-            path.write_text("".join(f'{{"n": {n}}}\n' for n in range(100)))
-            with mock.patch.dict(os.environ, {}, clear=False):
-                os.environ.pop("GODFATHER_FIXTURES", None)
-                lines = sources.tail_log("slotfather", str(path), size=64)
-        self.assertEqual('{"n": 99}', lines[-1])
-        self.assertTrue(all(line.startswith('{"n"') for line in lines), lines[:1])
-        self.assertLess(len(lines), 100)
+class LogPathTests(unittest.TestCase):
+    """The log is read through godfather.events (tests/test_events.py); this is where it is looked for."""
 
-    def test_fixture_mode_reads_the_tools_recorded_log_and_a_missing_one_is_empty(self) -> None:
-        with tempfile.TemporaryDirectory() as folder:
-            (Path(folder) / "slotfather").mkdir()
-            (Path(folder) / "slotfather" / "events.jsonl").write_text('{"a": 1}\n')
-            with mock.patch.dict(os.environ, {"GODFATHER_FIXTURES": folder}):
-                self.assertEqual(('{"a": 1}',), sources.tail_log("slotfather", "/elsewhere/events.jsonl"))
-                self.assertEqual((), sources.tail_log("lanefather", "/elsewhere/events.jsonl"))
-
-    def test_a_cut_at_a_line_start_keeps_that_line_and_an_unchanged_log_is_not_read_again(self) -> None:
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "events.jsonl"
-            path.write_text('{"n": 1}\n{"n": 2}\n')
+    def test_the_capabilities_path_or_in_fixture_mode_the_tools_recorded_log(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("GODFATHER_FIXTURES", None)
-            self.assertEqual(('{"n": 2}',), sources.tail_log("slotfather", str(path), size=9))
-            first = sources.tail_log("slotfather", str(path))
-            self.assertIs(first, sources.tail_log("slotfather", str(path)))
+            self.assertEqual(Path("/state/events.jsonl"), sources.event_log("slotfather", "/state/events.jsonl"))
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {"GODFATHER_FIXTURES": folder}):
+            self.assertEqual(Path(folder) / "lanefather" / "events.jsonl",
+                             sources.event_log("lanefather", "/elsewhere/events.jsonl"))
 
 
 class ViewTests(unittest.TestCase):
@@ -241,23 +219,24 @@ class ViewTests(unittest.TestCase):
         return canvas
 
     def test_events_mark_an_outlier_and_a_run_of_a_slowdown(self) -> None:
-        found = [dict(released(NOW, 1, "exit 0, ran 34m00s", "outlier run"), run="outlier"),
-                 dict(released(NOW, 2, "exit 0, ran 31m00s", "slower run"), run="slower"),
-                 released(NOW, 3, "exit 0, ran 18m00s", "plain run")]
+        found = rows_of([released(NOW, 3, 1080, "plain run"), released(NOW, 2, 1860, "slower run"),
+                         released(NOW, 1, 2040, "outlier run")])
+        found[2]["run"], found[1]["run"] = "outlier", "slower"
         canvas = self.events(found)
         y, x = self.find(canvas, "ok 34m00s ▲")
         self.assertEqual("warn", canvas.cells[y][x + len("ok 34m00s ")][1])
         self.find(canvas, "ok 31m00s ↗")
-        self.assertTrue(canvas.render(False).splitlines()[self.find(canvas, "plain run")[0]].rstrip("│ ").endswith(
-            "ok 18m00s"), "no mark on a plain run")
+        self.assertRegex(canvas.render(False).splitlines()[self.find(canvas, "plain run")[0]].rstrip("│ "),
+                         r"ok 18m00s +3$", "no mark on a plain run")
+
+    def trend(self, label: str = "straylight · gate", **changes: Any) -> dict[str, Any]:
+        return run_event("run.trend", NOW, label, dict(TREND, **changes))
 
     def test_a_trend_is_its_own_row_with_the_key_and_the_reason(self) -> None:
-        trend = {"when": NOW, "verb": "trend", "count": 0, "pid": 0, "delta": 0, "label": "straylight · gate",
-                 "trend": TREND}
-        grew = dict(trend, label="fathers · check · plan 3f2a",
-                    trend=dict(TREND, ratio=1.4, why="plan grew: +2 checks"))
-        faster = dict(trend, label="sid-kit · gate", trend=dict(TREND, verdict="faster", ratio=0.62))
-        canvas = self.events([trend, grew, faster], 100)
+        found = rows_of([released(NOW - dt.timedelta(minutes=1), 9), self.trend(),
+                         self.trend("fathers · check · plan 3f2a", ratio=1.4, why="plan grew: +2 checks"),
+                         self.trend("sid-kit · gate", verdict="faster", ratio=0.62)])
+        canvas = self.events(found, 100)
         y, x = self.find(canvas, "Straylight gate · slower +31% · same plan")
         self.assertEqual("warn", canvas.cells[y][x + len("Straylight gate · ")][1])
         self.find(canvas, "Fathers check plan 3f2a · slower +40% · plan grew +2 checks")
@@ -265,15 +244,15 @@ class ViewTests(unittest.TestCase):
         self.assertEqual("dim", canvas.cells[y][x + len("Sid-kit gate · ")][1])
 
     def test_a_trend_row_in_a_narrow_events_panel_that_has_dropped_its_slots(self) -> None:
-        trend = {"when": NOW, "verb": "trend", "count": 0, "pid": 0, "delta": 0, "label": "straylight · gate",
-                 "trend": TREND}
+        found = rows_of([released(NOW - dt.timedelta(seconds=1), 1), self.trend()])
         for width in (40, 30, 24):
             with self.subTest(width=width):
-                self.assertIn("Stray", self.events([trend, released(NOW, 1)], width).render(False))
+                self.assertIn("Stray", self.events(found, width).render(False))
 
     def test_ascii_terminals_get_ascii_run_marks(self) -> None:
-        canvas = self.events([dict(released(NOW, 1), run="outlier"), dict(released(NOW, 2), run="slower")],
-                             marks=self.tool.marks_for(True))
+        found = rows_of([released(NOW, 1), released(NOW, 2)])
+        found[0]["run"], found[1]["run"] = "outlier", "slower"
+        canvas = self.events(found, marks=self.tool.marks_for(True))
         self.find(canvas, "ok 34m00s ^")
         self.find(canvas, "ok 34m00s /")
 

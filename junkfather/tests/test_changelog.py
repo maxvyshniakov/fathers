@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from typing import List, Tuple
 import unittest
 
 from support import ROOT
@@ -19,14 +20,14 @@ class ChangelogLayoutTests(unittest.TestCase):
         headings = [line for line in lines if line.startswith("## ")]
         self.assertEqual("## Unreleased", headings[0])
         self.assertEqual(1, headings.count("## Unreleased"))
-        releases = []
+        releases: List[Tuple[Tuple[int, ...], str]] = []
         for heading in headings[1:]:
             found = re.fullmatch(r"## (\d+)\.(\d+)\.(\d+) - (\d{4}-\d\d-\d\d)", heading)
             self.assertIsNotNone(found, heading)
             assert found
             releases.append((tuple(int(part) for part in found.groups()[:3]), found[4]))
         self.assertEqual(sorted(releases, reverse=True), releases, "newest first, dates too")
-        section: list = []
+        section: List[str] = []
         for line in lines + ["## end"]:
             if line.startswith("## "):
                 self.assertEqual(sorted(section, key=SECTIONS.index), section, f"section order before {line}")

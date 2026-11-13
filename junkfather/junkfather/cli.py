@@ -16,10 +16,13 @@ them when their owner ends or their TTL passes.
   junkfather hand ID --to SESSION|self
   junkfather extend ID --ttl 2h
   junkfather sweep [--dry-run] [--json] [--quiet] | sweep --plist [--interval S]
+  junkfather settings [--json] | settings check KEY VALUE | settings set KEY VALUE [--revision R]
+                      | settings reset (KEY | --all) [--revision R]     (own.default_ttl, sweep.interval, reap.grace)
   junkfather hook            (Claude Code / Codex lifecycle hook: JSON on stdin)
   junkfather version
 
-Durations take seconds or 90s, 30m, 2h, 1d. State: $JUNKFATHER_STATE (default ~/.local/state/junkfather).
+Durations take seconds or 90s, 30m, 2h, 1d; without --ttl, --grace or --interval the setting applies (settings).
+State: $JUNKFATHER_STATE (default ~/.local/state/junkfather).
 See README.md for how agents launch through it and docs/reference.md for the rules.
 """
 from __future__ import annotations
@@ -30,7 +33,7 @@ import os
 import shlex
 import sys
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from . import __version__
 from . import changelog as _changelog
@@ -45,6 +48,7 @@ from . import procs as _procs
 from . import release as _release
 from . import reap as _reap
 from . import resources as _resources
+from . import settings as _settings
 from . import sweep as _sweep
 from .state import Store
 from .text import duration, seconds
@@ -60,8 +64,9 @@ def parser() -> argparse.ArgumentParser:
     sub = top.add_subparsers(dest="command")
 
     def ownership(p: argparse.ArgumentParser) -> None:
-        p.add_argument("--ttl", type=seconds, default=defaults.TTL,
-                       help=f"end it after this long at most (default {duration(defaults.TTL)})")
+        p.add_argument("--ttl", type=seconds,
+                       help=f"end it after this long at most (default: the own.default_ttl setting, "
+                            f"{duration(defaults.TTL)} unless changed)")
         p.add_argument("--keep-for", choices=("owner", "session"), default="owner",
                        help="owner: ends with the agent that started it; session: survives a subagent's stop and "
                             "ends with the session")
@@ -117,7 +122,8 @@ def parser() -> argparse.ArgumentParser:
                         "command check (the start time is still checked)")
     p.add_argument("--expired", action="store_true", help="only entries past their TTL")
     p.add_argument("--reason", default="reap")
-    p.add_argument("--grace", type=float, default=defaults.GRACE)
+    p.add_argument("--grace", type=float, help="seconds between SIGTERM and SIGKILL (default: the reap.grace "
+                                               "setting)")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--json", action="store_true")
     p.add_argument("--quiet", action="store_true")
@@ -136,7 +142,16 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
     p.add_argument("--quiet", action="store_true", help="print only reaps and errors")
     p.add_argument("--plist", action="store_true", help="print the hourly launchd agent")
-    p.add_argument("--interval", type=int, default=defaults.SWEEP_INTERVAL)
+    p.add_argument("--interval", type=int, help="seconds (default: the sweep.interval setting)")
+
+    p = sub.add_parser("settings", help="the settings a dashboard shows and changes (own.default_ttl, "
+                                        "sweep.interval, reap.grace)")
+    p.add_argument("action", nargs="?", choices=("check", "set", "reset"))
+    p.add_argument("key", nargs="?")
+    p.add_argument("value", nargs="?")
+    p.add_argument("--all", action="store_true", dest="everything", help="with reset: every setting")
+    p.add_argument("--revision", help="refuse the change when the settings no longer have this revision")
+    p.add_argument("--json", action="store_true")
 
     sub.add_parser("hook", help="the agent lifecycle hook (JSON on stdin)")
     p = sub.add_parser("supervise", help=argparse.SUPPRESS)
@@ -158,11 +173,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
 
-def show(data: Dict[str, Any]) -> None:
+def show(data: Mapping[str, Any]) -> None:
     print(json.dumps(data, sort_keys=True))
 
 
 # own, own-resource, adopt
+
+def ttl_of(store: Store, args: argparse.Namespace) -> float:
+    """--ttl, else the own.default_ttl setting as saved now."""
+    return float(args.ttl) if args.ttl is not None else _settings.value("own.default_ttl", store.root)
+
 
 def own_command(store: Store, args: argparse.Namespace) -> int:
     command = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
@@ -172,14 +192,15 @@ def own_command(store: Store, args: argparse.Namespace) -> int:
         raise Usage("--log goes with --detach")
     if args.remove and args.kind != "docker":
         raise Usage("--remove goes with --kind docker")
+    ttl = ttl_of(store, args)
     if not args.kind:
-        return _launch.own(store, command, args.ttl, args.keep_for, args.label, os.environ, args.detach, args.log,
+        return _launch.own(store, command, ttl, args.keep_for, args.label, os.environ, args.detach, args.log,
                            args.quiet, args.agent, args.lane)
     if args.detach:
         raise Usage("--kind runs its command attached: the resource outlives it")
     who = _owner.resolve(os.environ, _procs.read_or_none(), os.getcwd(), store, ["own", *command], args.lane,
                          args.agent)
-    return _resources.own_wrapped(store, args.kind, command, args.ttl, args.keep_for, args.label, who, args.remove,
+    return _resources.own_wrapped(store, args.kind, command, ttl, args.keep_for, args.label, who, args.remove,
                                   args.quiet)
 
 
@@ -193,14 +214,16 @@ def own_resource_command(store: Store, args: argparse.Namespace) -> int:
         stop = shlex.split(args.stop) if args.stop else None
     except ValueError as error:
         raise Usage(f"--alive/--stop: {error}") from None
+    ttl = ttl_of(store, args)
     who = _owner.resolve(os.environ, _procs.read_or_none(), os.getcwd(), store, ["own-resource", args.resource_id],
                          args.lane, args.agent)
-    return _resources.own_resource(store, args.kind, args.resource_id, args.ttl, args.keep_for, args.label, who,
+    return _resources.own_resource(store, args.kind, args.resource_id, ttl, args.keep_for, args.label, who,
                                    alive, stop, args.remove)
 
 
 def adopt_command(store: Store, args: argparse.Namespace) -> int:
-    return _launch.adopt(store, args.pid, args.ttl, args.keep_for, args.label, os.environ, args.lane, args.agent)
+    ttl = ttl_of(store, args)
+    return _launch.adopt(store, args.pid, ttl, args.keep_for, args.label, os.environ, args.lane, args.agent)
 
 
 # list, status, capabilities, changelog
@@ -298,7 +321,7 @@ def hand_command(store: Store, args: argparse.Namespace) -> int:
     if moved is None or not moved[1]:
         print(f"junkfather hand: no running entry {args.id}", file=sys.stderr)
         return 1
-    (entry, before), owner = moved, moved[0]["owner"]
+    (entry, before), owner = moved, moved[0].get("owner") or {}
     _events.write(store.root, "entry.handed", _events.subject(entry), _events.caller(),
                   {"from": {k: before.get(k) for k in ("kind", "session", "agent", "lane")},
                    "to": {k: owner.get(k) for k in ("kind", "session", "lane")}})
@@ -321,9 +344,10 @@ def extend_command(store: Store, args: argparse.Namespace) -> int:
 
 def sweep_command(store: Store, args: argparse.Namespace) -> int:
     if args.plist:
-        if args.interval < defaults.SWEEP_INTERVAL_MIN:
+        interval = int(_settings.value("sweep.interval", store.root)) if args.interval is None else args.interval
+        if interval < defaults.SWEEP_INTERVAL_MIN:
             raise Usage(f"--interval takes {defaults.SWEEP_INTERVAL_MIN} seconds or more")
-        print(_sweep.plist(_sweep.default_command(), args.interval, store.root), end="")
+        print(_sweep.plist(_sweep.default_command(), interval, store.root), end="")
         return 0
     with store.lock("sweep.lock", blocking=False) as got:
         if not got:
@@ -340,10 +364,16 @@ def sweep_command(store: Store, args: argparse.Namespace) -> int:
     return 1 if failed or (result["errors"] and not result["unowned"] and not result["running"]) else 0
 
 
+# settings
+
+def settings_command(store: Store, args: argparse.Namespace) -> int:
+    return _settings.command(store, args.action, args.key, args.value, args.everything, args.revision, args.json)
+
+
 COMMANDS: Dict[str, Callable[[Store, argparse.Namespace], int]] = {
     "own": own_command, "own-resource": own_resource_command, "adopt": adopt_command, "list": list_command,
     "status": status_command, "capabilities": capabilities_command, "changelog": changelog_command,
     "reap": reap_command, "hand": hand_command, "extend": extend_command, "sweep": sweep_command,
     "hook": lambda store, args: _hook.main(), "supervise": lambda store, args: _launch.supervise(store, args.id),
-    "version": version_command,
+    "settings": settings_command, "version": version_command,
 }

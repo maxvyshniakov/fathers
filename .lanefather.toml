@@ -1,0 +1,22 @@
+# Repository facts for Lanefather (lanefather/README.md, Configure one repository; fathers#116).
+project = "fathers"
+command = "lanefather"
+# This repository's own Store: lane ids and the queue stay apart from other projects' lanes.
+state_dir = "~/.local/state/lanefather/fathers/lanes"
+coding_standards = "AGENTS.md"
+report_doc = "docs/agents/orchestration.md"
+
+[checks]
+# Each changed package's checks (tools/checks.py), run through Repo-Kit's lane adapter (.githooks/lane-check).
+verify = "tools/lane-check"
+slot_env = "REPO_KIT_SLOT"
+
+[admission]
+provider = "slotfather"
+
+[tickets]
+# A landed lane's ticket gets the `integrated` label and a comment; the landing merge ends with `Fixes #N`, so GitHub
+# closes the ticket when the merge reaches main (docs/agents/issue-tracker.md).
+integrated_label = true
+land_comment = true
+fixes_trailer = true

@@ -64,8 +64,8 @@ A command run with `GODFATHER_ACTOR` set carries `via: "godfather"`.
 ## Dashboard contract
 
 - `junkfather capabilities --json`: `{v, tool, version, commit, dashboard: {v: 1, tag: "junk", snapshot: {argv:
-  ["status", "--json"], versions: [1], poll: 5}, events: {path, versions: [1], kinds}, actions: ["reap", "extend"],
-  changelog}}`. No `settings` block yet: settings commands are a later release.
+  ["status", "--json"], versions: [1], poll: 5}, events: {path, versions: [1], kinds}, settings: {versions: [1]},
+  actions: ["reap", "extend"], changelog}}`.
 - `junkfather status --json`: `{v: 1, host, time, entries: [the list --json rows of running entries], unowned:
   [{pid, start, cmd, cwd, root, why, age, alive}] from the last sweep, unowned_resources: [{kind, id, name, why}]
   from the last sweep, sweep: {time, result}, errors}`. A resource entry's row has `resource: {kind, id, name}` and
@@ -79,6 +79,39 @@ A command run with `GODFATHER_ACTOR` set carries `via: "godfather"`.
   when the release has none. It reads one file and changes nothing.
 - Without `--json`, `status`, `capabilities` and `changelog` print the same for people; a dashboard always passes
   `--json`, and these shapes only gain fields.
+
+## Settings
+
+`junkfather settings` follows Godfather's settings contract ([`godfather/SPEC.md`](../../godfather/SPEC.md),
+Settings contract), as Slotfather's and Lanefather's do:
+
+```text
+junkfather settings [--json]                                  the schema and the current values
+junkfather settings check KEY VALUE [--json]                  validate without saving: {v, ok, error, preview}
+junkfather settings set KEY VALUE [--revision R] [--json]     save; refused when R no longer matches
+junkfather settings reset (KEY | --all) [--revision R] [--json]
+```
+
+| Key | Default | Range | Used by |
+| --- | --- | --- | --- |
+| `own.default_ttl` | 7200 s | 60 s to 7 days | `own`, `own-resource`, `adopt` without `--ttl` |
+| `sweep.interval` | 3600 s | 60 s to 1 day, whole seconds | `sweep --plist` without `--interval`; the loaded agent keeps its interval until `install.py --launchd` reloads it |
+| `reap.grace` | 10 s | 1 to 600 s | `reap` without `--grace`, the sweep, the supervisor's TTL reap |
+
+Values are durations in seconds (typed as seconds or `90s`, `30m`, `2h`, `1d`), saved in `settings.json` in the state
+directory (`{"v": 1, "settings": {KEY: seconds}}`), written atomically and durably under the state lock. Each reader
+looks the value up when it runs (`settings.value`), so a change applies to the next command. `JUNKFATHER_STATE`,
+`JUNKFATHER_SCRATCH_ROOTS`, `JUNKFATHER_CLAUDE_SESSIONS` and `JUNKFATHER_LANE_RECORDS` are shown as read-only rows
+(`env.NAME`, `source: "env NAME"` when set). The reply is `{v, tool: "junkfather", writable, reason, revision, status,
+sections: [{id, title, settings: [{key, label, type: "duration", value, default, min, max, step, unit: "s", source,
+writable, revision, description}]}]}`; `revision` is the SHA-256 of the file as read, one for all three settings.
+`set` and `reset` reply with the document plus `ok` and `error`.
+
+Exit codes: 0 done, 1 not saved for another reason (a full disk, an I/O error), 2 invalid, 3 conflict (a stale
+`--revision`; the reply is the current settings with `"conflict": true`), 5 read-only (an environment row, or a
+settings file that is not Junkfather's or not writable, which is never overwritten). A command that uses a setting
+while the file cannot be read, or holds a value out of range, says so once on stderr and uses the default. 4 is
+Slotfather's "another user's queue" (fathers#118) and is not used here.
 
 ## Ending an entry
 

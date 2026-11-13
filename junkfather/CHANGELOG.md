@@ -20,6 +20,12 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   with the unowned processes and the last sweep's time, one line of capabilities, the changelog by release. With
   `--json` they print what they always did.
 
+- `junkfather settings` shows and changes three settings through Godfather's settings contract: the default TTL of
+  `own`, `own-resource` and `adopt` (`own.default_ttl`), the sweep agent's interval (`sweep.interval`, applied when
+  the agent is reinstalled) and the grace between SIGTERM and SIGKILL (`reap.grace`). `check`, `set` and `reset`
+  take `--json` and `--revision`; a stale revision exits 3 and a read-only row exits 5. The command-line flags still
+  win, and `capabilities --json` lists `settings` in its dashboard block.
+
 ### Changed
 
 - A reap no longer signals a leader it refused for a changed command: `known` lists the leader too, and the reap

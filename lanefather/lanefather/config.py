@@ -119,8 +119,17 @@ class Config:
     gc_after_remove_report: bool = False
     # [gc] dirs and branches (fathers#44): the worktrees under .claude/worktrees gc may collect, by name (a pattern
     # without '/') or by path from the main checkout, or by branch; and the merged branches it deletes.
-    gc_dirs: tuple[str, ...] = ("agent-*", "lane-*", ".claude/worktrees/*", "codex-*")
+    # Codex's codex-* worktrees are under .claude/worktrees, so .claude/worktrees/* covers them.
+    gc_dirs: tuple[str, ...] = ("agent-*", "lane-*", ".claude/worktrees/*")
     gc_branches: tuple[str, ...] = ("worktree-agent-*", "lane/*", "claude/*", "codex/*")
+    # A session worktree (one the agent and lane patterns do not name) that never had a commit of its own may
+    # still be open; gc keeps it unless this is set (fathers#44 review).
+    gc_collect_uncommitted_sessions: bool = False
+    # Ignored paths a session worktree may hold and still be collected: build output its checkout regenerates. Any
+    # other ignored file (.env, .claude/settings.local.json, notes) keeps it. Matched against each path component.
+    gc_disposable: tuple[str, ...] = ("node_modules", "__pycache__", "target", ".build", "dist", "build", ".venv",
+                                      ".turbo", ".next", "storybook-static", "coverage", ".pytest_cache",
+                                      ".ruff_cache", ".DS_Store")
     admission_provider: str = "legacy"
     tickets: Tickets = Tickets()
 
@@ -236,7 +245,7 @@ TABLE_KEYS = {
     "gate": ("stamp_tool", "stamp_file", "pre_push_hook"),
     "promote": ("ship_refuses", "ship_refusal", "install", "deploy", "install_env_drop", "after"),
     "hooks": ("process_scan", "project"),
-    "gc": ("after_remove", "after_remove_report", "dirs", "branches"),
+    "gc": ("after_remove", "after_remove_report", "dirs", "branches", "collect_uncommitted_sessions", "disposable"),
     "tickets": ("integrated_label", "land_comment", "fixes_trailer", "release_comment", "preview", "repo"),
     "slots": ("priority",),
     "review": ("blocks",),
@@ -320,6 +329,9 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
     gc_report = gc.get("after_remove_report", default.gc_after_remove_report)
     if type(gc_report) is not bool:
         raise LaneError(f"{CONFIG_NAME}: after_remove_report must be a boolean")
+    uncommitted = gc.get("collect_uncommitted_sessions", default.gc_collect_uncommitted_sessions)
+    if type(uncommitted) is not bool:
+        raise LaneError(f"{CONFIG_NAME}: [gc] collect_uncommitted_sessions must be a boolean")
     provider = _string(admission, "provider", default.admission_provider)
     if provider not in ("legacy", "slotfather"):
         raise LaneError(".lanefather.toml: admission provider must be legacy or slotfather")
@@ -365,6 +377,8 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         gc_after_remove_report=gc_report,
         gc_dirs=_patterns(gc, "dirs", default.gc_dirs),
         gc_branches=_patterns(gc, "branches", default.gc_branches),
+        gc_collect_uncommitted_sessions=uncommitted,
+        gc_disposable=_patterns(gc, "disposable", default.gc_disposable),
         admission_provider=provider,
         tickets=_tickets(tickets),
     )

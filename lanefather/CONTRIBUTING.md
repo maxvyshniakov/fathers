@@ -12,9 +12,9 @@ For a pull request:
 - Leave `tests/fixtures/` unchanged: those files are frozen copies of the older tool and project seams that the
   compatibility tests run against (`tests/fixtures/PROVENANCE.json`).
 - Keep the state formats compatible; see [State and its versions](docs/reference.md#state-and-its-versions).
-- Run `python3 tools/check.py`: Ruff and strict Pyright at pinned versions through
-  [uv](https://docs.astral.sh/uv/)'s `uvx`, then the tests. The pyright baseline only shrinks. The tests use
-  [Slotfather](https://github.com/maxvyshniakov/fathers/tree/main/slotfather) when it is on `PATH` and run without it otherwise.
+- Run `python3 tools/check.py`: Ruff and strict Pyright at the versions `requirements-dev.txt` pins (through
+  [uv](https://docs.astral.sh/uv/) when they are not on `PATH`) against a baseline that only shrinks. Then the
+  tests: `python3 -m unittest discover -s tests -p 'test_*.py'`.
 
 Security reports go through [SECURITY.md](SECURITY.md), not issues. Contributions are licensed under the
 [MIT License](LICENSE).

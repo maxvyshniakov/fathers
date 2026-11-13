@@ -7,14 +7,15 @@ requires-python = ">=3.9"
 license = "MIT"
 
 [tool.ruff]
-line-length = 120
+extend = "../tools/ruff.toml"
 target-version = "py39"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "B"]
+# The shared rules (../tools/ruff.toml) this package does not pass yet; drop a code once its findings are fixed.
+ignore = ["I001", "PLC3002", "RUF010", "RUF012", "RUF015", "RUF100", "SIM102", "SIM105", "UP006", "UP035", "UP037", "UP045"]
 
 [tool.pyright]
 include = ["junkfather", "tests", "install.py", "tools"]
 pythonVersion = "3.9"
-typeCheckingMode = "basic"
+typeCheckingMode = "strict"
 extraPaths = ["../common"]  # eventcheck: common/eventcheck.py

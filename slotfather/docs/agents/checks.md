@@ -5,30 +5,21 @@ checks, pinned in `requirements-dev.txt`; they are not installed on runner hosts
 
 ## Gate
 
-Run each command through one machine slot:
+The repository's [checks](../../../docs/agents/checks.md) run Slotfather's lint gate and tests whenever a change
+touches `slotfather/` (`bun run verify`, the pre-push hook, a lane check). By hand, each through one machine slot:
 
 ```sh
-slotfather run -n 1 -- uv run --no-project --with-requirements requirements-dev.txt python tools/check.py
-slotfather run -n 1 -- python3 -m unittest discover -s tests -v
+slotfather run -n 1 --label "<task> slotfather lint" -- python3 tools/check.py
+slotfather run -n 1 --label "<task> slotfather tests" -- python3 -m unittest discover -s tests
 ```
 
-The first command runs Ruff's error, import and bug-risk rules and Pyright in strict mode.
-`tools/type-baseline.json` records existing diagnostics by relative file, tool, rule and message.
-An increased count or a diagnostic in another file fails. A moved line does not consume a new
-budget. The checker also rejects baseline growth relative to committed history. The baseline is
-legacy debt, not a claim that the entire codebase is fully typed. New process-query and quality-gate
-modules start without debt. Do not suppress a new error, expand the baseline or weaken the
-configuration to make a change pass. CI must fetch full Git history (`fetch-depth: 0`);
-shallow checkouts are refused because they can hide earlier budget reductions.
-
-After fixing existing diagnostics, remove their budget:
-
-```sh
-slotfather run -n 1 -- uv run --no-project --with-requirements requirements-dev.txt python tools/check.py --shrink-baseline
-```
-
-This refresh refuses new diagnostics. `--initialize-baseline` is only for initial adoption;
-it refuses an existing baseline, including one present in Git history.
+`tools/type-baseline.json` is the lint gate's budget of legacy debt, by relative file, tool, rule and message: an
+increased count or a diagnostic in another file fails, a moved line does not consume a new budget, and the budget
+cannot grow beyond committed history (CI fetches full history for that). It is not a claim that the codebase is
+fully typed; new process-query and quality-gate modules start without debt. Do not suppress a new error, expand the
+baseline or weaken the configuration to make a change pass. After fixing debt, `python3 tools/check.py
+--shrink-baseline` removes its budget and refuses new diagnostics; `--initialize-baseline` is only for initial
+adoption.
 
 For a focused change, run its test file before the full gate. Tests use isolated directories
 and child processes; they must not modify the live queue. See [testing](../testing.md) for

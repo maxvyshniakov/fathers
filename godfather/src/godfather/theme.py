@@ -50,6 +50,10 @@ HOLDER_HUES = (("hot pink", 350.0), ("orange", 68.0), ("acid green", 138.0), ("s
 FILL_CHROMA, INK_CHROMA = 0.24, 0.16
 FILL_LIGHT, FILL_DARK = 0.73, 0.80  # a fill's lightness on a light and on a dark background
 HOLDERS = len(HOLDER_HUES)
+# EVENTS' source tags (fathers#84): one ink per tool, by the holder rules (kept apart from the accent, bad and warn
+# tokens, never in the blue range), so a tag reads as its tool's colour on any background
+SOURCE_HUES = (("source-slot", 172.0), ("source-lane", 300.0), ("source-junk", 60.0))
+BUILTIN_SOURCES: Dict[str, Colour] = {"source-slot": 79, "source-lane": 141, "source-junk": 216}
 
 
 class Holder(NamedTuple):
@@ -274,12 +278,18 @@ def holder_pairs(background: Optional[RGB], light: bool,
     return list(_holder_pairs(background, light, tuple(reserved or reserved_for(background, light))))
 
 
+def source_inks(background: Optional[RGB], light: bool, reserved: Sequence[RGB]) -> Dict[str, RGB]:
+    """EVENTS' source tag colours by token: SOURCE_HUES placed as holder fills are, each tag in its fill's ink."""
+    return {pair.name: pair.ink for pair in _holder_pairs(background, light, tuple(reserved), SOURCE_HUES)}
+
+
 @functools.lru_cache(maxsize=64)
-def _holder_pairs(background: Optional[RGB], light: bool, reserved: Tuple[RGB, ...]) -> Tuple[Holder, ...]:
+def _holder_pairs(background: Optional[RGB], light: bool, reserved: Tuple[RGB, ...],
+                  hues: Tuple[Tuple[str, float], ...] = HOLDER_HUES) -> Tuple[Holder, ...]:
     surface = background or (LIGHT_REFERENCE if light else DARK_REFERENCE)
     found: List[Holder] = []
     level = FILL_LIGHT if light else FILL_DARK
-    for name, angle in HOLDER_HUES:
+    for name, angle in hues:
         fill = oklch(level, FILL_CHROMA, angle)
         nearest = min(reserved, key=lambda colour: distance(colour, fill))
         away = -1 if (hue(nearest) - angle) % 360 < 180 else 1  # turn away from the nearest reserved colour first
@@ -485,6 +495,7 @@ def resolve(mode: str, answers: Optional[Answers] = None,
         styles.update({name: (colour, "") for name, colour in ours.items()})
         styles.update({f"badge-{name}": (ours[name], "br") for name in ("ok", "warn", "bad")})
         styles.update({f"{token}{n}": (colour, "") for n, colour in enumerate(BUILTIN_HOLDERS) for token in "hf"})
+        styles.update({name: (colour, "") for name, colour in BUILTIN_SOURCES.items()})
         styles.update({f"chart{n}": (colour, "") for n, colour in enumerate(chart_ramp(light, CHART_STEPS))})
         return Theme(mode, styles, (56, 62, 74), 252, "■", "block", light, background, source)
     styles = dict(TOKENS)
@@ -494,6 +505,8 @@ def resolve(mode: str, answers: Optional[Answers] = None,
     holders = holder_pairs(background, light, (ours["accent"], ours["bad"], ours["warn"]))
     styles.update({f"h{n}": (holder.ink, "") for n, holder in enumerate(holders)})
     styles.update({f"f{n}": (holder.fill, "") for n, holder in enumerate(holders)})
+    reserved = (ours["accent"], ours["bad"], ours["warn"])
+    styles.update({name: (ink, "") for name, ink in source_inks(background, light, reserved).items()})
     mixing = mode == "auto" and background is not None
     if mixing:
         assert background is not None

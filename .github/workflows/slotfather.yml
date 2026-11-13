@@ -6,11 +6,13 @@ on:
     paths:
       - 'slotfather/**'
       - 'common/**'
+      - 'tools/ruff.toml'
       - '.github/workflows/slotfather.yml'
   pull_request:
     paths:
       - 'slotfather/**'
       - 'common/**'
+      - 'tools/ruff.toml'
       - '.github/workflows/slotfather.yml'
   workflow_dispatch:
 

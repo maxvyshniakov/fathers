@@ -19,6 +19,12 @@
      ],
      "poll": 1
     },
+    "events": {
+     "path": "/fixture/events.jsonl",
+     "versions": [
+      1
+     ]
+    },
     "settings": {
      "versions": [
       1
@@ -26,13 +32,7 @@
     },
     "actions": [
      "reprioritize"
-    ],
-    "events": {
-     "path": "/fixture/events.jsonl",
-     "versions": [
-      1
-     ]
-    }
+    ]
    }
   }
  },
@@ -1111,8 +1111,7 @@
       "count": 1,
       "delta": -1,
       "label": "desktop",
-      "pid": 21194,
-      "detail": "exit 0, ran 5s"
+      "pid": 21194
      },
      {
       "when": "2026-11-04T09:52:53.000Z",
@@ -1168,8 +1167,7 @@
       "count": 1,
       "delta": -1,
       "label": "desktop",
-      "pid": 21197,
-      "detail": "exit 0, ran 6s"
+      "pid": 21197
      },
      {
       "when": "2026-11-04T09:55:24.000Z",
@@ -1185,8 +1183,7 @@
       "count": 1,
       "delta": -1,
       "label": "agent-a1c75285bdf2cd615",
-      "pid": 21198,
-      "detail": "exit 0, ran 1m20s"
+      "pid": 21198
      },
      {
       "when": "2026-11-04T09:55:31.000Z",
@@ -1194,8 +1191,7 @@
       "count": 1,
       "delta": -1,
       "label": "desktop",
-      "pid": 21199,
-      "detail": "exit 1, ran 7s"
+      "pid": 21199
      },
      {
       "when": "2026-11-04T09:55:41.000Z",
@@ -1219,8 +1215,7 @@
       "count": 1,
       "delta": -1,
       "label": "agent-a1c75285bdf2cd615",
-      "pid": 21200,
-      "detail": "exit 0, ran 1m34s"
+      "pid": 21200
      },
      {
       "when": "2026-11-04T09:57:20.000Z",
@@ -1236,8 +1231,7 @@
       "count": 1,
       "delta": -1,
       "label": "agent-a1c75285bdf2cd615",
-      "pid": 21201,
-      "detail": "exit 0, ran 1m13s"
+      "pid": 21201
      },
      {
       "when": "2026-11-04T09:59:35.000Z",
@@ -1245,8 +1239,7 @@
       "count": 1,
       "delta": -1,
       "label": "agent-ae72d94beb6f08961",
-      "pid": 21202,
-      "detail": "exit 0, ran 5m41s"
+      "pid": 21202
      }
     ],
     "updated": "2026-11-04T09:59:39.000Z",

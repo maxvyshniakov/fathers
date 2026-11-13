@@ -126,7 +126,9 @@ def project_entry(entry: dict[str, Any]) -> dict[str, Any]:
         raise LaneError(f"state directory {directory} not found")
     common = entry.get("common_dir") if isinstance(entry.get("common_dir"), str) else None
     # A state directory several projects share holds each one's lanes: a project reports those of its repository.
-    records = [r for r in state.Store(project, directory=directory).lanes()
+    # A record a write cut short cannot say its repository: every project of the directory lists it (fathers#129).
+    damaged: list[Path] = []
+    records = [r for r in state.Store(project, directory=directory).lanes(damaged=damaged)
                if common is None or r.get("common_dir") == common]
     try:
         decision = admission.evaluate(project, records)
@@ -147,7 +149,8 @@ def project_entry(entry: dict[str, Any]) -> dict[str, Any]:
             "active": sum(1 for r in records if r.get("status") == "active"),
             "planned": sum(1 for r in records if r.get("status") == "planned"),
             "gate": newest_gate(directory),
-            "lanes": [lane_entry(r, directory, repo, trees, logs.get(str(r["id"]), {})) for r in shown]}
+            "lanes": [lane_entry(r, directory, repo, trees, logs.get(str(r["id"]), {})) for r in shown],
+            "damaged": [{"path": str(path), "error": state.cut_short(path)} for path in damaged]}
 
 
 def snapshot() -> dict[str, Any]:
@@ -182,4 +185,7 @@ def status(args: Any) -> int:
         for lane in project["lanes"]:
             print(f"    {lane['id']}  {lane['status']}  receipt {lane['receipt']['status']}"
                   f"  review {lane['review']['status']}")
+        for row in project.get("damaged", []):
+            print(f"    damaged {row['path']}: restore the record or remove the file; start, land, promote and gc "
+                  "refuse until then")
     return 0

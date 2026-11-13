@@ -6,11 +6,13 @@ on:
     paths:
       - 'lanefather/**'
       - 'common/**'
+      - 'tools/ruff.toml'
       - '.github/workflows/lanefather.yml'
   pull_request:
     paths:
       - 'lanefather/**'
       - 'common/**'
+      - 'tools/ruff.toml'
       - '.github/workflows/lanefather.yml'
   workflow_dispatch:
 
@@ -47,6 +49,6 @@ jobs:
       - name: Install uv (tools/check.py runs Ruff and Pyright through uvx)
         run: python -m pip install uv==0.13.5
       - name: Check Ruff and strict Pyright against the baseline
-        run: python tools/check.py --lint
+        run: python tools/check.py
       - name: Run unit and compatibility tests
         run: python -m unittest discover -s tests -v

@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 SCENE = ROOT / "tests" / "fixtures" / "scene"
 EXPECTED = ROOT / "tests" / "fixtures" / "expected"  # the scene with expected runs, outliers and trends (fathers#108)
+MIXED = ROOT / "tests" / "fixtures" / "mixed"  # the scene with Lanefather's and junkfather's event logs (fathers#84)
 NEWS = ROOT / "tests" / "fixtures" / "news"
 GOLDENS = ROOT / "tests" / "goldens"
 COMMIT = "9f600e1c0ffee"  # Godfather's own install commit in what's new, so a commit changes no golden
@@ -48,6 +49,9 @@ SCREENS = {  # name: (width, height, overlay); what's new's filter after a colon
     "expected-100x40": (100, 40, "expected:0"), "expected-waiting-100x40": (100, 40, "expected:3"),
     # fathers#139: Tab's focus on EVENTS, and at 76 columns (no EVENTS there) on DETAILS
     "focus-events-156x43": (156, 43, "focus:events"), "focus-details-76x40": (76, 40, "focus:details"),
+    # fathers#84: EVENTS with every source, wide, at 100 and at 76 columns; filtered to Lanefather while "710" is typed
+    "mixed-156x43": (156, 43, "mixed"), "mixed-100x40": (100, 40, "mixed"), "mixed-76x40": (76, 40, "mixed"),
+    "mixed-filter-156x43": (156, 43, "mixed:lanefather:710"),
 }
 
 
@@ -83,7 +87,7 @@ def write_scene() -> None:
     """The demo scene, frozen, as the fixture replies Slotfather would give (docs/contracts/slotfather.md)."""
     demo = load(ROOT / "tools" / "dashboard-demo.py", "godfather_demo")
     fake = load(ROOT / "tests" / "fake_slotfather.py", "fake_slotfather")
-    _, model = demo.load_scene(advance=False)
+    _, model = demo.load_scene(advance=False, recorded=True)
     block = stamp({key: value for key, value in model.items() if key not in ("installed", "history_window")})
     lanes = {}
     for item in block["holders"] + block["waiters"]:
@@ -96,8 +100,14 @@ def write_scene() -> None:
     block.update(v=1, draining=0, basis=fake.basis(state))
     capabilities = {"v": 1, "tool": "slotfather", "version": "0.2.0", "dashboard": {
         "v": 1, "tag": "slot", "snapshot": {"argv": ["status", "--json", "--full"], "versions": [2], "poll": 1},
+        "events": {"path": "/fixture/events.jsonl", "versions": [1]},
         "settings": {"versions": [1]}, "actions": ["reprioritize"]}}
     (SCENE / "slotfather").mkdir(parents=True, exist_ok=True)
+    # EVENTS reads the event log (fathers#84): the scene's grants and releases as Slotfather logs them
+    live = {item["pid"]: (item["since"], item["granted"]) for item in block["holders"]}
+    log = replay().lines(block["events"], live)
+    (SCENE / "slotfather" / "events.jsonl").write_text("\n".join(log) + "\n")
+    (SCENE / "host.json").write_text(json.dumps({"host": "mbp"}) + "\n")  # the host its event log is read for
     (SCENE / "slotfather" / "replies.json").write_text(json.dumps({
         "capabilities --json": {"code": 0, "json": capabilities},
         "status --json --full": {"code": 0, "json": snapshot},
@@ -107,6 +117,11 @@ def write_scene() -> None:
                                                   "lanes": lanes}, indent=1) + "\n")
 
 
+def replay() -> Any:
+    """tests/replay.py: a recorded scene's grants and releases as Slotfather's event-log lines."""
+    return load(ROOT / "tests" / "replay.py", "godfather_replay")
+
+
 def lane_key(key: Any) -> str:
     """scene.json's key of a row's lane: its key as JSON, a [pid, since] pair as a list."""
     return json.dumps(list(cast(list[Any], key)) if isinstance(key, (list, tuple)) else key)
@@ -114,10 +129,9 @@ def lane_key(key: Any) -> str:
 
 def write_expected() -> None:
     """tests/fixtures/expected/: the scene as a Slotfather with fathers#101 and fathers#106 answers it: `entries` with
-    lease ids and expected runs (one lease past its p90, one waiter with an expected run), the event log's path in
-    capabilities, results on the last releases, and an event log with an outlier and two slower trends."""
+    lease ids and expected runs (one lease past its p90, one waiter with an expected run), and its event log with
+    lease ids, an outlier and two slower trends."""
     replies = json.loads((SCENE / "slotfather" / "replies.json").read_text())
-    replies["capabilities --json"]["json"]["dashboard"]["events"] = {"path": "/fixture/events.jsonl", "versions": [1]}
     snapshot = replies["status --json --full"]["json"]
     block = snapshot["dashboard"]
     gate = {"key": "straylight · gate", "p50": 1080.0, "p90": 1860.0, "runs": 23, "fallback": False}
@@ -132,13 +146,6 @@ def write_expected() -> None:
             if overrun is not None:
                 entry["overrun"] = overrun
         snapshot["entries"].append(entry)
-    results = {21194: "exit 0, ran 5s", 21197: "exit 0, ran 6s", 21199: "exit 1, ran 7s",
-               21198: "exit 0, ran 1m20s", 21200: "exit 0, ran 1m34s", 21201: "exit 0, ran 1m13s",
-               21202: "exit 0, ran 5m41s"}
-    for event in block["events"]:
-        if event["verb"] == "released" and event["pid"] in results:
-            event["detail"] = results[event["pid"]]
-
     def line(kind: str, time: str, key: str, details: dict[str, Any], level: str) -> str:
         return json.dumps({"v": 1, "time": time, "host": "mbp", "source": "slotfather", "kind": kind,
                            "subject": {"type": "run_type", "id": key}, "actor": {"type": "tool"},
@@ -153,13 +160,70 @@ def write_expected() -> None:
            line("run.trend", "2026-11-04T09:59:35.500Z", "straylight · gate",
                 {"verdict": "slower", "p50_recent": 341.0, "p50_before": 258.0, "ratio": 1.32, "recent": 10,
                  "before": 30, "plan_change": None, "why": "same plan"}, "warn")]
+    live = {item["pid"]: (item["since"], item["granted"]) for item in block["holders"]}
+    def lease(pid: int) -> str:
+        return f"lease-{pid}"
+
+    queue = replay().lines(block["events"], live, lease=lease)
+    log = sorted(queue + log, key=lambda text: json.loads(text)["time"])  # stable: a run event after its release
     EXPECTED.mkdir(parents=True, exist_ok=True)
     (EXPECTED / "slotfather").mkdir(exist_ok=True)
     (EXPECTED / "slotfather" / "replies.json").write_text(json.dumps(replies, indent=1) + "\n")
     (EXPECTED / "slotfather" / "events.jsonl").write_text("\n".join(log) + "\n")
+    (EXPECTED / "host.json").write_text(json.dumps({"host": "mbp"}) + "\n")  # the host its event log is read for
     scene = json.loads((SCENE / "scene.json").read_text())
     scene["lanes"] = {lane_key(f"lease-{json.loads(key)[0]}"): lane for key, lane in scene["lanes"].items()}
     (EXPECTED / "scene.json").write_text(json.dumps(scene, indent=1) + "\n")
+
+
+def write_mixed() -> None:
+    """tests/fixtures/mixed/: the scene with Lanefather and junkfather present, each answering capabilities with its
+    event log, and logs of a lane's start, check, land, smoke and review, a red batch gate, and owned, reported and
+    reaped processes in the scene's last ten minutes (fathers#84)."""
+    import shutil
+
+    shutil.rmtree(MIXED, ignore_errors=True)
+    shutil.copytree(SCENE, MIXED, ignore=shutil.ignore_patterns("CHANGELOG.md"))
+
+    def line(source: str, kind: str, time: str, subject: dict[str, Any], details: dict[str, Any],
+             level: str | None = None) -> str:
+        event = {"v": 1, "time": f"2026-11-04T{time}.000Z", "host": "mbp", "source": source, "kind": kind,
+                 "subject": subject, "actor": {"type": "agent", "session": "4bceaaaf"}, "details": details}
+        if level:
+            event["level"] = level
+        return json.dumps(event, sort_keys=True)
+
+    lane = {"type": "lane", "id": "710-speech-paste-phase", "ticket": "710", "project": "Straylight"}
+    review = {"type": "lane", "id": "644-build-once", "ticket": "644", "project": "Straylight"}
+    commit = {"type": "commit", "id": "cedf8b972dd8ed11d8af0725f0a9bcb5b2d0ba35", "project": "Straylight"}
+    lanes = [
+        line("lanefather", "lane.started", "09:50:12", lane, {"status": "active", "base": "integrate/queue-347",
+                                                              "claims": ["desktop/src/**", "docs/**"]}),
+        line("lanefather", "lane.checked", "09:53:40", lane, {"status": "green", "suites": ["tooling", "native"],
+                                                              "checks": 14, "reused": 3, "jobs": 2}),
+        line("lanefather", "lane.landed", "09:56:05", lane, {"onto": "integrate/queue-347", "merge": "cedf8b97"}),
+        line("lanefather", "lane.post_merge", "09:57:48", lane, {"status": "green", "scope": "narrowed", "jobs": 2}),
+        line("lanefather", "gate.finished", "09:58:10", commit, {"status": "red", "jobs": 1, "seconds": 1177},
+             "error"),
+        line("lanefather", "review.finished", "09:59:02", review, {"status": "finished", "findings": 2,
+                                                                   "seconds": 540})]
+    entry = {"type": "entry", "id": "j3f9a1c", "label": "vite dev", "pid": 90412}
+    junk = [
+        line("junkfather", "entry.owned", "09:51:30", entry, {"argv": ["bun", "run", "dev"], "ttl": 7200,
+                                                              "keep": "owner", "mode": "detached"}),
+        line("junkfather", "unowned.reported", "09:54:20", {"type": "process", "id": "88123", "pid": 88123},
+             {"cmd": "node storybook dev", "why": "orphan", "age": 5400}, "warn"),
+        line("junkfather", "entry.reaped", "09:57:00", {"type": "entry", "id": "j1c2d3e", "label": "simulator",
+                                                         "pid": 87001}, {"reason": "ttl expired", "result": "stopped"}),
+        line("junkfather", "entry.extended", "09:59:20", entry, {"ttl": 14400})]
+    for tool, tag, log in (("lanefather", "lane", lanes), ("junkfather", "junk", junk)):
+        (MIXED / tool).mkdir()
+        capabilities = {"v": 1, "tool": tool, "version": "0.9.0", "dashboard": {
+            "v": 1, "tag": tag, "snapshot": {"argv": ["status", "--json"], "versions": [1], "poll": 5},
+            "events": {"path": f"/fixture/{tool}/events.jsonl", "versions": [1]}}}
+        (MIXED / tool / "replies.json").write_text(json.dumps({"capabilities --json": {"code": 0, "json": capabilities}},
+                                                              indent=1) + "\n")
+        (MIXED / tool / "events.jsonl").write_text("\n".join(log) + "\n")
 
 
 def fake_state(state: dict[str, Any]) -> dict[str, Any]:
@@ -196,9 +260,15 @@ def render(name: str, theme: str | None) -> str:
     selected, focus = 0, "requests"
     if overlay and overlay.startswith("focus:"):
         focus, overlay = overlay.partition(":")[2], None
-    folder = SCENE
+    folder, found_filter = SCENE, None
     if overlay and overlay.startswith("expected"):
         folder, selected, overlay = EXPECTED, int(overlay.partition(":")[2]), None
+    if overlay and overlay.startswith("mixed"):
+        from godfather.views import events as events_view
+
+        _, source, text = (overlay.split(":") + ["", ""])[:3]
+        found_filter = events_view.Filter(source or None, text, editing=bool(text))
+        folder, overlay = MIXED, None
     found, everything, unread = scene_news()
     read = everything if name.startswith(("overview-", "help-", "settings-", "expected", "focus-")) else unread
     scene = json.loads((folder / "scene.json").read_text())
@@ -228,7 +298,7 @@ def render(name: str, theme: str | None) -> str:
         canvas = tui.Canvas(width, height, palette, common.marks_for(False))
         canvas.focus = focus
         overview.dashboard_draw(canvas, model, selected, shown, cwd="~/straylight", news=found, read=read,
-                                moment=moment)
+                                moment=moment, events_filter=found_filter)
         return canvas.render(theme is not None)
 
 
@@ -265,6 +335,7 @@ def main(argv: list[str]) -> int:
         return 1 if bad else 0
     write_scene()
     write_expected()
+    write_mixed()
     GOLDENS.mkdir(parents=True, exist_ok=True)
     for name, text in goldens().items():
         (GOLDENS / name).write_text(text)

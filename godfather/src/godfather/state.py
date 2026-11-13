@@ -15,6 +15,7 @@ from typing import Any, Optional, Union, cast
 from . import news as _news
 from .tui import dashboard_text
 from .views import common as _common
+from .views import events as _events_view
 from .views import overlays as _overlays
 from .widgets import OverlayView
 
@@ -120,8 +121,9 @@ class AppState:
     glow: dict[str, float] = field(default_factory=lambda: cast(dict[str, float], {}))  # when each last scrolled
     details: dict[DetailsKey, Loaded] = field(default_factory=lambda: cast(dict[DetailsKey, Loaded], {}))
     colours: dict[EntryId, int] = field(default_factory=lambda: cast(dict[EntryId, int], {}))
-    fresh_events: int = 0  # events that arrived while EVENTS was scrolled down
-    newest: Any = None  # the newest event's identity
+    fresh_events: int = 0  # events the filter lets through that arrived while EVENTS was scrolled down
+    newest: Any = None  # the newest shown event's identity
+    events_filter: _events_view.Filter = _events_view.Filter()  # EVENTS' source and text filters (fathers#84)
     interval: float = 1.0  # Refresh every
     theme: str = "auto"  # Colour theme
     news: Any = None  # news.News: what's new, once the tools answered
@@ -345,8 +347,9 @@ def fade(state: AppState, now: float) -> Optional[float]:
 
 def follow_events(state: AppState, events: list[dict[str, Any]]) -> AppState:
     """EVENTS (newest first) after a refresh (#15): at the top it shows the newest; scrolled down, it keeps showing
-    the same events as new ones arrive above them and counts those."""
-    ids = [event_id(event) for event in events[::-1]]
+    the same events as new ones arrive above them and counts those. Only the rows the filter lets through count
+    (fathers#84)."""
+    ids = [event_id(event) for event in _events_view.shown_rows({"events": events}, state.events_filter)[::-1]]
     arrived = ids.index(state.newest) if state.newest in ids else 0
     scroll, fresh = dict(state.scroll), 0
     if scroll.get("events"):
@@ -355,8 +358,19 @@ def follow_events(state: AppState, events: list[dict[str, Any]]) -> AppState:
     return dataclasses.replace(state, scroll=scroll, fresh_events=fresh, newest=ids[0] if ids else None)
 
 
-def event_id(event: dict[str, Any]) -> tuple[Any, ...]:
-    return (event.get("when"), event.get("verb"), event.get("pid"), event.get("count"))
+def filtered(state: AppState, events_filter: _events_view.Filter) -> AppState:
+    """A filter changed: what EVENTS shows is another list, so the newest shown is found again and nothing counts as
+    new; one pinned to the newest stays pinned (fathers#84)."""
+    if events_filter == state.events_filter:
+        return state
+    rows = _events_view.shown_rows(state.model, events_filter)
+    newest = event_id(rows[-1]) if rows else None
+    return dataclasses.replace(state, events_filter=events_filter, newest=newest, fresh_events=0)
+
+
+def event_id(event: dict[str, Any]) -> Any:
+    """A row's identity: its place in its source's log (events.row()), else what a row without one says."""
+    return event.get("key") or (event.get("when"), event.get("kind"), event.get("pid"), event.get("count"))
 
 
 def settings_effects(state: AppState, action: str) -> Result:

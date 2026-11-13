@@ -14,13 +14,14 @@ import sys
 import tempfile
 import time
 import unittest
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, cast
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT.parent / "common"))  # eventcheck: common/eventcheck.py, the shared validator
 
 from junkfather import procs  # noqa: E402
+from junkfather.entry import Entry  # noqa: E402
 from junkfather.state import Store  # noqa: E402
 
 AGENT_VARIABLES = ("CLAUDE", "CODEX", "LANEFATHER_", "JUNKFATHER_")
@@ -33,6 +34,21 @@ def proc(pid: int, ppid: int = 1, pgid: Optional[int] = None, uid: Optional[int]
 
 def table(*items: procs.Proc, moment: Optional[float] = None) -> procs.Table:
     return procs.Table({p.pid: p for p in items}, moment=moment)
+
+
+def plain(entry: Entry) -> Dict[str, Any]:
+    """An entry as a plain mapping a test can index freely (a copy)."""
+    return dict(cast(Mapping[str, Any], entry))
+
+
+def got(entry: Optional[Entry]) -> Dict[str, Any]:
+    """What a transition or a load returned, as a plain mapping; {} for None (indexing it then fails the test)."""
+    return plain(entry) if entry is not None else {}
+
+
+def as_entry(data: Mapping[str, Any]) -> Entry:
+    """A test's hand-written entry (often only the keys the code under test reads) as the Entry type."""
+    return cast(Entry, data)
 
 
 class Case(unittest.TestCase):
@@ -50,7 +66,7 @@ class Case(unittest.TestCase):
         self.addCleanup(os.environ.pop, "JUNKFATHER_STATE", None)
         self.addCleanup(os.environ.pop, "JUNKFATHER_CLAUDE_SESSIONS", None)
         self.store = Store(self.state)
-        self.children: List[subprocess.Popen] = []
+        self.children: List[subprocess.Popen[Any]] = []
         self.addCleanup(self.kill_children)
 
     def kill_children(self) -> None:
@@ -67,18 +83,18 @@ class Case(unittest.TestCase):
                         pass
 
     def cli(self, *args: str, env: Optional[Dict[str, str]] = None, input: Optional[str] = None,
-            timeout: float = 60) -> subprocess.CompletedProcess:
+            timeout: float = 60) -> subprocess.CompletedProcess[str]:
         return subprocess.run([sys.executable, "-m", "junkfather", *args], cwd=ROOT, env=env or self.env,
                               capture_output=True, text=True, input=input, timeout=timeout)
 
-    def spawn(self, *argv: str, **options: Any) -> subprocess.Popen:
+    def spawn(self, *argv: str, **options: Any) -> subprocess.Popen[Any]:
         options.setdefault("stdout", subprocess.DEVNULL)
         options.setdefault("stderr", subprocess.DEVNULL)
-        child = subprocess.Popen(list(argv), **options)
+        child: subprocess.Popen[Any] = subprocess.Popen(list(argv), **options)
         self.children.append(child)
         return child
 
-    def fake_claude(self, session: str, register: bool = True) -> subprocess.Popen:
+    def fake_claude(self, session: str, register: bool = True) -> subprocess.Popen[Any]:
         """A process standing in for a Claude Code session, and its registry record."""
         child = self.spawn("sleep", "600")
         if register:
@@ -89,18 +105,17 @@ class Case(unittest.TestCase):
                 {"pid": child.pid, "sessionId": session, "procStart": utc, "startedAt": int(time.time() * 1000)}))
         return child
 
-    def claude_env(self, session: str, claude: subprocess.Popen) -> Dict[str, str]:
+    def claude_env(self, session: str, claude: subprocess.Popen[Any]) -> Dict[str, str]:
         return {**self.env, "CLAUDE_CODE_SESSION_ID": session, "CLAUDE_PID": str(claude.pid)}
 
-    def own_detached(self, env: Dict[str, str], *options: str, argv: tuple = ("sleep", "600")) -> Dict[str, Any]:
+    def own_detached(self, env: Dict[str, str], *options: str, argv: Tuple[str, ...] = ("sleep", "600")
+                     ) -> Dict[str, Any]:
         result = self.cli("own", "--detach", *options, "--", *argv, env=env)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         entry_id = result.stdout.split()[1]
-        entry = self.store.load(entry_id)
-        assert entry is not None
-        return entry
+        return self.loaded(entry_id)
 
-    def wait_for(self, predicate, timeout: float = 20.0, what: str = "condition") -> None:
+    def wait_for(self, predicate: Callable[[], object], timeout: float = 20.0, what: str = "condition") -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if predicate():
@@ -108,14 +123,21 @@ class Case(unittest.TestCase):
             time.sleep(0.1)
         self.fail(f"timed out waiting for {what}")
 
+    def loaded(self, entry_id: str) -> Dict[str, Any]:
+        """The saved entry, as a plain mapping a test can index freely; fails the test when there is none."""
+        entry = self.store.load(entry_id)
+        if entry is None:
+            self.fail(f"no entry {entry_id}")
+        return plain(entry)
+
     def state_of(self, entry_id: str) -> Optional[str]:
         entry = self.store.load(entry_id)
         return entry.get("state") if entry else None
 
-    def runs(self, pid: int) -> bool:
+    def runs(self, pid: Any) -> bool:
         return pid in procs.identities([pid])
 
     def hook(self, event: str, session: str, env: Optional[Dict[str, str]] = None, **fields: Any
-             ) -> subprocess.CompletedProcess:
+             ) -> subprocess.CompletedProcess[str]:
         data = {"hook_event_name": event, "session_id": session, **fields}
         return self.cli("hook", env=env, input=json.dumps(data))

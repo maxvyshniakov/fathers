@@ -7,27 +7,32 @@ import signal
 import subprocess
 import sys
 import time
+from typing import Any, Dict, List, Tuple
 import unittest
 from unittest import mock
 
-from support import ROOT, Case, proc, table
+from support import ROOT, Case, as_entry, proc, table
 
-from junkfather import procs, reap, sweep
+from junkfather import procs, reap, resources, sweep
+from junkfather.entry import Entry
 
 IGNORES_TERM = ("import signal, sys, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
                 "print('ready', flush=True); time.sleep(600)")
 
 
-def running(pid: int, start: str, cmd: str, entry_id: str = "jedge") -> dict:
-    return {"v": 1, "id": entry_id, "state": "running", "pid": pid, "pgid": pid, "start": start, "seen": cmd,
+def running(pid: int, start: str, cmd: str, entry_id: str = "jedge") -> Entry:
+    return as_entry({"v": 1, "id": entry_id, "state": "running", "pid": pid, "pgid": pid, "start": start, "seen": cmd,
             "group": True, "known": [[pid, start]], "argv": cmd.split(), "expires": 0, "keep": "owner", "owner": {},
-            "created": 1.0}
+            "created": 1.0})
 
 
 class EdgeTests(Case):
-    def quiet_sweep(self, **options):
+    def no_stop(self, targets: List[procs.Proc], grace: float) -> Dict[str, Any]:
+        self.fail("the second reaper signalled")
+
+    def quiet_sweep(self, **options: Any) -> Dict[str, Any]:
         """A sweep on this state directory that lists no resource kind (no docker, simctl or tailscale call)."""
-        with mock.patch.object(sweep._resources, "unowned", return_value=([], [])):
+        with mock.patch.object(resources, "unowned", return_value=([], [])):
             return sweep.sweep(self.store, cwds={}, sessions=[], **options)
 
     def test_a_process_that_ignores_sigterm_is_killed_after_the_grace(self):
@@ -38,9 +43,9 @@ class EdgeTests(Case):
         mine = procs.Table.read().get(child.pid)
         assert mine is not None
         self.store.save(running(child.pid, mine.start, mine.cmd))
-        sent = []
+        sent: List[Tuple[int, float]] = []
 
-        def kill(pid, sig):
+        def kill(pid: int, sig: int) -> None:
             sent.append((sig, time.monotonic()))
             os.kill(pid, sig)
         result = reap.reap(self.store, "jedge", "test", grace=0.3,
@@ -126,9 +131,9 @@ class EdgeTests(Case):
             return procs.Table.read()
 
         result = reap.reap(self.store, "jedge", "test", grace=0.2, reader=other_reaper_first,
-                           stopper=lambda *_: self.fail("the second reaper signalled"))
+                           stopper=self.no_stop)
         self.assertEqual(("skipped", "another reaper has it"), (result["result"], result["reason"]))
-        self.assertEqual(4242, (self.store.load("jedge") or {})["reaping"]["by"])
+        self.assertEqual(4242, self.loaded("jedge")["reaping"]["by"])
         self.assertTrue(self.runs(child.pid))
 
 
