@@ -45,7 +45,7 @@ def read_processes(pid: int | None = None, required: set[int] | None = None) -> 
     argv = ["ps", "-ax", "-ww", "-o", "pid=,ppid=,uid=,tty=,stat=,lstart=,command="]
     try:
         result = subprocess.run(argv, capture_output=True, text=True, timeout=5,
-                                env={**os.environ, "LC_ALL": "C"})
+                                env=platform.c_locale())
     except (OSError, subprocess.TimeoutExpired) as error:
         raise ProcsError(f"cannot read processes: {error}") from None
     if result.returncode:
@@ -122,7 +122,7 @@ def read_leases(processes: dict[int, Process], entries: list[tuple[Path, dict[st
     for path, entry, old in entries:
         holder = processes.get(entry["pid"])
         start = str(entry["start"])
-        if holder is None or not platform.same_start(start, holder.start):
+        if holder is None or not platform.same_holder(start, entry.get("started"), holder.pid, holder.start):
             continue
         meta = config.meta_of(entry)
         priority = config.priority_of(entry)
@@ -190,7 +190,7 @@ def environment_leases(pids: list[int], leases: list[dict[str, Any]]) -> tuple[d
         return found, unknown
     try:
         result = subprocess.run(["ps", "-wwE", "-o", "pid=,command=", "-p", ",".join(map(str, pids))],
-                                capture_output=True, text=True, env={**os.environ, "LC_ALL": "C"}, timeout=5)
+                                capture_output=True, text=True, env=platform.c_locale(), timeout=5)
     except (OSError, subprocess.TimeoutExpired):
         return found, pids
     if result.returncode:

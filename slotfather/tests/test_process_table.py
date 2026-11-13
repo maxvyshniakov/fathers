@@ -19,7 +19,6 @@ from unittest import mock
 
 from slotfather import board as sf_board
 from slotfather import config as sf_config
-from slotfather import events as sf_events
 from slotfather import leases as sf_leases
 from slotfather import platform as sf_platform
 from slotfather import query as sf_query
@@ -65,6 +64,8 @@ class ProcessTableTests(unittest.TestCase):
                                                "SLOTFATHER_CORES": "4"})
         patcher.start()
         self.addCleanup(patcher.stop)
+        sf_leases._skipping.clear()  # pyright: ignore[reportPrivateUsage]
+        self.addCleanup(sf_leases._skipping.clear)  # pyright: ignore[reportPrivateUsage]
         (self.dir / "queue").mkdir(parents=True)
         me = os.getpid()
         start = sf_platform.processes()[me][1]
@@ -87,52 +88,61 @@ class ProcessTableTests(unittest.TestCase):
                 with self.assertRaises(sf_config.ProcessTableError):
                     sf_platform.processes()
 
-    def test_processes_has_a_timeout(self) -> None:
-        seen: list[Any] = []
-
-        def run(argv: Any, *args: Any, **kwargs: Any) -> Any:
-            seen.append(kwargs.get("timeout"))
-            return REAL_RUN(argv, *args, **kwargs)
-        with mock.patch.object(sf_platform.subprocess, "run", side_effect=run):
-            sf_platform.processes()
-        self.assertEqual([sf_config.PS_TIMEOUT], seen)
+    def test_a_ps_that_hangs_is_given_up_after_the_timeout(self) -> None:
+        bins = self.dir / "bin"
+        bins.mkdir()
+        (bins / "ps").write_text("#!/bin/sh\nsleep 10\n")
+        (bins / "ps").chmod(0o755)
+        began = time.monotonic()
+        with mock.patch.dict(os.environ, {"PATH": f"{bins}{os.pathsep}{os.environ.get('PATH', '')}"}), \
+                mock.patch.object(sf_config, "PS_TIMEOUT", 0.3):
+            with self.assertRaises(sf_config.ProcessTableError):
+                sf_platform.processes()
+        self.assertLess(time.monotonic() - began, 5)
 
     def test_no_look_reaps_on_a_bad_table_and_the_next_good_table_reaps(self) -> None:
-        looks: dict[str, Callable[[], Any]] = {
+        read_only: dict[str, Callable[[], Any]] = {
             "snapshot": lambda: sf_query.snapshot(self.dir),
             "look": lambda: sf_query.look(self.dir),
             "status": lambda: sf_query.status_lines(self.dir),
             "status --json": lambda: sf_query.status_json(self.dir),
+        }
+        changing: dict[str, Callable[[], Any]] = {
             "sweep": lambda: sf_sweep.leases(self.dir, mock.Mock()),
             "grant": lambda: sf_leases.grant(self.dir, sf_leases.process_table(self.dir)),
         }
-        skipped = 0
         for name, run in FAILURES.items():
-            for look_name, look in looks.items():
+            for look_name, look in {**read_only, **changing}.items():
                 with self.subTest(failure=name, look=look_name), \
                         mock.patch.object(sf_platform.subprocess, "run", side_effect=run), \
                         mock.patch("slotfather.macos_process.basic_snapshot", side_effect=OSError("no libproc")):
                     with self.assertRaises(sf_config.SlotError):
                         look()
-                    skipped += 1
                     self.assertTrue(self.live.exists() and self.dead.exists(), "a bad table reaped a lease")
+                    if look_name in read_only and name == next(iter(FAILURES)):
+                        self.assertFalse((self.dir / "queue.log").exists(), "a read-only look logged")
         log = (self.dir / "queue.log").read_text().splitlines()
-        self.assertEqual(skipped, sum(" skipped reaping: " in line for line in log), log)
-        self.assertEqual(skipped, self.kinds().count("reap.skipped"))
-        self.assertNotIn("lease.reaped", self.kinds())
-        sf_query.snapshot(self.dir)
+        self.assertEqual(1, sum(" skipped reaping: " in line for line in log), "one line per failure streak")
+        self.assertEqual(["reap.skipped"], self.kinds())
+        sf_query.snapshot(self.dir)  # a read-only look reaps, and says nothing of the streak
         self.assertTrue(self.live.exists())
         self.assertFalse(self.dead.exists(), "the next good table reaps the dead holder")
-        self.assertIn("lease.reaped", self.kinds())
+        self.assertEqual(["reap.skipped", "lease.reaped"], self.kinds())
+        sf_leases.process_table(self.dir)
+        sf_leases.process_table(self.dir)
+        self.assertEqual(["reap.skipped", "lease.reaped", "reap.resumed"], self.kinds())
+        self.assertTrue((self.dir / "queue.log").read_text().splitlines()[-1].endswith("reaping resumed: ps answers "
+                                                                                      "again"))
 
-    def test_the_skip_event_validates(self) -> None:
+    def test_the_skip_and_resume_events_validate(self) -> None:
         _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[2] / "common"))
         import eventcheck
         with mock.patch.object(sf_platform.subprocess, "run", side_effect=answer(0, "")):
             with self.assertRaises(sf_config.SlotError):
-                sf_query.snapshot(self.dir)
+                sf_leases.process_table(self.dir)
+        sf_leases.process_table(self.dir)
+        self.assertEqual(["reap.skipped", "reap.resumed"], self.kinds())
         self.assertEqual([], eventcheck.validate_file(str(self.dir / "events.jsonl"), strict=True))
-        self.assertIn("reap.skipped", sf_events.KINDS)
 
 
 class BoardSampleTests(unittest.TestCase):
@@ -148,7 +158,7 @@ class BoardSampleTests(unittest.TestCase):
 
 
 FAKE_PS = """#!/bin/sh
-if [ -e "$PS_BROKEN" ]; then echo "ps: broken" >&2; exit 1; fi
+if [ -e "$PS_BROKEN" ]; then echo broken >> "$PS_CALLS"; echo "ps: broken" >&2; exit 1; fi
 exec /bin/ps "$@"
 """
 
@@ -162,14 +172,16 @@ class WaiterTests(SlotCase):
         (bins / "ps").write_text(FAKE_PS)
         (bins / "ps").chmod(0o755)
         broken = self.tmp / "ps-broken"
-        self.env.update(PATH=f"{bins}{os.pathsep}{self.env.get('PATH', '')}", PS_BROKEN=str(broken))
+        calls = self.tmp / "ps-calls"
+        calls.touch()
+        self.env.update(PATH=f"{bins}{os.pathsep}{self.env.get('PATH', '')}", PS_BROKEN=str(broken),
+                        PS_CALLS=str(calls))
         holder = self.request("holder", 4)
         self.started("holder")
         waiter = self.request("waiter", 4)
         self.wait_for(lambda: "waiting: 4 slot(s) waiter" in self.status(), "the waiter to queue")
         broken.touch()
-        self.wait_for(lambda: "skipped reaping" in (self.state / "queue.log").read_text(), "a skipped look")
-        time.sleep(0.5)  # several more looks of the waiter
+        self.wait_for(lambda: len(calls.read_text().splitlines()) >= 5, "several looks on a broken ps")
         self.assertIsNone(holder.poll())
         self.assertIsNone(waiter.poll(), waiter.stdout.read() if waiter.poll() is not None and waiter.stdout else "")
         self.assertEqual(2, len(list((self.state / "queue").glob("*.json"))), "a broken ps reaped a lease")
@@ -179,7 +191,10 @@ class WaiterTests(SlotCase):
         self.release("waiter")
         for process in (holder, waiter):
             self.finish(process)
-        self.assertNotIn("reaped", (self.state / "queue.log").read_text())
+        log = (self.state / "queue.log").read_text()
+        self.assertNotIn("reaped ", log)
+        self.assertEqual(1, log.count("skipped reaping: "), log)  # the waiter's streak, said once
+        self.assertEqual(1, log.count("reaping resumed"), log)
 
 
 if __name__ == "__main__":

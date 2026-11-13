@@ -27,18 +27,32 @@ from . import state as _state
 Table = dict[int, tuple[int, str]]  # the process table: pid -> (parent pid, start time)
 
 
-def process_table(directory: Path) -> Table:
+_skipping: list[str] = []  # the reason this process last logged a skipped look for, while ps stays unusable
+
+
+def process_table(directory: Path, log: bool = True) -> Table:
     """platform.processes() for a look that reaps or sweeps the queue at `directory`. When ps gives no table that
-    can be trusted (config.ProcessTableError, a SlotError) the look reaps nothing: this says so in queue.log and
-    the event log and raises, and the caller skips that pass (a waiter's next look tries again)."""
+    can be trusted (config.ProcessTableError, a SlotError) the look reaps nothing and this raises; the caller skips
+    that pass (a waiter's next look tries again). With `log`, a look that changes the queue says so in queue.log
+    and the event log once per failure streak of this process (`skipped reaping`, reap.skipped), and once when ps
+    answers again (`reaping resumed`, reap.resumed). Read-only looks (status, the dashboard) pass log=False: they
+    must not flood the log a lasting failure fills already (fathers#121 review)."""
+    own = _state.foreign_owner(directory) is None
     try:
-        return _platform.processes()
+        table = _platform.processes()
     except _config.ProcessTableError as error:
-        if _state.foreign_owner(directory) is None:
+        if log and own and not _skipping:
+            _skipping.append(str(error))
             _state.log(directory, f"skipped reaping: {error}")
             _events.emit(directory, "reap.skipped", {"type": "queue", "id": "processes"}, {"reason": str(error)},
                          _events.actor(kind="tool"), level="warn")
         raise
+    if log and own and _skipping:
+        reason = _skipping.pop()
+        _state.log(directory, "reaping resumed: ps answers again")
+        _events.emit(directory, "reap.resumed", {"type": "queue", "id": "processes"}, {"after": reason},
+                     _events.actor(kind="tool"))
+    return table
 
 
 def reap(directory: Path, table: Table) -> list[tuple[Path, dict[str, Any]]]:
@@ -143,8 +157,9 @@ def asked_by_hand(request: dict[str, Any] | None, live: list[tuple[Path, dict[st
 
 
 def same_process(table: Table, pid: int, start: str) -> bool:
-    """Whether `pid` is still the process the caller saw, started at `start` (as `status --json` gives it)."""
-    return pid in table and " ".join(str(table[pid][1]).split()) == " ".join(start.split())
+    """Whether `pid` is still the process the caller saw, started at `start` (as `status --json` gives it: the
+    entry's own `start`, or the query's)."""
+    return pid in table and bool(start.strip()) and _platform.same_holder(start, None, pid, table[pid][1])
 
 
 CLASS_RANK = {"batch": 0, "normal": 1, "interactive": 2}
@@ -582,9 +597,7 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
             for _, other in _state.entries(directory):
                 spec = other.get("session")
                 same = isinstance(spec, dict) and cast(dict[str, Any], spec).get("name") == session["name"]
-                pid = other.get("pid")
-                holder = fresh.get(pid) if isinstance(pid, int) else None  # platform.alive(), spelled out
-                if same and holder is not None and _platform.same_start(str(other.get("start")), holder[1]):
+                if same and _platform.alive(other, fresh):
                     raise _config.SlotError(f"session {session['name']} exists (pid {other.get('pid')}, "
                                             f"{other.get('state')}): stop it first (slotfather session stop "
                                             f"{session['name']})")
@@ -595,6 +608,11 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
         entry: dict[str, Any] = {"pid": me, "start": table.get(me, (0, ""))[1], "count": count, "label": label, "cmd": command,
                  "cwd": cwd, "since": _config.now(), "state": "waiting", "priority": selected_priority,
                  "lease_id": uuid.uuid4().hex}  # unique across queues and restarts (fathers#101)
+        started = _platform.start_epoch(me)
+        if started is not None:
+            # the start in epoch seconds, which current clients compare whatever their locale and time zone (#122);
+            # older clients read past it and compare `start`, written as they write it
+            entry["started"] = started
         if selected_ticket is not None:
             entry["ticket"] = selected_ticket
         if whole:

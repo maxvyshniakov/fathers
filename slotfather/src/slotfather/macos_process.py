@@ -16,6 +16,8 @@ import sys
 import time
 from typing import NamedTuple
 
+from .platform import c_locale
+
 
 class NativeProcess(NamedTuple):
     pid: int
@@ -103,6 +105,22 @@ def pid_info(libproc: ctypes.CDLL, pid: int) -> BsdInfo:
     return info
 
 
+_libraries: tuple[ctypes.CDLL, ctypes.CDLL] | None = None
+
+
+def start_seconds(pid: int) -> int | None:
+    """The epoch second a live process started (libproc), or None where it cannot be read: not running, a zombie,
+    another user's process, or an unsupported ABI."""
+    global _libraries
+    try:
+        if _libraries is None:
+            _libraries = libraries()
+        info = pid_info(_libraries[0], pid)
+    except (OSError, AttributeError):
+        return None
+    return None if info.pbi_status == 5 else int(info.pbi_start_tvsec)
+
+
 def start_text(seconds: int, padded_day: bool = False) -> str:
     value = time.localtime(seconds)
     weekdays = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
@@ -119,7 +137,7 @@ def argument_processes(pids: set[int]) -> dict[int, str]:
     argv = ["/bin/ps", "-ww", "-p", ",".join(map(str, sorted(pids))),
             "-o", "pid=,command="]
     try:
-        answer = subprocess.run(argv, capture_output=True, text=True, timeout=5, env={**os.environ, "LC_ALL": "C"})
+        answer = subprocess.run(argv, capture_output=True, text=True, timeout=5, env=c_locale())
     except subprocess.TimeoutExpired as error:
         raise OSError(errno.ETIMEDOUT, "ps did not read protected process identities in time") from error
     if answer.returncode not in (0, 1) or answer.returncode and answer.stderr.strip():

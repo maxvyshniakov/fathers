@@ -58,13 +58,16 @@ def stamp(moment: float) -> str:
 # The recorded requests
 
 def log_requests(path: Path) -> list[dict]:
-    """The requests queue.log saw leave, by queue sequence: {seq, pid, label, count, granted, ended}; `granted` is None
-    for a waiter that left without a grant (its label is then unknown). Reaped leases have no sequence."""
+    """The requests queue.log (and queue.log.1 before it) saw leave, by queue sequence: {seq, pid, label, count,
+    granted, ended}; `granted` is None for a waiter that left without a grant (its label is then unknown). Reaped
+    leases have no sequence."""
     grants, found = {}, []
-    try:
-        lines = path.read_text(errors="replace").splitlines()
-    except FileNotFoundError:
-        return []
+    lines: list[str] = []
+    for part in (path.with_name(path.name + ".1"), path):  # the rotated part first (fathers#123)
+        try:
+            lines += part.read_text(errors="replace").splitlines()
+        except FileNotFoundError:
+            continue
     for line in lines:
         when, rest = sf_config.seconds(line[:20]), line[21:]
         if when is None:
