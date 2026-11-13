@@ -100,9 +100,36 @@ def entries(directory: Path) -> list[tuple[Path, dict[str, Any]]]:
 
 
 def write(path: Path, entry: Any) -> None:
+    """Writes `entry` as JSON to `path` whole: a .pending file is written and fsynced, renamed over `path`, and the
+    directory fsynced, so a crash leaves the old file or the new one, never an empty one (fathers#123)."""
     pending = path.with_name(path.name + ".pending")
-    pending.write_text(json.dumps(entry) + "\n")
+    fd = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    try:
+        os.write(fd, (json.dumps(entry) + "\n").encode("utf-8"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
     pending.replace(path)
+    with contextlib.suppress(OSError):  # a file system that cannot sync a directory keeps the rename as it is
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+
+
+def unreadable(directory: Path) -> list[Path]:
+    """Queue entries that do not read as one (empty or torn by a crash, or not JSON). entries() leaves them out and
+    nothing removes them: one may be a newer client's live lease. `status` reports them."""
+    found: list[Path] = []
+    for path in sorted((directory / "queue").glob("*.json")):
+        try:
+            json.loads(path.read_text())
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            found.append(path)
+    return found
 
 
 def record(directory: Path, entry: dict[str, Any], outcome: str, status: int | None = None,
@@ -272,10 +299,13 @@ def epoch(value: Any) -> float | None:
     return float(value) if type(value) in (int, float) and math.isfinite(value) else _config.seconds(value)
 
 
+QUEUE_LOG_MAX = 4 << 20  # bytes of queue.log; past it the file becomes queue.log.1, replacing the older one
+
+
 def log(directory: Path, message: str) -> None:
+    """Appends a line to queue.log, bounded as history.jsonl is (append_bounded()); callers hold the queue lock."""
     with contextlib.suppress(OSError):
-        with open(directory / "queue.log", "a", encoding="utf-8") as handle:
-            handle.write(f"{_config.now()} {message}\n")
+        append_bounded(directory / "queue.log", f"{_config.now()} {message}\n", QUEUE_LOG_MAX)
 
 
 def save_order(values: dict[str, Any] | None, directory: Path | None = None) -> None:
@@ -319,7 +349,7 @@ def configure(changes: dict[str, dict[str, Any] | None], *,
     applies at once, also while requests run or wait; the waiters it lets start are granted before this returns.
     `expected` names files as their bytes were read, `revisions` as settings.revision() tokens (`settings set
     --revision`); a file changed since is a Conflict and nothing is saved."""
-    from . import leases, platform, schedule
+    from . import leases, schedule
     directory = _config.state_dir()
     if set(changes) - {"capacity.json", "order.json"}:
         raise _config.SlotError("unknown configuration file")
@@ -377,4 +407,4 @@ def configure(changes: dict[str, dict[str, Any] | None], *,
                             {"reset": True} if changes[name] is None else {"saved": changes[name]})
         # Grant now what the new settings start, as a release does: waiters look less often the longer they wait.
         with contextlib.suppress(_config.SlotError, OSError):
-            cast(Any, leases).grant(directory, platform.processes())
+            cast(Any, leases).grant(directory, cast(Any, leases).process_table(directory))

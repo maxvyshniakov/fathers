@@ -470,8 +470,8 @@ def leases(directory: Path, snap: Snapshot) -> tuple[dict[int, str], list[tuple[
     """pid -> the label of the live lease whose holder's tree it is in, and (lease path, label) of every live lease
     (for the SLOTFATHER_LEASE check of processes that left the tree), from the queue (reaped as `status` does) and
     the earlier queues. The same rule as `status --json --pid` and the lease guard."""
-    processes = _platform.processes()
-    with _state.locked(directory):
+    with _state.locked(directory):  # a table ps could not give raises (fathers#121): this sweep stops nothing
+        processes = _leases.process_table(directory)
         live = _leases.reap(directory, processes)
     protected, paths = {}, []
     for path, entry in live:

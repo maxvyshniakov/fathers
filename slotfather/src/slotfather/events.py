@@ -7,7 +7,7 @@ events.jsonl.1, replacing the previous one, under an flock on events.lock beside
 
 Kinds: lease.granted, lease.released, request.left, lease.reaped, request.reaped, request.reprioritized,
 request.waiting_long, lease.yield_asked, lease.yield_withdrawn, lease.yielded, capacity.changed, order.changed,
-process.swept, session.run_started, session.run_ended, session.ended, run.outlier, run.trend.
+process.swept, session.run_started, session.run_ended, session.ended, run.outlier, run.trend, reap.skipped.
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ CONTROL = re.compile("[\x00-\x1f\x7f-\x9f]")
 KINDS = ("lease.granted", "lease.released", "request.left", "lease.reaped", "request.reaped", "request.reprioritized",
          "request.waiting_long", "lease.yield_asked", "lease.yield_withdrawn", "lease.yielded", "capacity.changed",
          "order.changed", "process.swept", "session.run_started", "session.run_ended", "session.ended",
-         "run.outlier", "run.trend")
+         "run.outlier", "run.trend", "reap.skipped")
 
 
 def path(directory: Path) -> Path:

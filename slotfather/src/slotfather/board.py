@@ -64,7 +64,11 @@ def parse_utc(value: object) -> datetime.datetime | None:
 
 def process_usage() -> tuple[dict[int, tuple[float, int, str]], dict[int, list[int]]]:
     """pid -> (CPU percent, resident KB, command name) for every process, and ppid -> its child pids."""
-    result = subprocess.run(["ps", "-axo", "pid=,ppid=,%cpu=,rss=,comm="], capture_output=True, text=True)
+    try:
+        result = subprocess.run(["ps", "-axo", "pid=,ppid=,%cpu=,rss=,comm="], capture_output=True, text=True,
+                                timeout=_config.PS_TIMEOUT)
+    except subprocess.TimeoutExpired as error:
+        raise OSError(f"CPU process sample failed: {error}") from None
     if result.returncode:
         raise OSError(f"CPU process sample failed: ps exited {result.returncode}")
     own: dict[int, tuple[float, int, str]] = {}
@@ -75,6 +79,8 @@ def process_usage() -> tuple[dict[int, tuple[float, int, str]], dict[int, list[i
             with contextlib.suppress(ValueError):
                 own[int(parts[0])] = (float(parts[2].replace(",", ".")), int(parts[3]), os.path.basename(parts[4]))
                 children.setdefault(int(parts[1]), []).append(int(parts[0]))
+    if os.getpid() not in own:  # an empty or cut table is no sample (fathers#121)
+        raise OSError(f"CPU process sample failed: ps listed {len(own)} processes and not this one")
     return own, children
 
 
@@ -162,13 +168,25 @@ def queue_events(directory: Path) -> list[dict[str, Any]]:
     """The grants, releases and reaps at the end of queue.log, oldest first. Each event carries `delta`, the change
     it made to held slots. A release whose grant precedes the part read is taken to end a held lease; one whose
     pid was never granted in a fully read log is a waiter that gave up."""
-    try:
-        with open(directory / "queue.log", "rb") as handle:
-            start = max(0, handle.seek(0, os.SEEK_END) - LOG_TAIL)
-            handle.seek(start)
-            lines = handle.read().decode("utf-8", "replace").splitlines()[1 if start else 0:]
-    except OSError:
-        return []
+    # The current part, and the end of the rotated one (queue.log.1, fathers#123) where the current is shorter than
+    # the part read. `cut` where the log was not read whole: cut, or a rotated part exists (lines
+    # older than it are gone).
+    data, cut, begin = b"", False, 0
+    for name in ("queue.log", "queue.log.1"):
+        try:
+            with open(directory / name, "rb") as handle:
+                begin = max(0, handle.seek(0, os.SEEK_END) - (LOG_TAIL - len(data)))
+                handle.seek(begin)
+                part = handle.read()
+        except OSError:
+            if name == "queue.log":
+                return []
+            break
+        data = part + (b"\n" if data and part and not part.endswith(b"\n") else b"") + data
+        cut = cut or begin > 0 or name == "queue.log.1"
+        if len(data) >= LOG_TAIL:
+            break
+    lines = data.decode("utf-8", "replace").splitlines()[1 if begin else 0:]
     events: list[dict[str, Any]] = []
     granted: dict[int, str] = {}
     for line in lines:
@@ -183,7 +201,7 @@ def queue_events(directory: Path) -> list[dict[str, Any]]:
                            "delta": count})
         elif found := RELEASED.match(message):
             count, pid = int(found[1]), int(found[2])
-            held = pid in granted or start > 0
+            held = pid in granted or cut
             events.append({"when": when, "verb": "released" if held else "left", "count": count,
                            "label": granted.pop(pid, ""), "pid": pid, "delta": -count if held else 0,
                            # granted before the part read, or never: describe_events() asks its history line

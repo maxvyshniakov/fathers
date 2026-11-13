@@ -189,6 +189,10 @@ class SlotTimeout(SlotError):
     pass
 
 
+class ProcessTableError(SlotError):
+    """ps gave no process table that can be trusted, and every holder would read as dead (fathers#121)."""
+
+
 def setting(name: str, default: str | None = None) -> str | None:
     """SLOTFATHER_<name>, read when needed; a client that loads this file may replace this function to add its own
     spellings (tools/slot_lease.py)."""
