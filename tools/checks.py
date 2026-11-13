@@ -39,7 +39,7 @@ KIT_FILES = ("package.json", "bun.lock", "bunfig.toml", "repo-kit.config.mjs", "
 class Check:
     name: str
     command: list[str]  # bun arguments, as a Repo-Kit step takes them
-    memory: float  # GiB at its peak, Repo-Kit's step memory
+    memory: float  # GiB at its peak, Repo-Kit's step memory (measured 2026-11-13: lint 0.4-0.6, tests 0.1-0.2)
     timeout: int | None = None  # minutes; Repo-Kit's default (15) without one
 
 
@@ -55,11 +55,11 @@ TESTS = {
 }
 CHECKS = [
     *(check for name in PACKAGES for check in (
-        Check(f"{name} lint", python_check(f"{name} lint"), 0.8),
-        Check(f"{name} tests", python_check(f"{name} tests"), 0.6, 30 if name == "lanefather" else None),
+        Check(f"{name} lint", python_check(f"{name} lint"), 0.7),
+        Check(f"{name} tests", python_check(f"{name} tests"), 0.3, 30 if name == "lanefather" else None),
     )),
-    Check("common", python_check("common"), 0.8),
-    Check("tools", python_check("tools"), 0.3),
+    Check("common", python_check("common"), 0.4),
+    Check("tools", python_check("tools"), 0.2),
     Check("kit", ["run", "check:kit"], 0.2),
     Check("test hygiene", ["run", "check:hygiene"], 0.2),
 ]
