@@ -35,6 +35,7 @@ from . import state as _state
 from .tui import Canvas, Loader, full_screen, read_keys
 from .views import common as _common
 from .views import details as _details
+from .views import events as _events_view
 from .views import overview as _overview
 from .views import settings as _settings
 
@@ -97,10 +98,35 @@ class Screen:
     """The overview's data: the Slotfather source, rediscovered as SPEC's discovery rules say, polled one call at
     a time on the model loader's thread; the last good model stays, marked stale, after a failed poll."""
 
-    def __init__(self, source: Source | None = None) -> None:
+    def __init__(self, source: Source | None = None, others: list[Source] | None = None) -> None:
         self.source = source or Source("slotfather", _slotfather)
+        # The other tools EVENTS reads (fathers#84): only their event logs, until their pages come
+        self.others = others if others is not None else [Source(name, _events.EventsContract(name))
+                                                         for name in _sources.TOOLS if name != "slotfather"]
         self.feed = _events.Feed()
-        self.runs: list[dict[str, Any]] = []
+        self.rows: list[dict[str, Any]] = []
+        self.followed: tuple[tuple[str, str], ...] = ()
+
+    def follow(self) -> tuple[tuple[str, str], ...]:
+        """Every present source with an event log followed, the others not: (name, tag) each, in TOOLS order."""
+        found: list[tuple[str, str]] = []
+        for source in [self.source, *self.others]:
+            if source is not self.source and source.due():
+                source.discover()
+            log = _events.log_path(source.capabilities) if source.state in ("ok", "stale") else None
+            self.feed.follow(source.name, str(_sources.event_log(source.name, log)) if log else None)
+            if log:
+                found.append((source.name, source.tag))
+        return tuple(found)
+
+    def events(self) -> list[dict[str, Any]]:
+        """EVENTS' rows from every followed log, built again only when a log gained a line or a source came or
+        went."""
+        followed = self.follow()
+        if self.feed.poll() or followed != self.followed:
+            self.followed = followed
+            self.rows = _events.rows(self.feed.events(), dict(followed))
+        return self.rows
 
     def load(self, _: Any = None) -> tuple[dict[str, Any] | None, str | None]:
         """(the model to draw, the refresh error for the footer); discovery first when it is due."""
@@ -116,12 +142,12 @@ class Screen:
         if source.snapshot is None:
             return None, source.problem
         model = dict(source.snapshot, installed=_version.installed_source())
-        log = _events.log_path(source.capabilities)
-        self.feed.follow("slotfather", str(_sources.event_log("slotfather", log)) if log else None)
-        if self.feed.poll() or not log:  # parsed again only when the log gained a line
-            self.runs = _slotfather.run_events(event.line for event in self.feed.events())
-        # outliers and trends (fathers#108): marks on the releases and rows of their own in EVENTS
-        model["events"] = _slotfather.merge_runs(model["events"], self.runs)
+        # EVENTS (fathers#84): every source's log, never the snapshot's described events; a Slotfather whose
+        # capabilities name no log shows none and says why
+        model["events"] = self.events()
+        model["sources"] = list(self.followed)
+        if not _events.log_path(source.capabilities):
+            model["events_note"] = _events_view.TOO_OLD
         for name in ("holders", "waiters"):  # this frame's colours and lanes stay off the cached snapshot
             model[name] = [dict(item) for item in source.snapshot[name]]
         if source.state == "stale" and source.failed_at is not None:
@@ -391,12 +417,12 @@ def once(width: int | None, height: int | None, colour: bool | None, interval: f
 
 
 def event_text(event: _events.Event, tag: str) -> str:
-    """One `godfather events` line: the local time, the source tag, the kind, the subject's label or id and a
-    one-line detail. The validator let no control character through; none is printed whatever a line held."""
-    subject = event.subject
-    name = str(subject.get("label") or subject.get("id") or "?")
-    detail = _events.compact(event.details)
-    fields = [event.when.astimezone().strftime("%Y-%m-%d %H:%M:%S"), f"{tag:<4}", f"{event.kind:<22}", name, detail]
+    """One `godfather events` line: the local time, the source tag, the kind, the subject's label or id and the
+    one-line detail EVENTS shows. The validator let no control character through; none is printed whatever a line held."""
+    shown = _events.shown(event)  # the detail EVENTS shows (fathers#84), from the event's fields
+    detail = "".join(text for text, _ in shown.detail)
+    fields = [event.when.astimezone().strftime("%Y-%m-%d %H:%M:%S"), f"{tag:<4}", f"{event.kind:<22}",
+              shown.label or _events.subject_label(event), detail]
     return _events.CONTROL.sub(" ", "  ".join(field for field in fields if field).rstrip())
 
 

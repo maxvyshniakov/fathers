@@ -41,6 +41,8 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
         ("tab", "next panel, by columns (shift-tab: back)"),
         ("click", "a row, a panel, a footer hint (as its key)"),
         ("wheel", "scroll the panel under the pointer"),
+        ("f", "events: every source, then each one"),
+        ("/", "events: filter by text (enter keeps, esc clears)"),
         ("s", "settings"),
         ("?", "help"),
         ("v", "what's new (or click Godfather what's new?)"),

@@ -156,6 +156,8 @@ class ParityTests(unittest.TestCase):
         what = ["v", "what's new (or click Godfather what's new?)"]  # fathers#102: the changelog became what's new
         self.assertIn(what, ours["KEYS"])
         ours["KEYS"][ours["KEYS"].index(what)] = ["v", "changelog (or click the version)"]
+        for key in ("f", "/"):  # fathers#84: EVENTS' source and text filters
+            ours["KEYS"] = [entry for entry in ours["KEYS"] if entry[0] != key]
         snail = ["🐌", "batch: unattended work, after the rest"]  # owner, 2026-11-12: batch is a snail, not a turtle
         self.assertIn(snail, ours["PRIORITY"])
         ours["PRIORITY"][ours["PRIORITY"].index(snail)] = ["🐢", snail[1]]

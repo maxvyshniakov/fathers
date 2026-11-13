@@ -51,6 +51,12 @@ def local_host() -> str:
     return name.strip("-") or "localhost"
 
 
+def stamp(moment: datetime.datetime) -> str:
+    """An aware time as an event's `time`: RFC 3339 UTC with milliseconds."""
+    utc = moment.astimezone(datetime.timezone.utc)
+    return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond // 1000:03d}Z"
+
+
 def parse_time(value: Any) -> Optional[datetime.datetime]:
     """An event's `time` (`2026-11-12T02:24:16.204Z`) as an aware UTC datetime."""
     if not isinstance(value, str):
@@ -350,3 +356,301 @@ class EventsContract:
         if log_path(capabilities) is None:
             return "its event log needs a newer godfather"
         return None
+
+
+# EVENTS' rows (fathers#84): each source's formatter turns a kind and its details into the event word, the detail
+# (text, style) parts and, for Slotfather, the slot cells. Only structured fields are read; Lanefather's `message`,
+# prose, is shown whole and only for a kind that has no other field. A kind a formatter does not know shows the kind
+# itself and a compact `key=value` detail.
+
+Part = tuple[str, str]
+RUN_MATCH = 2.0  # seconds between a release and a run event of the same moment, where no lease id joins them
+LEVEL_STYLE = {"error": "bad", "warn": "warn"}
+
+
+def _number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _span(value: Any) -> str:
+    from .tui import span
+
+    return span(float(value)) if _number(value) else ""
+
+
+def _minutes(value: Any) -> str:
+    from .tui import minutes
+
+    return minutes(float(value)) if _number(value) else ""
+
+
+def _words(*parts: Any) -> str:
+    """The parts that say something, joined by ` · `."""
+    return " · ".join(str(part) for part in parts if part not in (None, "", [], {}))
+
+
+def _field(details: dict[str, Any], *path: str) -> Any:
+    found: Any = details
+    for key in path:
+        found = cast(dict[str, Any], found).get(key) if isinstance(found, dict) else None
+    return found
+
+
+def _count(details: dict[str, Any]) -> int:
+    count = details.get("count")
+    return count if isinstance(count, int) and not isinstance(count, bool) and count > 0 else 0
+
+
+@dataclass(frozen=True)
+class Shown:
+    """What a formatter makes of an event: the event word, the detail parts, and slot cells (count, filled)."""
+    event: str
+    detail: tuple[Part, ...] = ()
+    count: int = 0
+    filled: bool = False
+    label: Optional[str] = None  # where the subject's label or id says less (an unowned process: its command)
+
+
+def slotfather_shown(kind: str, details: dict[str, Any]) -> Optional[Shown]:
+    """Slotfather's kinds as today's EVENTS shows them: `wait 32s` or `no wait`, `ok 3m25s` or `exit 1 · 26s`,
+    `gave up 5m`, `owner died · 12m` (red for a lease, yellow for a waiter), `batch → interactive`, `waiting 45m`."""
+    count = _count(details)
+    if kind == "lease.granted":
+        waited = details.get("waited")
+        if _number(waited):
+            return Shown("granted", ((f"wait {_span(waited)}", "text") if waited >= 1 else ("no wait", "dim"),),
+                         count, True)
+        return Shown("granted", (("resumed" if details.get("resumed") else "", "dim"),), count, True)
+    if kind == "lease.released":
+        status, ran = details.get("exit"), details.get("ran")
+        if isinstance(status, int) and not isinstance(status, bool):
+            text = (_words(f"ok {_span(ran)}".strip()), "dim") if status == 0 else \
+                (_words(f"exit {status}", _span(ran)), "bad")
+            return Shown("released", (text,), count)
+        return Shown("released", ((f"ended {_span(ran)}".strip(), "dim"),), count)
+    if kind == "request.left":
+        return Shown("left", ((f"gave up {_minutes(details.get('gave_up_after'))}".strip(), "dim"),), count)
+    if kind in ("lease.reaped", "request.reaped"):
+        reason = details.get("reason")
+        words = "owner died" if reason in (None, "owner exited") else str(reason)
+        held = kind == "lease.reaped"
+        took = details.get("ran") if held or not _number(details.get("waited")) else details.get("waited")
+        return Shown("reaped", ((_words(words, _minutes(took)), "bad" if held else "warn"),), count)
+    if kind == "request.reprioritized":
+        return Shown("priority", ((f"{details.get('from')} → {details.get('to')}", "dim"),))
+    if kind == "request.waiting_long":
+        return Shown("waiting", ((f"waiting {_minutes(details.get('waited'))}".strip(), "warn"),))
+    if kind == "lease.yield_asked":
+        return Shown("asked", ((_words("for " + str(_field(details, "for", "label") or "?"),
+                                      "by hand" if details.get("by_hand") else ""), "dim"),))
+    if kind == "lease.yield_withdrawn":
+        return Shown("withdrawn", (("yield not needed", "dim"),))
+    if kind == "lease.yielded":
+        return Shown("yielded", ((f"to {_field(details, 'to', 'label') or '?'}", "dim"),), count)
+    if kind == "capacity.changed":
+        return Shown("capacity", ((_words(f"{details.get('slots')} slots" if details.get("slots") else "",
+                                          details.get("mode")), "dim"),))
+    if kind == "order.changed":
+        saved = details.get("saved")
+        return Shown("order", (("reset" if details.get("reset") else
+                                compact(cast(dict[str, Any], saved)) if isinstance(saved, dict) else "saved", "dim"),))
+    if kind == "reap.skipped":
+        return Shown("skipped", ((str(details.get("reason") or "no process table"), "warn"),))
+    return None
+
+
+def lanefather_shown(kind: str, details: dict[str, Any]) -> Optional[Shown]:
+    """Lanefather's kinds (lanefather/events.py KINDS) from their structured fields."""
+    status = details.get("status")
+    judged = "bad" if status in ("red", "failed") else "dim"
+
+    def listed(name: str) -> int:
+        found = details.get(name)
+        return len(cast(list[Any], found)) if isinstance(found, list) else 0
+
+    def counted(name: str, word: str) -> str:
+        return f"{listed(name)} {word}{'s' if listed(name) != 1 else ''}" if listed(name) else ""
+
+    if kind == "lane.started":
+        return Shown("started", ((_words(f"on {details['base']}" if details.get("base") else "",
+                                         counted("claims", "claim")), "dim"),))
+    if kind == "lane.adopted":
+        return Shown("adopted", ((str(details.get("branch") or ""), "dim"),))
+    if kind == "claims.added":
+        overlaps = listed("overlaps")
+        return Shown("claims", ((_words(f"+{listed('added')}", counted("overlaps", "overlap")),
+                                 "warn" if overlaps else "dim"),))
+    if kind == "lane.checked":
+        return Shown("checked", ((_words(status, counted("suites", "suite")), judged),))
+    if kind == "lane.conflict":
+        return Shown("conflict", ((counted("paths", "path"), "bad"),))
+    if kind == "lane.landed":
+        return Shown("landed", ((f"onto {details['onto']}" if details.get("onto") else "", "dim"),))
+    if kind == "lane.post_merge":
+        return Shown("post-merge", ((_words(status, details.get("scope")), judged),))
+    if kind == "lane.released":
+        return Shown("released", (("claims freed", "dim"),))
+    if kind == "lane.done":
+        freed = details.get("freed_bytes")
+        from .tui import megabytes
+
+        return Shown("done", ((f"freed {megabytes(freed / 2**20)}" if _number(freed) else "", "dim"),))
+    if kind == "review.started":
+        return Shown("review", (("started", "dim"),))
+    if kind == "review.finished":
+        findings = details.get("findings")
+        found = f"{findings} finding{'s' if findings != 1 else ''}" if isinstance(findings, int) else ""
+        return Shown("reviewed", ((_words(found if status == "finished" else status, _minutes(details.get("seconds"))),
+                                   "warn" if status not in (None, "finished") else "dim"),))
+    if kind == "finding.marked":
+        return Shown("finding", ((_words(f"#{details.get('finding')}", details.get("mark")), "dim"),))
+    if kind == "review.marked":
+        return Shown("marked", ((f"{details.get('fixed', 0)} fixed · {details.get('rejected', 0)} rejected", "dim"),))
+    if kind in ("gate.finished", "perf.finished"):
+        return Shown(kind.split(".")[0], ((_words(status, _minutes(details.get("seconds"))), judged),))
+    if kind == "promote.step":
+        code = details.get("exit")
+        return Shown("promote", ((_words(details.get("step"), f"exit {code}" if code else ""),
+                                  "bad" if code else "dim"),))
+    if kind == "promote.finished":
+        branches = details.get("branches")
+        moved = "+".join(str(branch) for branch in cast(list[Any], branches)) if isinstance(branches, list) else ""
+        return Shown("promoted", ((_words(moved, f"{listed('failed')} failed" if listed("failed") else ""),
+                                   "warn" if listed("failed") else "dim"),))
+    if kind == "sync.finished":
+        return Shown("synced", ((_words(f"{listed('moved')} moved", f"{listed('failed')} failed"
+                                        if listed("failed") else ""), "warn" if listed("failed") else "dim"),))
+    if kind == "load.waited":
+        return Shown("load wait", ((_words(_minutes(details.get("seconds")), "gave up" if details.get("gave_up")
+                                           else ""), "warn" if details.get("gave_up") else "dim"),))
+    if kind == "landing.lock_taken":
+        return Shown("lock", ((f"from {details.get('from') or '?'}", "warn"),))
+    if kind == "ticket.marked":
+        done = details.get("done")
+        return Shown("ticket", ((_words(f"#{details.get('issue')}", ", ".join(cast(list[str], done))
+                                        if isinstance(done, list) else ""), "dim"),))
+    return None
+
+
+def junkfather_shown(kind: str, details: dict[str, Any]) -> Optional[Shown]:
+    """junkfather's kinds (junkfather/events.py KINDS) from their structured fields."""
+    ttl = f"ttl {_minutes(details.get('ttl'))}" if _number(details.get("ttl")) else ""
+    if kind in ("entry.owned", "entry.adopted", "entry.extended"):
+        return Shown(kind.split(".")[1], ((ttl, "dim"),))
+    if kind == "entry.exited":
+        code = details.get("exit")
+        return Shown("exited", ((f"exit {code}" if code is not None else "", "warn" if code else "dim"),))
+    if kind == "entry.handed":
+        to: Any = details.get("to")
+        owner = cast(dict[str, Any], to) if isinstance(to, dict) else {}
+        return Shown("handed", ((f"to {owner.get('lane') or owner.get('kind') or '?'}", "dim"),))
+    if kind in ("entry.reaped", "unowned.reaped", "resource.stopped"):
+        result = details.get("result")
+        return Shown("reaped" if kind != "resource.stopped" else "stopped",
+                     ((_words(details.get("reason"), result if result not in (None, "stopped") else ""), "dim"),),
+                     label=str(details["cmd"]) if kind == "unowned.reaped" and details.get("cmd") else None)
+    if kind in ("entry.reap_failed", "resource.stop_failed"):
+        return Shown("reap fail" if kind == "entry.reap_failed" else "stop fail",
+                     ((_words(details.get("reason"), details.get("error")), "bad"),))
+    if kind == "resource.owned":
+        resource = details.get("resource")
+        what = cast(dict[str, Any], resource).get("kind") if isinstance(resource, dict) else resource
+        return Shown("owned", ((_words(what, ttl), "dim"),))
+    if kind == "unowned.reported":
+        return Shown("unowned", ((str(details.get("why") or ""), "warn"),),
+                     label=str(details["cmd"]) if details.get("cmd") else None)
+    if kind == "hook.failed":
+        return Shown("hook fail", ((str(details.get("error") or ""), "bad"),))
+    return None
+
+
+FORMATTERS = {"slotfather": slotfather_shown, "lanefather": lanefather_shown, "junkfather": junkfather_shown}
+
+
+def shown(event: Event) -> Shown:
+    """The event word and detail for any event: its source's formatter, else the kind and a compact detail."""
+    formatter = FORMATTERS.get(event.source)
+    found = formatter(event.kind, event.details) if formatter is not None else None
+    if found is not None:
+        return found
+    style = LEVEL_STYLE.get(str(event.data.get("level")), "dim")
+    return Shown(event.kind, ((compact(event.details), style),))
+
+
+def subject_label(event: Event) -> str:
+    """The subject as EVENTS names it: its label, else its id; a commit by its project and short hash."""
+    subject = event.subject
+    if subject.get("label"):
+        return str(subject["label"])
+    ident = str(subject.get("id") or "?")
+    if subject.get("type") == "commit":
+        return _words(subject.get("project"), ident[:10]).replace(" · ", " ")
+    return ident
+
+
+def row(event: Event, tag: str) -> dict[str, Any]:
+    """One EVENTS row: when, source and tag, kind, event word, slot cells, label, subject id, pid and the detail
+    parts; `key` is its identity in the feed (source, file order)."""
+    found = shown(event)
+    pid = event.subject.get("pid")
+    return {"key": (event.source, event.order), "when": event.when, "source": event.source, "tag": tag,
+            "kind": event.kind, "event": found.event, "count": found.count, "filled": found.filled,
+            "label": found.label or subject_label(event), "id": str(event.subject.get("id") or ""),
+            "pid": pid if isinstance(pid, int) and not isinstance(pid, bool) else None,
+            "detail": list(found.detail), "lease": event.subject.get("lease_id"), "details": event.details}
+
+
+def rows(events: list[Event], tags: dict[str, str]) -> list[dict[str, Any]]:
+    """EVENTS' rows, oldest first, from the merged feed. Slotfather's run events (fathers#108) are marks, not rows:
+    the release a `run.outlier` names (by lease id, else by its end within RUN_MATCH) gets `run: "outlier"`, the
+    release a slower `run.trend` came with `run: "slower"`; each trend since the oldest other row is a row of its
+    own (kind `run.trend`, its run type as the label, `trend` its details)."""
+    found: list[dict[str, Any]] = []
+    outliers: list[Event] = []
+    for event in events:
+        if event.source == "slotfather" and event.kind == "run.outlier":
+            outliers.append(event)
+            continue
+        found.append(row(event, tags.get(event.source, DEFAULT_TAGS.get(event.source, event.source[:4]))))
+    releases = [item for item in found if item["source"] == "slotfather" and item["kind"] == "lease.released"]
+
+    def nearest(moment: Optional[datetime.datetime], before: bool = False) -> Optional[dict[str, Any]]:
+        if moment is None:
+            return None
+        close = [item for item in releases if abs((item["when"] - moment).total_seconds()) <= RUN_MATCH
+                 and (not before or item["when"] <= moment)]
+        return close[0] if len(close) == 1 else None
+
+    for outlier in outliers:
+        lease = outlier.details.get("lease_id")
+        target = next((item for item in releases if lease and item["lease"] == lease), None) \
+            or nearest(_parse_any_time(outlier.details.get("ended")))
+        if target is not None:
+            target["run"] = "outlier"
+    others = [item for item in found if item["kind"] != "run.trend"]
+    since = min((item["when"] for item in others), default=None)
+    kept: list[dict[str, Any]] = []
+    for item in found:
+        if item["kind"] == "run.trend" and item["source"] == "slotfather":
+            if since is None or item["when"] < since:
+                continue
+            item["trend"] = item["details"]
+            if item["details"].get("verdict") == "slower":
+                target = nearest(item["when"], before=True)
+                if target is not None and target.get("run") != "outlier":
+                    target["run"] = "slower"
+        kept.append(item)
+    return kept
+
+
+def _parse_any_time(value: Any) -> Optional[datetime.datetime]:
+    """An RFC 3339 time with or without fractions (a run's `ended`)."""
+    from .adapters.slotfather import parse_time as rfc3339
+
+    return rfc3339(value)
+
+
+def text_of(item: dict[str, Any]) -> str:
+    """What the text filter matches in a row: its kind, subject id, label and detail."""
+    return " ".join([str(item.get("kind") or ""), str(item.get("id") or ""), str(item.get("label") or ""),
+                     *(text for text, _ in item.get("detail") or [])]).lower()

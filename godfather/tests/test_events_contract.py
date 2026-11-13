@@ -91,7 +91,8 @@ class EventsContractTests(unittest.TestCase):
         self.assertEqual([("slot", "lease.granted"), ("slot", "lease.released"), ("junk", "entry.owned")],
                          [tuple(line.split()[2:4]) for line in lines], lines)
         self.assertTrue(all("contract" in line for line in lines), lines)
-        self.assertEqual(sorted(lines), lines, "in time order")
+        times = [line[:19] for line in lines]
+        self.assertEqual(sorted(times), times, "in time order")
 
 
 if __name__ == "__main__":

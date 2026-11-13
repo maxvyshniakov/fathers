@@ -39,10 +39,13 @@ def judge(memory: dict[str, Any]) -> None:
         and memory["swap_free"] < MIN_FREE_SWAP_MB
 
 
-def load_scene(advance: bool = False, elapsed: Callable[[], float] | None = None) -> tuple[Any, dict[str, Any]]:
+def load_scene(advance: bool = False, elapsed: Callable[[], float] | None = None,
+               recorded: bool = False) -> tuple[Any, dict[str, Any]]:
     """(the app module with the scene patched in, its first model): the demo's clock frozen at the scene's moment,
     or advancing from it, recorded machine samples replayed over the fixed queue. `elapsed` (seconds since the
-    start) stands in for the wall clock, so frames drawn at chosen moments are the same every time."""
+    start) stands in for the wall clock, so frames drawn at chosen moments are the same every time. EVENTS' rows
+    are read from the scene's event log (scene_events()); `recorded` keeps the recording's snapshot-style events
+    instead, which tools/goldens.py writes that log from."""
     from godfather import app, sources, theme
     from godfather.views import common, details, machine
 
@@ -83,6 +86,8 @@ def load_scene(advance: bool = False, elapsed: Callable[[], float] | None = None
     clock = types.SimpleNamespace(datetime=Clock, date=Date, timedelta=dt.timedelta, timezone=dt.timezone)
     app.datetime = clock  # type: ignore[assignment]  # the live loop's clock, which its Tick carries to the state
     model["history"] = machine.held_history(model["events"], model["used"], origin, 2 * model["history_window"])
+    if not recorded:  # EVENTS reads the log (fathers#84)
+        model["events"], model["sources"] = scene_events(model), [("slotfather", "slot")]
     common.dashboard_colours(model, {}, theme.from_environment().holders())  # GODFATHER_TERMINAL_BG/_FG
 
     def sample() -> dict[str, Any]:
@@ -121,6 +126,25 @@ def load_scene(advance: bool = False, elapsed: Callable[[], float] | None = None
     app.scene_clock = current  # type: ignore[attr-defined]
     scene_news(app)
     return app, sample()
+
+
+def scene_events(model: dict[str, Any]) -> list[dict[str, Any]]:
+    """EVENTS' rows as the dashboard reads them from Slotfather's event log: the scene's recorded grants and releases
+    written as that log (tests/replay.py, as tools/goldens.py writes the scene's), then read by godfather.events."""
+    import importlib.util
+
+    from godfather import events
+
+    spec = importlib.util.spec_from_file_location("godfather_replay", ROOT / "tests" / "replay.py")
+    assert spec and spec.loader
+    replay = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(replay)
+    live = {item["pid"]: (item["since"], item["granted"]) for item in model["holders"]}
+    found = []
+    for order, line in enumerate(replay.lines(model["events"], live), 1):
+        data = json.loads(line)
+        found.append(events.Event("slotfather", order, events.parse_time(data["time"]), data, line))
+    return events.rows(found, {"slotfather": "slot"})
 
 
 def scene_news(app: Any) -> tuple[Any, dict[str, str]]:

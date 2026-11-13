@@ -70,8 +70,9 @@ class EventsCommandTests(unittest.TestCase):
         self.assertEqual("", result.stderr)
         lines = result.stdout.splitlines()
         self.assertEqual(["junk", "slot", "lane", "slot"], [line.split()[2] for line in lines])
-        self.assertEqual("2026-11-12 02:24:10  junk  entry.owned             j3f9a1c  ttl=7200", lines[0])
-        self.assertIn("lane  lane.checked            710-speech  status=green", lines[2])
+        self.assertEqual("2026-11-12 02:24:10  junk  entry.owned             j3f9a1c  ttl 2h00m", lines[0])
+        self.assertIn("lane  lane.checked            710-speech  green", lines[2])
+        self.assertTrue(lines[3].endswith("lease.released          r1  ok 20s"), lines[3])
         self.assertNotIn("\x1b", result.stdout, "no escape from a line, and no colour without a terminal")
 
     def test_source_filters_and_json_prints_the_lines_as_read(self) -> None:

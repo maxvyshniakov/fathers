@@ -253,6 +253,8 @@ class Table:
         canvas, (y, x, _, width) = panel.canvas, panel.rect
         for index, (_, label, column, size, right) in enumerate(self.placed):
             value = title if index == 0 else label.lower()
+            if not value:  # a column too narrow for a label (EVENTS' one-cell source mark)
+                continue
             start = x + 3 if index == 0 else x + 3 + gutter + column + (max(0, size - text_width(value)) if right else 0)
             canvas.put(y, start - 1, " ", "text")
             canvas.put(y, start, value, "title" if index == 0 else "text" if panel.focused else "dim", size)

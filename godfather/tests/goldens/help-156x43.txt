@@ -9,34 +9,34 @@
 │  ▶️    lane-465-state-definitions-revi│    tab         next panel, by columns (shift-tab: back)                 ┃│ · waited 19m34s · running 35m10s      │
 │  ▶️    desktop                        │    click       a row, a panel, a footer hint (as its key)               ┃│ 1 processes                           │
 │                                       │    wheel       scroll the panel under the pointer                       ┃│                                       │
-│  ⏸️    prof51                         │    s           settings                                                 ┃│ight/.claude/worktrees/agent-afa3816b  │
-│  ⏸️    lane-555-host-rename-names     │    ?           help                                                     ┃│2                                      │
-│                                       │    v           what's new (or click Godfather what's new?)              ┃│ight/.claude/worktrees/agent-afa3816b  │
-┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    esc         close an overlay                                         ┃│2/verify.sh --checks desktop-tests     │
-╭─ EVENTS ──── slots ─ label ───────────│    q           quit                                                     ┃│oing --jobs 1                          │
-│                                       │    shift+drag  select text                                               │ight                                   │
-│  11:59:35    ▫       agent-ae72d94beb6│    Hotkeys work on any keyboard layout.                                  │                                       │
-│  11:58:33    ▫       agent-a1c75285bdf│                                                                          │d-once                                 │
-│  11:57:20    ▪       agent-a1c75285bdf│                                                                          │ht                                     │
-│  11:57:15    ▫       agent-a1c75285bdf│  STATES                                                                  │                                       │
+│  ⏸️    prof51                         │    f           events: every source, then each one                      ┃│ight/.claude/worktrees/agent-afa3816b  │
+│  ⏸️    lane-555-host-rename-names     │    /           events: filter by text (enter keeps, esc clears)         ┃│2                                      │
+│                                       │    s           settings                                                 ┃│ight/.claude/worktrees/agent-afa3816b  │
+┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    ?           help                                                     ┃│2/verify.sh --checks desktop-tests     │
+╭─ EVENTS ──── slots ─ label ───────────│    v           what's new (or click Godfather what's new?)              ┃│oing --jobs 1                          │
+│                                       │    esc         close an overlay                                          │ight                                   │
+│  11:59:35    ▫       agent-ae72d94beb6│    q           quit                                                      │                                       │
+│  11:58:33    ▫       agent-a1c75285bdf│    shift+drag  select text                                               │d-once                                 │
+│  11:57:20    ▪       agent-a1c75285bdf│    Hotkeys work on any keyboard layout.                                  │ht                                     │
+│  11:57:15    ▫       agent-a1c75285bdf│                                                                          │                                       │
 │  11:55:44    ▪▪      desktop          │                                                                          │-build-once                            │
-│  11:55:41    ▪       agent-a1c75285bdf│    ▶️  running                                                           │e/queue-347                            │
-│  11:55:31    ▫       desktop          │    ⏸️  waiting                                                           │ess                                    │
-│  11:55:26    ▫       agent-a1c75285bdf│    ↩️  yielded, back in the queue                                        │ted                                    │
-│  11:55:24    ▪       desktop          │    ❓  asked to yield its slots                                          │rification_plan.py, tools/verify.py,   │
-│  11:55:00    ▫       desktop          │    💤  idle: under 0.1 core for 5 min                                    │main-module.sh, tools/test-build-      │
-│  11:54:54    ▪       desktop          │    🔥  above 1.5× its CPU share                                          │odule.py, tools/app-build.py,          │
-│  11:54:06    ▪       agent-a1c75285bdf│    👨‍🦳  lease of an older client                                          │st-app-build.py, tools/cargo-test.py,  │
-│  11:54:02    ▫       agent-a1c75285bdf│                                                                          │elopment.md, tools/test-cargo-build-   │
-│  11:53:54    ▪       agent-ae72d94beb6│                                                                          │, tools/test-heavy.py,                 │
-│  11:53:08    ▪       agent-a1c75285bdf│  PRIORITY                                                                │rgo_build_cache.py                     │
+│  11:55:41    ▪       agent-a1c75285bdf│  STATES                                                                  │e/queue-347                            │
+│  11:55:31    ▫       desktop          │                                                                          │ess                                    │
+│  11:55:26    ▫       agent-a1c75285bdf│    ▶️  running                                                           │ted                                    │
+│  11:55:24    ▪       desktop          │    ⏸️  waiting                                                           │rification_plan.py, tools/verify.py,   │
+│  11:55:00    ▫       desktop          │    ↩️  yielded, back in the queue                                        │main-module.sh, tools/test-build-      │
+│  11:54:54    ▪       desktop          │    ❓  asked to yield its slots                                          │odule.py, tools/app-build.py,          │
+│  11:54:06    ▪       agent-a1c75285bdf│    💤  idle: under 0.1 core for 5 min                                    │st-app-build.py, tools/cargo-test.py,  │
+│  11:54:02    ▫       agent-a1c75285bdf│    🔥  above 1.5× its CPU share                                          │elopment.md, tools/test-cargo-build-   │
+│  11:53:54    ▪       agent-ae72d94beb6│    👨‍🦳  lease of an older client                                          │, tools/test-heavy.py,                 │
+│  11:53:08    ▪       agent-a1c75285bdf│                                                                          │rgo_build_cache.py                     │
 │  11:52:53    ▫       agent-a1c75285bdf│                                                                          │                                       │
-│  11:52:30    ▫       desktop          │    ⚡  interactive: someone is waiting on it                             │                                       │
-│  11:52:25    ▪       desktop          │    🐌  batch: unattended work, after the rest                            │───────────────────────────────────────╯
-│  11:51:40    ▪       agent-a1c75285bdf│    Normal has no mark.                                                   │───────── unleased 0.4 · no admission ─╮
-│  11:51:40    ▫       post-merge-456-re│                                                                          │          slots held  avg 4.4/6        │
-│  11:51:24    ▫       agent-a1c75285bdf│                                                                          │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
-│  11:49:34    ▫▫      data-grid        │  SLOTS                                                                   │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
+│  11:52:30    ▫       desktop          │  PRIORITY                                                                │                                       │
+│  11:52:25    ▪       desktop          │                                                                          │───────────────────────────────────────╯
+│  11:51:40    ▪       agent-a1c75285bdf│    ⚡  interactive: someone is waiting on it                             │───────── unleased 0.4 · no admission ─╮
+│  11:51:40    ▫       post-merge-456-re│    🐌  batch: unattended work, after the rest                            │          slots held  avg 4.4/6        │
+│  11:51:24    ▫       agent-a1c75285bdf│    Normal has no mark.                                                   │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
+│  11:49:34    ▫▫      data-grid        │                                                                          │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
 │  11:48:31    ▪▪      data-grid        │                                                                          │░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                                       │                      ↑↓ scroll   esc close   q quit                  36% │          −80s                    now  │
 ╰───────────────────────────────────────╰──────────────────────────────────────────────────────────────────────────╯───────────────────────────────────────╯

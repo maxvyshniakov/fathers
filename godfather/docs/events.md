@@ -67,5 +67,15 @@ it reads in `versions`):
 - the sources merge by `time`, then source name, then file order.
 
 `godfather events [--source NAME]... [--follow] [--json]` prints that feed, newest last; `--json` prints the lines
-as read. Under `GODFATHER_FIXTURES=DIR` a tool's log is `DIR/<tool>/events.jsonl` and `DIR/host.json`'s `host`
+as read.
+
+The overview's EVENTS (fathers#84) is the same feed, newest first: time, source (the tag from the tool's
+capabilities, in its own colour), event, slots (Slotfather's only), label, detail and pid. Each source has a
+formatter from a kind and its details to the event word and the detail; a kind it does not know shows the kind
+itself and `key=value` pairs. Nothing is parsed out of prose: Lanefather's `details.message` is shown only for a kind
+with no other field. With Slotfather alone the source and event columns are not drawn. `f` cycles the source filter
+(all, then each present source in the order slotfather, lanefather, junkfather); `/` opens a text field in the bottom
+border, matched case-insensitively against the kind, subject id, label and detail, Enter keeps it and Esc clears it.
+The top border names the filter (`all sources`, `lanefather`, `"710"`). A narrow panel shortens the label first, then
+drops pid, then slots, then shows the source as a one-cell coloured mark. Under `GODFATHER_FIXTURES=DIR` a tool's log is `DIR/<tool>/events.jsonl` and `DIR/host.json`'s `host`
 stands in for this machine's name.

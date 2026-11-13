@@ -6,8 +6,15 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Added
 
+- EVENTS is one feed of every tool's event log, newest first (fathers#84): Lanefather's and junkfather's rows come
+  between Slotfather's in time order, each with its tool's tag (`slot`, `lane`, `junk`) in a colour of its own and the
+  event (`checked`, `owned`, `reaped`); with Slotfather alone those two columns are not drawn. `f` cycles the source
+  filter (all, then each tool), `/` types a text filter into EVENTS' bottom border (Enter keeps it, Esc clears it),
+  the top border names the filter (`all sources`, `lanefather`, `"710"`), and `↑ N new` counts only rows it lets
+  through. A narrow panel shortens the label first, then drops the pid, then the slots, then shows the tag as a
+  one-cell mark. Help lists `f` and `/`.
 - `godfather events [--source NAME]... [--follow] [--json]` prints the tools' event logs merged, newest last: time,
-  source tag (`slot`, `lane`, `junk`), kind, subject and a `key=value` detail; `--json` prints the lines as read,
+  source tag (`slot`, `lane`, `junk`), kind, subject and the detail EVENTS shows; `--json` prints the lines as read,
   `--follow` keeps printing what the logs gain (checked every 250 ms). It follows each log by inode through a rotation
   to `events.jsonl.1`, waits on a torn last line, and skips, counting them, lines that fail the shared validator,
   name another schema version or another host; an escape sequence in a line never reaches the terminal. An absent
@@ -25,8 +32,14 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Changed
 
+- EVENTS reads Slotfather's event log instead of the events its snapshot describes, and its result column, now
+  `detail`, is filled from each event's fields: `wait 32s` or `no wait` for every grant, `ok 3m25s` or
+  `exit 1 · 26s` for every release, `gave up 5m`, `owner died · 12m`, `batch → interactive`, `waiting 45m`; it no
+  longer reads durations out of Slotfather's prose. Wide panels also show the pid. A Slotfather whose capabilities
+  name no event log shows EVENTS empty with `slotfather too old for events` in its border (fathers#84).
 - EVENTS' run marks and trend rows (fathers#108) are read through the same reader, so a rotated Slotfather log no
-  longer drops them (fathers#83).
+  longer drops them, and an outlier marks the release of its own lease id rather than the one that ended nearest
+  (fathers#83, fathers#84).
 - The panel Tab focuses shows without colour too: its top and bottom borders are heavy rules (`┍━ QUEUE ━━┑`, `=`
   in ASCII) as well as blue, and its sides stay light, so the heavy `┃` still marks only the selected row
   (fathers#139).

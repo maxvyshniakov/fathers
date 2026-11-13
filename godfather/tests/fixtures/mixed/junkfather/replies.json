@@ -1,0 +1,30 @@
+{
+ "capabilities --json": {
+  "code": 0,
+  "json": {
+   "v": 1,
+   "tool": "junkfather",
+   "version": "0.9.0",
+   "dashboard": {
+    "v": 1,
+    "tag": "junk",
+    "snapshot": {
+     "argv": [
+      "status",
+      "--json"
+     ],
+     "versions": [
+      1
+     ],
+     "poll": 5
+    },
+    "events": {
+     "path": "/fixture/junkfather/events.jsonl",
+     "versions": [
+      1
+     ]
+    }
+   }
+  }
+ }
+}
