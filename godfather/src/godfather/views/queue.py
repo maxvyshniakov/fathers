@@ -43,7 +43,7 @@ def draw_slots(canvas: Canvas, area: Rect, model: Model) -> None:
         canvas.put(area.y + 1, x, label, style, width)
 
 
-def free_slot(width: int, free: str = "block") -> str:
+def free_slot(width: int, free: str) -> str:
     """A free slot `width` cells wide: a block in the theme's free colour, or outlined where the theme has no surface
     colours (#14; `free` is the theme's form)."""
     if free == "block" or width < 1:

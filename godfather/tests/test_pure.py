@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import copy
 import datetime
-import importlib.util
 import json
 import re
 import unittest
@@ -13,16 +12,9 @@ from typing import Any
 
 import view as _view
 from helpers import ROOT
+from test_goldens import goldens_tool
 
 VIEWS = ROOT / "src" / "godfather" / "views"
-
-
-def goldens_tool() -> Any:
-    spec = importlib.util.spec_from_file_location("godfather_goldens", ROOT / "tools" / "goldens.py")
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 class PureRenderingTests(unittest.TestCase):
@@ -39,7 +31,7 @@ class PureRenderingTests(unittest.TestCase):
         self.assertIsNone(error)
         assert model is not None
         moment = tool.parse_time(scene["moment"])
-        state, _ = tool.reduce(tool.AppState(), tool.ModelLoaded(model), 0.0)
+        state, _ = tool.reduce(tool.AppState(), tool.ModelLoaded(model, 8), 0.0)
         state, _ = tool.reduce(state, tool.Tick(moment), 0.0)
         first = state.model["holders"][0]
         lane = scene["lanes"][goldens.lane_key(first["key"])]
@@ -80,9 +72,30 @@ class PureRenderingTests(unittest.TestCase):
 
     def test_the_moment_is_the_states_not_the_clock(self) -> None:
         state, moment, _ = self.scene_state()
-        later = self.draw(self.tool.reduce(state, self.tool.Tick(moment + datetime.timedelta(minutes=5)), 0.0)[0],
-                          None).render(False)
-        self.assertNotEqual(self.draw(state, None).render(False), later, "QUEUE's times age with the state's moment")
+        self.assertIn(" 35m10s ", self.draw(state, None).render(False), "the first lease's run at the scene's moment")
+        later, _ = self.tool.reduce(state, self.tool.Tick(moment + datetime.timedelta(minutes=5)), 0.0)
+        self.assertIn(" 40m10s ", self.draw(later, None).render(False), "five minutes later by the state's moment")
+
+    def test_the_state_keeps_the_moment_to_the_second(self) -> None:
+        state, moment, _ = self.scene_state()
+        within, _ = self.tool.reduce(state, self.tool.Tick(moment + datetime.timedelta(milliseconds=900)), 0.0)
+        self.assertIs(state, within, "a pass within the same second changes nothing, so nothing is drawn again")
+        next_second, _ = self.tool.reduce(state, self.tool.Tick(moment + datetime.timedelta(seconds=1.4)), 0.0)
+        self.assertEqual(moment + datetime.timedelta(seconds=1), next_second.moment, "cut to the second")
+
+    def test_a_selected_waiters_lane_is_joined_into_a_copy_of_the_model(self) -> None:
+        tool = self.tool
+        state, _, lane = self.scene_state()
+        state = tool.move(state, len(state.model["holders"]))  # the first waiter
+        before = state.model
+        waiter = before["waiters"][0]
+        self.assertNotIn("lane", waiter)
+        key = tool.details_key(waiter, state.selection.key)
+        self.assertEqual("request", key[1])
+        state, _ = tool.reduce(state, tool.DetailsLoaded(key, lane, None), 0.0)
+        self.assertEqual(lane, state.model["waiters"][0]["lane"])
+        self.assertNotIn("lane", before["waiters"][0], "the model drawn before is left as it was")
+        self.assertIs(before["holders"], state.model["holders"], "the other group is shared, not copied")
 
     def test_no_view_reads_the_clock_or_a_theme_global(self) -> None:
         # The Settings panel is a state machine of its own (state.SettingsOverlay), its clock injected and
@@ -96,9 +109,11 @@ class PureRenderingTests(unittest.TestCase):
                 self.assertNotIn("current_theme", text)
                 self.assertNotIn("use_marks", text)
 
-    def test_the_golden_tool_patches_nothing(self) -> None:
+    def test_the_golden_tool_patches_nothing_but_the_environment(self) -> None:
         text = (ROOT / "tools" / "goldens.py").read_text()
-        self.assertNotIn("mock.patch.object", text)
+        patches = re.findall(r"mock\.patch[\w.]*\(\w*", text)
+        self.assertTrue(patches)
+        self.assertEqual({"mock.patch.dict(os"}, set(patches), "only os.environ is set: no module, function or clock")
         self.assertNotIn("set_theme", text)
 
 

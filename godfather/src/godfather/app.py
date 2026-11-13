@@ -252,7 +252,7 @@ class Live:
                 self.send(_state.ModelFailed(str(failure)))
             else:
                 model, problem = value
-                self.send(_state.ModelLoaded(model, problem, self.theme.holders()))
+                self.send(_state.ModelLoaded(model, self.theme.holders(), problem))
         for _, value, failure in self.news.take():
             if failure is None:  # a failed load leaves what's new as it was
                 self.send(_state.NewsLoaded(value))

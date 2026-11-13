@@ -548,6 +548,18 @@ class DrawingTests(unittest.TestCase):
         self.tool.dashboard_colours(model, {}, theme.resolve("auto", None, {}).holders())
         self.assertEqual([f"h{n}" for n in range(8)] + ["h0"], [h["style"] for h in model["holders"]])
 
+    def test_the_holder_colour_count_always_comes_from_the_theme(self) -> None:
+        # fathers#138 review: a default of eight gave a builtin-theme lease h6, a style that theme lacks
+        import dataclasses
+        import inspect
+
+        self.assertIs(inspect.Parameter.empty, inspect.signature(self.tool.dashboard_colours).parameters["count"].default)
+        self.assertIs(dataclasses.MISSING, {f.name: f for f in dataclasses.fields(self.tool.ModelLoaded)}["colours"].default)
+        builtin = theme.resolve("builtin", None, {})
+        found = {"holders": [dict(key=n, kind="held") for n in range(8)], "waiters": [], "events": []}
+        state, _ = self.tool.reduce(self.tool.AppState(), self.tool.ModelLoaded(found, builtin.holders()), 0.0)
+        self.assertTrue(all(h["style"] in builtin.styles for h in state.model["holders"]))
+
 
 class SettingTests(unittest.TestCase):
     def setUp(self) -> None:

@@ -49,7 +49,7 @@ class FixtureCase(unittest.TestCase):
         model, error = screen.load()
         canvas = tui.Canvas(width, height)
         if model:
-            common.dashboard_colours(model, {})
+            common.dashboard_colours(model, {}, tui.current_theme.holders())
         overview.dashboard_draw(canvas, model, error=error, notice=screen.notice())
         self.canvas = canvas
         return canvas.render(False)

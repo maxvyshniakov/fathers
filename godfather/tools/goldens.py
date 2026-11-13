@@ -55,9 +55,8 @@ def scene_news() -> tuple[Any, dict[str, str], dict[str, str]]:
     """What's new as the fixture tools answer it, with everything read, and with Slotfather's newest unread."""
     from godfather import news
 
-    with mock.patch.dict(os.environ, {"GODFATHER_FIXTURES": str(NEWS)}), \
-            mock.patch("godfather.version.running_identity", return_value={"commit": COMMIT, "version": "0.1.0"}):
-        found = news.load((SCENE / "CHANGELOG.md").read_text(), stale=False)
+    with mock.patch.dict(os.environ, {"GODFATHER_FIXTURES": str(NEWS)}):
+        found = news.load((SCENE / "CHANGELOG.md").read_text(), stale=False, commit=COMMIT)
     read = news.mark_read(found, {})
     return found, read, dict(read, slotfather="0.1.0")
 
@@ -186,8 +185,9 @@ def environment(theme: str | None, scene: Path = SCENE) -> Iterator[None]:
 
 def render(name: str, theme: str | None) -> str:
     """One screen in one theme (None: plain text), as the live view would draw it at the scene's moment: the moment,
-    the lanes and the chart's window go in as data, the theme and marks with the canvas; nothing is patched
-    (fathers#138)."""
+    the lanes and the chart's window go in as data, the theme and marks with the canvas, the commit what's new shows as
+    an argument. No module is patched (fathers#138); the only thing set from outside is the process environment
+    (environment(): the fixture folder, the time zone and the terminal's colours), which is what the tools read."""
     from godfather import app, state, theme as themes, tui
     from godfather.adapters import slotfather as adapter
     from godfather.views import common, overlays, overview

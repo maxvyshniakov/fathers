@@ -148,8 +148,9 @@ class Mouse:
 @dataclass(frozen=True)
 class ModelLoaded:
     model: Optional[Model]
+    colours: int  # the drawing theme's holder colours (theme.Theme.holders()) leases get: required, as a builtin
+    # theme has six and a lease given a seventh would name a style it lacks
     problem: Optional[str] = None  # why the model shown is stale
-    colours: int = _common.HOLDER_COLOURS  # the theme's holder colours (theme.Theme.holders()) leases get
 
 
 @dataclass(frozen=True)
