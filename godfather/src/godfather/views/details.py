@@ -12,7 +12,8 @@ from ..layout import Rect
 from ..tui import SPINNER, Canvas, clip, clock, dashboard_text, megabytes, minutes, safe_link, short, span, text_width, \
     tilde
 from ..widgets import Panel, Part, Table, label_column
-from .common import EMOJI, Item, Marks, Model, bar, expected_run, marks_of, meta_text, priority_mark, priority_of, share, share_style, ticket_of
+from .common import (Item, Marks, Model, bar, expected_run, marks_of, meta_text, priority_mark, priority_of, share,
+                     share_style, ticket_of)
 
 Fact = tuple[str, list[Part]]
 BUILTIN_CONTEXT = {"class", "priority", "ticket", "lane", "phase", "kind", "check", "sha", "on", "session",
@@ -69,8 +70,8 @@ def queue_policy(model: Model, moment: Optional[datetime.datetime] = None) -> di
     return fields
 
 
-def request_facts(item: Item, model: Model, position: int, moment: datetime.datetime, marks: Marks = EMOJI,
-                  track: str = "■") -> list[Fact]:
+def request_facts(item: Item, model: Model, position: int, moment: datetime.datetime, marks: Marks,
+                  track: str) -> list[Fact]:
     """The facts of a request: label, status, priority, ticket, its context, then how it waits or runs; `marks` and
     `track` (a bar's empty cell) are the canvas's."""
     lane: dict[str, Any] = item.get("lane") or {}

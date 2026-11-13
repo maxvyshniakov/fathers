@@ -55,7 +55,8 @@ def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, ov
                    notice: Optional[list[str]] = None, message: Optional[str] = None,
                    failure: Optional[str] = None, news: Any = None, read: Optional[dict[str, str]] = None,
                    moment: Optional[datetime.datetime] = None) -> None:
-    """The whole screen at `moment` (where None, the model's own update time: the screen never reads the clock). `overlay` is the one open (state.Help, Changelog or SettingsOverlay); `error` the refresh's
+    """The whole screen at `moment` (where None, the model's own update time: the screen never reads the clock).
+    `overlay` is the one open (state.Help, Changelog or SettingsOverlay); `error` the refresh's
     failure, `message` a passing notice; `notice` stands in for the panels when Slotfather is absent or unsupported;
     `failure` is why the selected request's details did not load. A stale model (`stale_since`) is drawn dimmed, with
     the time it went stale in SLOTS' border. `news` and `read` are what's new and its read versions."""
@@ -70,7 +71,7 @@ def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, ov
         canvas.put(2, 3, f"Queue unavailable: {error}" if error else "Reading the queue…",
                    "bad" if error else "dim", canvas.width - 6)
     if model is not None:
-        draw_panels(canvas, model, selected, cwd, failure, moment or model["updated"])
+        draw_panels(canvas, model, selected, cwd, failure, cast(datetime.datetime, moment))
     if overlay is not None:
         draw_overlay(canvas, overlay, model, news, read)
 

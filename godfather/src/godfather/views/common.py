@@ -57,9 +57,6 @@ def marks_of(canvas: _tui.Canvas) -> Marks:
     return canvas.marks if isinstance(canvas.marks, Marks) else EMOJI
 
 
-HOLDER_COLOURS = 8  # the holder colours a theme has when it reserves none (theme.Theme.holders())
-
-
 def entry_ids(items: list[Item]) -> list[tuple[Any, int]]:
     """Each entry's identity on screen (fathers#21): its key, the lease id (fathers#101), and which of the entries
     sharing that key it is, so two entries of an older Slotfather's (keyed `[pid, since]`) of one pid created in the
@@ -73,7 +70,7 @@ def entry_ids(items: list[Item]) -> list[tuple[Any, int]]:
     return found
 
 
-def dashboard_colours(model: Model, assigned: dict[Any, int], count: int = HOLDER_COLOURS) -> None:
+def dashboard_colours(model: Model, assigned: dict[Any, int], count: int) -> None:
     """Gives each running lease one of `count` colours (the theme's holders(): 8 less any it reserves, or the
     builtin 6, #14) it keeps until it ends, preferring colours no other lease shows, so the slot bar, the table
     swatch and the detail heading stay linked as the queue moves. A lease that yields keeps its colour while it waits
@@ -110,7 +107,7 @@ def bar(fraction: float, width: int, style: str, track: str) -> list[Part]:
     return [("■" * full, style), (track * (width - full), "track")]
 
 
-def ramp_bar(fraction: float, width: int, critical: bool = False, track: str = "■") -> list[Part]:
+def ramp_bar(fraction: float, width: int, critical: bool, track: str) -> list[Part]:
     """A MACHINE resource bar: each filled cell in the load chart's indigo-to-red ramp at its place along the bar, so
     a nearly full bar reaches red at its tip; a critical one (🔥) entirely in that red, so full and critical match."""
     width = max(0, width)
@@ -213,7 +210,7 @@ def expected_run(item: Item) -> Optional[dict[str, Any]]:
     return expected if expected.get("p50") is not None else None
 
 
-def priority_mark(item: Item, marks: Marks = EMOJI) -> str:
+def priority_mark(item: Item, marks: Marks) -> str:
     """⚡ for an interactive request, 🐌 for a batch one (! and ~ in ASCII), nothing for normal: the class it is
     served in, aged (`served`), else the one it asked."""
     return marks.priority.get(priority_of({"priority": item.get("served") or item.get("priority")}), "")

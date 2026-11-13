@@ -34,10 +34,10 @@
 │  11:52:30    ▫       desktop                                                              │ │                                                            │
 │  11:52:25    ▪       desktop                                                              │ ╰────────────────────────────────────────────────────────────╯
 │  11:51:40    ▪       agent-a1c75285bdf2cd615                                              │ ╭─ MACHINE ──────────────────── unleased 0.4 · no admission ─╮
-│  11:51:40    ▫       post-merge-456-rename-compat-review-fixes                            │ │                               slots held                   │
+│  11:51:40    ▫       post-merge-456-rename-compat-review-fixes                            │ │                               slots held  avg 4.4/6        │
 │  11:51:24    ▫       agent-a1c75285bdf2cd615                                              │ │  🆗 load ■■■■■■■■■░░░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
 │  11:49:34    ▫▫      data-grid                                                            │ │  🆗 mem  ■■■■░░░░░░░░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
 │  11:48:31    ▪▪      data-grid                                                            │ │  🆗 swap ■■■■■■■■■░░░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
-│                                                                                           │ │                               −80s     avg 4.4/6      now  │
+│                                                                                           │ │                               −80s                    now  │
 ┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┙ ╰────────────────────────────────────────────────────────────╯
  Godfather what's new?                            ↑↓ scroll   tab panel   s settings   ? help   q quit                             updated 11:59:39  ● live

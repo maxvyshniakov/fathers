@@ -43,7 +43,7 @@ def load_scene(advance: bool = False, elapsed: Callable[[], float] | None = None
     """(the app module with the scene patched in, its first model): the demo's clock frozen at the scene's moment,
     or advancing from it, recorded machine samples replayed over the fixed queue. `elapsed` (seconds since the
     start) stands in for the wall clock, so frames drawn at chosen moments are the same every time."""
-    from godfather import app, sources
+    from godfather import app, sources, theme
     from godfather.views import common, details, machine
 
     data = json.loads(FIXTURE.read_text())
@@ -83,7 +83,7 @@ def load_scene(advance: bool = False, elapsed: Callable[[], float] | None = None
     clock = types.SimpleNamespace(datetime=Clock, date=Date, timedelta=dt.timedelta, timezone=dt.timezone)
     app.datetime = clock  # type: ignore[assignment]  # the live loop's clock, which its Tick carries to the state
     model["history"] = machine.held_history(model["events"], model["used"], origin, 2 * model["history_window"])
-    common.dashboard_colours(model, {})
+    common.dashboard_colours(model, {}, theme.from_environment().holders())  # GODFATHER_TERMINAL_BG/_FG
 
     def sample() -> dict[str, Any]:
         fresh = copy.deepcopy(model)
@@ -128,10 +128,8 @@ def scene_news(app: Any) -> tuple[Any, dict[str, str]]:
     GODFATHER_DEMO_UNREAD=1 Slotfather's newest entries unread (the footer's what's new? not muted)."""
     from godfather import news
 
-    with mock.patch.dict(os.environ, {"GODFATHER_FIXTURES": str(NEWS)}), \
-            mock.patch("godfather.version.running_identity",
-                       return_value={"commit": "9f600e1c0ffee", "version": "0.1.0"}):
-        found = news.load(stale=False)
+    with mock.patch.dict(os.environ, {"GODFATHER_FIXTURES": str(NEWS)}):
+        found = news.load(stale=False, commit="9f600e1c0ffee")
     read = news.mark_read(found, {})
     if os.environ.get("GODFATHER_DEMO_UNREAD"):
         read["slotfather"] = "0.1.0"
@@ -158,12 +156,11 @@ MEDIA = (176, 50)  # columns and rows of the README media
 FPS, DURATION, STILL = 4, 11.5, 1.0  # the animation's rate and length; the still is the screen one second in
 
 
-def frames(steps: list[Step], times: list[float], width: int, height: int) -> list[str]:
+def frames(steps: list[Step], times: list[float], width: int, height: int, palette: Any) -> list[str]:
     """The live dashboard's screens at `times` (seconds) with `steps` pressed, in colour: the real reducer and
     renderer over the scene, its clock moved by hand and every load done at once, so each run gives the same
     frames."""
     from godfather import state as _state
-    from godfather import tui
     from godfather.tui import Canvas
     from godfather.views import overview
 
@@ -172,6 +169,10 @@ def frames(steps: list[Step], times: list[float], width: int, height: int) -> li
     screen = app.Scene()
     current = _state.AppState(interval=1)
     fetched = -1.0
+
+    def model_loaded() -> Any:
+        model, problem = screen.load()
+        return _state.ModelLoaded(model, palette.holders(), problem)
 
     def send(event: Any) -> None:
         nonlocal current
@@ -183,10 +184,10 @@ def frames(steps: list[Step], times: list[float], width: int, height: int) -> li
             elif effect.kind == "load-news":
                 send(_state.NewsLoaded(app.load_news()))
             elif effect.kind == "load-model":
-                send(_state.ModelLoaded(*screen.load(), colours=tui.current_theme.holders()))
+                send(model_loaded())
 
     def draw() -> str:
-        canvas = Canvas(width, height)
+        canvas = Canvas(width, height, palette)
         overview.render(canvas, current, moment[0], screen.notice())
         send(_state.Drawn(_state.Frame(canvas.width, canvas.height, canvas.tables, canvas.version_at,
                                        tuple(canvas.hint_hits), canvas.order, tuple(canvas.filter_hits))))
@@ -198,7 +199,7 @@ def frames(steps: list[Step], times: list[float], width: int, height: int) -> li
     for at in times:
         moment[0] = at
         if at - fetched >= current.interval:
-            send(_state.ModelLoaded(*screen.load(), colours=tui.current_theme.holders()))
+            send(model_loaded())
             fetched = at
         draw()  # the frame the keys land on, as on screen
         while pending and pending[0][0] <= at:
@@ -223,7 +224,7 @@ def write_media(animation: bool) -> None:
     assert spec and spec.loader
     raster = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(raster)
-    from godfather import theme, tui
+    from godfather import theme
 
     os.environ["TZ"] = "Etc/GMT-2"
     time.tzset()
@@ -231,15 +232,15 @@ def write_media(animation: bool) -> None:
         palette = raster.THEMES[name]
         os.environ.update(GODFATHER_TERMINAL_BG="#%02x%02x%02x" % palette.background,
                           GODFATHER_TERMINAL_FG="#%02x%02x%02x" % palette.foreground, GODFATHER_THEME="auto")
-        tui.set_theme(theme.from_environment())  # the theme frames() makes its canvases with
+        palette = theme.from_environment()  # the theme frames() draws in
         draw = raster.Raster(*MEDIA, palette)
         if animation:
             times = [step / FPS for step in range(round(DURATION * FPS))]
             target = ROOT / f"assets/dashboard{variant}.webp"
-            raster.save_webp([draw.frame(text) for text in frames(NAVIGATION, times, *MEDIA)], target, FPS)
+            raster.save_webp([draw.frame(text) for text in frames(NAVIGATION, times, *MEDIA, palette)], target, FPS)
         else:
             target = ROOT / f"assets/dashboard{variant}.png"
-            raster.save_png(draw.frame(frames([], [STILL], *MEDIA)[0]), target)
+            raster.save_png(draw.frame(frames([], [STILL], *MEDIA, palette)[0]), target)
         print(target)
 
 
@@ -261,9 +262,8 @@ def main() -> None:
     from godfather import theme, tui
     from godfather.views import overview
 
-    tui.set_theme(theme.from_environment())  # GODFATHER_THEME, GODFATHER_TERMINAL_BG/_FG
     if args.once:
-        canvas = tui.Canvas(args.width, args.height)
+        canvas = tui.Canvas(args.width, args.height, theme.from_environment())  # GODFATHER_THEME, _TERMINAL_BG/_FG
         found, read = app.scene_news
         overview.dashboard_draw(canvas, model, cwd="~/straylight", news=found, read=read)
         print(canvas.render(True))

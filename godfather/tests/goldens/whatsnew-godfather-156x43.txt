@@ -34,10 +34,10 @@
 │  11:52:30    ▫       desktop          │    tools/screens.mjs and screen-kit are no longer used.  fathers#114     │                                       │
 │  11:52:25    ▪       desktop          │                                                                          │───────────────────────────────────────╯
 │  11:51:40    ▪       agent-a1c75285bdf│  • what's new? in the footer has one muted style, the key hints',        │───────── unleased 0.4 · no admission ─╮
-│  11:51:40    ▫       post-merge-456-re│    whether or not anything is unread, and one space after Godfather;     │          slots held                   │
+│  11:51:40    ▫       post-merge-456-re│    whether or not anything is unread, and one space after Godfather;     │          slots held  avg 4.4/6        │
 │  11:51:24    ▫       agent-a1c75285bdf│    what's new itself still marks unread entries (owner, 2026-11-13).     │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
 │  11:49:34    ▫▫      data-grid        │                                                                          │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
 │  11:48:31    ▪▪      data-grid        │                                                                          │░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
-│                                       │                     ←→ tool   ↑↓ scroll   esc close                  29% │          −80s     avg 4.4/6      now  │
+│                                       │                     ←→ tool   ↑↓ scroll   esc close                  29% │          −80s                    now  │
 ╰───────────────────────────────────────╰──────────────────────────────────────────────────────────────────────────╯───────────────────────────────────────╯
  Godfather what's new?                            ↑↓ select   tab panel   s settings   ? help   q quit                             updated 11:59:39  ● live

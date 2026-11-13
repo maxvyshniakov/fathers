@@ -561,8 +561,8 @@ class MachineStatusTests(unittest.TestCase):
                 lines=canvas.lines(False)
                 permit=f"admission: {admission} slots" if admission else "no admission"
                 self.assertTrue(lines[0].rstrip().endswith(f" unleased 4.5 · {permit} ─╮"),lines[0])
-                self.assertEqual("slots held","".join(cell[0] for cell in canvas.cells[1][1:-1]).strip(),
-                                 "a blank row first but for the chart's title")
+                self.assertTrue("".join(cell[0] for cell in canvas.cells[1][1:-1]).strip().startswith("slots held"),
+                                "a blank row first but for the chart's title")
                 for row,(name,mark) in enumerate(zip(("load","mem","swap"),marks),2):
                     self.assertEqual(mark,canvas.cells[row][3][0],f"{name}: under the blank row")
                     self.assertEqual(name,"".join(cell[0] for cell in canvas.cells[row][6:6+len(name)]))
@@ -622,32 +622,32 @@ class MemoryBarTests(unittest.TestCase):
         chart = lines[5]
         self.assertEqual("  ", chart[1:3])
         self.assertEqual("  ", chart[57:59])
-        self.assertRegex(lines[-2], r"^│  −\d+[smh] +slots held · avg 4\.0/4 · peak 4 · full 100% +now  │$")
+        self.assertRegex(lines[-2], r"^│  −\d+[smh] +avg 4\.0/4 · peak 4 · full 100% +now  │$")
         self.assertEqual(11, tool.machine_height(60))
         self.assertIn("╰", lines[-1], "the bottom frame right after the legend")
 
 
     def test_the_chart_says_it_shows_slots_held_without_a_row_of_its_own(self):
-        # fathers#140: beside the gauges its title sits in the blank row above it, so its rows do not read as the
-        # gauges' sparklines; under them the axis line names it
+        # fathers#140: beside the gauges its title and figures sit in the blank row above it and its axis line keeps
+        # only the window and now, so neither its rows nor its figures line up with the gauges'; stacked, the bottom
+        # border under the axis names it and the axis keeps every figure
         tool=surfaces(load_dashboard())
-        for width,height in ((62,7),(90,7)):
+        for width,height,kept in ((62,7,("avg",)),(90,7,("avg","peak","full"))):
             with self.subTest(width=width):
                 lines=self.machine(tool,height,width=width)
                 start=lines[-2].index("−")  # the chart's first column, where its axis starts
-                self.assertEqual("slots held",lines[1][start:start+10],lines[1])
-                self.assertNotIn("slots held",lines[-2])
+                self.assertTrue(lines[1][start:].startswith("slots held  avg 4.0/4"),lines[1])
+                for word in ("avg","peak","full"):
+                    self.assertEqual(word in kept,f"{word} " in lines[1],lines[1])
+                    self.assertNotIn(f"{word} ",lines[-2],"no figure under the gauges' values")
+                self.assertRegex(lines[-2],r"^│ +−\d+[smh] +now  │$")
         lines=self.machine(tool,11,width=60)
-        self.assertNotIn("slots held","".join(lines[:-2]),"stacked: no row for a title")
-        self.assertRegex(lines[-2],r"^│  −\d+[smh] +slots held · avg [\d.]+/4 .* now  │$")
-        for width,kept in ((60,("slots held","avg","peak","full")),(34,("slots held","avg")),(24,("slots held",)),
-                           (15,())):
-            with self.subTest(width=width):
-                line="".join(text for text,_ in tool.machine_legend(dict(average=0.65,peak=8,full=0.2),8,width,
-                                                                       label="slots held"))
-                self.assertEqual(width,tool.text_width(line))
-                for word in ("slots held","avg","peak","full"):
-                    self.assertEqual(word in kept,word in line,line)
+        self.assertNotIn("slots held","".join(lines[:-1]),"stacked: no row for a title")
+        self.assertRegex(lines[-2],r"^│  −\d+[smh] +avg [\d.]+/4 · peak 4 · full \d+% +now  │$","every figure kept")
+        self.assertTrue(lines[-1].startswith("╰─ slots held ─"),lines[-1])
+        self.assertEqual(lines[-2].index("−"),lines[-1].index("slots"),"under the axis' first column")
+        bare="".join(text for text,_ in tool.machine_legend(dict(average=0.65,peak=8,full=0.2),8,30,stats=False))
+        self.assertRegex(bare,r"^−\S+ +now$")
 
     def test_the_legend_is_a_time_axis_with_the_stats_in_slots_between(self):
         tool=surfaces(load_dashboard())
@@ -898,13 +898,13 @@ class MemoryBarTests(unittest.TestCase):
 
     def test_resource_bars_follow_the_chart_ramp_and_turn_red_when_critical(self):
         tool=surfaces(load_dashboard())
-        styles=[style for text,style in tool.ramp_bar(1,12) for _ in text if style!="track"]
+        styles=[style for text,style in tool.ramp_bar(1,12,False,"■") for _ in text if style!="track"]
         self.assertEqual(12,len(styles))
         self.assertEqual(("chart0","chart7"),(styles[0],styles[-1]),"blue at the start, red at the tip of a full bar")
         self.assertEqual([f"chart{round(k/11*7)}" for k in range(12)],styles,"each cell at its place on the ramp")
-        half=[style for text,style in tool.ramp_bar(0.5,12) if style!="track" for _ in text]
+        half=[style for text,style in tool.ramp_bar(0.5,12,False,"■") if style!="track" for _ in text]
         self.assertEqual(["chart0","chart1","chart1","chart2","chart3","chart3"],half,"half full runs blue to mid")
-        self.assertEqual({"chart7"},{style for _,style in tool.ramp_bar(0.5,12,True) if style!="track"},
+        self.assertEqual({"chart7"},{style for _,style in tool.ramp_bar(0.5,12,True,"■") if style!="track"},
                          "critical: all the ramp's red, the red a full bar ends on")
         now=datetime.datetime.now(datetime.timezone.utc)
         def machine(**extra: Any) -> Any:

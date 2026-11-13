@@ -42,7 +42,7 @@ class Case(unittest.TestCase):
         """An app state over a drawn overview of `found` (three running, two waiting by default)."""
         found = found if found is not None else model([entry(n) for n in range(3)],
                                                       [entry(n, "waiting") for n in range(3, 5)])
-        state, _ = self.tool.reduce(self.tool.AppState(), self.tool.ModelLoaded(found), 0.0)
+        state, _ = self.tool.reduce(self.tool.AppState(), self.tool.ModelLoaded(found, 8), 0.0)
         return self.draw(state, width, height)
 
     def draw(self, state: Any, width: int = 156, height: int = 43) -> Any:
@@ -465,7 +465,7 @@ class WhatsNewTests(Case):
         state = self.screen(model([entry(0)], events=events))
         state = dataclasses.replace(state, scroll={"events": 5}, glow={})
         state, _ = self.send(state, tool.ModelLoaded(model([entry(0)], events=events + [
-            dict(events[0], when=when + datetime.timedelta(seconds=99))])), now=2.0)
+            dict(events[0], when=when + datetime.timedelta(seconds=99))]), 8), now=2.0)
         self.assertEqual((6, {}), (state.scroll["events"], state.glow), "kept in place, and no flash")
 
     def test_each_overlay_owns_its_scroll_and_the_panels_keep_theirs(self) -> None:
@@ -507,7 +507,7 @@ class SelectionTests(Case):
     """fathers#21: the selection is the entry, not the row."""
 
     def reload(self, state: Any, found: dict[str, Any]) -> Any:
-        return self.send(state, self.tool.ModelLoaded(found))[0]
+        return self.send(state, self.tool.ModelLoaded(found, 8))[0]
 
     def test_it_follows_its_entry_through_a_reorder_a_grant_and_a_yield(self) -> None:
         a, b, c = entry(0), entry(1), entry(2, "waiting")
@@ -591,7 +591,7 @@ class DetailsTests(Case):
         state = self.screen(model([], [waiting]))
         key = tool.details_key(waiting, state.selection.key)
         state, _ = tool.reduce(state, tool.DetailsLoaded(key, None, None), 1.0)
-        state, effects = tool.reduce(state, tool.ModelLoaded(model([dict(waiting, kind="held")])), 1.5)
+        state, effects = tool.reduce(state, tool.ModelLoaded(model([dict(waiting, kind="held")]), 8), 1.5)
         self.assertEqual([(key[0], "lease")], [effect.key for effect in effects if effect.kind == "load-details"],
                          "a lease's facts, not the request's, within the fresh window")
 
@@ -602,7 +602,7 @@ class DetailsTests(Case):
         for item, identity in zip([a, b], tool.entry_ids([a, b])):
             state, _ = tool.reduce(state, tool.DetailsLoaded(tool.details_key(item, identity)), 1.0)
         self.assertEqual(2, len(state.details))
-        state, _ = tool.reduce(state, tool.ModelLoaded(model([b])), 2.0)
+        state, _ = tool.reduce(state, tool.ModelLoaded(model([b]), 8), 2.0)
         self.assertEqual([((11, None), 0)], [key[0] for key in state.details], "a's left with it")
 
     def test_the_focus_on_details_while_they_load_keeps_their_keys(self) -> None:
@@ -652,9 +652,9 @@ class NoticeTests(Case):
         state, _ = self.send(state, tool.ModelFailed("slotfather: timed out"))
         self.assertEqual(("stale", "slotfather: timed out"), (state.refresh.kind, state.refresh.error))
         self.assertIs(found, state.model)
-        state, _ = self.send(state, tool.ModelLoaded(found, "snapshot is 30 s old"))
+        state, _ = self.send(state, tool.ModelLoaded(found, 8, "snapshot is 30 s old"))
         self.assertEqual("stale", state.refresh.kind)
-        state, _ = self.send(state, tool.ModelLoaded(found))
+        state, _ = self.send(state, tool.ModelLoaded(found, 8))
         self.assertEqual(("live", None), (state.refresh.kind, state.refresh.error))
 
 

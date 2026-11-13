@@ -60,7 +60,7 @@ def event_result(event: dict[str, Any]) -> Part:
     return detail, "dim"  # reprioritized: `batch → interactive`
 
 
-def event_outcome(event: dict[str, Any], marks: _common.Marks = _common.EMOJI) -> list[Part]:
+def event_outcome(event: dict[str, Any], marks: _common.Marks) -> list[Part]:
     """The result column with the run's mark (fathers#108): `ok 34m ▲` for an outlier, `ok 34m ↗` for the run that
     turned its run type's trend slower; nothing for a trend row, whose label says it all."""
     if event.get("verb") == "trend":

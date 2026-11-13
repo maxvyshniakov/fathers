@@ -40,7 +40,9 @@ def held_history(events: list[dict[str, Any]], held_now: int, now_moment: dateti
 
 
 def history_window(model: Model) -> float:
-    """The seconds the history chart spans: the model's own (the demo's short zoom), else HISTORY_WINDOW."""
+    """The seconds the history chart spans: HISTORY_WINDOW, or the model's `history_window`. That key is no part of
+    Slotfather's contract (docs/contracts/slotfather.md) and its adapter never sets it: only tools/dashboard-demo.py
+    (its 60 s zoom) and the goldens and parity test drawing that scene put it into the model they draw."""
     return float(model.get("history_window") or HISTORY_WINDOW)
 
 
@@ -184,8 +186,10 @@ def draw_machine(canvas: Canvas, rect: Rect, model: Model) -> None:
 
 def draw_chart(canvas: Canvas, area: Rect, model: Model, slots: int, titled: bool = False) -> None:
     """The history chart in the area's rows, with half a cell of air at each end (owner, 2026-11-12), and its axis
-    line right under it. It says it shows slots held (fathers#140): `titled` (beside the gauges, whose rows its own
-    would otherwise read as sparklines of) in the blank row above it, else in the axis line, costing no row."""
+    line right under it. It says it shows slots held (fathers#140). `titled` (beside the gauges, whose rows its own
+    would otherwise read as sparklines of): the title and its figures in the blank row above it, the axis line only
+    the window and now, so no figure sits under a gauge's value. Stacked: the axis line keeps the figures and the
+    bottom border, right under it, names the chart. Neither costs a row."""
     chart_width = max(1, area.width)
     history = cast(list[Step], model["history"])
     window = history_window(model)
@@ -197,9 +201,31 @@ def draw_chart(canvas: Canvas, area: Rect, model: Model, slots: int, titled: boo
             canvas.put(area.y + line, area.x + column, glyph, f"chart{colour}" if glyph != " " else "dim")
     summary = history_summary(history, slots, window)
     if titled:
-        canvas.put(area.y - 1, area.x, CHART_TITLE, "dim", area.width)
-    canvas.segments(area.y + rows, area.x, machine_legend(summary, slots, chart_width, window,
-                                                         "" if titled else CHART_TITLE), area.width)
+        canvas.segments(area.y - 1, area.x, chart_title(summary, slots, area.width), area.width)
+    else:
+        canvas.put(area.y + rows + 1, area.x - 1, f" {CHART_TITLE} ", "dim", area.width)
+    canvas.segments(area.y + rows, area.x, machine_legend(summary, slots, chart_width, window, stats=not titled),
+                    area.width)
+
+
+def chart_stats(summary: dict[str, Any], slots: int) -> list[list[Part]]:
+    """The chart's figures, the least needed last: the mean and most held slots, the share of the time all were."""
+    return [[("avg", "dim"), (f" {summary['average'] * slots:.1f}/{slots}", "text")],
+            [("peak", "dim"), (f" {summary['peak']}", "text")],
+            [("full", "dim"), (f" {summary['full']:.0%}", "text")]]
+
+
+def joined(stats: list[list[Part]]) -> list[Part]:
+    return [part for index, stat in enumerate(stats) for part in ([(" · ", "dim")] if index else []) + stat]
+
+
+def chart_title(summary: dict[str, Any], slots: int, width: int) -> list[Part]:
+    """`slots held  avg 4.4/6 · peak 6 · full 10%` above a chart beside the gauges, its figures dropped from the
+    last where the width is short; the title always."""
+    stats = chart_stats(summary, slots)
+    while stats and text_width(CHART_TITLE) + sum(text_width(text) for text, _ in joined(stats)) + 2 > width:
+        stats.pop()
+    return [(CHART_TITLE, "dim")] + ([("  ", "text")] + joined(stats) if stats else [])
 
 
 def chart_cells(buckets: list[int], slots: int, rows: int, half_gaps: bool = True) -> list[list[str]]:
@@ -232,8 +258,7 @@ def gigabytes(value_mb: Optional[float], total: bool = False) -> str:
 
 
 def compact_resources(resources: list[tuple[str, Optional[float], str, bool]], width: int,
-                      shorts: Optional[list[str]] = None, marks: _common.Marks = _common.EMOJI,
-                      track: str = "■") -> list[Part]:
+                      shorts: Optional[list[str]], marks: _common.Marks, track: str) -> list[Part]:
     """Load, memory and swap on one line (owner, 2026-11-12) when MACHINE is too short for their rows: short ramp
     bars (6 to 4 cells, red when critical), else the numbers alone, a critical one in red; at the narrowest the
     short values (`23/32G`), then no marks. Never drops one."""
@@ -271,24 +296,20 @@ def window_text(seconds: float) -> str:
 
 
 def machine_legend(summary: dict[str, Any], slots: int, chart_width: int, window: float = HISTORY_WINDOW,
-                   label: str = "") -> list[Part]:
+                   stats: bool = True) -> list[Part]:
     """The history chart's legend, a time axis under it: the window it shows on the left, under its first column,
-    `now` on the right under its last, and between them, centred, `label` (what the chart shows, where nothing above
-    it says so), the mean and most held slots and the share of the time every slot was held. A narrow chart drops
-    full, then peak, then avg, then the label; the axis stays."""
+    `now` on the right under its last, and between them, centred, the mean and most held slots and the share of
+    the time every slot was held (none without `stats`: they are in the chart's title). A narrow chart drops full,
+    then peak, then avg; the axis stays."""
     left, right = window_text(chart_width * max(1, math.ceil(window / chart_width))), "now"
-    stats: list[list[Part]] = [[("avg", "dim"), (f" {summary['average'] * slots:.1f}/{slots}", "text")],
-                               [("peak", "dim"), (f" {summary['peak']}", "text")],
-                               [("full", "dim"), (f" {summary['full']:.0%}", "text")]]
-    if label:
-        stats.insert(0, [(label, "dim")])
+    figures = chart_stats(summary, slots) if stats else []
     room = chart_width - text_width(left) - text_width(right) - 4  # two cells each side of the stats
     parts: list[Part] = []
-    while stats:
-        parts = [part for index, stat in enumerate(stats) for part in ([(" · ", "dim")] if index else []) + stat]
+    while figures:
+        parts = joined(figures)
         if sum(text_width(text) for text, _ in parts) <= room:
             break
-        stats.pop()
+        figures.pop()
         parts = []
     middle = sum(text_width(text) for text, _ in parts)
     gap = max(0, chart_width - text_width(left) - text_width(right) - middle)
