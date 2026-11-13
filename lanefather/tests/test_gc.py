@@ -29,6 +29,43 @@ class GcCase(LaneCase):
     def collect(self, *args: str) -> dict[str, Any]:
         return json.loads(self.lane("gc", "--json", *args))
 
+    def session(self, name: str, branch: str | None, *, work: bool = True, publish: bool = True,
+                age: bool = True) -> Path:
+        """A Claude Code or Codex session worktree under .claude/worktrees: with `work`, a commit of its own; with
+        `publish`, its HEAD reaches origin/main, the default branch's upstream."""
+        path = self.repo / ".claude/worktrees" / name
+        if branch:
+            self.git(self.repo, "worktree", "add", "-q", "-b", branch, str(path), "integrate/q")
+        else:
+            self.git(self.repo, "worktree", "add", "-q", "--detach", str(path), "integrate/q")
+        if work:
+            self.commit(path, {f"docs/{name}.txt": "session work\n"}, "session work")
+        if publish:
+            self.publish(path)
+        if age:
+            self.age(path)
+        return path
+
+    def publish(self, path: Path) -> None:
+        """Make origin/main contain the worktree's HEAD: a commit whose parents are the old origin/main and it."""
+        head = self.git(path, "rev-parse", "HEAD")
+        parents = ["-p", head]
+        old = subprocess.run(["git", "rev-parse", "--verify", "-q", "refs/remotes/origin/main"], cwd=self.repo,
+                             capture_output=True, text=True).stdout.strip()
+        if old:
+            parents = ["-p", old, *parents]
+        merged = self.git(self.repo, "commit-tree", f"{head}^{{tree}}", *parents, "-m", "published")
+        self.git(self.repo, "update-ref", "refs/remotes/origin/main", merged)
+
+    def branches(self) -> str:
+        return self.git(self.repo, "branch", "--list")
+
+    def family(self, kind: str, name: str, *, age: bool = True) -> Path:
+        """A collectable worktree of one family: an agent worktree, or a published session worktree."""
+        if kind == "agent":
+            return self.candidate(name, age=age)
+        return self.session(f"{name}-session", f"claude/{name}", age=age)
+
 
 class GcTests(GcCase):
 
@@ -43,25 +80,31 @@ class GcTests(GcCase):
         self.assertTrue(self.integration.exists())
         self.assertTrue(any(a["kind"] == "branch" for a in report["removed"]))
 
-    def test_gc_keeps_dirty_young_unmerged_retained_and_owned_worktrees(self):
-        dirty, young, unmerged, retained, owned = (self.candidate(n, age=n != "young")
-                                                   for n in ("dirty", "young", "unmerged", "retained", "owned"))
-        self.write(dirty, "lib/api.txt", "unsaved")
-        self.age(dirty)
-        self.commit(unmerged, {"lib/api.txt": "unmerged"})
-        self.age(unmerged)
-        self.write(retained, ".keep", "baseline")
-        self.age(retained)
-        self.state.mkdir(parents=True, exist_ok=True)
-        (self.state / "held.json").write_text(json.dumps({"id": "held", "status": "landed",
-                                                         "worktree": str(owned.resolve()),
-                                                         "branch": "worktree-agent-owned"}))
-        report = self.collect()
-        for path in (dirty, young, unmerged, retained, owned):
-            self.assertTrue(path.exists(), str(path))
-        reasons = "\n".join(a["reason"] for a in report["kept"])
-        for text in ("uncommitted", "active", "not merged", ".keep", "record"):
-            self.assertIn(text, reasons)
+    def test_gc_keeps_dirty_young_unmerged_retained_owned_and_used_worktrees_of_every_family(self):
+        for kind in ("agent", "session"):
+            with self.subTest(kind):
+                dirty, young, unmerged, retained, owned, used = (
+                    self.family(kind, f"{kind}-{n}", age=n != "young")
+                    for n in ("dirty", "young", "unmerged", "retained", "owned", "used"))
+                self.write(dirty, "lib/api.txt", "unsaved")
+                self.age(dirty)
+                self.commit(unmerged, {"lib/api.txt": "unmerged"})
+                self.age(unmerged)
+                self.write(retained, ".keep", "baseline")
+                self.age(retained)
+                self.state.mkdir(parents=True, exist_ok=True)
+                branch = self.git(owned, "branch", "--show-current")
+                (self.state / f"held-{kind}.json").write_text(json.dumps({
+                    "id": f"held-{kind}", "status": "landed", "worktree": str(owned.resolve()), "branch": branch}))
+                child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], cwd=used)
+                self.addCleanup(lambda child=child: (child.kill(), child.wait()))
+                report = self.collect()
+                reasons = {a["path"]: a["reason"] for a in report["kept"]}
+                for path, text in ((dirty, "uncommitted"), (young, "active"), (unmerged, "not merged"),
+                                   (retained, ".keep"), (owned, "record"), (used, str(child.pid))):
+                    self.assertTrue(path.exists(), str(path))
+                    self.assertIn(text, reasons[str(path.resolve())])
+                    self.assertIn(self.git(path, "branch", "--show-current"), self.branches())
 
     def test_gc_keeps_everything_when_an_ownership_record_cannot_be_read(self):
         old = self.candidate()
@@ -206,22 +249,17 @@ class GcTests(GcCase):
 
 
 class SessionWorktreeTests(GcCase):
-    """Claude Code and Codex session worktrees are collected under the same rules (fathers#44)."""
+    """Claude Code and Codex session worktrees are collected, more conservatively than agent worktrees: a session
+    may still be open, and its ignored files may be the owner's (fathers#44 review)."""
 
-    def session(self, name: str, branch: str | None, *, age: bool = True) -> Path:
-        path = self.repo / ".claude/worktrees" / name
-        if branch:
-            self.git(self.repo, "worktree", "add", "-q", "-b", branch, str(path), "integrate/q")
-        else:
-            self.git(self.repo, "worktree", "add", "-q", "--detach", str(path), "integrate/q")
-        if age:
-            self.age(path)
-        return path
+    def kept(self, report: dict[str, Any], path: Path) -> str:
+        return next(a["reason"] for a in report["kept"] if a["path"] == str(path.resolve()))
 
-    def branches(self) -> str:
-        return self.git(self.repo, "branch", "--list")
+    def configure(self, text: str) -> None:
+        cfg = self.integration / ".lanefather.toml"
+        cfg.write_text(cfg.read_text() + "\n[gc]\n" + text)
 
-    def test_merged_clean_idle_claude_and_codex_worktrees_are_removed_with_their_branches(self):
+    def test_published_clean_idle_claude_and_codex_worktrees_are_removed_with_their_branches(self):
         claude = self.session("affectionate-hypatia-145d8b", "claude/affectionate-hypatia-145d8b")
         codex = self.session("codex-item-compact-spacing", "codex/item-compact-spacing")
         report = self.collect()
@@ -235,47 +273,104 @@ class SessionWorktreeTests(GcCase):
         self.assertTrue(self.integration.exists(), "the integration worktree stays")
         self.assertTrue((self.repo / ".git").is_dir(), "the main checkout stays")
 
-    def test_unmerged_dirty_recent_and_used_session_worktrees_are_kept(self):
-        unmerged = self.session("brave-turing-1a2b3c", "claude/brave-turing-1a2b3c")
-        self.commit(unmerged, {"lib/api.txt": "unmerged"})
-        self.age(unmerged)
-        dirty = self.session("codex-dirty", "codex/dirty")
-        self.write(dirty, "lib/api.txt", "unsaved")
-        self.age(dirty)
-        recent = self.session("eager-lovelace-4d5e6f", "claude/eager-lovelace-4d5e6f", age=False)
-        used = self.session("codex-used", "codex/used")
-        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], cwd=used)
-        self.addCleanup(lambda: (child.kill(), child.wait()))
+    def test_a_session_without_a_commit_of_its_own_is_kept_unless_the_project_opts_in(self):
+        fresh = self.session("eager-lovelace-4d5e6f", "claude/eager-lovelace-4d5e6f", work=False)
+        detached = self.session("smoke-0", None, work=False)
+        agent = self.candidate()
         report = self.collect()
-        for path in (unmerged, dirty, recent, used):
-            self.assertTrue(path.exists(), str(path))
-        reasons = {Path(a["path"]).name: a["reason"] for a in report["kept"]}
-        self.assertIn("not merged", reasons["brave-turing-1a2b3c"])
-        self.assertIn("uncommitted", reasons["codex-dirty"])
-        self.assertIn("active", reasons["eager-lovelace-4d5e6f"])
-        self.assertIn(str(child.pid), reasons["codex-used"])
-        for branch in ("claude/brave-turing-1a2b3c", "codex/dirty", "claude/eager-lovelace-4d5e6f", "codex/used"):
-            self.assertIn(branch, self.branches())
+        self.assertFalse(agent.exists(), "an agent worktree without commits is collected as before")
+        for path in (fresh, detached):
+            self.assertTrue(path.exists())
+            self.assertIn("no commit of its own", self.kept(report, path))
+        self.assertIn("claude/eager-lovelace-4d5e6f", self.branches())
+        self.configure("collect_uncommitted_sessions = true\n")
+        self.collect()
+        self.assertFalse(fresh.exists())
+        self.assertFalse(detached.exists())
+
+    def test_a_session_holding_ignored_files_is_kept_unless_they_are_disposable(self):
+        notes = self.session("brave-turing-1a2b3c", "claude/brave-turing-1a2b3c", age=False)
+        self.write(notes, ".claude/settings.local.json", "{}\n")
+        self.age(notes)
+        builds = self.session("codex-builds", "codex/builds", age=False)
+        self.write(builds, "node_modules/pkg/index.js", "x\n")
+        self.write(builds, "lib/__pycache__/api.pyc", "x\n")
+        self.age(builds)
+        agent = self.candidate("ignored", age=False)
+        self.write(agent, ".claude/settings.local.json", "{}\n")
+        self.age(agent)
+        report = self.collect()
+        self.assertTrue(notes.exists())
+        self.assertEqual((notes / ".claude/settings.local.json").read_text(), "{}\n")
+        self.assertIn("ignored files: .claude/", self.kept(report, notes))
+        self.assertFalse(builds.exists(), "build output under [gc] disposable does not hold a session")
+        self.assertFalse(agent.exists(), "an agent worktree's ignored files are collected as before")
+        self.configure('disposable = ["node_modules"]\n')
+        again = self.session("codex-pycache", "codex/pycache", age=False)
+        self.write(again, "lib/__pycache__/api.pyc", "x\n")
+        self.age(again)
+        self.assertIn("ignored files: lib/__pycache__/", self.kept(self.collect(), again))
+
+    def test_a_session_merged_only_into_a_local_integration_branch_is_kept(self):
+        local = self.session("codex-local-only", "codex/local-only", publish=False)
+        agent = self.candidate("local", age=False)
+        self.commit(agent, {"docs/agent.txt": "agent work\n"})
+        for worktree in (local, agent):
+            branch = self.git(worktree, "branch", "--show-current")
+            self.git(self.integration, "merge", "-q", "--no-edit", branch)
+        self.age(agent)
+        report = self.collect()
+        self.assertTrue(local.exists())
+        self.assertIn("not merged into origin", self.kept(report, local))
+        self.assertIn("codex/local-only", self.branches())
+        self.assertFalse(agent.exists(), "an agent worktree merged into integrate/* is collected as before")
+        self.git(self.repo, "worktree", "remove", str(local))
+        self.collect()
+        self.assertIn("codex/local-only", self.branches(), "an unpublished session branch is not deleted")
+        self.git(self.repo, "update-ref", "refs/remotes/origin/main", "codex/local-only")
+        self.collect()
+        self.assertNotIn("codex/local-only", self.branches())
+
+    def test_a_worktree_holding_another_repository_is_kept(self):
+        for path in (self.candidate("vendored"), self.session("codex-vendored", "codex/vendored")):
+            nested = path / "node_modules/vendored"
+            nested.mkdir(parents=True)
+            self.git(nested, "init", "-q")
+            self.write(nested, "local.txt", "another project's work\n")
+            self.age(path)
+        report = self.collect()
+        for path in (self.repo / ".claude/worktrees/agent-vendored", self.repo / ".claude/worktrees/codex-vendored"):
+            self.assertTrue((path / "node_modules/vendored/local.txt").exists())
+            self.assertIn("holds a Git repository at node_modules/vendored", self.kept(report, path))
+
+    def test_a_lock_naming_a_live_claude_agent_keeps_its_worktree(self):
+        live, dead = self.candidate("live-lock"), self.candidate("dead-lock")
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], cwd=self.tmp)
+        self.addCleanup(lambda: (child.kill(), child.wait()))
+        gone = subprocess.Popen([sys.executable, "-c", "pass"])
+        gone.wait()
+        self.git(self.repo, "worktree", "lock", "--reason", f"claude agent live (pid {child.pid})", str(live))
+        self.git(self.repo, "worktree", "lock", "--reason", f"claude agent dead (pid {gone.pid})", str(dead))
+        report = self.collect()
+        self.assertTrue(live.exists())
+        self.assertIn(f"locked by a live claude agent (pid {child.pid})", self.kept(report, live))
+        self.assertFalse(dead.exists())
 
     def test_a_branch_outside_the_patterns_outlives_its_removed_worktree(self):
         feature = self.session("feature-work", "feature/work")
-        detached = self.session("smoke-0", None)
         self.collect()
         self.assertFalse(feature.exists())
-        self.assertFalse(detached.exists())
         self.assertIn("feature/work", self.branches(), "only a branch the patterns name is deleted")
 
     def test_the_patterns_are_project_config(self):
         claude = self.session("affectionate-hypatia-145d8b", "claude/affectionate-hypatia-145d8b")
         old = self.candidate()
-        cfg = self.integration / ".lanefather.toml"
-        cfg.write_text(cfg.read_text() + '\n[gc]\ndirs = ["agent-*"]\nbranches = ["worktree-agent-*"]\n')
+        self.configure('dirs = ["agent-*"]\nbranches = ["worktree-agent-*"]\n')
         report = self.collect()
         self.assertFalse(old.exists())
         self.assertTrue(claude.exists())
         self.assertIn("claude/affectionate-hypatia-145d8b", self.branches())
-        reason = next(a["reason"] for a in report["kept"] if a["path"] == str(claude.resolve()))
-        self.assertIn("[gc] dirs", reason)
+        self.assertIn("[gc] dirs", self.kept(report, claude))
 
     def test_a_worktree_holding_another_worktree_is_kept(self):
         outer = self.session("codex-outer", "codex/outer")
@@ -283,11 +378,9 @@ class SessionWorktreeTests(GcCase):
         self.git(self.repo, "worktree", "add", "-q", "-b", "codex/inner", str(inner), "integrate/q")
         self.write(inner, "lib/api.txt", "unsaved inside")
         self.age(inner)
-        # The fixture ignores .claude/, as projects do, so the outer worktree reads clean.
         self.age(outer)
         report = self.collect()
         self.assertTrue(inner.exists())
         self.assertEqual((inner / "lib/api.txt").read_text(), "unsaved inside")
         self.assertTrue(outer.exists())
-        reason = next(a["reason"] for a in report["kept"] if a["path"] == str(outer.resolve()))
-        self.assertIn("holds the worktree", reason)
+        self.assertIn("holds the worktree", self.kept(report, outer))

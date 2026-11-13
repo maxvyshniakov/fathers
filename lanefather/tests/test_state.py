@@ -7,6 +7,7 @@ import pathlib
 import shutil
 import stat
 import tempfile
+from typing import Any
 import unittest
 import unittest.mock
 
@@ -72,12 +73,64 @@ class AtomicWriteTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE((self.tmp / "tool").stat().st_mode), 0o755)
         self.assertEqual(stat.S_IMODE((self.tmp / "plain").stat().st_mode), 0o644)
 
-    def test_every_write_site_uses_the_one_helper(self):
-        root = pathlib.Path(__file__).resolve().parent.parent
-        for name in ("lanefather/state.py", "lanefather/settings.py", "lanefather/registry.py", "install.py"):
-            text = (root / name).read_text()
-            self.assertNotIn("NamedTemporaryFile", text, name)
-            self.assertNotIn('".pending"', text, name)
+    def durable(self, target: pathlib.Path, write: Any) -> None:
+        """`write` replaces `target` through a temporary file of its own, synced before the rename, and syncs the
+        directory after it: a direct write_text or a shared .pending file fails here."""
+        events: list[tuple[str, str]] = []
+        real_fsync, real_replace = os.fsync, os.replace
+
+        def fsync(fd: int) -> None:
+            events.append(("dir-sync" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file-sync", ""))
+            real_fsync(fd)
+
+        def replace(source: Any, destination: Any) -> None:
+            events.append(("replace", os.fspath(source)))
+            self.assertEqual(os.path.realpath(destination), os.path.realpath(target))
+            real_replace(source, destination)
+        with unittest.mock.patch("os.fsync", side_effect=fsync), unittest.mock.patch("os.replace", side_effect=replace):
+            write()
+        kinds = [kind for kind, _ in events]
+        self.assertEqual(kinds[-3:], ["file-sync", "replace", "dir-sync"], f"{target.name}: {events}")
+        temporary = events[-2][1]
+        self.assertTrue(temporary.endswith(".tmp") and pathlib.Path(temporary).parent == target.parent, temporary)
+        self.assertTrue(target.exists())
+
+    def test_every_write_site_writes_durably(self):
+        import importlib
+        import subprocess
+
+        from lanefather import config, registry, settings, state
+        repo = self.tmp / "repo"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        (repo / ".lanefather.toml").write_text('project = "Durable"\n')
+        environment = {"LANEFATHER_STATE": str(self.tmp / "state"), "LANEFATHER_SETTINGS": str(self.tmp / "settings.json"),
+                       "LANEFATHER_REGISTRY": str(self.tmp / "projects.json")}
+        with unittest.mock.patch.dict(os.environ, environment):
+            config.use(config.Config())
+            self.addCleanup(config.use, None)
+            self.durable(self.tmp / "state" / "a.json", lambda: state.save({"id": "a", "status": "planned"}))
+            self.durable(self.tmp / "settings.json", lambda: settings.write({"review.start": "manual"}, None))
+            self.durable(self.tmp / "projects.json", lambda: registry.note(config.load(repo / ".lanefather.toml")))
+            install = importlib.import_module("install")
+            launcher = self.tmp / "bin" / "lanefather"
+            self.durable(launcher, lambda: install.write_atomic(launcher, "#!/bin/sh\n", 0o755))
+
+    def test_a_directory_sync_failure_is_reported_unless_the_file_system_cannot_sync_directories(self):
+        import errno
+
+        from lanefather import state
+        real_fsync = os.fsync
+        for code, raised in ((errno.EIO, True), (errno.EINVAL, False), (errno.ENOTSUP, False)):
+            def fsync(fd: int, code: int = code) -> None:
+                if stat.S_ISDIR(os.fstat(fd).st_mode):
+                    raise OSError(code, os.strerror(code))
+                real_fsync(fd)
+            with self.subTest(errno.errorcode[code]), unittest.mock.patch("os.fsync", side_effect=fsync):
+                if raised:
+                    with self.assertRaises(OSError):
+                        state.atomic_write(self.tmp / "a.json", "x\n")
+                else:
+                    state.atomic_write(self.tmp / "a.json", "x\n")
 
 
 class CutShortRecordTests(unittest.TestCase):
@@ -117,6 +170,27 @@ class CutShortRecordTests(unittest.TestCase):
             self.assertIn("cut short", str(caught.exception))
         with self.assertRaises(LaneError):
             state.occupying()
+
+    def test_show_reports_a_cut_short_record(self):
+        from lanefather import show
+        from lanefather.errors import LaneError
+        (self.state / "a.json").write_text('{"id": "a", "sta')
+        with self.assertRaises(LaneError) as caught:
+            show.summary("a", self.state)
+        self.assertIn("cut short", str(caught.exception))
+        self.assertIn(str(self.state / "a.json"), str(caught.exception))
+        with self.assertRaises(LaneError) as caught:
+            show.summary("b", self.state)
+        self.assertEqual(str(caught.exception), "no lane b")
+
+    def test_a_read_only_listing_names_the_damaged_record_beside_the_healthy_lanes(self):
+        from lanefather import state
+        state.save({"id": "b", "status": "active", "claims": ["src/**"]})
+        (self.state / "a.json").write_text("")
+        damaged: list[pathlib.Path] = []
+        found = state.Store(state.config.current()).lanes(damaged=damaged)
+        self.assertEqual([r["id"] for r in found], ["b"])
+        self.assertEqual(damaged, [self.state / "a.json"])
 
     def test_a_missing_record_is_still_no_lane(self):
         from lanefather import state
