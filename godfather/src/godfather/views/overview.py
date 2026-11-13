@@ -2,7 +2,8 @@
 layout.overview() places them, the footer, and the overlay open over them. It draws the model the Slotfather adapter
 decodes from `slotfather status --json --full` (docs/contracts/slotfather.md) on a tui.Canvas; the live view and
 --once write that canvas as the same escape sequences, so they are the same picture. render() draws an app state
-(state.py); dashboard_draw() is the same picture from its parts."""
+(state.py); dashboard_draw() is the same picture from its parts. Both are functions of what they are given
+(fathers#138): the moment comes from the state, the theme and marks with the canvas, and nothing is written back."""
 from __future__ import annotations
 
 import datetime
@@ -35,7 +36,8 @@ def footer_hints(focus: str) -> list[Part]:
 WHATS_NEW = "what's new?"
 
 
-def draw_footer(canvas: Canvas, model: Optional[Model], error: Optional[str], message: Optional[str]) -> None:
+def draw_footer(canvas: Canvas, model: Optional[Model], error: Optional[str], message: Optional[str],
+                moment: Optional[datetime.datetime] = None) -> None:
     """`Godfather what's new?` (fathers#102: the name in the title style; what's new? always muted like the key
     hints, unread or not, which only the overlay marks (owner, 2026-11-13); ↻ after it
     while a newer install waits for a restart; a click opens what's new), the hints, then the refresh failure or a
@@ -44,20 +46,23 @@ def draw_footer(canvas: Canvas, model: Optional[Model], error: Optional[str], me
     installed = _common.stale_install(model)
     Footer(canvas).draw([(_version.NAME, "title"), (" " + WHATS_NEW + (" ↻" if installed else ""), "dim")],
                         footer_hints(canvas.focus), ("● stale", "bad") if error else ("● live", "ok"),
-                        clock(model["updated"]) if model else "",
+                        clock(model["updated"], moment) if model else "",
                         (message, "bad") if message else (f"refresh failed: {error}", "bad") if error else ("", ""))
 
 
 def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, overlay: Any = None,
                    error: Optional[str] = None, cwd: Optional[str] = None, scroll: Optional[dict[str, int]] = None,
                    notice: Optional[list[str]] = None, message: Optional[str] = None,
-                   failure: Optional[str] = None, news: Any = None, read: Optional[dict[str, str]] = None) -> None:
-    """The whole screen. `overlay` is the one open (state.Help, Changelog or SettingsOverlay); `error` the refresh's
+                   failure: Optional[str] = None, news: Any = None, read: Optional[dict[str, str]] = None,
+                   moment: Optional[datetime.datetime] = None) -> None:
+    """The whole screen at `moment` (where None, the model's own update time: the screen never reads the clock). `overlay` is the one open (state.Help, Changelog or SettingsOverlay); `error` the refresh's
     failure, `message` a passing notice; `notice` stands in for the panels when Slotfather is absent or unsupported;
     `failure` is why the selected request's details did not load. A stale model (`stale_since`) is drawn dimmed, with
     the time it went stale in SLOTS' border. `news` and `read` are what's new and its read versions."""
     canvas.scroll = scroll if scroll is not None else {}
-    draw_footer(canvas, model, error, message)
+    if moment is None and model is not None:
+        moment = cast(Optional[datetime.datetime], model.get("updated"))
+    draw_footer(canvas, model, error, message, moment)
     if notice:
         draw_notice(canvas, notice)
         model = None
@@ -65,13 +70,13 @@ def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, ov
         canvas.put(2, 3, f"Queue unavailable: {error}" if error else "Reading the queue…",
                    "bad" if error else "dim", canvas.width - 6)
     if model is not None:
-        draw_panels(canvas, model, selected, cwd, failure)
+        draw_panels(canvas, model, selected, cwd, failure, moment or model["updated"])
     if overlay is not None:
         draw_overlay(canvas, overlay, model, news, read)
 
 
-def draw_panels(canvas: Canvas, model: Model, selected: int, cwd: Optional[str], failure: Optional[str]) -> None:
-    moment = datetime.datetime.now(datetime.timezone.utc)
+def draw_panels(canvas: Canvas, model: Model, selected: int, cwd: Optional[str], failure: Optional[str],
+                moment: datetime.datetime) -> None:
     screen = _layout.overview(canvas.width, canvas.height, _queue.queue_rows(model), _layout.machine_height)
     panels = screen.panels
     canvas.order = screen.order
@@ -85,7 +90,7 @@ def draw_panels(canvas: Canvas, model: Model, selected: int, cwd: Optional[str],
         if name == "requests":
             _queue.draw_requests(canvas, rect, model, selected, moment)
         elif name == "events":
-            _events.draw_events(canvas, rect, model)
+            _events.draw_events(canvas, rect, model, moment)
         elif name == "details":
             _details.draw_detail(canvas, rect, model, selected, cwd, moment, failure)
         elif name == "machine":
@@ -124,7 +129,8 @@ def draw_notice(canvas: Canvas, lines: list[str]) -> None:
 
 
 def render(canvas: Canvas, state: AppState, now: float, notice: Optional[list[str]] = None) -> None:
-    """An app state drawn: the focus, the details' spinner while they load, the thumbs that flash, then the screen."""
+    """An app state drawn at its moment: the focus, the details' spinner while they load, the thumbs that flash, then
+    the screen. The selected entry's lane is in the model already (the reducer joins it, state.settle())."""
     from .. import state as _state
 
     found = _state.items(state)
@@ -136,8 +142,6 @@ def render(canvas: Canvas, state: AppState, now: float, notice: Optional[list[st
         if known is None:
             canvas.loading = int(now * 10)  # a spinner at ten frames a second
         else:
-            if known.lane is not None:
-                item["lane"] = known.lane
             cwd, failure = known.cwd, known.error
     dashboard_draw(canvas, state.model, index, state.overlay, state.refresh.error, cwd, state.scroll, notice,
-                   state.notice.text if state.notice else None, failure, state.news, state.read)
+                   state.notice.text if state.notice else None, failure, state.news, state.read, state.moment)

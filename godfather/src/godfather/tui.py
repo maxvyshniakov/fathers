@@ -27,11 +27,13 @@ from . import theme as _theme
 
 # Styles come from the theme (#14, theme.py): style -> (colour, attributes: b bold, d dim, r reverse), where the
 # colour is None for the terminal's default foreground, a palette index or RGB. Frames are drawn in the muted "dim"
-# token, the same as muted text, so the two cannot drift apart.
+# token, the same as muted text, so the two cannot drift apart. Each canvas carries the theme it is drawn and written
+# in (fathers#138); `current_theme` is only the one a canvas made without a theme takes, for tests and tools.
 current_theme = _theme.resolve(_theme.DEFAULT_MODE, environ={})
 
 
 def set_theme(theme: _theme.Theme) -> None:
+    """The theme a Canvas made without one takes; the app gives each canvas its own."""
     global current_theme
     current_theme = theme
 
@@ -116,15 +118,14 @@ def minutes(seconds: float) -> str:
     return f"{seconds // 60}m" if seconds < 3600 else f"{seconds // 3600}h{seconds // 60 % 60:02}m"
 
 
-def today() -> datetime.date:
-    return datetime.date.today()
-
-
-def clock(moment: datetime.datetime | None) -> str:
+def clock(moment: datetime.datetime | None, now: datetime.datetime | None = None) -> str:
+    """A time of day, its weekday too when it is not on the day of `now` (the moment the screen is drawn at; None:
+    the same day). It never reads the clock (fathers#138)."""
     if moment is None:
         return "--:--:--"
     local = moment.astimezone()
-    return local.strftime("%H:%M:%S" if local.date() == today() else "%a %H:%M")
+    same = now is None or local.date() == now.astimezone().date()
+    return local.strftime("%H:%M:%S" if same else "%a %H:%M")
 
 
 def megabytes(value: float | None) -> str:
@@ -152,7 +153,11 @@ def parse_utc(value: Any) -> datetime.datetime | None:
 class Canvas:
     """A grid of [character, style, selected] cells; a wide character takes its cell and an empty one after it."""
 
-    def __init__(self, width: int, height: int):
+    def __init__(self, width: int, height: int, theme: _theme.Theme | None = None, marks: Any = None):
+        # What it is drawn with (fathers#138): the theme its styles resolve in, and the marks (views.common.Marks) its
+        # views draw, emoji where None
+        self.theme = theme if theme is not None else current_theme
+        self.marks = marks
         self.scroll: dict[str, int] = {}  # each panel's scroll offset this frame is drawn at (state.AppState.scroll)
         self.tables: dict[str, dict[str, Any]] = {}
         self.links: dict[tuple[int, int], str] = {}
@@ -279,7 +284,7 @@ class Canvas:
             parts: list[str] = []
             for text, style, selected, url, at in runs:
                 if colour:
-                    parts.append(sgr(style, selected))
+                    parts.append(sgr(style, selected, self.theme))
                 if at is not None:
                     parts.append(f"  \x1b[{at + 1}G")
                 parts.append(f"\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\" if url and colour else text)
@@ -305,14 +310,16 @@ def safe_link(url: str) -> bool:
         return False
 
 
-def sgr(style: str, selected: bool | str) -> str:
-    """The SGR sequence for a cell. A selected cell has the theme's selection background, or is bold where the
-    theme has none; its text keeps its colour (builtin: default-foreground text turns 252 over its dark band)."""
-    fore, flags = current_theme.styles[style]
+def sgr(style: str, selected: bool | str, theme: _theme.Theme | None = None) -> str:
+    """The SGR sequence for a cell in `theme` (current_theme where None). A selected cell has the theme's selection
+    background, or is bold where the theme has none; its text keeps its colour (builtin: default-foreground text
+    turns 252 over its dark band)."""
+    theme = theme if theme is not None else current_theme
+    fore, flags = theme.styles[style]
     if selected and fore is None:
-        fore = current_theme.selected_text
+        fore = theme.selected_text
     # `selected` is True, or a holder style: a running row's own tint (#15), the neutral selection where it has none
-    back = (current_theme.tints.get(selected) if isinstance(selected, str) else None) or current_theme.selection \
+    back = (theme.tints.get(selected) if isinstance(selected, str) else None) or theme.selection \
         if selected else None
     bold = "b" in flags or (bool(selected) and back is None)
     codes = ["0"] + (["1"] if bold else []) + (["2"] if "d" in flags and fore is None else [])

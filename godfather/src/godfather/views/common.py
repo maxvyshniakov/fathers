@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from typing import Any, Optional, Union, cast
+from typing import Any, NamedTuple, Optional, Union, cast
 
 from .. import theme as _theme
 from .. import tui as _tui
@@ -21,26 +21,43 @@ Item = dict[str, Any]
 MARKS = {"asked": ("❓", "?"), "idle": ("💤", "z"), "hot": ("🔥", "!"), "legacy": ("👨‍🦳", "o"), "running": ("▶️", ">"),
          "yielded": ("↩️", "<"), "waiting": ("⏸️", ".")}
 OLD_FALLBACK = "👴"  # for a terminal that draws 👨‍🦳 as two glyphs (theme.ask() measures it)
-marks = {key: emoji for key, (emoji, _) in MARKS.items()}  # what this terminal is drawn with
 # A request's priority (owner, 2026-11-11): its own column after the state; normal has none, so the column is blank
 PRIORITY_MARKS = {"interactive": ("⚡", "!"), "batch": ("🐌", "~")}
-priority_marks = {key: emoji for key, (emoji, _) in PRIORITY_MARKS.items()}
 # A MACHINE resource's health (owner, 2026-11-12): ok, or critical by the rules that turn its bar red
 HEALTH_MARKS = {"ok": ("🆗", "+"), "hot": ("🔥", "!")}
-health_marks = {key: emoji for key, (emoji, _) in HEALTH_MARKS.items()}
 # A finished run in EVENTS (fathers#108): an outlier above its run type's p90, or one of a run type turning slower
 RUN_MARKS = {"outlier": ("▲", "^"), "slower": ("↗", "/")}
-run_marks = {key: mark for key, (mark, _) in RUN_MARKS.items()}
 
 
-def use_marks(ascii_only: bool, joined: bool = True) -> None:
-    """The QUEUE state column for this terminal: ASCII where it has no UTF-8, 👴 for 👨‍🦳 where it does not join."""
-    marks.update({key: plain if ascii_only else emoji for key, (emoji, plain) in MARKS.items()})
-    priority_marks.update({key: plain if ascii_only else emoji for key, (emoji, plain) in PRIORITY_MARKS.items()})
-    health_marks.update({key: plain if ascii_only else emoji for key, (emoji, plain) in HEALTH_MARKS.items()})
-    run_marks.update({key: plain if ascii_only else mark for key, (mark, plain) in RUN_MARKS.items()})
+class Marks(NamedTuple):
+    """The marks a terminal is drawn with (fathers#138: a value the canvas carries, never a module's state): the
+    QUEUE state, the priority, MACHINE's health and EVENTS' run marks, by key."""
+    state: dict[str, str]
+    priority: dict[str, str]
+    health: dict[str, str]
+    run: dict[str, str]
+
+
+def marks_for(ascii_only: bool = False, joined: bool = True) -> Marks:
+    """The marks for this terminal: ASCII where it has no UTF-8, 👴 for 👨‍🦳 where it does not join."""
+    def pick(table: dict[str, tuple[str, str]]) -> dict[str, str]:
+        return {key: plain if ascii_only else emoji for key, (emoji, plain) in table.items()}
+
+    state = pick(MARKS)
     if not ascii_only and not joined:
-        marks["legacy"] = OLD_FALLBACK
+        state["legacy"] = OLD_FALLBACK
+    return Marks(state, pick(PRIORITY_MARKS), pick(HEALTH_MARKS), pick(RUN_MARKS))
+
+
+EMOJI = marks_for()
+
+
+def marks_of(canvas: _tui.Canvas) -> Marks:
+    """The marks a canvas is drawn with: its own, else the emoji ones."""
+    return canvas.marks if isinstance(canvas.marks, Marks) else EMOJI
+
+
+HOLDER_COLOURS = 8  # the holder colours a theme has when it reserves none (theme.Theme.holders())
 
 
 def entry_ids(items: list[Item]) -> list[tuple[Any, int]]:
@@ -56,15 +73,15 @@ def entry_ids(items: list[Item]) -> list[tuple[Any, int]]:
     return found
 
 
-def dashboard_colours(model: Model, assigned: dict[Any, int]) -> None:
-    """Gives each running lease a colour it keeps until it ends, preferring colours no other lease shows, so the
-    slot bar, the table swatch and the detail heading stay linked as the queue moves. A lease that yields keeps its
-    colour while it waits to resume (fathers#21)."""
+def dashboard_colours(model: Model, assigned: dict[Any, int], count: int = HOLDER_COLOURS) -> None:
+    """Gives each running lease one of `count` colours (the theme's holders(): 8 less any it reserves, or the
+    builtin 6, #14) it keeps until it ends, preferring colours no other lease shows, so the slot bar, the table
+    swatch and the detail heading stay linked as the queue moves. A lease that yields keeps its colour while it waits
+    to resume (fathers#21)."""
     holders = cast(list[Item], model["holders"])
     ids = entry_ids(holders + cast(list[Item], model.get("waiters") or []))
     for key in [key for key in assigned if key not in ids]:
         del assigned[key]
-    count = _tui.current_theme.holders()  # 8 holder colours less any the theme reserves, or the builtin 6 (#14)
     for holder, identity in zip(holders, ids):
         if holder["kind"] != "held":
             continue
@@ -79,21 +96,21 @@ def stale_install(model: Optional[Model]) -> bool:
     return bool(model and model.get("installed") not in (None, _version.running_source()))
 
 
-def fill(style: str) -> str:
-    """A holder's fill token (`f3`) for its ink token (`h3`): what paints blocks, cells, bars and the selection marker;
-    any other style is its own fill."""
+def fill(style: str, theme: _theme.Theme) -> str:
+    """A holder's fill token (`f3`) for its ink token (`h3`) in `theme`: what paints blocks, cells, bars and the
+    selection marker; any other style is its own fill."""
     token = "f" + style[1:]
-    return token if style[:1] == "h" and style[1:].isdigit() and token in _tui.current_theme.styles else style
+    return token if style[:1] == "h" and style[1:].isdigit() and token in theme.styles else style
 
 
-def bar(fraction: float, width: int, style: str) -> list[Part]:
-    """Compact squares leave vertical breathing room between adjacent bar rows."""
+def bar(fraction: float, width: int, style: str, track: str) -> list[Part]:
+    """Compact squares leave vertical breathing room between adjacent bar rows; `track` is the theme's empty cell."""
     width = max(0, width)
     full = max(0, min(width, math.floor(fraction * width + 0.5)))
-    return [("■" * full, style), (_tui.current_theme.track * (width - full), "track")]
+    return [("■" * full, style), (track * (width - full), "track")]
 
 
-def ramp_bar(fraction: float, width: int, critical: bool = False) -> list[Part]:
+def ramp_bar(fraction: float, width: int, critical: bool = False, track: str = "■") -> list[Part]:
     """A MACHINE resource bar: each filled cell in the load chart's indigo-to-red ramp at its place along the bar, so
     a nearly full bar reaches red at its tip; a critical one (🔥) entirely in that red, so full and critical match."""
     width = max(0, width)
@@ -106,7 +123,7 @@ def ramp_bar(fraction: float, width: int, critical: bool = False) -> list[Part]:
             parts[-1] = (parts[-1][0] + "■", style)
         else:
             parts.append(("■", style))
-    return parts + [(_tui.current_theme.track * (width - full), "track")]
+    return parts + [(track * (width - full), "track")]
 
 
 def share(item: Item, model: Model) -> tuple[float, float]:
@@ -196,7 +213,7 @@ def expected_run(item: Item) -> Optional[dict[str, Any]]:
     return expected if expected.get("p50") is not None else None
 
 
-def priority_mark(item: Item) -> str:
+def priority_mark(item: Item, marks: Marks = EMOJI) -> str:
     """⚡ for an interactive request, 🐌 for a batch one (! and ~ in ASCII), nothing for normal: the class it is
     served in, aged (`served`), else the one it asked."""
-    return priority_marks.get(priority_of({"priority": item.get("served") or item.get("priority")}), "")
+    return marks.priority.get(priority_of({"priority": item.get("served") or item.get("priority")}), "")

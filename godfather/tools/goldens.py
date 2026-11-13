@@ -82,7 +82,7 @@ def write_scene() -> None:
     demo = load(ROOT / "tools" / "dashboard-demo.py", "godfather_demo")
     fake = load(ROOT / "tests" / "fake_slotfather.py", "fake_slotfather")
     _, model = demo.load_scene(advance=False)
-    block = stamp({key: value for key, value in model.items() if key != "installed"})
+    block = stamp({key: value for key, value in model.items() if key not in ("installed", "history_window")})
     lanes = {}
     for item in block["holders"] + block["waiters"]:
         lanes[lane_key(item["key"])] = item.pop("lane", None)
@@ -182,10 +182,12 @@ def environment(theme: str | None, scene: Path = SCENE) -> Iterator[None]:
 
 
 def render(name: str, theme: str | None) -> str:
-    """One screen in one theme (None: plain text), as the live view would draw it at the scene's moment."""
-    from godfather import app, state, theme as themes, tui, version
+    """One screen in one theme (None: plain text), as the live view would draw it at the scene's moment: the moment,
+    the lanes and the chart's window go in as data, the theme and marks with the canvas; nothing is patched
+    (fathers#138)."""
+    from godfather import app, state, theme as themes, tui
     from godfather.adapters import slotfather as adapter
-    from godfather.views import common, machine, overlays, overview
+    from godfather.views import common, overlays, overview
 
     width, height, overlay = SCREENS[name]
     selected = 0
@@ -196,35 +198,32 @@ def render(name: str, theme: str | None) -> str:
     read = everything if name.startswith(("overview-", "help-", "settings-", "expected")) else unread
     scene = json.loads((folder / "scene.json").read_text())
     with environment(theme, folder):
-        tui.set_theme(themes.from_environment())
-        common.use_marks(False)
+        palette = themes.from_environment()
         screen = app.Screen()
         model, error = screen.load()
         assert model is not None and error is None, error
-        common.dashboard_colours(model, {})
+        common.dashboard_colours(model, {}, palette.holders())
         for item in model["holders"] + model["waiters"]:
             lane = scene["lanes"].get(lane_key(item["key"]))
             if lane:
                 item["lane"] = lane
+        model["history_window"] = scene["history_window"]
         moment = adapter.parse_time(scene["moment"])
         assert moment is not None
-        clock = load(ROOT / "tests" / "helpers.py", "golden_helpers").frozen(moment)
         shown: object = None
-        with mock.patch.object(tui, "datetime", clock), mock.patch.object(overview, "datetime", clock), \
-                mock.patch.object(machine, "HISTORY_WINDOW", scene["history_window"]), \
-                mock.patch.object(version, "changelog_text", (SCENE / "CHANGELOG.md").read_text):
-            if overlay == "settings":
-                settings = screen.settings(1.0, "auto")
-                settings.location = lambda: "~/.local/state/slotfather"  # type: ignore[method-assign]
-                shown = state.SettingsOverlay(settings)
-            elif overlay and overlay.startswith("changelog"):
-                tool = overlay.partition(":")[2] or "all"
-                shown = state.Changelog(tab=overlays.filters(found).index(tool))
-            elif overlay:
-                shown = state.Help()
-            canvas = tui.Canvas(width, height)
-            overview.dashboard_draw(canvas, model, selected, shown, cwd="~/straylight", news=found, read=read)
-            return canvas.render(theme is not None)
+        if overlay == "settings":
+            settings = screen.settings(1.0, "auto")
+            settings.location = lambda: "~/.local/state/slotfather"  # type: ignore[method-assign]
+            shown = state.SettingsOverlay(settings)
+        elif overlay and overlay.startswith("changelog"):
+            tool = overlay.partition(":")[2] or "all"
+            shown = state.Changelog(tab=overlays.filters(found).index(tool))
+        elif overlay:
+            shown = state.Help()
+        canvas = tui.Canvas(width, height, palette, common.marks_for(False))
+        overview.dashboard_draw(canvas, model, selected, shown, cwd="~/straylight", news=found, read=read,
+                                moment=moment)
+        return canvas.render(theme is not None)
 
 
 def goldens() -> dict[str, str]:

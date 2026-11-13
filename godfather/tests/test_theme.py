@@ -524,29 +524,28 @@ class DrawingTests(unittest.TestCase):
         self.assertEqual("\x1b[0;38;5;252;48;2;56;62;74m", self.tool.sgr("text", True))
 
     def test_tracks_and_free_slots_without_surface_colours(self) -> None:
-        self.tool.set_theme(theme.resolve("auto", None, {}))
-        self.assertEqual([("■■", "accent"), ("░░░", "track")], self.tool.bar(0.4, 5, "accent"))
-        self.assertEqual(("╭──╮", "▭"), (self.tool.free_slot(4), self.tool.free_slot(1)))
-        self.tool.set_theme(theme.resolve("auto", None, DARK_ENV))
-        self.assertEqual([("■■", "accent"), ("■■■", "track")], self.tool.bar(0.4, 5, "accent"))
-        self.assertEqual("🮅🮅🮅🮅", self.tool.free_slot(4))
+        plain = theme.resolve("auto", None, {})
+        self.assertEqual([("■■", "accent"), ("░░░", "track")], self.tool.bar(0.4, 5, "accent", plain.track))
+        self.assertEqual(("╭──╮", "▭"), (self.tool.free_slot(4, plain.free), self.tool.free_slot(1, plain.free)))
+        dark = theme.resolve("auto", None, DARK_ENV)
+        self.assertEqual([("■■", "accent"), ("■■■", "track")], self.tool.bar(0.4, 5, "accent", dark.track))
+        self.assertEqual("🮅🮅🮅🮅", self.tool.free_slot(4, dark.free))
         self.assertEqual("o", "▭".translate(self.tool.ASCII))
 
     def test_builtin_keeps_six_colours_and_gives_a_freed_one_first(self) -> None:
         def holders(count: int) -> list[dict[str, Any]]:
             return [dict(key=n, kind="held") for n in range(count)]
 
-        self.tool.set_theme(theme.resolve("builtin", None, {}))
+        builtin = theme.resolve("builtin", None, {}).holders()
         assigned: dict[Any, int] = {}
         model = {"holders": holders(7)}
-        self.tool.dashboard_colours(model, assigned)
+        self.tool.dashboard_colours(model, assigned, builtin)
         self.assertEqual([f"h{n}" for n in (0, 1, 2, 3, 4, 5, 0)], [h["style"] for h in model["holders"]])
         model = {"holders": [h for h in holders(7) if h["key"] != 1] + [dict(key=7, kind="held")]}
-        self.tool.dashboard_colours(model, assigned)
+        self.tool.dashboard_colours(model, assigned, builtin)
         self.assertEqual("h1", model["holders"][-1]["style"], "the colour the ended lease freed")
-        self.tool.set_theme(theme.resolve("auto", None, {}))
         model = {"holders": holders(9)}
-        self.tool.dashboard_colours(model, {})
+        self.tool.dashboard_colours(model, {}, theme.resolve("auto", None, {}).holders())
         self.assertEqual([f"h{n}" for n in range(8)] + ["h0"], [h["style"] for h in model["holders"]])
 
 

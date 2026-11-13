@@ -20,11 +20,11 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from helpers import ROOT, frozen_at, timezone
+from helpers import ROOT, timezone
 
 from godfather import app, sources, state, tui
 from godfather.adapters import slotfather as adapter
-from godfather.views import common, machine, overlays, overview
+from godfather.views import common, overlays, overview
 
 
 FIXTURE = ROOT / "tests" / "fixtures" / "parity"
@@ -62,29 +62,26 @@ class ParityTests(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, dict(keep, GODFATHER_FIXTURES=str(self.out)), clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
-        tui.set_theme(app._theme.from_environment(environ={}))
-        history = mock.patch.object(machine, "HISTORY_WINDOW", self.scene["history_window"])
-        history.start()
-        self.addCleanup(history.stop)
-        self.addCleanup(common.use_marks, False)
+        self.theme = app._theme.from_environment(environ={})
 
     def model(self) -> dict[str, Any]:
         model, error = app.Screen().load()
         self.assertIsNone(error)
         assert model is not None
-        common.dashboard_colours(model, {})
+        common.dashboard_colours(model, {}, self.theme.holders())
         for item in model["holders"] + model["waiters"]:
             item["lane"] = self.scene["lanes"][json.dumps(list(item["key"]))]
             if item["lane"] is None:
                 del item["lane"]
+        model["history_window"] = self.scene["history_window"]
         return model
 
     def canvas(self, width: int, height: int, ascii_only: bool, selected: int, help_open: bool = False) -> tui.Canvas:
         model = self.model()
-        common.use_marks(ascii_only)
-        with timezone("Etc/GMT-2"), frozen_at(adapter.parse_time(self.scene["moment"])):  # type: ignore[arg-type]
-            canvas = tui.Canvas(width, height)
-            overview.dashboard_draw(canvas, model, selected, state.Help() if help_open else None, cwd="~/straylight")
+        with timezone("Etc/GMT-2"):
+            canvas = tui.Canvas(width, height, self.theme, common.marks_for(ascii_only))
+            overview.dashboard_draw(canvas, model, selected, state.Help() if help_open else None, cwd="~/straylight",
+                                    moment=adapter.parse_time(self.scene["moment"]))
             return canvas
 
     def render(self, width: int, height: int, colour: bool, ascii_only: bool, selected: int,
