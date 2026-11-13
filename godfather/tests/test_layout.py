@@ -35,20 +35,20 @@ class OverviewTests(unittest.TestCase):
                         "details": (0, 94, 10, 62), "machine": (10, 94, 6, 62)}, ("requests", "events", "details")),
         ((156, 16, 1), {"slots": (0, 0, 5, 93), "requests": (5, 0, 5, 93), "events": (10, 0, 5, 93),
                         "details": (0, 94, 15, 62)}, ("requests", "events", "details")),
-        # wide and too short for EVENTS under QUEUE (fathers#140): QUEUE at its rows, MACHINE's compact line in the
-        # rows left under it, DETAILS the whole right column; with under three rows left, QUEUE takes them
+        # wide and too short for EVENTS under QUEUE (fathers#140): QUEUE at its rows less what MACHINE's three-row
+        # compact form needs, MACHINE under it, DETAILS the whole right column; never a padded QUEUE
         ((156, 14, 1), {"slots": (0, 0, 5, 93), "requests": (5, 0, 5, 93), "machine": (10, 0, 3, 93),
                         "details": (0, 94, 13, 62)}, ("requests", "details")),
         ((156, 20, 6), {"slots": (0, 0, 5, 93), "requests": (5, 0, 10, 93), "machine": (15, 0, 4, 93),
                         "details": (0, 94, 19, 62)}, ("requests", "details")),
         ((156, 19, 6), {"slots": (0, 0, 5, 93), "requests": (5, 0, 10, 93), "machine": (15, 0, 3, 93),
                         "details": (0, 94, 18, 62)}, ("requests", "details")),
-        ((156, 18, 6), {"slots": (0, 0, 5, 93), "requests": (5, 0, 12, 93), "details": (0, 94, 10, 62),
-                        "machine": (10, 94, 7, 62)}, ("requests", "details")),
+        ((156, 18, 6), {"slots": (0, 0, 5, 93), "requests": (5, 0, 9, 93), "machine": (14, 0, 3, 93),
+                        "details": (0, 94, 17, 62)}, ("requests", "details")),
         ((156, 21, 6), {"slots": (0, 0, 5, 93), "requests": (5, 0, 10, 93), "events": (15, 0, 5, 93),
                         "details": (0, 94, 13, 62), "machine": (13, 94, 7, 62)}, ("requests", "events", "details")),
-        ((110, 14, 8), {"slots": (0, 0, 5, 57), "events": (5, 0, 8, 57), "details": (0, 58, 13, 52)},
-         ("requests", "events", "details")),
+        ((110, 14, 8), {"slots": (0, 0, 5, 57), "requests": (5, 0, 5, 57), "machine": (10, 0, 3, 57),
+                        "details": (0, 58, 13, 52)}, ("requests", "details")),
         # one column: QUEUE, DETAILS, then EVENTS beside MACHINE from 83 columns, MACHINE alone below
         ((109, 40, 1), {"slots": (0, 0, 5, 109), "requests": (5, 0, 5, 109), "details": (10, 0, 18, 109),
                         "events": (28, 0, 11, 54), "machine": (28, 55, 11, 54)}, ("requests", "details", "events")),
@@ -100,6 +100,28 @@ class OverviewTests(unittest.TestCase):
         beside = [width for width in range(60, 120) if "events" in layout.overview(width, 40, 1, natural).panels]
         self.assertEqual(83, beside[0], "EVENTS beside MACHINE from 83 columns")
         self.assertEqual(62, next(width for width in range(30, 120) if layout.machine_side_by_side(width)))
+
+
+class ShortWideTests(unittest.TestCase):
+    """fathers#140 review: as a wide terminal grows taller for a fixed queue, EVENTS once shown stays, MACHINE
+    moves from under QUEUE to the right column at most once, and QUEUE never has more rows than its own."""
+
+    def test_panels_come_in_order_as_the_height_grows(self) -> None:
+        for rows in (1, 3, 6, 12, 20, 40):
+            shown, right = False, False
+            for height in range(layout.SMALL_HEIGHT, 70):
+                with self.subTest(rows=rows, height=height):
+                    panels = layout.overview(156, height, rows, natural).panels
+                    self.assertFalse(shown and "events" not in panels, "EVENTS went again")
+                    shown = shown or "events" in panels
+                    machine = panels.get("machine")  # the usual tier drops it on the shortest right columns
+                    left = machine is not None and machine.x == 0
+                    self.assertFalse(right and left, "MACHINE came back to the left")
+                    right = right or (machine is not None and machine.x > 0)
+                    self.assertEqual(not shown, left, "MACHINE is under QUEUE exactly while EVENTS is not shown")
+                    self.assertLessEqual(panels["requests"].height, layout.queue_height(rows), "no padded QUEUE")
+                    if not shown:
+                        self.assertEqual(height - 1, panels["details"].height, "DETAILS the whole column")
 
 
 class TabOrderTests(unittest.TestCase):

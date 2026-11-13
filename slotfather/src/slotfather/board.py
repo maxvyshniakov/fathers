@@ -171,10 +171,14 @@ def queue_events(directory: Path) -> list[dict[str, Any]]:
     # The current part, and the end of the rotated one (queue.log.1, fathers#123) where the current is shorter than
     # the part read. `cut` where the log was not read whole: cut, or a rotated part exists (lines
     # older than it are gone).
-    data, cut, begin = b"", False, 0
+    data, cut, begin, seen = b"", False, 0, None
     for name in ("queue.log", "queue.log.1"):
         try:
             with open(directory / name, "rb") as handle:
+                found = os.fstat(handle.fileno())
+                if (found.st_dev, found.st_ino) == seen:
+                    break  # rotated between the two reads: queue.log.1 is the file just read
+                seen = (found.st_dev, found.st_ino)
                 begin = max(0, handle.seek(0, os.SEEK_END) - (LOG_TAIL - len(data)))
                 handle.seek(begin)
                 part = handle.read()

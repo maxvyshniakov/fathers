@@ -22,11 +22,14 @@ Versions and release rules: [README.md](README.md#versions).
 - The panel Tab focuses shows without colour too: its top and bottom borders are heavy rules (`┍━ QUEUE ━━┑`, `=`
   in ASCII) as well as blue, and its sides stay light, so the heavy `┃` still marks only the selected row
   (fathers#139).
-- A wide terminal too short for EVENTS under QUEUE (156×20 with six queue rows) keeps QUEUE at its rows, puts
-  MACHINE's one-line form under it and gives DETAILS the whole right column, instead of padding QUEUE with empty rows
-  while DETAILS was cut short (fathers#140).
-- MACHINE's history chart says it shows `slots held`: beside the gauges in the blank row above it, so its rows no
-  longer read as sparklines of load, mem and swap; under them in its axis line (fathers#140).
+- A wide terminal too short for EVENTS under QUEUE (156×20 with six queue rows) keeps QUEUE at its rows (less at
+  most two that MACHINE's three-row form needs), puts MACHINE's one-line form under it and gives DETAILS the whole
+  right column, instead of padding QUEUE with empty rows while DETAILS was cut short. EVENTS comes in from the height
+  that gives it its least rows, and as the terminal grows taller panels only ever arrive (fathers#140).
+- MACHINE's history chart says it shows `slots held`. Beside the gauges the title and its figures
+  (`slots held  avg 4.4/6 · peak 6 · full 10%`) sit in the blank row above it and its axis line keeps only the window
+  and `now`, so neither its rows nor its figures line up with load, mem and swap; stacked under the gauges, the
+  bottom border names it and the axis line keeps every figure (fathers#140).
 - Screenshots and the README media come from `tools/raster.py`, Godfather's own cell rasterizer, with no browser,
   terminal or machine slot: box drawing and blocks are geometry snapped to each cell, so rounded corners and joins
   meet their lines and bars have no seams at fractional cell widths; emoji such as 🆗 are drawn in colour across

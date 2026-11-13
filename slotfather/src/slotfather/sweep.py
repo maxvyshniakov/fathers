@@ -267,7 +267,7 @@ def table() -> dict[int, Proc]:
     """Every process: one ps over the machine in the C locale (lstart in the words every client writes)."""
     try:
         result = subprocess.run(["ps", "-ax", "-ww", "-o", "pid=,ppid=,uid=,rss=,tty=,lstart=,command="],
-                                capture_output=True, text=True, env={**os.environ, "LC_ALL": "C"}, timeout=TIMEOUT)
+                                capture_output=True, text=True, env=_platform.c_locale(), timeout=TIMEOUT)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise SweepError(f"ps: {error}") from None
     return parse_table(result.stdout)
@@ -888,7 +888,7 @@ def identities(pids: list[int]) -> dict[int, tuple[str, bool]]:
         return {}
     try:
         result = subprocess.run(["ps", "-o", "pid=,stat=,lstart=", "-p", ",".join(map(str, pids))],
-                                capture_output=True, text=True, env={**os.environ, "LC_ALL": "C"}, timeout=TIMEOUT)
+                                capture_output=True, text=True, env=_platform.c_locale(), timeout=TIMEOUT)
     except (OSError, subprocess.TimeoutExpired):
         return {}
     found = {}

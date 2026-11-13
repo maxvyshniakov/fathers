@@ -73,9 +73,11 @@ colour emoji font, the same pixels for the same cells. A live screen:
 `godfather --once --color --width 100 --height 40 | python3 tools/raster.py - screen.png`.
 
 `GODFATHER_FIXTURES=DIR` replaces every tool call with recorded replies (`tests/fixtures/scene/` is the README
-scene) and records writes instead of making them. `tests/test_parity.py` compares Godfather, cell by cell but the
-footer and EVENTS, with Slotfather's in-tree dashboard on Slotfather's own demo scene, from the same model; that
-dashboard is gone upstream, so its output is a frozen fixture from Slotfather 37c4df7
+scene) and records writes instead of making them. `tests/test_parity.py` compares Godfather, cell by cell, with
+Slotfather's in-tree dashboard on Slotfather's own demo scene, from the same model, but for what Godfather changed on
+purpose: the footer, EVENTS, the focused panel's heavy rules (fathers#139) and where MACHINE says its chart shows
+slots held (fathers#140: beside the gauges its title row and axis line, stacked the label in its bottom border).
+That dashboard is gone upstream, so its output is a frozen fixture from Slotfather 37c4df7
 ([tests/fixtures/parity/](tests/fixtures/parity)).
 
 ## Versions

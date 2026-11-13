@@ -126,13 +126,17 @@ def ordered(items: list[Item]) -> tuple[Item, ...]:
     return tuple(item for _, item in indexed)
 
 
-def own(text: Optional[str] = None, stale: Optional[bool] = None) -> tuple[Installed, list[Item]]:
-    """Godfather's row and its entries, Unreleased ones too (the running commit's), from its own CHANGELOG.md."""
+def own(text: Optional[str] = None, stale: Optional[bool] = None,
+        commit: Optional[str] = None) -> tuple[Installed, list[Item]]:
+    """Godfather's row and its entries, Unreleased ones too (the running commit's, or `commit`), from its own
+    CHANGELOG.md."""
     text = _version.changelog_text() if text is None else text
     if stale is None:
         installed = _version.installed_source()
         stale = installed is not None and installed != _version.running_source()
-    commit = str(_version.running_identity().get("commit") or "")[:7]
+    if commit is None:
+        commit = str(_version.running_identity().get("commit") or "")
+    commit = commit[:7]
     items: list[Item] = []
     for release in parse_changelog(text):
         for section, entries in release.sections:
@@ -190,9 +194,10 @@ def tool(name: str) -> tuple[Installed, list[Item]]:
     return Installed(name, None, "failed", problem), []
 
 
-def load(text: Optional[str] = None, stale: Optional[bool] = None) -> News:
-    """Every tool's news, Godfather's first: what the overlay and the footer show."""
-    row, items = own(text, stale)
+def load(text: Optional[str] = None, stale: Optional[bool] = None, commit: Optional[str] = None) -> News:
+    """Every tool's news, Godfather's first: what the overlay and the footer show; `commit` stands in for the running
+    one (the goldens and the demo, so a commit changes no picture)."""
+    row, items = own(text, stale, commit)
     rows = [row]
     for name in TOOLS[1:]:
         found, more = tool(name)
