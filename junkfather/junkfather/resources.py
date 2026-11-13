@@ -251,8 +251,8 @@ def routes(status: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
         for host_port, site in web.items():
             if not host_port.endswith(f":{port}") or not isinstance(site, dict):
                 continue
-            for path, value in as_dict(as_dict(site).get("Handlers")).items():
-                handler = as_dict(value)
+            for path, raw in as_dict(as_dict(site).get("Handlers")).items():
+                handler = as_dict(raw)
                 target = handler.get("Proxy") or handler.get("Path") or handler.get("Text") if handler else None
                 found[f"{proto}:{port}" + ("" if path == "/" else path)] = {"target": target}
     return found
