@@ -219,7 +219,8 @@ def effective_priority(entry: Entry, settings: dict[str, Any] | None = None, mom
     entry.ageing_since(): a class set by `reprioritize` holds for its own steps. A held lease, and any entry without
     `settings` or `moment`, keeps its own class."""
     cls = _entry.priority_of(entry)
-    if settings is None or moment is None or _entry.is_held(entry):
+    # by its state alone: the plan gets known entries (leases.reap()), and a partial one here is a caller's copy
+    if settings is None or moment is None or entry.get("state") == _entry.HELD:
         return cls
     began = _entry.ageing_since(entry)
     if began is None:
@@ -425,7 +426,7 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
     deadline = math.inf  # with a limit, when the head has waited it: from then on nothing passes
 
     def quiet(free: int, entry: Entry) -> str:
-        return f"{free} of {slots} slots free; {entry['label']} is batch and lets the normal and interactive " \
+        return f"{free} of {slots} slots free; {entry.get('label')} is batch and lets the normal and interactive " \
                "requests that wait go first"
 
     def promise() -> int:
@@ -497,19 +498,19 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
                     # (#5): nothing passes then, but the leases it waits for still run on.
                     found.head = None
                     clock = time.strftime("%H:%M:%S", time.localtime(gives_up))
-                    found.reason = found.reason or (f"{free} of {slots} slots free; {entry['label']} gives up at "
+                    found.reason = found.reason or (f"{free} of {slots} slots free; {entry.get('label')} gives up at "
                                                     f"{clock}, before they are expected, so requests that fit pass it")
                     continue
             if reserve_head or _entry.reservation(entry) is None:
                 extra = promise()
             else:
                 found.reserved = _entry.reservation(entry)
-            found.reason = (f"{free} of {slots} slots free; {entry['label']} is next, and a later request that fits "
-                            f"starts first only if it ends before {entry['label']} can start")
+            found.reason = (f"{free} of {slots} slots free; {entry.get('label')} is next, and a later request that fits "
+                            f"starts first only if it ends before {entry.get('label')} can start")
             continue
         until = time.strftime("%H:%M:%S", time.localtime(queued + window))
         found.reason = found.reason or (f"{free} of {slots} slots free; requests that fit may pass "
-                                        f"{entry['label']} until {until}")
+                                        f"{entry.get('label')} until {until}")
     return found
 
 

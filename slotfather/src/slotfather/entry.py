@@ -64,32 +64,62 @@ PRESSED = "pressed"  # on an entry granted while memory was not normal (memory_l
 # Phases: what an entry is to a reader, worked out from its state and what lies beside it.
 YIELDED = "yielded"  # waiting again after a yield
 ASKED = "asked"  # held, with a yield request standing
+UNKNOWN = "unknown"  # an entry this client does not know (unknown()): left alone
+
+NEEDED = (("pid", int), ("start", str), ("count", int), ("since", str))  # what the scheduler reads of every entry
 
 
 class Phase(NamedTuple):
-    name: str  # WAITING, YIELDED, HELD or ASKED
+    name: str  # WAITING, YIELDED, HELD, ASKED or UNKNOWN
     idle: bool  # a held lease below the idle threshold for the idle duration (idle.idle_since())
 
 
+def unknown(entry: Mapping[str, Any]) -> str | None:
+    """Why this client does not know an entry, or None when it does (fathers#19): a state other than waiting and
+    held (a newer client's, perhaps), no state, or a field the scheduler needs (NEEDED) missing or of another type.
+    Such an entry may be a live lease of a newer client: it is never granted, reaped, ranked or deleted, its slots
+    count neither held nor free, and `status` shows it."""
+    if "state" not in entry:
+        return "no state"
+    state = entry.get("state")
+    if state not in (WAITING, HELD):
+        return f"state {state!r}" if isinstance(state, str) else "a state that is not text"
+    for field, kind in NEEDED:
+        value = entry.get(field)
+        if type(value) is not kind:
+            return f"no {field}" if value is None else f"a {field} that is not {kind.__name__}"
+    return None
+
+
 def is_held(entry: Mapping[str, Any]) -> bool:
-    """Whether the entry holds its slots. Everything else waits."""
-    return entry.get("state") == HELD
+    """Whether the entry holds its slots: a known entry (unknown()) whose state is held."""
+    return entry.get("state") == HELD and unknown(entry) is None
+
+
+def is_waiting(entry: Mapping[str, Any]) -> bool:
+    """Whether the entry waits for its slots: a known entry whose state is waiting (after a yield too)."""
+    return entry.get("state") == WAITING and unknown(entry) is None
 
 
 def phase(entry: Mapping[str, Any], asked: bool = False, idle_since: float | None = None) -> Phase:
-    """The entry's phase: held (asked, when a yield request stands beside it), or waiting (yielded, when it is back
-    in the queue after a yield); idle for a held lease idle since `idle_since`."""
+    """The entry's phase: held (asked, when a yield request stands beside it), waiting (yielded, when it is back
+    in the queue after a yield), or unknown (unknown()); idle for a held lease idle since `idle_since`."""
     if is_held(entry):
         return Phase(ASKED if asked else HELD, idle_since is not None)
-    return Phase(YIELDED if "yielded_at" in entry else WAITING, False)
+    if is_waiting(entry):
+        return Phase(YIELDED if "yielded_at" in entry else WAITING, False)
+    return Phase(UNKNOWN, False)
 
 
 def split(entries: Iterable[Record]) -> tuple[list[Record], list[Record]]:
-    """(held, waiting) of `entries`, each in their order."""
+    """(held, waiting) of `entries`, each in their order; an unknown entry is in neither."""
     held: list[Record] = []
     waiting: list[Record] = []
     for entry in entries:
-        (held if is_held(entry) else waiting).append(entry)
+        if is_held(entry):
+            held.append(entry)
+        elif is_waiting(entry):
+            waiting.append(entry)
     return held, waiting
 
 

@@ -124,6 +124,22 @@ def write(path: Path, entry: Any) -> None:
             os.close(directory)
 
 
+def unknown(directory: Path) -> list[tuple[Path, dict[str, Any]]]:
+    """Queue entries that read but that this client does not know (entry.unknown(); fathers#19), in queue order: a
+    state it does not know, no state, or a field the scheduler needs missing (entries() leaves out one without an
+    int count). Nothing grants, reaps or removes them: one may be a newer client's live lease. `status` reports
+    them."""
+    found: list[tuple[Path, dict[str, Any]]] = []
+    for path in sorted((directory / "queue").glob("*.json")):
+        try:
+            entry: object = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue  # unreadable(), or gone
+        if isinstance(entry, dict) and _entry.unknown(cast(dict[str, Any], entry)) is not None:
+            found.append((path, cast(dict[str, Any], entry)))
+    return found
+
+
 def unreadable(directory: Path) -> list[Path]:
     """Queue entries that do not read as one (empty or torn by a crash, or not JSON). entries() leaves them out and
     nothing removes them: one may be a newer client's live lease. `status` reports them."""

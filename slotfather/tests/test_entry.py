@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """The queue entry module (fathers#33): its phase, its accessors and its transitions, and a property test that random
 grant, yield, resume, reprioritize and release sequences leave the same entries through the live functions as
-through the transitions the replay applies (tools/replay.py)."""
+through the transitions the replay applies (tools/replay.py), and leave an entry this client does not know as it
+was (fathers#19)."""
 from __future__ import annotations
 import sys as _path_sys
 from pathlib import Path as _Path
@@ -154,7 +155,9 @@ class SequenceTests(unittest.TestCase):
     queue's plan keeps."""
 
     def live(self, queue: Queue) -> dict[str, dict[str, Any]]:
-        return {path.name: json.loads(path.read_text()) for path in sorted((queue.directory / "queue").glob("*.json"))}
+        """The entries this client knows; an unknown one (fathers#19) is checked on its own."""
+        found = {path.name: json.loads(path.read_text()) for path in sorted((queue.directory / "queue").glob("*.json"))}
+        return {name: entry for name, entry in found.items() if sf_entry.unknown(entry) is None}
 
     def granted(self, queue: Queue, mirror: dict[str, dict[str, Any]], done: list[str]) -> None:
         for name, entry in self.live(queue).items():
@@ -181,6 +184,11 @@ class SequenceTests(unittest.TestCase):
         with queue.running(), mock.patch.object(sf_leases, "held_again", unknown):
             with sf_state.locked(queue.directory):
                 sf_state.save_order(dict(sf_config.ORDER_DEFAULTS, **AGES_OFF), queue.directory)
+            # Half the sequences carry a newer client's entry (a state this one does not know), alive or not: it
+            # must stay as it is through every step (fathers#19).
+            strange = queue.entry(next(pids), "strange", rng.randint(1, 4), "paused", since=-60,
+                                  alive=rng.random() < 0.5) if seed % 2 else None
+            kept = strange.read_bytes() if strange else b""
             for step in range(30):
                 queue.clock += rng.choice([1.0, 5.25, 30.5, 120.0, 600.125])
                 live = self.live(queue)
@@ -226,6 +234,8 @@ class SequenceTests(unittest.TestCase):
                     self.granted(queue, mirror, done)
                     done.append("release")
                 self.same(queue, mirror, f"seed {seed} step {step} {op}")
+                if strange:
+                    self.assertEqual(kept, strange.read_bytes(), f"seed {seed} step {step} {op}: left alone")
         return done
 
     def test_live_transitions_leave_what_the_replay_applies(self) -> None:

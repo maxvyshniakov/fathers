@@ -411,7 +411,12 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
             "admission": admission,
             "order": order, "start": start, "reserved": reserved, "limit": settings["limit"],
             "memory": memory_facts(), "history": held_history(events, own_held, moment), "events": events[-60:],
-            "updated": moment}
+            "updated": moment,
+            # Entries this client does not know (fathers#19): left alone, in no row and no count, shown with a warning
+            "unknown": [{"id": path.stem, "lease": str(path), "label": dashboard_text(str(e.get("label") or "")),
+                         "pid": e.get("pid"), "state": e.get("state"), "count": e.get("count"),
+                         "reason": _entry.unknown(e), "warning": dashboard_text(_query.unknown_text(path, e))}
+                        for path, e in look.unknown]}
 
 
 def stamp(moment: datetime.datetime) -> str:
