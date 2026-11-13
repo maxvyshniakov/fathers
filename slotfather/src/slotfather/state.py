@@ -175,7 +175,7 @@ def record(directory: Path, entry: dict[str, Any], outcome: str, status: int | N
         item.update(cores=_config.cores(), capacity=_config.total())
     item.update(usage or {})
     if entry.get("yields"):
-        yielded = float(entry.get("yielded") or 0)
+        yielded = _entry.yielded_of(entry)
         away = _entry.epoch(entry.get("yielded_at"))
         item.update(yields=int(entry["yields"]), yielded=round(yielded + (max(0.0, ended - away) if away else 0), 2))
     if entry.get("until"):

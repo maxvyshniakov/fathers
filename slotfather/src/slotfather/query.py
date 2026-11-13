@@ -42,6 +42,7 @@ class Look(NamedTuple):
     legacy: list[tuple[Path, dict[str, Any], int]]
     asks: dict[int, dict[str, Any] | None]  # id() of an entry in `live` -> its yield request
     unknown: tuple[tuple[Path, dict[str, Any]], ...] = ()
+    reserved: tuple[tuple[Path, dict[str, Any], int], ...] = ()  # the unknown ones whose holder is alive
 
     def asked_of(self, entry: dict[str, Any]) -> dict[str, Any] | None:
         return self.asks.get(id(entry))
@@ -57,18 +58,20 @@ def look(directory: Path | None = None) -> Look:
         basis: dict[str, Any] = _config.capacity_basis()
         requests = [_state.asked(path) for path, _ in found]
         strange = tuple(_state.unknown(directory))
+        kept = tuple(_leases.reserved(directory, table))
     marked = idle_of(directory, found)
     live = [dict(entry, idle_since=marked.get(id(entry))) if _entry.is_held(entry) else entry
             for _, entry in found]
     return Look(directory, table, found, live, basis, _leases.legacy_holders(table),
-                {id(entry): request for entry, request in zip(live, requests)}, strange)
+                {id(entry): request for entry, request in zip(live, requests)}, strange, kept)
 
 
 def locked_snapshot(directory: Path | None = None) -> tuple[list[dict[str, Any]], list[tuple[Path, dict[str, Any], int]],
                                                            dict[int, tuple[int, str]], dict[str, Any]]:
-    """look() as (live entries, earlier queues' holders, process table, capacity basis)."""
+    """look() as (live entries, the slots held without a known entry: earlier queues' holders and live unknown
+    entries (leases.reserved()), process table, capacity basis)."""
     found = look(directory)
-    return found.live, found.legacy, found.table, found.basis
+    return found.live, [*found.legacy, *found.reserved], found.table, found.basis
 
 
 def idle_of(directory: Path, live: list[tuple[Path, dict[str, Any]]]) -> dict[int, float | None]:
@@ -143,9 +146,10 @@ def status_lines(directory: Path | None = None) -> list[str]:
         live = _leases.reap(directory, table)
         slots = _config.total()
         strange = _state.unknown(directory)
+        kept = _leases.reserved(directory, table)
     legacy = _leases.legacy_holders(table)
     marked = idle_of(directory, live)
-    expect = outlook(directory, [e for _, e in live], slots, sum(c for _, _, c in legacy))
+    expect = outlook(directory, [e for _, e in live], slots, sum(c for _, _, c in [*legacy, *kept]))
     lines: list[str] = []
     for path, e in live:
         meta = _entry.meta_of(e)
@@ -167,15 +171,28 @@ def status_lines(directory: Path | None = None) -> list[str]:
               for path, e, count in legacy]
     lines += [f"unreadable: queue/{path.name} (empty or not JSON; left in place)"
               for path in _state.unreadable(directory)]
-    lines += [f"unknown: {unknown_text(path, e)}" for path, e in strange]
-    used = held_slots([e for _, e in live], legacy, slots)
+    lines += [f"unknown: {unknown_text(path, e, table)}" for path, e in strange]
+    used = held_slots([e for _, e in live], [*legacy, *kept], slots)
     return lines + [held_line(used, slots)]
 
 
-def unknown_text(path: Path, entry: dict[str, Any]) -> str:
-    """The warning for an entry this client does not know (fathers#19): its file, why, and what it is said to be."""
-    return (f"queue/{path.name} ({_entry.unknown(entry)}; label={entry.get('label')} pid={entry.get('pid')}): "
-            f"this client does not know it and leaves it alone; a newer client may hold it")
+def unknown_holds(entry: dict[str, Any], table: dict[int, tuple[int, str]]) -> int:
+    """The slots an unknown entry holds now: its count while its holder is alive (leases.reserved()), else 0."""
+    count = _entry.reserved(entry)
+    return count if count and _platform.alive(entry, table) else 0
+
+
+def unknown_text(path: Path, entry: dict[str, Any], table: dict[int, tuple[int, str]]) -> str:
+    """The warning for an entry this client does not know (fathers#19): its file, why, what it is said to be, what
+    it holds, and how to clear it when its holder is gone."""
+    found = (f"queue/{path.name} ({_entry.unknown(entry)}; label={entry.get('label')} pid={entry.get('pid')}): "
+             f"this client does not know it and leaves it alone")
+    holds = unknown_holds(entry, table)
+    if holds:
+        return found + f"; its holder runs, so its {holds} slot(s) stay reserved"
+    if _entry.checkable(entry):
+        return found + f"; its holder is not running: remove {path} to clear it"
+    return found + f"; its holder cannot be checked, so it reserves no slots: remove {path} once no client holds it"
 
 
 def entry_item(path: Path, entry: dict[str, Any], table: dict[int, tuple[int, str]]) -> dict[str, Any]:
@@ -195,7 +212,8 @@ def unknown_item(path: Path, entry: dict[str, Any], table: dict[int, tuple[int, 
     "unknown", the reason, and none of the order's (no position, forecast or class served)."""
     item = entry_item(path, dict(entry, yields=None), table)
     item.update(yield_asked=None, position=None, idle_since=None, phase=_entry.UNKNOWN,
-                unknown=_entry.unknown(entry), warning=unknown_text(path, entry),
+                unknown=_entry.unknown(entry), holds=unknown_holds(entry, table),
+                warning=unknown_text(path, entry, table),
                 effective_priority=item["priority"], aged=False, reprioritized=None, est_start=None, head=False,
                 reserved=None, waited=None, long_wait=False, memory_wait=None)
     return item
@@ -241,11 +259,11 @@ def long_wait_report(directory: Path, path: Path) -> tuple[str, dict[str, Any]] 
         table = _leases.process_table(directory, log=False)
         live = _leases.reap(directory, table)
         slots = _config.total()
+        other = _leases.used_elsewhere(directory, table)
     mine = next((e for p, e in live if p == path), None)
     if mine is None or _entry.is_held(mine):
         return None
-    legacy = _leases.legacy_holders(table)
-    expect = outlook(directory, [e for _, e in live], slots, sum(c for _, _, c in legacy)).get(id(mine))
+    expect = outlook(directory, [e for _, e in live], slots, other).get(id(mine))
     if expect is None:
         return None
     settings = _schedule.order_settings(directory)
@@ -321,6 +339,7 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
         directory, table, slots = look.directory, look.table, int(look.basis["slots"])
         live = look.found
         strange = list(look.unknown)
+        kept = list(look.reserved)
         marked = {id(entry): item.get("idle_since") for (_, entry), item in zip(look.found, look.live)}
         asks = {id(entry): look.asked_of(item) for (_, entry), item in zip(look.found, look.live)}
     else:
@@ -330,6 +349,7 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
             live = _leases.reap(directory, table)
             slots = _config.total()
             strange = _state.unknown(directory)
+            kept = _leases.reserved(directory, table)
         marked = idle_of(directory, live)
     entries_found: list[dict[str, Any]] = []
     for path, entry in live:
@@ -348,7 +368,7 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
     places = {id(e): n for n, e in enumerate(serving, 1)}
     earlier = _leases.legacy_holders(table)
     # A guard asking about one process (--pid) needs no forecast.
-    expect = outlook(directory, [e for _, e in live], slots, sum(c for _, _, c in earlier), moment) \
+    expect = outlook(directory, [e for _, e in live], slots, sum(c for _, _, c in [*earlier, *kept]), moment) \
         if pid is None else {}
     known = None
     if pid is None:  # expected runs per run type (fathers#106); not for a guard asking about one process
@@ -376,8 +396,8 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
         legacy.append({"id": path.stem, "lease": str(path), "state": "held", "count": count,
                        "label": entry.get("label"), "pid": entry.get("pid"), "pgid": _platform.process_group(entry.get("pid")),
                        "tree": _platform.descendants(table, entry.get("pid"))})
-    held = held_slots([entry for _, entry in live], earlier, slots)
-    # Entries this client does not know, after the others: left alone, their slots counted neither held nor free.
+    held = held_slots([entry for _, entry in live], [*earlier, *kept], slots)
+    # Entries this client does not know, after the others: left alone; a live one's slots count as held (`holds`).
     entries_found += [unknown_item(path, entry, table) for path, entry in strange]
     found = {}
     if pid is not None:

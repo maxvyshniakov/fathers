@@ -334,6 +334,7 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
     directory = look.directory
     live = look.live
     legacy = look.legacy
+    other = sum(count for _, _, count in [*legacy, *look.reserved])  # earlier queues' and live unknown entries' slots
     slots: int = look.basis["slots"]
     saved: bool = look.basis["saved"]
     own, children = process_usage()
@@ -369,7 +370,7 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
     # The class each waiter is served in and its expected start (query.outlook(); nothing when it cannot be read).
     expected: dict[int, dict[str, Any]] = {}
     with contextlib.suppress(Exception):
-        expected = _query.outlook(directory, live, slots, sum(count for _, _, count in legacy))
+        expected = _query.outlook(directory, live, slots, other)
     # An `-n all` lease holds the whole capacity, also one grown under it (#7).
     held, live_waiters = _entry.split(live)
     holders = [item(e, "held", _entry.holds(e, slots)) for e in held]
@@ -382,11 +383,11 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
     if order == "backfill":
         live_waiters = _schedule.ranked(live_waiters, settings, time.time())  # the order the queue serves them in
     waiters = [item(e, "waiting", e["count"]) for e in live_waiters]
-    used = sum(h["count"] for h in holders)
+    used = sum(h["count"] for h in holders) + sum(count for _, _, count in look.reserved)
     if order == "backfill" and live_waiters:
         with contextlib.suppress(Exception):  # an estimate that cannot be read leaves the sentence without a time
             found = _schedule.plan(live_waiters, held, slots, time.time(), order,
-                                   _schedule.estimator(directory), sum(count for _, _, count in legacy),
+                                   _schedule.estimator(directory), other,
                                    reserve_head=True, settings=settings)
             if found.head is not None and found.start is not None:
                 start = datetime.datetime.fromtimestamp(found.start, datetime.timezone.utc)
@@ -400,7 +401,7 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
     moment = datetime.datetime.now(datetime.timezone.utc)
     free = max(0, slots - used)
     admission = dashboard_admission(live_waiters, held, slots,
-                                    sum(count for _, _, count in legacy), memory_block,
+                                    other, memory_block,
                                     _schedule.estimator(directory) if live_waiters else None, settings, memory_kind)
     own_held = sum(h["count"] for h in holders if h["kind"] == "held")
     return {"directory": str(directory), "slots": slots, "saved": saved, "basis": look.basis, "cores": machine,
@@ -415,7 +416,8 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
             # Entries this client does not know (fathers#19): left alone, in no row and no count, shown with a warning
             "unknown": [{"id": path.stem, "lease": str(path), "label": dashboard_text(str(e.get("label") or "")),
                          "pid": e.get("pid"), "state": e.get("state"), "count": e.get("count"),
-                         "reason": _entry.unknown(e), "warning": dashboard_text(_query.unknown_text(path, e))}
+                         "reason": _entry.unknown(e), "holds": _query.unknown_holds(e, look.table),
+                         "warning": dashboard_text(_query.unknown_text(path, e, look.table))}
                         for path, e in look.unknown]}
 
 

@@ -102,12 +102,41 @@ def live_processes() -> dict[int, str]:
     return table
 
 
+KNOWN_STATES = ("held", "waiting")  # as the package's entry.unknown() knows them
+
+
+def holder_runs(pid: int, start: str, table: dict[int, str]) -> bool:
+    """Whether the process an entry names runs: its pid is live with the same start (an empty start matches)."""
+    live_start = table.get(pid)
+    return live_start is not None and (not start or " ".join(start.split()) == " ".join(live_start.split()))
+
+
+def unknown_and_gone(path: Path, entry: object, table: dict[int, str]) -> bool:
+    """Whether `entry` is one this installer does not know (a state other than held/waiting, or none; the package's
+    entry.unknown()) whose holder can be checked and is not running: such an entry is read as absent, with a
+    warning, and left in place (fathers#19 review). One whose holder runs is refused by the caller."""
+    if not isinstance(entry, dict):
+        return False
+    found = cast(dict[str, Any], entry)
+    pid, start = found.get("pid"), found.get("start")
+    if found.get("state") in KNOWN_STATES or type(pid) is not int or pid <= 0 or not isinstance(start, str):
+        return False
+    if holder_runs(pid, start, table):
+        raise InstallError(f"live entry this installer does not know at {path} (state {found.get('state')!r}); "
+                           "let its client drain before installing")
+    print(f"slotfather install: ignoring {path}: an entry this installer does not know whose holder is not "
+          "running; remove the file to clear it", file=sys.stderr)
+    return True
+
+
 def require_idle(directory, table):
     for path in (directory / "queue").glob("*.json"):
         try:
             entry = json.loads(path.read_text())
+            if unknown_and_gone(path, entry, table):
+                continue
             pid, start, state = entry["pid"], entry["start"], entry["state"]
-            if type(pid) is not int or not isinstance(start, str) or state not in ("held", "waiting"):
+            if type(pid) is not int or not isinstance(start, str) or state not in KNOWN_STATES:
                 raise ValueError("unrecognized queue entry")
         except (OSError, ValueError, KeyError, TypeError) as error:
             raise InstallError(f"cannot establish old queue idleness from {path}: {error}") from None
@@ -141,8 +170,10 @@ def queue_updates(directory: Path, table: dict[int, str]) -> list[tuple[Path, by
         try:
             original = path.read_bytes()
             entry: dict[str, Any] = json.loads(original)
+            if unknown_and_gone(path, entry, table):
+                continue
             pid, start, state = entry["pid"], entry["start"], entry["state"]
-            if type(pid) is not int or pid <= 0 or not isinstance(start, str) or state not in ("held", "waiting"):
+            if type(pid) is not int or pid <= 0 or not isinstance(start, str) or state not in KNOWN_STATES:
                 raise ValueError("unrecognized queue entry")
         except (OSError, ValueError, KeyError, TypeError) as error:
             raise InstallError(f"cannot establish current queue format from {path}: {error}") from None

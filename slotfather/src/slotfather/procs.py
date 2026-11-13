@@ -83,8 +83,11 @@ def session(process: Process) -> bool:
     return bool(process.tty or _SESSION.search(executable))
 
 
-def lease_entries(directory: Path | None = None) -> list[tuple[Path, dict[str, Any], bool]]:
-    """Validate raw queue entries once before observing the process identities they require."""
+def lease_entries(directory: Path | None = None,
+                  unknown: list[tuple[Path, dict[str, Any], bool]] | None = None) -> list[tuple[Path, dict[str, Any], bool]]:
+    """Validate raw queue entries once before observing the process identities they require. An entry this client
+    does not know (entry.unknown(), without the arrival) whose holder can be checked goes to `unknown`, where given, for the caller to
+    check against the process table (fathers#19 review); any other invalid entry raises."""
     directory = directory or config.state_dir()
     sources = [(directory, False), *[(path, True) for path in config.legacy_dirs()]]
     found: list[tuple[Path, dict[str, Any], bool]] = []
@@ -108,6 +111,10 @@ def lease_entries(directory: Path | None = None) -> list[tuple[Path, dict[str, A
             except (OSError, ValueError) as error:
                 raise ProcsError(f"cannot read lease {path}: {error}") from None
             if entry is None or not _entry.valid_identity(entry):
+                if unknown is not None and entry is not None and _entry.unknown(entry, _entry.IDENTITY) is not None \
+                        and _entry.checkable(entry):
+                    unknown.append((path, entry, old))
+                    continue
                 raise ProcsError(f"invalid lease identity at {path}")
             if old and not _entry.is_held(entry):
                 continue
@@ -205,9 +212,21 @@ def environment_leases(pids: list[int], leases: list[dict[str, Any]]) -> tuple[d
 
 def query(pid: int | None = None, cwd: str | None = None, directory: Path | None = None) -> dict[str, Any]:
     """Observe processes; ``--pid`` is exact and does not scan working directories."""
-    entries = lease_entries(directory)
-    processes = read_processes(pid, {entry["pid"] for _, entry, _ in entries})
+    strange: list[tuple[Path, dict[str, Any], bool]] = []
+    entries = lease_entries(directory, strange)
+    processes = read_processes(pid, {entry["pid"] for _, entry, _ in [*entries, *strange]})
     leases = read_leases(processes, entries)
+    warnings: list[str] = []
+    for path, entry, _ in strange:
+        holder = processes.get(entry["pid"])
+        if holder is not None and platform.same_holder(entry["start"], entry.get("started"), holder.pid,
+                                                       holder.start):
+            raise ProcsError(f"invalid lease identity at {path}: an entry this Slotfather does not know "
+                             f"({_entry.unknown(entry, _entry.IDENTITY)}) whose holder runs")
+        # Its holder is gone: it protects nothing, so it is read as absent; nothing removes it (fathers#19)
+        warnings.append(f"ignored {path}: an entry this Slotfather does not know "
+                        f"({_entry.unknown(entry, _entry.IDENTITY)}) whose "
+                        f"holder is not running; remove the file to clear it")
     selected = sorted(processes) if pid is None else ([pid] if pid in processes else [])
     cwds = read_cwds(processes, os.geteuid()) if cwd is not None else {}
     unknown: list[int] = []
@@ -232,7 +251,7 @@ def query(pid: int | None = None, cwd: str | None = None, directory: Path | None
                                    for lease in leases if lease["pid"] in [number, *chain]
                                    or lease["lease"] in marked.get(number, set())]})
     return {"v": 2, "query": {"pid": pid, "cwd": cwd, "start": processes[pid].start if pid in processes else None},
-            "cwd_unknown": unknown, "lease_unknown": lease_unknown, "processes": records}
+            "cwd_unknown": unknown, "lease_unknown": lease_unknown, "processes": records, "warnings": warnings}
 
 
 USAGE = "usage: slotfather procs --json [--pid PID] [--cwd PATH]"
