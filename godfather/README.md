@@ -12,8 +12,9 @@ processes agents start).
 
 **Status: 0.1.0.** The main screen is Slotfather's dashboard, moved here with no visible change but the footer:
 `Godfather what's new?` (`v` or a click) opens one timeline of every tool's changelog, an install from main's
-unreleased entries included. Lanes, processes, the merged event feed and row actions come in the next slices of
-[SPEC.md](SPEC.md), each as its tool supports the contract.
+unreleased entries included, and EVENTS is one feed of every tool's event log, with a source column where there is
+more than one tool and filters (`f` for the source, `/` for text). Lanes, processes and row actions come in the next
+slices of [SPEC.md](SPEC.md), each as its tool supports the contract.
 
 ## Install and run
 
@@ -25,6 +26,7 @@ cd fathers
 python3 install.py godfather # ~/.local/bin/godfather, an entry point into an immutable release
 godfather                   # the live dashboard: ? lists the keys, q quits
 godfather --once --width 156 --height 43    # one frame as text (--color for escape sequences)
+godfather events --follow   # the tools' events merged, newest last (--source NAME, --json: the lines as read)
 ```
 
 Re-running the installer replaces the entry point atomically; a dashboard already running keeps its release and
@@ -55,6 +57,9 @@ import:
 ```sh
 python3 common/eventcheck.py --strict ~/.local/state/slotfather/events.jsonl
 ```
+
+Godfather reads the logs with a packaged copy of that validator (`src/godfather/eventcheck.py`, kept byte for byte
+the same by `tests/test_events.py`), because an installed command cannot import from the repository.
 
 ## Develop
 

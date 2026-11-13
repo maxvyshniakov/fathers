@@ -50,3 +50,32 @@ A file that does not end in a newline is a problem (a torn or partial last write
 
 The tools in this repository import the one file from `common/`, so a new schema rule reaches every tool's tests at
 once. A project outside this repository copies the file unchanged and records its SHA-256 beside the copy.
+
+## Reading (Godfather)
+
+`godfather.events` follows each tool's log, at the path its capabilities give under `dashboard.events` (a version
+it reads in `versions`):
+
+- by inode and offset; after a rename to `events.jsonl.1` it reads the rest of the old file, then the new one from
+  its start, so a rotation loses no line and repeats none; a log truncated in place is read again from its start;
+- a last line without its newline waits until it is whole; a line that never ends within 16 KiB is skipped;
+- lines that fail the validator (lenient), name another `v`, or another `host` than this machine's are skipped and
+  counted per source, for Settings' STATUS; nothing is printed about them, and nothing stops the reader;
+- on start, the newest 600 events or 256 KiB per source, whichever is less, the end of `events.jsonl.1` included
+  while the current log is shorter;
+- growth is checked by `stat` every 250 ms (`godfather events --follow`) or at each refresh (the dashboard);
+- the sources merge by `time`, then source name, then file order.
+
+`godfather events [--source NAME]... [--follow] [--json]` prints that feed, newest last; `--json` prints the lines
+as read.
+
+The overview's EVENTS (fathers#84) is the same feed, newest first: time, source (the tag from the tool's
+capabilities, in its own colour), event, slots (Slotfather's only), label, detail and pid. Each source has a
+formatter from a kind and its details to the event word and the detail; a kind it does not know shows the kind
+itself and `key=value` pairs. Nothing is parsed out of prose: Lanefather's `details.message` is shown only for a kind
+with no other field. With Slotfather alone the source and event columns are not drawn. `f` cycles the source filter
+(all, then each present source in the order slotfather, lanefather, junkfather); `/` opens a text field in the bottom
+border, matched case-insensitively against the kind, subject id, label and detail, Enter keeps it and Esc clears it.
+The top border names the filter (`all sources`, `lanefather`, `"710"`). A narrow panel shortens the label first, then
+drops pid, then slots, then shows the source as a one-cell coloured mark. Under `GODFATHER_FIXTURES=DIR` a tool's log is `DIR/<tool>/events.jsonl` and `DIR/host.json`'s `host`
+stands in for this machine's name.

@@ -19,6 +19,12 @@
      ],
      "poll": 1
     },
+    "events": {
+     "path": "/fixture/events.jsonl",
+     "versions": [
+      1
+     ]
+    },
     "settings": {
      "versions": [
       1

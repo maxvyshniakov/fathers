@@ -3,7 +3,7 @@
 read its text. Log history is checked on slotfather-dashboard itself."""
 from __future__ import annotations
 import helpers  # noqa: F401 - src/ on sys.path
-from helpers import mouse
+from helpers import ROOT, logged, mouse, rows_of
 import view as _view
 
 def judged(memory: dict[str, Any]) -> dict[str, Any]:
@@ -264,101 +264,112 @@ class QueueTableTests(unittest.TestCase):
 
 
 class EventDetailTests(unittest.TestCase):
-    """EVENTS' detail column, as Slotfather describes each event from its request's history line (#queue-table
-    review); Slotfather keeps that description and its tests, Godfather draws it."""
+    """EVENTS' rows for Slotfather's events, read from its event log (fathers#84): the result comes from each event's
+    structured fields, never from a description in prose."""
 
-
-
-    def events(self, padding: int = 0) -> list[dict[str, Any]]:
-        """The events Slotfather describes for its test log (its queue_events() and describe_events(), which stay
-        there), as its snapshot's dashboard block carries them."""
+    def events(self) -> list[dict[str, Any]]:
+        """Slotfather's log for a grant that waited, one that did not, a failed release, a waiter that gave up, a
+        held lease reaped and a later grant (slotfather/src/slotfather/leases.py writes these details)."""
         def at(clock: str) -> datetime.datetime:
             return datetime.datetime.fromisoformat(f"2026-11-11T{clock}+00:00")
-        return [dict(when=at("02:00:00"), verb="granted", count=1, label="build", pid=101, delta=1,
-                     detail="waited 3m00s"),
-                dict(when=at("02:00:05"), verb="granted", count=2, label="verify", pid=102, delta=2, detail="no wait"),
-                dict(when=at("02:04:00"), verb="released", count=1, label="build", pid=101, delta=-1,
-                     detail="exit 1, ran 4m00s"),
-                dict(when=at("02:05:00"), verb="left", count=1, label="gate", pid=103, delta=0,
-                     detail="gave up after 15m00s"),
-                dict(when=at("02:06:00"), verb="reaped", count=2, label="verify", pid=102, delta=-2, state="held",
-                     detail="owner exited, ran 5m55s"),
-                dict(when=at("02:06:30"), verb="granted", count=1, label="live", pid=104, delta=1,
-                     detail="waited 1m00s")]
+        return [logged("lease.granted", at("02:00:00"), "build", 101, count=1, waited=180),
+                logged("lease.granted", at("02:00:05"), "verify", 102, count=2, waited=0),
+                logged("lease.released", at("02:04:00"), "build", 101, count=1, exit=1, ran=240),
+                logged("request.left", at("02:05:00"), "gate", 103, count=1, gave_up_after=900),
+                logged("lease.reaped", at("02:06:00"), "verify", 102, count=2, ran=355, waited=5,
+                       reason="owner exited", level="warn"),
+                logged("lease.granted", at("02:06:30"), "live", 104, count=1, waited=60)]
 
     def draw(self, width: int, events: list[dict[str, Any]] | None = None) -> tuple[Any, list[str]]:
         tool = load_dashboard()
-        found = self.events() if events is None else events
+        found = rows_of(self.events() if events is None else events)
         when = found[-1]["when"]  # drawn on the log's day: times read as times on any day
         canvas = tool.Canvas(width, 12)
-        tool.draw_events(canvas, Rect(0, 0, 12, width), {"events": found}, when)
+        tool.draw_events(canvas, Rect(0, 0, 12, width), {"events": found, "sources": [("slotfather", "slot")]}, when)
         return canvas, canvas.render(False).splitlines()
 
-    def test_the_columns_are_time_slots_label_result(self) -> None:
+    def test_slotfather_alone_has_time_slots_label_detail_and_pid(self) -> None:
         for width in (156, 120, 92, 64):  # wide, the one-column layout's EVENTS beside MACHINE, narrow
             with self.subTest(width=width):
                 _, lines = self.draw(width)
                 header = lines[0]
-                places = [header.index(title) for title in ("EVENTS", "slots", "label", "result")]
+                places = [header.index(title) for title in ("EVENTS", "slots", "label", "detail", "pid")]
                 self.assertEqual(sorted(places), places)
-                for gone in (" event ", " detail ", " pid "):
-                    self.assertNotIn(gone, header, "no event, detail or pid column")
+                for gone in (" source ", " event ", "all sources"):
+                    self.assertNotIn(gone, header, "one source: no source or event column, no filter note")
                 row = next(line for line in lines if " gate " in line)
-                self.assertRegex(row, r"^│  \d\d:\d\d:\d\d +▫ +gate +gave up 15m  │$")
-                self.assertNotIn("103", row, "no pid")
-                self.assertEqual(header.index("result") + len("result"), row.index("15m") + 3, "right-aligned")
+                self.assertRegex(row, r"^│  \d\d:\d\d:\d\d +▫ +gate +gave up 15m +103  │$")
+                self.assertEqual(header.index("detail") + len("detail"), row.index("15m") + 3, "right-aligned")
 
-    def test_a_very_narrow_panel_drops_the_result_and_keeps_the_cells(self) -> None:
-        _, lines = self.draw(44)
-        self.assertEqual(["slots", "label"], [t for t in ("slots", "label", "result") if t in lines[0]])
-        self.assertRegex(next(line for line in lines if " gate " in line), r"▫ +gate")
+    def test_a_narrow_panel_drops_pid_then_slots_and_keeps_the_detail(self) -> None:
+        _, lines = self.draw(56)  # 50 inner cells: time 10, slots 5, detail 15, pid 3, gaps 8 would leave 9
+        self.assertEqual(["slots", "label", "detail"], [t for t in ("slots", "label", "detail", "pid") if t in lines[0]])
+        self.assertRegex(next(line for line in lines if " gate " in line), r"▫ +gate +gave up 15m  │$")
+        _, lines = self.draw(48)
+        self.assertEqual(["label", "detail"], [t for t in ("slots", "label", "detail", "pid") if t in lines[0]])
+        self.assertRegex(next(line for line in lines if " gate " in line), r"\d +gate +gave up 15m")
 
-    def test_the_label_takes_the_width_the_event_and_pid_columns_left(self) -> None:
-        long = dict(self.events()[0], label="lane-710-speech-paste-phase-review-fixes-and-the-follow-up-checks")
+    def test_the_label_takes_the_width_the_other_columns_leave(self) -> None:
+        long = dict(self.events()[0])
+        long["subject"] = dict(long["subject"], label="lane-710-speech-paste-phase-review-fixes-and-the-follow-up")
         _, lines = self.draw(92, [long])
         label = lines[0].index("label")
         self.assertEqual(label, lines[2].index("lane-710"))
         shown = lines[2][label:].split("  ")[0]
-        self.assertGreaterEqual(len(shown), 92 - 6 - 10 - 5 - len("wait 3m00s") - 6, "every freed cell")
-        # Before: time 10, event 8, slots 5, detail 22, pid 6 and five gaps left the label 25 of these 86 cells.
-        self.assertGreater(len(shown), 25 + 8)
+        self.assertEqual(92 - 6 - 10 - 5 - len("wait 3m00s") - 3 - 8, len(shown), "every cell the others left")
 
     def test_slot_cells_are_filled_when_taken_hollow_when_handed_back_and_never_coloured(self) -> None:
         events = self.events()
-        events[1]["count"] = 20  # verify's grant: wider than the column
+        events[1]["details"]["count"] = 20  # verify's grant: wider than the column
         canvas, lines = self.draw(120, events)
         column = lines[0].index("slots")
-        expected = {("granted", "build"): "▪", ("released", "build"): "▫", ("left", "gate"): "▫",
-                    ("reaped", "verify"): "▫▫", ("granted", "verify"): "▪▪▪▪ +16"}
-        rows = {(event["verb"], event["label"]): 2 + index for index, event in enumerate(events[::-1])}
-        for (verb, label), cells in expected.items():
-            row = rows[verb, label]
-            self.assertEqual(cells, lines[row][column:].split("  ")[0], (verb, label))
+        expected = {("lease.granted", "build"): "▪", ("lease.released", "build"): "▫", ("request.left", "gate"): "▫",
+                    ("lease.reaped", "verify"): "▫▫", ("lease.granted", "verify"): "▪▪▪▪ +16"}
+        rows = {(event["kind"], event["subject"]["label"]): 2 + index for index, event in enumerate(events[::-1])}
+        for (kind, label), cells in expected.items():
+            row = rows[kind, label]
+            self.assertEqual(cells, lines[row][column:].split("  ")[0], (kind, label))
             styles = {canvas.cells[row][column + n][1] for n in range(len(cells))}
-            self.assertEqual({"text"}, styles, f"{verb} {label}: cells in the text colour")
+            self.assertEqual({"text"}, styles, f"{kind} {label}: cells in the text colour")
         for line in canvas.lines(False, ascii_only=True):
             self.assertTrue(line.isascii(), line)
 
-    def test_each_kind_has_a_short_result(self) -> None:
-        tool = load_dashboard()
+    def test_each_kind_has_a_short_result_from_its_fields(self) -> None:
+        from godfather import events
 
-        def result(verb: str, detail: str, **extra: Any) -> tuple[str, str]:
-            return tool.event_result(dict(dict(verb=verb, detail=detail, count=1, delta=0), **extra))
+        def result(kind: str, **details: Any) -> tuple[str, str]:
+            found = events.slotfather_shown(kind, details)
+            assert found is not None
+            return found.detail[0]
 
-        self.assertEqual(("wait 32s", "text"), result("granted", "waited 32s"))
-        self.assertEqual(("no wait", "dim"), result("granted", "no wait"))
-        self.assertEqual(("ok 3m25s", "dim"), result("released", "exit 0, ran 3m25s"))
-        self.assertEqual(("exit 1 · 26s", "bad"), result("released", "exit 1, ran 26s"))
-        self.assertEqual(("exit 137", "bad"), result("released", "exit 137"))
-        self.assertEqual(("gave up 5m", "dim"), result("left", "gave up after 5m12s"))
-        self.assertEqual(("gave up", "dim"), result("left", "never granted"))
-        self.assertEqual(("owner died · 12m", "bad"), result("reaped", "owner exited, ran 12m40s", state="held"))
-        self.assertEqual(("owner died", "warn"), result("reaped", "owner exited", state="waiting"))
-        self.assertEqual(("waiting 30m", "warn"), result("waiting", "30m00s, est. 10:30:00"))
-        self.assertEqual(("batch → interactive", "dim"), result("priority", "batch → interactive"))
-        self.assertEqual(("owner died · 1h05m", "bad"), result("reaped", "owner exited, ran 1h05m", delta=-2))
-        self.assertEqual(3725.0, tool.span_seconds("1h02m05s"))
-        self.assertIsNone(tool.span_seconds("soon"))
+        self.assertEqual(("wait 32s", "text"), result("lease.granted", count=1, waited=32))
+        self.assertEqual(("no wait", "dim"), result("lease.granted", count=1, waited=0))
+        self.assertEqual(("resumed", "dim"), result("lease.granted", count=1, waited=None, resumed=True))
+        self.assertEqual(("ok 3m25s", "dim"), result("lease.released", exit=0, ran=205))
+        self.assertEqual(("exit 1 · 26s", "bad"), result("lease.released", exit=1, ran=26))
+        self.assertEqual(("exit 137", "bad"), result("lease.released", exit=137, ran=None))
+        self.assertEqual(("ended", "dim"), result("lease.released", count=1, unknown=True))
+        self.assertEqual(("gave up 5m", "dim"), result("request.left", gave_up_after=312))
+        self.assertEqual(("gave up", "dim"), result("request.left", gave_up_after=None))
+        self.assertEqual(("owner died · 12m", "bad"), result("lease.reaped", ran=760, waited=3, reason="owner exited"))
+        self.assertEqual(("owner died · 4m", "warn"), result("request.reaped", ran=None, waited=250,
+                                                              reason="owner exited"))
+        self.assertEqual(("owner died · 1h05m", "bad"), result("lease.reaped", ran=3900, reason="owner exited"))
+        self.assertEqual(("waiting 30m", "warn"), result("request.waiting_long", waited=1800,
+                                                         est_start="2026-11-11T10:30:00Z"))
+        self.assertEqual(("batch → interactive", "dim"), result("request.reprioritized", to="interactive",
+                                                                **{"from": "batch"}))
+        self.assertEqual(("for prof51", "dim"), result("lease.yield_asked", count=2, **{"for": {"label": "prof51"}}))
+        self.assertEqual(("to prof51", "dim"), result("lease.yielded", count=2, to={"label": "prof51"}))
+        self.assertEqual(("8 slots · fixed", "dim"), result("capacity.changed", saved={}, mode="fixed", slots=8))
+        self.assertEqual(("ps failed", "warn"), result("reap.skipped", reason="ps failed"))
+        self.assertIsNone(events.slotfather_shown("session.ended", {}), "a kind it does not know: the generic form")
+
+    def test_the_view_reads_no_prose(self) -> None:
+        source = (ROOT / "src" / "godfather" / "views" / "events.py").read_text()
+        self.assertNotIn("import re", source)
+        self.assertNotIn("SPAN", source)
+        self.assertNotIn("span_seconds", source)
 
     def test_results_are_in_their_colours(self) -> None:
         canvas, lines = self.draw(120)

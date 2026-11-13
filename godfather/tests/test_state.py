@@ -112,6 +112,8 @@ class ModeTableTests(Case):
             "G": ({"selection"}, [], selected(4)), "end": ({"selection"}, [], selected(4)),
             "page_down": ({"selection"}, [], selected(4)),
             "esc": none, "x": none,
+            # fathers#84: f cycles EVENTS' sources (one here: nothing to cycle), / opens its text field
+            "f": none, "/": ({"events_filter"}, [], lambda state: state.events_filter.editing),
         }
         events = self.start("panel").frame.tables["events"]
         page, last = events["visible"] - 1, events["count"] - events["visible"]

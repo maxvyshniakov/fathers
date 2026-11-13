@@ -27,7 +27,7 @@ class OnceTests(LiveCase):
 
     def test_table_headers_share_the_border_and_empty_messages_start_under_them(self) -> None:
         lines = self.snapshot(width=220, height=50).splitlines()
-        for title, message in (("QUEUE", "No requests"), ("EVENTS", "No grants")):
+        for title, message in (("QUEUE", "No requests"), ("EVENTS", "No events logged yet")):
             row = next(i for i, line in enumerate(lines) if title in line)
             self.assertFalse(lines[row + 1][1:lines[row + 1].index("│", 1)].strip(), "a blank padding row first")
             self.assertEqual(lines[row].index(title), lines[row + 2].index(message), "then the message")

@@ -13,31 +13,31 @@
 │  ⏸️    lane-555-host-rename-names                ▪       waiting #2          10s   10004  │ │             08f8cf012                                      │
 │                                                                                           │ │  command    ~/straylight/.claude/worktrees/agent-afa3816b  │
 ╰───────────────────────────────────────────────────────────────────────────────────────────╯ │             08f8cf012/verify.sh --checks desktop-tests     │
-┍━ EVENTS ━━━━ slots ━ label ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ result ━┑ │             --keep-going --jobs 1                          │
+┍━ EVENTS ━━━━ slots ━ label ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ detail ━━ pid ━┑ │             --keep-going --jobs 1                          │
 │                                                                                           │ │  cwd        ~/straylight                                   │
-│  11:59:35    ▫       agent-ae72d94beb6f08961                                             ┃│ │                                                            │
-│  11:58:33    ▫       agent-a1c75285bdf2cd615                                             ┃│ │  lane       644-build-once                                 │
-│  11:57:20    ▪       agent-a1c75285bdf2cd615                                             ┃│ │  project    Straylight                                     │
-│  11:57:15    ▫       agent-a1c75285bdf2cd615                                             ┃│ │  stage      active                                         │
-│  11:55:44    ▪▪      desktop                                                              │ │  branch     lane/644-build-once                            │
-│  11:55:41    ▪       agent-a1c75285bdf2cd615                                              │ │  base       integrate/queue-347                            │
-│  11:55:31    ▫       desktop                                                              │ │  receipt    in progress                                    │
-│  11:55:26    ▫       agent-a1c75285bdf2cd615                                              │ │  review     not started                                    │
-│  11:55:24    ▪       desktop                                                              │ │  claims     tools/verification_plan.py, tools/verify.py,   │
-│  11:55:00    ▫       desktop                                                              │ │             build-domain-module.sh, tools/test-build-      │
-│  11:54:54    ▪       desktop                                                              │ │             domain-module.py, tools/app-build.py,          │
-│  11:54:06    ▪       agent-a1c75285bdf2cd615                                              │ │             tools/test-app-build.py, tools/cargo-test.py,  │
-│  11:54:02    ▫       agent-a1c75285bdf2cd615                                              │ │             docs/development.md, tools/test-cargo-build-   │
-│  11:53:54    ▪       agent-ae72d94beb6f08961                                              │ │             cache.py, tools/test-heavy.py,                 │
-│  11:53:08    ▪       agent-a1c75285bdf2cd615                                              │ │             tools/cargo_build_cache.py                     │
-│  11:52:53    ▫       agent-a1c75285bdf2cd615                                              │ │  after      —                                              │
-│  11:52:30    ▫       desktop                                                              │ │                                                            │
-│  11:52:25    ▪       desktop                                                              │ ╰────────────────────────────────────────────────────────────╯
-│  11:51:40    ▪       agent-a1c75285bdf2cd615                                              │ ╭─ MACHINE ──────────────────── unleased 0.4 · no admission ─╮
-│  11:51:40    ▫       post-merge-456-rename-compat-review-fixes                            │ │                               slots held  avg 4.4/6        │
-│  11:51:24    ▫       agent-a1c75285bdf2cd615                                              │ │  🆗 load ■■■■■■■■■░░░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
-│  11:49:34    ▫▫      data-grid                                                            │ │  🆗 mem  ■■■■░░░░░░░░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
-│  11:48:31    ▪▪      data-grid                                                            │ │  🆗 swap ■■■■■■■■■░░░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
+│  11:59:35    ▫       agent-ae72d94beb6f08961                             ok 5m41s  21202 ┃│ │                                                            │
+│  11:58:33    ▫       agent-a1c75285bdf2cd615                             ok 1m13s  21201 ┃│ │  lane       644-build-once                                 │
+│  11:57:20    ▪       agent-a1c75285bdf2cd615                              no wait  21201 ┃│ │  project    Straylight                                     │
+│  11:57:15    ▫       agent-a1c75285bdf2cd615                             ok 1m34s  21200 ┃│ │  stage      active                                         │
+│  11:55:44    ▪▪      desktop                                              no wait  10002  │ │  branch     lane/644-build-once                            │
+│  11:55:41    ▪       agent-a1c75285bdf2cd615                              no wait  21200  │ │  base       integrate/queue-347                            │
+│  11:55:31    ▫       desktop                                          exit 1 · 7s  21199  │ │  receipt    in progress                                    │
+│  11:55:26    ▫       agent-a1c75285bdf2cd615                             ok 1m20s  21198  │ │  review     not started                                    │
+│  11:55:24    ▪       desktop                                              no wait  21199  │ │  claims     tools/verification_plan.py, tools/verify.py,   │
+│  11:55:00    ▫       desktop                                                ok 6s  21197  │ │             build-domain-module.sh, tools/test-build-      │
+│  11:54:54    ▪       desktop                                              no wait  21197  │ │             domain-module.py, tools/app-build.py,          │
+│  11:54:06    ▪       agent-a1c75285bdf2cd615                              no wait  21198  │ │             tools/test-app-build.py, tools/cargo-test.py,  │
+│  11:54:02    ▫       agent-a1c75285bdf2cd615                               ok 54s  21196  │ │             docs/development.md, tools/test-cargo-build-   │
+│  11:53:54    ▪       agent-ae72d94beb6f08961                              no wait  21202  │ │             cache.py, tools/test-heavy.py,                 │
+│  11:53:08    ▪       agent-a1c75285bdf2cd615                              no wait  21196  │ │             tools/cargo_build_cache.py                     │
+│  11:52:53    ▫       agent-a1c75285bdf2cd615                             ok 1m13s  21195  │ │  after      —                                              │
+│  11:52:30    ▫       desktop                                                ok 5s  21194  │ │                                                            │
+│  11:52:25    ▪       desktop                                              no wait  21194  │ ╰────────────────────────────────────────────────────────────╯
+│  11:51:40    ▪       agent-a1c75285bdf2cd615                           wait 2m21s  21195  │ ╭─ MACHINE ──────────────────── unleased 0.4 · no admission ─╮
+│  11:51:40    ▫       post-merge-456-rename-compat-review-fixes          ok 14m38s  21193  │ │                               slots held  avg 4.4/6        │
+│  11:51:24    ▫       agent-a1c75285bdf2cd615                             ok 4m46s  21192  │ │  🆗 load ■■■■■■■■■░░░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
+│  11:49:34    ▫▫      data-grid                                           ok 1m03s  21191  │ │  🆗 mem  ■■■■░░░░░░░░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
+│  11:48:31    ▪▪      data-grid                                            no wait  21191  │ │  🆗 swap ■■■■■■■■■░░░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                                                                                           │ │                               −80s                    now  │
 ┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┙ ╰────────────────────────────────────────────────────────────╯
  Godfather what's new?                            ↑↓ scroll   tab panel   s settings   ? help   q quit                             updated 11:59:39  ● live

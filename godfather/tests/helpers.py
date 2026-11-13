@@ -113,3 +113,31 @@ def mouse(canvas: Any, event: tuple[str, int, int, int, bool], scroll: dict[str,
     scroll.clear()
     scroll.update(found.scroll)
     return found.selection.index
+
+
+# EVENTS' rows as the dashboard builds them from the tools' event logs (fathers#84)
+
+def logged(kind: str, when: Any, label: str = "", pid: int | None = None, source: str = "slotfather",
+           level: str | None = None, ident: str | None = None, **details: Any) -> dict[str, Any]:
+    """One event as a tool logs it (docs/events.md), `when` an aware datetime."""
+    from godfather import events
+
+    subject: dict[str, Any] = {"type": "request", "id": ident or f"r-{pid or label or kind}"}
+    if label:
+        subject["label"] = label
+    if pid:
+        subject["pid"] = pid
+    found: dict[str, Any] = {"v": 1, "time": events.stamp(when), "host": "mbp", "source": source, "kind": kind,
+                             "subject": subject, "actor": {"type": "tool"}, "details": details}
+    if level:
+        found["level"] = level
+    return found
+
+
+def rows_of(logged_events: list[dict[str, Any]], tags: dict[str, str] | None = None) -> list[dict[str, Any]]:
+    """EVENTS' rows for logged events, in their order, as Screen.load() hands them to the model."""
+    from godfather import events
+
+    found = [events.Event(item["source"], order, events.parse_time(item["time"]) or item["time"], item,
+                          json.dumps(item)) for order, item in enumerate(logged_events, 1)]
+    return events.rows(events.merged(found), tags or {})

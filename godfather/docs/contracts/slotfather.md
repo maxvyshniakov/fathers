@@ -18,7 +18,8 @@ docs win and this page and the adapter follow.
    "changelog": "/Users/me/.local/lib/slotfather/releases/<release>/CHANGELOG.md"}}
 ```
 
-`events` is optional: without it, or without version 1, EVENTS shows no outliers or trends.
+`events` names the event log EVENTS reads (fathers#84). Without it, or without version 1, EVENTS shows nothing and
+its border says `slotfather too old for events`: there is no fallback to the snapshot's `dashboard.events`.
 
 Godfather needs `dashboard.v == 1`, a snapshot whose `versions` include 2 and whose dashboard block `v` is 1.
 Missing `settings` hides Settings' Slotfather rows (the panel then shows only Refresh every and Colour theme).
@@ -58,7 +59,8 @@ dashboard:
                                     psi_low   bool          Linux: PSI at or over SLOTFATHER_MAX_PSI_SOME / _FULL,
                                                             so MACHINE's mem row shows `psi N%` (slotfather 346db8e)
   history            [[start, end, slots]]   held_history() steps
-  events             [event]      the last 60 described events, oldest first (transitional, until slice 3)
+  events             [event]      the last 60 described events, oldest first (transitional: Godfather no longer
+                                   reads them, fathers#84; Slotfather may drop them in its next release)
   updated            time
   overtake_window    number       config.overtake_window(), seconds
 
@@ -102,13 +104,30 @@ entry:
 
 A row that carries `lease_id`, `expected` or `overrun` itself is read from the row first.
 
-### The event log: outliers and trends
+### The event log: EVENTS
 
-Godfather reads the last 256 KiB of `events.jsonl` ([docs/events.md](../events.md)) again whenever it changes, and
-takes from it only `run.outlier` and `run.trend` (`subject.id` the run type; details as Slotfather's api.md lists
-them). An outlier marks the release in `dashboard.events` that ended within 2 s of its `details.ended`. A trend newer
-than the oldest event shown is a row of its own; a `slower` one also marks the release within 2 s before it, the run
-whose release turned the trend. Other kinds wait for the merged EVENTS (SPEC slice 3).
+EVENTS reads Slotfather's `events.jsonl` through godfather.events ([docs/events.md](../events.md#reading-godfather)),
+with Lanefather's and junkfather's beside it. Each Slotfather row's result comes from the event's own fields, never
+from prose:
+
+| Kind | Fields read | Result |
+| --- | --- | --- |
+| `lease.granted` | `count`, `waited` (s or null), `resumed` | `wait 32s` (text), `no wait`, `resumed` |
+| `lease.released` | `count`, `exit`, `ran` | `ok 3m25s`, `exit 1 · 26s` (red), `ended` |
+| `request.left` | `count`, `gave_up_after` | `gave up 5m` |
+| `lease.reaped`, `request.reaped` | `count`, `ran`, `waited`, `reason` | `owner died · 12m`, red for a lease, yellow for a waiter |
+| `request.reprioritized` | `from`, `to` | `batch → interactive` |
+| `request.waiting_long` | `waited` | `waiting 45m` (yellow) |
+| `lease.yield_asked`, `lease.yielded`, `lease.yield_withdrawn` | `for.label`, `to.label`, `count` | `for prof51`, `to prof51` |
+| `capacity.changed`, `order.changed`, `reap.skipped` | `slots`, `mode`, `saved`, `reason` | `8 slots · fixed`, `reset` |
+| any other | its details | the kind, then `key=value` pairs |
+
+Slot cells: filled for `count` slots taken (`lease.granted`), hollow for slots handed back or never held.
+
+`run.outlier` and `run.trend` (`subject.id` the run type; details as Slotfather's api.md lists them) are marks: an
+outlier marks the `lease.released` whose `subject.lease_id` is its `details.lease_id` (else the one that ended within
+2 s of its `details.ended`). A trend newer than the oldest row shown is a row of its own; a `slower` one also marks
+the release within 2 s before it, the run whose release turned the trend.
 
 ### `slotfather changelog --json`
 
