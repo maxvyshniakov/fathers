@@ -1,10 +1,23 @@
 #!/usr/bin/env python3
-"""Run Ruff and strict Pyright, rejecting diagnostics beyond the saved debt budget."""
+"""The package's lint gate: Ruff and Pyright, rejecting diagnostics beyond the saved debt budget.
+
+  python3 tools/check.py                        fail on any diagnostic tools/type-baseline.json does not budget
+  python3 tools/check.py --shrink-baseline      remove fixed debt from the budget; refuses to add any
+  python3 tools/check.py --initialize-baseline  first adoption only; refuses when a baseline exists or existed
+
+The four packages of fathers carry this file byte for byte (the root's tools/test_checks.py holds them to it).
+Ruff's rules are ../tools/ruff.toml, extended by pyproject.toml; Pyright's strictness is the package's own
+configuration. Ruff and Pyright on PATH are used as they are (CI installs requirements-dev.txt); otherwise
+`uv run --with-requirements requirements-dev.txt` runs the pinned ones. Without a baseline file every diagnostic
+fails. A budget counts each exact file, tool, rule and message, and never grows beyond the smallest one Git history
+has committed.
+"""
 from __future__ import annotations
 
 import argparse
 from collections import Counter
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -13,6 +26,7 @@ from typing import Literal, TypedDict, cast
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / "tools/type-baseline.json"
+PINS = ROOT / "requirements-dev.txt"
 
 
 class RuffDiagnostic(TypedDict):
@@ -56,11 +70,20 @@ def key(path: str, tool: str, rule: str, message: str) -> str:
     return "|".join((file, tool, rule, message))
 
 
-def tool_report(tool: Literal["ruff", "pyright"], arguments: list[str]) -> object:
+def command(tool: Literal["ruff", "pyright"]) -> list[str]:
+    """The tool on PATH, else the pinned development requirements through uv, so Pyright also sees their imports."""
     executable = shutil.which(tool)
-    if executable is None:
-        raise RuntimeError(f"{tool} is missing; run with the pinned requirements-dev.txt tools")
-    result = subprocess.run([executable, *arguments], cwd=ROOT, capture_output=True, text=True)
+    if executable is not None:
+        return [executable]
+    uv = shutil.which("uv")
+    if uv is None:
+        raise RuntimeError(f"neither {tool} nor uv is on PATH; install uv, or the tools {PINS.name} pins")
+    return [uv, "run", "--quiet", "--no-project", "--with-requirements", str(PINS), tool]
+
+
+def tool_report(tool: Literal["ruff", "pyright"], arguments: list[str]) -> object:
+    environment = {**os.environ, "PYRIGHT_PYTHON_IGNORE_WARNINGS": "1"}
+    result = subprocess.run([*command(tool), *arguments], cwd=ROOT, capture_output=True, text=True, env=environment)
     if result.returncode not in (0, 1):
         raise RuntimeError(f"{tool} failed ({result.returncode}): {result.stderr or result.stdout}")
     try:
@@ -102,6 +125,11 @@ def read_baseline(text: str) -> dict[str, int]:
     return cast(dict[str, int], diagnostics)
 
 
+def saved_baseline() -> dict[str, int]:
+    """The budget on disk; a package without a baseline file has none."""
+    return read_baseline(BASELINE.read_text()) if BASELINE.exists() else {}
+
+
 def smallest_budget(history: list[dict[str, int]]) -> dict[str, int]:
     """Once committed debt disappears, a later change cannot resurrect its budget."""
     if not history:
@@ -138,7 +166,7 @@ def write_baseline(counts: dict[str, int]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--initialize-baseline", action="store_true",
                        help="initial adoption only: refuses to replace an existing baseline")
@@ -153,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
             write_baseline(current)
             print(f"Initialized {sum(current.values())} existing diagnostics")
             return 0
-        accepted = read_baseline(BASELINE.read_text())
+        accepted = saved_baseline()
         committed = committed_baseline()
         if committed is not None and regressions(accepted, committed):
             raise ValueError("saved baseline grew beyond committed history; restore its budget and fix new diagnostics")
@@ -165,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         if args.shrink_baseline:
             write_baseline(shrink_baseline(current, accepted))
-        print(f"Ruff + strict Pyright: no new diagnostics; "
+        print(f"Ruff + Pyright: no new diagnostics; "
               f"{sum(current.values())} existing, {sum(accepted.values()) - sum(current.values())} resolved")
     except (OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
         print(f"quality gate: {error}", file=sys.stderr)

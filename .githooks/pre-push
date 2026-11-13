@@ -1,0 +1,14 @@
+#!/bin/sh
+# Managed by @maxvyshniakov/repo-kit (repo-kit hooks sync); do not edit.
+# Runs `bun run verify` on the commits being pushed; skip once with git push --no-verify.
+root=$(git rev-parse --show-toplevel)
+cli="$root/node_modules/@maxvyshniakov/repo-kit/src/cli.mjs"
+if [ ! -f "$cli" ]; then
+  common=$(cd "$root" && cd "$(git rev-parse --git-common-dir)/.." && pwd)
+  cli="$common/node_modules/@maxvyshniakov/repo-kit/src/cli.mjs"
+fi
+if [ ! -f "$cli" ]; then
+  echo "pre-push: repo-kit is not installed; run bun install. Nothing was pushed." >&2
+  exit 1
+fi
+exec node "$cli" pre-push "$@"

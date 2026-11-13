@@ -6,11 +6,13 @@ on:
     paths:
       - 'junkfather/**'
       - 'common/**'
+      - 'tools/ruff.toml'
       - '.github/workflows/junkfather.yml'
   pull_request:
     paths:
       - 'junkfather/**'
       - 'common/**'
+      - 'tools/ruff.toml'
       - '.github/workflows/junkfather.yml'
   workflow_dispatch:
 

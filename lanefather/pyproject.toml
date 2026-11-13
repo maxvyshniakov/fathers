@@ -8,29 +8,13 @@ license = "MIT"
 license-files = ["LICENSE"]
 
 [tool.ruff]
-line-length = 120
+extend = "../tools/ruff.toml"  # the shared rule set; lanefather passes all of it
 target-version = "py311"
 extend-exclude = ["tests/fixtures"]
-
-[tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PL"]
-ignore = [
-    "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR2004",  # long commands are one story each; numbers are named in prose
-    "PLW0603",  # the run's config is one module global
-    "PLC0415",  # imports inside functions break the command modules' import cycle
-    "PLR0917",  # positional arguments follow the old tools/lane signatures
-    "PLW1510",  # every subprocess.run reads its returncode itself
-    "RUF005",
-    "SIM108",
-    "RUF001", "RUF002", "RUF003",  # prose uses the multiplication sign and arrows
-]
 
 [tool.ruff.lint.per-file-ignores]
 # The command tests came over from Straylight's tools/test-lane.py (#648) with their long assertion lines.
 "tests/*" = ["E501", "RUF012", "B905", "PLW0108"]
-
-[tool.ruff.lint.isort]
-force-sort-within-sections = true
 
 [tool.pyright]
 include = ["lanefather", "tests", "install.py", "tools"]

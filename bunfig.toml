@@ -1,0 +1,4 @@
+# @maxvyshniakov packages live in GitHub Packages. Installing them needs GITHUB_TOKEN with read:packages:
+# locally `export GITHUB_TOKEN=$(gh auth token)`; the pre-push hook and .githooks/lane-check fall back to gh.
+[install.scopes]
+maxvyshniakov = { url = "https://npm.pkg.github.com/", token = "$GITHUB_TOKEN" }

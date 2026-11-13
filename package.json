@@ -1,0 +1,19 @@
+{
+  "name": "fathers-workspace",
+  "private": true,
+  "type": "module",
+  "description": "Development checks only: Repo-Kit runs each package's Python checks. The installed commands stay standard-library Python.",
+  "packageManager": "bun@1.4.4",
+  "scripts": {
+    "prepare": "repo-kit hooks install",
+    "verify": "repo-kit verify",
+    "check": "python3 tools/checks.py run",
+    "check:kit": "repo-kit check",
+    "check:hygiene": "repo-kit test-hygiene",
+    "repo-kit": "repo-kit"
+  },
+  "devDependencies": {
+    "@maxvyshniakov/repo-kit": "0.7.0"
+  },
+  "license": "MIT"
+}

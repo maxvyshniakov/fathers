@@ -1,8 +1,7 @@
 # Publishing
 
-One branch, `main`, on `maxvyshniakov/junkfather` (private until Max decides otherwise; ask before making it
-public). Push the verified commit with an explicit refspec: `git push origin <sha>:refs/heads/main`. Never force a
-push. There is no CI yet; run the [checks](checks.md) before pushing.
+Branches, the push, CI and installs are the repository's: [publishing](../../../docs/agents/publishing.md).
+Junkfather adds only its changelog rules and its install below.
 
 ## Changelog and versions
 
@@ -15,6 +14,6 @@ Unreleased entries under the new version and sets it in `pyproject.toml` and `ju
 
 ## Install
 
-`python3 install.py --launchd --mastack` from a clean, committed `main`: a new release under
-`~/.local/share/junkfather`, the command in `~/.local/bin`, the hourly sweep reloaded, the hooks registered through
-Mastack. A running supervisor keeps the release it started from.
+Only on an explicit request, `python3 install.py --launchd --mastack` from a clean, committed `main`: a new release
+under `~/.local/share/junkfather`, the command in `~/.local/bin`, the hourly sweep reloaded, the hooks registered
+through Mastack. A running supervisor keeps the release it started from.

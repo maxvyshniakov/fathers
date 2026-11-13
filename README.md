@@ -27,15 +27,29 @@ runner installs Slotfather alone (`python3 slotfather/install.py --user runner -
 ## Layout
 
 - `slotfather/`, `lanefather/`, `junkfather/`, `godfather/`: one package each, with its own `install.py`, version,
-  `CHANGELOG.md`, `README.md`, `GLOSSARY.md`, `docs/` and `tests/`. Run a package's checks from its directory
-  (`docs/agents/checks.md` there; Godfather's README, Develop).
+  `CHANGELOG.md`, `README.md`, `GLOSSARY.md`, `docs/` and `tests/`, and the same lint gate, `tools/check.py`.
 - `common/`: code the packages share today. It holds [`eventcheck.py`](common/eventcheck.py), the validator of the
   shared event schema that every package's tests import.
+- `tools/`: the repository's check entry ([`checks.py`](tools/checks.py)), Lanefather's verify command
+  (`lane-check`) and the shared Ruff rules (`ruff.toml`).
 - [`GLOSSARY.md`](GLOSSARY.md): the terms the tools share; each package's glossary holds its own.
 - [`notes/sha-map.md`](notes/sha-map.md): the packages moved here from their own repositories with their history;
   the map gives the new commit for each old one.
 
 CI runs one job per package on GitHub-hosted runners, triggered by changes under that package or `common/`.
+
+## Develop
+
+[Repo-Kit](https://github.com/maxvyshniakov/repo-kit) runs the checks; it needs Bun 1.4.4 and a `GITHUB_TOKEN` that
+reads GitHub Packages (`export GITHUB_TOKEN=$(gh auth token)`). It is a development tool only.
+
+```sh
+bun install              # once: the kit, and the pre-push gate in .githooks
+bun run verify           # the checks of the packages changed since origin/main; FATHERS_CHECKS=all for every one
+```
+
+Each package's checks also run from its directory: `python3 tools/check.py` (Ruff and Pyright) and its tests.
+[docs/agents/checks.md](docs/agents/checks.md) has the details.
 
 ## License
 
