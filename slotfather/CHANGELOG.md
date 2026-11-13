@@ -119,6 +119,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- On macOS two clients in different locales (`LC_ALL`, `LC_TIME`) no longer reap each other's live leases: `ps`
+  runs in the C locale everywhere, and an entry an older client wrote in its own locale's words still matches its
+  holder.
 - A `ps` that fails, times out, prints nothing or leaves out its caller no longer makes every holder look dead:
   that look reaps no lease and grants nothing, says so in queue.log (`skipped reaping: ...`) and EVENTS
   (`reap.skipped`), and waiters keep their place until the next good table. The dashboard's CPU sample refuses

@@ -67,6 +67,12 @@ not a reason to rewrite queue state. Derived caches may be rebuilt rather than m
 - `status --json` and `procs --json` use version 2 with priority and ticket request fields.
 - Process identity is a PID plus its start time. A recycled PID must never inherit a lease
   or permission to stop a process.
+- A holder's start time is `ps -o lstart` in the C locale on every system (fathers#122), whatever the
+  client's `LC_ALL` or `LC_TIME`. Mixed versions: clients before it ran macOS's `ps` in the caller's locale. A
+  current client matches such an entry by its clock time, day and year (`platform.same_start()`), so an older
+  client's lease is never reaped while its holder runs. An older client reads a current client's entry as before
+  only in the C or `en_US` locale, whose words are the same; one in another locale can reap it, so upgrade
+  every client of a queue before running any in such a locale.
 - Installed commands bind to an immutable package release; replacement entry points do not
   change code underneath an already running old client. Releases are retained while old
   clients may still use them.

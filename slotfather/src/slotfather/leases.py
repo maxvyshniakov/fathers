@@ -568,7 +568,7 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
                 same = isinstance(spec, dict) and cast(dict[str, Any], spec).get("name") == session["name"]
                 pid = other.get("pid")
                 holder = fresh.get(pid) if isinstance(pid, int) else None  # platform.alive(), spelled out
-                if same and holder is not None and other.get("start") in ("", holder[1]):
+                if same and holder is not None and _platform.same_start(str(other.get("start")), holder[1]):
                     raise _config.SlotError(f"session {session['name']} exists (pid {other.get('pid')}, "
                                             f"{other.get('state')}): stop it first (slotfather session stop "
                                             f"{session['name']})")

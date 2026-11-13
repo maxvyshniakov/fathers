@@ -286,7 +286,7 @@ def prune(uses: dict[str, Any], table: dict[int, tuple[int, str]] | None, moment
         except (PermissionError, ValueError):
             alive = True
         if alive and table is not None:
-            alive = int(pid) in table and (not run.get("start") or table[int(pid)][1] == run.get("start"))
+            alive = int(pid) in table and _platform.same_start(str(run.get("start") or ""), table[int(pid)][1])
         if not alive:
             gone.append(pid)
     for pid in gone:
