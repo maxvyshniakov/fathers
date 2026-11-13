@@ -35,11 +35,32 @@ def state_dir() -> Path:
 
 
 def write_atomic(path: Path, data: Any) -> None:
+    """Replace `path` with `data` as JSON in one rename, after the new content reached the disk (fsync of the file,
+    then of its directory). A write that fails leaves the old file as it was and removes its temp file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", dir=path.parent, prefix=f".{path.name}.", delete=False) as handle:
-        json.dump(data, handle, indent=1, sort_keys=True)
-        handle.write("\n")
-    os.replace(handle.name, path)
+        try:
+            json.dump(data, handle, indent=1, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        except BaseException:
+            handle.close()
+            with contextlib.suppress(OSError):
+                os.unlink(handle.name)
+            raise
+    try:
+        os.replace(handle.name, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(handle.name)
+        raise
+    with contextlib.suppress(OSError):
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
 
 
 def read_json(path: Path) -> Any:
