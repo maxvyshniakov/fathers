@@ -33,7 +33,8 @@ from . import procs as _procs
 from . import safety as _safety
 from .defaults import GRACE
 from .procs import command_matches
-from .state import Entry, Store
+from .entry import Entry
+from .state import Store
 
 ROUNDS = 3  # reads of the entry's members: a process forked during the grace period is found by the next one
 STOPPED = ("stopped", "killed", "gone")
@@ -141,14 +142,19 @@ def stop(targets: List[_procs.Proc], grace: float = GRACE,
     return {"result": "failed" if left else "killed", "signalled": signalled, "left": left}
 
 
+Stopper = Callable[[List[_procs.Proc], float], Dict[str, Any]]  # stop(), or a test's stand-in
+
+
 def reap(store: Store, entry_id: str, reason: str, grace: float = GRACE, dry_run: bool = False,
-         force: bool = False, table: Optional[_procs.Table] = None, stopper=stop,
-         actor: Optional[Dict[str, Any]] = None, reader=None, report_failure: bool = True) -> Dict[str, Any]:
+         force: bool = False, table: Optional[_procs.Table] = None, stopper: Optional[Stopper] = None,
+         actor: Optional[Dict[str, Any]] = None, reader: Optional[Callable[[], _procs.Table]] = None,
+         report_failure: bool = True) -> Dict[str, Any]:
     """End one running entry. Returns {"id", "result", "reason", "pids", "how"}; result "skipped" when the entry
     is not running (someone else reaped it, it exited, it is still starting), "would-stop" in a dry run. `table`
     serves the first read only; every later round reads the machine again (`reader`). `report_failure` False: a
     failure is recorded on the entry (`last_error`) but writes no `entry.reap_failed` event (a retry in a streak)."""
     reader = reader or _procs.Table.read
+    stopper = stopper or stop
     entry = store.load(entry_id)
     if entry is None:
         return {"id": entry_id, "result": "unknown", "reason": reason, "pids": [], "how": ""}
@@ -165,7 +171,7 @@ def reap(store: Store, entry_id: str, reason: str, grace: float = GRACE, dry_run
     try:
         table = table or reader()
     except _procs.ProcError as error:
-        unread = {"reason": reason, "left": [], "error": str(error)}
+        unread: Dict[str, Any] = {"reason": reason, "left": [], "error": str(error)}
         if not dry_run:  # like any failed reap: last_error on the entry, and the event that opens a streak
             _entry.noted_error(store, entry_id, unread)
             if report_failure:

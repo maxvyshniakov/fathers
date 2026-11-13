@@ -27,14 +27,15 @@ import shutil
 import subprocess
 import sys
 import time
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, TextIO, Tuple
 
 from . import entry as _entry
 from . import events as _events
 from . import procs as _procs
 from . import safety as _safety
 from .defaults import CREATE_TIMEOUT, RESOURCE_TIMEOUT, SETTLE, STOP_TIMEOUT
-from .state import Entry, Store
+from .entry import Entry
+from .state import Store, as_dict, as_list
 from .text import duration
 
 EXTRA_PATH = ("/opt/homebrew/bin", "/usr/local/bin", "/Applications/Docker.app/Contents/Resources/bin", "/usr/bin")
@@ -117,11 +118,11 @@ class Simulator(Kind):
         except ValueError:
             return None
         found: Dict[str, Dict[str, Any]] = {}
-        for runtime, devices in (data.get("devices") or {}).items() if isinstance(data, dict) else []:
-            for device in devices if isinstance(devices, list) else []:
-                if isinstance(device, dict) and isinstance(device.get("udid"), str) \
-                        and device.get("state") not in (None, "Shutdown"):
-                    found[device["udid"]] = {"name": device.get("name"), "runtime": str(runtime).rsplit(".", 1)[-1]}
+        for runtime, devices in as_dict(as_dict(data).get("devices")).items():
+            for device in map(as_dict, as_list(devices)):
+                udid = device.get("udid")
+                if isinstance(udid, str) and device.get("state") not in (None, "Shutdown"):
+                    found[udid] = {"name": device.get("name"), "runtime": runtime.rsplit(".", 1)[-1]}
         return found
 
     def resolve(self, given: str, listed: Listing) -> Tuple[Optional[Dict[str, Any]], str]:
@@ -189,7 +190,7 @@ class TailscaleServe(Kind):
             data = json.loads(ran.out)
         except ValueError:
             return None
-        return routes(data) if isinstance(data, dict) else None
+        return routes(as_dict(data)) if isinstance(data, dict) else None
 
     def resolve(self, given: str, listed: Listing) -> Tuple[Optional[Dict[str, Any]], str]:
         if not ROUTE.match(given):
@@ -234,11 +235,12 @@ class TailscaleServe(Kind):
 def routes(status: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
     """`tailscale serve status --json` as route ids: one per web handler path, one per TCP forward."""
     found: Dict[str, Dict[str, Any]] = {}
-    ports = status.get("TCP") if isinstance(status.get("TCP"), dict) else {}
-    web = status.get("Web") if isinstance(status.get("Web"), dict) else {}
-    for port, how in (ports or {}).items():
-        if not isinstance(how, dict) or not str(port).isdigit():
+    ports = as_dict(status.get("TCP"))
+    web = as_dict(status.get("Web"))
+    for port, value in ports.items():
+        if not isinstance(value, dict) or not port.isdigit():
             continue
+        how = as_dict(value)
         if how.get("TCPForward"):
             proto = "tls-terminated-tcp" if how.get("TerminateTLS") else "tcp"
             found[f"{proto}:{port}"] = {"target": how.get("TCPForward")}
@@ -246,13 +248,13 @@ def routes(status: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
         proto = "https" if how.get("HTTPS") else "http" if how.get("HTTP") else None
         if proto is None:
             continue
-        for host_port, site in (web or {}).items():
-            if not str(host_port).endswith(f":{port}") or not isinstance(site, dict):
+        for host_port, site in web.items():
+            if not host_port.endswith(f":{port}") or not isinstance(site, dict):
                 continue
-            for path, handler in (site.get("Handlers") or {}).items():
-                target = handler.get("Proxy") or handler.get("Path") or handler.get("Text") \
-                    if isinstance(handler, dict) else None
-                found[f"{proto}:{port}" + ("" if path == "/" else str(path))] = {"target": target}
+            for path, value in as_dict(as_dict(site).get("Handlers")).items():
+                handler = as_dict(value)
+                target = handler.get("Proxy") or handler.get("Path") or handler.get("Text") if handler else None
+                found[f"{proto}:{port}" + ("" if path == "/" else path)] = {"target": target}
     return found
 
 
@@ -304,11 +306,11 @@ class Command(Kind):
         argv = resource.get("alive")
         if not isinstance(argv, list) or not argv:
             return None
-        ran = run([str(word) for word in argv])
+        ran = run([str(word) for word in as_list(argv)])
         return True if ran.code == 0 else False if ran.code == 1 else None
 
     def stop(self, resource: Mapping[str, Any], grace: float) -> List[List[str]]:
-        return [[str(word) for word in resource.get("stop") or []]]
+        return [[str(word) for word in as_list(resource.get("stop"))]]
 
 
 KINDS: Dict[str, Kind] = {k.name: k for k in (Simulator(), Docker(), TailscaleServe(), SafariTP(), Command())}
@@ -339,7 +341,7 @@ class Snapshot:
 
 
 def subject(entry: Mapping[str, Any]) -> Dict[str, Any]:
-    resource = entry.get("resource") or {}
+    resource = as_dict(entry.get("resource"))
     found: Dict[str, Any] = {"type": "resource", "id": key(resource), "kind": str(resource.get("kind")),
                              "entry": str(entry.get("id"))}
     label = entry.get("label") or resource.get("name")
@@ -356,7 +358,7 @@ def describe(resource: Mapping[str, Any]) -> str:
 
 def owned_keys(store: Store) -> Dict[str, str]:
     """kind:id -> entry id, for every live resource entry."""
-    return {key(e["resource"]): e["id"] for e in store.entries()
+    return {key(as_dict(e.get("resource"))): e["id"] for e in store.entries()
             if e.get("state") in _entry.LIVE and isinstance(e.get("resource"), dict)}
 
 
@@ -374,11 +376,12 @@ def record(store: Store, resource: Dict[str, Any], argv: List[str], ttl: float, 
     return entry, ""
 
 
-def announce(entry: Entry, out=None) -> None:
+def announce(entry: Entry, out: Optional[TextIO] = None) -> None:
     from .owner import describe as who
     keep = "" if entry["keep"] == "owner" else f", kept for the {entry['keep']}"
-    note = f" ({entry['claim_note']})" if entry.get("claim_note") else ""
-    print(f"junkfather: {entry['id']} owns {describe(entry['resource'])} for {who(entry['owner'])}{note}, ttl "
+    note = f" ({entry.get('claim_note')})" if entry.get("claim_note") else ""
+    what = describe(entry.get("resource") or {})
+    print(f"junkfather: {entry['id']} owns {what} for {who(entry['owner'])}{note}, ttl "
           f"{duration(entry['ttl'])}{keep}; stop it: junkfather reap --id {entry['id']}", file=out or sys.stdout,
           flush=True)
 
@@ -575,7 +578,7 @@ def reap(store: Store, entry: Entry, reason: str, grace: float, dry_run: bool,
 
 def step_text(step: Mapping[str, Any]) -> str:
     """One stop step for an event (an argv list would nest past the schema's depth): its command and exit."""
-    text = f"{shlex.join(str(word) for word in step.get('argv') or [])}: exit {step.get('exit')}"
+    text = f"{shlex.join(str(word) for word in as_list(step.get('argv')))}: exit {step.get('exit')}"
     return text + (f" ({step['error']})" if step.get("error") else "")
 
 

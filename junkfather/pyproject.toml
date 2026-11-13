@@ -16,5 +16,5 @@ select = ["E", "F", "W", "B"]
 [tool.pyright]
 include = ["junkfather", "tests", "install.py", "tools"]
 pythonVersion = "3.9"
-typeCheckingMode = "basic"
+typeCheckingMode = "strict"
 extraPaths = ["../common"]  # eventcheck: common/eventcheck.py

@@ -76,7 +76,7 @@ def contract(since: Optional[str] = None) -> Dict[str, Any]:
 def text(found: List[Dict[str, Any]]) -> str:
     """Changelog entries for people: a heading per release (Unreleased first), then `  Section: text` lines."""
     lines: List[str] = []
-    heading = None
+    heading: Optional[str] = None
     for item in found:
         release = "Unreleased" if item.get("unreleased") else f"{item['version']} - {item['date']}"
         if release != heading:

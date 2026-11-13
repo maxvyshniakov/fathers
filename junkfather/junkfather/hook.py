@@ -17,11 +17,11 @@ import os
 import subprocess
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from . import entry as _entry
 from . import owner as _owner
-from .state import Store
+from .state import Store, as_dict, as_list
 
 
 def plan(data: Dict[str, Any], store: Store, now: Optional[float] = None) -> Optional[List[str]]:
@@ -51,7 +51,8 @@ def plan(data: Dict[str, Any], store: Store, now: Optional[float] = None) -> Opt
     return None
 
 
-def handle(data: Dict[str, Any], store: Store, spawn=None) -> Optional[List[str]]:
+def handle(data: Dict[str, Any], store: Store, spawn: Optional[Callable[[List[str]], None]] = None
+           ) -> Optional[List[str]]:
     event = data.get("hook_event_name")
     if event == "PreToolUse":
         command = _owner_command(data)
@@ -68,10 +69,9 @@ def handle(data: Dict[str, Any], store: Store, spawn=None) -> Optional[List[str]
 def _owner_command(data: Dict[str, Any]) -> Optional[str]:
     if data.get("tool_name") not in ("Bash", "shell", "local_shell", "exec_command"):
         return None
-    tool_input = data.get("tool_input")
-    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    command = as_dict(data.get("tool_input")).get("command")
     if isinstance(command, list):
-        command = " ".join(str(word) for word in command)
+        command = " ".join(str(word) for word in as_list(command))
     return command if isinstance(command, str) else None
 
 
@@ -86,7 +86,7 @@ def main() -> int:
     try:
         data = json.load(sys.stdin)
         if isinstance(data, dict):
-            handle(data, Store())
+            handle(as_dict(data), Store())
     except Exception as error:  # noqa: BLE001 - a hook fails open
         from . import events as _events
         _events.write(Store().root, "hook.failed", {"type": "hook", "id": "junkfather-hook"}, _events.tool("hook"),

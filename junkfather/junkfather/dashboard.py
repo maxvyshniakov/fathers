@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TypedDict
 
 from . import __version__
 from . import release as _release
@@ -15,13 +15,76 @@ from . import owner as _owner
 from . import procs as _procs
 from . import reap as _reap
 from . import resources as _resources
-from .state import Entry, Store, read_json
+from .entry import Entry
+from .state import Store, as_dict, as_list, read_json
 from .text import duration, iso
 
 STATUS_VERSION = 1
 
 
-def row(entry: Entry, table: Optional[_procs.Table], now: float) -> Dict[str, Any]:
+class Row(TypedDict):
+    """One entry as `list --json` and `status --json` show it."""
+    id: str
+    state: Optional[str]
+    owner: str
+    session: Optional[str]
+    agent: Optional[str]
+    lane: Optional[str]
+    owner_alive: Optional[bool]
+    age: float
+    ttl: Optional[float]
+    ttl_left: float
+    keep: Optional[str]
+    pid: Optional[int]
+    pgid: Optional[int]
+    processes: Optional[int]
+    label: Optional[str]
+    mode: Optional[str]
+    cwd: Optional[str]
+    argv: Optional[List[str]]
+    log: Optional[str]
+    end: Optional[Dict[str, Any]]
+    exit: Optional[int]
+    resource: Optional[Dict[str, Any]]  # {kind, id, name} for a resource entry
+
+
+class UnownedProcess(TypedDict):
+    pid: Any
+    start: Any
+    cmd: Any
+    cwd: Any
+    root: Any
+    why: Any
+    age: Optional[float]
+    alive: Optional[bool]
+
+
+class UnownedResource(TypedDict):
+    kind: Any
+    id: Any
+    name: Any
+    why: Any
+
+
+class LastSweep(TypedDict):
+    time: Optional[str]
+    result: Any
+
+
+class Status(TypedDict):
+    """`status --json` (docs/reference.md, Dashboard contract). Values read back from unowned.json and sweep.json
+    are as the last sweep wrote them, hence Any."""
+    v: int
+    host: str
+    time: str
+    entries: List[Row]
+    unowned: List[UnownedProcess]
+    unowned_resources: List[UnownedResource]
+    sweep: LastSweep
+    errors: List[str]
+
+
+def row(entry: Entry, table: Optional[_procs.Table], now: float) -> Row:
     """One entry as `list --json` and `status --json` show it."""
     alive = None
     resource = entry.get("resource") if entry.get("mode") == "resource" else None
@@ -39,7 +102,7 @@ def row(entry: Entry, table: Optional[_procs.Table], now: float) -> Dict[str, An
             "resource": {k: resource.get(k) for k in ("kind", "id", "name")} if isinstance(resource, dict) else None}
 
 
-def rows(store: Store, table: Optional[_procs.Table], now: float, everything: bool = False) -> List[Dict[str, Any]]:
+def rows(store: Store, table: Optional[_procs.Table], now: float, everything: bool = False) -> List[Row]:
     """The active entries' rows (with `everything`, finished ones too)."""
     return [row(e, table, now) for e in store.entries() if everything or e.get("state") in _entry.ACTIVE]
 
@@ -50,33 +113,38 @@ def listing(store: Store, everything: bool = False) -> Dict[str, Any]:
     return {"v": 1, "at": now, "entries": rows(store, _procs.read_or_none(), now, everything)}
 
 
-def status(store: Store) -> Dict[str, Any]:
+def status(store: Store) -> Status:
     """`status --json`: the active entries, the last sweep's unowned processes and resources, and its time and
     result."""
     now = time.time()
     table = _procs.read_or_none()
     last = _record(store, "sweep.json")
     listed = _record(store, "unowned.json")
-    unowned = []
-    for item in listed.get("items") or []:
-        if not isinstance(item, dict):
+    unowned: List[UnownedProcess] = []
+    for found in as_list(listed.get("items")):
+        if not isinstance(found, dict):
             continue
+        item = as_dict(found)
         started = _procs.started_at(str(item.get("start") or ""))
         alive = table.alive(item.get("pid"), item.get("start")) if table is not None else None
         unowned.append({"pid": item.get("pid"), "start": item.get("start"), "cmd": item.get("cmd"),
                         "cwd": item.get("cwd"), "root": item.get("root"), "why": item.get("why"),
                         "age": None if started is None else max(0.0, now - started), "alive": alive})
-    resources = [{k: item.get(k) for k in ("kind", "id", "name", "why")}
-                 for item in listed.get("resources") or [] if isinstance(item, dict)]
+    resources: List[UnownedResource] = [
+        {"kind": item.get("kind"), "id": item.get("id"), "name": item.get("name"), "why": item.get("why")}
+        for item in map(as_dict, filter(_is_dict, as_list(listed.get("resources"))))]
     return {"v": STATUS_VERSION, "host": _events.host(), "time": _events.now(), "entries": rows(store, table, now),
             "unowned": unowned, "unowned_resources": resources,
             "sweep": {"time": iso(last.get("at")), "result": last.get("result")},
             "errors": [] if table is not None else ["the process table cannot be read"]}
 
 
+def _is_dict(value: Any) -> bool:
+    return isinstance(value, dict)
+
+
 def _record(store: Store, name: str) -> Dict[str, Any]:
-    data = read_json(store.root / name)
-    return data if isinstance(data, dict) else {}
+    return as_dict(read_json(store.root / name))
 
 
 def capabilities(store: Store) -> Dict[str, Any]:
@@ -95,7 +163,7 @@ def capabilities(store: Store) -> Dict[str, Any]:
 
 # For people (without --json)
 
-def rows_text(found: List[Dict[str, Any]]) -> str:
+def rows_text(found: List[Row]) -> str:
     """Rows as the `list` table."""
     lines = [f"{'ID':8} {'STATE':8} {'OWNER':34} {'AGE':>7} {'TTL':>7} {'KEEP':7} {'PID':>6} {'PROCS':>5}  COMMAND"]
     for r in found:
@@ -109,7 +177,7 @@ def rows_text(found: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def status_text(snapshot: Dict[str, Any]) -> str:
+def status_text(snapshot: Status) -> str:
     """The snapshot as `status` prints it: the list table, the unowned processes and resources, a summary line."""
     lines = [rows_text(snapshot["entries"])] if snapshot["entries"] else []
     lines += [f"unowned pid {item['pid']} ({item['why']}): {str(item['cmd'])[:120]}" for item in snapshot["unowned"]]

@@ -20,11 +20,12 @@ import os
 from pathlib import Path
 import secrets
 import tempfile
-from typing import Any, Callable, Dict, Iterator, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, cast
+
+if TYPE_CHECKING:
+    from .entry import Entry
 
 VERSION = 1
-
-Entry = Dict[str, Any]
 
 
 def state_dir() -> Path:
@@ -76,6 +77,22 @@ def read_json(path: Path) -> Any:
         return None
 
 
+def as_dict(value: Any) -> Dict[str, Any]:
+    """A JSON object as read (its values unchecked), or {} for anything else."""
+    return cast(Dict[str, Any], value) if isinstance(value, dict) else {}
+
+
+def as_list(value: Any) -> List[Any]:
+    """A JSON array as read (its items unchecked), or [] for anything else."""
+    return cast(List[Any], value) if isinstance(value, list) else []
+
+
+def entry_of(data: Any) -> Optional[Entry]:
+    """A JSON object read from an entry file as an Entry; anything else is not one. Its values are as the file
+    holds them: readers check what they rely on, as they always did."""
+    return cast("Entry", data) if isinstance(data, dict) else None
+
+
 class Store:
     def __init__(self, root: Optional[Path] = None):
         self.root = root or state_dir()
@@ -108,7 +125,7 @@ class Store:
             data = read_json(self.path(entry_id))
         except ValueError:
             return None
-        return data if isinstance(data, dict) else None
+        return entry_of(data)
 
     def save(self, entry: Entry) -> None:
         write_atomic(self.path(entry["id"]), entry)
@@ -122,11 +139,11 @@ class Store:
         for name in names:
             if name.endswith(".json") and not name.startswith("."):
                 data = read_json(self.entries_dir / name)
-                if isinstance(data, dict) and isinstance(data.get("id"), str):
-                    found.append(data)
+                if isinstance(as_dict(data).get("id"), str):
+                    found.append(cast("Entry", data))
         return sorted(found, key=lambda e: e.get("created") or 0)
 
-    def update(self, entry_id: str, change: Callable[[Entry], Optional[bool]]) -> Optional[Entry]:
+    def update(self, entry_id: str, change: Callable[["Entry"], Optional[bool]]) -> Optional[Entry]:
         """Read, change and write one entry under the lock; `change` returning False writes nothing."""
         with self.lock():
             entry = self.load(entry_id)

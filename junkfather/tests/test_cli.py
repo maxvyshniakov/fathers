@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from typing import Any, Dict, List, cast
 import unittest
 
 from support import ROOT, Case
@@ -14,8 +15,9 @@ from junkfather import changelog, cli, defaults, text
 
 class DispatchTests(unittest.TestCase):
     def test_every_command_has_a_handler(self):
-        sub = next(a for a in cli.parser()._actions if isinstance(a, argparse._SubParsersAction))
-        self.assertEqual(sorted(sub.choices), sorted(cli.COMMANDS))
+        actions: List[argparse.Action] = vars(cli.parser())["_actions"]  # argparse has no public list of them
+        choices = next(cast(Dict[str, Any], a.choices) for a in actions if a.nargs == argparse.PARSER)
+        self.assertEqual(sorted(choices), sorted(cli.COMMANDS))
 
 
 class WithoutJsonTests(Case):

@@ -12,11 +12,11 @@ import os
 from pathlib import Path
 import re
 import subprocess
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence, cast
 import unittest
 from unittest import mock
 
-from support import ROOT, Case, proc, table
+from support import ROOT, Case, as_entry, plain, proc, table
 
 from junkfather import changelog, events, launch, procs, reap, resources, sweep
 
@@ -38,19 +38,20 @@ class Recorder:
         self.steps: List[Dict[str, Any]] = []
         self.pids: List[int] = []
 
-    def pid(self, pid: int) -> int:
+    def pid(self, pid: Any) -> Any:
         if pid not in self.pids:
             self.pids.append(pid)
         return pid
 
-    def run(self, *args: str, env: Dict[str, str], input: Optional[str] = None) -> subprocess.CompletedProcess:
+    def run(self, *args: str, env: Dict[str, str], input: Optional[str] = None) -> subprocess.CompletedProcess[str]:
         result = self.case.cli(*args, env=env, input=input)
         self.steps.append({"args": list(args), "code": result.returncode, "out": result.stdout,
                            "err": result.stderr})
         return result
 
     def snapshot(self, name: str) -> None:
-        entries = sorted(self.case.store.entries(), key=lambda e: (e.get("created") or 0, e["id"]))
+        entries: List[Dict[str, Any]] = [plain(e) for e in sorted(self.case.store.entries(),
+                                                                 key=lambda e: (e.get("created") or 0, e["id"]))]
         for entry in entries:
             if entry.get("label") == "short-lived" and entry.get("seen"):
                 entry["seen"] = "<what ps showed of a command that may have exited>"
@@ -58,7 +59,7 @@ class Recorder:
                 if isinstance(entry.get(key), int):
                     self.pid(entry[key])
             for key in ("supervisor", "owner"):
-                if isinstance((entry.get(key) or {}).get("pid"), int):
+                if isinstance(cast(Dict[str, Any], entry.get(key) or {}).get("pid"), int):
                     self.pid(entry[key]["pid"])
         path = self.case.state / "events.jsonl"
         lines = path.read_text().splitlines() if path.exists() else []
@@ -81,9 +82,10 @@ class Recorder:
 
 def mask(value: Any) -> Any:
     if isinstance(value, dict):
-        return {k: ("<v>" if k in VOLATILE and v is not None else mask(v)) for k, v in value.items()}
+        return {k: ("<v>" if k in VOLATILE and v is not None else mask(v))
+                for k, v in cast(Mapping[str, Any], value).items()}
     if isinstance(value, list):
-        return [mask(v) for v in value]
+        return [mask(v) for v in cast(Sequence[Any], value)]
     if isinstance(value, str) and value.startswith(("{", "[")):
         try:
             return {"json": mask(json.loads(value))}
@@ -109,7 +111,7 @@ class GoldenTests(Case):
             path.write_text(text)
         self.assertEqual(path.read_text(), text, f"{name}: entries, events or output changed")
 
-    def child(self) -> subprocess.Popen:
+    def child(self) -> subprocess.Popen[Any]:
         child = self.spawn("sleep", "600", start_new_session=True)
         self.record.pid(child.pid)
         return child
@@ -119,7 +121,7 @@ class GoldenTests(Case):
         r.run("own", "--ttl", "1m", "--label", "short-lived", "--", "sh", "-c", "exit 3", env=self.as_claude)
         r.snapshot("attached exited")
         owned = r.run("own", "--detach", "--ttl", "1h", "--", "sleep", "600", env=self.as_claude)
-        entry = self.store.load(owned.stdout.split()[1]) or {}
+        entry = self.loaded(owned.stdout.split()[1])
         r.pid(entry["pid"])
         r.pid(entry["supervisor"]["pid"])
         r.snapshot("detached running")
@@ -219,9 +221,9 @@ class GoldenTests(Case):
         me = os.getpid()
         now = 1_900_000_000.0
         here = table(proc(me, ppid=1, start="Thu Nov 12 09:00:00 2026", cmd="python3"))
-        base = {"v": 1, "argv": ["sleep", "600"], "keep": "owner", "owner": {}, "group": True, "ttl": 3600.0,
-                "expires": now + 3600, "known": [], "mode": "detached"}
-        entries = [
+        base: Dict[str, Any] = {"v": 1, "argv": ["sleep", "600"], "keep": "owner", "owner": {}, "group": True,
+                                "ttl": 3600.0, "expires": now + 3600, "known": [], "mode": "detached"}
+        entries: List[Dict[str, Any]] = [
             {**base, "id": "j000001", "state": "starting", "created": now - 61, "pid": None},
             {**base, "id": "j000002", "state": "starting", "created": now - 30, "pid": None},
             {**base, "id": "j000003", "state": "running", "created": now - 10, "pid": 4243, "pgid": 4243,
@@ -234,8 +236,8 @@ class GoldenTests(Case):
              "resource": {"kind": "command", "id": "gone", "alive": ["false"], "stop": ["true"]}},
         ]
         for entry in entries:
-            self.store.save(entry)
-        with mock.patch.object(sweep._resources, "unowned", return_value=([], [])):
+            self.store.save(as_entry(entry))
+        with mock.patch.object(resources, "unowned", return_value=([], [])):
             dry = sweep.sweep(self.store, dry_run=True, table=here, cwds={}, sessions=[], now=now)
             self.record.steps.append({"sweep": "dry", "report": dry})
             done = sweep.sweep(self.store, table=here, cwds={}, sessions=[], now=now)
@@ -284,19 +286,28 @@ class GoldenTests(Case):
         cwds = {510: f"{root}/s1", 600: f"{root}/s1", 601: f"{root}/s1", 700: f"{root}/s1", 701: f"{root}/s1",
                 710: f"{root}/s1", 711: f"{root}/s1", 900: f"{root}/s1", 910: f"{root}/s1", 920: f"{root}/s1",
                 930: "/repo/.claude/worktrees/w1"}
-        owned = {"v": 1, "id": "j0000a1", "state": "running", "pid": 920, "pgid": 920, "start": B, "seen": "sleep 600",
-                 "group": True, "known": [[920, B]], "argv": ["sleep", "600"], "expires": 1_900_003_600.0,
-                 "keep": "owner", "owner": {}, "created": 1_899_999_000.0, "mode": "detached", "ttl": 3600.0}
-        held = {**owned, "id": "j0000a2", "pid": None, "pgid": None, "known": [], "mode": "resource", "group": False,
-                "resource": {"kind": "simulator", "id": "UDID-HELD"}}
-        self.store.save(owned)
-        self.store.save(held)
-        listings = {"simulator": {"UDID-HELD": {"name": "iPhone"}, "UDID-FREE": {"name": "iPad"}},
-                    "docker": None, "tailscale-serve": {"https:443": {"target": "http://127.0.0.1:6006"}},
-                    "safari-tp": {"4242": {"pid": 4242}}}
+        owned: Dict[str, Any] = {
+            "v": 1, "id": "j0000a1", "state": "running", "pid": 920, "pgid": 920, "start": B, "seen": "sleep 600",
+            "group": True, "known": [[920, B]], "argv": ["sleep", "600"], "expires": 1_900_003_600.0,
+            "keep": "owner", "owner": {}, "created": 1_899_999_000.0, "mode": "detached", "ttl": 3600.0}
+        held: Dict[str, Any] = {**owned, "id": "j0000a2", "pid": None, "pgid": None, "known": [], "mode": "resource",
+                                "group": False, "resource": {"kind": "simulator", "id": "UDID-HELD"}}
+        self.store.save(as_entry(owned))
+        self.store.save(as_entry(held))
+        listings: Dict[str, Any] = {
+            "simulator": {"UDID-HELD": {"name": "iPhone"}, "UDID-FREE": {"name": "iPad"}},
+            "docker": None, "tailscale-serve": {"https:443": {"target": "http://127.0.0.1:6006"}},
+            "safari-tp": {"4242": {"pid": 4242}}}
+
+        def fake_tool(name: str) -> str:
+            return "/usr/bin/true"
+
+        def fake_listing(snap: resources.Snapshot, kind: str) -> Any:
+            return listings.get(kind)
+
         with mock.patch.dict(os.environ, {"JUNKFATHER_SCRATCH_ROOTS": root}), \
-                mock.patch.object(resources, "tool", lambda name: "/usr/bin/true"), \
-                mock.patch.object(resources.Snapshot, "listing", lambda snap, kind: listings.get(kind)):
+                mock.patch.object(resources, "tool", fake_tool), \
+                mock.patch.object(resources.Snapshot, "listing", fake_listing):
             report = sweep.sweep(self.store, table=here, cwds=cwds, sessions=[], now=1_900_000_000.0)
         self.record.steps.append({"sweep": report, "text": sweep.text(report),
                                   "unowned.json": json.loads((self.state / "unowned.json").read_text())})
@@ -331,7 +342,7 @@ class GoldenTests(Case):
         }
         for name, entry in cases.items():
             for force in (False, True):
-                found, how = reap.members(entry, here, force=force)
+                found, how = reap.members(as_entry(entry), here, force=force)
                 self.record.steps.append({"members": name, "force": force, "how": how,
                                           "pids": [p.pid for p in found]})
         self.compare("members")
@@ -428,11 +439,11 @@ class GoldenTests(Case):
                                         "agent_type": "Explore", "tool_input": {"command": command}}),
               env=self.as_claude)
         owned = r.run("own", "--detach", "--ttl", "1h", "--", "sleep", "600", env=self.as_claude)
-        entry = self.store.load(owned.stdout.split()[1]) or {}
+        entry = self.loaded(owned.stdout.split()[1])
         r.pid(entry["pid"])
         r.pid(entry["supervisor"]["pid"])
         r.run("own", "--detach", "--ttl", "1h", "--", "sleep", "600", env=self.as_claude)
-        second = [e for e in self.store.entries() if e["id"] != entry["id"]][0]
+        second = [plain(e) for e in self.store.entries() if e["id"] != entry["id"]][0]
         r.pid(second["pid"])
         r.pid(second["supervisor"]["pid"])
         r.snapshot("owned")

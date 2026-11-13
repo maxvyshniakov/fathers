@@ -8,6 +8,7 @@ import json
 import os
 import re
 import subprocess
+from typing import Any, List
 import unittest
 
 from support import ROOT, Case, proc, table
@@ -23,9 +24,9 @@ class RefusalTests(Case):
         self.claude = bin_dir / "claude"  # its command line reads `.../claude 600`: an agent session by its command
         self.claude.symlink_to("/bin/sleep")
 
-    def started(self, child: subprocess.Popen, below: bool = False) -> int:
+    def started(self, child: subprocess.Popen[Any], below: bool = False) -> int:
         """The pid of `child`, or with `below` of its child, once ps shows it running `600`."""
-        found: list = []
+        found: List[int] = []
 
         def ready() -> bool:
             here = procs.Table.read()

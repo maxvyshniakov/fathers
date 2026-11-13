@@ -11,7 +11,7 @@ import calendar
 import os
 import subprocess
 import time
-from typing import Any, Dict, List, NamedTuple, Optional
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
 
 from .defaults import PS_TIMEOUT
 C_LOCALE = {"LC_ALL": "C", "LANG": "C", "TZ": "UTC"}
@@ -49,7 +49,8 @@ def command_matches(now: str, seen: str) -> bool:
     process renamed its arguments."""
     if now == seen:
         return True
-    first = lambda text: os.path.basename((text.split() or [""])[0])  # noqa: E731
+    def first(text: str) -> str:
+        return os.path.basename((text.split() or [""])[0])
     return bool(first(now)) and first(now) == first(seen)
 
 
@@ -61,7 +62,7 @@ def started_at(lstart: str) -> Optional[float]:
         return None
 
 
-def run(argv: List[str], ok=(0,)) -> str:
+def run(argv: List[str], ok: Tuple[int, ...] = (0,)) -> str:
     try:
         result = subprocess.run(argv, capture_output=True, text=True, timeout=PS_TIMEOUT,
                                 env={**os.environ, **C_LOCALE})
@@ -119,7 +120,7 @@ class Table:
             here = self.procs[here].ppid
         return chain
 
-    def descendants(self, pid: int, prune=None) -> List[Proc]:
+    def descendants(self, pid: int, prune: Optional[Callable[[Proc], bool]] = None) -> List[Proc]:
         """Every process below pid; with `prune`, a process it accepts is left out together with its subtree."""
         found: List[Proc] = []
         seen = {pid}

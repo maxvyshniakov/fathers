@@ -26,6 +26,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from typing import Any, Dict, List, cast
 
 sys.dont_write_bytecode = True
 MIN_PYTHON = (3, 9)
@@ -115,11 +116,12 @@ def launchd(command: Path) -> Path:
     write_atomic(plist, text, 0o644)
     domain = f"gui/{os.getuid()}"
     subprocess.run(["launchctl", "bootout", f"{domain}/com.junkfather.sweep"], capture_output=True)
-    for attempt in range(5):  # bootout finishes asynchronously; an early bootstrap fails with error 5
-        loaded = subprocess.run(["launchctl", "bootstrap", domain, str(plist)], capture_output=True, text=True)
+    loaded = subprocess.run(["launchctl", "bootstrap", domain, str(plist)], capture_output=True, text=True)
+    for attempt in range(4):  # bootout finishes asynchronously; an early bootstrap fails with error 5
         if not loaded.returncode:
             break
         time.sleep(0.5 * (attempt + 1))
+        loaded = subprocess.run(["launchctl", "bootstrap", domain, str(plist)], capture_output=True, text=True)
     if loaded.returncode:
         raise InstallError(f"launchctl bootstrap: {loaded.stderr.strip()}")
     return plist
@@ -136,9 +138,10 @@ def mastack(command: Path) -> None:
     except ValueError as error:
         raise InstallError(f"{path} is not JSON: {error}") from None
     hook = HOOK.format(command=shlex.quote(str(command)))
-    lifecycle = data.setdefault("lifecycle", {})
-    if not isinstance(lifecycle, dict):
+    found = cast(Dict[str, Any], data).setdefault("lifecycle", {}) if isinstance(data, dict) else None
+    if not isinstance(found, dict):
         raise InstallError(f"`lifecycle` in {path} is not an object")
+    lifecycle = cast(Dict[str, List[Any]], found)
     for event in EVENTS:
         entries = lifecycle.setdefault(event, [])
         if hook not in entries:

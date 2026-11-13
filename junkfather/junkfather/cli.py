@@ -30,7 +30,7 @@ import os
 import shlex
 import sys
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from . import __version__
 from . import changelog as _changelog
@@ -158,7 +158,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
 
-def show(data: Dict[str, Any]) -> None:
+def show(data: Mapping[str, Any]) -> None:
     print(json.dumps(data, sort_keys=True))
 
 
@@ -298,7 +298,7 @@ def hand_command(store: Store, args: argparse.Namespace) -> int:
     if moved is None or not moved[1]:
         print(f"junkfather hand: no running entry {args.id}", file=sys.stderr)
         return 1
-    (entry, before), owner = moved, moved[0]["owner"]
+    (entry, before), owner = moved, moved[0].get("owner") or {}
     _events.write(store.root, "entry.handed", _events.subject(entry), _events.caller(),
                   {"from": {k: before.get(k) for k in ("kind", "session", "agent", "lane")},
                    "to": {k: owner.get(k) for k in ("kind", "session", "lane")}})

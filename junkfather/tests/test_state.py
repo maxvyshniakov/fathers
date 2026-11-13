@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Any, Callable, List
 import unittest
 from unittest import mock
 
@@ -23,11 +24,18 @@ class WriteAtomicTests(Case):
 
     def test_a_write_reaches_the_disk_before_it_replaces_the_file(self):
         path = self.tmp / "entries" / "j1.json"
-        calls = []
+        calls: List[str] = []
         real_fsync, real_replace = os.fsync, os.replace
-        with mock.patch.object(state.os, "fsync", side_effect=lambda fd: (calls.append("fsync"), real_fsync(fd))), \
-                mock.patch.object(state.os, "replace",
-                                  side_effect=lambda a, b: (calls.append("replace"), real_replace(a, b))):
+
+        def fsync(fd: int) -> None:
+            calls.append("fsync")
+            real_fsync(fd)
+
+        def replace(a: Any, b: Any) -> None:
+            calls.append("replace")
+            real_replace(a, b)
+        with mock.patch.object(state.os, "fsync", side_effect=fsync), \
+                mock.patch.object(state.os, "replace", side_effect=replace):
             state.write_atomic(path, {"id": "j1"})
         self.assertEqual("fsync", calls[0])
         self.assertIn("replace", calls)
@@ -38,8 +46,8 @@ class WriteAtomicTests(Case):
         path = self.tmp / "entries" / "j1.json"
         real_fsync = os.fsync
 
-        def fsync_failing(code):
-            def fsync(fd):
+        def fsync_failing(code: int) -> Callable[[int], None]:
+            def fsync(fd: int) -> None:
                 if os.path.isdir(f"/dev/fd/{fd}"):
                     raise OSError(code, os.strerror(code))
                 real_fsync(fd)
