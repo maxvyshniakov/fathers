@@ -78,14 +78,23 @@ def ps_environment() -> dict | None:
 
 def processes() -> dict[int, tuple[int, str]]:
     """Live pid -> (ppid, start time); the start time tells a reused pid from the holder. Zombies are dead. The same
-    ps flags serve macOS and Linux (procps-ng)."""
-    result = subprocess.run(["ps", "-axo", "pid=,ppid=,stat=,lstart="], capture_output=True, text=True,
-                            env=ps_environment())
-    table = {}
+    ps flags serve macOS and Linux (procps-ng). Raises ProcessTableError for a ps that fails, takes longer than
+    PS_TIMEOUT, or gives a table without this process in it: such a table is no table, and reaping by it would
+    take every lease from commands that still run."""
+    try:
+        result = subprocess.run(["ps", "-axo", "pid=,ppid=,stat=,lstart="], capture_output=True, text=True,
+                                env=ps_environment(), timeout=_config.PS_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise _config.ProcessTableError(f"ps: {error}") from None
+    if result.returncode:
+        raise _config.ProcessTableError(f"ps exited {result.returncode}: {result.stderr.strip()[:200]}")
+    table: dict[int, tuple[int, str]] = {}
     for line in result.stdout.splitlines():
         parts = line.split(None, 3)
         if len(parts) == 4 and parts[0].isdigit() and parts[1].isdigit() and not parts[2].startswith("Z"):
             table[int(parts[0])] = (int(parts[1]), parts[3].strip())
+    if os.getpid() not in table:
+        raise _config.ProcessTableError(f"ps listed {len(table)} processes and not this one ({os.getpid()})")
     return table
 
 

@@ -319,7 +319,7 @@ def configure(changes: dict[str, dict[str, Any] | None], *,
     applies at once, also while requests run or wait; the waiters it lets start are granted before this returns.
     `expected` names files as their bytes were read, `revisions` as settings.revision() tokens (`settings set
     --revision`); a file changed since is a Conflict and nothing is saved."""
-    from . import leases, platform, schedule
+    from . import leases, schedule
     directory = _config.state_dir()
     if set(changes) - {"capacity.json", "order.json"}:
         raise _config.SlotError("unknown configuration file")
@@ -377,4 +377,4 @@ def configure(changes: dict[str, dict[str, Any] | None], *,
                             {"reset": True} if changes[name] is None else {"saved": changes[name]})
         # Grant now what the new settings start, as a release does: waiters look less often the longer they wait.
         with contextlib.suppress(_config.SlotError, OSError):
-            cast(Any, leases).grant(directory, platform.processes())
+            cast(Any, leases).grant(directory, cast(Any, leases).process_table(directory))

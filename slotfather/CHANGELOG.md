@@ -119,6 +119,10 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- A `ps` that fails, times out, prints nothing or leaves out its caller no longer makes every holder look dead:
+  that look reaps no lease and grants nothing, says so in queue.log (`skipped reaping: ...`) and EVENTS
+  (`reap.skipped`), and waiters keep their place until the next good table. The dashboard's CPU sample refuses
+  such a table too.
 - A batch `-n all` request no longer waits for as long as normal and interactive work keeps coming: on 2026-11-11 a
   Safari profile run waited 6 h 14 min and was given up. It now ages to normal after 30 minutes and is then the head.
 - QUEUE, EVENTS, the details, help, the changelog and Settings keep a blank row over and under their content

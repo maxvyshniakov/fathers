@@ -64,7 +64,11 @@ def parse_utc(value: object) -> datetime.datetime | None:
 
 def process_usage() -> tuple[dict[int, tuple[float, int, str]], dict[int, list[int]]]:
     """pid -> (CPU percent, resident KB, command name) for every process, and ppid -> its child pids."""
-    result = subprocess.run(["ps", "-axo", "pid=,ppid=,%cpu=,rss=,comm="], capture_output=True, text=True)
+    try:
+        result = subprocess.run(["ps", "-axo", "pid=,ppid=,%cpu=,rss=,comm="], capture_output=True, text=True,
+                                timeout=_config.PS_TIMEOUT)
+    except subprocess.TimeoutExpired as error:
+        raise OSError(f"CPU process sample failed: {error}") from None
     if result.returncode:
         raise OSError(f"CPU process sample failed: ps exited {result.returncode}")
     own: dict[int, tuple[float, int, str]] = {}
@@ -75,6 +79,8 @@ def process_usage() -> tuple[dict[int, tuple[float, int, str]], dict[int, list[i
             with contextlib.suppress(ValueError):
                 own[int(parts[0])] = (float(parts[2].replace(",", ".")), int(parts[3]), os.path.basename(parts[4]))
                 children.setdefault(int(parts[1]), []).append(int(parts[0]))
+    if os.getpid() not in own:  # an empty or cut table is no sample (fathers#121)
+        raise OSError(f"CPU process sample failed: ps listed {len(own)} processes and not this one")
     return own, children
 
 
