@@ -8,6 +8,10 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- The free-disk minimum under which `start` refuses a lane is part of the runtime contract (fathers#46):
+  `capabilities --json` reports it as `"host": {"min_disk_gb": 150}` (capability `host.min_disk_gb`), and a
+  project hook finds it in `LANEFATHER_MIN_DISK_GB` and `<legacy_env_prefix>MIN_DISK_GB`, next to `DISK_FREE_GB`,
+  so a project no longer reads `MIN_DISK_GB` out of the installed `host.py`.
 - `gc` collects the worktrees Claude Code and Codex sessions leave under `.claude/worktrees`, not only `agent-*`
   and `lane-*` ones (fathers#44): the patterns are project config, `[gc] dirs` (default `agent-*`, `lane-*`,
   `.claude/worktrees/*`, `codex-*`) and `[gc] branches` (default `worktree-agent-*`, `lane/*`, `claude/*`,

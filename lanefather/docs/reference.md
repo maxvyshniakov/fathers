@@ -408,6 +408,16 @@ manifest; a changed or missing manifest refuses verification. A checkout reports
 The installer accepts committed shipping inputs and reuses an identical existing
 release without replacing its bytes.
 
+Free disk (fathers#46). Two values, not to be confused:
+
+| Value | Meaning | Where a project reads it |
+| --- | --- | --- |
+| `host.min_disk_gb` | the free disk, in decimal GB, under which `start` refuses a lane (150); fixed in this release | `capabilities --json` (`"host": {"min_disk_gb": 150}`, capability `host.min_disk_gb`); in a project hook, `LANEFATHER_MIN_DISK_GB` and each other name of the setting (`<legacy_env_prefix>MIN_DISK_GB`) |
+| `DISK_FREE_GB` | a stand-in for the measured free space of the home volume: tests and hooks set it, admission reads it instead of measuring | `LANEFATHER_DISK_FREE_GB` or `<legacy_env_prefix>DISK_FREE_GB`, as the caller set it |
+
+Lanefather sets the minimum's variables for the hook's run and restores the caller's environment after it; it
+never reads them, so setting one does not change admission.
+
 `lanefather --config /path/to/.lanefather.toml project-hook NAME -- ARGS` runs only
 a named script from `[hooks.project]`, with the project's directory as its working
 directory. The script receives `LANEFATHER_PROJECT`, an explicit
