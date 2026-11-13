@@ -199,7 +199,10 @@ def main(argv: list[str]) -> int:
             "v": 1, "tool": "slotfather", "version": state["version"],
             "dashboard": {"v": 1, "tag": "slot",
                           "snapshot": {"argv": ["status", "--json", "--full"], "versions": [2], "poll": 1},
-                          "settings": {"versions": [1]}, "actions": ["reprioritize"]}})
+                          "settings": {"versions": [1]}, "actions": ["reprioritize"],
+                          # EVENTS' log (fathers#84), beside the state file: tests' LiveCase.queue() writes it
+                          "events": {"path": os.path.join(os.path.dirname(os.path.abspath(PATH)), "events.jsonl"),
+                                     "versions": [1]}}})
     if argv == ["status", "--json", "--full"]:
         return reply(state.get("snapshot") or idle_snapshot(state))
     if command != "settings" or argv[-1:] != ["--json"]:

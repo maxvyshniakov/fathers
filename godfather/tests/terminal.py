@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import datetime
 import fcntl
+import json
 import os
 import pty
 import re
@@ -52,6 +53,20 @@ def item(label: str, pid: int, kind: str = "held", count: int = 1, **extra: Any)
 def event(n: int, verb: str = "granted") -> dict[str, Any]:
     return {"when": ago(3000 - n), "verb": verb, "count": 1, "label": f"job{n}", "pid": 1000 + n,
             "delta": 1 if verb == "granted" else -1, "detail": "no wait"}
+
+
+def log_line(found: dict[str, Any]) -> str:
+    """A snapshot-style event as a line of Slotfather's event log on this host."""
+    from godfather import events
+
+    granted = found["verb"] == "granted"
+    when = datetime.datetime.fromisoformat(str(found["when"]).replace("Z", "+00:00"))
+    details: dict[str, Any] = {"count": found["count"], "waited": 0} if granted else \
+        {"count": found["count"], "exit": 0, "ran": 60}
+    return json.dumps({"v": 1, "time": events.stamp(when), "host": events.local_host(), "source": "slotfather",
+                       "kind": "lease.granted" if granted else "lease.released",
+                       "subject": {"type": "request", "id": f"r-{found['pid']}", "label": found["label"],
+                                   "pid": found["pid"]}, "actor": {"type": "process"}, "details": details})
 
 
 def snapshot(holders: list[dict[str, Any]] | None = None, waiters: list[dict[str, Any]] | None = None,
@@ -173,6 +188,14 @@ class LiveCase(unittest.TestCase):
         self.addCleanup(self.fake.close)
 
     def queue(self, **parts: Any) -> None:
+        """The fake's snapshot; its `events` go to the fake's event log (fathers#84: EVENTS reads the log), each
+        written once, in order, as Slotfather logs a grant or a release."""
+        self.logged = getattr(self, "logged", 0)
+        events: list[dict[str, Any]] = parts.pop("events", None) or []
+        with open(self.fake.root / "events.jsonl", "a", encoding="utf-8") as handle:
+            for found in events[self.logged:]:
+                handle.write(log_line(found) + "\n")
+        self.logged = max(self.logged, len(events))
         self.fake.update(snapshot=snapshot(**parts))
 
     def start(self, rows: int = 40, columns: int = 120, argv: list[str] | None = None, **extra: str) -> Terminal:
