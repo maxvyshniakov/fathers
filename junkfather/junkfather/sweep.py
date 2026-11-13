@@ -180,7 +180,7 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
         if supervised:
             owned.add(supervisor["pid"])  # and it keeps `known` fresh itself
         elif not dry_run:
-            store.update(entry["id"], refresher([[p.pid, p.start] for p in members]))
+            store.update(entry["id"], refresher(members))
     if cwds is None:
         cwds = _procs.working_dirs(os.getuid())
         if not cwds:
@@ -263,11 +263,11 @@ def result_of(report: Dict[str, Any]) -> Dict[str, Any]:
             "pruned": report["pruned"], "errors": report["errors"], "notes": report.get("notes") or []}
 
 
-def refresher(known: List[List[Any]]):
+def refresher(members: List[_procs.Proc]):
     def change(e: Dict[str, Any]) -> Optional[bool]:
         if e.get("state") != "running":
             return False
-        e["known"] = known
+        e.update(_reap.known_fields(members))
         return None
     return change
 

@@ -22,7 +22,7 @@ import signal
 import subprocess
 import sys
 import time
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from . import events as _events
 from . import owner as _owner
@@ -34,6 +34,13 @@ KNOWN_EVERY = 15.0  # seconds between refreshes of an entry's known members
 POLL = 0.5  # seconds between checks of the child and the entry
 DETACH_WAIT = 15.0  # seconds `own --detach` waits for the supervisor to start the command
 PACKAGE_ROOT = str(Path(__file__).resolve().parent.parent)
+RETRY_FIRST = 1.0  # seconds before the supervisor tries a failed TTL reap again; doubled per failure
+RETRY_MAX = 60.0  # the longest wait between two tries
+
+
+def retry_delay(failures: int) -> float:
+    """How long the supervisor waits after the `failures`-th failed TTL reap in a row."""
+    return min(RETRY_MAX, RETRY_FIRST * 2 ** min(max(failures - 1, 0), 16))
 
 
 def self_command(*args: str) -> List[str]:
@@ -47,7 +54,8 @@ def new_entry(store: Store, argv: List[str], ttl: float, keep: str, label: Optio
     now = time.time()
     return {"v": VERSION, "id": store.new_id(), "label": label, "argv": argv, "cwd": cwd, "created": now,
             "ttl": ttl, "expires": now + ttl, "keep": keep, "owner": owner, "mode": mode, "state": "starting",
-            "pid": None, "pgid": None, "start": None, "seen": None, "group": True, "known": [], "handed": [],
+            "pid": None, "pgid": None, "start": None, "seen": None, "group": True, "known": [], "known_seen": [],
+            "handed": [],
             "supervisor": None, "log": None, "claim_note": owner.pop("claim_note", "")}
 
 
@@ -87,8 +95,7 @@ def record_child(store: Store, entry_id: str, child: subprocess.Popen, superviso
             e.update(state="failed", ended=time.time(), error="its identity could not be read")
             return None
         e.update(state="running", pid=child.pid, pgid=child.pid, start=proc.start, seen=proc.cmd,
-                 supervisor={"pid": supervisor, "start": me.start if me else None},
-                 known=[[child.pid, proc.start]])
+                 supervisor={"pid": supervisor, "start": me.start if me else None}, **_reap.known_fields([proc]))
         return None
     entry = store.update(entry_id, fill)
     if entry is None or entry.get("state") != "running" or entry.get("pid") != child.pid:
@@ -103,20 +110,26 @@ def record_child(store: Store, entry_id: str, child: subprocess.Popen, superviso
 
 
 class Supervisor:
-    """Waits on the leader, enforces the TTL, keeps `known` fresh, and stops the group on a signal."""
+    """Waits on the leader, enforces the TTL, keeps `known` fresh, and stops the group on a signal. A TTL reap that
+    fails is tried again after a capped backoff (retry_delay), and only the first failure of a streak is an event.
+    Tests inject `clock` (monotonic), `pause` and `reaper`."""
 
     def __init__(self, store: Store, entry_id: str, child: subprocess.Popen, quiet: bool = False,
-                 attached: bool = True, catcher: Optional["Catcher"] = None):
+                 attached: bool = True, catcher: Optional["Catcher"] = None,
+                 clock: Callable[[], float] = time.monotonic, pause: Callable[[float], None] = time.sleep,
+                 reaper: Optional[Callable[..., Dict[str, Any]]] = None):
         self.store, self.id, self.child, self.quiet, self.attached = store, entry_id, child, quiet, attached
         self.catcher = catcher or Catcher()
+        self.clock, self.pause, self.reaper = clock, pause, reaper or _reap.reap
 
     def say(self, text: str) -> None:
         if not self.quiet:
             print(f"junkfather: {text}", file=sys.stderr, flush=True)
 
     def run(self) -> int:
-        next_known = time.monotonic() + KNOWN_EVERY
+        next_known = self.clock() + KNOWN_EVERY
         code: Optional[int] = None
+        failures, retry_at = 0, 0.0
         while True:
             signalled = self.catcher.signum
             if signalled is not None:
@@ -145,12 +158,20 @@ class Supervisor:
                 if entry is not None and entry.get("state") == "reaped":
                     self.say(f"{self.id} reaped ({(entry.get('end') or {}).get('reason')})")
                 return status(code)
-            if entry.get("state") == "running" and time.time() >= float(entry.get("expires") or 0):
-                result = _reap.reap(self.store, self.id, "ttl expired", actor=_events.tool("supervisor"))
-                self.say(f"{self.id} reached its TTL: {result['result']}")
-                continue
-            if exited_now or time.monotonic() >= next_known:
-                next_known = time.monotonic() + KNOWN_EVERY
+            if entry.get("state") == "running" and time.time() >= float(entry.get("expires") or 0) \
+                    and self.clock() >= retry_at:
+                result = self.reaper(self.store, self.id, "ttl expired", actor=_events.tool("supervisor"),
+                                     report_failure=not failures)
+                if result["result"] != "failed":
+                    self.say(f"{self.id} reached its TTL: {result['result']}")
+                    continue
+                failures += 1
+                retry_at = self.clock() + retry_delay(failures)
+                if failures == 1:
+                    self.say(f"{self.id} reached its TTL: failed ({result['reason']}); trying again with a backoff "
+                             f"up to {RETRY_MAX:.0f} s")
+            if exited_now or self.clock() >= next_known:
+                next_known = self.clock() + KNOWN_EVERY
                 done, left = self.refresh(code)
                 if done:
                     return status(code)
@@ -158,7 +179,7 @@ class Supervisor:
                     self.say(f"{self.id}: the command exited; {left} process(es) it left keep the entry running "
                              f"until its owner ends or its TTL passes (now: junkfather reap --id {self.id})")
                     return status(code)
-            time.sleep(POLL)
+            self.pause(POLL)
 
     def refresh(self, code: Optional[int]) -> "tuple[bool, int]":
         """Refresh `known`. Returns (the entry exited: the leader is gone and nothing of it remains, how many
@@ -172,15 +193,17 @@ class Supervisor:
         def change(e: Entry) -> Optional[bool]:
             if e.get("state") != "running":
                 return False
-            members, _ = _reap.members(e, table)
+            # While our child runs unwaited its pid cannot be reused: it is the leader whatever command it shows now
+            # (a launcher such as /usr/bin/python3 execs another program), and known_seen records that command.
+            members, _ = _reap.members(e, table, ours=code is None and self.child.poll() is None)
             members = [p for p in members if p.pid != os.getpid()]
             result["left"] = len(members)
             if members:
-                e["known"] = [[p.pid, p.start] for p in members]
+                e.update(_reap.known_fields(members))
                 return None
             if code is None:
                 return False
-            e.update(state="exited", ended=time.time(), exit=code, known=[])
+            e.update(state="exited", ended=time.time(), exit=code, known=[], known_seen=[])
             result["done"] = True
             return None
 
@@ -355,8 +378,7 @@ def adopt(store: Store, pid: int, ttl: float, keep: str, label: Optional[str], e
         who["agent"] = agent
     entry = new_entry(store, [proc.cmd], ttl, keep, label, who, "adopted", os.getcwd())
     entry.update(state="running", pid=pid, pgid=proc.pgid, start=proc.start, seen=proc.cmd,
-                 group=proc.pgid == pid,
-                 known=[[p.pid, p.start] for p in [proc, *table.descendants(pid, prune=_reap.unsafe)]])
+                 group=proc.pgid == pid, **_reap.known_fields([proc, *table.descendants(pid, prune=_reap.unsafe)]))
     with store.lock():
         store.save(entry)
     _events.write(store.root, "entry.adopted", _events.subject(entry), _events.actor_of(who),

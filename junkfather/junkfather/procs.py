@@ -1,8 +1,9 @@
 """The process table: one `ps` read, identities (pid plus start time), trees and process groups.
 
 A process is known by its pid and its start time (`ps -o lstart` in the C locale and UTC, so every caller reads the
-same text whatever its TZ). A pid alone can be reused; the pair cannot within the lifetime of a machine's clock.
-Every decision to signal a process goes through that pair.
+same text whatever its TZ). A pid alone can be reused, and so can the pair: lstart has one-second granularity, so a
+pid that ends and is taken again within the same second keeps the same pair. The command is therefore the second
+factor: every decision to signal a process checks the pid, the start time and the command (reap.command_matches).
 """
 from __future__ import annotations
 
@@ -10,7 +11,7 @@ import calendar
 import os
 import subprocess
 import time
-from typing import Dict, List, NamedTuple, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 TIMEOUT = 10.0  # seconds a ps or lsof call may take
 C_LOCALE = {"LC_ALL": "C", "LANG": "C", "TZ": "UTC"}
@@ -133,17 +134,22 @@ class Table:
         return None if started is None else max(0.0, self.moment - started)
 
 
-def identities(pids: List[int]) -> Dict[int, str]:
-    """pid -> start time for those of `pids` that still run and are not zombies. ProcError when ps cannot be asked:
-    an unreadable answer is never "they are gone"."""
+def identities(pids: List[int], command: bool = False) -> Dict[int, Any]:
+    """pid -> start time (with `command`, pid -> (start time, command)) for those of `pids` that still run and are
+    not zombies. ProcError when ps cannot be asked: an unreadable answer is never "they are gone"."""
     if not pids:
         return {}
-    text = run(["ps", "-o", "pid=,stat=,lstart=", "-p", ",".join(str(pid) for pid in pids)], ok=(0, 1))
-    found: Dict[int, str] = {}
+    fields = "pid=,stat=,lstart=" + (",command=" if command else "")
+    text = run(["ps", "-ww", "-o", fields, "-p", ",".join(str(pid) for pid in pids)], ok=(0, 1))
+    found: Dict[int, Any] = {}
     for line in text.splitlines():
-        parts = line.split(None, 2)
-        if len(parts) == 3 and parts[0].isdigit() and not parts[1].startswith("Z"):
+        parts = line.split(None, 7 if command else 2)
+        if len(parts) < 3 or not parts[0].isdigit() or parts[1].startswith("Z"):
+            continue
+        if not command:
             found[int(parts[0])] = norm(parts[2])
+        elif len(parts) >= 7:
+            found[int(parts[0])] = (norm(" ".join(parts[2:7])), parts[7].strip() if len(parts) > 7 else "")
     return found
 
 
