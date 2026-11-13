@@ -8,6 +8,7 @@ panel, which owns its own state and its calls to `slotfather settings`."""
 from __future__ import annotations
 
 import dataclasses
+import datetime
 from dataclasses import dataclass, field
 from typing import Any, Optional, Union, cast
 
@@ -126,6 +127,7 @@ class AppState:
     news: Any = None  # news.News: what's new, once the tools answered
     read: dict[str, str] = field(default_factory=lambda: cast(dict[str, str], {}))  # news.Read: newest read, by tool
     frame: Frame = Frame()
+    moment: Optional[datetime.datetime] = None  # the wall-clock second the screen is drawn at (Tick; fathers#138)
 
 
 # Events
@@ -147,6 +149,7 @@ class Mouse:
 class ModelLoaded:
     model: Optional[Model]
     problem: Optional[str] = None  # why the model shown is stale
+    colours: int = _common.HOLDER_COLOURS  # the theme's holder colours (theme.Theme.holders()) leases get
 
 
 @dataclass(frozen=True)
@@ -184,7 +187,9 @@ class Drawn:
 
 @dataclass(frozen=True)
 class Tick:
-    """The loop's pass: a Settings change settles and is saved, a notice expires."""
+    """The loop's pass: a Settings change settles and is saved, a notice expires; `moment` is the wall clock, which
+    the state keeps to the second, so ages on screen move once a second and a pass within one changes nothing."""
+    moment: Optional[datetime.datetime] = None
 
 
 Event = Union[Key, Mouse, ModelLoaded, ModelFailed, DetailsLoaded, SettingsOpened, SettingsFailed, NewsLoaded, Drawn,
@@ -394,14 +399,27 @@ def settle(state: AppState, now: float) -> Result:
         known = state.details.get(key)
         if known is None or now - known.at >= (DETAILS_RETRY if known.error else DETAILS_FRESH):
             effects.append(Effect("load-details", key, dict(found[index])))
+        if known is not None and known.lane is not None and found[index].get("lane") != known.lane:
+            state = join_lane(state, index, known.lane)
     return state, effects
+
+
+def join_lane(state: AppState, index: int, lane: Any) -> AppState:
+    """The model with the selected entry's loaded lane in it (fathers#138: the reducer joins it, the views only read
+    it): a new model, its entry copied, so the model a view drew never changes."""
+    model = cast(Model, state.model)
+    holders = len(model["holders"])
+    group, position = ("holders", index) if index < holders else ("waiters", index - holders)
+    entries_now = list(model[group])
+    entries_now[position] = dict(entries_now[position], lane=lane)
+    return dataclasses.replace(state, model={**model, group: entries_now})
 
 
 def model_loaded(state: AppState, event: ModelLoaded) -> AppState:
     fresh = event.model
     if fresh is not None and fresh is not state.model:
         colours = dict(state.colours)
-        _common.dashboard_colours(fresh, colours)
+        _common.dashboard_colours(fresh, colours, event.colours)
         state = dataclasses.replace(state, colours=colours, model=fresh)
         state = follow_events(state, cast(list[dict[str, Any]], fresh["events"]))
         ids = _common.entry_ids(items(state))
@@ -441,11 +459,15 @@ def reduce(state: AppState, event: Event, now: float) -> Result:
     elif isinstance(event, Drawn):
         focus = state.focus if state.focus == "requests" or state.focus in event.frame.tables else "requests"
         state = dataclasses.replace(state, frame=event.frame, focus=focus)
-    elif isinstance(state.overlay, SettingsOverlay):  # Tick: a change that settled is saved, and applies at once
-        panel = state.overlay.panel
-        if panel.tick():
-            state, effects = settings_effects(state, "changed")
-        elif str(panel.theme) != state.theme:
-            state, effects = settings_effects(state, "handled")
+    else:
+        second = event.moment.replace(microsecond=0) if event.moment is not None else state.moment
+        if second != state.moment:
+            state = dataclasses.replace(state, moment=second)
+        if isinstance(state.overlay, SettingsOverlay):  # a change that settled is saved, and applies at once
+            panel = state.overlay.panel
+            if panel.tick():
+                state, effects = settings_effects(state, "changed")
+            elif str(panel.theme) != state.theme:
+                state, effects = settings_effects(state, "handled")
     state, more = settle(state, now)
     return state, effects + more

@@ -31,7 +31,7 @@ class OnceTests(LiveCase):
             row = next(i for i, line in enumerate(lines) if title in line)
             self.assertFalse(lines[row + 1][1:lines[row + 1].index("│", 1)].strip(), "a blank padding row first")
             self.assertEqual(lines[row].index(title), lines[row + 2].index(message), "then the message")
-            self.assertIn("╭", lines[row])
+            self.assertIn("┍" if title == "QUEUE" else "╭", lines[row], "QUEUE holds the focus (fathers#139)")
             if title != "EVENTS":
                 self.assertIn("pid", lines[row], "column names belong on the top border")
 
@@ -61,7 +61,7 @@ class OnceTests(LiveCase):
         self.fake.write(state)
         text = self.snapshot()
         self.assertIn("no admission", text)
-        self.assertIn("─ QUEUE ", text)
+        self.assertIn("━ QUEUE ", text)
         self.assertIn("┃  ▶️    holder", text, "the selected row on the frame, its state (#15), then the label")
         self.assertEqual(1, text.count("▶"), "only the selected row has a cursor")
         self.assertRegex(text, r"gate +▪▪▪▪ +waiting #1 ")

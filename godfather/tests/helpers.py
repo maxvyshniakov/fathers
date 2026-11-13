@@ -1,15 +1,13 @@
-"""Shared test seams: the package on sys.path, a frozen clock for the renderers, a fake Slotfather on PATH."""
+"""Shared test seams: the package on sys.path, a time zone, a fake Slotfather on PATH."""
 from __future__ import annotations
 
 import contextlib
-import datetime as dt
 import importlib
 import json
 import os
 import sys
 import tempfile
 import time
-import types
 from pathlib import Path
 from typing import Any, Iterator
 from unittest import mock
@@ -17,32 +15,6 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 FAKE = ROOT / "tests" / "fake_slotfather.py"
-
-
-def frozen(moment: dt.datetime) -> Any:
-    """A datetime module whose now() and today() are `moment`, as Slotfather's demo freezes its own."""
-
-    class Clock(dt.datetime):
-        @classmethod
-        def now(cls, tz: Any = None) -> Any:  # type: ignore[override]
-            return moment.astimezone(tz) if tz else moment.astimezone().replace(tzinfo=None)
-
-    class Date(dt.date):
-        @classmethod
-        def today(cls) -> Any:  # type: ignore[override]
-            return moment.astimezone().date()
-
-    return types.SimpleNamespace(datetime=Clock, date=Date, timedelta=dt.timedelta, timezone=dt.timezone)
-
-
-@contextlib.contextmanager
-def frozen_at(moment: dt.datetime) -> Iterator[None]:
-    from godfather import tui
-    from godfather.views import overview
-
-    clock = frozen(moment)
-    with mock.patch.object(tui, "datetime", clock), mock.patch.object(overview, "datetime", clock):
-        yield
 
 
 @contextlib.contextmanager

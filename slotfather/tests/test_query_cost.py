@@ -28,7 +28,8 @@ class StatusInspectionTests(unittest.TestCase):
                     "pid": number, "start": born, "count": 1, "state": "held", "label": str(number),
                     "since": "2026-11-04T10:00:00Z", "cmd": "work"}))
             marker = str(queue / "0000000052-52.json")
-            table = "\n".join(f"{number} 1 S {born}" for number in (51, 52, 53, 200))
+            # with the caller in it: a table without it is no table (fathers#121)
+            table = "\n".join(f"{number} 1 S {born}" for number in (51, 52, 53, 200, os.getpid()))
             def run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
                 output = f"200 worker SLOTFATHER_LEASE={marker}\n" if "-wwE" in argv else table
                 return subprocess.CompletedProcess(argv, 0, output, "")

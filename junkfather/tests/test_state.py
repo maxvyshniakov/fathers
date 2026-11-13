@@ -1,0 +1,55 @@
+"""The entry files: a write is durable and atomic, and a write that fails leaves the old file and no temp file."""
+from __future__ import annotations
+
+import json
+import os
+import unittest
+from unittest import mock
+
+from support import Case
+
+from junkfather import state
+
+
+class WriteAtomicTests(Case):
+    def test_a_write_that_fails_midway_keeps_the_old_content_and_leaves_no_temp_file(self):
+        path = self.tmp / "entries" / "j1.json"
+        state.write_atomic(path, {"id": "j1", "state": "running"})
+        before = path.read_text()
+        with self.assertRaises(TypeError):  # json.dump has written "a" before it reaches the unserializable "z"
+            state.write_atomic(path, {"a": "x" * 50000, "z": object()})
+        self.assertEqual(before, path.read_text())
+        self.assertEqual(["j1.json"], sorted(os.listdir(path.parent)))
+
+    def test_a_write_reaches_the_disk_before_it_replaces_the_file(self):
+        path = self.tmp / "entries" / "j1.json"
+        calls = []
+        real_fsync, real_replace = os.fsync, os.replace
+        with mock.patch.object(state.os, "fsync", side_effect=lambda fd: (calls.append("fsync"), real_fsync(fd))), \
+                mock.patch.object(state.os, "replace",
+                                  side_effect=lambda a, b: (calls.append("replace"), real_replace(a, b))):
+            state.write_atomic(path, {"id": "j1"})
+        self.assertEqual("fsync", calls[0])
+        self.assertIn("replace", calls)
+        self.assertEqual({"id": "j1"}, json.loads(path.read_text()))
+
+    def test_a_directory_that_cannot_be_synced_fails_the_write_unless_its_filesystem_has_no_such_sync(self):
+        import errno
+        path = self.tmp / "entries" / "j1.json"
+        real_fsync = os.fsync
+
+        def fsync_failing(code):
+            def fsync(fd):
+                if os.path.isdir(f"/dev/fd/{fd}"):
+                    raise OSError(code, os.strerror(code))
+                real_fsync(fd)
+            return fsync
+        with mock.patch.object(state.os, "fsync", side_effect=fsync_failing(errno.EIO)), self.assertRaises(OSError):
+            state.write_atomic(path, {"id": "j1"})
+        with mock.patch.object(state.os, "fsync", side_effect=fsync_failing(errno.EINVAL)):
+            state.write_atomic(path, {"id": "j2"})
+        self.assertEqual({"id": "j2"}, json.loads(path.read_text()))
+
+
+if __name__ == "__main__":
+    unittest.main()

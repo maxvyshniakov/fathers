@@ -143,7 +143,7 @@ def start(argv: list[str]) -> int:
     if _leases.inherited_lease(_platform.processes()) is not None:
         raise _config.SlotError("a session cannot start inside a lease: it would wait for the slots its caller holds")
     with _state.locked(directory):  # the process table of this moment: one taken earlier would reap new waiters
-        found = find(_leases.reap(directory, _platform.processes()), spec["name"])
+        found = find(_leases.reap(directory, _leases.process_table(directory)), spec["name"])
     if found is not None:
         raise _config.SlotError(f"session {spec['name']} exists (pid {found[1].get('pid')}, {found[1].get('state')})")
     env = {k: v for k, v in os.environ.items() if k not in ("SLOTFATHER_LEASE", "SLOTFATHER_COUNT", "SLOTFATHER_YIELD")}
@@ -230,7 +230,10 @@ class Holder:
         while True:
             time.sleep(tick)
             full = time.monotonic() - pruned >= PRUNE_EVERY
-            table = _platform.processes() if full else None
+            table = None
+            if full:
+                with contextlib.suppress(_config.SlotError):  # no table to trust: no run is pruned this time
+                    table = _platform.processes()
             if full:
                 pruned = time.monotonic()
             with _state.locked(directory):
@@ -283,7 +286,7 @@ def prune(uses: dict[str, Any], table: dict[int, tuple[int, str]] | None, moment
         except (PermissionError, ValueError):
             alive = True
         if alive and table is not None:
-            alive = int(pid) in table and (not run.get("start") or table[int(pid)][1] == run.get("start"))
+            alive = int(pid) in table and _platform.same_start(str(run.get("start") or ""), table[int(pid)][1])
         if not alive:
             gone.append(pid)
     for pid in gone:
@@ -311,7 +314,7 @@ def stop(argv: list[str]) -> int:
     directory = _config.state_dir()
     _state.require_own(directory, "a session stop")
     with _state.locked(directory):
-        table = _platform.processes()
+        table = _leases.process_table(directory)
         found = find(_leases.reap(directory, table), name)
         if found is None:
             raise _config.SlotError(f"no session {name} in this queue")
@@ -330,8 +333,8 @@ def stop(argv: list[str]) -> int:
         time.sleep(0.1)  # the holder releases the lease itself; only a holder that died needs a look
         if time.monotonic() - reaped >= 5:
             reaped = time.monotonic()
-            with _state.locked(directory):
-                _leases.reap(directory, _platform.processes())
+            with _state.locked(directory), contextlib.suppress(_config.SlotError):
+                _leases.reap(directory, _leases.process_table(directory))
     if path.exists():
         print(f"slot: session {name} still holds its slots after {STOP_WAIT:g} s", file=sys.stderr)
         return 1
@@ -358,25 +361,29 @@ def run_inside(name: str, argv: list[str], label: str | None = None, meta: dict[
     poll = float(_config.setting("POLL") or 2)
     while True:
         with _state.locked(directory):
-            table = _platform.processes()
-            found = find(_leases.reap(directory, table), name)
-            if found is None:
-                raise _config.SlotError(f"no session {name} in this queue (slotfather session start --label {name})")
-            path, entry = found
-            if _platform.process_uid(entry.get("pid")) != os.geteuid():
-                raise _config.SlotError(f"session {name} (pid {entry.get('pid')}) is another user's")
-            if entry["session"].get("stopping"):
-                raise _config.SlotError(f"session {name} is stopping: it starts no more runs")
-            uses = read_uses(path) if entry.get("state") == "held" else None
-            if uses is not None:
-                since = _config.now()
-                uses.setdefault("active", {})[str(me)] = {"start": table.get(me, (0, ""))[1], "label": label,
-                                                          "cmd": _events.command(" ".join(argv)), "since": since}
-                _state.write(uses_path(path), uses)
-                _events.emit(directory, "session.run_started", _events.request(entry, path),
-                             {"session": name, "run": {"pid": me, "label": label,
-                                                       "cmd": _events.command(" ".join(argv))}})
-                break
+            try:
+                table = _leases.process_table(directory)
+            except _config.ProcessTableError:
+                table = None  # no table to trust: this look reaps nothing, and the run looks again
+            if table is not None:
+                found = find(_leases.reap(directory, table), name)
+                if found is None:
+                    raise _config.SlotError(f"no session {name} in this queue (slotfather session start --label {name})")
+                path, entry = found
+                if _platform.process_uid(entry.get("pid")) != os.geteuid():
+                    raise _config.SlotError(f"session {name} (pid {entry.get('pid')}) is another user's")
+                if entry["session"].get("stopping"):
+                    raise _config.SlotError(f"session {name} is stopping: it starts no more runs")
+                uses = read_uses(path) if entry.get("state") == "held" else None
+                if uses is not None:
+                    since = _config.now()
+                    uses.setdefault("active", {})[str(me)] = {"start": table.get(me, (0, ""))[1], "label": label,
+                                                              "cmd": _events.command(" ".join(argv)), "since": since}
+                    _state.write(uses_path(path), uses)
+                    _events.emit(directory, "session.run_started", _events.request(entry, path),
+                                 {"session": name, "run": {"pid": me, "label": label,
+                                                           "cmd": _events.command(" ".join(argv))}})
+                    break
         if not said:
             print(f"slot: session {name} still waits for its slots; this run starts once it holds them",
                   file=sys.stderr, flush=True)

@@ -1,0 +1,577 @@
+[
+ {
+  "args": [
+   "own",
+   "--ttl",
+   "1m",
+   "--label",
+   "short-lived",
+   "--",
+   "sh",
+   "-c",
+   "exit 3"
+  ],
+  "code": 3,
+  "err": "junkfather: <id1> owns pid <pid2> (pgid <pid2>) for claude s1 (no claim (is the junkfather PreToolUse hook installed?)), ttl 60s; stop it: junkfather reap --id <id1>\n",
+  "out": ""
+ },
+ {
+  "entries": [
+   {
+    "argv": [
+     "sh",
+     "-c",
+     "exit 3"
+    ],
+    "claim_note": "no claim (is the junkfather PreToolUse hook installed?)",
+    "created": "<v>",
+    "cwd": "<root>",
+    "ended": "<v>",
+    "exit": 3,
+    "expires": "<v>",
+    "group": true,
+    "handed": [],
+    "id": "<id1>",
+    "keep": "owner",
+    "known": [],
+    "known_seen": [],
+    "label": "short-lived",
+    "log": null,
+    "mode": "attached",
+    "owner": {
+     "agent": null,
+     "agent_type": null,
+     "kind": "claude",
+     "lane": null,
+     "pid": <pid1>,
+     "pid_start": "<start>",
+     "session": "s1"
+    },
+    "pgid": <pid2>,
+    "pid": <pid2>,
+    "seen": "<what ps showed of a command that may have exited>",
+    "start": "<start>",
+    "state": "exited",
+    "supervisor": {
+     "pid": <pid3>,
+     "start": "<start>"
+    },
+    "ttl": 60.0,
+    "v": 1
+   }
+  ],
+  "events": [
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "argv": [
+      "sh",
+      "-c",
+      "exit 3"
+     ],
+     "cwd": "<root>",
+     "keep": "owner",
+     "log": null,
+     "mode": "attached",
+     "pgid": <pid2>,
+     "ttl": 60.0
+    },
+    "host": "<host>",
+    "kind": "entry.owned",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "label": "short-lived",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "name": "junkfather",
+     "type": "tool",
+     "via": "supervisor"
+    },
+    "details": {
+     "exit": 3
+    },
+    "host": "<host>",
+    "kind": "entry.exited",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "label": "short-lived",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   }
+  ],
+  "snapshot": "attached exited"
+ },
+ {
+  "args": [
+   "own",
+   "--detach",
+   "--ttl",
+   "1h",
+   "--",
+   "sleep",
+   "600"
+  ],
+  "code": 0,
+  "err": "",
+  "out": "junkfather: <id2> owns pid <pid4> (pgid <pid4>) for claude s1 (no claim (is the junkfather PreToolUse hook installed?)), ttl 60m, log <tmp>/state/logs/<id2>.log; stop it: junkfather reap --id <id2>\n"
+ },
+ {
+  "entries": [
+   {
+    "argv": [
+     "sh",
+     "-c",
+     "exit 3"
+    ],
+    "claim_note": "no claim (is the junkfather PreToolUse hook installed?)",
+    "created": "<v>",
+    "cwd": "<root>",
+    "ended": "<v>",
+    "exit": 3,
+    "expires": "<v>",
+    "group": true,
+    "handed": [],
+    "id": "<id1>",
+    "keep": "owner",
+    "known": [],
+    "known_seen": [],
+    "label": "short-lived",
+    "log": null,
+    "mode": "attached",
+    "owner": {
+     "agent": null,
+     "agent_type": null,
+     "kind": "claude",
+     "lane": null,
+     "pid": <pid1>,
+     "pid_start": "<start>",
+     "session": "s1"
+    },
+    "pgid": <pid2>,
+    "pid": <pid2>,
+    "seen": "<what ps showed of a command that may have exited>",
+    "start": "<start>",
+    "state": "exited",
+    "supervisor": {
+     "pid": <pid3>,
+     "start": "<start>"
+    },
+    "ttl": 60.0,
+    "v": 1
+   },
+   {
+    "argv": [
+     "sleep",
+     "600"
+    ],
+    "claim_note": "no claim (is the junkfather PreToolUse hook installed?)",
+    "created": "<v>",
+    "cwd": "<root>",
+    "expires": "<v>",
+    "group": true,
+    "handed": [],
+    "id": "<id2>",
+    "keep": "owner",
+    "known": [
+     [
+      <pid4>,
+      "<start>"
+     ]
+    ],
+    "known_seen": [
+     [
+      <pid4>,
+      "<start>",
+      "sleep 600"
+     ]
+    ],
+    "label": null,
+    "log": "<tmp>/state/logs/<id2>.log",
+    "mode": "detached",
+    "owner": {
+     "agent": null,
+     "agent_type": null,
+     "kind": "claude",
+     "lane": null,
+     "pid": <pid1>,
+     "pid_start": "<start>",
+     "session": "s1"
+    },
+    "pgid": <pid4>,
+    "pid": <pid4>,
+    "seen": "sleep 600",
+    "start": "<start>",
+    "state": "running",
+    "supervisor": {
+     "pid": <pid5>,
+     "start": "<start>"
+    },
+    "ttl": 3600.0,
+    "v": 1
+   }
+  ],
+  "events": [
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "argv": [
+      "sh",
+      "-c",
+      "exit 3"
+     ],
+     "cwd": "<root>",
+     "keep": "owner",
+     "log": null,
+     "mode": "attached",
+     "pgid": <pid2>,
+     "ttl": 60.0
+    },
+    "host": "<host>",
+    "kind": "entry.owned",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "label": "short-lived",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "name": "junkfather",
+     "type": "tool",
+     "via": "supervisor"
+    },
+    "details": {
+     "exit": 3
+    },
+    "host": "<host>",
+    "kind": "entry.exited",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "label": "short-lived",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "argv": [
+      "sleep",
+      "600"
+     ],
+     "cwd": "<root>",
+     "keep": "owner",
+     "log": "<tmp>/state/logs/<id2>.log",
+     "mode": "detached",
+     "pgid": <pid4>,
+     "ttl": 3600.0
+    },
+    "host": "<host>",
+    "kind": "entry.owned",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id2>",
+     "pid": <pid4>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   }
+  ],
+  "snapshot": "detached running"
+ },
+ {
+  "args": [
+   "reap",
+   "--id",
+   "<id2>",
+   "--grace",
+   "2"
+  ],
+  "code": 0,
+  "err": "",
+  "out": "<id2>: stopped (reap; pids <pid4>; leader)\n"
+ },
+ {
+  "entries": [
+   {
+    "argv": [
+     "sh",
+     "-c",
+     "exit 3"
+    ],
+    "claim_note": "no claim (is the junkfather PreToolUse hook installed?)",
+    "created": "<v>",
+    "cwd": "<root>",
+    "ended": "<v>",
+    "exit": 3,
+    "expires": "<v>",
+    "group": true,
+    "handed": [],
+    "id": "<id1>",
+    "keep": "owner",
+    "known": [],
+    "known_seen": [],
+    "label": "short-lived",
+    "log": null,
+    "mode": "attached",
+    "owner": {
+     "agent": null,
+     "agent_type": null,
+     "kind": "claude",
+     "lane": null,
+     "pid": <pid1>,
+     "pid_start": "<start>",
+     "session": "s1"
+    },
+    "pgid": <pid2>,
+    "pid": <pid2>,
+    "seen": "<what ps showed of a command that may have exited>",
+    "start": "<start>",
+    "state": "exited",
+    "supervisor": {
+     "pid": <pid3>,
+     "start": "<start>"
+    },
+    "ttl": 60.0,
+    "v": 1
+   },
+   {
+    "argv": [
+     "sleep",
+     "600"
+    ],
+    "claim_note": "no claim (is the junkfather PreToolUse hook installed?)",
+    "created": "<v>",
+    "cwd": "<root>",
+    "end": {
+     "how": "leader",
+     "pids": [
+      <pid4>
+     ],
+     "reason": "reap",
+     "result": "stopped"
+    },
+    "ended": "<v>",
+    "expires": "<v>",
+    "group": true,
+    "handed": [],
+    "id": "<id2>",
+    "keep": "owner",
+    "known": [
+     [
+      <pid4>,
+      "<start>"
+     ]
+    ],
+    "known_seen": [
+     [
+      <pid4>,
+      "<start>",
+      "sleep 600"
+     ]
+    ],
+    "label": null,
+    "log": "<tmp>/state/logs/<id2>.log",
+    "mode": "detached",
+    "owner": {
+     "agent": null,
+     "agent_type": null,
+     "kind": "claude",
+     "lane": null,
+     "pid": <pid1>,
+     "pid_start": "<start>",
+     "session": "s1"
+    },
+    "pgid": <pid4>,
+    "pid": <pid4>,
+    "seen": "sleep 600",
+    "start": "<start>",
+    "state": "reaped",
+    "supervisor": {
+     "pid": <pid5>,
+     "start": "<start>"
+    },
+    "ttl": 3600.0,
+    "v": 1
+   }
+  ],
+  "events": [
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "argv": [
+      "sh",
+      "-c",
+      "exit 3"
+     ],
+     "cwd": "<root>",
+     "keep": "owner",
+     "log": null,
+     "mode": "attached",
+     "pgid": <pid2>,
+     "ttl": 60.0
+    },
+    "host": "<host>",
+    "kind": "entry.owned",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "label": "short-lived",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "name": "junkfather",
+     "type": "tool",
+     "via": "supervisor"
+    },
+    "details": {
+     "exit": 3
+    },
+    "host": "<host>",
+    "kind": "entry.exited",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "label": "short-lived",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "argv": [
+      "sleep",
+      "600"
+     ],
+     "cwd": "<root>",
+     "keep": "owner",
+     "log": "<tmp>/state/logs/<id2>.log",
+     "mode": "detached",
+     "pgid": <pid4>,
+     "ttl": 3600.0
+    },
+    "host": "<host>",
+    "kind": "entry.owned",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id2>",
+     "pid": <pid4>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "how": "leader",
+     "left": [],
+     "pids": [
+      <pid4>
+     ],
+     "reason": "reap",
+     "result": "stopped",
+     "signals": [
+      "TERM"
+     ]
+    },
+    "host": "<host>",
+    "kind": "entry.reaped",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id2>",
+     "pid": <pid4>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   }
+  ],
+  "snapshot": "detached reaped"
+ },
+ {
+  "args": [
+   "reap",
+   "--id",
+   "<id2>",
+   "--json"
+  ],
+  "code": 0,
+  "err": "",
+  "out": {
+   "json": {
+    "results": [
+     {
+      "how": "",
+      "id": "<id2>",
+      "pids": [],
+      "reason": "already reaped",
+      "result": "skipped"
+     }
+    ],
+    "v": 1
+   }
+  }
+ },
+ {
+  "args": [
+   "reap",
+   "--id",
+   "<id3>"
+  ],
+  "code": 1,
+  "err": "",
+  "out": "<id3>: unknown (no such entry; pids -)\n"
+ }
+]

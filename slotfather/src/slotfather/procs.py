@@ -14,7 +14,7 @@ import subprocess
 import sys
 from typing import Any, NamedTuple, cast
 
-from . import config, state
+from . import config, platform, state
 
 
 class ProcsError(config.SlotError):
@@ -122,7 +122,7 @@ def read_leases(processes: dict[int, Process], entries: list[tuple[Path, dict[st
     for path, entry, old in entries:
         holder = processes.get(entry["pid"])
         start = str(entry["start"])
-        if holder is None or start and " ".join(start.split()) != holder.start:
+        if holder is None or not platform.same_start(start, holder.start):
             continue
         meta = config.meta_of(entry)
         priority = config.priority_of(entry)

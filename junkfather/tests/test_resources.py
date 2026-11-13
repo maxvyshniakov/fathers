@@ -362,7 +362,7 @@ class ProcessOwnUnchangedTests(Case):
         (entry,) = self.store.entries()
         self.assertEqual({"v", "id", "label", "argv", "cwd", "created", "ttl", "expires", "keep", "owner", "mode",
                           "state", "pid", "pgid", "start", "seen", "group", "known", "handed", "supervisor", "log",
-                          "claim_note", "ended", "exit"}, set(entry))
+                          "claim_note", "ended", "exit", "known_seen"}, set(entry))  # known_seen: fathers#135
         self.assertNotIn("resource", entry)
         self.assertEqual(("attached", "exited", True), (entry["mode"], entry["state"], entry["group"]))
         events = [json.loads(line) for line in (self.state / "events.jsonl").read_text().splitlines()]

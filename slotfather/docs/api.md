@@ -155,6 +155,7 @@ Godfather. The tests validate every line with the shared `common/eventcheck.py`.
 | `lease.released` | a lease ends | `count`, `exit`, `ran`, `cpu`, `rss_peak_mb`; only `count` and `unknown: true` when its entry was already gone |
 | `request.left` | a waiter gives up (`--wait`, a signal) | `count`, `gave_up_after` |
 | `lease.reaped`, `request.reaped` | a holder that died is reaped (level warn) | `count`, `ran`, `waited`, `reason` |
+| `reap.skipped` | ps gave no process table to trust (it failed, timed out, or left out its caller), so that look reaped nothing (subject `queue`, level warn) | `reason` |
 | `request.reprioritized` | `slotfather reprioritize` | `from`, `to`, `state` |
 | `request.waiting_long` | a waiter says it has waited the warn time (level warn) | `waited`, `est_start`, `behind` (`earlier`, `running`), `priority`, `aged` |
 | `lease.yield_asked` | a waiter, or `ask-yield` (`by_hand`), asks a lease to yield | `count`, `for` (`id`, `label`, `priority`) |

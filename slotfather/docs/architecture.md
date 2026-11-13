@@ -42,10 +42,10 @@ A pinned installation shares one user's directory even when a service changes `H
 | File | Format and compatibility |
 | --- | --- |
 | `schema.json` | State schema 1. Unstamped queues are adopted without rewriting entries; unknown versions are refused before mutation. Old clients ignore the stamp and can release existing leases. |
-| `queue/*.json`, `sequence`, `.lock` | Existing queue format: atomic JSON entries and a shared advisory lock. PID plus process start time identifies a holder. |
+| `queue/*.json`, `sequence`, `.lock` | Existing queue format: atomic JSON entries and a shared advisory lock. PID plus process start time identifies a holder. Entries and `sequence` are written whole: fsynced, renamed, then the directory fsynced. A new request's sequence is past every entry in the queue as well as the file's, so a torn `sequence` (older clients write it in place) never puts it ahead. An entry that does not read is left in place and listed by `status` as `unreadable`. |
 | `capacity.json`, `order.json` | Shared settings. Keep old keys and meanings; older clients ignore added fields. |
 | `queue/*.yield` | Cooperative requests, never permission to stop a holder. |
-| `queue.log` | Timestamped grants, releases and reaping; retained event syntax supports existing history readers. |
+| `queue.log[.1]` | Timestamped grants, releases and reaping; retained event syntax supports existing history readers. Past 4 MiB it becomes `queue.log.1`, replacing the older one, under the queue lock; older clients keep appending to whichever file is current. |
 | `history.jsonl[.1]` | Current record version 2. Unversioned version-1 history remains readable. |
 | `machine.jsonl[.1]` | Record version 1; unavailable facts remain unavailable. |
 | `estimates.json` | Disposable cache version 2. Rebuilt when its version or history stamp changes. |
@@ -67,6 +67,12 @@ not a reason to rewrite queue state. Derived caches may be rebuilt rather than m
 - `status --json` and `procs --json` use version 2 with priority and ticket request fields.
 - Process identity is a PID plus its start time. A recycled PID must never inherit a lease
   or permission to stop a process.
+- A holder's start time is `ps -o lstart` in the C locale on every system (fathers#122), whatever the
+  client's `LC_ALL` or `LC_TIME`. Mixed versions: clients before it ran macOS's `ps` in the caller's locale. A
+  current client matches such an entry by its clock time, day and year (`platform.same_start()`), so an older
+  client's lease is never reaped while its holder runs. An older client reads a current client's entry as before
+  only in the C or `en_US` locale, whose words are the same; one in another locale can reap it, so upgrade
+  every client of a queue before running any in such a locale.
 - Installed commands bind to an immutable package release; replacement entry points do not
   change code underneath an already running old client. Releases are retained while old
   clients may still use them.

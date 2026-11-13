@@ -15,6 +15,8 @@ Placed = tuple[str, str, int, int, bool]  # (key, title, x, width, right-aligned
 Spec = tuple[str, str, int, bool, int]  # (key, title, width (0: the flexible one), right-aligned, drop priority)
 Value = Union[str, Part, list[Part]]
 
+# A panel's corners and its top and bottom rule: at rest rounded and light; focused, heavy rules (fathers#139)
+REST_FRAME, FOCUS_FRAME = ("╭╮╰╯", "─"), ("┍┑┕┙", "━")
 SELECTED_FRAME = "┃"  # the left frame beside a selected row, heavy in the row's colour (#15); # on ASCII
 # A scrollbar's thumb (#15): a whole cell, a cell's lower half (where it starts), its upper half (where it ends);
 # # on an ASCII terminal
@@ -44,17 +46,20 @@ class Panel:
         return bool(self.name) and self.name == self.canvas.focus
 
     def frame(self, title: str = "", note: str = "") -> Panel:
-        """A rounded light frame in the frame token, the focused panel's in the accent blue, the same glyphs: focus
-        shows by colour alone (owner). The title is set into the top border at x + 2, a note on its right."""
+        """A rounded light frame in the frame token. The focused panel's is in the accent blue and its top and bottom
+        borders are heavy rules (fathers#139: `┍━━┑`, `=` on ASCII), so focus shows without colour too; its sides stay
+        light, the heavy `┃` being a selected row's. The title is set into the top border at x + 2, a note on its
+        right."""
         canvas, (y, x, height, width) = self.canvas, self.rect
         if height < 2 or width < 6:
             return self
         style = "accent" if self.focused else "frame"
-        canvas.put(y, x, "╭" + "─" * (width - 2) + "╮", style)
+        (top_left, top_right, bottom_left, bottom_right), rule = FOCUS_FRAME if self.focused else REST_FRAME
+        canvas.put(y, x, top_left + rule * (width - 2) + top_right, style)
         for row in range(y + 1, y + height - 1):
             canvas.put(row, x, "│", style)
             canvas.put(row, x + width - 1, "│", style)
-        canvas.put(y + height - 1, x, "╰" + "─" * (width - 2) + "╯", style)
+        canvas.put(y + height - 1, x, bottom_left + rule * (width - 2) + bottom_right, style)
         after = canvas.put(y, x + 2, f" {title} ", "title", width - 4) if title else x + 2
         if note and x + width - 2 - text_width(note) - 2 > after:
             canvas.right(y, x + width - 2, f" {note} ", "dim")

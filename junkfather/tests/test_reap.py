@@ -1,6 +1,7 @@
 """Which processes a reap may signal, and how it signals them: identity first, a reused pid never."""
 from __future__ import annotations
 
+import json
 import os
 import signal
 import unittest
@@ -82,7 +83,7 @@ class StopTests(unittest.TestCase):
 
         clock = iter(range(1000))
         result = reap.stop([proc(100), proc(101), proc(102)], grace=3, kill=kill,
-                           look=lambda pids: {p: alive[p] for p in pids if p in alive},
+                           look=lambda pids: {p: (alive[p], "sleep 300") for p in pids if p in alive},
                            now=lambda: next(clock), pause=lambda _s: None)
         self.assertEqual("killed", result["result"])
         self.assertIn((101, signal.SIGKILL), sent)
@@ -186,3 +187,135 @@ class ReviewFixTests(Case):
         items = sweep.unowned(t, cwds, set(), [root], sweep.agent_sessions(t))
         self.assertEqual([530], [i["pid"] for i in items])
         self.assertEqual("/scratch/", items[0]["root"])
+
+
+class ChangedLeaderTests(Case):
+    """fathers#134: a leader refused for its command is not found again through `known`, which always holds it."""
+
+    def test_a_changed_leader_is_not_signalled_through_known_but_its_children_are(self):
+        known = [[100, A], [101, A]]  # what record_child, adopt and refresh write: the leader comes first
+        found, how = reap.members(entry(known=known), table(
+            proc(100, cmd="/usr/bin/python3 other.py"), proc(101, ppid=100, pgid=100, cmd="node worker.js"),
+            proc(102, ppid=101, pgid=100, cmd="esbuild --service"), proc(103, ppid=100, pgid=100)))
+        self.assertEqual("known", how)
+        self.assertEqual([101, 102], [p.pid for p in found], "the reused leader and its own new child stay")
+
+    def test_a_reused_leader_is_not_signalled_through_known(self):
+        found, how = reap.members(entry(known=[[100, A], [101, A]]), table(
+            proc(100, start=B, cmd="node server.js"), proc(101, ppid=1, pgid=100)))
+        self.assertEqual(("known", [101]), (how, [p.pid for p in found]))
+
+    def test_force_takes_the_changed_leader_with_its_group(self):
+        found, how = reap.members(entry(known=[[100, A]]), table(
+            proc(100, cmd="/usr/bin/python3 other.py"), proc(103, ppid=100, pgid=100)), force=True)
+        self.assertEqual(("leader", [100, 103]), (how, [p.pid for p in found]))
+
+    def test_a_real_changed_leader_survives_a_reap_and_force_stops_it(self):
+        child = self.spawn("sleep", "600", start_new_session=True)
+        mine = procs.Table.read().get(child.pid)
+        assert mine is not None
+        self.store.save(entry(pid=child.pid, start=mine.start, cmd="node server.js", known=[[child.pid, mine.start]]))
+        result = reap.reap(self.store, "jtest", "test", grace=0.2)
+        self.assertEqual(("gone", []), (result["result"], result["pids"]))
+        self.assertTrue(self.runs(child.pid))
+        self.store.update("jtest", lambda e: e.update(state="running", end=None))
+        forced = reap.reap(self.store, "jtest", "test", grace=0.2, force=True)
+        self.assertEqual(("stopped", [child.pid], "leader"), (forced["result"], forced["pids"], forced["how"]))
+        child.wait(5)
+
+
+class CommandFactorTests(Case):
+    """fathers#135: a start time has one-second granularity, so the command is the second factor after it."""
+
+    def test_a_known_member_whose_command_changed_is_not_a_member_unless_forced(self):
+        record = entry(pid=100, known=[[102, A], [103, A]])
+        record["known_seen"] = [[102, A, "node worker.js"], [103, A, "esbuild --service"]]
+        reused = table(proc(102, pgid=100, cmd="node worker.js --inspect"), proc(103, pgid=100, cmd="/bin/zsh -l"))
+        self.assertEqual(("known", [102]), (lambda f: (f[1], [p.pid for p in f[0]]))(reap.members(record, reused)))
+        self.assertEqual([102, 103], [p.pid for p in reap.members(record, reused, force=True)[0]])
+
+    def test_an_entry_without_known_seen_keeps_pid_and_start_only(self):
+        found, how = reap.members(entry(known=[[102, A]]), table(proc(102, pgid=100, cmd="anything at all")))
+        self.assertEqual(("known", [102]), (how, [p.pid for p in found]))
+
+    def test_a_leader_matches_the_command_its_supervisor_last_recorded(self):
+        record = entry(cmd="/usr/bin/python3 -m http.server", known=[[100, A]])
+        record["known_seen"] = [[100, A, "/Library/Frameworks/Python.app/Contents/MacOS/Python -m http.server"]]
+        found, how = reap.members(record, table(
+            proc(100, cmd="/Library/Frameworks/Python.app/Contents/MacOS/Python -m http.server")))
+        self.assertEqual(("leader", [100]), (how, [p.pid for p in found]))
+
+    def test_stop_signals_no_pid_whose_command_changed_since_it_was_read(self):
+        sent = []
+        result = reap.stop([proc(100, cmd="node server.js"), proc(101, cmd="node worker.js")], grace=0,
+                           look=lambda pids: {100: (A, "/bin/zsh"), 101: (A, "node worker.js --x")},
+                           kill=lambda pid, sig: sent.append((pid, sig)), now=iter(range(100)).__next__,
+                           pause=lambda _s: None)
+        self.assertEqual([(101, signal.SIGTERM), (101, signal.SIGKILL)], sent)
+        self.assertEqual("failed", result["result"])
+
+    def test_identities_with_their_commands(self):
+        child = self.spawn("sleep", "600")
+        here = procs.identities([child.pid], command=True)
+        self.assertEqual((procs.identities([child.pid])[child.pid], "sleep 600"), here[child.pid])
+
+    def test_the_supervisor_records_the_command_its_own_child_shows_now(self):
+        from junkfather import launch
+        child = self.spawn("sleep", "600", start_new_session=True)
+        record = entry(pid=None)
+        record["state"] = "starting"
+        self.store.save(record)
+        self.assertIsNotNone(launch.record_child(self.store, "jtest", child, os.getpid()))
+        shim = "/usr/bin/python3 shim.py"  # what a launcher showed before it exec'd the real program
+        self.store.update("jtest", lambda e: e.update(seen=shim, known_seen=[[child.pid, e["start"], shim]]))
+        self.assertEqual([], reap.members(self.store.load("jtest") or {}, procs.Table.read())[0])
+        from test_supervisor import Quiet
+        launch.Supervisor(self.store, "jtest", child, quiet=True, catcher=Quiet()).refresh(None)
+        now = self.store.load("jtest") or {}
+        self.assertEqual([[child.pid, now["start"], "sleep 600"]], now["known_seen"])
+        self.assertEqual(([child.pid], "leader"),
+                         (lambda f: ([p.pid for p in f[0]], f[1]))(reap.members(now, procs.Table.read())))
+
+    def test_reap_pid_force_refuses_a_listed_pid_whose_command_changed(self):
+        import json
+        child = self.spawn("sleep", "600", start_new_session=True)
+        mine = procs.Table.read().get(child.pid)
+        assert mine is not None
+        self.state.mkdir(parents=True, exist_ok=True)
+        (self.state / "unowned.json").write_text(json.dumps(
+            {"items": [{"pid": child.pid, "start": mine.start, "cmd": "node server.js"}]}))
+        result = self.cli("reap", "--pid", str(child.pid), "--force", "--grace", "0.2")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("command changed", result.stderr)
+        self.assertTrue(self.runs(child.pid))
+
+
+class FailureStreakTests(Case):
+    def test_a_retry_in_a_failure_streak_records_last_error_but_writes_no_event(self):
+        child = self.spawn("sleep", "600", start_new_session=True)
+        mine = procs.Table.read().get(child.pid)
+        assert mine is not None
+        self.store.save(entry(pid=child.pid, start=mine.start, cmd=mine.cmd))
+        failing = lambda targets, grace: {"result": "failed", "signalled": [], "left": [t.pid for t in targets],  # noqa: E731
+                                          "error": "ps did not answer"}
+        first = reap.reap(self.store, "jtest", "ttl expired", stopper=failing)
+        again = reap.reap(self.store, "jtest", "ttl expired", stopper=failing, report_failure=False)
+        self.assertEqual(("failed", "failed"), (first["result"], again["result"]))
+        lines = (self.state / "events.jsonl").read_text().splitlines()
+        self.assertEqual(1, len(lines), "only the first failure of the streak is an event")
+        self.assertEqual("running", self.state_of("jtest"))
+        self.assertIn("left", (self.store.load("jtest") or {})["last_error"])
+
+    def test_an_unreadable_first_table_records_last_error_and_starts_the_streak_with_an_event(self):
+        self.store.save(entry(pid=4242, known=[[4242, A]]))
+
+        def unreadable():
+            raise procs.ProcError("ps did not answer")
+        first = reap.reap(self.store, "jtest", "ttl expired", reader=unreadable)
+        again = reap.reap(self.store, "jtest", "ttl expired", reader=unreadable, report_failure=False)
+        self.assertEqual(("failed", "failed"), (first["result"], again["result"]))
+        events = [json.loads(line) for line in (self.state / "events.jsonl").read_text().splitlines()]
+        self.assertEqual(["entry.reap_failed"], [e["kind"] for e in events])
+        self.assertEqual("ps did not answer", events[0]["details"]["error"])
+        recorded = self.store.load("jtest") or {}
+        self.assertEqual(("running", "ps did not answer"), (recorded["state"], recorded["last_error"]["error"]))

@@ -6,8 +6,8 @@ import datetime
 from typing import NamedTuple, Optional, cast
 
 from .. import layout as _layout
-from .. import tui as _tui
 from ..layout import Rect
+from ..theme import Theme
 from ..tui import Canvas, minutes, short, span, text_width
 from ..widgets import Panel, Part, Table, Value
 from . import common as _common
@@ -32,10 +32,10 @@ def draw_slots(canvas: Canvas, area: Rect, model: Model) -> None:
             break
         labels.append((cells[filled][0], str(holder["label"]), str(holder["style"])))
         for start, size in cells[filled:filled + count]:
-            canvas.put(area.y, start, "🮅" * size, fill(str(holder["style"])))
+            canvas.put(area.y, start, "🮅" * size, fill(str(holder["style"]), canvas.theme))
         filled += count
     for start, size in cells[filled:]:
-        canvas.put(area.y, start, free_slot(size), "free")
+        canvas.put(area.y, start, free_slot(size, canvas.theme.free), "free")
     places, free_at = _layout.slot_labels(area, [x for x, _, _ in labels], filled < slots)
     if free_at is not None:
         canvas.put(area.y + 1, free_at, "free", "dim")
@@ -43,10 +43,10 @@ def draw_slots(canvas: Canvas, area: Rect, model: Model) -> None:
         canvas.put(area.y + 1, x, label, style, width)
 
 
-def free_slot(width: int) -> str:
+def free_slot(width: int, free: str = "block") -> str:
     """A free slot `width` cells wide: a block in the theme's free colour, or outlined where the theme has no surface
-    colours (#14)."""
-    if _tui.current_theme.free == "block" or width < 1:
+    colours (#14; `free` is the theme's form)."""
+    if free == "block" or width < 1:
         return "🮅" * width
     return "▭" if width == 1 else "╭" + "─" * (width - 2) + "╮"
 
@@ -60,11 +60,11 @@ def slots_note(model: Model) -> str:
             + (f" · stale since {stale.astimezone().strftime('%H:%M')}" if stale else ""))
 
 
-def queue_bar_style(item: Item, model: Model) -> str:
+def queue_bar_style(item: Item, model: Model, theme: Theme) -> str:
     """A QUEUE row's CPU bar fills in the holder's fill (its SLOTS colour), except when it warns: red over 1.5 times
     its share, yellow while the lease is idle (#12, share_style())."""
     style = share_style(item, model)
-    return fill(str(item["style"])) if style == "accent" else style
+    return fill(str(item["style"]), theme) if style == "accent" else style
 
 
 class QueueLayout(NamedTuple):
@@ -155,6 +155,7 @@ def draw_requests(canvas: Canvas, rect: Rect, model: Model, selected: int, momen
         row_items.append(None)  # visual separator, never a selectable request
     row_items.extend(range(len(holders), len(items)))
     panel = Panel(canvas, rect, "requests")
+    theme, marks = canvas.theme, _common.marks_of(canvas)
     # cpu use/share: the bar starts at the column's left edge on every row, then `use` right-aligned and `/share`
     # left-aligned around the slash, padded to the widest on screen; a waiting row's state starts where the bars do.
     layout = queue_layout(panel.inner.width - MARK_COLUMNS, model, moment)
@@ -179,23 +180,24 @@ def draw_requests(canvas: Canvas, rect: Rect, model: Model, selected: int, momen
             cpu: list[Part] = [(waiting_text(item, index - len(holders) + 1), style)]
         else:
             used, allotted = share(item, model)
-            cpu = _common.bar(used / allotted if allotted else 0, layout.bar, queue_bar_style(item, model)) + [
+            cpu = _common.bar(used / allotted if allotted else 0, layout.bar, queue_bar_style(item, model, theme),
+                              theme.track) + [
                 (f" {used:.1f}".rjust(layout.use_width + 1) + "/" + short(allotted).ljust(layout.share_width), style)]
         # The state is the row's first content, where every panel's starts; the priority (blank for normal, so the
         # labels align), then the label after it
-        MARKS_TABLE.row(canvas, row, panel.inner.x, {"state": (_common.marks[row_state(item, model)], style),
-                                                     "priority": (_common.priority_mark(item), style)})
+        MARKS_TABLE.row(canvas, row, panel.inner.x, {"state": (marks.state[row_state(item, model)], style),
+                                                     "priority": (_common.priority_mark(item, marks), style)})
         values: dict[str, Value] = {
-            "label": (str(item["label"]), style), "slots": slot_cells(item, size),
+            "label": (str(item["label"]), style), "slots": slot_cells(item, size, theme),
             "time": (when, "warn" if overrun else style), "cpu": cpu, "pid": (str(item["pid"]), style)}
         table.row(canvas, row, panel.inner.x, values)
         if index == selected:  # a selected running row keeps its colour and gets its own tint behind it (#15)
-            panel.mark(row, fill(style), style if style in _tui.current_theme.tints else True)
+            panel.mark(row, fill(style, theme), style if style in theme.tints else True)
 
 
-def slot_cells(item: Item, size: int) -> list[Part]:
+def slot_cells(item: Item, size: int, theme: Theme) -> list[Part]:
     """A QUEUE row's slots as countable cells in the row's colour (the fill of its SLOTS blocks for a lease; the
     plain text colour for a waiting request, whose state the cpu column gives); see cell_run()."""
     style = "text" if item["kind"] == "waiting" else str(item["style"])
-    return cell_run(int(item["count"]), size, fill(style), whole=bool(item.get("all")), text=style)
+    return cell_run(int(item["count"]), size, fill(style, theme), whole=bool(item.get("all")), text=style)
 

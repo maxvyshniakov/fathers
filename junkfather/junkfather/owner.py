@@ -27,16 +27,13 @@ import os
 from pathlib import Path
 import re
 import time
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from . import procs as _procs
+from . import safety as _safety
+from .defaults import CLAIM_AMBIGUOUS, CLAIM_KEEP, CLAIM_WINDOW
 from .state import Store, read_json, write_atomic
 
-CLAUDE = re.compile(r"(^|/)claude(\s|$)|/claude/versions/[^/\s]+(\s|$)|/claude\.app/Contents/MacOS/claude(\s|$)")
-CODEX = re.compile(r"(^|/)(codex|CodexCLI)(\s|$)|/codex-[\w-]+/vendor/[^\s]*/codex(\s|$)")
-CLAIM_WINDOW = 1800.0  # seconds a claim may wait for its command (a permission prompt can take a while)
-CLAIM_AMBIGUOUS = 60.0  # two agents' matching claims this close together: ambiguous
-CLAIM_KEEP = 86400.0  # claims older than this are pruned
 
 Owner = Dict[str, Any]
 
@@ -74,12 +71,13 @@ def lane_of(env: Mapping[str, str], cwd: str) -> Optional[str]:
     return best[1] if best else None
 
 
-def nearest(table: Optional[_procs.Table], pid: int, pattern: "re.Pattern[str]") -> Optional[_procs.Proc]:
+def nearest(table: Optional[_procs.Table], pid: int, test: Callable[[str], bool]) -> Optional[_procs.Proc]:
+    """`pid` or its nearest ancestor whose command passes `test` (safety.claude, safety.codex)."""
     if table is None:
         return None
     for here in [pid, *table.ancestors(pid)]:
         proc = table.get(here)
-        if proc is not None and pattern.search(proc.cmd):
+        if proc is not None and test(proc.cmd):
             return proc
     return None
 
@@ -93,12 +91,12 @@ def detect(env: Mapping[str, str], table: Optional[_procs.Table], cwd: str, me: 
     if session:
         owner.update(kind="claude", session=session)
         pid = int(env["CLAUDE_PID"]) if (env.get("CLAUDE_PID") or "").isdigit() else None
-        proc = table.get(pid) if table is not None and pid else nearest(table, me, CLAUDE)
+        proc = table.get(pid) if table is not None and pid else nearest(table, me, _safety.claude)
         if proc is None and table is not None:
-            proc = nearest(table, me, CLAUDE)
+            proc = nearest(table, me, _safety.claude)
     elif codex:
         owner.update(kind="codex", session=codex)
-        proc = nearest(table, me, CODEX)
+        proc = nearest(table, me, _safety.codex)
     else:
         proc = None
         if table is not None and me in table.procs:
@@ -111,6 +109,65 @@ def detect(env: Mapping[str, str], table: Optional[_procs.Table], cwd: str, me: 
     if proc is not None:
         owner.update(pid=proc.pid, pid_start=proc.start)
     return owner
+
+
+def resolve(env: Mapping[str, str], table: Optional[_procs.Table], cwd: str, store: Store, words: List[str],
+            lane: Optional[str] = None, agent: Optional[str] = None, claims: bool = True) -> Owner:
+    """The owner of what a command starts or adopts: the detected session (`detect`), the --lane and --agent
+    overrides, and with `claims` (own, own-resource) the subagent from JUNKFATHER_AGENT or from the claim holding
+    `words` (junkfather's own arguments), with `claim_note` saying why there is none. `adopt` takes no claim: it
+    names a process that runs already, and keeps its owner to the session and the overrides."""
+    who = detect(env, table, cwd)
+    if lane:
+        who["lane"] = lane
+    if agent:
+        who["agent"] = agent
+    elif not claims:
+        pass
+    elif who["kind"] == "claude" and env.get("JUNKFATHER_AGENT"):
+        who["agent"] = env["JUNKFATHER_AGENT"]
+    elif who["kind"] == "claude" and who.get("session"):
+        claim, note = find_claim(store, who["session"], words)
+        if claim is not None:
+            who["agent"], who["agent_type"] = claim.get("agent"), claim.get("agent_type")
+        who["claim_note"] = note
+    return who
+
+
+def hand_target(to: str, env: Mapping[str, str], table: Optional[_procs.Table], cwd: str
+                ) -> Tuple[Optional[Owner], str]:
+    """The owner `hand --to` names, and a warning ("" when none); (None, why) when it names no owner. `self` is
+    this command's session; another id is a Claude Code session with its process when the registry names it live,
+    else a session to come (Codex when the registry never named it). The target has no subagent and no lane yet:
+    a hand-over keeps the entry's lane when the target has none (entry.handed)."""
+    if to == "self":
+        target = detect(env, table, cwd)
+        if not target.get("session"):
+            return None, "--to self needs an agent session (CLAUDE_CODE_SESSION_ID or CODEX_THREAD_ID)"
+        target["agent"] = None
+        return target, ""
+    target = {"kind": "claude", "session": to, "agent": None, "agent_type": None, "pid": None,
+              "pid_start": None, "lane": None}
+    for record in registry() or []:
+        if record.get("sessionId") == to and table is not None and registered_alive(record, table):
+            proc = table.get(record["pid"])
+            target.update(pid=record["pid"], pid_start=proc.start if proc else None)
+            return target, ""
+    target["kind"] = "codex" if not any(r.get("sessionId") == to for r in registry() or []) else "claude"
+    return target, (f"no live Claude Code session {to} in the registry; the entry ends at its TTL or when swept as "
+                    "orphaned if that session never shows up")
+
+
+def from_env(env: Mapping[str, str], parent: Optional[int] = None) -> Owner:
+    """Whoever runs this command, from the environment alone (no process table): an agent session by
+    CLAUDE_CODE_SESSION_ID or CODEX_THREAD_ID (with CLAUDE_PID), else this process's parent. Event actors use it
+    (events.caller); unlike `detect` it ignores CODEX_SESSION_ID and names a Codex caller kind "claude", which only
+    the agent-or-process distinction of an actor reads (fathers#79)."""
+    session = env.get("CLAUDE_CODE_SESSION_ID") or env.get("CODEX_THREAD_ID")
+    pid = env.get("CLAUDE_PID", "")
+    return {"kind": "claude" if session else "shell", "session": session,
+            "pid": int(pid) if session and pid.isdigit() else (os.getppid() if parent is None else parent),
+            "lane": env.get("JUNKFATHER_LANE") or env.get("LANEFATHER_LANE")}
 
 
 def describe(owner: Owner) -> str:
@@ -155,7 +212,7 @@ def registered_alive(record: Dict[str, Any], table: _procs.Table) -> bool:
             pass
     if isinstance(record.get("startedAt"), (int, float)):
         return -2 <= record["startedAt"] / 1000 - proc.started <= 120
-    return bool(CLAUDE.search(proc.cmd))
+    return _safety.claude(proc.cmd)
 
 
 def alive(owner: Owner, table: Optional[_procs.Table],

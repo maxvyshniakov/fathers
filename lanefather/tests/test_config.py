@@ -109,6 +109,8 @@ class ConfigTests(ConfigCase):
         for text, words in (('[checks]\nverify = 3\n', "verify must be a string"),
                             ('unclaimed = [1]\n', "unclaimed must be a string or a list of strings"),
                             ('[gc]\nafter_remove_report = 1\n', "after_remove_report must be a boolean"),
+                            ('[gc]\ndirs = [1]\n', "dirs must be a string or a list of strings"),
+                            ('[gc]\nbranches = [""]\n', "[gc] branches takes non-empty patterns"),
                             ('[[promote.install]]\nargv = ["x"]\n', "needs a name and an argv"),
                             ('checks = "x"\n', "[checks] must be a table"),
                             ('[env]\nLANEFATHER_X = 1\n', "[env] maps"),
@@ -121,6 +123,13 @@ class ConfigTests(ConfigCase):
             with self.subTest(text), self.assertRaises(LaneError) as raised:
                 self.use(text)
             self.assertIn(words, str(raised.exception))
+
+    def test_gc_patterns_default_to_agent_lane_claude_and_codex_worktrees(self):
+        default = config.Config()
+        self.assertEqual(default.gc_dirs, ("agent-*", "lane-*", ".claude/worktrees/*", "codex-*"))
+        self.assertEqual(default.gc_branches, ("worktree-agent-*", "lane/*", "claude/*", "codex/*"))
+        found = self.use('[gc]\ndirs = "agent-*"\nbranches = []\n')
+        self.assertEqual((found.gc_dirs, found.gc_branches), (("agent-*",), ()))
 
     def test_find_reads_the_repository_top_or_lanefather_config(self):
         repo = self.tmp / "repo"

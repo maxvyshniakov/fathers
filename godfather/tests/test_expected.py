@@ -235,8 +235,8 @@ class ViewTests(unittest.TestCase):
         y, x = self.find(canvas, "18m · p90 31m")
         self.assertEqual("warn", canvas.cells[y][x][1])
 
-    def events(self, found: list[dict[str, Any]], width: int = 80) -> Any:
-        canvas = self.tool.Canvas(width, 8)
+    def events(self, found: list[dict[str, Any]], width: int = 80, marks: Any = None) -> Any:
+        canvas = self.tool.Canvas(width, 8, marks=marks)
         self.tool.draw_events(canvas, Rect(0, 0, 8, width), {"events": found})
         return canvas
 
@@ -272,8 +272,8 @@ class ViewTests(unittest.TestCase):
                 self.assertIn("Stray", self.events([trend, released(NOW, 1)], width).render(False))
 
     def test_ascii_terminals_get_ascii_run_marks(self) -> None:
-        self.tool.use_marks(True)
-        canvas = self.events([dict(released(NOW, 1), run="outlier"), dict(released(NOW, 2), run="slower")])
+        canvas = self.events([dict(released(NOW, 1), run="outlier"), dict(released(NOW, 2), run="slower")],
+                             marks=self.tool.marks_for(True))
         self.find(canvas, "ok 34m00s ^")
         self.find(canvas, "ok 34m00s /")
 

@@ -13,12 +13,20 @@ An entry is one owned process group, `entries/<id>.json` under `$JUNKFATHER_STAT
 | `pid`, `pgid`, `start`, `seen` | the leader: its pid, group, start time (`ps lstart`, C locale) and command as `ps` showed it at launch |
 | `group` | whether the leader leads its own group (true for `own`; for `adopt`, only when pid = pgid) |
 | `known` | `[pid, start]` of every member seen while it ran: what a reap may signal once the leader is gone |
+| `known_seen` | `[pid, start, command]` for the same members: the command each showed when last seen (absent in entries written before it: those members are checked by pid and start only) |
 | `ttl`, `expires` | seconds, and the epoch at which the entry is reaped whatever its owner |
 | `keep` | `owner`: ends with the agent that started it; `session`: survives a subagent's stop, ends with the session |
 | `owner` | `{kind: claude\|codex\|shell, session, agent, agent_type, pid, pid_start, lane}` |
 | `handed` | each hand-over: `{at, from, to}` |
 | `supervisor`, `log` | the supervising process (`pid`, `start`) and, detached, the output file |
 | `state` | `starting`, `running`, `reaping`, then `exited` (code in `exit`), `reaped` (`end: {reason, result, how, pids}`), `gone` (ended unseen) or `failed` |
+
+A state changes only by one of these moves, each made under the state directory's lock and only from the states
+listed (otherwise the entry is left as it is): `starting` to `running` (the command started) or `failed`; `running`
+to `reaping` (one reaper holds it) and back to `running` (the reap failed, or its reaper died: the sweep releases it
+after 5 minutes) or on to `reaped`; `running` to `exited` (the supervisor saw the command end with nothing left) or
+`gone` (the sweep found nothing left), and `gone` back to `running` when the supervisor's own command still runs.
+Process and resource entries share them (`junkfather/entry.py`).
 
 Finished entries and their logs are pruned after 7 days.
 
@@ -69,6 +77,8 @@ A command run with `GODFATHER_ACTOR` set carries `via: "godfather"`.
   checkout); an entry's continuation lines join it and its markdown stays; `--since` keeps only releases newer than
   that version, and the Unreleased entries. `source` is the file read, `null` (with no entries)
   when the release has none. It reads one file and changes nothing.
+- Without `--json`, `status`, `capabilities` and `changelog` print the same for people; a dashboard always passes
+  `--json`, and these shapes only gain fields.
 
 ## Ending an entry
 
@@ -77,18 +87,30 @@ A command run with `GODFATHER_ACTOR` set carries `via: "godfather"`.
   turn, the sweep), the sweep when the owner's session is gone, a signal to an attached junkfather, or
   `junkfather reap`.
 - **Which processes**: the leader when its pid still has the recorded start time and command (same command line,
-  or the same program; `--force` skips the command check, never the start time); with a verified leader of its own
-  group, the whole group, which the live leader pins; without one, only the `known` members, never the group id
-  alone, since a group id can be taken again once its last member ends; then the descendants of all of these. Only
+  or the same program, as `seen` or as `known_seen` last recorded it; `--force` skips the command check, never the
+  start time); with a verified leader of its own group, the whole group, which the live leader pins; without one,
+  only the `known` members whose start time and command (`known_seen`) still match, never the group id alone, since
+  a group id can be taken again once its last member ends; then the descendants of all of these. A leader refused
+  for its start time or its command is not taken through `known` either, though `known` lists it: its recorded
+  members still are. The supervisor records its own child's current command (a launcher such as
+  `/usr/bin/python3` execs another program), since a child it has not waited for cannot have had its pid reused. Only
   this user's processes, never pid 1, junkfather or its ancestors, and never a process with a terminal or an agent
   session (Claude Code, Codex), nor anything below one. Up to three rounds: a process forked during the grace
   period is found by the next read.
-- **How**: SIGTERM to each target whose start time was just read again, up to `--grace` seconds (10), SIGKILL to
-  what is left, again only to unchanged identities. Results: `stopped`, `killed`, `gone` (nothing left to signal),
-  `failed` (the entry keeps running and records `last_error`; also when `ps` cannot be read, which is never taken
-  for "they ended"). Start times are read in UTC, whatever the caller's `TZ`.
+- **How**: SIGTERM to each target whose start time and command were just read again, up to `--grace` seconds (10),
+  SIGKILL to what is left, again only to unchanged identities. Results: `stopped`, `killed`, `gone` (nothing left to
+  signal), `failed` (the entry keeps running and records `last_error`; also when `ps` cannot be read, which is never
+  taken for "they ended"). Start times are read in UTC, whatever the caller's `TZ`.
+- **Identity**: a pid with its start time, and its command as the second factor. `ps lstart` has one-second
+  granularity, so a pid that ends and is taken again within the same second has the same start time; only the
+  command tells them apart (same command line or same program, so a process that renamed its arguments still
+  matches).
+- **A failed TTL reap**: the supervisor tries again after 1 s, then 2, 4 and so on up to 60 s, and only the first
+  failure of a streak writes `entry.reap_failed`; each failure still updates `last_error`.
 - **Never** a process junkfather did not start or adopt, except `reap --pid PID --force` on a pid the last sweep
-  listed as unowned, with the same start time and still unowned.
+  listed as unowned, with the same start time and command and still unowned.
+- **One policy**: `adopt`, a reap, `reap --pid --force`, the sweep's unowned report and its unowned resources
+  decide what they may touch by the same rules (`junkfather/safety.py`).
 
 ## Resources
 
@@ -134,12 +156,23 @@ lives while it runs; a script or cron job has no such ancestor, so only the TTL 
 table cannot be read, or an owner has no process to check and the registry does not name it, its liveness is
 unknown, and unknown never reaps.
 
+Liveness compares a process's pid and start time only, by design: the owner's recorded process, an entry's
+supervisor and the reaper holding an entry in `reaping`. A start time has one-second granularity, so a pid taken
+again within that second reads as alive; that only delays a reap (the TTL still ends the entry, the sweep tries
+again), while every signal checks the command as well (Ending an entry). Recording each owner's command to compare
+it would add an owner field for no safety gain.
+
 The subagent comes from claims: the PreToolUse hook writes `claims/<session>/<tool_use_id>.json` (agent id, agent
 type, command) for each Bash call naming junkfather, and `own` takes the newest claim of its session whose command
 holds `own` and every one of its arguments, and marks it used for them. No full match (a script that runs
 junkfather, a hook not installed), or two agents of the session with a matching command within a minute of each
 other, leaves the entry to the session alone, and `own` says so: a session-level entry lives longer, never shorter. Claude Code passes `agent_id` to hooks but not to the Bash
 tool's environment, hence the claims.
+
+`own` and `own-resource` take the subagent from `--agent`, `JUNKFATHER_AGENT` or a claim; `adopt` takes it from
+`--agent` only, since the process it names was not started by the Bash call that runs it. `hand --to SESSION`
+records the session's process when the registry names it live; otherwise the entry waits for that session (a
+Codex one when the registry never named it) and ends at its TTL or when swept as orphaned.
 
 ## Hooks
 

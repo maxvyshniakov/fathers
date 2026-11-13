@@ -19,6 +19,7 @@ import sys
 import time
 from typing import Any, Dict, List, Optional
 
+from . import entry as _entry
 from . import owner as _owner
 from .state import Store
 
@@ -29,7 +30,7 @@ def plan(data: Dict[str, Any], store: Store, now: Optional[float] = None) -> Opt
     event, session = data.get("hook_event_name"), data.get("session_id")
     if not isinstance(session, str) or not session:
         return None
-    running = [e for e in store.entries() if e.get("state") == "running"
+    running = [e for e in store.entries() if e.get("state") == _entry.RUNNING
                and (e.get("owner") or {}).get("session") == session]
     if event == "SubagentStop":
         agent = data.get("agent_id")

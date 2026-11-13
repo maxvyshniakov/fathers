@@ -80,7 +80,7 @@ class QueueTableTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.tool = surfaces(load_dashboard())
-        self.tool.use_marks(True)  # one-cell ASCII states: these tests read columns as string positions (#15)
+        self.marks = self.tool.marks_for(True)  # one-cell ASCII states: these tests read columns as positions (#15)
         self.now = datetime.datetime.now(datetime.timezone.utc)
 
     def model(self, **extra: Any) -> dict[str, Any]:
@@ -93,7 +93,7 @@ class QueueTableTests(unittest.TestCase):
         return {"holders": holders, "waiters": waiters, "slots": 6, "cores": 12, **extra}
 
     def draw(self, model: dict[str, Any], width: int = 120, height: int = 10) -> Any:
-        canvas = self.tool.Canvas(width, height)
+        canvas = self.tool.Canvas(width, height, marks=self.marks)
         self.tool.draw_requests(canvas, Rect(0, 0, height, width), model, 0, self.now)
         return canvas
 
@@ -136,7 +136,7 @@ class QueueTableTests(unittest.TestCase):
             # build is selected and tinted with its colour (#15): its text in its ink, its cells in its fill
             text = {cell[1] for cell in cells if cell[0] not in (" ", "■", "", "▪", ">")}
             self.assertEqual({style}, text, f"{label}: the selected row keeps its colour too")
-            self.assertTrue(all(cell[1] == self.tool.fill(style) for cell in cells if cell[0] == "▪"), label)
+            self.assertTrue(all(cell[1] == self.tool.fill(style, self.tool.current_theme) for cell in cells if cell[0] == "▪"), label)
         build = self.row(canvas, "build")
         self.assertEqual({"f0", "track"}, {cell[1] for cell in canvas.cells[build] if cell[0] == "■"},
                          "the CPU bar fills in the row's fill; its empty cells keep the track colour")
@@ -170,7 +170,7 @@ class QueueTableTests(unittest.TestCase):
             dict(label="hog", kind="held", count=1, pid=11, style="h1", cpu=900, since=now, granted=now),
             dict(label="idle", kind="held", count=1, pid=12, style="h2", cpu=5, since=old, granted=old,
                  idle_since=old)]  # #12: idle is the holder's record (idle.idle_since()), not a guess from one sample
-        styles = [self.tool.queue_bar_style(item, model) for item in model["holders"]]
+        styles = [self.tool.queue_bar_style(item, model, self.tool.current_theme) for item in model["holders"]]
         self.assertEqual(["f0", "bad", "warn"], styles, "over its share stays red, an idle lease stays yellow")
         canvas = self.draw(model)
         cpu = canvas.render(False).splitlines()[0].index("cpu use/share")
@@ -255,9 +255,11 @@ class QueueTableTests(unittest.TestCase):
     def test_a_large_count_is_cut_without_trying_every_count_below_it(self) -> None:
         item = dict(kind="held", style="h0", count=100000)
         with mock.patch.object(self.tool, "cells_text", wraps=self.tool.cells_text) as tries:
-            self.assertEqual([("▪", "f0"), (" +99999", "h0")], self.tool.slot_cells(item, 11), "at most 8 columns")
+            self.assertEqual([("▪", "f0"), (" +99999", "h0")], self.tool.slot_cells(item, 11, self.tool.current_theme),
+                             "at most 8 columns")
         self.assertLess(tries.call_count, 25, "a bounded number of tries, not one per count")
-        self.assertEqual([("▪▪▪▪", "f0"), (" +16", "h0")], self.tool.slot_cells(dict(item, count=20), 8),
+        self.assertEqual([("▪▪▪▪", "f0"), (" +16", "h0")], self.tool.slot_cells(dict(item, count=20), 8,
+                                                                                self.tool.current_theme),
                          "cells in the fill, the count in the ink")
 
 
@@ -287,12 +289,9 @@ class EventDetailTests(unittest.TestCase):
     def draw(self, width: int, events: list[dict[str, Any]] | None = None) -> tuple[Any, list[str]]:
         tool = load_dashboard()
         found = self.events() if events is None else events
-        when = found[-1]["when"].astimezone().date()
-        patched = mock.patch.object(tool, "today", lambda: when)  # the log's day: times read as times on any day
-        patched.start()
-        self.addCleanup(patched.stop)
+        when = found[-1]["when"]  # drawn on the log's day: times read as times on any day
         canvas = tool.Canvas(width, 12)
-        tool.draw_events(canvas, Rect(0, 0, 12, width), {"events": found})
+        tool.draw_events(canvas, Rect(0, 0, 12, width), {"events": found}, when)
         return canvas, canvas.render(False).splitlines()
 
     def test_the_columns_are_time_slots_label_result(self) -> None:
@@ -439,8 +438,7 @@ class DetailLayoutTests(unittest.TestCase):
         model: dict[str, Any] = dict(holders=[], waiters=[item], free=4, used=2, slots=6,
                                     memory_block=None, order="window", start=None, limit=0, overtake_window=600)
         canvas = tool.Canvas(90, 24)
-        with mock.patch.object(tool, "today", return_value=moment.date()):
-            tool.draw_detail(canvas, Rect(0, 0, 24, 90), model, 0, None, moment)
+        tool.draw_detail(canvas, Rect(0, 0, 24, 90), model, 0, None, moment)
         lines = canvas.render(False).splitlines()
         for label, value in (("label", "first"), ("status", "waiting"), ("queued", "10:00:00"),
                              ("free", "4 of 6 slots"), ("pass until", "10:10:00"),
@@ -499,13 +497,12 @@ class DetailLayoutTests(unittest.TestCase):
 class QueuePolicyTests(unittest.TestCase):
     def test_backfill_policy_is_structured_as_deadlines_not_a_sentence(self):
         tool = load_dashboard()
-        tool.today = lambda: datetime.date(2026, 11, 5)
         since = datetime.datetime(2026, 11, 5, 10).astimezone()
         model = dict(holders=[], waiters=[dict(count=3, since=since, passable=False, label="head", pid=100,
                      kind="waiting",style="warn",cmd="work",queue="",tree=[])], free=1,used=1,slots=4,memory_block=None,
                      order="backfill", start=since+datetime.timedelta(minutes=30), limit=1200)
         self.assertEqual({"start est": "10:30:00", "pass until": "10:20:00"},
-                         tool.queue_policy(model))
+                         tool.queue_policy(model, since))
         canvas = tool.Canvas(100,24)
         tool.draw_detail(canvas, Rect(0, 0, 24, 100),model,0,None,since)
         lines = canvas.render(False).splitlines()
@@ -513,7 +510,7 @@ class QueuePolicyTests(unittest.TestCase):
             line=next(line for line in lines if title in line)
             self.assertRegex(line,re.escape(title)+r"\s+"+re.escape(value))
         model["waiters"] = []
-        self.assertEqual({}, tool.queue_policy(model))
+        self.assertEqual({}, tool.queue_policy(model, since))
 
 
 class SlotBarTests(unittest.TestCase):
@@ -564,7 +561,8 @@ class MachineStatusTests(unittest.TestCase):
                 lines=canvas.lines(False)
                 permit=f"admission: {admission} slots" if admission else "no admission"
                 self.assertTrue(lines[0].rstrip().endswith(f" unleased 4.5 · {permit} ─╮"),lines[0])
-                self.assertFalse("".join(cell[0] for cell in canvas.cells[1][1:-1]).strip(),"a blank row first")
+                self.assertEqual("slots held","".join(cell[0] for cell in canvas.cells[1][1:-1]).strip(),
+                                 "a blank row first but for the chart's title")
                 for row,(name,mark) in enumerate(zip(("load","mem","swap"),marks),2):
                     self.assertEqual(mark,canvas.cells[row][3][0],f"{name}: under the blank row")
                     self.assertEqual(name,"".join(cell[0] for cell in canvas.cells[row][6:6+len(name)]))
@@ -573,13 +571,11 @@ class MachineStatusTests(unittest.TestCase):
                 self.assertIn("\x1b[0munleased 4.5",coloured,"in the text colour")
                 self.assertIn(tool.sgr("bad" if not admission else "status-normal",False)+permit,coloured,
                               "red when it blocks")
-                tool.use_marks(True)
-                ascii_canvas=tool.Canvas(110,24)
+                ascii_canvas=tool.Canvas(110,24,marks=tool.marks_for(True))
                 tool.draw_machine(ascii_canvas, Rect(0, 0, 24, 110),model)
                 plain=ascii_canvas.lines(False,ascii_only=True)
                 self.assertEqual("".join("!" if mark=="🔥" else "+" for mark in marks),
                                  "".join(plain[row][3] for row in (2,3,4)),"ASCII: + and !")
-                tool.use_marks(False)
 
     def test_a_narrow_border_keeps_the_admission_and_drops_the_unleased_load(self):
         tool=load_dashboard()
@@ -626,10 +622,32 @@ class MemoryBarTests(unittest.TestCase):
         chart = lines[5]
         self.assertEqual("  ", chart[1:3])
         self.assertEqual("  ", chart[57:59])
-        self.assertRegex(lines[-2], r"^│  −\d+[smh] +avg 4\.0/4 · peak 4 · full 100% +now  │$")
+        self.assertRegex(lines[-2], r"^│  −\d+[smh] +slots held · avg 4\.0/4 · peak 4 · full 100% +now  │$")
         self.assertEqual(11, tool.machine_height(60))
         self.assertIn("╰", lines[-1], "the bottom frame right after the legend")
 
+
+    def test_the_chart_says_it_shows_slots_held_without_a_row_of_its_own(self):
+        # fathers#140: beside the gauges its title sits in the blank row above it, so its rows do not read as the
+        # gauges' sparklines; under them the axis line names it
+        tool=surfaces(load_dashboard())
+        for width,height in ((62,7),(90,7)):
+            with self.subTest(width=width):
+                lines=self.machine(tool,height,width=width)
+                start=lines[-2].index("−")  # the chart's first column, where its axis starts
+                self.assertEqual("slots held",lines[1][start:start+10],lines[1])
+                self.assertNotIn("slots held",lines[-2])
+        lines=self.machine(tool,11,width=60)
+        self.assertNotIn("slots held","".join(lines[:-2]),"stacked: no row for a title")
+        self.assertRegex(lines[-2],r"^│  −\d+[smh] +slots held · avg [\d.]+/4 .* now  │$")
+        for width,kept in ((60,("slots held","avg","peak","full")),(34,("slots held","avg")),(24,("slots held",)),
+                           (15,())):
+            with self.subTest(width=width):
+                line="".join(text for text,_ in tool.machine_legend(dict(average=0.65,peak=8,full=0.2),8,width,
+                                                                       label="slots held"))
+                self.assertEqual(width,tool.text_width(line))
+                for word in ("slots held","avg","peak","full"):
+                    self.assertEqual(word in kept,word in line,line)
 
     def test_the_legend_is_a_time_axis_with_the_stats_in_slots_between(self):
         tool=surfaces(load_dashboard())
@@ -686,9 +704,9 @@ class MemoryBarTests(unittest.TestCase):
         self.assertIn("38;2;%d;%d;%dm▄"%red,canvas.lines(True)[rows[0]])
 
     def machine(self, tool: Any, height: int, width: int = 60, memory: dict[str, Any] | None = None,
-                load: float = 3) -> list[str]:
+                load: float = 3, marks: Any = None) -> list[str]:
         now=datetime.datetime.now(datetime.timezone.utc)
-        canvas=tool.Canvas(width,height)
+        canvas=tool.Canvas(width,height,marks=marks)
         tool.draw_machine(canvas, Rect(0, 0, height, width),dict(slots=4,cores=12,averages=(load,2,3),
                           advice=dict(unleased_load=0,jobs=2),memory_block=None,admission=1,
                           memory=judged(memory or dict(level=1,used=24678,total=32768,swap_total=9216,swap_free=1434)),
@@ -846,11 +864,9 @@ class MemoryBarTests(unittest.TestCase):
                 compact=next(line for line in lines if "load " in line)
                 self.assertRegex(compact,r"🆗 load ■\S* 3\.0/12 · 🆗 mem ■\S* normal · 🆗 swap ■\S* 7\.6/9G")
                 self.assertTrue(" mem " in compact and " swap " in compact,"one line, not rows")
-        tool.use_marks(True)
-        self.machine(tool,3,width=90)
+        self.machine(tool,3,width=90,marks=tool.marks_for(True))
         self.assertRegex(next(line for line in self.canvas.lines(False,ascii_only=True) if "load " in line),
                          r"\+ load #\S* 3\.0/12 \. \+ mem #\S* normal \. \+ swap #\S* 7\.6/9G")
-        tool.use_marks(False)
         narrow=self.machine(tool,3,width=56)
         line=next(line for line in narrow if "load " in line)
         self.assertRegex(line,r"🆗 load 3\.0/12 (· )?🆗 mem normal (· )?🆗 swap 7\.6/9G","too narrow for bars: the numbers")

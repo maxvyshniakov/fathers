@@ -27,6 +27,20 @@ from . import state as _state
 Table = dict[int, tuple[int, str]]  # the process table: pid -> (parent pid, start time)
 
 
+def process_table(directory: Path) -> Table:
+    """platform.processes() for a look that reaps or sweeps the queue at `directory`. When ps gives no table that
+    can be trusted (config.ProcessTableError, a SlotError) the look reaps nothing: this says so in queue.log and
+    the event log and raises, and the caller skips that pass (a waiter's next look tries again)."""
+    try:
+        return _platform.processes()
+    except _config.ProcessTableError as error:
+        if _state.foreign_owner(directory) is None:
+            _state.log(directory, f"skipped reaping: {error}")
+            _events.emit(directory, "reap.skipped", {"type": "queue", "id": "processes"}, {"reason": str(error)},
+                         _events.actor(kind="tool"), level="warn")
+        raise
+
+
 def reap(directory: Path, table: Table) -> list[tuple[Path, dict[str, Any]]]:
     """Live entries in queue order; removes those whose holder exited or crashed (in another user's queue it only
     leaves them out)."""
@@ -145,7 +159,7 @@ def ask_yield(pid: int, start: str, directory: Path | None = None) -> tuple[dict
     directory = directory or _config.state_dir()
     _state.require_own(directory, "a yield request")
     with _state.locked(directory):
-        table = _platform.processes()
+        table = process_table(directory)
         live = reap(directory, table)
         if not same_process(table, pid, start):
             raise _config.SlotError(f"pid {pid} is not the process started at {start!r} any more: nothing was asked")
@@ -207,12 +221,12 @@ def yield_lease(path: Path, out=sys.stderr) -> bool:
         request = _state.asked(path)
         if entry.get("state") != "held" or request is None:
             return False
-        live = reap(directory, _platform.processes())
+        live = reap(directory, process_table(directory))
         asker = next((e for p, e in live if p.stem == request.get("by") and e.get("state") != "held"), None)
         settings = _schedule.order_settings(directory, environment=False)
         behind = _schedule.rank_time(asker, settings, time.time()) + _config.YIELD_BEHIND if asker is not None else None
         if asker is not None:  # would the asker start? Things may have changed since it asked.
-            table = _platform.processes()
+            table = process_table(directory)
             held = [e for p, e in live if e.get("state") == "held" and p != path]
             waiters = [e for p, e in live if e.get("state") != "held"] + [dict(entry, state="waiting", rank=behind)]
             trial = _schedule.plan(waiters, held, _config.total(), time.time(), estimate=_schedule.estimator(directory),
@@ -234,7 +248,8 @@ def yield_lease(path: Path, out=sys.stderr) -> bool:
         _events.emit(directory, "lease.yielded", _events.request(entry, path),
                      {"count": entry["count"], "to": {"id": request.get("by"), "label": asker.get("label")},
                       "yields": entry["yields"]}, _events.holder(entry))
-        grant(directory, _platform.processes())
+        with contextlib.suppress(_config.SlotError):  # held_again()'s looks grant it then
+            grant(directory, process_table(directory))
     print(f"slot: {entry.get('label')} yielded {entry['count']} slot(s) to {asker.get('label')}; it resumes when "
           f"they are free", file=out, flush=True)
     held_again(path)
@@ -256,7 +271,7 @@ def reprioritize(target: str, priority: str, directory: Path | None = None,
     _state.require_own(directory, "a priority change")
     changed: list[dict[str, Any]] = []
     with _state.locked(directory):
-        table = _platform.processes()
+        table = process_table(directory)
         live = reap(directory, table)
         if start is not None and not (target.isdigit() and same_process(table, int(target), start)):
             raise _config.SlotError(f"pid {target} is not the process started at {start!r} any more: nothing changed"
@@ -295,7 +310,8 @@ def reprioritize(target: str, priority: str, directory: Path | None = None,
             _events.emit(directory, "request.reprioritized", _events.request(entry, path),
                          {"from": before, "to": priority, "state": entry.get("state")})
             changed.append(entry)
-        grant(directory, _platform.processes())
+        with contextlib.suppress(_config.SlotError):  # the change stands; the waiters' looks grant by it
+            grant(directory, process_table(directory))
     return changed
 
 
@@ -308,7 +324,8 @@ def held_again(path: Path) -> None:
     while True:
         if time.monotonic() >= look:
             with _state.locked(directory):
-                grant(directory, _platform.processes())
+                with contextlib.suppress(_config.SlotError):  # no table to trust: this look reaps and grants nothing
+                    grant(directory, process_table(directory))
                 try:
                     entry = json.loads(path.read_text())
                 except (OSError, ValueError):
@@ -463,7 +480,7 @@ class Lease:
                                  {"count": self.count, "unknown": True})
                 # Hand the slots on now: waiters look at the queue less often the longer they wait.
                 with contextlib.suppress(_config.SlotError, OSError):
-                    grant(directory, _platform.processes())
+                    grant(directory, process_table(directory))
             if item is not None and item.get("run_key"):
                 from . import runtype as _runtype
                 _runtype.after_release(directory, item)  # outliers and trends, outside the queue lock
@@ -506,6 +523,22 @@ def policy() -> str:
     if value not in _config.POLICIES:
         raise _config.SlotError(f"invalid SLOTFATHER_POLICY {value!r}: use {', '.join(_config.POLICIES)}")
     return value
+
+
+def next_sequence(directory: Path) -> int:
+    """The next queue sequence, under the queue lock, written whole (state.write()). It is past every entry in the
+    queue too: a torn or lost `sequence` file (an older client writes it in place) must not put a new request
+    ahead of those already waiting (fathers#123). Older clients read the file with int(), which takes "42\n"."""
+    try:
+        sequence = int((directory / "sequence").read_text() or 0)
+    except (OSError, ValueError):
+        sequence = 0
+    for path in (directory / "queue").glob("*.json"):
+        number = path.name.split("-", 1)[0]
+        if number.isdigit():
+            sequence = max(sequence, int(number))
+    _state.write(directory / "sequence", sequence + 1)
+    return sequence + 1
 
 
 def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wait: float | None = None,
@@ -551,18 +584,13 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
                 same = isinstance(spec, dict) and cast(dict[str, Any], spec).get("name") == session["name"]
                 pid = other.get("pid")
                 holder = fresh.get(pid) if isinstance(pid, int) else None  # platform.alive(), spelled out
-                if same and holder is not None and other.get("start") in ("", holder[1]):
+                if same and holder is not None and _platform.same_start(str(other.get("start")), holder[1]):
                     raise _config.SlotError(f"session {session['name']} exists (pid {other.get('pid')}, "
                                             f"{other.get('state')}): stop it first (slotfather session stop "
                                             f"{session['name']})")
         whole = count == "all"
         count = _config.total() if whole else min(count, _config.total())
-        sequence_file = directory / "sequence"
-        try:
-            sequence = int(sequence_file.read_text() or 0) + 1
-        except (OSError, ValueError):
-            sequence = 1
-        sequence_file.write_text(str(sequence))
+        sequence = next_sequence(directory)
         path = directory / "queue" / f"{sequence:010d}-{me}.json"
         entry: dict[str, Any] = {"pid": me, "start": table.get(me, (0, ""))[1], "count": count, "label": label, "cmd": command,
                  "cwd": cwd, "since": _config.now(), "state": "waiting", "priority": selected_priority,
@@ -596,7 +624,7 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
     main_thread = threading.current_thread() is threading.main_thread()
     previous_term = signal.signal(signal.SIGTERM, terminate) if main_thread else None
     try:
-        said, interval, look = None, poll, 0.0
+        said, interval, look, waiting = None, poll, 0.0, None
         queued = time.monotonic()
         warned = None  # when it last said it waits long (WARN_REPEAT)
         while True:
@@ -604,8 +632,9 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
                 # A full look runs ps over the machine under the queue lock. While the reason to wait stays the same,
                 # each pause is half as long again, up to poll_max: a release grants at once, so only reaping a
                 # crashed holder and memory recovering wait for a look.
-                with _state.locked(directory):
-                    waiting = grant(directory, _platform.processes())
+                with _state.locked(directory), contextlib.suppress(_config.ProcessTableError):
+                    # no table to trust: this look reaps and grants nothing, and the waiter keeps its place
+                    waiting = grant(directory, process_table(directory))
                 interval = poll if waiting != said else min(interval * 1.5, poll_max)
                 look = time.monotonic() + interval
             try:
@@ -637,8 +666,9 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
             if waiting != said:
                 print(f"slot: {label} waits for {count} slot(s): {waiting or 'earlier requests first'}",
                       file=out, flush=True)
-                for line in _query.status_lines(directory):
-                    print(f"  {line}", file=out, flush=True)
+                with contextlib.suppress(_config.ProcessTableError):  # a display must never cost the request its place
+                    for line in _query.status_lines(directory):
+                        print(f"  {line}", file=out, flush=True)
                 if note and said is None:
                     print(f"slot: {note}", file=out, flush=True)
                 said = waiting
