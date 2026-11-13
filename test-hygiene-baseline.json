@@ -9,6 +9,7 @@
       "slotfather/tests/test_events.py": 1,
       "slotfather/tests/test_idle.py": 1,
       "slotfather/tests/test_order.py": 1,
+      "slotfather/tests/test_process_table.py": 1,
       "slotfather/tests/test_session.py": 2,
       "slotfather/tests/test_slotfather.py": 3,
       "slotfather/tests/test_sweep.py": 6,
