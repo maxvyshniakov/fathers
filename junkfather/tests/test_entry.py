@@ -38,6 +38,7 @@ class TransitionTests(Case):
         leader = proc(4100, cmd="sleep 600")
         self.check(entry.started, [entry.STARTING], leader, {"pid": 1, "start": None})
         self.check(entry.failed, [entry.STARTING], "no")
+        self.check(entry.failed, [entry.STARTING, entry.FAILED], "no", start_error=True)
         self.check(entry.known, [entry.RUNNING], [leader])
         self.check(entry.gone, [entry.RUNNING])
         self.check(entry.revived, [entry.GONE])
@@ -60,9 +61,12 @@ class TransitionTests(Case):
         extended = entry.extended(self.store, ident, 60.0, now=100.0) or {}
         self.assertEqual((60.0, 160.0), (extended["ttl"], extended["expires"]))
         target = {"kind": "claude", "session": "s2", "lane": None}
-        handed = entry.handed(self.store, ident, target, now=7.0) or {}
-        self.assertEqual(("owner", "s2", {"kind": "shell"}), (handed["keep"], handed["owner"]["session"],
-                                                              handed["handed"][-1]["from"]))
+        moved = entry.handed(self.store, ident, target, now=7.0)
+        assert moved is not None
+        handed, before = moved
+        self.assertEqual(("owner", "s2", {"kind": "shell"}, {"kind": "shell"}),
+                         (handed["keep"], handed["owner"]["session"], handed["handed"][-1]["from"], before))
+        self.assertEqual({"kind": "claude", "session": "s2", "lane": None}, target, "the caller's target is untouched")
         failed = entry.failed(self.store, self.make(entry.STARTING), "why", now=9.0) or {}
         self.assertEqual((entry.FAILED, "why", 9.0), (failed["state"], failed["error"], failed["ended"]))
 

@@ -220,7 +220,7 @@ def reap(store: Store, entry_id: str, reason: str, grace: float = GRACE, dry_run
 def reap_unowned(store: Store, pid: int, table: _procs.Table, force: bool, reason: str, grace: float = GRACE,
                  dry_run: bool = False, via: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
     """Stop an unowned process: only with `force`, only one the last sweep listed, only when it is still the same
-    process (start time and command) and still unowned (safety.refusal). None, after saying why on stderr, when
+    process (start time and command) and still unowned (safety.force_refusal). None, after saying why on stderr, when
     refused; else the one result row."""
     if not force:
         print(f"junkfather reap: pid {pid} is not owned; junkfather stops an unowned process only with --force, "
@@ -231,7 +231,7 @@ def reap_unowned(store: Store, pid: int, table: _procs.Table, force: bool, reaso
         return any(candidate in {p.pid for p in members(e, table)[0]} for e in store.entries()
                    if e.get("state") in _entry.ACTIVE)
 
-    refused = _safety.refusal("force", pid, table, store, owned)
+    refused = _safety.force_refusal(pid, table, store, owned)
     if refused:
         print(f"junkfather reap: refusing pid {pid}: {refused}", file=sys.stderr)
         return None

@@ -13,7 +13,7 @@ import subprocess
 import time
 from typing import Any, Dict, List, NamedTuple, Optional
 
-from .defaults import PS_TIMEOUT as TIMEOUT
+from .defaults import PS_TIMEOUT
 C_LOCALE = {"LC_ALL": "C", "LANG": "C", "TZ": "UTC"}
 LSTART = "%a %b %d %H:%M:%S %Y"
 
@@ -63,10 +63,10 @@ def started_at(lstart: str) -> Optional[float]:
 
 def run(argv: List[str], ok=(0,)) -> str:
     try:
-        result = subprocess.run(argv, capture_output=True, text=True, timeout=TIMEOUT,
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=PS_TIMEOUT,
                                 env={**os.environ, **C_LOCALE})
     except subprocess.TimeoutExpired:
-        raise ProcError(f"{argv[0]} did not answer in {TIMEOUT:.0f} s") from None
+        raise ProcError(f"{argv[0]} did not answer in {PS_TIMEOUT:.0f} s") from None
     except OSError as error:
         raise ProcError(f"{argv[0]}: {error}") from None
     if result.returncode not in ok:

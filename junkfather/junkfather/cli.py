@@ -42,6 +42,7 @@ from . import hook as _hook
 from . import launch as _launch
 from . import owner as _owner
 from . import procs as _procs
+from . import release as _release
 from . import reap as _reap
 from . import resources as _resources
 from . import sweep as _sweep
@@ -246,7 +247,7 @@ def changelog_command(store: Store, args: argparse.Namespace) -> int:
 
 
 def version_command(store: Store, args: argparse.Namespace) -> int:
-    print(f"junkfather {__version__}{_changelog.commit()}")
+    print(f"junkfather {__version__}{_release.commit()}")
     return 0
 
 
@@ -293,15 +294,15 @@ def hand_command(store: Store, args: argparse.Namespace) -> int:
         raise Usage(warning)
     if warning:
         print(f"junkfather hand: {warning}", file=sys.stderr)
-    entry = _entry.handed(store, args.id, target)
-    before: Dict[str, Any] = entry["handed"][-1]["from"] if entry is not None else {}
-    if entry is None or not before:
+    moved = _entry.handed(store, args.id, target)
+    if moved is None or not moved[1]:
         print(f"junkfather hand: no running entry {args.id}", file=sys.stderr)
         return 1
+    (entry, before), owner = moved, moved[0]["owner"]
     _events.write(store.root, "entry.handed", _events.subject(entry), _events.caller(),
                   {"from": {k: before.get(k) for k in ("kind", "session", "agent", "lane")},
-                   "to": {k: target.get(k) for k in ("kind", "session", "lane")}})
-    print(f"junkfather: {args.id} now belongs to {_owner.describe(target)}")
+                   "to": {k: owner.get(k) for k in ("kind", "session", "lane")}})
+    print(f"junkfather: {args.id} now belongs to {_owner.describe(owner)}")
     return 0
 
 
