@@ -561,7 +561,8 @@ class MachineStatusTests(unittest.TestCase):
                 lines=canvas.lines(False)
                 permit=f"admission: {admission} slots" if admission else "no admission"
                 self.assertTrue(lines[0].rstrip().endswith(f" unleased 4.5 · {permit} ─╮"),lines[0])
-                self.assertFalse("".join(cell[0] for cell in canvas.cells[1][1:-1]).strip(),"a blank row first")
+                self.assertEqual("slots held","".join(cell[0] for cell in canvas.cells[1][1:-1]).strip(),
+                                 "a blank row first but for the chart's title")
                 for row,(name,mark) in enumerate(zip(("load","mem","swap"),marks),2):
                     self.assertEqual(mark,canvas.cells[row][3][0],f"{name}: under the blank row")
                     self.assertEqual(name,"".join(cell[0] for cell in canvas.cells[row][6:6+len(name)]))
@@ -621,10 +622,32 @@ class MemoryBarTests(unittest.TestCase):
         chart = lines[5]
         self.assertEqual("  ", chart[1:3])
         self.assertEqual("  ", chart[57:59])
-        self.assertRegex(lines[-2], r"^│  −\d+[smh] +avg 4\.0/4 · peak 4 · full 100% +now  │$")
+        self.assertRegex(lines[-2], r"^│  −\d+[smh] +slots held · avg 4\.0/4 · peak 4 · full 100% +now  │$")
         self.assertEqual(11, tool.machine_height(60))
         self.assertIn("╰", lines[-1], "the bottom frame right after the legend")
 
+
+    def test_the_chart_says_it_shows_slots_held_without_a_row_of_its_own(self):
+        # fathers#140: beside the gauges its title sits in the blank row above it, so its rows do not read as the
+        # gauges' sparklines; under them the axis line names it
+        tool=surfaces(load_dashboard())
+        for width,height in ((62,7),(90,7)):
+            with self.subTest(width=width):
+                lines=self.machine(tool,height,width=width)
+                start=lines[-2].index("−")  # the chart's first column, where its axis starts
+                self.assertEqual("slots held",lines[1][start:start+10],lines[1])
+                self.assertNotIn("slots held",lines[-2])
+        lines=self.machine(tool,11,width=60)
+        self.assertNotIn("slots held","".join(lines[:-2]),"stacked: no row for a title")
+        self.assertRegex(lines[-2],r"^│  −\d+[smh] +slots held · avg [\d.]+/4 .* now  │$")
+        for width,kept in ((60,("slots held","avg","peak","full")),(34,("slots held","avg")),(24,("slots held",)),
+                           (15,())):
+            with self.subTest(width=width):
+                line="".join(text for text,_ in tool.machine_legend(dict(average=0.65,peak=8,full=0.2),8,width,
+                                                                       label="slots held"))
+                self.assertEqual(width,tool.text_width(line))
+                for word in ("slots held","avg","peak","full"):
+                    self.assertEqual(word in kept,word in line,line)
 
     def test_the_legend_is_a_time_axis_with_the_stats_in_slots_between(self):
         tool=surfaces(load_dashboard())

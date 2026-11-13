@@ -8,6 +8,8 @@ in two columns (QUEUE over EVENTS on the left, DETAILS over MACHINE on the right
 and at least 52); below that one column (QUEUE, DETAILS, then EVENTS beside MACHINE, or MACHINE alone where EVENTS
 would get under 38 columns, which is under 83); under SMALL_WIDTH or SMALL_HEIGHT only the slots and a note. MACHINE
 sits at its natural height (7 with its chart beside the rows, from 62 columns; 11 stacked); DETAILS takes the rest.
+Wide but too short for EVENTS under QUEUE at its rows (fathers#140), QUEUE keeps just its rows, MACHINE's compact line
+goes under it and DETAILS takes the whole right column.
 Tab goes by columns, left to right and each top to bottom."""
 from __future__ import annotations
 
@@ -32,6 +34,7 @@ RIGHT_MIN = 52  # the right column's least width; it takes 2/5 of the screen whe
 NARROW_MACHINE, NARROW_EVENTS = 44, 38  # the least width each takes side by side in one column; below both, EVENTS goes
 QUEUE_MIN, QUEUE_FLOOR, DETAILS_FLOOR = 10, 6 + 4, 9 + 4  # rows: QUEUE's least, one column's comfortable floors
 EVENTS_MIN, DETAILS_MIN, DETAILS_WIDE_MIN, MACHINE_MIN = 5, 5, 10, 6
+MACHINE_SHORT = 3  # MACHINE's least rows as one compact line in its frame: the short wide arrangement (fathers#140)
 
 # MACHINE inside: a frame, a blank row, three resource rows and the history chart with its axis line under it
 CHART_ROWS, MIN_CHART_ROWS = 4, 2  # the chart's rows when there is room; fewer than two, it goes (owner)
@@ -111,12 +114,19 @@ def overview(width: int, height: int, rows: int, machine_natural: Callable[[int]
     if width >= WIDE:
         right = max(RIGHT_MIN, width * 2 // 5)
         left = width - right - 1
-        heights = stack(available, (Tier((("requests", min(queue, QUEUE_MIN)), ("events", EVENTS_MIN)),
-                                         grow=("requests",), rest=("events", "requests")),), {"requests": queue})
-        column(panels, ("requests", "events"), heights, SLOTS_HEIGHT, 0, left)
-        sides = stack(height - 1, (Tier((("details", DETAILS_WIDE_MIN), ("machine", MACHINE_MIN)), grow=("machine",),
-                                        rest=("details",)),), {"machine": machine_natural(right)})
-        column(panels, ("details", "machine"), sides, 0, left + 1, right)
+        slack = available - queue
+        if MACHINE_SHORT <= slack < EVENTS_MIN:
+            # Short (fathers#140): EVENTS cannot fit under QUEUE at its rows, so QUEUE keeps just its rows, MACHINE's
+            # compact line takes the rows under it and DETAILS has the whole right column
+            column(panels, ("requests", "machine"), {"requests": queue, "machine": slack}, SLOTS_HEIGHT, 0, left)
+            panels["details"] = Rect(0, left + 1, height - 1, right)
+        else:
+            heights = stack(available, (Tier((("requests", min(queue, QUEUE_MIN)), ("events", EVENTS_MIN)),
+                                             grow=("requests",), rest=("events", "requests")),), {"requests": queue})
+            column(panels, ("requests", "events"), heights, SLOTS_HEIGHT, 0, left)
+            sides = stack(height - 1, (Tier((("details", DETAILS_WIDE_MIN), ("machine", MACHINE_MIN)),
+                                            grow=("machine",), rest=("details",)),), {"machine": machine_natural(right)})
+            column(panels, ("details", "machine"), sides, 0, left + 1, right)
         arrangement = "wide"
         slots_width = left
     else:

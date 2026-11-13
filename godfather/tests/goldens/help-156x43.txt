@@ -34,7 +34,7 @@
 │  11:52:30    ▫       desktop          │    ⚡  interactive: someone is waiting on it                             │                                       │
 │  11:52:25    ▪       desktop          │    🐌  batch: unattended work, after the rest                            │───────────────────────────────────────╯
 │  11:51:40    ▪       agent-a1c75285bdf│    Normal has no mark.                                                   │───────── unleased 0.4 · no admission ─╮
-│  11:51:40    ▫       post-merge-456-re│                                                                          │                                       │
+│  11:51:40    ▫       post-merge-456-re│                                                                          │          slots held                   │
 │  11:51:24    ▫       agent-a1c75285bdf│                                                                          │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
 │  11:49:34    ▫▫      data-grid        │  SLOTS                                                                   │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
 │  11:48:31    ▪▪      data-grid        │                                                                          │░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │

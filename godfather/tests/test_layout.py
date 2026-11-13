@@ -35,8 +35,18 @@ class OverviewTests(unittest.TestCase):
                         "details": (0, 94, 10, 62), "machine": (10, 94, 6, 62)}, ("requests", "events", "details")),
         ((156, 16, 1), {"slots": (0, 0, 5, 93), "requests": (5, 0, 5, 93), "events": (10, 0, 5, 93),
                         "details": (0, 94, 15, 62)}, ("requests", "events", "details")),
-        ((156, 14, 1), {"slots": (0, 0, 5, 93), "requests": (5, 0, 8, 93), "details": (0, 94, 13, 62)},
-         ("requests", "details")),
+        # wide and too short for EVENTS under QUEUE (fathers#140): QUEUE at its rows, MACHINE's compact line in the
+        # rows left under it, DETAILS the whole right column; with under three rows left, QUEUE takes them
+        ((156, 14, 1), {"slots": (0, 0, 5, 93), "requests": (5, 0, 5, 93), "machine": (10, 0, 3, 93),
+                        "details": (0, 94, 13, 62)}, ("requests", "details")),
+        ((156, 20, 6), {"slots": (0, 0, 5, 93), "requests": (5, 0, 10, 93), "machine": (15, 0, 4, 93),
+                        "details": (0, 94, 19, 62)}, ("requests", "details")),
+        ((156, 19, 6), {"slots": (0, 0, 5, 93), "requests": (5, 0, 10, 93), "machine": (15, 0, 3, 93),
+                        "details": (0, 94, 18, 62)}, ("requests", "details")),
+        ((156, 18, 6), {"slots": (0, 0, 5, 93), "requests": (5, 0, 12, 93), "details": (0, 94, 10, 62),
+                        "machine": (10, 94, 7, 62)}, ("requests", "details")),
+        ((156, 21, 6), {"slots": (0, 0, 5, 93), "requests": (5, 0, 10, 93), "events": (15, 0, 5, 93),
+                        "details": (0, 94, 13, 62), "machine": (13, 94, 7, 62)}, ("requests", "events", "details")),
         ((110, 14, 8), {"slots": (0, 0, 5, 57), "events": (5, 0, 8, 57), "details": (0, 58, 13, 52)},
          ("requests", "events", "details")),
         # one column: QUEUE, DETAILS, then EVENTS beside MACHINE from 83 columns, MACHINE alone below

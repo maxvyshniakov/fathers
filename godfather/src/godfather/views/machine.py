@@ -15,6 +15,7 @@ from . import common as _common
 from .common import Model, ramp_bar
 
 SPARK = "▁▂▃▄▅▆▇█"
+CHART_TITLE = "slots held"  # what the history chart shows (fathers#140)
 HISTORY_WINDOW = 3600  # seconds of queue.log the utilisation strip rebuilds; a model's `history_window` overrides it
 PRESSURE_LEVELS = {1: ("normal", 1), 2: ("warning", 2), 4: ("critical", 3)}  # kern.memorystatus_vm_pressure_level
 Step = tuple[datetime.datetime, datetime.datetime, int]
@@ -178,12 +179,13 @@ def draw_machine(canvas: Canvas, rect: Rect, model: Model) -> None:
             inside.compact.width, [resource.short for resource in resources], _common.marks_of(canvas),
             canvas.theme.track), inside.compact.width)
     if inside.chart is not None:
-        draw_chart(canvas, inside.chart, model, slots)
+        draw_chart(canvas, inside.chart, model, slots, titled=inside.side)
 
 
-def draw_chart(canvas: Canvas, area: Rect, model: Model, slots: int) -> None:
+def draw_chart(canvas: Canvas, area: Rect, model: Model, slots: int, titled: bool = False) -> None:
     """The history chart in the area's rows, with half a cell of air at each end (owner, 2026-11-12), and its axis
-    line right under it."""
+    line right under it. It says it shows slots held (fathers#140): `titled` (beside the gauges, whose rows its own
+    would otherwise read as sparklines of) in the blank row above it, else in the axis line, costing no row."""
     chart_width = max(1, area.width)
     history = cast(list[Step], model["history"])
     window = history_window(model)
@@ -194,7 +196,10 @@ def draw_chart(canvas: Canvas, area: Rect, model: Model, slots: int) -> None:
         for column, glyph in enumerate(column_glyphs):
             canvas.put(area.y + line, area.x + column, glyph, f"chart{colour}" if glyph != " " else "dim")
     summary = history_summary(history, slots, window)
-    canvas.segments(area.y + rows, area.x, machine_legend(summary, slots, chart_width, window), area.width)
+    if titled:
+        canvas.put(area.y - 1, area.x, CHART_TITLE, "dim", area.width)
+    canvas.segments(area.y + rows, area.x, machine_legend(summary, slots, chart_width, window,
+                                                         "" if titled else CHART_TITLE), area.width)
 
 
 def chart_cells(buckets: list[int], slots: int, rows: int, half_gaps: bool = True) -> list[list[str]]:
@@ -265,14 +270,18 @@ def window_text(seconds: float) -> str:
     return f"−{round(minutes / 60)}h"
 
 
-def machine_legend(summary: dict[str, Any], slots: int, chart_width: int, window: float = HISTORY_WINDOW) -> list[Part]:
+def machine_legend(summary: dict[str, Any], slots: int, chart_width: int, window: float = HISTORY_WINDOW,
+                   label: str = "") -> list[Part]:
     """The history chart's legend, a time axis under it: the window it shows on the left, under its first column,
-    `now` on the right under its last, and between them, centred, the mean and most held slots and the share of
-    the time every slot was held. A narrow chart drops full, then peak, then avg; the axis stays."""
+    `now` on the right under its last, and between them, centred, `label` (what the chart shows, where nothing above
+    it says so), the mean and most held slots and the share of the time every slot was held. A narrow chart drops
+    full, then peak, then avg, then the label; the axis stays."""
     left, right = window_text(chart_width * max(1, math.ceil(window / chart_width))), "now"
     stats: list[list[Part]] = [[("avg", "dim"), (f" {summary['average'] * slots:.1f}/{slots}", "text")],
                                [("peak", "dim"), (f" {summary['peak']}", "text")],
                                [("full", "dim"), (f" {summary['full']:.0%}", "text")]]
+    if label:
+        stats.insert(0, [(label, "dim")])
     room = chart_width - text_width(left) - text_width(right) - 4  # two cells each side of the stats
     parts: list[Part] = []
     while stats:
