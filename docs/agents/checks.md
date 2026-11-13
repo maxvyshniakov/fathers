@@ -19,7 +19,7 @@ are development tools only.
   selects everything, and so does a tree without changes. `FATHERS_CHECKS=all bun run verify` runs every check;
   `FATHERS_CHECK_BASE=<ref>` names another base.
 - It leases two slots itself and runs the steps side by side. Every check took 2026-11-13: lint gates 2 to 14 s,
-  Godfather's tests 1.5 min, Junkfather's 2, Slotfather's 4, Lanefather's 13 (the whole run: 13 min).
+  Godfather's tests 1.5 min, Junkfather's 2, Slotfather's 4-5, Lanefather's 13-18 (the whole run: as long as Lanefather's).
 - The pre-push hook runs it on the pushed commits and a lane's `lanefather check` on the lane's diff
   ([orchestration](orchestration.md)); do not run it again by hand right before either.
 - CI runs each package's lint gate and tests on its own workflow ([publishing](publishing.md#ci)).
