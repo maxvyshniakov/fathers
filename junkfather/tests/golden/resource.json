@@ -41,7 +41,7 @@
     "argv": [],
     "claim_note": "no claim (is the junkfather PreToolUse hook installed?)",
     "created": "<v>",
-    "cwd": "/Users/maxwish/fathers-lane-jf-tidy/junkfather",
+    "cwd": "<root>",
     "expires": "<v>",
     "group": false,
     "handed": [],
@@ -93,7 +93,7 @@
     },
     "details": {
      "argv": [],
-     "cwd": "/Users/maxwish/fathers-lane-jf-tidy/junkfather",
+     "cwd": "<root>",
      "keep": "owner",
      "resource": {
       "alive": [
@@ -141,7 +141,7 @@
       "age": "<v>",
       "agent": null,
       "argv": [],
-      "cwd": "/Users/maxwish/fathers-lane-jf-tidy/junkfather",
+      "cwd": "<root>",
       "end": null,
       "exit": null,
       "id": "<id1>",
@@ -199,7 +199,7 @@
     "argv": [],
     "claim_note": "no claim (is the junkfather PreToolUse hook installed?)",
     "created": "<v>",
-    "cwd": "/Users/maxwish/fathers-lane-jf-tidy/junkfather",
+    "cwd": "<root>",
     "end": {
      "how": "command web",
      "pids": [],
@@ -267,7 +267,7 @@
     },
     "details": {
      "argv": [],
-     "cwd": "/Users/maxwish/fathers-lane-jf-tidy/junkfather",
+     "cwd": "<root>",
      "keep": "owner",
      "resource": {
       "alive": [

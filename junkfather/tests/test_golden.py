@@ -12,7 +12,6 @@ import os
 from pathlib import Path
 import re
 import subprocess
-import sys
 from typing import Any, Dict, List
 import unittest
 from unittest import mock
@@ -67,7 +66,7 @@ class Recorder:
     def masked(self) -> str:
         data = mask(self.steps)
         text = json.dumps(data, indent=1, sort_keys=True)
-        text = text.replace(str(self.case.tmp), "<tmp>").replace(events.host(), "<host>")
+        text = text.replace(str(self.case.tmp), "<tmp>").replace(str(ROOT), "<root>").replace(events.host(), "<host>")
         text = START.sub("<start>", text)
         text = ISO.sub("<time>", text)
         text = EPOCH.sub("<t>", text)
@@ -261,4 +260,4 @@ class GoldenTests(Case):
 
 
 if __name__ == "__main__":
-    sys.exit(unittest.main())
+    unittest.main()

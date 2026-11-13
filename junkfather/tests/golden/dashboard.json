@@ -14,7 +14,7 @@
       "reap",
       "extend"
      ],
-     "changelog": "/Users/maxwish/fathers-lane-jf-tidy/junkfather/CHANGELOG.md",
+     "changelog": "<root>/CHANGELOG.md",
      "events": {
       "kinds": [
        "entry.owned",
@@ -128,7 +128,7 @@
   "err": "",
   "out": {
    "json": {
-    "source": "/Users/maxwish/fathers-lane-jf-tidy/junkfather/CHANGELOG.md",
+    "source": "<root>/CHANGELOG.md",
     "tool": "junkfather",
     "v": 1,
     "version": "0.1.0"
