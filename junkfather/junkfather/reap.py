@@ -26,6 +26,7 @@ import signal
 import time
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+from . import entry as _entry
 from . import events as _events
 from . import procs as _procs
 from .state import Entry, Store
@@ -51,11 +52,6 @@ def unsafe(proc: _procs.Proc) -> bool:
     """A process no reap may touch, nor anything below it: a terminal's or an agent session."""
     from .owner import CLAUDE, CODEX
     return bool(proc.tty) or bool(CLAUDE.search(proc.cmd) or CODEX.search(proc.cmd))
-
-
-def known_fields(found: List[_procs.Proc]) -> Dict[str, List[List[Any]]]:
-    """An entry's `known` members (pid, start) and, beside them, the command each showed (`known_seen`)."""
-    return {"known": [[p.pid, p.start] for p in found], "known_seen": [[p.pid, p.start, p.cmd] for p in found]}
 
 
 def seen_commands(entry: Entry) -> Dict[Tuple[int, str], str]:
@@ -178,22 +174,21 @@ def reap(store: Store, entry_id: str, reason: str, grace: float = GRACE, dry_run
     if entry is None:
         return {"id": entry_id, "result": "unknown", "reason": reason, "pids": [], "how": ""}
     if entry.get("mode") == "resource":
-        if entry.get("state") != "running":
+        if entry.get("state") != _entry.RUNNING:
             return {"id": entry_id, "result": "skipped", "reason": f"already {entry.get('state')}", "pids": [],
                     "how": ""}
         from . import resources
         return resources.reap(store, entry, reason, grace, dry_run, actor)
-    if entry.get("state") == "starting" or (entry.get("state") == "running" and not entry.get("pid")):
+    if entry.get("state") == _entry.STARTING or (entry.get("state") == _entry.RUNNING and not entry.get("pid")):
         return {"id": entry_id, "result": "skipped", "reason": "still starting", "pids": [], "how": ""}
-    if entry.get("state") != "running":
+    if entry.get("state") != _entry.RUNNING:
         return {"id": entry_id, "result": "skipped", "reason": f"already {entry.get('state')}", "pids": [], "how": ""}
     try:
         table = table or reader()
     except _procs.ProcError as error:
         unread = {"reason": reason, "left": [], "error": str(error)}
         if not dry_run:  # like any failed reap: last_error on the entry, and the event that opens a streak
-            store.update(entry_id, lambda e: e.update(last_error={"at": time.time(), **unread})
-                         if e.get("state") == "running" else False)
+            _entry.noted_error(store, entry_id, unread)
             if report_failure:
                 _events.write(store.root, "entry.reap_failed", _events.subject(entry), actor or _events.caller(),
                               {**unread, "result": "failed", "how": "", "signals": [], "pids": []}, "error")
@@ -202,7 +197,7 @@ def reap(store: Store, entry_id: str, reason: str, grace: float = GRACE, dry_run
     if dry_run:
         return {"id": entry_id, "result": "would-stop" if targets else "gone", "reason": reason,
                 "pids": [p.pid for p in targets], "how": how}
-    me = begin_reap(store, entry_id, reason, table)
+    me = _entry.begin_reap(store, entry_id, reason, table)
     if me is None:
         return {"id": entry_id, "result": "skipped", "reason": "another reaper has it", "pids": [], "how": how}
     pids: List[int] = []
@@ -228,8 +223,9 @@ def reap(store: Store, entry_id: str, reason: str, grace: float = GRACE, dry_run
         "stopped" if "stopped" in results else "gone"
     outcome["result"] = result
 
-    end_reap(store, entry_id, me, result in STOPPED, {"reason": reason, "result": result, "how": how, "pids": pids},
-             {"reason": reason, "left": outcome.get("left"), "error": outcome.get("error")})
+    _entry.end_reap(store, entry_id, me, result in STOPPED,
+                    {"reason": reason, "result": result, "how": how, "pids": pids},
+                    {"reason": reason, "left": outcome.get("left"), "error": outcome.get("error")})
     signals = {"stopped": ["TERM"], "killed": ["TERM", "KILL"], "failed": ["TERM", "KILL"]}.get(result, [])
     done = result in STOPPED
     if not done and not report_failure:
@@ -241,44 +237,3 @@ def reap(store: Store, entry_id: str, reason: str, grace: float = GRACE, dry_run
                   None if done else "error")
     return {"id": entry_id, "result": result, "reason": reason, "pids": pids, "how": how}
 
-
-def begin_reap(store: Store, entry_id: str, reason: str, table: Optional[_procs.Table] = None) -> Optional[int]:
-    """running -> reaping, held by this process; its pid, or None when the entry no longer runs or another reaper
-    has it."""
-    me = os.getpid()
-    if table is None:
-        try:
-            table = _procs.Table.read()
-        except _procs.ProcError:
-            table = None
-    mine = ((table.get(me) if table is not None else None) or _procs.Proc(me, 0, 0, 0, "", "", "")).start
-
-    def mark(e: Entry) -> Optional[bool]:
-        if e.get("state") != "running":
-            return False
-        e["state"] = "reaping"
-        e["reaping"] = {"reason": reason, "at": time.time(), "by": me, "by_start": mine}
-        return None
-
-    marked = store.update(entry_id, mark)
-    if marked is None or marked.get("state") != "reaping" or (marked.get("reaping") or {}).get("by") != me:
-        return None
-    return me
-
-
-def end_reap(store: Store, entry_id: str, me: int, done: bool, end: Dict[str, Any], error: Dict[str, Any]) -> None:
-    """reaping -> reaped (with `end`) when done, else back to running (with `last_error`); only for the reaper that
-    holds it."""
-    def finish(e: Entry) -> Optional[bool]:
-        if e.get("state") != "reaping" or (e.get("reaping") or {}).get("by") != me:
-            return False
-        e["state"] = "reaped" if done else "running"
-        e.pop("reaping", None)
-        if done:
-            e["ended"] = time.time()
-            e["end"] = end
-        else:
-            e["last_error"] = {"at": time.time(), **error}
-        return None
-
-    store.update(entry_id, finish)

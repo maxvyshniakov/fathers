@@ -21,6 +21,13 @@ An entry is one owned process group, `entries/<id>.json` under `$JUNKFATHER_STAT
 | `supervisor`, `log` | the supervising process (`pid`, `start`) and, detached, the output file |
 | `state` | `starting`, `running`, `reaping`, then `exited` (code in `exit`), `reaped` (`end: {reason, result, how, pids}`), `gone` (ended unseen) or `failed` |
 
+A state changes only by one of these moves, each made under the state directory's lock and only from the states
+listed (otherwise the entry is left as it is): `starting` to `running` (the command started) or `failed`; `running`
+to `reaping` (one reaper holds it) and back to `running` (the reap failed, or its reaper died: the sweep releases it
+after 5 minutes) or on to `reaped`; `running` to `exited` (the supervisor saw the command end with nothing left) or
+`gone` (the sweep found nothing left), and `gone` back to `running` when the supervisor's own command still runs.
+Process and resource entries share them (`junkfather/entry.py`).
+
 Finished entries and their logs are pruned after 7 days.
 
 ## Events

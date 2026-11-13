@@ -24,11 +24,13 @@ import sys
 import time
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
+from . import entry as _entry
 from . import events as _events
 from . import owner as _owner
 from . import procs as _procs
 from . import reap as _reap
-from .state import Entry, Store, VERSION
+from .entry import new as new_entry
+from .state import Entry, Store
 
 KNOWN_EVERY = 15.0  # seconds between refreshes of an entry's known members
 POLL = 0.5  # seconds between checks of the child and the entry
@@ -47,16 +49,6 @@ def self_command(*args: str) -> List[str]:
     """This junkfather's own command line for a helper process (the supervisor, a detached reaper)."""
     code = f"import sys; sys.path.insert(0, {PACKAGE_ROOT!r}); from junkfather.cli import main; sys.exit(main())"
     return [sys.executable, "-c", code, *args]
-
-
-def new_entry(store: Store, argv: List[str], ttl: float, keep: str, label: Optional[str], owner: Dict[str, Any],
-              mode: str, cwd: str) -> Entry:
-    now = time.time()
-    return {"v": VERSION, "id": store.new_id(), "label": label, "argv": argv, "cwd": cwd, "created": now,
-            "ttl": ttl, "expires": now + ttl, "keep": keep, "owner": owner, "mode": mode, "state": "starting",
-            "pid": None, "pgid": None, "start": None, "seen": None, "group": True, "known": [], "known_seen": [],
-            "handed": [],
-            "supervisor": None, "log": None, "claim_note": owner.pop("claim_note", "")}
 
 
 def end_child(child: subprocess.Popen, grace: float = 3.0) -> None:
@@ -87,18 +79,11 @@ def record_child(store: Store, entry_id: str, child: subprocess.Popen, superviso
         except _procs.ProcError:
             time.sleep(0.2 * (attempt + 1))
     me = table.get(supervisor) if table is not None else None
-
-    def fill(e: Entry) -> Optional[bool]:
-        if e.get("state") != "starting":
-            return False
-        if proc is None:
-            e.update(state="failed", ended=time.time(), error="its identity could not be read")
-            return None
-        e.update(state="running", pid=child.pid, pgid=child.pid, start=proc.start, seen=proc.cmd,
-                 supervisor={"pid": supervisor, "start": me.start if me else None}, **_reap.known_fields([proc]))
-        return None
-    entry = store.update(entry_id, fill)
-    if entry is None or entry.get("state") != "running" or entry.get("pid") != child.pid:
+    if proc is None:
+        entry = _entry.failed(store, entry_id, "its identity could not be read")
+    else:
+        entry = _entry.started(store, entry_id, proc, {"pid": supervisor, "start": me.start if me else None})
+    if entry is None or entry.get("state") != _entry.RUNNING or entry.get("pid") != child.pid:
         end_child(child)
         return None
     if entry is not None:
@@ -146,19 +131,18 @@ class Supervisor:
                 code = self.child.poll()
                 exited_now = code is not None
             entry = self.store.load(self.id)
-            if entry is not None and entry.get("state") == "gone" and code is None:
+            if entry is not None and entry.get("state") == _entry.GONE and code is None:
                 # A sweep took it for ended while our child runs: it is still ours.
-                self.store.update(self.id, lambda e: e.update(state="running", ended=None)
-                                  if e.get("state") == "gone" else False)
+                _entry.revived(self.store, self.id)
                 continue
-            if entry is None or entry.get("state") not in ("running", "starting", "reaping"):
+            if entry is None or entry.get("state") not in _entry.ACTIVE:
                 if code is None:
                     end_child(self.child)  # ended on the record (reaped, failed) while ours still runs
                     code = self.child.poll()
-                if entry is not None and entry.get("state") == "reaped":
+                if entry is not None and entry.get("state") == _entry.REAPED:
                     self.say(f"{self.id} reaped ({(entry.get('end') or {}).get('reason')})")
                 return status(code)
-            if entry.get("state") == "running" and time.time() >= float(entry.get("expires") or 0) \
+            if entry.get("state") == _entry.RUNNING and time.time() >= float(entry.get("expires") or 0) \
                     and self.clock() >= retry_at:
                 result = self.reaper(self.store, self.id, "ttl expired", actor=_events.tool("supervisor"),
                                      report_failure=not failures)
@@ -175,7 +159,7 @@ class Supervisor:
                 done, left = self.refresh(code)
                 if done:
                     return status(code)
-                if exited_now and self.attached and entry.get("state") == "running":
+                if exited_now and self.attached and entry.get("state") == _entry.RUNNING:
                     self.say(f"{self.id}: the command exited; {left} process(es) it left keep the entry running "
                              f"until its owner ends or its TTL passes (now: junkfather reap --id {self.id})")
                     return status(code)
@@ -188,30 +172,17 @@ class Supervisor:
             table = _procs.Table.read()
         except _procs.ProcError:
             return False, 0
-        result = {"done": False, "left": 0}
-
-        def change(e: Entry) -> Optional[bool]:
-            if e.get("state") != "running":
-                return False
+        def members_of(e: Entry) -> List[_procs.Proc]:
             # While our child runs unwaited its pid cannot be reused: it is the leader whatever command it shows now
             # (a launcher such as /usr/bin/python3 execs another program), and known_seen records that command.
             members, _ = _reap.members(e, table, ours=code is None and self.child.poll() is None)
-            members = [p for p in members if p.pid != os.getpid()]
-            result["left"] = len(members)
-            if members:
-                e.update(_reap.known_fields(members))
-                return None
-            if code is None:
-                return False
-            e.update(state="exited", ended=time.time(), exit=code, known=[], known_seen=[])
-            result["done"] = True
-            return None
+            return [p for p in members if p.pid != os.getpid()]
 
-        entry = self.store.update(self.id, change)
-        if result["done"] and entry is not None:
+        entry, done, left = _entry.refreshed(self.store, self.id, members_of, code)
+        if done and entry is not None:
             _events.write(self.store.root, "entry.exited", _events.subject(entry), _events.tool("supervisor"),
                           {"exit": code})
-        return bool(result["done"]), int(result["left"])
+        return done, left
 
 
 SIGNAL_GRACE = 3.0  # seconds a signalled junkfather gives its command before SIGKILL
@@ -267,16 +238,14 @@ def own(store: Store, argv: List[str], ttl: float, keep: str, label: Optional[st
     entry = new_entry(store, argv, ttl, keep, label, who, "detached" if detach else "attached", cwd)
     if detach:
         entry["log"] = log or str(store.logs_dir / f"{entry['id']}.log")
-    with store.lock():
-        store.save(entry)
+    _entry.save_starting(store, entry)
     if detach:
         return start_detached(store, entry, quiet)
     catcher = Catcher()
     try:
         child = subprocess.Popen(argv, start_new_session=True)
     except OSError as error:
-        message = str(error)
-        store.update(entry["id"], lambda e: e.update(state="failed", ended=time.time(), error=message))
+        _entry.failed(store, entry["id"], str(error))
         print(f"junkfather: cannot start {shlex.join(argv)}: {error}", file=sys.stderr)
         return 127
     if record_child(store, entry["id"], child, os.getpid()) is None:
@@ -306,7 +275,7 @@ def start_detached(store: Store, entry: Entry, quiet: bool) -> int:
     deadline = time.monotonic() + DETACH_WAIT
     while time.monotonic() < deadline:
         current = store.load(entry["id"]) or {}
-        if current.get("state") == "failed":
+        if current.get("state") == _entry.FAILED:
             print(f"junkfather: cannot start {shlex.join(entry['argv'])}: {current.get('error')}", file=sys.stderr)
             return 127
         if current.get("pid"):
@@ -322,7 +291,7 @@ def start_detached(store: Store, entry: Entry, quiet: bool) -> int:
 def supervise(store: Store, entry_id: str) -> int:
     """The detached supervisor: start the command with output to the log, then run like an attached own."""
     entry = store.load(entry_id)
-    if entry is None or entry.get("state") != "starting":
+    if entry is None or entry.get("state") != _entry.STARTING:
         print(f"junkfather supervise: no starting entry {entry_id}", file=sys.stderr)
         return 2
     catcher = Catcher()
@@ -330,8 +299,7 @@ def supervise(store: Store, entry_id: str) -> int:
         with open(os.devnull, "rb") as null:
             child = subprocess.Popen(entry["argv"], stdin=null, start_new_session=True, cwd=entry["cwd"])
     except OSError as error:
-        message = str(error)
-        store.update(entry_id, lambda e: e.update(state="failed", ended=time.time(), error=message))
+        _entry.failed(store, entry_id, str(error))
         print(f"junkfather: cannot start {shlex.join(entry['argv'])}: {error}", file=sys.stderr)
         return 127
     if record_child(store, entry_id, child, os.getpid()) is None:
@@ -365,7 +333,7 @@ def adopt(store: Store, pid: int, ttl: float, keep: str, label: Optional[str], e
         refusal = f"a process with a terminal ({proc.tty})"
     elif any(_reap.unsafe(p) for p in table.descendants(pid)):
         refusal = "its tree holds a terminal's process or an agent session"
-    elif any(e.get("state") == "running" and e.get("pid") == pid for e in store.entries()):
+    elif any(e.get("state") == _entry.RUNNING and e.get("pid") == pid for e in store.entries()):
         refusal = "already owned"
     if refusal:
         print(f"junkfather adopt: refusing pid {pid}: {refusal}", file=sys.stderr)
@@ -376,11 +344,8 @@ def adopt(store: Store, pid: int, ttl: float, keep: str, label: Optional[str], e
         who["lane"] = lane
     if agent:
         who["agent"] = agent
-    entry = new_entry(store, [proc.cmd], ttl, keep, label, who, "adopted", os.getcwd())
-    entry.update(state="running", pid=pid, pgid=proc.pgid, start=proc.start, seen=proc.cmd,
-                 group=proc.pgid == pid, **_reap.known_fields([proc, *table.descendants(pid, prune=_reap.unsafe)]))
-    with store.lock():
-        store.save(entry)
+    entry = _entry.adopted(store, new_entry(store, [proc.cmd], ttl, keep, label, who, "adopted", os.getcwd()), proc,
+                           [proc, *table.descendants(pid, prune=_reap.unsafe)])
     _events.write(store.root, "entry.adopted", _events.subject(entry), _events.actor_of(who),
                   {"cmd": proc.cmd, "ttl": ttl, "keep": keep, "pgid": proc.pgid, "group": entry["group"]})
     scope = "its group" if entry["group"] else "it and its descendants (not its group: it does not lead one)"

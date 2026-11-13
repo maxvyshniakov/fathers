@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Optional
 
 from . import __version__
 from . import changelog as _changelog
+from . import entry as _entry
 from . import events as _events
 from . import hook as _hook
 from . import launch as _launch
@@ -44,8 +45,6 @@ from . import reap as _reap
 from . import resources as _resources
 from . import sweep as _sweep
 from .state import Entry, Store
-
-RUNNING = ("running", "starting", "reaping")
 
 
 class Usage(Exception):
@@ -242,12 +241,12 @@ def table_or_none() -> Optional[_procs.Table]:
 def row(entry: Entry, table: Optional[_procs.Table], now: float) -> Dict[str, Any]:
     alive = None
     resource = entry.get("resource") if entry.get("mode") == "resource" else None
-    if table is not None and entry.get("state") in RUNNING and resource is None:
+    if table is not None and entry.get("state") in _entry.ACTIVE and resource is None:
         alive = len(_reap.members(entry, table)[0])
     owner = entry.get("owner") or {}
     return {"id": entry["id"], "state": entry.get("state"), "owner": _owner.describe(owner),
             "session": owner.get("session"), "agent": owner.get("agent"), "lane": owner.get("lane"),
-            "owner_alive": _owner.alive(owner, table) if entry.get("state") in RUNNING else None,
+            "owner_alive": _owner.alive(owner, table) if entry.get("state") in _entry.ACTIVE else None,
             "age": now - float(entry.get("created") or now), "ttl": entry.get("ttl"),
             "ttl_left": float(entry.get("expires") or now) - now, "keep": entry.get("keep"),
             "pid": entry.get("pid"), "pgid": entry.get("pgid"), "processes": alive, "label": entry.get("label"),
@@ -259,7 +258,7 @@ def row(entry: Entry, table: Optional[_procs.Table], now: float) -> Dict[str, An
 def list_command(store: Store, everything: bool, as_json: bool) -> int:
     now = time.time()
     table = table_or_none()
-    rows = [row(e, table, now) for e in store.entries() if everything or e.get("state") in RUNNING]
+    rows = [row(e, table, now) for e in store.entries() if everything or e.get("state") in _entry.ACTIVE]
     if as_json:
         print(json.dumps({"v": 1, "at": now, "entries": rows}, sort_keys=True))
         return 0
@@ -268,7 +267,7 @@ def list_command(store: Store, everything: bool, as_json: bool) -> int:
         return 0
     print(f"{'ID':8} {'STATE':8} {'OWNER':34} {'AGE':>7} {'TTL':>7} {'KEEP':7} {'PID':>6} {'PROCS':>5}  COMMAND")
     for r in rows:
-        ttl = _launch.duration(r["ttl_left"]) if r["state"] in RUNNING else "-"
+        ttl = _launch.duration(r["ttl_left"]) if r["state"] in _entry.ACTIVE else "-"
         owner = r["owner"] + ("" if r["owner_alive"] is not False else " (gone)")
         what = _resources.describe(r["resource"]) if r["resource"] else " ".join(r["argv"] or [])
         command = (f"[{r['label']}] " if r["label"] else "") + what
@@ -286,7 +285,7 @@ STATUS_VERSION = 1
 def status(store: Store) -> Dict[str, Any]:
     now = time.time()
     table = table_or_none()
-    rows = [row(e, table, now) for e in store.entries() if e.get("state") in RUNNING]
+    rows = [row(e, table, now) for e in store.entries() if e.get("state") in _entry.ACTIVE]
     last = _sweep_record(store, "sweep.json")
     listed = _sweep_record(store, "unowned.json")
     unowned = []
@@ -379,7 +378,7 @@ def reap_command(store: Store, args: argparse.Namespace) -> int:
     if args.agent and not args.owner:
         raise Usage("--agent goes with --owner SESSION")
     now = time.time()
-    running = [e for e in store.entries() if e.get("state") in ("running", "starting")]
+    running = [e for e in store.entries() if e.get("state") in _entry.OPEN]
     results: List[Dict[str, Any]] = []
     force = False
     if args.id:
@@ -448,7 +447,7 @@ def reap_unowned(store: Store, args: argparse.Namespace, table: _procs.Table) ->
     elif any(_reap.unsafe(p) for p in table.descendants(pid)):
         refusal = "its tree holds a terminal's process or an agent session"
     elif any(pid in {p.pid for p in _reap.members(e, table)[0]} for e in store.entries()
-             if e.get("state") in RUNNING):
+             if e.get("state") in _entry.ACTIVE):
         refusal = "an entry owns it now (reap that entry)"
     if refusal:
         print(f"junkfather reap: refusing pid {pid}: {refusal}", file=sys.stderr)
@@ -492,18 +491,8 @@ def hand_command(store: Store, entry_id: str, to: str) -> int:
             print(f"junkfather hand: no live Claude Code session {to} in the registry; the entry ends at its TTL or "
                   "when swept as orphaned if that session never shows up", file=sys.stderr)
     target["agent"] = None
-    before: Dict[str, Any] = {}
-
-    def change(e: Entry) -> Optional[bool]:
-        if e.get("state") not in ("running", "starting"):
-            return False
-        before.update(e.get("owner") or {})
-        target["lane"] = target.get("lane") or before.get("lane")
-        e.setdefault("handed", []).append({"at": time.time(), "from": dict(before), "to": dict(target)})
-        e["owner"], e["keep"] = target, "owner"
-        return None
-
-    entry = store.update(entry_id, change)
+    entry = _entry.handed(store, entry_id, target)
+    before: Dict[str, Any] = entry["handed"][-1]["from"] if entry is not None else {}
     if entry is None or not before:
         print(f"junkfather hand: no running entry {entry_id}", file=sys.stderr)
         return 1
@@ -515,14 +504,8 @@ def hand_command(store: Store, entry_id: str, to: str) -> int:
 
 
 def extend_command(store: Store, entry_id: str, ttl: float) -> int:
-    def change(e: Entry) -> Optional[bool]:
-        if e.get("state") not in ("running", "starting"):
-            return False
-        e["ttl"], e["expires"] = ttl, time.time() + ttl
-        return None
-
-    entry = store.update(entry_id, change)
-    if entry is None or entry.get("state") not in ("running", "starting"):
+    entry = _entry.extended(store, entry_id, ttl)
+    if entry is None:
         print(f"junkfather extend: no running entry {entry_id}", file=sys.stderr)
         return 1
     _events.write(store.root, "entry.extended", _events.subject(entry), _events.caller(),

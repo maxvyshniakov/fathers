@@ -29,11 +29,11 @@ import sys
 import time
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
+from . import entry as _entry
 from . import events as _events
 from . import procs as _procs
 from .state import Entry, Store
 
-LIVE = ("running", "reaping")
 TIMEOUT = 20.0  # seconds a liveness or listing call may take
 STOP_TIMEOUT = 120.0  # seconds a stop command may take (a simulator shutdown is slow)
 SETTLE = 15.0  # seconds `own --kind` waits for the resource its command made to show up
@@ -358,7 +358,7 @@ def describe(resource: Mapping[str, Any]) -> str:
 def owned_keys(store: Store) -> Dict[str, str]:
     """kind:id -> entry id, for every live resource entry."""
     return {key(e["resource"]): e["id"] for e in store.entries()
-            if e.get("state") in LIVE and isinstance(e.get("resource"), dict)}
+            if e.get("state") in _entry.LIVE and isinstance(e.get("resource"), dict)}
 
 
 # Owning
@@ -366,15 +366,10 @@ def owned_keys(store: Store) -> Dict[str, str]:
 def record(store: Store, resource: Dict[str, Any], argv: List[str], ttl: float, keep: str, label: Optional[str],
            owner: Dict[str, Any], cwd: str) -> Tuple[Optional[Entry], str]:
     """A running resource entry, or None and why not: one entry per resource."""
-    from .launch import new_entry
-    entry = new_entry(store, argv, ttl, keep, label, owner, "resource", cwd)
-    entry.update(state="running", group=False, resource=resource)
-    with store.lock():
-        holder = next((e["id"] for e in store.entries() if e.get("state") in LIVE
-                       and key(e.get("resource") or {}) == key(resource)), None)
-        if holder:
-            return None, f"already owned by {holder}"
-        store.save(entry)
+    entry, holder = _entry.resource_owned(store, _entry.new(store, argv, ttl, keep, label, owner, "resource", cwd),
+                                          resource, lambda e: key(e.get("resource") or {}) == key(resource))
+    if entry is None:
+        return None, f"already owned by {holder}"
     _events.write(store.root, "resource.owned", subject(entry), _events.actor_of(entry.get("owner")),
                   {"resource": resource, "argv": argv, "cwd": cwd, "ttl": ttl, "keep": keep})
     return entry, ""
@@ -560,16 +555,16 @@ def reap(store: Store, entry: Entry, reason: str, grace: float, dry_run: bool,
         state = alive()
         return {"id": entry_id, "result": "gone" if state is False else "would-stop", "reason": reason, "pids": [],
                 "how": describe(resource)}
-    me = _reap.begin_reap(store, entry_id, reason)
+    me = _entry.begin_reap(store, entry_id, reason)
     if me is None:
         return {"id": entry_id, "result": "skipped", "reason": "another reaper has it", "pids": [],
                 "how": describe(resource)}
     outcome = stop(resource, grace, alive)
     result = outcome["result"]
     done = result in _reap.STOPPED
-    _reap.end_reap(store, entry_id, me, done, {"reason": reason, "result": result, "how": describe(resource),
-                                               "pids": [], "steps": outcome["steps"]},
-                   {"reason": reason, "left": [], "error": outcome.get("error"), "steps": outcome["steps"]})
+    _entry.end_reap(store, entry_id, me, done, {"reason": reason, "result": result, "how": describe(resource),
+                                                "pids": [], "steps": outcome["steps"]},
+                    {"reason": reason, "left": [], "error": outcome.get("error"), "steps": outcome["steps"]})
     _events.write(store.root, "resource.stopped" if done else "resource.stop_failed", subject(entry),
                   actor or _events.caller(), {"reason": reason, "result": result, "resource": resource,
                                               "steps": [step_text(step) for step in outcome["steps"]],

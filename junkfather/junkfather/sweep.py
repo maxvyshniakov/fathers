@@ -29,6 +29,7 @@ import sys
 import time
 from typing import Any, Dict, List, Optional
 
+from . import entry as _entry
 from . import events as _events
 from . import owner as _owner
 from . import procs as _procs
@@ -133,20 +134,19 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
     for entry in store.entries():
         state = entry.get("state")
         reaping = entry.get("reaping") or {}
-        if state == "reaping" and now - float(reaping.get("at") or 0) > REAPING_STUCK \
+        if state == _entry.REAPING and now - float(reaping.get("at") or 0) > REAPING_STUCK \
                 and not table.alive(reaping.get("by"), reaping.get("by_start")):
             if not dry_run:
-                store.update(entry["id"], lambda e: e.update(state="running") if e.get("state") == "reaping" else False)
-            state = "running"
-        if state not in ("running", "starting"):
+                _entry.release_stuck(store, entry["id"])
+            state = _entry.RUNNING
+        if state not in _entry.OPEN:
             if entry.get("ended") and now - float(entry["ended"]) > KEEP_FINISHED and not dry_run:
                 prune(store, entry)
                 report["pruned"] += 1
             continue
-        if state == "starting":
+        if state == _entry.STARTING:
             if now - float(entry.get("created") or now) > 60 and not dry_run:
-                store.update(entry["id"], lambda e: e.update(state="failed", ended=now, error="never started")
-                             if e.get("state") == "starting" else False)
+                _entry.failed(store, entry["id"], "never started", now)
             continue
         if entry.get("mode") == "resource":
             sweep_resource(store, entry, snapshot, report, now, sessions, grace, dry_run)
@@ -160,8 +160,7 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
                 owned.add(supervisor["pid"])
                 continue
             if not dry_run:
-                store.update(entry["id"], lambda e: e.update(state="gone", ended=now, known=[])
-                             if e.get("state") == "running" else False)
+                _entry.gone(store, entry["id"], now)
             report["gone"].append({"id": entry["id"], "how": how})
             continue
         reason = None
@@ -180,7 +179,7 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
         if supervised:
             owned.add(supervisor["pid"])  # and it keeps `known` fresh itself
         elif not dry_run:
-            store.update(entry["id"], refresher(members))
+            _entry.known(store, entry["id"], members)
     if cwds is None:
         cwds = _procs.working_dirs(os.getuid())
         if not cwds:
@@ -203,8 +202,7 @@ def sweep_resource(store: Store, entry: Dict[str, Any], snapshot: "_resources.Sn
     alive = snapshot.alive(resource)
     if alive is False:
         if not dry_run:
-            store.update(entry["id"], lambda e: e.update(state="gone", ended=now)
-                         if e.get("state") == "running" else False)
+            _entry.gone(store, entry["id"], now)
         report["gone"].append({"id": entry["id"], "how": _resources.describe(resource)})
         return
     if alive is None:
@@ -263,15 +261,6 @@ def result_of(report: Dict[str, Any]) -> Dict[str, Any]:
             "pruned": report["pruned"], "errors": report["errors"], "notes": report.get("notes") or []}
 
 
-def refresher(members: List[_procs.Proc]):
-    def change(e: Dict[str, Any]) -> Optional[bool]:
-        if e.get("state") != "running":
-            return False
-        e.update(_reap.known_fields(members))
-        return None
-    return change
-
-
 def prune(store: Store, entry: Dict[str, Any]) -> None:
     try:
         store.path(entry["id"]).unlink()
@@ -297,7 +286,8 @@ def listed_unowned(store: Store, pid: int) -> Optional[Dict[str, Any]]:
 def text(report: Dict[str, Any], quiet: bool = False) -> str:
     lines = []
     for result in report["reaped"]:
-        lines.append(f"{'would reap' if result['result'] == 'would-stop' else 'reaped'} {result['id']}: "
+        verb = "would reap" if result["result"] == "would-stop" else "reaped"  # text, not a state
+        lines.append(f"{verb} {result['id']}: "
                      f"{result['reason']} -> {result['result']} (pids {', '.join(map(str, result['pids'])) or '-'})")
     for error in report["errors"]:
         lines.append(f"error: {error}")
