@@ -83,7 +83,7 @@ class AtomicWriteTests(unittest.TestCase):
             events.append(("dir-sync" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file-sync", ""))
             real_fsync(fd)
 
-        def replace(source: Any, destination: Any) -> None:
+        def replace(source: str | os.PathLike[str], destination: str | os.PathLike[str]) -> None:
             events.append(("replace", os.fspath(source)))
             self.assertEqual(os.path.realpath(destination), os.path.realpath(target))
             real_replace(source, destination)

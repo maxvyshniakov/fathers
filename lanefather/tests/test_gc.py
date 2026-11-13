@@ -97,7 +97,8 @@ class GcTests(GcCase):
                 (self.state / f"held-{kind}.json").write_text(json.dumps({
                     "id": f"held-{kind}", "status": "landed", "worktree": str(owned.resolve()), "branch": branch}))
                 child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], cwd=used)
-                self.addCleanup(lambda child=child: (child.kill(), child.wait()))
+                self.addCleanup(child.wait)
+                self.addCleanup(child.kill)
                 report = self.collect()
                 reasons = {a["path"]: a["reason"] for a in report["kept"]}
                 for path, text in ((dirty, "uncommitted"), (young, "active"), (unmerged, "not merged"),
