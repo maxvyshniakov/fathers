@@ -2,6 +2,7 @@
 
   godfather [--interval S]                                         live view: ? lists the keys, q quits
   godfather --once [--page overview] [--width N] [--height N] [--color]   one frame as text
+  godfather events [--source NAME]... [--follow] [--json]          the tools' events, newest last
   godfather --version
 
 The main screen is Slotfather's dashboard, moved here unchanged: it is drawn from `slotfather status --json --full`
@@ -22,6 +23,7 @@ import time
 from pathlib import Path
 from typing import Any, cast
 
+from . import events as _events
 from . import news as _news
 from . import sources as _sources
 from . import theme as _theme
@@ -38,6 +40,7 @@ from .views import settings as _settings
 
 USAGE = ("usage: godfather [--interval SECONDS]\n"
          "       godfather --once [--page overview] [--width N] [--height N] [--color]\n"
+         "       godfather events [--source NAME]... [--follow] [--json]\n"
          "       godfather --version")
 
 
@@ -96,7 +99,7 @@ class Screen:
 
     def __init__(self, source: Source | None = None) -> None:
         self.source = source or Source("slotfather", _slotfather)
-        self.lines: tuple[str, ...] = ()
+        self.feed = _events.Feed()
         self.runs: list[dict[str, Any]] = []
 
     def load(self, _: Any = None) -> tuple[dict[str, Any] | None, str | None]:
@@ -113,12 +116,12 @@ class Screen:
         if source.snapshot is None:
             return None, source.problem
         model = dict(source.snapshot, installed=_version.installed_source())
-        log = _slotfather.events_log(source.capabilities)
-        if log:  # outliers and trends (fathers#108): marks on the releases and rows of their own in EVENTS
-            lines = _sources.tail_log("slotfather", log)
-            if lines is not self.lines:  # the log is parsed again only when it changed (tail_log's same tuple)
-                self.lines, self.runs = lines, _slotfather.run_events(lines)
-            model["events"] = _slotfather.merge_runs(model["events"], self.runs)
+        log = _events.log_path(source.capabilities)
+        self.feed.follow("slotfather", str(_sources.event_log("slotfather", log)) if log else None)
+        if self.feed.poll() or not log:  # parsed again only when the log gained a line
+            self.runs = _slotfather.run_events(event.line for event in self.feed.events())
+        # outliers and trends (fathers#108): marks on the releases and rows of their own in EVENTS
+        model["events"] = _slotfather.merge_runs(model["events"], self.runs)
         for name in ("holders", "waiters"):  # this frame's colours and lanes stay off the cached snapshot
             model[name] = [dict(item) for item in source.snapshot[name]]
         if source.state == "stale" and source.failed_at is not None:
@@ -387,7 +390,71 @@ def once(width: int | None, height: int | None, colour: bool | None, interval: f
     return 1 if model is None else 0  # the frame says why: no tool, no contract, or a failed snapshot
 
 
+def event_text(event: _events.Event, tag: str) -> str:
+    """One `godfather events` line: the local time, the source tag, the kind, the subject's label or id and a
+    one-line detail. The validator let no control character through; none is printed whatever a line held."""
+    subject = event.subject
+    name = str(subject.get("label") or subject.get("id") or "?")
+    detail = _events.compact(event.details)
+    fields = [event.when.astimezone().strftime("%Y-%m-%d %H:%M:%S"), f"{tag:<4}", f"{event.kind:<22}", name, detail]
+    return _events.CONTROL.sub(" ", "  ".join(field for field in fields if field).rstrip())
+
+
+def events_command(argv: list[str]) -> int:
+    """`godfather events [--source NAME]... [--follow] [--json]`: every present source's events merged, newest last;
+    --follow keeps printing what the logs gain (checked every 250 ms), --json prints the lines as read. An absent
+    source is left out; a present one that is unsupported is named on stderr. Never in colour."""
+    names: list[str] = []
+    follow = as_json = False
+    while argv:
+        if argv[0] == "--source" and len(argv) > 1:
+            if argv[1] not in _sources.TOOLS:
+                raise UsageError(f"--source takes {', '.join(_sources.TOOLS)}, not {argv[1]!r}")
+            names, argv = names + [argv[1]], argv[2:]
+        elif argv[0] == "--follow":
+            follow, argv = True, argv[1:]
+        elif argv[0] == "--json":
+            as_json, argv = True, argv[1:]
+        elif argv[0] in ("--help", "-h"):
+            print(USAGE)
+            return 0
+        else:
+            raise UsageError(f"events: unknown argument {argv[0]!r}\n{USAGE}")
+    feed, tags = _events.Feed(), {}
+    for name in [tool for tool in _sources.TOOLS if not names or tool in names]:
+        source = Source(name, _events.EventsContract(name))
+        source.discover()
+        if source.state == "absent":
+            continue
+        log = _events.log_path(source.capabilities)
+        if source.state == "unsupported" or not log:
+            print(f"godfather: {source.problem or name + ': no event log'}", file=sys.stderr)
+            continue
+        tags[name] = source.tag
+        feed.follow(name, str(_sources.event_log(name, log)))
+
+    def show(found: list[_events.Event]) -> None:
+        for event in found:
+            print(event.line if as_json else event_text(event, tags[event.source]), flush=follow)
+
+    try:
+        show(feed.poll())
+        while follow:
+            time.sleep(_events.POLL)
+            show(feed.poll())
+    except KeyboardInterrupt:
+        pass
+    except BrokenPipeError:  # `godfather events | head`
+        with contextlib.suppress(OSError):
+            sys.stdout = open(os.devnull, "w")
+    finally:
+        feed.close()
+    return 0
+
+
 def command(argv: list[str]) -> int:
+    if argv[:1] == ["events"]:
+        return events_command(argv[1:])
     interval, run_once, colour, width, height = None, False, None, None, None
     while argv:
         if argv[0] == "--once":

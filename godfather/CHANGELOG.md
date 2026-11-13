@@ -6,6 +6,12 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Added
 
+- `godfather events [--source NAME]... [--follow] [--json]` prints the tools' event logs merged, newest last: time,
+  source tag (`slot`, `lane`, `junk`), kind, subject and a `key=value` detail; `--json` prints the lines as read,
+  `--follow` keeps printing what the logs gain (checked every 250 ms). It follows each log by inode through a rotation
+  to `events.jsonl.1`, waits on a torn last line, and skips, counting them, lines that fail the shared validator,
+  name another schema version or another host; an escape sequence in a line never reaches the terminal. An absent
+  tool is left out; one whose capabilities name no event log is named on stderr (fathers#83).
 - The footer says `Godfather what's new?`; a click or `v` opens what's new: one timeline of every
   tool's changelog, newest first, filtered by tool with ← → or a click on a tool's name. An install from main
   shows its Unreleased entries, which are what it runs, under `Slotfather · unreleased · installed 81abd86`. Closing it marks
@@ -19,6 +25,8 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Changed
 
+- EVENTS' run marks and trend rows (fathers#108) are read through the same reader, so a rotated Slotfather log no
+  longer drops them (fathers#83).
 - The panel Tab focuses shows without colour too: its top and bottom borders are heavy rules (`┍━ QUEUE ━━┑`, `=`
   in ASCII) as well as blue, and its sides stay light, so the heavy `┃` still marks only the selected row
   (fathers#139).

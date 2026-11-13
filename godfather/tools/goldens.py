@@ -157,6 +157,7 @@ def write_expected() -> None:
     (EXPECTED / "slotfather").mkdir(exist_ok=True)
     (EXPECTED / "slotfather" / "replies.json").write_text(json.dumps(replies, indent=1) + "\n")
     (EXPECTED / "slotfather" / "events.jsonl").write_text("\n".join(log) + "\n")
+    (EXPECTED / "host.json").write_text(json.dumps({"host": "mbp"}) + "\n")  # the host its event log is read for
     scene = json.loads((SCENE / "scene.json").read_text())
     scene["lanes"] = {lane_key(f"lease-{json.loads(key)[0]}"): lane for key, lane in scene["lanes"].items()}
     (EXPECTED / "scene.json").write_text(json.dumps(scene, indent=1) + "\n")

@@ -147,34 +147,16 @@ class AdapterTests(unittest.TestCase):
                                                        for event in merged])
 
 
-class LogTailTests(unittest.TestCase):
-    def test_the_log_is_read_from_its_end_and_a_cut_first_line_dropped(self) -> None:
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "events.jsonl"
-            path.write_text("".join(f'{{"n": {n}}}\n' for n in range(100)))
-            with mock.patch.dict(os.environ, {}, clear=False):
-                os.environ.pop("GODFATHER_FIXTURES", None)
-                lines = sources.tail_log("slotfather", str(path), size=64)
-        self.assertEqual('{"n": 99}', lines[-1])
-        self.assertTrue(all(line.startswith('{"n"') for line in lines), lines[:1])
-        self.assertLess(len(lines), 100)
+class LogPathTests(unittest.TestCase):
+    """The log is read through godfather.events (tests/test_events.py); this is where it is looked for."""
 
-    def test_fixture_mode_reads_the_tools_recorded_log_and_a_missing_one_is_empty(self) -> None:
-        with tempfile.TemporaryDirectory() as folder:
-            (Path(folder) / "slotfather").mkdir()
-            (Path(folder) / "slotfather" / "events.jsonl").write_text('{"a": 1}\n')
-            with mock.patch.dict(os.environ, {"GODFATHER_FIXTURES": folder}):
-                self.assertEqual(('{"a": 1}',), sources.tail_log("slotfather", "/elsewhere/events.jsonl"))
-                self.assertEqual((), sources.tail_log("lanefather", "/elsewhere/events.jsonl"))
-
-    def test_a_cut_at_a_line_start_keeps_that_line_and_an_unchanged_log_is_not_read_again(self) -> None:
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "events.jsonl"
-            path.write_text('{"n": 1}\n{"n": 2}\n')
+    def test_the_capabilities_path_or_in_fixture_mode_the_tools_recorded_log(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("GODFATHER_FIXTURES", None)
-            self.assertEqual(('{"n": 2}',), sources.tail_log("slotfather", str(path), size=9))
-            first = sources.tail_log("slotfather", str(path))
-            self.assertIs(first, sources.tail_log("slotfather", str(path)))
+            self.assertEqual(Path("/state/events.jsonl"), sources.event_log("slotfather", "/state/events.jsonl"))
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {"GODFATHER_FIXTURES": folder}):
+            self.assertEqual(Path(folder) / "lanefather" / "events.jsonl",
+                             sources.event_log("lanefather", "/elsewhere/events.jsonl"))
 
 
 class ViewTests(unittest.TestCase):

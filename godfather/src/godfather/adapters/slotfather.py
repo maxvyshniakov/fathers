@@ -50,20 +50,6 @@ def changelog(capabilities: Optional[dict[str, Any]]) -> Optional[str]:
     return path if isinstance(path, str) and path.startswith("/") else None
 
 
-def events_log(capabilities: Optional[dict[str, Any]]) -> Optional[str]:
-    """The event log's absolute path when the capabilities name one of a version this Godfather reads."""
-    block: Any = (capabilities or {}).get("dashboard") or {}
-    events: Any = cast(dict[str, Any], block).get("events") if isinstance(block, dict) else None
-    if not isinstance(events, dict):
-        return None
-    log = cast(dict[str, Any], events)
-    versions: Any = log.get("versions")
-    if not isinstance(versions, list) or 1 not in cast(list[Any], versions):
-        return None
-    path: Any = log.get("path")
-    return path if isinstance(path, str) and path.startswith("/") else None
-
-
 def parse_time(value: Any) -> Optional[datetime.datetime]:
     """An RFC 3339 time (`2026-11-12T04:25:56Z`, with or without fractions, `Z` or an offset) as an aware UTC
     datetime; None for null or anything else."""
