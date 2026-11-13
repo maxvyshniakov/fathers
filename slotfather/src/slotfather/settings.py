@@ -22,6 +22,7 @@ import pwd
 from typing import Any, cast
 
 from . import config as _config
+from . import entry as _entry
 from . import schedule as _schedule
 from . import state as _state
 
@@ -231,7 +232,7 @@ class Reading:
             look = _query.look(directory)
             slots = int(look.basis["slots"])
             self.held = _query.held_slots(look.live, look.legacy, slots)
-            waiters = [e for e in look.live if e.get("state") != "held"]
+            waiters = [e for e in look.live if _entry.is_waiting(e)]
             _schedule.fit(waiters, slots)
             if self.effective["order"] == "backfill":
                 import time

@@ -31,6 +31,7 @@ from typing import Any, Iterable, cast
 from . import askuse as _askuse
 from . import runtype as _runtype
 from . import config as _config
+from . import entry as _entry
 from . import schedule as _schedule
 from . import state as _state
 
@@ -242,12 +243,12 @@ def summarize(directory: Path | None = None, since: float | None = None, label: 
     field = by if by in ("priority", "ticket", "family", "derived") else None
     for item in items:
         if field:
-            value = _config.priority_of(item) if field == "priority" else _config.ticket_of(item) \
+            value = _entry.priority_of(item) if field == "priority" else _entry.ticket_of(item) \
                 if field == "ticket" else _schedule.family(item.get("label")) if field == "family" \
                 else item.get("label_derived") or item.get("label")
             key = (value, None)
         elif meta_key:
-            key = (_config.meta_of(item).get(meta_key), None)
+            key = (_entry.meta_of(item).get(meta_key), None)
         else:
             key = (item.get("label") if by != "kind" else None, kind(item.get("cmd")) if by != "label" else None)
         groups.setdefault(key, []).append(item)

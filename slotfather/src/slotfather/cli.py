@@ -215,12 +215,13 @@ def run_command(argv: list[str]) -> int:
             break
     if not argv:
         raise _config.SlotError("no command to run")
+    from .entry import parse_meta
     if session is not None:
         if counted or priority or ticket or yieldable or wait is not None:
             raise _config.SlotError("run --session takes only --label and --meta: the session's lease is already held")
         from .session import run_inside
-        return run_inside(session, argv, label if labelled else None, _config.parse_meta(pairs))
-    return _leases.run(count, label, argv, wait, _config.parse_meta(pairs), yieldable, priority=priority, ticket=ticket,
+        return run_inside(session, argv, label if labelled else None, parse_meta(pairs))
+    return _leases.run(count, label, argv, wait, parse_meta(pairs), yieldable, priority=priority, ticket=ticket,
                        labelled=labelled)
 
 

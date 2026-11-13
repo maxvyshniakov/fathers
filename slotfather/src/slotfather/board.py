@@ -17,6 +17,7 @@ import time
 from typing import Any, cast
 
 from . import config as _config
+from . import entry as _entry
 from . import platform as _platform
 from . import query as _query
 from . import schedule as _schedule
@@ -304,11 +305,11 @@ def dashboard_admission(waiters: list[dict[str, Any]], held: list[dict[str, Any]
                         memory_kind: str = "short") -> int:
     """Largest generic request grant() would admit, including earlier grants consuming the memory exemption; under a
     memory-pressure warning (`memory_kind`) at most one slot, none beside a lease granted under pressure."""
-    used = sum(_schedule.holds(entry, slots) for entry in held) + other
+    used = sum(_entry.holds(entry, slots) for entry in held) + other
     free = max(0, slots - used)
     if free and memory_block and used and memory_kind == "warning" and \
             float(settings.get("warning_admits", 1)) >= 1:  # schedule.memory_gate()
-        if any(entry.get(_schedule.PRESSED) for entry in held):
+        if any(entry.get(_entry.PRESSED) for entry in held):
             return 0
         return min(1, _schedule.room(waiters, free, held, estimate, other, settings=settings, slots=slots)
                    if waiters else free)
@@ -347,9 +348,9 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
                 "kind": kind, "count": count, "queue": queue,
                 "label": dashboard_text(entry.get("label", "")), "pid": entry.get("pid"),
                 "cmd": dashboard_text(entry.get("cmd", "")), "since": parse_utc(entry.get("since")),
-                "meta": dashboard_text(_config.meta_text(_config.meta_of(entry))),
-                "context": _config.meta_of(entry), "workdir": entry.get("cwd") or "",
-                "priority": _config.priority_of(entry), "ticket": _config.ticket_of(entry),
+                "meta": dashboard_text(_config.meta_text(_entry.meta_of(entry))),
+                "context": _entry.meta_of(entry), "workdir": entry.get("cwd") or "",
+                "priority": _entry.priority_of(entry), "ticket": _entry.ticket_of(entry),
                 "yieldable": bool(entry.get("yieldable")), "yields": int(entry.get("yields") or 0),
                 "asked": dashboard_text(request.get("label") or "?") if request else "",
                 "asked_at": parse_utc(request.get("at")) if request else None,
@@ -370,13 +371,13 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
     with contextlib.suppress(Exception):
         expected = _query.outlook(directory, live, slots, sum(count for _, _, count in legacy))
     # An `-n all` lease holds the whole capacity, also one grown under it (#7).
-    holders = [item(e, "held", _schedule.holds(e, slots)) for e in live if e["state"] == "held"]
+    held, live_waiters = _entry.split(live)
+    holders = [item(e, "held", _entry.holds(e, slots)) for e in held]
     holders += [item(e, "legacy", count, str(path.parent.parent)) for path, e, count in legacy]
     settings = _schedule.order_settings(directory)
     start: datetime.datetime | None = None
     reserved: datetime.datetime | None = None
     order = settings["order"]
-    live_waiters = [e for e in live if e["state"] != "held"]
     _schedule.fit(live_waiters, slots)  # as the queue grants them when the capacity shrank under them
     if order == "backfill":
         live_waiters = _schedule.ranked(live_waiters, settings, time.time())  # the order the queue serves them in
@@ -384,7 +385,7 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
     used = sum(h["count"] for h in holders)
     if order == "backfill" and live_waiters:
         with contextlib.suppress(Exception):  # an estimate that cannot be read leaves the sentence without a time
-            found = _schedule.plan(live_waiters, [e for e in live if e["state"] == "held"], slots, time.time(), order,
+            found = _schedule.plan(live_waiters, held, slots, time.time(), order,
                                    _schedule.estimator(directory), sum(count for _, _, count in legacy),
                                    reserve_head=True, settings=settings)
             if found.head is not None and found.start is not None:
@@ -398,7 +399,7 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
     describe_events(events, directory, live)
     moment = datetime.datetime.now(datetime.timezone.utc)
     free = max(0, slots - used)
-    admission = dashboard_admission(live_waiters, [e for e in live if e["state"] == "held"], slots,
+    admission = dashboard_admission(live_waiters, held, slots,
                                     sum(count for _, _, count in legacy), memory_block,
                                     _schedule.estimator(directory) if live_waiters else None, settings, memory_kind)
     own_held = sum(h["count"] for h in holders if h["kind"] == "held")
@@ -410,7 +411,12 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
             "admission": admission,
             "order": order, "start": start, "reserved": reserved, "limit": settings["limit"],
             "memory": memory_facts(), "history": held_history(events, own_held, moment), "events": events[-60:],
-            "updated": moment}
+            "updated": moment,
+            # Entries this client does not know (fathers#19): left alone, in no row and no count, shown with a warning
+            "unknown": [{"id": path.stem, "lease": str(path), "label": dashboard_text(str(e.get("label") or "")),
+                         "pid": e.get("pid"), "state": e.get("state"), "count": e.get("count"),
+                         "reason": _entry.unknown(e), "warning": dashboard_text(_query.unknown_text(path, e))}
+                        for path, e in look.unknown]}
 
 
 def stamp(moment: datetime.datetime) -> str:

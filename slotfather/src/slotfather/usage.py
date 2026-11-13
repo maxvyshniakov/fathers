@@ -13,6 +13,7 @@ import time
 from typing import Any, cast
 
 from . import config as _config
+from . import entry as _entry
 from . import idle as _idle
 from . import platform as _platform
 from . import state as _state
@@ -204,7 +205,7 @@ class Watch(threading.Thread):
 def machine_facts(directory: Path) -> dict:
     """One machine sample: load, cumulative CPU ticks (busy is the change between two samples), memory pressure,
     swap and the slots held."""
-    held = [e for _, e in _state.entries(directory) if e.get("state") == "held"]
+    held = [e for _, e in _state.entries(directory) if _entry.is_held(e)]
     linux_facts = _platform.linux_memory() if _platform.linux() else None
     if linux_facts is None:
         swap = _platform.swap_usage()

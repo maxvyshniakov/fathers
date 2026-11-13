@@ -12,7 +12,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
-config = importlib.import_module('slotfather.config')
+entry = importlib.import_module('slotfather.entry')
 
 
 class PriorityTests(unittest.TestCase):
@@ -92,9 +92,9 @@ class PriorityTests(unittest.TestCase):
                 self.assertEqual(expected, {row[field]: row['requests'] for row in json.loads(run.stdout)['groups']})
 
     def test_scheduler_reads_only_request_priority(self) -> None:
-        self.assertEqual('interactive', config.priority_of({'priority': 'interactive'}))
-        self.assertEqual('normal', config.priority_of({'meta': {'class': 'batch'}}))
-        self.assertEqual('normal', config.priority_of({}))
+        self.assertEqual('interactive', entry.priority_of({'priority': 'interactive'}))
+        self.assertEqual('normal', entry.priority_of({'meta': {'class': 'batch'}}))
+        self.assertEqual('normal', entry.priority_of({}))
 
 
 if __name__ == '__main__':

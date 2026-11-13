@@ -5,7 +5,7 @@ import json
 import math
 import os
 from pathlib import Path
-from typing import Any, Mapping, cast
+from typing import Any
 import re
 
 from . import platform as _platform
@@ -351,91 +351,6 @@ def number_setting(name: str, default: float) -> float:
 
 
 _host_port = None
-
-
-def lease_id(stem: str, entry: Mapping[str, object]) -> str:
-    """An entry's unique id (fathers#101): the one its client wrote, else, for an entry of an older client, one made
-    of its name, its holder's start time and its arrival, the same from one look to the next."""
-    found = entry.get("lease_id")
-    if isinstance(found, str) and found:
-        return found
-    import hashlib
-    return "old-" + hashlib.sha256(f"{stem}|{entry.get('start')}|{entry.get('since')}".encode()).hexdigest()[:24]
-
-
-def checked_meta(meta: object) -> dict[str, str]:
-    """Lease metadata, validated: raises SlotError for a key that is not a short lowercase word, a value that is
-    not short printable text, or too many keys."""
-    if meta is None:
-        return {}
-    if not isinstance(meta, dict):
-        raise SlotError("meta must be a mapping of key to value")
-    if len(meta) > META_KEYS_MAX:
-        raise SlotError(f"at most {META_KEYS_MAX} --meta keys")
-    found = {}
-    for key, value in cast(dict[object, object], meta).items():
-        if not isinstance(key, str) or not META_KEY.fullmatch(key):
-            raise SlotError(f"--meta key {key!r} must be a lowercase word (a-z, 0-9, _ . -), at most 32 characters")
-        if not isinstance(value, str) or len(value) > META_VALUE_MAX or not value.isprintable():
-            raise SlotError(f"--meta {key} takes printable text of at most {META_VALUE_MAX} characters")
-        if key in ("class", "priority", "ticket"):
-            option = "priority" if key == "class" else key
-            raise SlotError(f"{key} is a request field; use --{option}, not --meta")
-        found[key] = value
-    return found
-
-
-def parse_meta(pairs: list[str]) -> dict[str, str]:
-    """`key=value` words as lease metadata; a later key replaces an earlier one."""
-    found = {}
-    for pair in pairs:
-        key, equals, value = pair.partition("=")
-        if not equals:
-            raise SlotError(f"--meta takes key=value, not {pair!r}")
-        if key == "cache" and value not in CACHE_VALUES:  # the command line only: library callers keep any value
-            raise SlotError(f"--meta cache takes {', '.join(CACHE_VALUES[:-1])} or {CACHE_VALUES[-1]}, not {value!r}")
-        found[key] = value
-    return checked_meta(found)
-
-
-def meta_of(entry: Mapping[str, object]) -> dict[str, str]:
-    """An entry's or history line's metadata: {} where it has none (an older client) or it is not a mapping of
-    text, as a foreign writer could leave."""
-    meta = entry.get("meta")
-    if not isinstance(meta, dict):
-        return {}
-    return {k: str(v) for k, v in cast(dict[object, object], meta).items()
-            if isinstance(k, str) and META_KEY.fullmatch(k) and isinstance(v, (str, int, float))}
-
-
-def priority_of(entry: Mapping[str, object]) -> str:
-    value = entry.get("priority")
-    if isinstance(value, str) and value in PRIORITIES:
-        return value
-    return "normal"
-
-
-def checked_ticket(value: object) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, int) and not isinstance(value, bool):
-        value = str(value)
-    if not isinstance(value, str):
-        raise SlotError("ticket must be a short printable identifier")
-    if len(value) > META_VALUE_MAX or not value.isprintable():
-        raise SlotError("ticket must be short printable text")
-    value = value.strip()
-    if not value or value.lower() == "none":
-        return None
-    return value[1:] if value.startswith("#") and value[1:].isdigit() else value
-
-
-def ticket_of(entry: Mapping[str, object]) -> str | None:
-    value = entry.get("ticket")
-    try:
-        return checked_ticket(value)
-    except SlotError:
-        return None
 
 
 def meta_text(meta: dict[str, str]) -> str:

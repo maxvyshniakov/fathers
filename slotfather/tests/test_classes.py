@@ -8,6 +8,7 @@ import sys as _path_sys
 from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from slotfather import config as sf_config
+from slotfather import entry as sf_entry
 from slotfather import leases as sf_leases
 from slotfather import schedule as sf_schedule
 from slotfather import state as sf_state
@@ -93,8 +94,8 @@ class RankTests(PlanCase):
                                           one=3600, short=60))
 
     def test_an_unknown_class_is_normal(self):
-        self.assertEqual("normal", sf_config.priority_of({"priority": "urgent"}))
-        self.assertEqual("normal", sf_config.priority_of({}))
+        self.assertEqual("normal", sf_entry.priority_of({"priority": "urgent"}))
+        self.assertEqual("normal", sf_entry.priority_of({}))
 
 
 class BatchDefersTests(PlanCase):

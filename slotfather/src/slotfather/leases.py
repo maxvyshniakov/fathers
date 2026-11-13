@@ -15,6 +15,7 @@ from typing import Any, cast
 import uuid
 
 from . import config as _config
+from . import entry as _entry
 from . import events as _events
 from . import facts as _facts
 from . import idle as _idle
@@ -57,10 +58,13 @@ def process_table(directory: Path, log: bool = True) -> Table:
 
 def reap(directory: Path, table: Table) -> list[tuple[Path, dict[str, Any]]]:
     """Live entries in queue order; removes those whose holder exited or crashed (in another user's queue it only
-    leaves them out)."""
+    leaves them out). An entry this client does not know (entry.unknown(); fathers#19) is in neither: it is left
+    alone, never reaped, and the queue is planned as if it were absent."""
     live: list[tuple[Path, dict[str, Any]]] = []
     readonly = _state.foreign_owner(directory) is not None
     for path, entry in _state.entries(directory):
+        if _entry.unknown(entry) is not None:
+            continue  # perhaps a newer client's live lease: `status` shows it (state.unknown())
         if _platform.alive(entry, table):
             live.append((path, entry))
         elif not readonly:
@@ -70,8 +74,8 @@ def reap(directory: Path, table: Table) -> list[tuple[Path, dict[str, Any]]]:
             path.with_suffix(".session").unlink(missing_ok=True)  # a session's runs (session.py)
             _state.log(directory, f"reaped {entry.get('state')} lease of {entry.get('count')} for "
                            f"{entry.get('label')} (pid {entry.get('pid')} exited)")
-            item = _state.record(directory, entry, "reaped", path=path)
-            _events.emit(directory, "lease.reaped" if entry.get("state") == "held" else "request.reaped",
+            item = _state.record(directory, entry, _entry.outcome(entry, reaped=True), path=path)
+            _events.emit(directory, "lease.reaped" if _entry.is_held(entry) else "request.reaped",
                          _events.request(entry, path),
                          {"count": entry.get("count"), "ran": item.get("ran"), "waited": item.get("waited"),
                           "reason": "owner exited"}, _events.actor(kind="tool"), level="warn")
@@ -84,28 +88,13 @@ def legacy_holders(table: Table) -> list[tuple[Path, dict[str, Any], int]]:
     found: list[tuple[Path, dict[str, Any], int]] = []
     for directory in _config.legacy_dirs():
         for path, entry in _state.entries(directory):
-            if entry.get("state") == "held" and _platform.alive(entry, table):
+            if _entry.is_held(entry) and _platform.alive(entry, table):
                 found.append((path, entry, min(_config.total(), math.ceil(entry["count"] * _config.total() / _config.LEGACY_TOTAL))))
     return found
 
 
 def legacy_used(table: Table) -> int:
     return sum(count for _, _, count in legacy_holders(table))
-
-
-def resume(entry: dict, moment: float | None = None) -> None:
-    """A yielded lease that was granted again (at `moment`, else its `granted` stamp): `granted` is its first grant
-    again (waits and runs in the history stay its own), `resumed` this grant, `yielded` the seconds it spent back in
-    the queue."""
-    away = _state.epoch(entry.get("yielded_at"))
-    if away is None:
-        return
-    again = entry.get("granted")
-    back = moment if moment is not None else _config.seconds(again) or time.time()
-    entry["yielded"] = round(float(entry.get("yielded") or 0) + max(0.0, back - away), 2)
-    entry.update(resumed=again, granted=entry.get("first_granted") or again)
-    for key in ("yielded_at", "first_granted", "rank"):
-        entry.pop(key, None)
 
 
 def ask(directory: Path, live: list[tuple[Path, dict[str, Any]]], held: list[dict[str, Any]],
@@ -129,19 +118,19 @@ def ask(directory: Path, live: list[tuple[Path, dict[str, Any]]], held: list[dic
             who = asks[id(entry)]
             if place.exists():
                 continue
-            _state.write(place, {"by": paths[id(who)].stem, "label": who.get("label"), "priority": _config.priority_of(who),
+            _state.write(place, {"by": paths[id(who)].stem, "label": who.get("label"), "priority": _entry.priority_of(who),
                           "count": who["count"], "at": _config.now()})
-            _state.log(directory, f"asked {entry['label']} (pid {entry['pid']}) to yield {entry['count']} for "
+            _state.log(directory, f"asked {entry.get('label')} (pid {entry['pid']}) to yield {entry['count']} for "
                            f"{who.get('label')}")
             _events.emit(directory, "lease.yield_asked", _events.request(entry, path),
                          {"count": entry["count"], "for": {"id": paths[id(who)].stem, "label": who.get("label"),
-                                                           "priority": _config.priority_of(who)}},
+                                                           "priority": _entry.priority_of(who)}},
                          _events.actor(kind="tool"))
         elif place.exists():
-            if entry.get("state") == "held" and asked_by_hand(_state.asked(path), live):
+            if _entry.is_held(entry) and asked_by_hand(_state.asked(path), live):
                 continue  # `slotfather ask-yield` asked it: it stands while the waiter it names still waits
             place.unlink(missing_ok=True)
-            _state.log(directory, f"withdrew the yield request to {entry['label']} (pid {entry['pid']})")
+            _state.log(directory, f"withdrew the yield request to {entry.get('label')} (pid {entry['pid']})")
             _events.emit(directory, "lease.yield_withdrawn", _events.request(entry, path), {},
                          _events.actor(kind="tool"))
     for place in [*(directory / "queue").glob("*.yield"), *(directory / "queue").glob("*" + _idle.SUFFIX),
@@ -153,7 +142,7 @@ def ask(directory: Path, live: list[tuple[Path, dict[str, Any]]], held: list[dic
 def asked_by_hand(request: dict[str, Any] | None, live: list[tuple[Path, dict[str, Any]]]) -> bool:
     """Whether a yield request came from `slotfather ask-yield` and the waiter it names still waits."""
     return bool(request and request.get("asker") and
-                any(p.stem == request.get("by") and e.get("state") != "held" for p, e in live))
+                any(p.stem == request.get("by") and _entry.is_waiting(e) for p, e in live))
 
 
 def same_process(table: Table, pid: int, start: str) -> bool:
@@ -178,7 +167,7 @@ def ask_yield(pid: int, start: str, directory: Path | None = None) -> tuple[dict
         live = reap(directory, table)
         if not same_process(table, pid, start):
             raise _config.SlotError(f"pid {pid} is not the process started at {start!r} any more: nothing was asked")
-        found = next(((p, e) for p, e in live if e.get("pid") == pid and e.get("state") == "held"), None)
+        found = next(((p, e) for p, e in live if e.get("pid") == pid and _entry.is_held(e)), None)
         if found is None:
             raise _config.SlotError(f"pid {pid} holds no lease of this queue")
         path, entry = found
@@ -187,21 +176,21 @@ def ask_yield(pid: int, start: str, directory: Path | None = None) -> tuple[dict
         if int(entry.get("yields") or 0) >= _config.YIELDS_MAX:
             raise _config.SlotError(f"{entry.get('label')} (pid {pid}) has yielded {_config.YIELDS_MAX} times, the most")
         before = _state.asked(path)
-        if before is not None and any(p.stem == before.get("by") and e.get("state") != "held" for p, e in live):
+        if before is not None and any(p.stem == before.get("by") and _entry.is_waiting(e) for p, e in live):
             return entry, before, True  # a request that stands; one naming a waiter gone is replaced below
         settings = _schedule.order_settings(directory, environment=False)
         moment = time.time()
-        own = CLASS_RANK[_config.priority_of(entry)]  # its own class, as schedule.yield_asks() compares it
-        waiters = [(p, e) for p, e in live if e.get("state") != "held"]
+        own = CLASS_RANK[_entry.priority_of(entry)]  # its own class, as schedule.yield_asks() compares it
+        waiters = [(p, e) for p, e in live if _entry.is_waiting(e)]
         ranked = _schedule.ranked([e for _, e in waiters], settings, moment)
         paths = {id(e): p for p, e in waiters}
-        held = [e for p, e in live if e.get("state") == "held" and p != path]
+        held = [e for p, e in live if _entry.is_held(e) and p != path]
         chosen = None
         for waiter in ranked:
             if CLASS_RANK[_schedule.effective_priority(waiter, settings, moment)] <= own:
                 continue
             behind = _schedule.rank_time(waiter, settings, moment) + _config.YIELD_BEHIND
-            trial = _schedule.plan([*(e for e in ranked), dict(entry, state="waiting", rank=behind)], held,
+            trial = _schedule.plan([*(e for e in ranked), _entry.trial_yielded(entry, behind)], held,
                                    _config.total(), moment, estimate=_schedule.estimator(directory),
                                    other=legacy_used(table), settings=settings)
             if any(g is waiter for g in trial.grants):
@@ -215,7 +204,7 @@ def ask_yield(pid: int, start: str, directory: Path | None = None) -> tuple[dict
                    "priority": _schedule.effective_priority(chosen, settings, moment), "count": chosen["count"],
                    "at": _config.now(), "asker": asker.get("via") or f"pid {asker['pid']}"}
         _state.write(_state.marker(path), request)
-        _state.log(directory, f"asked {entry['label']} (pid {entry['pid']}) to yield {entry['count']} for "
+        _state.log(directory, f"asked {entry.get('label')} (pid {entry['pid']}) to yield {entry['count']} for "
                               f"{chosen.get('label')}")
         _events.emit(directory, "lease.yield_asked", _events.request(entry, path),
                      {"count": entry["count"], "for": {"id": request["by"], "label": chosen.get("label"),
@@ -234,16 +223,16 @@ def yield_lease(path: Path, out=sys.stderr) -> bool:
         except (OSError, ValueError):
             raise _config.SlotError("the lease vanished from the queue") from None
         request = _state.asked(path)
-        if entry.get("state") != "held" or request is None:
+        if not _entry.is_held(entry) or request is None:
             return False
         live = reap(directory, process_table(directory))
-        asker = next((e for p, e in live if p.stem == request.get("by") and e.get("state") != "held"), None)
+        asker = next((e for p, e in live if p.stem == request.get("by") and _entry.is_waiting(e)), None)
         settings = _schedule.order_settings(directory, environment=False)
         behind = _schedule.rank_time(asker, settings, time.time()) + _config.YIELD_BEHIND if asker is not None else None
         if asker is not None:  # would the asker start? Things may have changed since it asked.
             table = process_table(directory)
-            held = [e for p, e in live if e.get("state") == "held" and p != path]
-            waiters = [e for p, e in live if e.get("state") != "held"] + [dict(entry, state="waiting", rank=behind)]
+            held = [e for p, e in live if _entry.is_held(e) and p != path]
+            waiters = [e for p, e in live if _entry.is_waiting(e)] + [_entry.trial_yielded(entry, behind)]
             trial = _schedule.plan(waiters, held, _config.total(), time.time(), estimate=_schedule.estimator(directory),
                          other=legacy_used(table), settings=settings)
             if not any(e is asker for e in trial.grants):
@@ -253,10 +242,7 @@ def yield_lease(path: Path, out=sys.stderr) -> bool:
             _state.log(directory, f"withdrew the yield request to {entry.get('label')} (pid {entry.get('pid')})")
             _events.emit(directory, "lease.yield_withdrawn", _events.request(entry, path), {}, _events.holder(entry))
             return False
-        entry.update(state="waiting", yields=int(entry.get("yields") or 0) + 1, yielded_at=round(time.time(), 3),
-                     first_granted=entry.get("granted"), rank=behind)
-        entry.pop("reserved", None)  # a reservation an older client granted it with is no promise now
-        entry.pop(_schedule.PRESSED, None)  # back in the queue it is no lease of a warning; its next grant decides
+        _entry.to_yielded(entry, time.time(), behind)
         _state.write(path, entry)
         _state.marker(path).unlink(missing_ok=True)
         _state.log(directory, f"yielded {entry['count']} ({path.name}) to {asker.get('label')}")
@@ -297,7 +283,7 @@ def reprioritize(target: str, priority: str, directory: Path | None = None,
             # the label, or the --label it was given before a derived one replaced it (labels.py)
             chosen = [(p, e) for p, e in live if target in (e.get("label"), e.get("label_given"))]
             if len(chosen) > 1:
-                waiting = [(p, e) for p, e in chosen if e.get("state") != "held"]
+                waiting = [(p, e) for p, e in chosen if _entry.is_waiting(e)]
                 if len(waiting) != 1:
                     pids = ", ".join(str(e.get("pid")) for _, e in chosen)
                     raise _config.SlotError(f"{len(chosen)} requests are labelled {target} (pids {pids}): name the pid")
@@ -311,14 +297,11 @@ def reprioritize(target: str, priority: str, directory: Path | None = None,
                 raise _config.SlotError(f"{entry.get('label')} (pid {entry.get('pid')}) runs as uid {owner}: only its "
                                         f"owner may change its priority")
         for path, entry in chosen:
-            before = _config.priority_of(entry)
+            before = _entry.priority_of(entry)
             if before == priority:
                 changed.append(entry)
                 continue
-            entry.setdefault("reprioritized", before)  # the class it asked first; `since` stays its arrival
-            entry["priority"] = priority
-            entry["reprioritized_at"] = round(time.time(), 3)  # ageing counts from here (schedule.ageing_since())
-            entry.pop("aged", None)
+            _entry.to_reprioritized(entry, priority, time.time())
             _state.write(path, entry)
             _state.log(directory, f"reprioritized {entry.get('label')} (pid {entry.get('pid')}) from {before} to "
                                   f"{priority}")
@@ -345,15 +328,15 @@ def held_again(path: Path) -> None:
                     entry = json.loads(path.read_text())
                 except (OSError, ValueError):
                     raise _config.SlotError("the lease vanished from the queue") from None
-                if entry.get("state") == "held":
+                if _entry.is_held(entry):
                     if "yielded_at" in entry:  # an older client granted it
-                        resume(entry)
+                        _entry.resume(entry)
                         _state.write(path, entry)
                     return
             interval = min(interval * 1.5, poll_max)
             look = time.monotonic() + interval
         try:
-            if json.loads(path.read_text()).get("state") == "held":
+            if _entry.is_held(json.loads(path.read_text())):
                 look = 0.0  # held: settle it under the lock at once
                 continue
         except (OSError, ValueError):
@@ -365,8 +348,7 @@ def grant(directory: Path, table: Table) -> str | None:
     """Grant the waiters plan() starts, in their order, that memory lets start (schedule.memory_gate()); then ask yieldable holders to yield for
     interactive waiters that still wait (yield_asks()). Returns why the first that does not start still waits."""
     live = reap(directory, table)
-    held = [e for _, e in live if e["state"] == "held"]
-    waiters = [e for _, e in live if e["state"] != "held"]
+    held, waiters = _entry.split(e for _, e in live)
     paths = {id(e): path for path, e in live}
     estimate = _schedule.estimator(directory)
     other = legacy_used(table)
@@ -379,7 +361,7 @@ def grant(directory: Path, table: Table) -> str | None:
     # Every client keeps it by the shared settings, whatever its environment (shared_plan()).
     keeper = _schedule.shared_plan(found, waiters, held, slots, moment, estimate, other, settings,
                                    _schedule.order_settings(directory, environment=False))
-    used = sum(_schedule.holds(e, slots) for e in held) + other
+    used = sum(_entry.holds(e, slots) for e in held) + other
     memory = _platform.memory_level() if found.grants else ("normal", None)
     gated = _schedule.memory_gate(found.grants, held, used, memory, settings)
     starting = [entry for entry, why in gated if not why]
@@ -392,28 +374,22 @@ def grant(directory: Path, table: Table) -> str | None:
             short = short or why
             continue
         served = _schedule.effective_priority(entry, settings, moment)
-        back = _state.epoch(entry.get("yielded_at"))  # a yielded lease waited from when it went back
+        back = _entry.epoch(entry.get("yielded_at"))  # a yielded lease waited from when it went back
         waited_from = back if back is not None else _config.seconds(entry.get("since"))
-        entry.update(state="held", granted=_config.now())
-        began = _config.seconds(entry["granted"]) or time.time()  # resume() puts a yielded lease's first grant back
-        if memory[0] == "normal":
-            entry.pop(_schedule.PRESSED, None)
-        else:
-            entry[_schedule.PRESSED] = True  # under warning, the one lease at a time until it releases
-        if served != _config.priority_of(entry):
-            entry["aged"] = served  # the class ageing moved it to by its grant; status and the history show it
-        resume(entry, time.time())
+        granted = _config.now()
+        began = _config.seconds(granted) or time.time()  # resume() puts a yielded lease's first grant back
+        _entry.to_held(entry, granted, time.time(), pressed=memory[0] != "normal", served=served)
         _state.write(paths[id(entry)], entry)
         used += entry["count"]
-        _state.log(directory, f"granted {entry['count']} to {entry['label']} (pid {entry['pid']})")
-        details: dict[str, Any] = {"count": entry["count"], "priority": _config.priority_of(entry),
+        _state.log(directory, f"granted {entry['count']} to {entry.get('label')} (pid {entry['pid']})")
+        details: dict[str, Any] = {"count": entry["count"], "priority": _entry.priority_of(entry),
                                    "waited": None if waited_from is None else
                                    round(max(0.0, began - waited_from))}
-        if served != _config.priority_of(entry):
+        if served != _entry.priority_of(entry):
             details["served"] = served
         if back is not None:
             details["resumed"] = True
-        meta = _config.meta_of(entry)
+        meta = _entry.meta_of(entry)
         if meta:
             details["meta"] = meta
         if isinstance(entry.get("session"), dict):
@@ -479,10 +455,10 @@ class Lease:
                 _idle.path(self.path).unlink(missing_ok=True)
                 if isinstance(entry, dict):
                     entry = cast(dict[str, Any], entry)
-                    ran = entry.get("state") == "held" or bool(entry.get("yields"))  # a yielded lease ran
-                    item = _state.record(directory, entry, "released" if ran else "left", self.status, self.usage,
+                    outcome = _entry.outcome(entry)  # a yielded lease ran
+                    item = _state.record(directory, entry, outcome, self.status, self.usage,
                                          path=self.path, expected=expected)
-                    if ran:
+                    if outcome == "released":
                         _events.emit(directory, "lease.released", _events.request(entry, self.path),
                                      {"count": self.count, "exit": item.get("status"), "ran": item.get("ran"),
                                       "cpu": item.get("cpu"), "rss_peak_mb": item.get("rss_peak_mb")},
@@ -513,7 +489,7 @@ def inherited_lease(table: Table) -> tuple[Path, dict[str, Any], int] | None:
     mine = _platform.ancestors(table, os.getpid())
     own = _config.setting("LEASE")
     for path, entry in _state.entries(_config.state_dir()):
-        mine_now = entry.get("state") == "held" or "yielded_at" in entry  # a yielded lease is still this tree's
+        mine_now = _entry.phase(entry).name in (_entry.HELD, _entry.YIELDED)  # a yielded lease is still this tree's
         if mine_now and _platform.alive(entry, table) and (own == str(path) or entry["pid"] in mine):
             return path, entry, entry["count"]
     for path, entry, count in legacy_holders(table):
@@ -569,11 +545,11 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
     same session name refuses it."""
     if count != "all" and (type(count) is not int or count < 1):
         raise _config.SlotError("count must be a positive integer or all")
-    meta = _config.checked_meta(meta)
+    meta = _entry.checked_meta(meta)
     if priority is not None and priority not in _config.PRIORITIES:
         raise _config.SlotError(f"priority is one of {', '.join(_config.PRIORITIES)}")
     selected_priority = priority if priority is not None else "normal"
-    selected_ticket = _config.checked_ticket(ticket)
+    selected_ticket = _entry.checked_ticket(ticket)
     if policy() == "bypass":
         return Lease(_config.total())
     directory = _config.state_dir()
@@ -605,36 +581,15 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
         count = _config.total() if whole else min(count, _config.total())
         sequence = next_sequence(directory)
         path = directory / "queue" / f"{sequence:010d}-{me}.json"
-        entry: dict[str, Any] = {"pid": me, "start": table.get(me, (0, ""))[1], "count": count, "label": label, "cmd": command,
-                 "cwd": cwd, "since": _config.now(), "state": "waiting", "priority": selected_priority,
-                 "lease_id": uuid.uuid4().hex}  # unique across queues and restarts (fathers#101)
-        started = _platform.start_epoch(me)
-        if started is not None:
-            # the start in epoch seconds, which current clients compare whatever their locale and time zone (#122);
-            # older clients read past it and compare `start`, written as they write it
-            entry["started"] = started
-        if selected_ticket is not None:
-            entry["ticket"] = selected_ticket
-        if whole:
-            entry["all"] = True  # the capacity at the grant; older clients read past fields they do not know
-        if meta:
-            entry["meta"] = meta  # older clients read past fields they do not know
-        for key, value in (naming or {}).items():
-            # label_given, label_derived, and project: the git repository (labels.py); older clients read past them
-            entry["project" if key == "project" else "label_" + key] = value
-        if session is not None:
-            entry["session"] = dict(session)  # older clients read past it: to them it is a lease like any other
-        if git:
-            entry["git"] = git  # the tree it checks (fathers#97), copied to the history line
-        if yieldable:
-            entry["yieldable"] = True
-        if wait is not None:
-            # When this client gives up (plan(): a head that would give up before its expected start holds nobody
-            # back).
-            entry["until"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + wait))
         own = _schedule.order_settings(directory)["yield_after"]
-        if own != _schedule.order_settings(directory, environment=False)["yield_after"]:
-            entry["yield_after"] = own  # this client asks later or never (SLOTFATHER_YIELD_AFTER); others' looks read it
+        entry = _entry.new_request(
+            me, table.get(me, (0, ""))[1], count, label, command, cwd, _config.now(), selected_priority,
+            uuid.uuid4().hex, started=_platform.start_epoch(me), ticket=selected_ticket, whole=whole, meta=meta,
+            naming=naming, session=session, git=git, yieldable=yieldable,
+            # when this client gives up (plan(): a head that would give up before its expected start holds nobody back)
+            until=None if wait is None else time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + wait)),
+            # this client asks later or never (SLOTFATHER_YIELD_AFTER)
+            yield_after=own if own != _schedule.order_settings(directory, environment=False)["yield_after"] else None)
         _state.write(path, entry)
     lease = Lease(count, path, yieldable=yieldable)
     deadline = None if wait is None else time.monotonic() + wait

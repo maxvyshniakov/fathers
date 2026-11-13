@@ -6,6 +6,7 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- `status --json` gives every entry its `phase` (`waiting`, `yielded`, `held`, `asked` or `unknown`).
 - `run` without `--label` names the request after its project (the git repository of its directory, never a temporary
   one), the part of the command that names the work and its lane, ticket and phase: `godfather · measure_cpu`,
   `straylight · lane 743 · node --test · check`; a label that says little (`scratchpad`, `tmp`, the project's name
@@ -119,6 +120,10 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- A queue entry this Slotfather does not know (a state other than waiting or held, no state, or no pid, start,
+  since or count) is left alone, since it may be a newer client's lease: it is no longer granted as a waiter, reaped
+  or deleted, and no longer stops every client's look with a `KeyError`. `status`, `status --json` and the dashboard
+  block show it as `unknown` with a warning; its slots count neither held nor free.
 - Queue entries and the `sequence` file are written whole and synced to disk, so a crash no longer leaves an empty
   entry or loses the counter; a torn `sequence` no longer puts a new request ahead of those already waiting. An
   entry that cannot be read is left in place and `status` lists it as `unreadable`.

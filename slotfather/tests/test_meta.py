@@ -7,6 +7,7 @@ import sys as _path_sys
 from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from slotfather import config as sf_config
+from slotfather import entry as sf_entry
 
 
 import json
@@ -112,7 +113,7 @@ class MetaTests(SlotCase):
         self.assertEqual(0, result.returncode, "a later key replaces an earlier one")
         self.assertEqual({"custom": "2"}, json.loads((self.state / "history.jsonl").read_text())["meta"])
         with self.assertRaises(sf_config.SlotError):
-            sf_config.checked_meta({f"k{n}": "v" for n in range(17)})
+            sf_entry.checked_meta({f"k{n}": "v" for n in range(17)})
 
     def test_status_json_options_are_checked(self):
         for args in (("--json", "--pid"), ("--json", "--pid", "x"), ("--json", "extra"), ("--pid", "1")):
@@ -125,8 +126,8 @@ class MetaTests(SlotCase):
         self.queue_entry(self.state, pid, start, 1, "old")
         self.assertRegex(self.status(), r"held: 1 slot\(s\) old pid=\d+ since=- cmd=fake\n")
         self.assertEqual([{}], [e["meta"] for e in json.loads(self.tool("status", "--json").stdout)["entries"]])
-        self.assertEqual({}, sf_config.meta_of({"meta": ["not", "a", "mapping"]}))
-        self.assertEqual({"ticket": "1"}, sf_config.meta_of({"meta": {"ticket": "1", "Bad Key\x1b": "x", "": "y"}}),
+        self.assertEqual({}, sf_entry.meta_of({"meta": ["not", "a", "mapping"]}))
+        self.assertEqual({"ticket": "1"}, sf_entry.meta_of({"meta": {"ticket": "1", "Bad Key\x1b": "x", "": "y"}}),
                          "keys a foreign writer left that --meta would refuse are dropped")
 
     def test_the_dashboard_block_carries_the_request_ticket_apart_from_its_meta(self):

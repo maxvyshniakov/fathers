@@ -1,0 +1,1973 @@
+{
+ "ask_by_hand": [
+  {
+   "events.jsonl": [
+    "{\"actor\": {\"pid\": SELF, \"type\": \"process\"}, \"details\": {\"by_hand\": true, \"count\": 4, \"for\": {\"id\": \"0000000002-90062\", \"label\": \"urgent\", \"priority\": \"interactive\"}}, \"host\": \"host\", \"kind\": \"lease.yield_asked\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000001-90061\", \"label\": \"gate\", \"lease_id\": \"lease-gate\", \"pid\": 90061, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}"
+   ],
+   "history.jsonl": [],
+   "queue": {
+    "0000000001-90061.json": "{\"pid\": 90061, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 4, \"label\": \"gate\", \"cmd\": \"make gate\", \"cwd\": \"/work\", \"since\": \"2025-11-12T10:00:00Z\", \"state\": \"held\", \"priority\": \"normal\", \"lease_id\": \"lease-gate\", \"granted\": \"2025-11-12T10:01:00Z\", \"yieldable\": true}\n",
+    "0000000001-90061.yield": "{\"by\": \"0000000002-90062\", \"label\": \"urgent\", \"priority\": \"interactive\", \"count\": 2, \"at\": \"2025-11-12T12:00:00Z\", \"asker\": \"pid SELF\"}\n",
+    "0000000002-90062.json": "{\"pid\": 90062, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 2, \"label\": \"urgent\", \"cmd\": \"make urgent\", \"cwd\": \"/work\", \"since\": \"2025-11-12T11:59:30Z\", \"state\": \"waiting\", \"priority\": \"interactive\", \"lease_id\": \"lease-urgent\"}\n"
+   },
+   "queue.log": [
+    "2025-11-12T12:00:00Z asked gate (pid 90061) to yield 4 for urgent"
+   ],
+   "status": [
+    "held: 4 slot(s) gate pid=90061 since=2025-11-12T10:00:00Z yieldable asked-to-yield-for=urgent cmd=make gate",
+    "waiting: 2 slot(s) urgent pid=90062 since=2025-11-12T11:59:30Z priority=interactive head reserved=2025-11-12T12:59:30Z est-start=2025-11-12T12:59:30Z cmd=make urgent",
+    "4 of 4 slots held"
+   ],
+   "status --json": {
+    "draining": 0,
+    "entries": [
+     {
+      "aged": false,
+      "cmd": "make gate",
+      "count": 4,
+      "cwd": "/work",
+      "effective_priority": "normal",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T10:01:00Z",
+      "head": false,
+      "id": "0000000001-90061",
+      "idle_since": null,
+      "label": "gate",
+      "lease": "QUEUE/queue/0000000001-90061.json",
+      "lease_id": "lease-gate",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "asked",
+      "pid": 90061,
+      "position": null,
+      "priority": "normal",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T10:00:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       90061
+      ],
+      "waited": null,
+      "yield_asked": {
+       "asker": "pid SELF",
+       "at": "2025-11-12T12:00:00Z",
+       "by": "0000000002-90062",
+       "count": 2,
+       "label": "urgent",
+       "priority": "interactive"
+      },
+      "yieldable": true,
+      "yields": 0
+     },
+     {
+      "aged": false,
+      "cmd": "make urgent",
+      "count": 2,
+      "cwd": "/work",
+      "effective_priority": "interactive",
+      "est_start": "2025-11-12T12:59:30Z",
+      "expected": null,
+      "granted": null,
+      "head": true,
+      "id": "0000000002-90062",
+      "idle_since": null,
+      "label": "urgent",
+      "lease": "QUEUE/queue/0000000002-90062.json",
+      "lease_id": "lease-urgent",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "waiting",
+      "pid": 90062,
+      "position": 1,
+      "priority": "interactive",
+      "reprioritized": null,
+      "reserved": "2025-11-12T12:59:30Z",
+      "since": "2025-11-12T11:59:30Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "waiting",
+      "ticket": null,
+      "tree": [
+       90062
+      ],
+      "waited": 30,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     }
+    ],
+    "free": 0,
+    "held": 4,
+    "legacy": [],
+    "slots": 4,
+    "v": 2
+   },
+   "step": "asked by hand for the interactive waiter"
+  }
+ ],
+ "grants": [
+  {
+   "events.jsonl": [
+    "{\"actor\": {\"pid\": 90002, \"type\": \"process\"}, \"details\": {\"count\": 1, \"priority\": \"batch\", \"served\": \"interactive\", \"waited\": 7200}, \"host\": \"host\", \"kind\": \"lease.granted\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000002-90002\", \"label\": \"aged\", \"lease_id\": \"lease-aged\", \"pid\": 90002, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}",
+    "{\"actor\": {\"pid\": 90003, \"type\": \"process\"}, \"details\": {\"count\": 1, \"priority\": \"normal\", \"waited\": 60}, \"host\": \"host\", \"kind\": \"lease.granted\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000003-90003\", \"label\": \"fresh\", \"lease_id\": \"lease-fresh\", \"pid\": 90003, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}"
+   ],
+   "history.jsonl": [],
+   "queue": {
+    "0000000001-90001.json": "{\"pid\": 90001, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 1, \"label\": \"running\", \"cmd\": \"make running\", \"cwd\": \"/work\", \"since\": \"2025-11-12T10:00:00Z\", \"state\": \"held\", \"priority\": \"normal\", \"lease_id\": \"lease-running\", \"granted\": \"2025-11-12T10:01:00Z\"}\n",
+    "0000000002-90002.json": "{\"pid\": 90002, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 1, \"label\": \"aged\", \"cmd\": \"make aged\", \"cwd\": \"/work\", \"since\": \"2025-11-12T10:00:00Z\", \"state\": \"held\", \"priority\": \"batch\", \"lease_id\": \"lease-aged\", \"granted\": \"2025-11-12T12:00:00Z\", \"aged\": \"interactive\"}\n",
+    "0000000003-90003.json": "{\"pid\": 90003, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 1, \"label\": \"fresh\", \"cmd\": \"make fresh\", \"cwd\": \"/work\", \"since\": \"2025-11-12T11:59:00Z\", \"state\": \"held\", \"priority\": \"normal\", \"lease_id\": \"lease-fresh\", \"granted\": \"2025-11-12T12:00:00Z\"}\n"
+   },
+   "queue.log": [
+    "2025-11-12T12:00:00Z granted 1 to aged (pid 90002)",
+    "2025-11-12T12:00:00Z granted 1 to fresh (pid 90003)"
+   ],
+   "status": [
+    "held: 1 slot(s) running pid=90001 since=2025-11-12T10:00:00Z cmd=make running",
+    "held: 1 slot(s) aged pid=90002 since=2025-11-12T10:00:00Z priority=interactive aged-from=batch cmd=make aged",
+    "held: 1 slot(s) fresh pid=90003 since=2025-11-12T11:59:00Z cmd=make fresh",
+    "3 of 4 slots held"
+   ],
+   "status --json": {
+    "draining": 0,
+    "entries": [
+     {
+      "aged": false,
+      "cmd": "make running",
+      "count": 1,
+      "cwd": "/work",
+      "effective_priority": "normal",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T10:01:00Z",
+      "head": false,
+      "id": "0000000001-90001",
+      "idle_since": null,
+      "label": "running",
+      "lease": "QUEUE/queue/0000000001-90001.json",
+      "lease_id": "lease-running",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "held",
+      "pid": 90001,
+      "position": null,
+      "priority": "normal",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T10:00:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       90001
+      ],
+      "waited": null,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     },
+     {
+      "aged": true,
+      "cmd": "make aged",
+      "count": 1,
+      "cwd": "/work",
+      "effective_priority": "interactive",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T12:00:00Z",
+      "head": false,
+      "id": "0000000002-90002",
+      "idle_since": null,
+      "label": "aged",
+      "lease": "QUEUE/queue/0000000002-90002.json",
+      "lease_id": "lease-aged",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "held",
+      "pid": 90002,
+      "position": null,
+      "priority": "batch",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T10:00:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       90002
+      ],
+      "waited": null,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     },
+     {
+      "aged": false,
+      "cmd": "make fresh",
+      "count": 1,
+      "cwd": "/work",
+      "effective_priority": "normal",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T12:00:00Z",
+      "head": false,
+      "id": "0000000003-90003",
+      "idle_since": null,
+      "label": "fresh",
+      "lease": "QUEUE/queue/0000000003-90003.json",
+      "lease_id": "lease-fresh",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "held",
+      "pid": 90003,
+      "position": null,
+      "priority": "normal",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T11:59:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       90003
+      ],
+      "waited": null,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     }
+    ],
+    "free": 1,
+    "held": 3,
+    "legacy": [],
+    "slots": 4,
+    "v": 2
+   },
+   "step": "an aged batch waiter and a fresh one granted"
+  },
+  {
+   "events.jsonl": [
+    "{\"actor\": {\"pid\": 90002, \"type\": \"process\"}, \"details\": {\"count\": 1, \"priority\": \"batch\", \"served\": \"interactive\", \"waited\": 7200}, \"host\": \"host\", \"kind\": \"lease.granted\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000002-90002\", \"label\": \"aged\", \"lease_id\": \"lease-aged\", \"pid\": 90002, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}",
+    "{\"actor\": {\"pid\": 90003, \"type\": \"process\"}, \"details\": {\"count\": 1, \"priority\": \"normal\", \"waited\": 60}, \"host\": \"host\", \"kind\": \"lease.granted\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000003-90003\", \"label\": \"fresh\", \"lease_id\": \"lease-fresh\", \"pid\": 90003, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}",
+    "{\"actor\": {\"pid\": 90004, \"type\": \"process\"}, \"details\": {\"count\": 1, \"priority\": \"normal\", \"waited\": 15}, \"host\": \"host\", \"kind\": \"lease.granted\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000004-90004\", \"label\": \"pressed\", \"lease_id\": \"lease-pressed\", \"pid\": 90004, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:10Z\", \"v\": 1}"
+   ],
+   "history.jsonl": [],
+   "queue": {
+    "0000000001-90001.json": "{\"pid\": 90001, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 1, \"label\": \"running\", \"cmd\": \"make running\", \"cwd\": \"/work\", \"since\": \"2025-11-12T10:00:00Z\", \"state\": \"held\", \"priority\": \"normal\", \"lease_id\": \"lease-running\", \"granted\": \"2025-11-12T10:01:00Z\"}\n",
+    "0000000002-90002.json": "{\"pid\": 90002, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 1, \"label\": \"aged\", \"cmd\": \"make aged\", \"cwd\": \"/work\", \"since\": \"2025-11-12T10:00:00Z\", \"state\": \"held\", \"priority\": \"batch\", \"lease_id\": \"lease-aged\", \"granted\": \"2025-11-12T12:00:00Z\", \"aged\": \"interactive\"}\n",
+    "0000000003-90003.json": "{\"pid\": 90003, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 1, \"label\": \"fresh\", \"cmd\": \"make fresh\", \"cwd\": \"/work\", \"since\": \"2025-11-12T11:59:00Z\", \"state\": \"held\", \"priority\": \"normal\", \"lease_id\": \"lease-fresh\", \"granted\": \"2025-11-12T12:00:00Z\"}\n",
+    "0000000004-90004.json": "{\"pid\": 90004, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 1, \"label\": \"pressed\", \"cmd\": \"make pressed\", \"cwd\": \"/work\", \"since\": \"2025-11-12T11:59:55Z\", \"state\": \"held\", \"priority\": \"normal\", \"lease_id\": \"lease-pressed\", \"granted\": \"2025-11-12T12:00:10Z\", \"pressed\": true}\n",
+    "0000000005-90005.json": "{\"pid\": 90005, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 1, \"label\": \"second\", \"cmd\": \"make second\", \"cwd\": \"/work\", \"since\": \"2025-11-12T11:59:56Z\", \"state\": \"waiting\", \"priority\": \"normal\", \"lease_id\": \"lease-second\", \"reserved\": 1762952385.0}\n"
+   },
+   "queue.log": [
+    "2025-11-12T12:00:00Z granted 1 to aged (pid 90002)",
+    "2025-11-12T12:00:00Z granted 1 to fresh (pid 90003)",
+    "2025-11-12T12:00:10Z granted 1 to pressed (pid 90004)"
+   ],
+   "status": [
+    "held: 1 slot(s) running pid=90001 since=2025-11-12T10:00:00Z cmd=make running",
+    "held: 1 slot(s) aged pid=90002 since=2025-11-12T10:00:00Z priority=interactive aged-from=batch cmd=make aged",
+    "held: 1 slot(s) fresh pid=90003 since=2025-11-12T11:59:00Z cmd=make fresh",
+    "held: 1 slot(s) pressed pid=90004 since=2025-11-12T11:59:55Z cmd=make pressed",
+    "waiting: 1 slot(s) second pid=90005 since=2025-11-12T11:59:56Z head reserved=2025-11-12T12:59:45Z est-start=2025-11-12T12:59:45Z cmd=make second",
+    "4 of 4 slots held"
+   ],
+   "status --json": {
+    "draining": 0,
+    "entries": [
+     {
+      "aged": false,
+      "cmd": "make running",
+      "count": 1,
+      "cwd": "/work",
+      "effective_priority": "normal",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T10:01:00Z",
+      "head": false,
+      "id": "0000000001-90001",
+      "idle_since": null,
+      "label": "running",
+      "lease": "QUEUE/queue/0000000001-90001.json",
+      "lease_id": "lease-running",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "held",
+      "pid": 90001,
+      "position": null,
+      "priority": "normal",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T10:00:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       90001
+      ],
+      "waited": null,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     },
+     {
+      "aged": true,
+      "cmd": "make aged",
+      "count": 1,
+      "cwd": "/work",
+      "effective_priority": "interactive",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T12:00:00Z",
+      "head": false,
+      "id": "0000000002-90002",
+      "idle_since": null,
+      "label": "aged",
+      "lease": "QUEUE/queue/0000000002-90002.json",
+      "lease_id": "lease-aged",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "held",
+      "pid": 90002,
+      "position": null,
+      "priority": "batch",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T10:00:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       90002
+      ],
+      "waited": null,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     },
+     {
+      "aged": false,
+      "cmd": "make fresh",
+      "count": 1,
+      "cwd": "/work",
+      "effective_priority": "normal",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T12:00:00Z",
+      "head": false,
+      "id": "0000000003-90003",
+      "idle_since": null,
+      "label": "fresh",
+      "lease": "QUEUE/queue/0000000003-90003.json",
+      "lease_id": "lease-fresh",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "held",
+      "pid": 90003,
+      "position": null,
+      "priority": "normal",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T11:59:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       90003
+      ],
+      "waited": null,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     },
+     {
+      "aged": false,
+      "cmd": "make pressed",
+      "count": 1,
+      "cwd": "/work",
+      "effective_priority": "normal",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T12:00:10Z",
+      "head": false,
+      "id": "0000000004-90004",
+      "idle_since": null,
+      "label": "pressed",
+      "lease": "QUEUE/queue/0000000004-90004.json",
+      "lease_id": "lease-pressed",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "held",
+      "pid": 90004,
+      "position": null,
+      "priority": "normal",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T11:59:55Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       90004
+      ],
+      "waited": null,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     },
+     {
+      "aged": false,
+      "cmd": "make second",
+      "count": 1,
+      "cwd": "/work",
+      "effective_priority": "normal",
+      "est_start": "2025-11-12T12:59:45Z",
+      "expected": null,
+      "granted": null,
+      "head": true,
+      "id": "0000000005-90005",
+      "idle_since": null,
+      "label": "second",
+      "lease": "QUEUE/queue/0000000005-90005.json",
+      "lease_id": "lease-second",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "waiting",
+      "pid": 90005,
+      "position": 1,
+      "priority": "normal",
+      "reprioritized": null,
+      "reserved": "2025-11-12T12:59:45Z",
+      "since": "2025-11-12T11:59:56Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "waiting",
+      "ticket": null,
+      "tree": [
+       90005
+      ],
+      "waited": 14,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     }
+    ],
+    "free": 0,
+    "held": 4,
+    "legacy": [],
+    "slots": 4,
+    "v": 2
+   },
+   "step": "under warning: one granted pressed, the next held back"
+  },
+  {
+   "events.jsonl": [
+    "{\"actor\": {\"pid\": 90002, \"type\": \"process\"}, \"details\": {\"count\": 1, \"priority\": \"batch\", \"served\": \"interactive\", \"waited\": 7200}, \"host\": \"host\", \"kind\": \"lease.granted\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000002-90002\", \"label\": \"aged\", \"lease_id\": \"lease-aged\", \"pid\": 90002, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}",
+    "{\"actor\": {\"pid\": 90003, \"type\": \"process\"}, \"details\": {\"count\": 1, \"priority\": \"normal\", \"waited\": 60}, \"host\": \"host\", \"kind\": \"lease.granted\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000003-90003\", \"label\": \"fresh\", \"lease_id\": \"lease-fresh\", \"pid\": 90003, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}",
+    "{\"actor\": {\"pid\": 90004, \"type\": \"process\"}, \"details\": {\"count\": 1, \"priority\": \"normal\", \"waited\": 15}, \"host\": \"host\", \"kind\": \"lease.granted\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000004-90004\", \"label\": \"pressed\", \"lease_id\": \"lease-pressed\", \"pid\": 90004, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:10Z\", \"v\": 1}"
+   ],
+   "history.jsonl": [],
+   "queue": {
+    "0000000001-90001.json": "{\"pid\": 90001, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 1, \"label\": \"running\", \"cmd\": \"make running\", \"cwd\": \"/work\", \"since\": \"2025-11-12T10:00:00Z\", \"state\": \"held\", \"priority\": \"normal\", \"lease_id\": \"lease-running\", \"granted\": \"2025-11-12T10:01:00Z\"}\n",
+    "0000000002-90002.json": "{\"pid\": 90002, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 1, \"label\": \"aged\", \"cmd\": \"make aged\", \"cwd\": \"/work\", \"since\": \"2025-11-12T10:00:00Z\", \"state\": \"held\", \"priority\": \"batch\", \"lease_id\": \"lease-aged\", \"granted\": \"2025-11-12T12:00:00Z\", \"aged\": \"interactive\"}\n",
+    "0000000003-90003.json": "{\"pid\": 90003, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 1, \"label\": \"fresh\", \"cmd\": \"make fresh\", \"cwd\": \"/work\", \"since\": \"2025-11-12T11:59:00Z\", \"state\": \"held\", \"priority\": \"normal\", \"lease_id\": \"lease-fresh\", \"granted\": \"2025-11-12T12:00:00Z\"}\n",
+    "0000000004-90004.json": "{\"pid\": 90004, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 1, \"label\": \"pressed\", \"cmd\": \"make pressed\", \"cwd\": \"/work\", \"since\": \"2025-11-12T11:59:55Z\", \"state\": \"held\", \"priority\": \"normal\", \"lease_id\": \"lease-pressed\", \"granted\": \"2025-11-12T12:00:10Z\", \"pressed\": true}\n",
+    "0000000005-90005.json": "{\"pid\": 90005, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 1, \"label\": \"second\", \"cmd\": \"make second\", \"cwd\": \"/work\", \"since\": \"2025-11-12T11:59:56Z\", \"state\": \"waiting\", \"priority\": \"normal\", \"lease_id\": \"lease-second\", \"reserved\": 1762952385.0}\n"
+   },
+   "queue.log": [
+    "2025-11-12T12:00:00Z granted 1 to aged (pid 90002)",
+    "2025-11-12T12:00:00Z granted 1 to fresh (pid 90003)",
+    "2025-11-12T12:00:10Z granted 1 to pressed (pid 90004)"
+   ],
+   "status": [
+    "held: 1 slot(s) running pid=90001 since=2025-11-12T10:00:00Z cmd=make running",
+    "held: 1 slot(s) aged pid=90002 since=2025-11-12T10:00:00Z priority=interactive aged-from=batch cmd=make aged",
+    "held: 1 slot(s) fresh pid=90003 since=2025-11-12T11:59:00Z cmd=make fresh",
+    "held: 1 slot(s) pressed pid=90004 since=2025-11-12T11:59:55Z cmd=make pressed",
+    "waiting: 1 slot(s) second pid=90005 since=2025-11-12T11:59:56Z head reserved=2025-11-12T12:59:45Z est-start=2025-11-12T13:00:00Z cmd=make second",
+    "4 of 4 slots held"
+   ],
+   "status --json": {
+    "draining": 0,
+    "entries": [
+     {
+      "aged": false,
+      "cmd": "make running",
+      "count": 1,
+      "cwd": "/work",
+      "effective_priority": "normal",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T10:01:00Z",
+      "head": false,
+      "id": "0000000001-90001",
+      "idle_since": null,
+      "label": "running",
+      "lease": "QUEUE/queue/0000000001-90001.json",
+      "lease_id": "lease-running",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "held",
+      "pid": 90001,
+      "position": null,
+      "priority": "normal",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T10:00:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       90001
+      ],
+      "waited": null,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     },
+     {
+      "aged": true,
+      "cmd": "make aged",
+      "count": 1,
+      "cwd": "/work",
+      "effective_priority": "interactive",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T12:00:00Z",
+      "head": false,
+      "id": "0000000002-90002",
+      "idle_since": null,
+      "label": "aged",
+      "lease": "QUEUE/queue/0000000002-90002.json",
+      "lease_id": "lease-aged",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "held",
+      "pid": 90002,
+      "position": null,
+      "priority": "batch",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T10:00:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       90002
+      ],
+      "waited": null,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     },
+     {
+      "aged": false,
+      "cmd": "make fresh",
+      "count": 1,
+      "cwd": "/work",
+      "effective_priority": "normal",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T12:00:00Z",
+      "head": false,
+      "id": "0000000003-90003",
+      "idle_since": null,
+      "label": "fresh",
+      "lease": "QUEUE/queue/0000000003-90003.json",
+      "lease_id": "lease-fresh",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "held",
+      "pid": 90003,
+      "position": null,
+      "priority": "normal",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T11:59:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       90003
+      ],
+      "waited": null,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     },
+     {
+      "aged": false,
+      "cmd": "make pressed",
+      "count": 1,
+      "cwd": "/work",
+      "effective_priority": "normal",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T12:00:10Z",
+      "head": false,
+      "id": "0000000004-90004",
+      "idle_since": null,
+      "label": "pressed",
+      "lease": "QUEUE/queue/0000000004-90004.json",
+      "lease_id": "lease-pressed",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "held",
+      "pid": 90004,
+      "position": null,
+      "priority": "normal",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T11:59:55Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       90004
+      ],
+      "waited": null,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     },
+     {
+      "aged": false,
+      "cmd": "make second",
+      "count": 1,
+      "cwd": "/work",
+      "effective_priority": "normal",
+      "est_start": "2025-11-12T13:00:00Z",
+      "expected": null,
+      "granted": null,
+      "head": true,
+      "id": "0000000005-90005",
+      "idle_since": null,
+      "label": "second",
+      "lease": "QUEUE/queue/0000000005-90005.json",
+      "lease_id": "lease-second",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "waiting",
+      "pid": 90005,
+      "position": 1,
+      "priority": "normal",
+      "reprioritized": null,
+      "reserved": "2025-11-12T12:59:45Z",
+      "since": "2025-11-12T11:59:56Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "waiting",
+      "ticket": null,
+      "tree": [
+       90005
+      ],
+      "waited": 24,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     }
+    ],
+    "free": 0,
+    "held": 4,
+    "legacy": [],
+    "slots": 4,
+    "v": 2
+   },
+   "step": "memory normal again"
+  }
+ ],
+ "older_client_grant": [
+  {
+   "events.jsonl": [],
+   "history.jsonl": [],
+   "queue": {
+    "0000000001-90021.json": "{\"pid\": 90021, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 2, \"label\": \"gate\", \"cmd\": \"make gate\", \"cwd\": \"/work\", \"since\": \"2025-11-12T10:00:00Z\", \"state\": \"held\", \"priority\": \"batch\", \"lease_id\": \"lease-gate\", \"granted\": \"2025-11-12T10:03:20Z\", \"yieldable\": true, \"yields\": 1, \"yielded\": 270.0, \"resumed\": \"2025-11-12T11:59:30Z\"}\n"
+   },
+   "queue.log": [],
+   "status": [
+    "held: 2 slot(s) gate pid=90021 since=2025-11-12T10:00:00Z yieldable yielded=1 cmd=make gate",
+    "2 of 4 slots held"
+   ],
+   "status --json": {
+    "draining": 0,
+    "entries": [
+     {
+      "aged": false,
+      "cmd": "make gate",
+      "count": 2,
+      "cwd": "/work",
+      "effective_priority": "batch",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T10:03:20Z",
+      "head": false,
+      "id": "0000000001-90021",
+      "idle_since": null,
+      "label": "gate",
+      "lease": "QUEUE/queue/0000000001-90021.json",
+      "lease_id": "lease-gate",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "held",
+      "pid": 90021,
+      "position": null,
+      "priority": "batch",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T10:00:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       90021
+      ],
+      "waited": null,
+      "yield_asked": null,
+      "yieldable": true,
+      "yields": 1
+     }
+    ],
+    "free": 2,
+    "held": 2,
+    "legacy": [],
+    "slots": 4,
+    "v": 2
+   },
+   "step": "an older client granted the yielded gate; its holder settles the resume"
+  }
+ ],
+ "reap": [
+  {
+   "events.jsonl": [
+    "{\"actor\": {\"name\": \"slotfather\", \"pid\": SELF, \"type\": \"tool\"}, \"details\": {\"count\": 2, \"ran\": 840, \"reason\": \"owner exited\", \"waited\": 60}, \"host\": \"host\", \"kind\": \"lease.reaped\", \"level\": \"warn\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000001-90051\", \"label\": \"crashed\", \"lease_id\": \"lease-crashed\", \"pid\": 90051, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}",
+    "{\"actor\": {\"name\": \"slotfather\", \"pid\": SELF, \"type\": \"tool\"}, \"details\": {\"count\": 1, \"ran\": null, \"reason\": \"owner exited\", \"waited\": 100}, \"host\": \"host\", \"kind\": \"request.reaped\", \"level\": \"warn\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000002-90052\", \"label\": \"gone\", \"lease_id\": \"lease-gone\", \"pid\": 90052, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}",
+    "{\"actor\": {\"pid\": 90053, \"type\": \"process\"}, \"details\": {\"count\": 1, \"priority\": \"normal\", \"waited\": 50}, \"host\": \"host\", \"kind\": \"lease.granted\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000003-90053\", \"label\": \"waits\", \"lease_id\": \"lease-waits\", \"pid\": 90053, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}"
+   ],
+   "history.jsonl": [
+    "{\"v\": 2, \"label\": \"crashed\", \"cmd\": \"make crashed\", \"cwd\": \"/work\", \"count\": 2, \"pid\": 90051, \"queued\": \"2025-11-12T11:45:00Z\", \"granted\": \"2025-11-12T11:46:00Z\", \"ended\": \"2025-11-12T12:00:00Z\", \"outcome\": \"reaped\", \"waited\": 60, \"ran\": 840, \"status\": null, \"priority\": \"normal\", \"cores\": 12, \"capacity\": 4, \"lease_id\": \"lease-crashed\"}",
+    "{\"v\": 2, \"label\": \"gone\", \"cmd\": \"make gone\", \"cwd\": \"/work\", \"count\": 1, \"pid\": 90052, \"queued\": \"2025-11-12T11:58:20Z\", \"granted\": null, \"ended\": \"2025-11-12T12:00:00Z\", \"outcome\": \"reaped\", \"waited\": 100, \"ran\": null, \"status\": null, \"priority\": \"normal\", \"cores\": 12, \"capacity\": 4, \"lease_id\": \"lease-gone\"}"
+   ],
+   "queue": {
+    "0000000003-90053.json": "{\"pid\": 90053, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 1, \"label\": \"waits\", \"cmd\": \"make waits\", \"cwd\": \"/work\", \"since\": \"2025-11-12T11:59:10Z\", \"state\": \"held\", \"priority\": \"normal\", \"lease_id\": \"lease-waits\", \"granted\": \"2025-11-12T12:00:00Z\"}\n"
+   },
+   "queue.log": [
+    "2025-11-12T12:00:00Z reaped held lease of 2 for crashed (pid 90051 exited)",
+    "2025-11-12T12:00:00Z reaped waiting lease of 1 for gone (pid 90052 exited)",
+    "2025-11-12T12:00:00Z granted 1 to waits (pid 90053)"
+   ],
+   "status": [
+    "held: 1 slot(s) waits pid=90053 since=2025-11-12T11:59:10Z cmd=make waits",
+    "1 of 4 slots held"
+   ],
+   "status --json": {
+    "draining": 0,
+    "entries": [
+     {
+      "aged": false,
+      "cmd": "make waits",
+      "count": 1,
+      "cwd": "/work",
+      "effective_priority": "normal",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T12:00:00Z",
+      "head": false,
+      "id": "0000000003-90053",
+      "idle_since": null,
+      "label": "waits",
+      "lease": "QUEUE/queue/0000000003-90053.json",
+      "lease_id": "lease-waits",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "held",
+      "pid": 90053,
+      "position": null,
+      "priority": "normal",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T11:59:10Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       90053
+      ],
+      "waited": null,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     }
+    ],
+    "free": 3,
+    "held": 1,
+    "legacy": [],
+    "slots": 4,
+    "v": 2
+   },
+   "step": "a crashed holder and a gone waiter reaped; the waiter granted"
+  }
+ ],
+ "reprioritize": [
+  {
+   "events.jsonl": [
+    "{\"actor\": {\"pid\": SELF, \"type\": \"process\"}, \"details\": {\"from\": \"normal\", \"state\": \"waiting\", \"to\": \"interactive\"}, \"host\": \"host\", \"kind\": \"request.reprioritized\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000002-90042\", \"label\": \"late\", \"lease_id\": \"lease-late\", \"pid\": 90042, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}"
+   ],
+   "history.jsonl": [],
+   "queue": {
+    "0000000001-90041.json": "{\"pid\": 90041, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 4, \"label\": \"holder\", \"cmd\": \"make holder\", \"cwd\": \"/work\", \"since\": \"2025-11-12T11:45:00Z\", \"state\": \"held\", \"priority\": \"normal\", \"lease_id\": \"lease-holder\", \"granted\": \"2025-11-12T11:46:00Z\"}\n",
+    "0000000002-90042.json": "{\"pid\": 90042, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 1, \"label\": \"late\", \"cmd\": \"make late\", \"cwd\": \"/work\", \"since\": \"2025-11-12T11:58:20Z\", \"state\": \"waiting\", \"priority\": \"interactive\", \"lease_id\": \"lease-late\", \"reprioritized\": \"normal\", \"reprioritized_at\": 1762948800.0, \"reserved\": 1762951560.0}\n",
+    "0000000003-90043.json": "{\"pid\": 90043, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 1, \"label\": \"batchy\", \"cmd\": \"make batchy\", \"cwd\": \"/work\", \"since\": \"2025-11-12T11:59:10Z\", \"state\": \"waiting\", \"priority\": \"batch\", \"lease_id\": \"lease-batchy\"}\n"
+   },
+   "queue.log": [
+    "2025-11-12T12:00:00Z reprioritized late (pid 90042) from normal to interactive"
+   ],
+   "status": [
+    "held: 4 slot(s) holder pid=90041 since=2025-11-12T11:45:00Z cmd=make holder",
+    "waiting: 1 slot(s) late pid=90042 since=2025-11-12T11:58:20Z priority=interactive reprioritized-from=normal head reserved=2025-11-12T12:46:00Z est-start=2025-11-12T12:46:00Z cmd=make late",
+    "waiting: 1 slot(s) batchy pid=90043 since=2025-11-12T11:59:10Z priority=batch est-start=2025-11-12T12:46:00Z cmd=make batchy",
+    "4 of 4 slots held"
+   ],
+   "status --json": {
+    "draining": 0,
+    "entries": [
+     {
+      "aged": false,
+      "cmd": "make holder",
+      "count": 4,
+      "cwd": "/work",
+      "effective_priority": "normal",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T11:46:00Z",
+      "head": false,
+      "id": "0000000001-90041",
+      "idle_since": null,
+      "label": "holder",
+      "lease": "QUEUE/queue/0000000001-90041.json",
+      "lease_id": "lease-holder",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "held",
+      "pid": 90041,
+      "position": null,
+      "priority": "normal",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T11:45:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       90041
+      ],
+      "waited": null,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     },
+     {
+      "aged": false,
+      "cmd": "make late",
+      "count": 1,
+      "cwd": "/work",
+      "effective_priority": "interactive",
+      "est_start": "2025-11-12T12:46:00Z",
+      "expected": null,
+      "granted": null,
+      "head": true,
+      "id": "0000000002-90042",
+      "idle_since": null,
+      "label": "late",
+      "lease": "QUEUE/queue/0000000002-90042.json",
+      "lease_id": "lease-late",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "waiting",
+      "pid": 90042,
+      "position": 1,
+      "priority": "interactive",
+      "reprioritized": "normal",
+      "reserved": "2025-11-12T12:46:00Z",
+      "since": "2025-11-12T11:58:20Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "waiting",
+      "ticket": null,
+      "tree": [
+       90042
+      ],
+      "waited": 100,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     },
+     {
+      "aged": false,
+      "cmd": "make batchy",
+      "count": 1,
+      "cwd": "/work",
+      "effective_priority": "batch",
+      "est_start": "2025-11-12T12:46:00Z",
+      "expected": null,
+      "granted": null,
+      "head": false,
+      "id": "0000000003-90043",
+      "idle_since": null,
+      "label": "batchy",
+      "lease": "QUEUE/queue/0000000003-90043.json",
+      "lease_id": "lease-batchy",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "waiting",
+      "pid": 90043,
+      "position": 2,
+      "priority": "batch",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T11:59:10Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "waiting",
+      "ticket": null,
+      "tree": [
+       90043
+      ],
+      "waited": 50,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     }
+    ],
+    "free": 0,
+    "held": 4,
+    "legacy": [],
+    "slots": 4,
+    "v": 2
+   },
+   "step": "late moved to interactive"
+  },
+  {
+   "events.jsonl": [
+    "{\"actor\": {\"pid\": SELF, \"type\": \"process\"}, \"details\": {\"from\": \"normal\", \"state\": \"waiting\", \"to\": \"interactive\"}, \"host\": \"host\", \"kind\": \"request.reprioritized\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000002-90042\", \"label\": \"late\", \"lease_id\": \"lease-late\", \"pid\": 90042, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}",
+    "{\"actor\": {\"pid\": SELF, \"type\": \"process\"}, \"details\": {\"from\": \"interactive\", \"state\": \"waiting\", \"to\": \"batch\"}, \"host\": \"host\", \"kind\": \"request.reprioritized\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000002-90042\", \"label\": \"late\", \"lease_id\": \"lease-late\", \"pid\": 90042, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:30Z\", \"v\": 1}"
+   ],
+   "history.jsonl": [],
+   "queue": {
+    "0000000001-90041.json": "{\"pid\": 90041, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 4, \"label\": \"holder\", \"cmd\": \"make holder\", \"cwd\": \"/work\", \"since\": \"2025-11-12T11:45:00Z\", \"state\": \"held\", \"priority\": \"normal\", \"lease_id\": \"lease-holder\", \"granted\": \"2025-11-12T11:46:00Z\"}\n",
+    "0000000002-90042.json": "{\"pid\": 90042, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 1, \"label\": \"late\", \"cmd\": \"make late\", \"cwd\": \"/work\", \"since\": \"2025-11-12T11:58:20Z\", \"state\": \"waiting\", \"priority\": \"batch\", \"lease_id\": \"lease-late\", \"reprioritized\": \"normal\", \"reprioritized_at\": 1762948830.0, \"reserved\": 1762951560.0}\n",
+    "0000000003-90043.json": "{\"pid\": 90043, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 1, \"label\": \"batchy\", \"cmd\": \"make batchy\", \"cwd\": \"/work\", \"since\": \"2025-11-12T11:59:10Z\", \"state\": \"waiting\", \"priority\": \"batch\", \"lease_id\": \"lease-batchy\"}\n"
+   },
+   "queue.log": [
+    "2025-11-12T12:00:00Z reprioritized late (pid 90042) from normal to interactive",
+    "2025-11-12T12:00:30Z reprioritized late (pid 90042) from interactive to batch"
+   ],
+   "status": [
+    "held: 4 slot(s) holder pid=90041 since=2025-11-12T11:45:00Z cmd=make holder",
+    "waiting: 1 slot(s) late pid=90042 since=2025-11-12T11:58:20Z priority=batch reprioritized-from=normal head reserved=2025-11-12T12:46:00Z est-start=2025-11-12T12:46:00Z cmd=make late",
+    "waiting: 1 slot(s) batchy pid=90043 since=2025-11-12T11:59:10Z priority=batch est-start=2025-11-12T12:46:00Z cmd=make batchy",
+    "4 of 4 slots held"
+   ],
+   "status --json": {
+    "draining": 0,
+    "entries": [
+     {
+      "aged": false,
+      "cmd": "make holder",
+      "count": 4,
+      "cwd": "/work",
+      "effective_priority": "normal",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T11:46:00Z",
+      "head": false,
+      "id": "0000000001-90041",
+      "idle_since": null,
+      "label": "holder",
+      "lease": "QUEUE/queue/0000000001-90041.json",
+      "lease_id": "lease-holder",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "held",
+      "pid": 90041,
+      "position": null,
+      "priority": "normal",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T11:45:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       90041
+      ],
+      "waited": null,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     },
+     {
+      "aged": false,
+      "cmd": "make late",
+      "count": 1,
+      "cwd": "/work",
+      "effective_priority": "batch",
+      "est_start": "2025-11-12T12:46:00Z",
+      "expected": null,
+      "granted": null,
+      "head": true,
+      "id": "0000000002-90042",
+      "idle_since": null,
+      "label": "late",
+      "lease": "QUEUE/queue/0000000002-90042.json",
+      "lease_id": "lease-late",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "waiting",
+      "pid": 90042,
+      "position": 1,
+      "priority": "batch",
+      "reprioritized": "normal",
+      "reserved": "2025-11-12T12:46:00Z",
+      "since": "2025-11-12T11:58:20Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "waiting",
+      "ticket": null,
+      "tree": [
+       90042
+      ],
+      "waited": 130,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     },
+     {
+      "aged": false,
+      "cmd": "make batchy",
+      "count": 1,
+      "cwd": "/work",
+      "effective_priority": "batch",
+      "est_start": "2025-11-12T12:46:00Z",
+      "expected": null,
+      "granted": null,
+      "head": false,
+      "id": "0000000003-90043",
+      "idle_since": null,
+      "label": "batchy",
+      "lease": "QUEUE/queue/0000000003-90043.json",
+      "lease_id": "lease-batchy",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "waiting",
+      "pid": 90043,
+      "position": 2,
+      "priority": "batch",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T11:59:10Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "waiting",
+      "ticket": null,
+      "tree": [
+       90043
+      ],
+      "waited": 80,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     }
+    ],
+    "free": 0,
+    "held": 4,
+    "legacy": [],
+    "slots": 4,
+    "v": 2
+   },
+   "step": "late moved to batch, batchy unchanged"
+  }
+ ],
+ "request_and_release": [
+  {
+   "events.jsonl": [
+    "{\"actor\": {\"pid\": SELF, \"type\": \"process\"}, \"details\": {\"count\": 1, \"priority\": \"normal\", \"waited\": 0}, \"host\": \"host\", \"kind\": \"lease.granted\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000001-SELF\", \"label\": \"plain\", \"lease_id\": \"00000000000000000000000000000001\", \"pid\": SELF, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}"
+   ],
+   "history.jsonl": [],
+   "queue": {
+    "0000000001-SELF.json": "{\"pid\": SELF, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 1, \"label\": \"plain\", \"cmd\": \"make plain\", \"cwd\": \"QUEUE\", \"since\": \"2025-11-12T12:00:00Z\", \"state\": \"held\", \"priority\": \"normal\", \"lease_id\": \"00000000000000000000000000000001\", \"granted\": \"2025-11-12T12:00:00Z\"}\n"
+   },
+   "queue.log": [
+    "2025-11-12T12:00:00Z granted 1 to plain (pid SELF)"
+   ],
+   "status": [
+    "held: 1 slot(s) plain pid=SELF since=2025-11-12T12:00:00Z cmd=make plain",
+    "1 of 4 slots held"
+   ],
+   "status --json": {
+    "draining": 0,
+    "entries": [
+     {
+      "aged": false,
+      "cmd": "make plain",
+      "count": 1,
+      "cwd": "QUEUE",
+      "effective_priority": "normal",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T12:00:00Z",
+      "head": false,
+      "id": "0000000001-SELF",
+      "idle_since": null,
+      "label": "plain",
+      "lease": "QUEUE/queue/0000000001-SELF.json",
+      "lease_id": "00000000000000000000000000000001",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "held",
+      "pid": "SELF",
+      "position": null,
+      "priority": "normal",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T12:00:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       "SELF"
+      ],
+      "waited": null,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     }
+    ],
+    "free": 3,
+    "held": 1,
+    "legacy": [],
+    "slots": 4,
+    "v": 2
+   },
+   "step": "a plain request granted at once"
+  },
+  {
+   "events.jsonl": [
+    "{\"actor\": {\"pid\": SELF, \"type\": \"process\"}, \"details\": {\"count\": 1, \"priority\": \"normal\", \"waited\": 0}, \"host\": \"host\", \"kind\": \"lease.granted\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000001-SELF\", \"label\": \"plain\", \"lease_id\": \"00000000000000000000000000000001\", \"pid\": SELF, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}",
+    "{\"actor\": {\"pid\": SELF, \"type\": \"process\"}, \"details\": {\"count\": 1, \"cpu\": null, \"exit\": 0, \"ran\": 90, \"rss_peak_mb\": null}, \"host\": \"host\", \"kind\": \"lease.released\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000001-SELF\", \"label\": \"plain\", \"lease_id\": \"00000000000000000000000000000001\", \"pid\": SELF, \"type\": \"request\"}, \"time\": \"2025-11-12T12:01:30Z\", \"v\": 1}"
+   ],
+   "history.jsonl": [
+    "{\"v\": 2, \"label\": \"plain\", \"cmd\": \"make plain\", \"cwd\": \"QUEUE\", \"count\": 1, \"pid\": SELF, \"queued\": \"2025-11-12T12:00:00Z\", \"granted\": \"2025-11-12T12:00:00Z\", \"ended\": \"2025-11-12T12:01:30Z\", \"outcome\": \"released\", \"waited\": 0, \"ran\": 90, \"status\": 0, \"priority\": \"normal\", \"cores\": 12, \"capacity\": 4, \"lease_id\": \"00000000000000000000000000000001\"}"
+   ],
+   "queue": {},
+   "queue.log": [
+    "2025-11-12T12:00:00Z granted 1 to plain (pid SELF)",
+    "2025-11-12T12:01:30Z released 1 (0000000001-SELF.json)"
+   ],
+   "status": [
+    "0 of 4 slots held"
+   ],
+   "status --json": {
+    "draining": 0,
+    "entries": [],
+    "free": 4,
+    "held": 0,
+    "legacy": [],
+    "slots": 4,
+    "v": 2
+   },
+   "step": "released after it ran"
+  },
+  {
+   "events.jsonl": [
+    "{\"actor\": {\"pid\": SELF, \"type\": \"process\"}, \"details\": {\"count\": 1, \"priority\": \"normal\", \"waited\": 0}, \"host\": \"host\", \"kind\": \"lease.granted\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000001-SELF\", \"label\": \"plain\", \"lease_id\": \"00000000000000000000000000000001\", \"pid\": SELF, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}",
+    "{\"actor\": {\"pid\": SELF, \"type\": \"process\"}, \"details\": {\"count\": 1, \"cpu\": null, \"exit\": 0, \"ran\": 90, \"rss_peak_mb\": null}, \"host\": \"host\", \"kind\": \"lease.released\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000001-SELF\", \"label\": \"plain\", \"lease_id\": \"00000000000000000000000000000001\", \"pid\": SELF, \"type\": \"request\"}, \"time\": \"2025-11-12T12:01:30Z\", \"v\": 1}",
+    "{\"actor\": {\"lane\": \"l1\", \"pid\": SELF, \"type\": \"process\"}, \"details\": {\"count\": 4, \"meta\": {\"cache\": \"warm\", \"lane\": \"l1\"}, \"priority\": \"batch\", \"waited\": 0}, \"host\": \"host\", \"kind\": \"lease.granted\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000002-SELF\", \"label\": \"every\", \"lease_id\": \"00000000000000000000000000000002\", \"pid\": SELF, \"type\": \"request\"}, \"time\": \"2025-11-12T12:01:40Z\", \"v\": 1}"
+   ],
+   "history.jsonl": [
+    "{\"v\": 2, \"label\": \"plain\", \"cmd\": \"make plain\", \"cwd\": \"QUEUE\", \"count\": 1, \"pid\": SELF, \"queued\": \"2025-11-12T12:00:00Z\", \"granted\": \"2025-11-12T12:00:00Z\", \"ended\": \"2025-11-12T12:01:30Z\", \"outcome\": \"released\", \"waited\": 0, \"ran\": 90, \"status\": 0, \"priority\": \"normal\", \"cores\": 12, \"capacity\": 4, \"lease_id\": \"00000000000000000000000000000001\"}"
+   ],
+   "queue": {
+    "0000000002-SELF.json": "{\"pid\": SELF, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 4, \"label\": \"every\", \"cmd\": \"make every\", \"cwd\": \"QUEUE\", \"since\": \"2025-11-12T12:01:40Z\", \"state\": \"held\", \"priority\": \"batch\", \"lease_id\": \"00000000000000000000000000000002\", \"ticket\": \"12\", \"all\": true, \"meta\": {\"lane\": \"l1\", \"cache\": \"warm\"}, \"label_given\": \"g\", \"label_derived\": \"d\", \"project\": \"p\", \"yieldable\": true, \"until\": \"2025-11-12T12:02:40Z\", \"granted\": \"2025-11-12T12:01:40Z\"}\n"
+   },
+   "queue.log": [
+    "2025-11-12T12:00:00Z granted 1 to plain (pid SELF)",
+    "2025-11-12T12:01:30Z released 1 (0000000001-SELF.json)",
+    "2025-11-12T12:01:40Z granted 4 to every (pid SELF)"
+   ],
+   "status": [
+    "held: 4 slot(s) every pid=SELF since=2025-11-12T12:01:40Z meta=lane=l1,cache=warm yieldable cmd=make every",
+    "4 of 4 slots held"
+   ],
+   "status --json": {
+    "draining": 0,
+    "entries": [
+     {
+      "aged": false,
+      "cmd": "make every",
+      "count": 4,
+      "cwd": "QUEUE",
+      "effective_priority": "batch",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T12:01:40Z",
+      "head": false,
+      "id": "0000000002-SELF",
+      "idle_since": null,
+      "label": "every",
+      "lease": "QUEUE/queue/0000000002-SELF.json",
+      "lease_id": "00000000000000000000000000000002",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {
+       "cache": "warm",
+       "lane": "l1"
+      },
+      "pgid": null,
+      "phase": "held",
+      "pid": "SELF",
+      "position": null,
+      "priority": "batch",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T12:01:40Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": "12",
+      "tree": [
+       "SELF"
+      ],
+      "waited": null,
+      "yield_asked": null,
+      "yieldable": true,
+      "yields": 0
+     }
+    ],
+    "free": 0,
+    "held": 4,
+    "legacy": [],
+    "slots": 4,
+    "v": 2
+   },
+   "step": "a request with every field"
+  },
+  {
+   "events.jsonl": [
+    "{\"actor\": {\"pid\": SELF, \"type\": \"process\"}, \"details\": {\"count\": 1, \"priority\": \"normal\", \"waited\": 0}, \"host\": \"host\", \"kind\": \"lease.granted\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000001-SELF\", \"label\": \"plain\", \"lease_id\": \"00000000000000000000000000000001\", \"pid\": SELF, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}",
+    "{\"actor\": {\"pid\": SELF, \"type\": \"process\"}, \"details\": {\"count\": 1, \"cpu\": null, \"exit\": 0, \"ran\": 90, \"rss_peak_mb\": null}, \"host\": \"host\", \"kind\": \"lease.released\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000001-SELF\", \"label\": \"plain\", \"lease_id\": \"00000000000000000000000000000001\", \"pid\": SELF, \"type\": \"request\"}, \"time\": \"2025-11-12T12:01:30Z\", \"v\": 1}",
+    "{\"actor\": {\"lane\": \"l1\", \"pid\": SELF, \"type\": \"process\"}, \"details\": {\"count\": 4, \"meta\": {\"cache\": \"warm\", \"lane\": \"l1\"}, \"priority\": \"batch\", \"waited\": 0}, \"host\": \"host\", \"kind\": \"lease.granted\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000002-SELF\", \"label\": \"every\", \"lease_id\": \"00000000000000000000000000000002\", \"pid\": SELF, \"type\": \"request\"}, \"time\": \"2025-11-12T12:01:40Z\", \"v\": 1}",
+    "{\"actor\": {\"lane\": \"l1\", \"pid\": SELF, \"type\": \"process\"}, \"details\": {\"count\": 4, \"cpu\": null, \"exit\": 3, \"ran\": 30, \"rss_peak_mb\": null}, \"host\": \"host\", \"kind\": \"lease.released\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000002-SELF\", \"label\": \"every\", \"lease_id\": \"00000000000000000000000000000002\", \"pid\": SELF, \"type\": \"request\"}, \"time\": \"2025-11-12T12:02:10Z\", \"v\": 1}"
+   ],
+   "history.jsonl": [
+    "{\"v\": 2, \"label\": \"plain\", \"cmd\": \"make plain\", \"cwd\": \"QUEUE\", \"count\": 1, \"pid\": SELF, \"queued\": \"2025-11-12T12:00:00Z\", \"granted\": \"2025-11-12T12:00:00Z\", \"ended\": \"2025-11-12T12:01:30Z\", \"outcome\": \"released\", \"waited\": 0, \"ran\": 90, \"status\": 0, \"priority\": \"normal\", \"cores\": 12, \"capacity\": 4, \"lease_id\": \"00000000000000000000000000000001\"}",
+    "{\"v\": 2, \"label\": \"every\", \"cmd\": \"make every\", \"cwd\": \"QUEUE\", \"count\": 4, \"pid\": SELF, \"queued\": \"2025-11-12T12:01:40Z\", \"granted\": \"2025-11-12T12:01:40Z\", \"ended\": \"2025-11-12T12:02:10Z\", \"outcome\": \"released\", \"waited\": 0, \"ran\": 30, \"status\": 3, \"priority\": \"batch\", \"ticket\": \"12\", \"cores\": 12, \"capacity\": 4, \"until\": \"2025-11-12T12:02:40Z\", \"meta\": {\"lane\": \"l1\", \"cache\": \"warm\"}, \"lease_id\": \"00000000000000000000000000000002\", \"label_given\": \"g\", \"label_derived\": \"d\", \"project\": \"p\"}"
+   ],
+   "queue": {},
+   "queue.log": [
+    "2025-11-12T12:00:00Z granted 1 to plain (pid SELF)",
+    "2025-11-12T12:01:30Z released 1 (0000000001-SELF.json)",
+    "2025-11-12T12:01:40Z granted 4 to every (pid SELF)",
+    "2025-11-12T12:02:10Z released 4 (0000000002-SELF.json)"
+   ],
+   "status": [
+    "0 of 4 slots held"
+   ],
+   "status --json": {
+    "draining": 0,
+    "entries": [],
+    "free": 4,
+    "held": 0,
+    "legacy": [],
+    "slots": 4,
+    "v": 2
+   },
+   "step": "released with a status"
+  }
+ ],
+ "yield_and_resume": [
+  {
+   "events.jsonl": [
+    "{\"actor\": {\"name\": \"slotfather\", \"pid\": SELF, \"type\": \"tool\"}, \"details\": {\"count\": 4, \"for\": {\"id\": \"0000000002-90012\", \"label\": \"quick\", \"priority\": \"interactive\"}}, \"host\": \"host\", \"kind\": \"lease.yield_asked\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000001-90011\", \"label\": \"gate\", \"lease_id\": \"lease-gate\", \"pid\": 90011, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}"
+   ],
+   "history.jsonl": [],
+   "queue": {
+    "0000000001-90011.json": "{\"pid\": 90011, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 4, \"label\": \"gate\", \"cmd\": \"make gate\", \"cwd\": \"/work\", \"since\": \"2025-11-12T10:00:00Z\", \"state\": \"held\", \"priority\": \"batch\", \"lease_id\": \"lease-gate\", \"granted\": \"2025-11-12T10:01:00Z\", \"yieldable\": true}\n",
+    "0000000001-90011.yield": "{\"by\": \"0000000002-90012\", \"label\": \"quick\", \"priority\": \"interactive\", \"count\": 4, \"at\": \"2025-11-12T12:00:00Z\"}\n",
+    "0000000002-90012.json": "{\"pid\": 90012, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 4, \"label\": \"quick\", \"cmd\": \"make quick\", \"cwd\": \"/work\", \"since\": \"2025-11-12T11:50:00Z\", \"state\": \"waiting\", \"priority\": \"interactive\", \"lease_id\": \"lease-quick\", \"reserved\": 1762952370.0}\n"
+   },
+   "queue.log": [
+    "2025-11-12T12:00:00Z asked gate (pid 90011) to yield 4 for quick"
+   ],
+   "status": [
+    "held: 4 slot(s) gate pid=90011 since=2025-11-12T10:00:00Z yieldable asked-to-yield-for=quick cmd=make gate",
+    "waiting: 4 slot(s) quick pid=90012 since=2025-11-12T11:50:00Z priority=interactive head reserved=2025-11-12T12:59:30Z est-start=2025-11-12T12:59:30Z cmd=make quick",
+    "4 of 4 slots held"
+   ],
+   "status --json": {
+    "draining": 0,
+    "entries": [
+     {
+      "aged": false,
+      "cmd": "make gate",
+      "count": 4,
+      "cwd": "/work",
+      "effective_priority": "batch",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T10:01:00Z",
+      "head": false,
+      "id": "0000000001-90011",
+      "idle_since": null,
+      "label": "gate",
+      "lease": "QUEUE/queue/0000000001-90011.json",
+      "lease_id": "lease-gate",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "asked",
+      "pid": 90011,
+      "position": null,
+      "priority": "batch",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T10:00:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       90011
+      ],
+      "waited": null,
+      "yield_asked": {
+       "at": "2025-11-12T12:00:00Z",
+       "by": "0000000002-90012",
+       "count": 4,
+       "label": "quick",
+       "priority": "interactive"
+      },
+      "yieldable": true,
+      "yields": 0
+     },
+     {
+      "aged": false,
+      "cmd": "make quick",
+      "count": 4,
+      "cwd": "/work",
+      "effective_priority": "interactive",
+      "est_start": "2025-11-12T12:59:30Z",
+      "expected": null,
+      "granted": null,
+      "head": true,
+      "id": "0000000002-90012",
+      "idle_since": null,
+      "label": "quick",
+      "lease": "QUEUE/queue/0000000002-90012.json",
+      "lease_id": "lease-quick",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "waiting",
+      "pid": 90012,
+      "position": 1,
+      "priority": "interactive",
+      "reprioritized": null,
+      "reserved": "2025-11-12T12:59:30Z",
+      "since": "2025-11-12T11:50:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "waiting",
+      "ticket": null,
+      "tree": [
+       90012
+      ],
+      "waited": 600,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     }
+    ],
+    "free": 0,
+    "held": 4,
+    "legacy": [],
+    "slots": 4,
+    "v": 2
+   },
+   "step": "the interactive waiter asks the gate to yield"
+  },
+  {
+   "events.jsonl": [
+    "{\"actor\": {\"name\": \"slotfather\", \"pid\": SELF, \"type\": \"tool\"}, \"details\": {\"count\": 4, \"for\": {\"id\": \"0000000002-90012\", \"label\": \"quick\", \"priority\": \"interactive\"}}, \"host\": \"host\", \"kind\": \"lease.yield_asked\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000001-90011\", \"label\": \"gate\", \"lease_id\": \"lease-gate\", \"pid\": 90011, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}",
+    "{\"actor\": {\"pid\": 90011, \"type\": \"process\"}, \"details\": {\"count\": 4, \"to\": {\"id\": \"0000000002-90012\", \"label\": \"quick\"}, \"yields\": 1}, \"host\": \"host\", \"kind\": \"lease.yielded\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000001-90011\", \"label\": \"gate\", \"lease_id\": \"lease-gate\", \"pid\": 90011, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:05Z\", \"v\": 1}",
+    "{\"actor\": {\"pid\": 90012, \"type\": \"process\"}, \"details\": {\"count\": 4, \"priority\": \"interactive\", \"waited\": 605}, \"host\": \"host\", \"kind\": \"lease.granted\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000002-90012\", \"label\": \"quick\", \"lease_id\": \"lease-quick\", \"pid\": 90012, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:05Z\", \"v\": 1}"
+   ],
+   "history.jsonl": [],
+   "queue": {
+    "0000000001-90011.json": "{\"pid\": 90011, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 4, \"label\": \"gate\", \"cmd\": \"make gate\", \"cwd\": \"/work\", \"since\": \"2025-11-12T10:00:00Z\", \"state\": \"waiting\", \"priority\": \"batch\", \"lease_id\": \"lease-gate\", \"granted\": \"2025-11-12T10:01:00Z\", \"yieldable\": true, \"yields\": 1, \"yielded_at\": 1762948805.0, \"first_granted\": \"2025-11-12T10:01:00Z\", \"rank\": 1762946400.001, \"reserved\": 1762952405.0}\n",
+    "0000000002-90012.json": "{\"pid\": 90012, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 4, \"label\": \"quick\", \"cmd\": \"make quick\", \"cwd\": \"/work\", \"since\": \"2025-11-12T11:50:00Z\", \"state\": \"held\", \"priority\": \"interactive\", \"lease_id\": \"lease-quick\", \"granted\": \"2025-11-12T12:00:05Z\"}\n"
+   },
+   "queue.log": [
+    "2025-11-12T12:00:00Z asked gate (pid 90011) to yield 4 for quick",
+    "2025-11-12T12:00:05Z yielded 4 (0000000001-90011.json) to quick",
+    "2025-11-12T12:00:05Z granted 4 to quick (pid 90012)"
+   ],
+   "status": [
+    "waiting: 4 slot(s) gate pid=90011 since=2025-11-12T10:00:00Z yieldable yielded=1 priority=batch head reserved=2025-11-12T13:00:05Z est-start=2025-11-12T13:00:05Z cmd=make gate",
+    "held: 4 slot(s) quick pid=90012 since=2025-11-12T11:50:00Z cmd=make quick",
+    "4 of 4 slots held"
+   ],
+   "status --json": {
+    "draining": 0,
+    "entries": [
+     {
+      "aged": false,
+      "cmd": "make gate",
+      "count": 4,
+      "cwd": "/work",
+      "effective_priority": "batch",
+      "est_start": "2025-11-12T13:00:05Z",
+      "expected": null,
+      "granted": "2025-11-12T10:01:00Z",
+      "head": true,
+      "id": "0000000001-90011",
+      "idle_since": null,
+      "label": "gate",
+      "lease": "QUEUE/queue/0000000001-90011.json",
+      "lease_id": "lease-gate",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "yielded",
+      "pid": 90011,
+      "position": 1,
+      "priority": "batch",
+      "reprioritized": null,
+      "reserved": "2025-11-12T13:00:05Z",
+      "since": "2025-11-12T10:00:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "waiting",
+      "ticket": null,
+      "tree": [
+       90011
+      ],
+      "waited": 0,
+      "yield_asked": null,
+      "yieldable": true,
+      "yields": 1
+     },
+     {
+      "aged": false,
+      "cmd": "make quick",
+      "count": 4,
+      "cwd": "/work",
+      "effective_priority": "interactive",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T12:00:05Z",
+      "head": false,
+      "id": "0000000002-90012",
+      "idle_since": null,
+      "label": "quick",
+      "lease": "QUEUE/queue/0000000002-90012.json",
+      "lease_id": "lease-quick",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "held",
+      "pid": 90012,
+      "position": null,
+      "priority": "interactive",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T11:50:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       90012
+      ],
+      "waited": null,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     }
+    ],
+    "free": 0,
+    "held": 4,
+    "legacy": [],
+    "slots": 4,
+    "v": 2
+   },
+   "step": "the gate yielded"
+  },
+  {
+   "events.jsonl": [
+    "{\"actor\": {\"name\": \"slotfather\", \"pid\": SELF, \"type\": \"tool\"}, \"details\": {\"count\": 4, \"for\": {\"id\": \"0000000002-90012\", \"label\": \"quick\", \"priority\": \"interactive\"}}, \"host\": \"host\", \"kind\": \"lease.yield_asked\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000001-90011\", \"label\": \"gate\", \"lease_id\": \"lease-gate\", \"pid\": 90011, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}",
+    "{\"actor\": {\"pid\": 90011, \"type\": \"process\"}, \"details\": {\"count\": 4, \"to\": {\"id\": \"0000000002-90012\", \"label\": \"quick\"}, \"yields\": 1}, \"host\": \"host\", \"kind\": \"lease.yielded\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000001-90011\", \"label\": \"gate\", \"lease_id\": \"lease-gate\", \"pid\": 90011, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:05Z\", \"v\": 1}",
+    "{\"actor\": {\"pid\": 90012, \"type\": \"process\"}, \"details\": {\"count\": 4, \"priority\": \"interactive\", \"waited\": 605}, \"host\": \"host\", \"kind\": \"lease.granted\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000002-90012\", \"label\": \"quick\", \"lease_id\": \"lease-quick\", \"pid\": 90012, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:05Z\", \"v\": 1}",
+    "{\"actor\": {\"pid\": 90012, \"type\": \"process\"}, \"details\": {\"count\": 4, \"cpu\": null, \"exit\": null, \"ran\": 60, \"rss_peak_mb\": null}, \"host\": \"host\", \"kind\": \"lease.released\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000002-90012\", \"label\": \"quick\", \"lease_id\": \"lease-quick\", \"pid\": 90012, \"type\": \"request\"}, \"time\": \"2025-11-12T12:01:05Z\", \"v\": 1}",
+    "{\"actor\": {\"pid\": 90011, \"type\": \"process\"}, \"details\": {\"count\": 4, \"priority\": \"batch\", \"resumed\": true, \"waited\": 60}, \"host\": \"host\", \"kind\": \"lease.granted\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000001-90011\", \"label\": \"gate\", \"lease_id\": \"lease-gate\", \"pid\": 90011, \"type\": \"request\"}, \"time\": \"2025-11-12T12:01:05Z\", \"v\": 1}"
+   ],
+   "history.jsonl": [
+    "{\"v\": 2, \"label\": \"quick\", \"cmd\": \"make quick\", \"cwd\": \"/work\", \"count\": 4, \"pid\": 90012, \"queued\": \"2025-11-12T11:50:00Z\", \"granted\": \"2025-11-12T12:00:05Z\", \"ended\": \"2025-11-12T12:01:05Z\", \"outcome\": \"released\", \"waited\": 605, \"ran\": 60, \"status\": null, \"priority\": \"interactive\", \"cores\": 12, \"capacity\": 4, \"lease_id\": \"lease-quick\"}"
+   ],
+   "queue": {
+    "0000000001-90011.json": "{\"pid\": 90011, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 4, \"label\": \"gate\", \"cmd\": \"make gate\", \"cwd\": \"/work\", \"since\": \"2025-11-12T10:00:00Z\", \"state\": \"held\", \"priority\": \"batch\", \"lease_id\": \"lease-gate\", \"granted\": \"2025-11-12T10:01:00Z\", \"yieldable\": true, \"yields\": 1, \"yielded\": 60.0, \"resumed\": \"2025-11-12T12:01:05Z\"}\n"
+   },
+   "queue.log": [
+    "2025-11-12T12:00:00Z asked gate (pid 90011) to yield 4 for quick",
+    "2025-11-12T12:00:05Z yielded 4 (0000000001-90011.json) to quick",
+    "2025-11-12T12:00:05Z granted 4 to quick (pid 90012)",
+    "2025-11-12T12:01:05Z released 4 (0000000002-90012.json)",
+    "2025-11-12T12:01:05Z granted 4 to gate (pid 90011)"
+   ],
+   "status": [
+    "held: 4 slot(s) gate pid=90011 since=2025-11-12T10:00:00Z yieldable yielded=1 cmd=make gate",
+    "4 of 4 slots held"
+   ],
+   "status --json": {
+    "draining": 0,
+    "entries": [
+     {
+      "aged": false,
+      "cmd": "make gate",
+      "count": 4,
+      "cwd": "/work",
+      "effective_priority": "batch",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T10:01:00Z",
+      "head": false,
+      "id": "0000000001-90011",
+      "idle_since": null,
+      "label": "gate",
+      "lease": "QUEUE/queue/0000000001-90011.json",
+      "lease_id": "lease-gate",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "held",
+      "pid": 90011,
+      "position": null,
+      "priority": "batch",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T10:00:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       90011
+      ],
+      "waited": null,
+      "yield_asked": null,
+      "yieldable": true,
+      "yields": 1
+     }
+    ],
+    "free": 0,
+    "held": 4,
+    "legacy": [],
+    "slots": 4,
+    "v": 2
+   },
+   "step": "quick released: the gate resumes"
+  },
+  {
+   "events.jsonl": [
+    "{\"actor\": {\"name\": \"slotfather\", \"pid\": SELF, \"type\": \"tool\"}, \"details\": {\"count\": 4, \"for\": {\"id\": \"0000000002-90012\", \"label\": \"quick\", \"priority\": \"interactive\"}}, \"host\": \"host\", \"kind\": \"lease.yield_asked\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000001-90011\", \"label\": \"gate\", \"lease_id\": \"lease-gate\", \"pid\": 90011, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}",
+    "{\"actor\": {\"pid\": 90011, \"type\": \"process\"}, \"details\": {\"count\": 4, \"to\": {\"id\": \"0000000002-90012\", \"label\": \"quick\"}, \"yields\": 1}, \"host\": \"host\", \"kind\": \"lease.yielded\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000001-90011\", \"label\": \"gate\", \"lease_id\": \"lease-gate\", \"pid\": 90011, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:05Z\", \"v\": 1}",
+    "{\"actor\": {\"pid\": 90012, \"type\": \"process\"}, \"details\": {\"count\": 4, \"priority\": \"interactive\", \"waited\": 605}, \"host\": \"host\", \"kind\": \"lease.granted\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000002-90012\", \"label\": \"quick\", \"lease_id\": \"lease-quick\", \"pid\": 90012, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:05Z\", \"v\": 1}",
+    "{\"actor\": {\"pid\": 90012, \"type\": \"process\"}, \"details\": {\"count\": 4, \"cpu\": null, \"exit\": null, \"ran\": 60, \"rss_peak_mb\": null}, \"host\": \"host\", \"kind\": \"lease.released\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000002-90012\", \"label\": \"quick\", \"lease_id\": \"lease-quick\", \"pid\": 90012, \"type\": \"request\"}, \"time\": \"2025-11-12T12:01:05Z\", \"v\": 1}",
+    "{\"actor\": {\"pid\": 90011, \"type\": \"process\"}, \"details\": {\"count\": 4, \"priority\": \"batch\", \"resumed\": true, \"waited\": 60}, \"host\": \"host\", \"kind\": \"lease.granted\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000001-90011\", \"label\": \"gate\", \"lease_id\": \"lease-gate\", \"pid\": 90011, \"type\": \"request\"}, \"time\": \"2025-11-12T12:01:05Z\", \"v\": 1}",
+    "{\"actor\": {\"pid\": 90011, \"type\": \"process\"}, \"details\": {\"count\": 4, \"cpu\": null, \"exit\": 0, \"ran\": 7265, \"rss_peak_mb\": null}, \"host\": \"host\", \"kind\": \"lease.released\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000001-90011\", \"label\": \"gate\", \"lease_id\": \"lease-gate\", \"pid\": 90011, \"type\": \"request\"}, \"time\": \"2025-11-12T12:02:05Z\", \"v\": 1}"
+   ],
+   "history.jsonl": [
+    "{\"v\": 2, \"label\": \"quick\", \"cmd\": \"make quick\", \"cwd\": \"/work\", \"count\": 4, \"pid\": 90012, \"queued\": \"2025-11-12T11:50:00Z\", \"granted\": \"2025-11-12T12:00:05Z\", \"ended\": \"2025-11-12T12:01:05Z\", \"outcome\": \"released\", \"waited\": 605, \"ran\": 60, \"status\": null, \"priority\": \"interactive\", \"cores\": 12, \"capacity\": 4, \"lease_id\": \"lease-quick\"}",
+    "{\"v\": 2, \"label\": \"gate\", \"cmd\": \"make gate\", \"cwd\": \"/work\", \"count\": 4, \"pid\": 90011, \"queued\": \"2025-11-12T10:00:00Z\", \"granted\": \"2025-11-12T10:01:00Z\", \"ended\": \"2025-11-12T12:02:05Z\", \"outcome\": \"released\", \"waited\": 60, \"ran\": 7265, \"status\": 0, \"priority\": \"batch\", \"cores\": 12, \"capacity\": 4, \"yields\": 1, \"yielded\": 60.0, \"lease_id\": \"lease-gate\"}"
+   ],
+   "queue": {},
+   "queue.log": [
+    "2025-11-12T12:00:00Z asked gate (pid 90011) to yield 4 for quick",
+    "2025-11-12T12:00:05Z yielded 4 (0000000001-90011.json) to quick",
+    "2025-11-12T12:00:05Z granted 4 to quick (pid 90012)",
+    "2025-11-12T12:01:05Z released 4 (0000000002-90012.json)",
+    "2025-11-12T12:01:05Z granted 4 to gate (pid 90011)",
+    "2025-11-12T12:02:05Z released 4 (0000000001-90011.json)"
+   ],
+   "status": [
+    "0 of 4 slots held"
+   ],
+   "status --json": {
+    "draining": 0,
+    "entries": [],
+    "free": 4,
+    "held": 0,
+    "legacy": [],
+    "slots": 4,
+    "v": 2
+   },
+   "step": "the gate released after its yield"
+  }
+ ],
+ "yielded_waiter_leaves": [
+  {
+   "events.jsonl": [],
+   "history.jsonl": [],
+   "queue": {
+    "0000000001-90031.json": "{\"pid\": 90031, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 4, \"label\": \"gate\", \"cmd\": \"make gate\", \"cwd\": \"/work\", \"since\": \"2025-11-12T10:00:00Z\", \"state\": \"waiting\", \"priority\": \"batch\", \"lease_id\": \"lease-gate\", \"yieldable\": true, \"yields\": 1, \"yielded_at\": 1762948500.0, \"first_granted\": \"2025-11-12T10:03:20Z\", \"rank\": 1762947799.5, \"granted\": \"2025-11-12T10:03:20Z\"}\n",
+    "0000000002-90032.json": "{\"pid\": 90032, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 4, \"label\": \"holder\", \"cmd\": \"make holder\", \"cwd\": \"/work\", \"since\": \"2025-11-12T11:45:00Z\", \"state\": \"held\", \"priority\": \"normal\", \"lease_id\": \"lease-holder\", \"granted\": \"2025-11-12T11:46:00Z\"}\n",
+    "0000000003-90033.json": "{\"pid\": 90033, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 1, \"label\": \"lone\", \"cmd\": \"make lone\", \"cwd\": \"/work\", \"since\": \"2025-11-12T11:58:20Z\", \"state\": \"waiting\", \"priority\": \"normal\", \"lease_id\": \"lease-lone\"}\n"
+   },
+   "queue.log": [],
+   "status": [
+    "waiting: 4 slot(s) gate pid=90031 since=2025-11-12T10:00:00Z yieldable yielded=1 priority=batch est-start=2025-11-12T12:46:00Z cmd=make gate",
+    "held: 4 slot(s) holder pid=90032 since=2025-11-12T11:45:00Z cmd=make holder",
+    "waiting: 1 slot(s) lone pid=90033 since=2025-11-12T11:58:20Z head reserved=2025-11-12T12:46:00Z est-start=2025-11-12T13:46:00Z cmd=make lone",
+    "4 of 4 slots held"
+   ],
+   "status --json": {
+    "draining": 0,
+    "entries": [
+     {
+      "aged": false,
+      "cmd": "make gate",
+      "count": 4,
+      "cwd": "/work",
+      "effective_priority": "batch",
+      "est_start": "2025-11-12T12:46:00Z",
+      "expected": null,
+      "granted": "2025-11-12T10:03:20Z",
+      "head": false,
+      "id": "0000000001-90031",
+      "idle_since": null,
+      "label": "gate",
+      "lease": "QUEUE/queue/0000000001-90031.json",
+      "lease_id": "lease-gate",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "yielded",
+      "pid": 90031,
+      "position": 1,
+      "priority": "batch",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T10:00:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "waiting",
+      "ticket": null,
+      "tree": [
+       90031
+      ],
+      "waited": 300,
+      "yield_asked": null,
+      "yieldable": true,
+      "yields": 1
+     },
+     {
+      "aged": false,
+      "cmd": "make holder",
+      "count": 4,
+      "cwd": "/work",
+      "effective_priority": "normal",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T11:46:00Z",
+      "head": false,
+      "id": "0000000002-90032",
+      "idle_since": null,
+      "label": "holder",
+      "lease": "QUEUE/queue/0000000002-90032.json",
+      "lease_id": "lease-holder",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "held",
+      "pid": 90032,
+      "position": null,
+      "priority": "normal",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T11:45:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       90032
+      ],
+      "waited": null,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     },
+     {
+      "aged": false,
+      "cmd": "make lone",
+      "count": 1,
+      "cwd": "/work",
+      "effective_priority": "normal",
+      "est_start": "2025-11-12T13:46:00Z",
+      "expected": null,
+      "granted": null,
+      "head": true,
+      "id": "0000000003-90033",
+      "idle_since": null,
+      "label": "lone",
+      "lease": "QUEUE/queue/0000000003-90033.json",
+      "lease_id": "lease-lone",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "waiting",
+      "pid": 90033,
+      "position": 2,
+      "priority": "normal",
+      "reprioritized": null,
+      "reserved": "2025-11-12T12:46:00Z",
+      "since": "2025-11-12T11:58:20Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "waiting",
+      "ticket": null,
+      "tree": [
+       90033
+      ],
+      "waited": 100,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     }
+    ],
+    "free": 0,
+    "held": 4,
+    "legacy": [],
+    "slots": 4,
+    "v": 2
+   },
+   "step": "a yielded lease and a waiter behind a full machine"
+  },
+  {
+   "events.jsonl": [
+    "{\"actor\": {\"pid\": 90031, \"type\": \"process\"}, \"details\": {\"count\": 4, \"cpu\": null, \"exit\": null, \"ran\": 7000, \"rss_peak_mb\": null}, \"host\": \"host\", \"kind\": \"lease.released\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000001-90031\", \"label\": \"gate\", \"lease_id\": \"lease-gate\", \"pid\": 90031, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}"
+   ],
+   "history.jsonl": [
+    "{\"v\": 2, \"label\": \"gate\", \"cmd\": \"make gate\", \"cwd\": \"/work\", \"count\": 4, \"pid\": 90031, \"queued\": \"2025-11-12T10:00:00Z\", \"granted\": \"2025-11-12T10:03:20Z\", \"ended\": \"2025-11-12T12:00:00Z\", \"outcome\": \"released\", \"waited\": 200, \"ran\": 7000, \"status\": null, \"priority\": \"batch\", \"cores\": 12, \"capacity\": 4, \"yields\": 1, \"yielded\": 300.0, \"lease_id\": \"lease-gate\"}"
+   ],
+   "queue": {
+    "0000000002-90032.json": "{\"pid\": 90032, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 4, \"label\": \"holder\", \"cmd\": \"make holder\", \"cwd\": \"/work\", \"since\": \"2025-11-12T11:45:00Z\", \"state\": \"held\", \"priority\": \"normal\", \"lease_id\": \"lease-holder\", \"granted\": \"2025-11-12T11:46:00Z\"}\n",
+    "0000000003-90033.json": "{\"pid\": 90033, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 1, \"label\": \"lone\", \"cmd\": \"make lone\", \"cwd\": \"/work\", \"since\": \"2025-11-12T11:58:20Z\", \"state\": \"waiting\", \"priority\": \"normal\", \"lease_id\": \"lease-lone\", \"reserved\": 1762951560.0}\n"
+   },
+   "queue.log": [
+    "2025-11-12T12:00:00Z released 4 (0000000001-90031.json)"
+   ],
+   "status": [
+    "held: 4 slot(s) holder pid=90032 since=2025-11-12T11:45:00Z cmd=make holder",
+    "waiting: 1 slot(s) lone pid=90033 since=2025-11-12T11:58:20Z head reserved=2025-11-12T12:46:00Z est-start=2025-11-12T12:46:00Z cmd=make lone",
+    "4 of 4 slots held"
+   ],
+   "status --json": {
+    "draining": 0,
+    "entries": [
+     {
+      "aged": false,
+      "cmd": "make holder",
+      "count": 4,
+      "cwd": "/work",
+      "effective_priority": "normal",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T11:46:00Z",
+      "head": false,
+      "id": "0000000002-90032",
+      "idle_since": null,
+      "label": "holder",
+      "lease": "QUEUE/queue/0000000002-90032.json",
+      "lease_id": "lease-holder",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "held",
+      "pid": 90032,
+      "position": null,
+      "priority": "normal",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T11:45:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       90032
+      ],
+      "waited": null,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     },
+     {
+      "aged": false,
+      "cmd": "make lone",
+      "count": 1,
+      "cwd": "/work",
+      "effective_priority": "normal",
+      "est_start": "2025-11-12T12:46:00Z",
+      "expected": null,
+      "granted": null,
+      "head": true,
+      "id": "0000000003-90033",
+      "idle_since": null,
+      "label": "lone",
+      "lease": "QUEUE/queue/0000000003-90033.json",
+      "lease_id": "lease-lone",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "waiting",
+      "pid": 90033,
+      "position": 1,
+      "priority": "normal",
+      "reprioritized": null,
+      "reserved": "2025-11-12T12:46:00Z",
+      "since": "2025-11-12T11:58:20Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "waiting",
+      "ticket": null,
+      "tree": [
+       90033
+      ],
+      "waited": 100,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     }
+    ],
+    "free": 0,
+    "held": 4,
+    "legacy": [],
+    "slots": 4,
+    "v": 2
+   },
+   "step": "the yielded lease gave up: released, it ran"
+  },
+  {
+   "events.jsonl": [
+    "{\"actor\": {\"pid\": 90031, \"type\": \"process\"}, \"details\": {\"count\": 4, \"cpu\": null, \"exit\": null, \"ran\": 7000, \"rss_peak_mb\": null}, \"host\": \"host\", \"kind\": \"lease.released\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000001-90031\", \"label\": \"gate\", \"lease_id\": \"lease-gate\", \"pid\": 90031, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}",
+    "{\"actor\": {\"pid\": 90033, \"type\": \"process\"}, \"details\": {\"count\": 1, \"gave_up_after\": 100}, \"host\": \"host\", \"kind\": \"request.left\", \"source\": \"slotfather\", \"subject\": {\"id\": \"0000000003-90033\", \"label\": \"lone\", \"lease_id\": \"lease-lone\", \"pid\": 90033, \"type\": \"request\"}, \"time\": \"2025-11-12T12:00:00Z\", \"v\": 1}"
+   ],
+   "history.jsonl": [
+    "{\"v\": 2, \"label\": \"gate\", \"cmd\": \"make gate\", \"cwd\": \"/work\", \"count\": 4, \"pid\": 90031, \"queued\": \"2025-11-12T10:00:00Z\", \"granted\": \"2025-11-12T10:03:20Z\", \"ended\": \"2025-11-12T12:00:00Z\", \"outcome\": \"released\", \"waited\": 200, \"ran\": 7000, \"status\": null, \"priority\": \"batch\", \"cores\": 12, \"capacity\": 4, \"yields\": 1, \"yielded\": 300.0, \"lease_id\": \"lease-gate\"}",
+    "{\"v\": 2, \"label\": \"lone\", \"cmd\": \"make lone\", \"cwd\": \"/work\", \"count\": 1, \"pid\": 90033, \"queued\": \"2025-11-12T11:58:20Z\", \"granted\": null, \"ended\": \"2025-11-12T12:00:00Z\", \"outcome\": \"left\", \"waited\": 100, \"ran\": null, \"status\": null, \"priority\": \"normal\", \"cores\": 12, \"capacity\": 4, \"lease_id\": \"lease-lone\"}"
+   ],
+   "queue": {
+    "0000000002-90032.json": "{\"pid\": 90032, \"start\": \"Wed Nov 12 11:00:00 2025\", \"count\": 4, \"label\": \"holder\", \"cmd\": \"make holder\", \"cwd\": \"/work\", \"since\": \"2025-11-12T11:45:00Z\", \"state\": \"held\", \"priority\": \"normal\", \"lease_id\": \"lease-holder\", \"granted\": \"2025-11-12T11:46:00Z\"}\n"
+   },
+   "queue.log": [
+    "2025-11-12T12:00:00Z released 4 (0000000001-90031.json)",
+    "2025-11-12T12:00:00Z released 1 (0000000003-90033.json)"
+   ],
+   "status": [
+    "held: 4 slot(s) holder pid=90032 since=2025-11-12T11:45:00Z cmd=make holder",
+    "4 of 4 slots held"
+   ],
+   "status --json": {
+    "draining": 0,
+    "entries": [
+     {
+      "aged": false,
+      "cmd": "make holder",
+      "count": 4,
+      "cwd": "/work",
+      "effective_priority": "normal",
+      "est_start": null,
+      "expected": null,
+      "granted": "2025-11-12T11:46:00Z",
+      "head": false,
+      "id": "0000000002-90032",
+      "idle_since": null,
+      "label": "holder",
+      "lease": "QUEUE/queue/0000000002-90032.json",
+      "lease_id": "lease-holder",
+      "long_wait": false,
+      "memory_wait": null,
+      "meta": {},
+      "pgid": null,
+      "phase": "held",
+      "pid": 90032,
+      "position": null,
+      "priority": "normal",
+      "reprioritized": null,
+      "reserved": null,
+      "since": "2025-11-12T11:45:00Z",
+      "start": "Wed Nov 12 11:00:00 2025",
+      "state": "held",
+      "ticket": null,
+      "tree": [
+       90032
+      ],
+      "waited": null,
+      "yield_asked": null,
+      "yieldable": false,
+      "yields": 0
+     }
+    ],
+    "free": 0,
+    "held": 4,
+    "legacy": [],
+    "slots": 4,
+    "v": 2
+   },
+   "step": "the waiter gave up: left"
+  }
+ ]
+}

@@ -15,6 +15,7 @@ import sys
 from typing import Any, NamedTuple, cast
 
 from . import config, platform, state
+from . import entry as _entry
 
 
 class ProcsError(config.SlotError):
@@ -106,11 +107,9 @@ def lease_entries(directory: Path | None = None) -> list[tuple[Path, dict[str, A
                 continue  # A holder released while this observation was being made.
             except (OSError, ValueError) as error:
                 raise ProcsError(f"cannot read lease {path}: {error}") from None
-            if entry is None or type(entry.get("pid")) is not int or entry["pid"] <= 0 or \
-                    (not isinstance(entry.get("start"), str) or not entry["start"].strip()) or entry.get("state") not in ("held", "waiting") or \
-                    type(entry.get("count")) is not int or entry["count"] <= 0:
+            if entry is None or not _entry.valid_identity(entry):
                 raise ProcsError(f"invalid lease identity at {path}")
-            if old and entry["state"] != "held":
+            if old and not _entry.is_held(entry):
                 continue
             found.append((path, entry, old))
     return found
@@ -124,11 +123,11 @@ def read_leases(processes: dict[int, Process], entries: list[tuple[Path, dict[st
         start = str(entry["start"])
         if holder is None or not platform.same_holder(start, entry.get("started"), holder.pid, holder.start):
             continue
-        meta = config.meta_of(entry)
-        priority = config.priority_of(entry)
+        meta = _entry.meta_of(entry)
+        priority = _entry.priority_of(entry)
         leases.append({"id": path.stem, "lease": str(path), "state": entry["state"],
                        "count": entry["count"], "label": entry.get("label"), "pid": holder.pid,
-                       "start": holder.start, "priority": priority, "ticket": config.ticket_of(entry),
+                       "start": holder.start, "priority": priority, "ticket": _entry.ticket_of(entry),
                        "meta": meta, "legacy": old})
     return leases
 

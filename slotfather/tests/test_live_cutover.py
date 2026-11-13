@@ -36,6 +36,10 @@ import json, pathlib, sys
 root = pathlib.Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(root))
 from slotfather import config, leases, platform, query, schedule, state
+try:
+    from slotfather import entry as fields  # the entry accessors (fathers#33)
+except ImportError:
+    fields = config  # an older client's
 assert pathlib.Path(config.__file__).resolve().parent.parent == root, config.__file__
 directory, action = pathlib.Path(sys.argv[2]), sys.argv[3]
 if action == "look":
@@ -49,7 +53,7 @@ if action == "look":
     found = schedule.plan(schedule.fit(waiters, slots), held, slots, float(sys.argv[4]),
                           estimate=schedule.estimator(directory), other=0, settings=settings)
     status = query.status_json(directory)
-    out = {"read": {e["label"]: [config.priority_of(e), config.ticket_of(e)] for _, e in live},
+    out = {"read": {e["label"]: [fields.priority_of(e), fields.ticket_of(e)] for _, e in live},
            "ranks": ranks, "grants": [e["label"] for e in found.grants], "reason": found.reason,
            "status": sorted([x["label"], x["state"], x["priority"], x["ticket"], x["count"]]
                             for x in status["entries"]),
