@@ -178,21 +178,27 @@ def unknown_text(path: Path, entry: dict[str, Any]) -> str:
             f"this client does not know it and leaves it alone; a newer client may hold it")
 
 
+def entry_item(path: Path, entry: dict[str, Any], table: dict[int, tuple[int, str]]) -> dict[str, Any]:
+    """`status --json`'s fields of an entry as it was written, with its holder's process group and live tree."""
+    pid = entry.get("pid") if type(entry.get("pid")) is int else None
+    return {"id": path.stem, "lease_id": _entry.lease_id(path.stem, entry), "lease": str(path),
+            "state": entry.get("state"), "count": entry.get("count"), "label": entry.get("label"),
+            "pid": entry.get("pid"), "pgid": _platform.process_group(pid), "start": entry.get("start"),
+            "since": entry.get("since"), "granted": entry.get("granted"), "cmd": entry.get("cmd"),
+            "cwd": entry.get("cwd"), "meta": _entry.meta_of(entry), "tree": _platform.descendants(table, pid),
+            "priority": _entry.priority_of(entry), "ticket": _entry.ticket_of(entry),
+            "yieldable": bool(entry.get("yieldable")), "yields": int(entry.get("yields") or 0)}
+
+
 def unknown_item(path: Path, entry: dict[str, Any], table: dict[int, tuple[int, str]]) -> dict[str, Any]:
     """`status --json`'s item for an entry this client does not know: the fields it has, as read, with `phase`
     "unknown", the reason, and none of the order's (no position, forecast or class served)."""
-    pid = entry.get("pid") if type(entry.get("pid")) is int else None
-    return {"id": path.stem, "lease_id": _entry.lease_id(path.stem, entry), "lease": str(path),
-            "state": entry.get("state"), "count": entry.get("count"), "label": entry.get("label"), "pid": entry.get("pid"),
-            "pgid": _platform.process_group(pid), "start": entry.get("start"), "since": entry.get("since"),
-            "granted": entry.get("granted"), "cmd": entry.get("cmd"), "cwd": entry.get("cwd"),
-            "meta": _entry.meta_of(entry), "tree": _platform.descendants(table, pid) if pid is not None else [],
-            "priority": _entry.priority_of(entry), "ticket": _entry.ticket_of(entry),
-            "yieldable": bool(entry.get("yieldable")), "yields": 0, "yield_asked": None, "position": None,
-            "idle_since": None, "phase": _entry.UNKNOWN, "unknown": _entry.unknown(entry),
-            "warning": unknown_text(path, entry), "effective_priority": _entry.priority_of(entry), "aged": False,
-            "reprioritized": None, "est_start": None, "head": False, "reserved": None, "waited": None,
-            "long_wait": False, "memory_wait": None}
+    item = entry_item(path, dict(entry, yields=None), table)
+    item.update(yield_asked=None, position=None, idle_since=None, phase=_entry.UNKNOWN,
+                unknown=_entry.unknown(entry), warning=unknown_text(path, entry),
+                effective_priority=item["priority"], aged=False, reprioritized=None, est_start=None, head=False,
+                reserved=None, waited=None, long_wait=False, memory_wait=None)
+    return item
 
 
 def waiter_tags(entry: dict[str, Any], expected: dict[str, Any] | None) -> str:
@@ -327,17 +333,9 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
         marked = idle_of(directory, live)
     entries_found: list[dict[str, Any]] = []
     for path, entry in live:
-        tree = _platform.descendants(table, entry.get("pid"))
-        priority = _entry.priority_of(entry)
-        item: dict[str, Any] = {"id": path.stem, "lease_id": _entry.lease_id(path.stem, entry), "lease": str(path), "state": entry.get("state"), "count": entry.get("count"),
-                "label": entry.get("label"), "pid": entry.get("pid"), "pgid": _platform.process_group(entry.get("pid")),
-                "start": entry.get("start"), "since": entry.get("since"), "granted": entry.get("granted"),
-                "cmd": entry.get("cmd"), "cwd": entry.get("cwd"), "meta": _entry.meta_of(entry), "tree": tree,
-                "priority": priority, "ticket": _entry.ticket_of(entry),
-                "yieldable": bool(entry.get("yieldable")),
-                "yields": int(entry.get("yields") or 0),
-                "yield_asked": _state.asked(path) if asks is None else asks.get(id(entry)), "position": None,
-                "idle_since": marked.get(id(entry))}
+        item = entry_item(path, entry, table)
+        item.update(yield_asked=_state.asked(path) if asks is None else asks.get(id(entry)), position=None,
+                    idle_since=marked.get(id(entry)))
         item["phase"] = _entry.phase(entry, bool(item["yield_asked"]), item["idle_since"]).name  # fathers#19
         if isinstance(entry.get("session"), dict):
             from .session import view
