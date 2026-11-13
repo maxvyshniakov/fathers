@@ -9,7 +9,6 @@
       "slotfather/tests/test_events.py": 1,
       "slotfather/tests/test_idle.py": 1,
       "slotfather/tests/test_order.py": 1,
-      "slotfather/tests/test_process_table.py": 1,
       "slotfather/tests/test_session.py": 2,
       "slotfather/tests/test_slotfather.py": 3,
       "slotfather/tests/test_sweep.py": 6,
@@ -22,6 +21,7 @@
       "junkfather/tests/test_lifecycle.py": 1,
       "junkfather/tests/test_resources.py": 1,
       "lanefather/tests/test_admission.py": 1,
+      "slotfather/tests/test_process_table.py": 1,
       "slotfather/tests/test_usage.py": 1
     }
   }
