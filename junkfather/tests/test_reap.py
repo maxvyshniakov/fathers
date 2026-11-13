@@ -98,7 +98,7 @@ class StopTests(unittest.TestCase):
         self.assertNotIn((102, signal.SIGKILL), sent)
 
     def test_nothing_alive_is_gone(self):
-        result = reap.stop([proc(100)], look=lambda pids: {}, kill=no_signal)
+        result = reap.stop([proc(100)], 1.0, look=lambda pids: {}, kill=no_signal)
         self.assertEqual("gone", result["result"])
 
 
@@ -145,7 +145,7 @@ class ReviewFixTests(Case):
     def test_an_unreadable_process_table_fails_the_stop_and_keeps_the_entry(self):
         def look(_pids: List[int]) -> Dict[int, Tuple[str, str]]:
             raise procs.ProcError("ps did not answer")
-        result = reap.stop([proc(100)], look=look, kill=no_signal)
+        result = reap.stop([proc(100)], 1.0, look=look, kill=no_signal)
         self.assertEqual("failed", result["result"])
         child = self.spawn("sleep", "600", start_new_session=True)
         mine = procs.Table.read().get(child.pid)

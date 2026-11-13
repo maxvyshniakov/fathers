@@ -33,7 +33,7 @@ class SchemaTests(SettingsCase):
         self.assertEqual((1, "junkfather", True, None), (found["v"], found["tool"], found["writable"], found["reason"]))
         self.assertEqual(["own", "sweep", "reap", "environment"], [s["id"] for s in found["sections"]])
         rows = self.rows(found)
-        expected = {"own.default_ttl": (7200, 1), "sweep.interval": (3600, 60), "reap.grace": (10, 0)}
+        expected = {"own.default_ttl": (7200, 60), "sweep.interval": (3600, 60), "reap.grace": (10, 1)}
         for key, (default, least) in expected.items():
             row = rows[key]
             self.assertEqual(("duration", default, default, "default", True, "s", least),
@@ -85,12 +85,12 @@ class ChangeTests(SettingsCase):
                          json.loads((self.state / "settings.json").read_text()))
         self.assertEqual(3600, self.rows(self.settings())["own.default_ttl"]["value"])
 
-        self.settings("set", "reap.grace", "0")
+        self.settings("set", "reap.grace", "1")
         self.settings("set", "sweep.interval", "2h")
         reset = self.settings("reset", "own.default_ttl")
         rows = self.rows(reset)
         self.assertEqual((7200, "default"), (rows["own.default_ttl"]["value"], rows["own.default_ttl"]["source"]))
-        self.assertEqual((0, 7200), (rows["reap.grace"]["value"], rows["sweep.interval"]["value"]))
+        self.assertEqual((1, 7200), (rows["reap.grace"]["value"], rows["sweep.interval"]["value"]))
         everything = self.rows(self.settings("reset", "--all"))
         self.assertEqual(["default"] * 3, [everything[k]["source"] for k in ("own.default_ttl", "sweep.interval",
                                                                             "reap.grace")])
@@ -104,11 +104,51 @@ class ChangeTests(SettingsCase):
             self.assertTrue(found["error"], args)
         self.assertFalse((self.state / "settings.json").exists())
 
+    def test_a_grace_under_a_second_and_a_ttl_under_a_minute_are_refused(self):
+        for key, text in (("reap.grace", "0"), ("reap.grace", "0.5"), ("own.default_ttl", "59"),
+                          ("own.default_ttl", "1")):
+            for action in ("check", "set"):
+                found = self.settings(action, key, text, code=2)
+                self.assertIn("must be from", found["error"], (key, text))
+        self.settings("set", "reap.grace", "1s")
+        rows = self.rows(self.settings("set", "own.default_ttl", "1m"))
+        self.assertEqual((1, 60), (rows["reap.grace"]["value"], rows["own.default_ttl"]["value"]))
+
+    def test_a_saved_value_below_the_minimum_is_not_used_and_says_so_once(self):
+        self.state.mkdir(parents=True)
+        (self.state / "settings.json").write_text(json.dumps({"v": 1, "settings": {"reap.grace": 0}}))
+        settings.forget_warnings()
+        with mock.patch("sys.stderr") as stderr:
+            self.assertEqual(10, settings.value("reap.grace", self.store.root))
+            self.assertEqual(10, settings.value("reap.grace", self.store.root))
+        written = "".join(str(call.args[0]) for call in stderr.write.call_args_list)
+        self.assertEqual(1, written.count("using the defaults"), written)
+        self.assertIn("reap.grace", written)
+
+    def test_an_unreadable_file_is_reported_by_a_command_that_uses_the_setting(self):
+        self.state.mkdir(parents=True)
+        (self.state / "settings.json").write_text("{not json")
+        result = self.cli("sweep", "--plist")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(1, result.stderr.count("settings.json: is not JSON"), result.stderr)
+        self.assertEqual(3600, plistlib.loads(result.stdout.encode())["StartInterval"])
+
+    def test_a_failed_write_that_is_not_a_permission_problem_is_not_read_only(self):
+        store = self.store
+        full = OSError(28, "No space left on device")
+        with mock.patch.object(settings, "write", side_effect=full), mock.patch("sys.stdout"):
+            code = settings.command(store, "set", "reap.grace", "5", False, None, True)
+        self.assertEqual(settings.FAILED, code)
+        denied = PermissionError(13, "Permission denied")
+        with mock.patch.object(settings, "write", side_effect=denied), mock.patch("sys.stdout"):
+            code = settings.command(store, "set", "reap.grace", "5", False, None, True)
+        self.assertEqual(settings.READ_ONLY, code)
+
     def test_a_stale_revision_is_a_conflict_that_returns_the_current_settings(self):
         before = self.settings()["revision"]
         self.settings("set", "reap.grace", "5", "--revision", before)
         found = self.settings("set", "reap.grace", "3", "--revision", before, code=3)
-        self.assertEqual(False, found["ok"])
+        self.assertEqual((False, True), (found["ok"], found["conflict"]))
         self.assertIn("changed", found["error"])
         self.assertEqual(5, self.rows(found)["reap.grace"]["value"], "the reply is the current settings")
         self.settings("reset", "reap.grace", "--revision", before, code=3)

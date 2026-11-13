@@ -96,7 +96,7 @@ def members(entry: Entry, table: _procs.Table, uid: Optional[int] = None, force:
     return sorted(_safety.signallable(found.values(), table, uid), key=lambda p: p.pid), how
 
 
-def stop(targets: List[_procs.Proc], grace: Optional[float] = None,
+def stop(targets: List[_procs.Proc], grace: float,
          look: Optional[Callable[[List[int]], Dict[int, Tuple[str, str]]]] = None,
          kill: Callable[[int, int], None] = os.kill, now: Callable[[], float] = time.monotonic,
          pause: Callable[[float], None] = time.sleep) -> Dict[str, Any]:
@@ -105,7 +105,6 @@ def stop(targets: List[_procs.Proc], grace: Optional[float] = None,
     Returns {"result": stopped|killed|gone|failed, "signalled": [...], "left": [...]}; failed also when the process
     table cannot be read, since then nothing says the targets ended."""
     look = look or (lambda pids: _procs.identities(pids, command=True))
-    grace = _settings.value("reap.grace") if grace is None else grace
     expected = {p.pid: p for p in targets}
 
     def remaining(pids: List[int]) -> List[int]:

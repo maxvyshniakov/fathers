@@ -63,6 +63,7 @@ Copy this into an agent brief:
 | `sweep [--dry-run] [--json] [--quiet]` | reaps expired and orphaned entries, reports unowned agent processes and unowned simulators, containers and serve routes |
 | `sweep --plist` | the hourly launchd agent |
 | `hook` | the Claude Code / Codex lifecycle hook (JSON on stdin) |
+| `settings [--json]`, `settings check\|set KEY VALUE`, `settings reset KEY\|--all` | the default TTL, the sweep interval and the reap grace, for people and [Godfather](../godfather)'s Settings ([reference](docs/reference.md#settings)) |
 | `status --json`, `capabilities --json` | the snapshot and capabilities for [Godfather](../godfather)'s dashboard |
 
 The owner is the Claude Code session (`CLAUDE_CODE_SESSION_ID`, its process `CLAUDE_PID`), the subagent that ran
