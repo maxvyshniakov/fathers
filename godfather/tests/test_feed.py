@@ -60,7 +60,7 @@ class ReplayTests(unittest.TestCase):
         with tool.environment(None, folder / "scene"):
             from godfather import app
 
-            model, error = app.Screen().load()
+            model, _ = app.Screen().load()
         assert model is not None
         self.assertEqual(([], [], "slotfather too old for events"),
                          (model["events"], model["sources"], model["events_note"]),
@@ -190,9 +190,10 @@ class MixedViewTests(unittest.TestCase):
 
         wide = widths(114)
         self.assertEqual(["time", "source", "event", "slots", "label", "detail", "pid"], list(wide))
-        steps = [next(inner for inner in range(114, 20, -1) if lost(widths(inner)))
-                 for lost in (lambda found: "pid" not in found, lambda found: "slots" not in found,
-                              lambda found: found["source"] == 1)]
+        def lost(step: int, found: dict[str, int]) -> bool:
+            return ("pid" not in found, "slots" not in found, found["source"] == 1)[step]
+
+        steps = [next(inner for inner in range(114, 20, -1) if lost(step, widths(inner))) for step in range(3)]
         self.assertEqual(sorted(steps, reverse=True), steps, "pid goes, then slots, then the source shrinks")
         for inner in (steps[0] + 1, steps[1] + 1, steps[2] + 1):
             self.assertEqual(0, wide["label"], "the label is the flexible one")
@@ -267,7 +268,7 @@ class FilterReducerTests(unittest.TestCase):
 
     def test_f_cycles_every_source_in_order_then_all(self) -> None:
         state = self.state()
-        seen = []
+        seen: list[Any] = []
         for _ in range(4):
             state = self.keys(state, "f")
             seen.append(state.events_filter.source)

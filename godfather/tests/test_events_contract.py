@@ -15,7 +15,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from helpers import ROOT
 
@@ -64,8 +64,9 @@ class EventsContractTests(unittest.TestCase):
             found: Any = json.loads(result.stdout) if result.returncode == 0 else None
         except (OSError, ValueError, subprocess.TimeoutExpired):
             return None
-        events = ((found or {}).get("dashboard") or {}).get("events") or {}
-        return events.get("path") if 1 in (events.get("versions") or []) else None
+        from godfather import events
+
+        return events.log_path(cast(dict[str, Any], found) if isinstance(found, dict) else None)
 
     def run_tool(self, *argv: str) -> None:
         result = subprocess.run(list(argv), capture_output=True, text=True, timeout=60, env=self.environ,

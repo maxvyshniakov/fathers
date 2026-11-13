@@ -161,7 +161,10 @@ def write_expected() -> None:
                 {"verdict": "slower", "p50_recent": 341.0, "p50_before": 258.0, "ratio": 1.32, "recent": 10,
                  "before": 30, "plan_change": None, "why": "same plan"}, "warn")]
     live = {item["pid"]: (item["since"], item["granted"]) for item in block["holders"]}
-    queue = replay().lines(block["events"], live, lease=lambda pid: f"lease-{pid}")
+    def lease(pid: int) -> str:
+        return f"lease-{pid}"
+
+    queue = replay().lines(block["events"], live, lease=lease)
     log = sorted(queue + log, key=lambda text: json.loads(text)["time"])  # stable: a run event after its release
     EXPECTED.mkdir(parents=True, exist_ok=True)
     (EXPECTED / "slotfather").mkdir(exist_ok=True)

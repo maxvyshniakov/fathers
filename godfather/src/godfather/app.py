@@ -446,7 +446,8 @@ def events_command(argv: list[str]) -> int:
             return 0
         else:
             raise UsageError(f"events: unknown argument {argv[0]!r}\n{USAGE}")
-    feed, tags = _events.Feed(), {}
+    feed: _events.Feed = _events.Feed()
+    tags: dict[str, str] = {}
     for name in [tool for tool in _sources.TOOLS if not names or tool in names]:
         source = Source(name, _events.EventsContract(name))
         source.discover()

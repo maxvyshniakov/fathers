@@ -140,10 +140,12 @@ def scene_events(model: dict[str, Any]) -> list[dict[str, Any]]:
     replay = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(replay)
     live = {item["pid"]: (item["since"], item["granted"]) for item in model["holders"]}
-    found = []
+    found: list[Any] = []
     for order, line in enumerate(replay.lines(model["events"], live), 1):
         data = json.loads(line)
-        found.append(events.Event("slotfather", order, events.parse_time(data["time"]), data, line))
+        when = events.parse_time(data["time"])
+        assert when is not None
+        found.append(events.Event("slotfather", order, when, data, line))
     return events.rows(found, {"slotfather": "slot"})
 
 

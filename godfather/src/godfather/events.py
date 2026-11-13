@@ -416,9 +416,9 @@ def slotfather_shown(kind: str, details: dict[str, Any]) -> Optional[Shown]:
     `gave up 5m`, `owner died · 12m` (red for a lease, yellow for a waiter), `batch → interactive`, `waiting 45m`."""
     count = _count(details)
     if kind == "lease.granted":
-        waited = details.get("waited")
+        waited: Any = details.get("waited")
         if _number(waited):
-            return Shown("granted", ((f"wait {_span(waited)}", "text") if waited >= 1 else ("no wait", "dim"),),
+            return Shown("granted", ((f"wait {_span(waited)}", "text") if float(waited) >= 1 else ("no wait", "dim"),),
                          count, True)
         return Shown("granted", (("resumed" if details.get("resumed") else "", "dim"),), count, True)
     if kind == "lease.released":
@@ -491,10 +491,10 @@ def lanefather_shown(kind: str, details: dict[str, Any]) -> Optional[Shown]:
     if kind == "lane.released":
         return Shown("released", (("claims freed", "dim"),))
     if kind == "lane.done":
-        freed = details.get("freed_bytes")
+        freed: Any = details.get("freed_bytes")
         from .tui import megabytes
 
-        return Shown("done", ((f"freed {megabytes(freed / 2**20)}" if _number(freed) else "", "dim"),))
+        return Shown("done", ((f"freed {megabytes(float(freed) / 2**20)}" if _number(freed) else "", "dim"),))
     if kind == "review.started":
         return Shown("review", (("started", "dim"),))
     if kind == "review.finished":
@@ -652,5 +652,6 @@ def _parse_any_time(value: Any) -> Optional[datetime.datetime]:
 
 def text_of(item: dict[str, Any]) -> str:
     """What the text filter matches in a row: its kind, subject id, label and detail."""
+    detail = cast(list[Part], item.get("detail") or [])
     return " ".join([str(item.get("kind") or ""), str(item.get("id") or ""), str(item.get("label") or ""),
-                     *(text for text, _ in item.get("detail") or [])]).lower()
+                     *(text for text, _ in detail)]).lower()
