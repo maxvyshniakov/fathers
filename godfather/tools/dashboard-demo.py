@@ -232,15 +232,15 @@ def write_media(animation: bool) -> None:
         palette = raster.THEMES[name]
         os.environ.update(GODFATHER_TERMINAL_BG="#%02x%02x%02x" % palette.background,
                           GODFATHER_TERMINAL_FG="#%02x%02x%02x" % palette.foreground, GODFATHER_THEME="auto")
-        palette = theme.from_environment()  # the theme frames() draws in
+        drawn = theme.from_environment()  # the theme frames() draws in
         draw = raster.Raster(*MEDIA, palette)
         if animation:
             times = [step / FPS for step in range(round(DURATION * FPS))]
             target = ROOT / f"assets/dashboard{variant}.webp"
-            raster.save_webp([draw.frame(text) for text in frames(NAVIGATION, times, *MEDIA, palette)], target, FPS)
+            raster.save_webp([draw.frame(text) for text in frames(NAVIGATION, times, *MEDIA, drawn)], target, FPS)
         else:
             target = ROOT / f"assets/dashboard{variant}.png"
-            raster.save_png(draw.frame(frames([], [STILL], *MEDIA, palette)[0]), target)
+            raster.save_png(draw.frame(frames([], [STILL], *MEDIA, drawn)[0]), target)
         print(target)
 
 
