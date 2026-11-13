@@ -13,6 +13,7 @@ An entry is one owned process group, `entries/<id>.json` under `$JUNKFATHER_STAT
 | `pid`, `pgid`, `start`, `seen` | the leader: its pid, group, start time (`ps lstart`, C locale) and command as `ps` showed it at launch |
 | `group` | whether the leader leads its own group (true for `own`; for `adopt`, only when pid = pgid) |
 | `known` | `[pid, start]` of every member seen while it ran: what a reap may signal once the leader is gone |
+| `known_seen` | `[pid, start, command]` for the same members: the command each showed when last seen (absent in entries written before it: those members are checked by pid and start only) |
 | `ttl`, `expires` | seconds, and the epoch at which the entry is reaped whatever its owner |
 | `keep` | `owner`: ends with the agent that started it; `session`: survives a subagent's stop, ends with the session |
 | `owner` | `{kind: claude\|codex\|shell, session, agent, agent_type, pid, pid_start, lane}` |
@@ -77,18 +78,28 @@ A command run with `GODFATHER_ACTOR` set carries `via: "godfather"`.
   turn, the sweep), the sweep when the owner's session is gone, a signal to an attached junkfather, or
   `junkfather reap`.
 - **Which processes**: the leader when its pid still has the recorded start time and command (same command line,
-  or the same program; `--force` skips the command check, never the start time); with a verified leader of its own
-  group, the whole group, which the live leader pins; without one, only the `known` members, never the group id
-  alone, since a group id can be taken again once its last member ends; then the descendants of all of these. Only
+  or the same program, as `seen` or as `known_seen` last recorded it; `--force` skips the command check, never the
+  start time); with a verified leader of its own group, the whole group, which the live leader pins; without one,
+  only the `known` members whose start time and command (`known_seen`) still match, never the group id alone, since
+  a group id can be taken again once its last member ends; then the descendants of all of these. A leader refused
+  for its start time or its command is not taken through `known` either, though `known` lists it: its recorded
+  members still are. The supervisor records its own child's current command (a launcher such as
+  `/usr/bin/python3` execs another program), since a child it has not waited for cannot have had its pid reused. Only
   this user's processes, never pid 1, junkfather or its ancestors, and never a process with a terminal or an agent
   session (Claude Code, Codex), nor anything below one. Up to three rounds: a process forked during the grace
   period is found by the next read.
-- **How**: SIGTERM to each target whose start time was just read again, up to `--grace` seconds (10), SIGKILL to
-  what is left, again only to unchanged identities. Results: `stopped`, `killed`, `gone` (nothing left to signal),
-  `failed` (the entry keeps running and records `last_error`; also when `ps` cannot be read, which is never taken
-  for "they ended"). Start times are read in UTC, whatever the caller's `TZ`.
+- **How**: SIGTERM to each target whose start time and command were just read again, up to `--grace` seconds (10),
+  SIGKILL to what is left, again only to unchanged identities. Results: `stopped`, `killed`, `gone` (nothing left to
+  signal), `failed` (the entry keeps running and records `last_error`; also when `ps` cannot be read, which is never
+  taken for "they ended"). Start times are read in UTC, whatever the caller's `TZ`.
+- **Identity**: a pid with its start time, and its command as the second factor. `ps lstart` has one-second
+  granularity, so a pid that ends and is taken again within the same second has the same start time; only the
+  command tells them apart (same command line or same program, so a process that renamed its arguments still
+  matches).
+- **A failed TTL reap**: the supervisor tries again after 1 s, then 2, 4 and so on up to 60 s, and only the first
+  failure of a streak writes `entry.reap_failed`; each failure still updates `last_error`.
 - **Never** a process junkfather did not start or adopt, except `reap --pid PID --force` on a pid the last sweep
-  listed as unowned, with the same start time and still unowned.
+  listed as unowned, with the same start time and command and still unowned.
 
 ## Resources
 

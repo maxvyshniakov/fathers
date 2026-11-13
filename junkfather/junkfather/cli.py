@@ -441,6 +441,8 @@ def reap_unowned(store: Store, args: argparse.Namespace, table: _procs.Table) ->
         refusal = "it no longer runs"
     elif proc.start != _procs.norm(listed.get("start") or ""):
         refusal = "the pid now belongs to another process (its start time changed)"
+    elif listed.get("cmd") is not None and not _reap.command_matches(proc.cmd, str(listed["cmd"])):
+        refusal = "the pid now belongs to another process (its command changed)"
     elif proc.uid != os.getuid() or _reap.unsafe(proc) or pid in _reap.protected(table):
         refusal = "not a process junkfather may stop"
     elif any(_reap.unsafe(p) for p in table.descendants(pid)):
