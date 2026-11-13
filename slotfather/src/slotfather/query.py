@@ -22,7 +22,7 @@ def snapshot(directory: Path | None = None) -> tuple[list[dict[str, Any]], list[
     that no holder starts or ends between the table and the entries."""
     directory = directory or _config.state_dir()
     with _state.locked(directory):
-        table = _leases.process_table(directory)
+        table = _leases.process_table(directory, log=False)
         live = [entry for _, entry in _leases.reap(directory, table)]
     return live, _leases.legacy_holders(table), table
 
@@ -49,7 +49,7 @@ def look(directory: Path | None = None) -> Look:
     look, never for half of this one."""
     directory = directory or _config.state_dir()
     with _state.locked(directory):
-        table = _leases.process_table(directory)
+        table = _leases.process_table(directory, log=False)
         found = _leases.reap(directory, table)
         basis: dict[str, Any] = _config.capacity_basis()
         requests = [_state.asked(path) for path, _ in found]
@@ -135,7 +135,7 @@ def expected(directory: Path, entries: list[dict[str, Any]], slots: int, other: 
 def status_lines(directory: Path | None = None) -> list[str]:
     directory = directory or _config.state_dir()
     with _state.locked(directory):  # the processes and capacity the plans of this moment read
-        table = _leases.process_table(directory)
+        table = _leases.process_table(directory, log=False)
         live = _leases.reap(directory, table)
         slots = _config.total()
     legacy = _leases.legacy_holders(table)
@@ -203,7 +203,7 @@ def long_wait_report(directory: Path, path: Path) -> tuple[str, dict[str, Any]] 
     """long_wait()'s line and its facts for the request.waiting_long event: {"waited" (seconds), "est_start" (UTC
     stamp or None), "behind": {"earlier", "running"}, "priority" (served), "aged"}."""
     with _state.locked(directory):
-        table = _leases.process_table(directory)
+        table = _leases.process_table(directory, log=False)
         live = _leases.reap(directory, table)
         slots = _config.total()
     mine = next((e for p, e in live if p == path), None)
@@ -266,11 +266,11 @@ def status_processes(directory: Path, pid: int | None = None) -> dict[int, tuple
             # Legacy clients use their own lock: a lease may appear during this observation.
             if any(entry["pid"] in table and not table[entry["pid"]][1]
                    for source in sources for _, entry in _state.entries(source) if type(entry.get("pid")) is int):
-                return _leases.process_table(directory)
+                return _leases.process_table(directory, log=False)
             return table
         except OSError:
             pass
-    return _leases.process_table(directory)
+    return _leases.process_table(directory, log=False)
 
 
 def status_json(directory: Path | None = None, pid: int | None = None, look: Look | None = None) -> dict[str, Any]:

@@ -243,6 +243,14 @@ class TraceTests(unittest.TestCase):
         replayed = replay.Replay(found, 6, replay.POLICIES[CURRENT]).simulate()
         self.assertEqual([0, 0, 900, 900], [r["granted"] - q["arrival"] for r, q in zip(replayed, found)])
 
+    def test_a_grant_in_the_rotated_queue_log_keeps_its_request(self):
+        """queue.log rotates to queue.log.1 (fathers#123): a grant there and its release in queue.log are one run."""
+        (self.dir / "queue.log.1").write_text("2026-11-02T08:00:00Z granted 2 to build (pid 31)\n")
+        (self.dir / "queue.log").write_text("2026-11-02T08:05:00Z released 2 (0000000007-31.json)\n")
+        logged = replay.log_requests(self.dir / "queue.log")
+        self.assertEqual([("build", 7, sf_config.seconds("2026-11-02T08:00:00Z"))],
+                         [(r["label"], r["seq"], r["granted"]) for r in logged])
+
     def test_a_reaped_lease_holds_its_slots_but_is_no_run_of_its_kind(self):
         """A reaped held lease (queue.log only, or a history line) keeps its slots in the replay for as long as it
         did, as the queue saw it; the estimates, the replay's and the seed's, leave its time out as the queue's do."""

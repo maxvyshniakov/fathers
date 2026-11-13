@@ -67,7 +67,7 @@ self-contained configuration in the README for a Repo-Kit consumer.
 | `[lane]` `targets`, `cache_partitions` | build directories `done` removes |
 | `[gate]` `stamp_tool`, `stamp_file`, `pre_push_hook` | the verified-tree stamp of the full gate |
 | `[promote]` `install`, `deploy`, `after`, `ship_refuses` | what promote runs after it moved dev |
-| `[gc]` `dirs`, `branches` | what `gc` collects (fnmatch patterns, fathers#44). A worktree under the main checkout's `.claude/worktrees` is a candidate when a `dirs` pattern matches its name (a pattern without `/`) or its path from the main checkout (`.claude/worktrees/*`), or a `branches` pattern matches its branch; it is removed only when merged, clean, idle for 2 h, unused by any process, owned by no open lane and holding no other worktree. A merged branch is deleted only when `branches` names it and no worktree or lane uses it; any other branch outlives its worktree. Defaults: `dirs = ["agent-*", "lane-*", ".claude/worktrees/*", "codex-*"]`, `branches = ["worktree-agent-*", "lane/*", "claude/*", "codex/*"]`; `dev`, `main` and `integrate/*` are never collected. |
+| `[gc]` `dirs`, `branches`, `collect_uncommitted_sessions`, `disposable` | what `gc` collects (fnmatch patterns, fathers#44). A worktree under the main checkout's `.claude/worktrees` is a candidate when a `dirs` pattern matches its name (a pattern without `/`) or its path from the main checkout (`.claude/worktrees/*`), or a `branches` pattern matches its branch. Every candidate must be clean, idle for 2 h, unused by any process, owned by no open lane, unlocked (a `claude agent` lock counts only while its pid is dead), and hold no other worktree or Git repository anywhere below it. An agent or lane worktree (`agent-*`, `lane-*`, `worktree-agent-*`, `lane/*`) must be merged into origin/dev, origin/main or a local `integrate/*`. Any other candidate is a session worktree: its HEAD must be in origin/dev or origin/main, it must have a commit of its own in its HEAD reflog unless `collect_uncommitted_sessions = true`, and every ignored path in it must have a component that `disposable` names (default `node_modules`, `__pycache__`, `target`, `.build`, `dist`, `build`, `.venv`, `.turbo`, `.next`, `storybook-static`, `coverage`, `.pytest_cache`, `.ruff_cache`, `.DS_Store`). A merged branch is deleted only when `branches` names it, no worktree or lane uses it and it is merged as its family requires; any other branch outlives its worktree. Defaults: `dirs = ["agent-*", "lane-*", ".claude/worktrees/*"]` (Codex's `codex-*` worktrees are under `.claude/worktrees`), `branches = ["worktree-agent-*", "lane/*", "claude/*", "codex/*"]`; `dev`, `main` and `integrate/*` are never collected. |
 | `[gc]` `after_remove`, `after_remove_report` | project cache cleanup after removal (`{worktree}`, `{name}`, `{project}`). Stdout is ignored by default, preserving existing hooks. With `after_remove_report = true`, a successful hook must emit `{"v":1,"freed":123}` to add its actually removed bytes; diagnostics go to stderr. Invalid reports add zero bytes and a report error. |
 | `[slots.priority]` `check`, `post-merge`, `gate`, `rerun`, `perf`, `default` | each run's Slotfather priority; see [slot priorities](#slot-priorities) |
 | `[admission]` `provider` | `legacy` by default; explicit `slotfather` uses the versioned lifetime-admission query, separately from execution jobs. See [rollout contract](../docs/admission.md). |
@@ -243,10 +243,12 @@ each running its own branch's `tools/lane`, share the state directory with an in
 directions against that tool (`tests/fixtures/legacy-lane`). A record of a newer schema is refused, never rewritten.
 
 Records, receipts, the settings, the registry and the installed command are written whole: each write goes through
-its own temporary file beside the target, synced with its directory before the rename. A lane record that is empty
-or not a JSON object (a write a crash cut short) is reported by every command that reads the lanes, naming the
-file; it is never read as no lane, so `start` does not register over it and its claims are not silently released.
-Restore the record or remove the file.
+its own temporary file beside the target, synced before the rename, and the directory after it. A lane record that is empty
+or not a JSON object (a write a crash cut short) is never read as no lane. Every command that admits, claims,
+lands, promotes or collects refuses while it is there, naming the file, as do `list` and `show`; `status` lists
+the project's healthy lanes and the file as a `damaged` row (a damaged record cannot name its repository, so every
+project sharing the directory shows it). Restore the record or remove the file. A directory sync that fails for any
+reason but an unsupported one (EINVAL, ENOTSUP) fails the write.
 
 Safe to change: messages, the modules' insides. Not without a schema bump and a migration: record and receipt keys,
 the landing lock's file format (a project's reference-transaction hook reads it), the queue file.

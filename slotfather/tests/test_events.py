@@ -25,11 +25,12 @@ MIRROR = (("granted ", ("lease.granted",)), ("released ", ("lease.released", "re
           ("reaped ", ("lease.reaped", "request.reaped")), ("reprioritized ", ("request.reprioritized",)),
           ("waiting long: ", ("request.waiting_long",)), ("asked ", ("lease.yield_asked",)),
           ("withdrew ", ("lease.yield_withdrawn",)), ("yielded ", ("lease.yielded",)),
-          ("sweep ", ("process.swept",)), ("skipped reaping: ", ("reap.skipped",)))
+          ("sweep ", ("process.swept",)), ("skipped reaping: ", ("reap.skipped",)),
+          ("reaping resumed", ("reap.resumed",)))
 QUEUE_LOG = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ (granted \d+ to .* \(pid \d+\)|released \d+ \(\d+-\d+\.json\)|"
                        r"reaped (held|waiting) lease of \d+ for .* \(pid \d+ exited\)|reprioritized .* \(pid \d+\) "
                        r"from \w+ to \w+|waiting long: .*|asked .* \(pid \d+\) to yield \d+ for .*|withdrew the yield "
-                       r"request to .* \(pid \d+\)|yielded \d+ \(\d+-\d+\.json\) to .*|skipped reaping: .*)$")
+                       r"request to .* \(pid \d+\)|yielded \d+ \(\d+-\d+\.json\) to .*|skipped reaping: .*|reaping resumed: .*)$")
 
 
 class EventLogTests(SlotCase):

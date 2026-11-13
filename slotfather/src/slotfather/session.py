@@ -286,7 +286,8 @@ def prune(uses: dict[str, Any], table: dict[int, tuple[int, str]] | None, moment
         except (PermissionError, ValueError):
             alive = True
         if alive and table is not None:
-            alive = int(pid) in table and _platform.same_start(str(run.get("start") or ""), table[int(pid)][1])
+            alive = int(pid) in table and _platform.same_holder(run.get("start") or "", run.get("started"), int(pid),
+                                                               table[int(pid)][1])
         if not alive:
             gone.append(pid)
     for pid in gone:
@@ -377,7 +378,8 @@ def run_inside(name: str, argv: list[str], label: str | None = None, meta: dict[
                 uses = read_uses(path) if entry.get("state") == "held" else None
                 if uses is not None:
                     since = _config.now()
-                    uses.setdefault("active", {})[str(me)] = {"start": table.get(me, (0, ""))[1], "label": label,
+                    uses.setdefault("active", {})[str(me)] = {"start": table.get(me, (0, ""))[1],
+                                                              "started": _platform.start_epoch(me), "label": label,
                                                               "cmd": _events.command(" ".join(argv)), "since": since}
                     _state.write(uses_path(path), uses)
                     _events.emit(directory, "session.run_started", _events.request(entry, path),
