@@ -31,6 +31,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   the old file and no temp file, and one whose directory cannot be synced reports the error.
 - junkfather lives in the `fathers` repository: install it with `python3 install.py junkfather` from a `fathers`
   checkout.
+- `junkfather status`, `capabilities` and `changelog` no longer require `--json`: without it they print for people
+  (the `list` table with the unowned processes and the last sweep's time; one line of capabilities; the changelog
+  by release). With `--json` they print what they always did.
 
 ## 0.1.0 - 2026-11-12
 

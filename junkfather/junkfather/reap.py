@@ -31,10 +31,10 @@ from . import entry as _entry
 from . import events as _events
 from . import procs as _procs
 from . import safety as _safety
+from .defaults import GRACE
 from .procs import command_matches
 from .state import Entry, Store
 
-GRACE = 10.0  # seconds between SIGTERM and SIGKILL
 ROUNDS = 3  # reads of the entry's members: a process forked during the grace period is found by the next one
 STOPPED = ("stopped", "killed", "gone")
 
@@ -248,3 +248,44 @@ def reap_unowned(store: Store, pid: int, table: _procs.Table, force: bool, reaso
                   None if outcome["result"] in STOPPED else "error")
     return [{"id": f"pid {pid}", "result": outcome["result"], "reason": reason, "pids": [p.pid for p in targets],
              "how": "unowned, forced"}]
+
+
+def matches_owner(entry: Entry, owner: str, agent: Optional[str]) -> bool:
+    """`reap --owner OWNER [--agent AGENT]`: a session's entries (not those handed away), or a subagent's entries
+    not kept for the session."""
+    who = entry.get("owner") or {}
+    if agent:
+        return who.get("session") == owner and who.get("agent") == agent and entry.get("keep") == "owner"
+    if who.get("session") == owner:
+        return True
+    return who.get("agent") == owner and entry.get("keep") == "owner"
+
+
+def select(store: Store, ids: List[str], owner: Optional[str], agent: Optional[str], lane: Optional[str],
+           table: Optional[_procs.Table] = None, pid: Optional[int] = None) -> Tuple[List[Entry], List[Dict[str, Any]]]:
+    """The running or starting entries one `reap` selector names (--id, --owner, --lane, or --pid with `table`),
+    and a result row for each id given that names no such entry."""
+    running = [e for e in store.entries() if e.get("state") in _entry.OPEN]
+    missing: List[Dict[str, Any]] = []
+    if ids:
+        known = {e["id"] for e in running}
+        for entry_id in [i for i in ids if i not in known]:
+            entry = store.load(entry_id)
+            missing.append({"id": entry_id, "result": "skipped" if entry else "unknown",
+                            "reason": f"already {entry.get('state')}" if entry else "no such entry", "pids": [],
+                            "how": ""})
+        return [e for e in running if e["id"] in ids], missing
+    if owner:
+        return [e for e in running if matches_owner(e, owner, agent)], missing
+    if lane:
+        return [e for e in running if (e.get("owner") or {}).get("lane") == lane], missing
+    assert table is not None
+    return [e for e in running if pid in {p.pid for p in members(e, table)[0]}], missing
+
+
+def results_text(results: List[Dict[str, Any]]) -> str:
+    """`reap` results for people, one line each."""
+    if not results:
+        return "nothing to reap"
+    return "\n".join(f"{r['id']}: {r['result']} ({r['reason']}; pids {', '.join(map(str, r['pids'])) or '-'}"
+                     f"{'; ' + r['how'] if r['how'] else ''})" for r in results)

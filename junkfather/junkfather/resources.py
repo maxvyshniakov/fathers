@@ -33,12 +33,10 @@ from . import entry as _entry
 from . import events as _events
 from . import procs as _procs
 from . import safety as _safety
+from .defaults import CREATE_TIMEOUT, SETTLE, STOP_TIMEOUT, TIMEOUT
 from .state import Entry, Store
+from .text import duration
 
-TIMEOUT = 20.0  # seconds a liveness or listing call may take
-STOP_TIMEOUT = 120.0  # seconds a stop command may take (a simulator shutdown is slow)
-SETTLE = 15.0  # seconds `own --kind` waits for the resource its command made to show up
-CREATE_TIMEOUT = 600.0  # seconds `own --kind` lets its command run
 EXTRA_PATH = ("/opt/homebrew/bin", "/usr/local/bin", "/Applications/Docker.app/Contents/Resources/bin", "/usr/bin")
 UDID = re.compile(r"\A[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\Z")
 CONTAINER = re.compile(r"\A[0-9a-f]{64}\Z")
@@ -377,7 +375,6 @@ def record(store: Store, resource: Dict[str, Any], argv: List[str], ttl: float, 
 
 
 def announce(entry: Entry, out=None) -> None:
-    from .launch import duration
     from .owner import describe as who
     keep = "" if entry["keep"] == "owner" else f", kept for the {entry['keep']}"
     note = f" ({entry['claim_note']})" if entry.get("claim_note") else ""

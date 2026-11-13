@@ -77,6 +77,8 @@ A command run with `GODFATHER_ACTOR` set carries `via: "godfather"`.
   checkout); an entry's continuation lines join it and its markdown stays; `--since` keeps only releases newer than
   that version, and the Unreleased entries. `source` is the file read, `null` (with no entries)
   when the release has none. It reads one file and changes nothing.
+- Without `--json`, `status`, `capabilities` and `changelog` print the same for people; a dashboard always passes
+  `--json`, and these shapes only gain fields.
 
 ## Ending an entry
 

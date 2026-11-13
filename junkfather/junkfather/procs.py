@@ -13,7 +13,7 @@ import subprocess
 import time
 from typing import Any, Dict, List, NamedTuple, Optional
 
-TIMEOUT = 10.0  # seconds a ps or lsof call may take
+from .defaults import PS_TIMEOUT as TIMEOUT
 C_LOCALE = {"LC_ALL": "C", "LANG": "C", "TZ": "UTC"}
 LSTART = "%a %b %d %H:%M:%S %Y"
 

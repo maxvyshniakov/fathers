@@ -31,11 +31,9 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from . import procs as _procs
 from . import safety as _safety
+from .defaults import CLAIM_AMBIGUOUS, CLAIM_KEEP, CLAIM_WINDOW
 from .state import Store, read_json, write_atomic
 
-CLAIM_WINDOW = 1800.0  # seconds a claim may wait for its command (a permission prompt can take a while)
-CLAIM_AMBIGUOUS = 60.0  # two agents' matching claims this close together: ambiguous
-CLAIM_KEEP = 86400.0  # claims older than this are pruned
 
 Owner = Dict[str, Any]
 

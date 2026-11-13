@@ -36,10 +36,9 @@ from . import procs as _procs
 from . import reap as _reap
 from . import resources as _resources
 from . import safety as _safety
+from .defaults import KEEP_FINISHED, REAPING_STUCK, STARTING_STUCK
 from .state import Store, VERSION, read_json, write_atomic
-
-KEEP_FINISHED = 7 * 86400.0
-REAPING_STUCK = 300.0
+from .text import duration
 LABEL = "com.junkfather.sweep"
 WORKTREES = ("/.claude/worktrees/", "/.codex/worktrees/")
 SPLIT = re.compile(r"[\s=:,]+")
@@ -142,7 +141,7 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
                 report["pruned"] += 1
             continue
         if state == _entry.STARTING:
-            if now - float(entry.get("created") or now) > 60 and not dry_run:
+            if now - float(entry.get("created") or now) > STARTING_STUCK and not dry_run:
                 _entry.failed(store, entry["id"], "never started", now)
             continue
         if entry.get("mode") == "resource":
@@ -301,7 +300,6 @@ def text(report: Dict[str, Any], quiet: bool = False) -> str:
 
 
 def _age(seconds: Optional[float]) -> str:
-    from .launch import duration
     return "age ?" if seconds is None else f"age {duration(seconds)}"
 
 

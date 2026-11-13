@@ -11,16 +11,17 @@ unowned.reaped, sweep.finished, hook.failed.
 """
 from __future__ import annotations
 
-import datetime
 import fcntl
 import json
 import os
 from pathlib import Path
 import re
 import socket
+import time
 from typing import Any, Dict, Mapping, Optional
 
 from . import owner as _owner
+from . import text as _text
 
 VERSION = 1
 SOURCE = "junkfather"
@@ -34,8 +35,7 @@ CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
 def now() -> str:
-    moment = datetime.datetime.now(datetime.timezone.utc)
-    return moment.strftime("%Y-%m-%dT%H:%M:%S.") + f"{moment.microsecond // 1000:03d}Z"
+    return str(_text.iso(time.time()))
 
 
 def host() -> str:

@@ -30,15 +30,12 @@ from . import owner as _owner
 from . import procs as _procs
 from . import reap as _reap
 from . import safety as _safety
+from .defaults import DETACH_WAIT, KNOWN_EVERY, POLL, RETRY_FIRST, RETRY_MAX, SIGNAL_GRACE
 from .entry import new as new_entry
+from .text import duration
 from .state import Entry, Store
 
-KNOWN_EVERY = 15.0  # seconds between refreshes of an entry's known members
-POLL = 0.5  # seconds between checks of the child and the entry
-DETACH_WAIT = 15.0  # seconds `own --detach` waits for the supervisor to start the command
 PACKAGE_ROOT = str(Path(__file__).resolve().parent.parent)
-RETRY_FIRST = 1.0  # seconds before the supervisor tries a failed TTL reap again; doubled per failure
-RETRY_MAX = 60.0  # the longest wait between two tries
 
 
 def retry_delay(failures: int) -> float:
@@ -186,9 +183,6 @@ class Supervisor:
         return done, left
 
 
-SIGNAL_GRACE = 3.0  # seconds a signalled junkfather gives its command before SIGKILL
-
-
 class Catcher:
     """SIGTERM, SIGINT and SIGHUP noted from before the command starts, so none is lost in between."""
 
@@ -314,15 +308,3 @@ def adopt(store: Store, pid: int, ttl: float, keep: str, label: Optional[str], e
           f"stop it: junkfather reap --id {entry['id']}")
     return 0
 
-
-def duration(seconds: float) -> str:
-    seconds = int(max(0, seconds))
-    if seconds < 120:
-        return f"{seconds}s"
-    minutes = seconds // 60
-    if minutes < 120:
-        return f"{minutes}m"
-    hours, minutes = divmod(minutes, 60)
-    if hours < 48:
-        return f"{hours}h{minutes:02d}m" if minutes else f"{hours}h"
-    return f"{hours // 24}d{hours % 24}h"
