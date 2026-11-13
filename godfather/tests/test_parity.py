@@ -6,7 +6,7 @@ it drew, its help, and the same model as a `status --json --full` reply (tools/s
 stand-in). Godfather reads that reply in fixture mode, its adapter decodes it, and Godfather renders it at the same
 moment. Every cell, character and style, must be identical, emoji and ASCII, wide, one-column and narrow, but the
 footer (its name and version) and the EVENTS panel, whose columns Godfather changed on purpose after the move (time ·
-slots · label · result, owner 2026-11-12), and the focused panel's top and bottom rules, heavy since fathers#139;
+slots · label · result, owner 2026-11-12), and the focused panel's top and bottom rules, heavy since fathers#139, and the history chart's title (fathers#140);
 help likewise in every section but EVENTS. A missing or unreadable fixture
 fails the test; it never skips.
 """
@@ -41,6 +41,19 @@ def read(name: str) -> Any:
     except (OSError, ValueError, EOFError, zlib.error) as error:
         raise AssertionError(f"parity fixture {path} unreadable ({error}); it is frozen from Slotfather 37c4df7, "
                              f"see {FIXTURE / 'README.md'}") from error
+
+
+def chart_title(canvas: tui.Canvas) -> set[tuple[int, int]]:
+    """The row inside MACHINE's frame that says `slots held` (fathers#140): its title above the chart, or the axis
+    line it leads, whose stats it moves."""
+    found: set[tuple[int, int]] = set()
+    for row, cells in enumerate(canvas.cells):
+        text = "".join(str(cell[0]) or "\0" for cell in cells)
+        at = text.find("slots held")
+        if at >= 0:
+            start, end = text.rindex("│", 0, at), text.index("│", at)
+            found |= {(row, column) for column in range(start + 1, end)}
+    return found
 
 
 RESTED = {"┍": "╭", "┑": "╮", "┕": "╰", "┙": "╯", "━": "─"}  # a focused frame's rules as a resting one's
@@ -112,6 +125,7 @@ class ParityTests(unittest.TestCase):
                 # QUEUE holds the focus where it is drawn: its rules are heavy (fathers#139)
                 focused = canvas.tables.get("requests", dict(x=0, y=-1, width=0, height=0))
                 rules = {focused["y"], focused["y"] + focused["height"] - 1}
+                masked |= chart_title(canvas)
                 for row in range(height - 1):
                     for column in range(width):
                         if (row, column) not in masked:
