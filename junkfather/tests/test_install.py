@@ -13,7 +13,7 @@ from support import ROOT, Case
 
 
 class InstallTests(Case):
-    def install(self, *extra: str) -> subprocess.CompletedProcess:
+    def install(self, *extra: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run([sys.executable, str(ROOT / "install.py"), "--bin", str(self.tmp / "bin"),
                                "--share", str(self.tmp / "share"), *extra], capture_output=True, text=True)
 

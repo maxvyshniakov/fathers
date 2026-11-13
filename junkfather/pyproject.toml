@@ -17,5 +17,5 @@ ignore = ["I001", "PLC3002", "RUF010", "RUF012", "RUF015", "RUF100", "SIM102", "
 [tool.pyright]
 include = ["junkfather", "tests", "install.py", "tools"]
 pythonVersion = "3.9"
-typeCheckingMode = "basic"
+typeCheckingMode = "strict"
 extraPaths = ["../common"]  # eventcheck: common/eventcheck.py

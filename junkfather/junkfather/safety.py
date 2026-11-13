@@ -13,7 +13,7 @@ import re
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Set
 
 from . import procs as _procs
-from .state import Store, read_json
+from .state import Store, as_dict, as_list, read_json
 
 CLAUDE = re.compile(r"(^|/)claude(\s|$)|/claude/versions/[^/\s]+(\s|$)|/claude\.app/Contents/MacOS/claude(\s|$)")
 CODEX = re.compile(r"(^|/)(codex|CodexCLI)(\s|$)|/codex-[\w-]+/vendor/[^\s]*/codex(\s|$)")
@@ -69,11 +69,9 @@ def signallable(found: Iterable[_procs.Proc], table: _procs.Table, uid: Optional
 
 def listed_unowned(store: Store, pid: int) -> Optional[Dict[str, Any]]:
     """The last sweep's report of this unowned pid (unowned.json), or None: what `reap --pid --force` may stop."""
-    data = read_json(store.root / "unowned.json")
-    items = data.get("items") if isinstance(data, dict) else None
-    for item in items if isinstance(items, list) else []:
-        if isinstance(item, dict) and item.get("pid") == pid:
-            return item
+    for item in as_list(as_dict(read_json(store.root / "unowned.json")).get("items")):
+        if isinstance(item, dict) and as_dict(item).get("pid") == pid:
+            return as_dict(item)
     return None
 
 

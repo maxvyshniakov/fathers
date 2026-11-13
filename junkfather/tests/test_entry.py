@@ -5,24 +5,27 @@ from __future__ import annotations
 
 import os
 import re
+from typing import Any, Callable, List, Optional
 import unittest
 from unittest import mock
 
-from support import ROOT, Case, proc, table
+from support import ROOT, Case, as_entry, got, plain, proc, table
 
-from junkfather import entry, sweep
+from junkfather import entry, resources, sweep
 
 A = "Thu Nov 12 10:00:00 2026"
 
 
 class TransitionTests(Case):
-    def make(self, state: str, **fields) -> str:
+    def make(self, state: str, **fields: Any) -> str:
         record = entry.new(self.store, ["sleep", "600"], 3600.0, "owner", None, {"kind": "shell"}, "attached", "/")
-        record.update(state=state, **fields)
+        record["state"] = state
+        record.update(as_entry(fields))
         self.store.save(record)
         return record["id"]
 
-    def check(self, transition, allowed, *args, **options):
+    def check(self, transition: Callable[..., Optional[Any]], allowed: List[str], *args: Any, **options: Any
+              ) -> None:
         """`transition` moves an entry in each `allowed` state, and refuses every other state without a write."""
         for state in entry.STATES:
             ident = self.make(state)
@@ -50,25 +53,45 @@ class TransitionTests(Case):
     def test_what_each_transition_writes(self):
         leader = proc(4100, cmd="sleep 600")
         ident = self.make(entry.STARTING)
-        started = entry.started(self.store, ident, leader, {"pid": 7, "start": A}) or {}
+        started = got(entry.started(self.store, ident, leader, {"pid": 7, "start": A}))
         self.assertEqual((entry.RUNNING, 4100, 4100, A, "sleep 600", [[4100, A]], [[4100, A, "sleep 600"]]),
                          (started["state"], started["pid"], started["pgid"], started["start"], started["seen"],
                           started["known"], started["known_seen"]))
-        gone = entry.gone(self.store, ident, now=5.0) or {}
+        gone = got(entry.gone(self.store, ident, now=5.0))
         self.assertEqual((entry.GONE, 5.0, []), (gone["state"], gone["ended"], gone["known"]))
-        revived = entry.revived(self.store, ident) or {}
+        revived = got(entry.revived(self.store, ident))
         self.assertEqual((entry.RUNNING, None), (revived["state"], revived["ended"]))
-        extended = entry.extended(self.store, ident, 60.0, now=100.0) or {}
+        extended = got(entry.extended(self.store, ident, 60.0, now=100.0))
         self.assertEqual((60.0, 160.0), (extended["ttl"], extended["expires"]))
         target = {"kind": "claude", "session": "s2", "lane": None}
         moved = entry.handed(self.store, ident, target, now=7.0)
         assert moved is not None
-        handed, before = moved
+        handed, before = plain(moved[0]), moved[1]
         self.assertEqual(("owner", "s2", {"kind": "shell"}, {"kind": "shell"}),
                          (handed["keep"], handed["owner"]["session"], handed["handed"][-1]["from"], before))
         self.assertEqual({"kind": "claude", "session": "s2", "lane": None}, target, "the caller's target is untouched")
-        failed = entry.failed(self.store, self.make(entry.STARTING), "why", now=9.0) or {}
+        failed = got(entry.failed(self.store, self.make(entry.STARTING), "why", now=9.0))
         self.assertEqual((entry.FAILED, "why", 9.0), (failed["state"], failed["error"], failed["ended"]))
+
+    def test_the_entry_type_names_every_key_the_lifecycle_writes(self):
+        known = set(entry.Entry.__annotations__)
+        record = entry.new(self.store, ["sleep", "600"], 3600.0, "owner", None, {"kind": "shell"}, "attached", "/")
+        self.assertLessEqual(set(entry.Entry.__required_keys__), set(record), "new writes every required key")
+        entry.save_starting(self.store, record)
+        ident = record["id"]
+        entry.started(self.store, ident, proc(4100, cmd="sleep 600"), {"pid": 7, "start": A})
+        entry.handed(self.store, ident, {"kind": "claude", "session": "s2"})
+        entry.noted_error(self.store, ident, {"reason": "r"})
+        me = entry.begin_reap(self.store, ident, "test", table(proc(os.getpid())))
+        self.assertIsNotNone(me)
+        reaping = got(self.store.load(ident))
+        entry.end_reap(self.store, ident, os.getpid(), True, {"reason": "test"}, {})
+        failed = got(entry.failed(self.store, self.make(entry.STARTING), "why"))
+        resource = entry.new(self.store, [], 60.0, "owner", None, {}, "resource", "/")
+        entry.resource_owned(self.store, resource, {"kind": "command", "id": "x"}, lambda e: False)
+        gone = got(entry.gone(self.store, resource["id"]))
+        for written in (reaping, got(self.store.load(ident)), failed, gone):
+            self.assertLessEqual(set(written), known, f"keys the Entry type does not name: {set(written) - known}")
 
     def test_a_resource_entry_keeps_its_fields_when_gone(self):
         record = entry.new(self.store, [], 60.0, "owner", None, {}, "resource", "/")
@@ -76,7 +99,7 @@ class TransitionTests(Case):
         self.assertIsNone(holder)
         assert owned is not None
         before = set(owned)
-        gone = entry.gone(self.store, owned["id"], now=3.0) or {}
+        gone = got(entry.gone(self.store, owned["id"], now=3.0))
         self.assertEqual(before | {"ended"}, set(gone))
         self.assertEqual(entry.GONE, gone["state"])
 
@@ -104,7 +127,7 @@ class ReapTransitionTests(Case):
         self.assertIsNone(entry.begin_reap(self.store, ident, "again", table(proc(os.getpid()))))
         self.assertIsNone(entry.end_reap(self.store, ident, os.getpid() + 1, True, {}, {}), "not its reaper")
         self.assertEqual(entry.REAPING, self.state_of(ident))
-        ended = entry.end_reap(self.store, ident, os.getpid(), True, {"reason": "test"}, {}) or {}
+        ended = got(entry.end_reap(self.store, ident, os.getpid(), True, {"reason": "test"}, {}))
         self.assertEqual((entry.REAPED, {"reason": "test"}), (ended["state"], ended["end"]))
         self.assertNotIn("reaping", ended)
 
@@ -112,7 +135,7 @@ class ReapTransitionTests(Case):
         ident = self.running()
         me = entry.begin_reap(self.store, ident, "test", table(proc(os.getpid())))
         assert me is not None
-        back = entry.end_reap(self.store, ident, me, False, {}, {"reason": "test", "left": [4100]}) or {}
+        back = got(entry.end_reap(self.store, ident, me, False, {}, {"reason": "test", "left": [4100]}))
         self.assertEqual((entry.RUNNING, [4100]), (back["state"], back["last_error"]["left"]))
 
     def test_a_resource_entry_goes_through_the_same_reap(self):
@@ -142,9 +165,9 @@ class ReapTransitionTests(Case):
     def test_the_sweep_releases_a_stuck_reap_and_marks_the_entry_gone(self):
         ident = self.running()
         entry.begin_reap(self.store, ident, "test", table(proc(os.getpid())))
-        self.store.update(ident, lambda e: e["reaping"].update(at=0.0, by=4242, by_start=A))
+        self.store.update(ident, lambda e: e.get("reaping", {}).update(at=0.0, by=4242, by_start=A))
         here = table(proc(os.getpid(), start=A, cmd="python3"))
-        with mock.patch.object(sweep._resources, "unowned", return_value=([], [])):
+        with mock.patch.object(resources, "unowned", return_value=([], [])):
             report = sweep.sweep(self.store, table=here, cwds={}, sessions=[], now=sweep.REAPING_STUCK + 10)
         self.assertEqual([ident], [g["id"] for g in report["gone"]])
         self.assertEqual(entry.GONE, self.state_of(ident))
@@ -159,7 +182,7 @@ class NoStateLiteralTests(unittest.TestCase):
     STATE = re.compile(r"""state\W{1,8}["'](starting|running|reaping|exited|reaped|gone|failed)["']""")
 
     def test_no_state_string_outside_entry_py(self):
-        found = []
+        found: List[str] = []
         for path in sorted((ROOT / "junkfather").glob("*.py")):
             if path.name == "entry.py":
                 continue

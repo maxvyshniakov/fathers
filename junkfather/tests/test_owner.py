@@ -5,6 +5,7 @@ import calendar
 import json
 import re
 import time
+from typing import Optional
 import unittest
 
 from support import ROOT, Case, proc, table
@@ -76,7 +77,7 @@ class DetectTests(unittest.TestCase):
 
 
 class ClaimTests(Case):
-    def claim(self, agent, command, at, tool):
+    def claim(self, agent: Optional[str], command: str, at: float, tool: str) -> None:
         owner.write_claim(self.store, {"session_id": "s1", "agent_id": agent, "tool_use_id": tool,
                                        "tool_input": {"command": command}}, now=at)
 

@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+from typing import Any, Dict, List, Optional, Tuple
 import unittest
 
 from support import Case
 
 from junkfather import launch
+from junkfather.state import Store
 
 
 class Quiet(launch.Catcher):
@@ -16,7 +19,7 @@ class Quiet(launch.Catcher):
 
 
 class SupervisorLoopTests(Case):
-    def supervised(self, ttl: float = 3600.0):
+    def supervised(self, ttl: float = 3600.0) -> Tuple[subprocess.Popen[Any], str]:
         child = self.spawn("sleep", "600", start_new_session=True)
         record = launch.new_entry(self.store, ["sleep", "600"], ttl, "owner", None, {"kind": "process"}, "attached",
                                   str(self.tmp))
@@ -27,9 +30,9 @@ class SupervisorLoopTests(Case):
     def test_a_failing_ttl_reap_backs_off_and_reports_once_per_streak(self):
         child, entry_id = self.supervised(ttl=0)
         clock = [100.0]
-        attempts = []
+        attempts: List[Tuple[float, bool]] = []
 
-        def reaper(store, ident, reason, **options):
+        def reaper(store: Store, ident: str, reason: str, **options: Any) -> Dict[str, Any]:
             attempts.append((clock[0], options.get("report_failure", True)))
             if len(attempts) < 4:
                 return {"id": ident, "result": "failed", "reason": reason, "pids": [], "how": "leader"}
@@ -53,9 +56,9 @@ class SupervisorLoopTests(Case):
     def test_a_gone_entry_whose_child_still_runs_is_revived(self):
         child, entry_id = self.supervised()
         self.store.update(entry_id, lambda e: e.update(state="gone", ended=1.0))
-        seen = []
+        seen: List[Optional[str]] = []
 
-        def pause(_seconds):
+        def pause(_seconds: float) -> None:
             seen.append(self.state_of(entry_id))
             child.kill()
             child.wait()

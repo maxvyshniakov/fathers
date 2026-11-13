@@ -11,7 +11,7 @@ import sys
 import time
 from typing import Any, Dict, List
 
-from support import ROOT, Case
+from support import ROOT, Case, plain
 
 import eventcheck
 from junkfather import procs, resources
@@ -66,7 +66,7 @@ class ResourceCase(Case):
     def own(self, *args: str, env: "Dict[str, str] | None" = None) -> Dict[str, Any]:
         result = self.cli("own", *args, env=env or self.env)
         self.assertEqual(0, result.returncode, result.stderr + result.stdout)
-        entry = self.store.entries()[-1]
+        entry = plain(self.store.entries()[-1])
         self.assertEqual(("resource", "running"), (entry["mode"], entry["state"]))
         return entry
 
@@ -111,7 +111,7 @@ class SimulatorTests(ResourceCase):
         result = self.cli("reap", "--id", entry["id"], "--json", "--grace", "1", env=self.env)
         self.assertEqual(1, result.returncode)
         self.assertEqual("failed", json.loads(result.stdout)["results"][0]["result"])
-        kept = self.store.load(entry["id"]) or {}
+        kept = self.loaded(entry["id"])
         self.assertEqual("running", kept["state"])
         self.assertIn("failing on purpose", kept["last_error"]["error"])
         failed = [e for e in self.events() if e["kind"] == "resource.stop_failed"]
@@ -198,7 +198,7 @@ class DockerTests(ResourceCase):
         self.store.update(self.store.entries()[0]["id"], lambda e: e.update(state="reaped"))
         result = self.cli("own-resource", "--kind", "docker", "--id", "box0", env=self.env)
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual(ident, self.store.entries()[-1]["resource"]["id"])
+        self.assertEqual(ident, plain(self.store.entries()[-1])["resource"]["id"])
         self.assertEqual(1, self.cli("own-resource", "--kind", "docker", "--id", "nope", env=self.env).returncode)
 
     def test_a_failed_rm_after_a_stop_is_a_warning_not_a_silent_success(self):
@@ -320,7 +320,7 @@ class SafariTests(ResourceCase):
         entry = self.own("--kind", "safari-tp", "--", "open", "-n", "-g", "-a", "Safari Technology Preview")
         result = self.cli("reap", "--id", entry["id"], "--json", "--grace", "1", env=self.env)
         self.assertEqual("failed", json.loads(result.stdout)["results"][0]["result"])
-        self.assertIn("not the only one", (self.store.load(entry["id"]) or {})["last_error"]["error"])
+        self.assertIn("not the only one", self.loaded(entry["id"])["last_error"]["error"])
         self.assertTrue(self.runs(theirs.pid) and self.runs(entry["resource"]["pid"]), "both keep running")
         self.assertFalse([c for c in self.fake_state()["calls"] if c[0] == "osascript"])
 
@@ -346,7 +346,7 @@ class CommandKindTests(ResourceCase):
         result = self.cli("own-resource", "--kind", "command", "--id", "marker", "--alive",
                           f"test -e '{marker}'", "--stop", f"rm '{marker}'", env=self.env)
         self.assertEqual(0, result.returncode, result.stderr)
-        (entry,) = self.store.entries()
+        (entry,) = map(plain, self.store.entries())
         self.assertEqual(["rm", str(marker)], entry["resource"]["stop"])
         self.assertEqual(0, self.cli("reap", "--id", entry["id"], env=self.env).returncode)
         self.assertFalse(marker.exists())

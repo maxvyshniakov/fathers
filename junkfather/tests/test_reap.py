@@ -4,19 +4,27 @@ from __future__ import annotations
 import json
 import os
 import signal
+from typing import Any, Dict, List, Optional, Tuple
 import unittest
 
-from support import Case, proc, table
+from support import Case, as_entry, proc, table
 
 from junkfather import procs, reap
+from junkfather.entry import Entry
 
 A = "Thu Nov 12 10:00:00 2026"
 B = "Thu Nov 12 11:30:00 2026"
 
 
-def entry(pid: "int | None" = 100, start: str = A, cmd: str = "node server.js", group: bool = True, known=None):
-    return {"id": "jtest", "state": "running", "pid": pid, "pgid": pid, "start": start, "seen": cmd, "group": group,
-            "known": known or [], "argv": cmd.split(), "expires": 0, "keep": "owner", "owner": {}}
+def entry(pid: Optional[int] = 100, start: str = A, cmd: str = "node server.js", group: bool = True,
+          known: Optional[List[List[Any]]] = None) -> Entry:
+    return as_entry({"id": "jtest", "state": "running", "pid": pid, "pgid": pid, "start": start, "seen": cmd,
+                     "group": group, "known": known or [], "argv": cmd.split(), "expires": 0, "keep": "owner",
+                     "owner": {}})
+
+
+def no_signal(pid: int, sig: int) -> None:
+    raise AssertionError(f"signalled {pid} with {sig}")
 
 
 class MembersTests(unittest.TestCase):
@@ -70,9 +78,9 @@ class MembersTests(unittest.TestCase):
 class StopTests(unittest.TestCase):
     def test_term_then_kill_only_to_unchanged_identities(self):
         alive = {100: A, 101: A, 102: A}
-        sent = []
+        sent: List[Tuple[int, int]] = []
 
-        def kill(pid, sig):
+        def kill(pid: int, sig: int) -> None:
             sent.append((pid, sig))
             if sig == signal.SIGTERM and pid == 100:
                 alive.pop(100)
@@ -90,7 +98,7 @@ class StopTests(unittest.TestCase):
         self.assertNotIn((102, signal.SIGKILL), sent)
 
     def test_nothing_alive_is_gone(self):
-        result = reap.stop([proc(100)], look=lambda pids: {}, kill=lambda *_: self.fail("signalled"))
+        result = reap.stop([proc(100)], look=lambda pids: {}, kill=no_signal)
         self.assertEqual("gone", result["result"])
 
 
@@ -135,9 +143,9 @@ class ReviewFixTests(Case):
         self.assertEqual([100, 101, 106], [p.pid for p in found])
 
     def test_an_unreadable_process_table_fails_the_stop_and_keeps_the_entry(self):
-        def look(_pids):
+        def look(_pids: List[int]) -> Dict[int, Tuple[str, str]]:
             raise procs.ProcError("ps did not answer")
-        result = reap.stop([proc(100)], look=look, kill=lambda *_: self.fail("signalled"))
+        result = reap.stop([proc(100)], look=look, kill=no_signal)
         self.assertEqual("failed", result["result"])
         child = self.spawn("sleep", "600", start_new_session=True)
         mine = procs.Table.read().get(child.pid)
@@ -246,7 +254,7 @@ class CommandFactorTests(Case):
         self.assertEqual(("leader", [100]), (how, [p.pid for p in found]))
 
     def test_stop_signals_no_pid_whose_command_changed_since_it_was_read(self):
-        sent = []
+        sent: List[Tuple[int, int]] = []
         result = reap.stop([proc(100, cmd="node server.js"), proc(101, cmd="node worker.js")], grace=0,
                            look=lambda pids: {100: (A, "/bin/zsh"), 101: (A, "node worker.js --x")},
                            kill=lambda pid, sig: sent.append((pid, sig)), now=iter(range(100)).__next__,
@@ -268,13 +276,13 @@ class CommandFactorTests(Case):
         self.assertIsNotNone(launch.record_child(self.store, "jtest", child, os.getpid()))
         shim = "/usr/bin/python3 shim.py"  # what a launcher showed before it exec'd the real program
         self.store.update("jtest", lambda e: e.update(seen=shim, known_seen=[[child.pid, e["start"], shim]]))
-        self.assertEqual([], reap.members(self.store.load("jtest") or {}, procs.Table.read())[0])
+        self.assertEqual([], reap.members(as_entry(self.loaded("jtest")), procs.Table.read())[0])
         from test_supervisor import Quiet
         launch.Supervisor(self.store, "jtest", child, quiet=True, catcher=Quiet()).refresh(None)
-        now = self.store.load("jtest") or {}
+        now = self.loaded("jtest")
         self.assertEqual([[child.pid, now["start"], "sleep 600"]], now["known_seen"])
         self.assertEqual(([child.pid], "leader"),
-                         (lambda f: ([p.pid for p in f[0]], f[1]))(reap.members(now, procs.Table.read())))
+                         (lambda f: ([p.pid for p in f[0]], f[1]))(reap.members(as_entry(now), procs.Table.read())))
 
     def test_reap_pid_force_refuses_a_listed_pid_whose_command_changed(self):
         import json
@@ -296,15 +304,16 @@ class FailureStreakTests(Case):
         mine = procs.Table.read().get(child.pid)
         assert mine is not None
         self.store.save(entry(pid=child.pid, start=mine.start, cmd=mine.cmd))
-        failing = lambda targets, grace: {"result": "failed", "signalled": [], "left": [t.pid for t in targets],  # noqa: E731
-                                          "error": "ps did not answer"}
+        def failing(targets: List[procs.Proc], grace: float) -> Dict[str, Any]:
+            return {"result": "failed", "signalled": [], "left": [t.pid for t in targets], "error": "ps did not answer"}
+
         first = reap.reap(self.store, "jtest", "ttl expired", stopper=failing)
         again = reap.reap(self.store, "jtest", "ttl expired", stopper=failing, report_failure=False)
         self.assertEqual(("failed", "failed"), (first["result"], again["result"]))
         lines = (self.state / "events.jsonl").read_text().splitlines()
         self.assertEqual(1, len(lines), "only the first failure of the streak is an event")
         self.assertEqual("running", self.state_of("jtest"))
-        self.assertIn("left", (self.store.load("jtest") or {})["last_error"])
+        self.assertIn("left", self.loaded("jtest")["last_error"])
 
     def test_an_unreadable_first_table_records_last_error_and_starts_the_streak_with_an_event(self):
         self.store.save(entry(pid=4242, known=[[4242, A]]))
@@ -317,5 +326,5 @@ class FailureStreakTests(Case):
         events = [json.loads(line) for line in (self.state / "events.jsonl").read_text().splitlines()]
         self.assertEqual(["entry.reap_failed"], [e["kind"] for e in events])
         self.assertEqual("ps did not answer", events[0]["details"]["error"])
-        recorded = self.store.load("jtest") or {}
+        recorded = self.loaded("jtest")
         self.assertEqual(("running", "ps did not answer"), (recorded["state"], recorded["last_error"]["error"]))

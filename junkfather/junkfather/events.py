@@ -18,7 +18,7 @@ from pathlib import Path
 import re
 import socket
 import time
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Sequence, cast
 
 from . import owner as _owner
 from . import text as _text
@@ -51,9 +51,9 @@ def clean(value: Any, depth: int = 0) -> Any:
     if depth >= 3:
         return clean(json.dumps(value, sort_keys=True, default=str), depth)
     if isinstance(value, Mapping):
-        return {clean(str(k)): clean(v, depth + 1) for k, v in value.items()}
+        return {clean(str(k)): clean(v, depth + 1) for k, v in cast(Mapping[Any, Any], value).items()}
     if isinstance(value, (list, tuple)):
-        return [clean(v, depth + 1) for v in value]
+        return [clean(v, depth + 1) for v in cast(Sequence[Any], value)]
     return clean(str(value), depth)
 
 

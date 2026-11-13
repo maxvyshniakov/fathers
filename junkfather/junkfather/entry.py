@@ -14,10 +14,51 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypedDict
 
 from . import procs as _procs
-from .state import Entry, Store, VERSION
+from .state import Store, VERSION
+
+
+class _Written(TypedDict):
+    """The keys `new` writes into every entry (docs/reference.md, Entry)."""
+    v: int
+    id: str
+    label: Optional[str]
+    argv: List[str]
+    cwd: str
+    created: float
+    ttl: float
+    expires: float
+    keep: str  # owner | session
+    owner: Dict[str, Any]  # owner.py: kind, session, agent, agent_type, pid, pid_start, lane
+    mode: str  # attached | detached | adopted | resource
+    state: str  # STATES
+    pid: Optional[int]
+    pgid: Optional[int]
+    start: Optional[str]
+    seen: Optional[str]
+    group: bool
+    known: List[List[Any]]  # [pid, start]
+    supervisor: Optional[Dict[str, Any]]  # {pid, start}
+    log: Optional[str]
+
+
+class Entry(_Written, total=False):
+    """An entry as `entries/<id>.json` holds it. The keys below are absent from entries older releases wrote
+    (`known_seen`, `handed`, `claim_note`) or appear with the state that sets them. A file is read as it is
+    (state.entry_of): code that cannot rule out an older or damaged file reads with `.get`, as it always did."""
+    known_seen: List[List[Any]]  # [pid, start, command]
+    handed: List[Dict[str, Any]]  # {at, from, to}
+    claim_note: str
+    resource: Dict[str, Any]  # resource entries: {kind, id, name, ...}
+    reaping: Dict[str, Any]  # {reason, at, by, by_start} while reaping
+    ended: Optional[float]
+    exit: Optional[int]
+    end: Optional[Dict[str, Any]]  # {reason, result, how, pids} once reaped
+    error: str  # why it failed
+    last_error: Dict[str, Any]  # the last reap that failed: {at, ...}
+
 
 STARTING = "starting"
 RUNNING = "running"
@@ -44,15 +85,16 @@ def new(store: Store, argv: List[str], ttl: float, keep: str, label: Optional[st
             "supervisor": None, "log": None, "claim_note": owner.pop("claim_note", "")}
 
 
-def known_fields(found: Sequence[_procs.Proc]) -> Dict[str, List[List[Any]]]:
+def set_known(entry: Entry, found: Sequence[_procs.Proc]) -> None:
     """An entry's `known` members (pid, start) and, beside them, the command each showed (`known_seen`)."""
-    return {"known": [[p.pid, p.start] for p in found], "known_seen": [[p.pid, p.start, p.cmd] for p in found]}
+    entry["known"] = [[p.pid, p.start] for p in found]
+    entry["known_seen"] = [[p.pid, p.start, p.cmd] for p in found]
 
 
 def _move(store: Store, entry_id: str, allowed: Callable[[Entry], bool], change: Callable[[Entry], None]
           ) -> Optional[Entry]:
     """Apply `change` when `allowed` holds for the entry as read under the lock; the entry, or None."""
-    applied = []
+    applied: List[bool] = []
 
     def step(e: Entry) -> Optional[bool]:
         if not allowed(e):
@@ -79,9 +121,11 @@ def save_starting(store: Store, entry: Entry) -> None:
 
 def started(store: Store, entry_id: str, leader: _procs.Proc, supervisor: Dict[str, Any]) -> Optional[Entry]:
     """starting -> running, with the leader's identity: it leads a group of its own, and is its only known member."""
-    return _move(store, entry_id, _from(STARTING), lambda e: e.update(
-        state=RUNNING, pid=leader.pid, pgid=leader.pid, start=leader.start, seen=leader.cmd, supervisor=supervisor,
-        **known_fields([leader])))
+    def change(e: Entry) -> None:
+        e.update({"state": RUNNING, "pid": leader.pid, "pgid": leader.pid, "start": leader.start,
+                  "seen": leader.cmd, "supervisor": supervisor})
+        set_known(e, [leader])
+    return _move(store, entry_id, _from(STARTING), change)
 
 
 def failed(store: Store, entry_id: str, error: str, now: Optional[float] = None, start_error: bool = False
@@ -91,13 +135,14 @@ def failed(store: Store, entry_id: str, error: str, now: Optional[float] = None,
     ("never started"), as it always did."""
     at = time.time() if now is None else now
     allowed = _from(STARTING, FAILED) if start_error else _from(STARTING)
-    return _move(store, entry_id, allowed, lambda e: e.update(state=FAILED, ended=at, error=error))
+    return _move(store, entry_id, allowed, lambda e: e.update({"state": FAILED, "ended": at, "error": error}))
 
 
 def adopted(store: Store, entry: Entry, leader: _procs.Proc, members: Sequence[_procs.Proc]) -> Entry:
     """A new entry (from `new`) for a process that already runs, saved as running: its group when it leads one."""
-    entry.update(state=RUNNING, pid=leader.pid, pgid=leader.pgid, start=leader.start, seen=leader.cmd,
-                 group=leader.pgid == leader.pid, **known_fields(members))
+    entry.update({"state": RUNNING, "pid": leader.pid, "pgid": leader.pgid, "start": leader.start,
+                  "seen": leader.cmd, "group": leader.pgid == leader.pid})
+    set_known(entry, members)
     with store.lock():
         store.save(entry)
     return entry
@@ -107,7 +152,7 @@ def resource_owned(store: Store, entry: Entry, resource: Dict[str, Any], holds: 
                    ) -> Tuple[Optional[Entry], Optional[str]]:
     """A new entry (from `new`) for a resource that runs now, saved as running; refused (None and the id of the
     holder) when a live entry holds that resource already."""
-    entry.update(state=RUNNING, group=False, resource=resource)
+    entry.update({"state": RUNNING, "group": False, "resource": resource})
     with store.lock():
         holder = next((e["id"] for e in store.entries() if e.get("state") in LIVE and holds(e)), None)
         if holder:
@@ -123,7 +168,7 @@ def refreshed(store: Store, entry_id: str, members_of: Callable[[Entry], List[_p
     """The supervisor's refresh of a running entry: its `known` members as `members_of` finds them now; with none
     left and its command's exit `code` known, running -> exited. Returns (the entry, whether it exited, how many
     members remain); the entry is None when it was not running or nothing was written."""
-    result = {"done": False, "left": 0}
+    result: Dict[str, int] = {"done": 0, "left": 0}
 
     def step(e: Entry) -> Optional[bool]:
         if e.get("state") != RUNNING:
@@ -131,12 +176,13 @@ def refreshed(store: Store, entry_id: str, members_of: Callable[[Entry], List[_p
         members = members_of(e)
         result["left"] = len(members)
         if members:
-            e.update(known_fields(members))
+            set_known(e, members)
             return None
         if code is None:
             return False
-        e.update(state=EXITED, ended=time.time() if now is None else now, exit=code, known=[], known_seen=[])
-        result["done"] = True
+        e.update({"state": EXITED, "ended": time.time() if now is None else now, "exit": code, "known": [],
+                  "known_seen": []})
+        result["done"] = 1
         return None
 
     entry = store.update(entry_id, step)
@@ -145,7 +191,7 @@ def refreshed(store: Store, entry_id: str, members_of: Callable[[Entry], List[_p
 
 def known(store: Store, entry_id: str, members: Sequence[_procs.Proc]) -> Optional[Entry]:
     """A running entry's `known` members, refreshed (by a sweep when no supervisor does it)."""
-    return _move(store, entry_id, _from(RUNNING), lambda e: e.update(known_fields(members)))
+    return _move(store, entry_id, _from(RUNNING), lambda e: set_known(e, members))
 
 
 def gone(store: Store, entry_id: str, now: Optional[float] = None) -> Optional[Entry]:
@@ -154,21 +200,21 @@ def gone(store: Store, entry_id: str, now: Optional[float] = None) -> Optional[E
 
     def change(e: Entry) -> None:
         if e.get("mode") == "resource":
-            e.update(state=GONE, ended=at)
+            e.update({"state": GONE, "ended": at})
         else:
-            e.update(state=GONE, ended=at, known=[])
+            e.update({"state": GONE, "ended": at, "known": []})
     return _move(store, entry_id, _from(RUNNING), change)
 
 
 def revived(store: Store, entry_id: str) -> Optional[Entry]:
     """gone -> running: a sweep took it for ended while the supervisor's own child still runs."""
-    return _move(store, entry_id, _from(GONE), lambda e: e.update(state=RUNNING, ended=None))
+    return _move(store, entry_id, _from(GONE), lambda e: e.update({"state": RUNNING, "ended": None}))
 
 
 def extended(store: Store, entry_id: str, ttl: float, now: Optional[float] = None) -> Optional[Entry]:
     """A new TTL from now, for a running or starting entry."""
     at = time.time() if now is None else now
-    return _move(store, entry_id, _from(*OPEN), lambda e: e.update(ttl=ttl, expires=at + ttl))
+    return _move(store, entry_id, _from(*OPEN), lambda e: e.update({"ttl": ttl, "expires": at + ttl}))
 
 
 def handed(store: Store, entry_id: str, target: Dict[str, Any], now: Optional[float] = None
@@ -191,7 +237,7 @@ def handed(store: Store, entry_id: str, target: Dict[str, Any], now: Optional[fl
 def noted_error(store: Store, entry_id: str, error: Dict[str, Any], now: Optional[float] = None) -> Optional[Entry]:
     """A running entry's `last_error`: a reap that could not start (an unreadable process table)."""
     at = time.time() if now is None else now
-    return _move(store, entry_id, _from(RUNNING), lambda e: e.update(last_error={"at": at, **error}))
+    return _move(store, entry_id, _from(RUNNING), lambda e: e.update({"last_error": {"at": at, **error}}))
 
 
 # Reaping
@@ -207,7 +253,7 @@ def begin_reap(store: Store, entry_id: str, reason: str, table: Optional[_procs.
             table = None
     mine = ((table.get(me) if table is not None else None) or _procs.Proc(me, 0, 0, 0, "", "", "")).start
     marked = _move(store, entry_id, _from(RUNNING), lambda e: e.update(
-        state=REAPING, reaping={"reason": reason, "at": time.time(), "by": me, "by_start": mine}))
+        {"state": REAPING, "reaping": {"reason": reason, "at": time.time(), "by": me, "by_start": mine}}))
     if marked is None or (marked.get("reaping") or {}).get("by") != me:
         return None
     return me
@@ -231,4 +277,4 @@ def end_reap(store: Store, entry_id: str, me: int, done: bool, end: Dict[str, An
 
 def release_stuck(store: Store, entry_id: str) -> Optional[Entry]:
     """reaping -> running: its reaper died before it finished (the sweep decides that)."""
-    return _move(store, entry_id, _from(REAPING), lambda e: e.update(state=RUNNING))
+    return _move(store, entry_id, _from(REAPING), lambda e: e.update({"state": RUNNING}))

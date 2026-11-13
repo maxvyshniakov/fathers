@@ -8,26 +8,29 @@ from __future__ import annotations
 import json
 import os
 import sys
+from typing import Any, Dict, List, Tuple
 
 
-def load() -> dict:
+def load() -> Dict[str, Any]:
     with open(os.environ["JUNKFATHER_FAKE_STATE"], encoding="utf-8") as handle:
         return json.load(handle)
 
 
-def save(state: dict) -> None:
+def save(state: Dict[str, Any]) -> None:
     path = os.environ["JUNKFATHER_FAKE_STATE"]
     with open(path + ".tmp", "w", encoding="utf-8") as handle:
         json.dump(state, handle)
     os.replace(path + ".tmp", path)
 
 
-def begin(tool: str) -> "tuple[dict, list]":
+def begin(tool: str) -> Tuple[Dict[str, Any], List[str]]:
     state = load()
     args = sys.argv[1:]
-    state.setdefault("calls", []).append([tool, *args])
+    calls: List[List[str]] = state.setdefault("calls", [])
+    calls.append([tool, *args])
     save(state)
-    for failing in state.get("fail") or []:
+    fails: List[List[str]] = state.get("fail") or []
+    for failing in fails:
         if [tool, *args][:len(failing)] == failing:
             print(f"{tool}: failing on purpose", file=sys.stderr)
             sys.exit(3)
