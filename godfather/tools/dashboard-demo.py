@@ -43,8 +43,8 @@ def load_scene(advance: bool = False, elapsed: Callable[[], float] | None = None
     """(the app module with the scene patched in, its first model): the demo's clock frozen at the scene's moment,
     or advancing from it, recorded machine samples replayed over the fixed queue. `elapsed` (seconds since the
     start) stands in for the wall clock, so frames drawn at chosen moments are the same every time."""
-    from godfather import app, sources, tui
-    from godfather.views import common, details, machine, overview
+    from godfather import app, sources
+    from godfather.views import common, details, machine
 
     data = json.loads(FIXTURE.read_text())
     profiles = json.loads(METRICS.read_text())["samples"]
@@ -60,7 +60,7 @@ def load_scene(advance: bool = False, elapsed: Callable[[], float] | None = None
     model["updated"] = dt.datetime.fromisoformat(model["updated"])
     model["overtake_window"] = 600
     judge(model["memory"])
-    machine.HISTORY_WINDOW = 60  # short demo zoom; the legend reports seconds per column
+    model["history_window"] = 60  # short demo zoom; the legend reports seconds per column
     origin = model["updated"]
     started = time.monotonic()
     since = elapsed or (lambda: time.monotonic() - started)
@@ -81,9 +81,8 @@ def load_scene(advance: bool = False, elapsed: Callable[[], float] | None = None
             return current().astimezone().date()
 
     clock = types.SimpleNamespace(datetime=Clock, date=Date, timedelta=dt.timedelta, timezone=dt.timezone)
-    overview.datetime = clock  # type: ignore[assignment]
-    tui.datetime = clock  # type: ignore[assignment]
-    model["history"] = machine.held_history(model["events"], model["used"], origin)
+    app.datetime = clock  # type: ignore[assignment]  # the live loop's clock, which its Tick carries to the state
+    model["history"] = machine.held_history(model["events"], model["used"], origin, 2 * model["history_window"])
     common.dashboard_colours(model, {})
 
     def sample() -> dict[str, Any]:
@@ -119,6 +118,7 @@ def load_scene(advance: bool = False, elapsed: Callable[[], float] | None = None
     holders = [holder["pid"] for holder in model["holders"]]
     sources.process_cwd = lambda pid: "~/straylight" if pid in holders else None  # type: ignore[assignment]
     app.Scene = Scene  # type: ignore[attr-defined]
+    app.scene_clock = current  # type: ignore[attr-defined]
     scene_news(app)
     return app, sample()
 
@@ -163,6 +163,7 @@ def frames(steps: list[Step], times: list[float], width: int, height: int) -> li
     renderer over the scene, its clock moved by hand and every load done at once, so each run gives the same
     frames."""
     from godfather import state as _state
+    from godfather import tui
     from godfather.tui import Canvas
     from godfather.views import overview
 
@@ -182,7 +183,7 @@ def frames(steps: list[Step], times: list[float], width: int, height: int) -> li
             elif effect.kind == "load-news":
                 send(_state.NewsLoaded(app.load_news()))
             elif effect.kind == "load-model":
-                send(_state.ModelLoaded(*screen.load()))
+                send(_state.ModelLoaded(*screen.load(), colours=tui.current_theme.holders()))
 
     def draw() -> str:
         canvas = Canvas(width, height)
@@ -197,7 +198,7 @@ def frames(steps: list[Step], times: list[float], width: int, height: int) -> li
     for at in times:
         moment[0] = at
         if at - fetched >= current.interval:
-            send(_state.ModelLoaded(*screen.load()))
+            send(_state.ModelLoaded(*screen.load(), colours=tui.current_theme.holders()))
             fetched = at
         draw()  # the frame the keys land on, as on screen
         while pending and pending[0][0] <= at:
@@ -208,7 +209,7 @@ def frames(steps: list[Step], times: list[float], width: int, height: int) -> li
                     send(_state.Mouse(65, column, row, True))
             else:
                 send(_state.Key(keys))
-        send(_state.Tick())
+        send(_state.Tick(app.scene_clock()))
         found.append(draw())
     return found
 
@@ -223,7 +224,6 @@ def write_media(animation: bool) -> None:
     raster = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(raster)
     from godfather import theme, tui
-    from godfather.views import common
 
     os.environ["TZ"] = "Etc/GMT-2"
     time.tzset()
@@ -231,8 +231,7 @@ def write_media(animation: bool) -> None:
         palette = raster.THEMES[name]
         os.environ.update(GODFATHER_TERMINAL_BG="#%02x%02x%02x" % palette.background,
                           GODFATHER_TERMINAL_FG="#%02x%02x%02x" % palette.foreground, GODFATHER_THEME="auto")
-        tui.set_theme(theme.from_environment())
-        common.use_marks(False)
+        tui.set_theme(theme.from_environment())  # the theme frames() makes its canvases with
         draw = raster.Raster(*MEDIA, palette)
         if animation:
             times = [step / FPS for step in range(round(DURATION * FPS))]

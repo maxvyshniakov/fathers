@@ -6,7 +6,8 @@ it drew, its help, and the same model as a `status --json --full` reply (tools/s
 stand-in). Godfather reads that reply in fixture mode, its adapter decodes it, and Godfather renders it at the same
 moment. Every cell, character and style, must be identical, emoji and ASCII, wide, one-column and narrow, but the
 footer (its name and version) and the EVENTS panel, whose columns Godfather changed on purpose after the move (time ·
-slots · label · result, owner 2026-11-12); help likewise in every section but EVENTS. A missing or unreadable fixture
+slots · label · result, owner 2026-11-12), and the focused panel's top and bottom rules, heavy since fathers#139, and the history chart's title (fathers#140);
+help likewise in every section but EVENTS. A missing or unreadable fixture
 fails the test; it never skips.
 """
 from __future__ import annotations
@@ -20,11 +21,11 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from helpers import ROOT, frozen_at, timezone
+from helpers import ROOT, timezone
 
 from godfather import app, sources, state, tui
 from godfather.adapters import slotfather as adapter
-from godfather.views import common, machine, overlays, overview
+from godfather.views import common, overlays, overview
 
 
 FIXTURE = ROOT / "tests" / "fixtures" / "parity"
@@ -40,6 +41,22 @@ def read(name: str) -> Any:
     except (OSError, ValueError, EOFError, zlib.error) as error:
         raise AssertionError(f"parity fixture {path} unreadable ({error}); it is frozen from Slotfather 37c4df7, "
                              f"see {FIXTURE / 'README.md'}") from error
+
+
+def chart_title(canvas: tui.Canvas) -> set[tuple[int, int]]:
+    """The row inside MACHINE's frame that says `slots held` (fathers#140): its title above the chart, or the axis
+    line it leads, whose stats it moves."""
+    found: set[tuple[int, int]] = set()
+    for row, cells in enumerate(canvas.cells):
+        text = "".join(str(cell[0]) or "\0" for cell in cells)
+        at = text.find("slots held")
+        if at >= 0:
+            start, end = text.rindex("│", 0, at), text.index("│", at)
+            found |= {(row, column) for column in range(start + 1, end)}
+    return found
+
+
+RESTED = {"┍": "╭", "┑": "╮", "┕": "╰", "┙": "╯", "━": "─"}  # a focused frame's rules as a resting one's
 
 
 class ParityTests(unittest.TestCase):
@@ -62,29 +79,26 @@ class ParityTests(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, dict(keep, GODFATHER_FIXTURES=str(self.out)), clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
-        tui.set_theme(app._theme.from_environment(environ={}))
-        history = mock.patch.object(machine, "HISTORY_WINDOW", self.scene["history_window"])
-        history.start()
-        self.addCleanup(history.stop)
-        self.addCleanup(common.use_marks, False)
+        self.theme = app._theme.from_environment(environ={})
 
     def model(self) -> dict[str, Any]:
         model, error = app.Screen().load()
         self.assertIsNone(error)
         assert model is not None
-        common.dashboard_colours(model, {})
+        common.dashboard_colours(model, {}, self.theme.holders())
         for item in model["holders"] + model["waiters"]:
             item["lane"] = self.scene["lanes"][json.dumps(list(item["key"]))]
             if item["lane"] is None:
                 del item["lane"]
+        model["history_window"] = self.scene["history_window"]
         return model
 
     def canvas(self, width: int, height: int, ascii_only: bool, selected: int, help_open: bool = False) -> tui.Canvas:
         model = self.model()
-        common.use_marks(ascii_only)
-        with timezone("Etc/GMT-2"), frozen_at(adapter.parse_time(self.scene["moment"])):  # type: ignore[arg-type]
-            canvas = tui.Canvas(width, height)
-            overview.dashboard_draw(canvas, model, selected, state.Help() if help_open else None, cwd="~/straylight")
+        with timezone("Etc/GMT-2"):
+            canvas = tui.Canvas(width, height, self.theme, common.marks_for(ascii_only))
+            overview.dashboard_draw(canvas, model, selected, state.Help() if help_open else None, cwd="~/straylight",
+                                    moment=adapter.parse_time(self.scene["moment"]))
             return canvas
 
     def render(self, width: int, height: int, colour: bool, ascii_only: bool, selected: int,
@@ -108,11 +122,17 @@ class ParityTests(unittest.TestCase):
                     masked = {(row, column) for row in range(events["y"], events["y"] + events["height"])
                               for column in range(events["x"], events["x"] + events["width"])}
                 self.assertEqual(len(expected), canvas.height)
+                # QUEUE holds the focus where it is drawn: its rules are heavy (fathers#139)
+                focused = canvas.tables.get("requests", dict(x=0, y=-1, width=0, height=0))
+                rules = {focused["y"], focused["y"] + focused["height"] - 1}
+                masked |= chart_title(canvas)
                 for row in range(height - 1):
                     for column in range(width):
                         if (row, column) not in masked:
-                            self.assertEqual(expected[row][column], canvas.cells[row][column],
-                                             f"{name}: row {row}, column {column}")
+                            cell = canvas.cells[row][column]
+                            if row in rules and focused["x"] <= column < focused["x"] + focused["width"]:
+                                cell = [RESTED.get(str(cell[0]), cell[0]), *cell[1:]]
+                            self.assertEqual(expected[row][column], cell, f"{name}: row {row}, column {column}")
                 if events:  # the same frame and place, other columns
                     for row, column in ((events["y"], events["x"]), (events["y"] + events["height"] - 1,
                                                                      events["x"] + events["width"] - 1)):

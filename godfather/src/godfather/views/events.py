@@ -1,6 +1,7 @@
 """EVENTS: what the queue did lately, newest first, as time · slots · label · result."""
 from __future__ import annotations
 
+import datetime
 import re
 from typing import Any, Optional, cast
 
@@ -59,13 +60,13 @@ def event_result(event: dict[str, Any]) -> Part:
     return detail, "dim"  # reprioritized: `batch → interactive`
 
 
-def event_outcome(event: dict[str, Any]) -> list[Part]:
+def event_outcome(event: dict[str, Any], marks: _common.Marks = _common.EMOJI) -> list[Part]:
     """The result column with the run's mark (fathers#108): `ok 34m ▲` for an outlier, `ok 34m ↗` for the run that
     turned its run type's trend slower; nothing for a trend row, whose label says it all."""
     if event.get("verb") == "trend":
         return [("", "dim")]
     found = [event_result(event)]
-    mark = _common.run_marks.get(str(event.get("run")))
+    mark = marks.run.get(str(event.get("run")))
     return found + [(" " + mark, "warn")] if mark else found
 
 
@@ -90,14 +91,15 @@ def event_cells(event: dict[str, Any], size: int, style: str = "text") -> list[P
     return cell_run(int(event["count"]), size, style, hollow=event["verb"] != "granted")
 
 
-def draw_events(canvas: Canvas, rect: Rect, model: Model) -> None:
+def draw_events(canvas: Canvas, rect: Rect, model: Model, moment: Optional[datetime.datetime] = None) -> None:
     """EVENTS (owner, 2026-11-12): time · slots · label · result. The slot cells say what happened (filled: taken,
     hollow: handed back), the label takes every cell the other columns leave, and the result, right-aligned, says
     how it went. Scrolled down, what arrived since is counted in its bottom border (Home goes back to it)."""
     events = cast(list[dict[str, Any]], model["events"])[::-1]
     panel = Panel(canvas, rect, "events")
     cells = cells_width([int(event["count"]) for event in events])
-    results = [event_outcome(event) for event in events]
+    marks = _common.marks_of(canvas)
+    results = [event_outcome(event, marks) for event in events]
     result = max([RESULT_MIN] + [sum(text_width(text) for text, _ in parts) for parts in results])
     table = Table.fit(panel.inner.width, [
         ("time", "time", 10, False, 0), ("slots", "slots", cells, False, 1), ("label", "label", 0, False, 0),
@@ -112,11 +114,11 @@ def draw_events(canvas: Canvas, rect: Rect, model: Model) -> None:
     for row, position in panel.rows(offset, visible, len(events)):
         event, outcome = events[position], results[position]
         if event.get("verb") == "trend":  # its own row: the run type and why across slots, label and result
-            table.row(canvas, row, panel.inner.x, {"time": (clock(event["when"]), "dim")})
+            table.row(canvas, row, panel.inner.x, {"time": (clock(event["when"], moment), "dim")})
             start = next((x for key, _, x, _, _ in table.placed if key in ("slots", "label")), 0)
             end = max(x + width for _, _, x, width, _ in table.placed)
             canvas.segments(row, panel.inner.x + start, trend_label(event), end - start)
             continue
         table.row(canvas, row, panel.inner.x, {
-            "time": (clock(event["when"]), "dim"), "label": str(event["label"] or "?"),
+            "time": (clock(event["when"], moment), "dim"), "label": str(event["label"] or "?"),
             "slots": event_cells(event, size), "result": outcome})

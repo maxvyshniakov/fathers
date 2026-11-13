@@ -39,7 +39,9 @@ class NavigationDemoTests(DemoCase):
         self.assertEqual(first["events"], later["events"])
         self.assertNotEqual([h["cpu"] for h in first["holders"]], [h["cpu"] for h in later["holders"]])
         tool = _view.current()
-        self.assertNotEqual(tool.history_buckets(first["history"], 56), tool.history_buckets(later["history"], 56))
+        window = first["history_window"]
+        self.assertNotEqual(tool.history_buckets(first["history"], 56, window),
+                            tool.history_buckets(later["history"], 56, window))
 
     def test_recorded_chart_has_peaks_and_fractional_vertical_cells(self) -> None:
         demo = load_demo()
@@ -50,7 +52,7 @@ class NavigationDemoTests(DemoCase):
         tool.dashboard_draw(canvas, model, cwd="~/straylight")
         text = canvas.render(False)
         self.assertTrue(any(glyph in text for glyph in "▁▂▃▄▅▆▇"))
-        values = tool.history_buckets(model["history"], 56)
+        values = tool.history_buckets(model["history"], 56, model["history_window"])
         self.assertGreaterEqual(sum(a != b for a, b in zip(values, values[1:])), 5)
         self.assertGreaterEqual(max(values) - min(values), 3)
 

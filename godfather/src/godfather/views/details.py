@@ -12,7 +12,7 @@ from ..layout import Rect
 from ..tui import SPINNER, Canvas, clip, clock, dashboard_text, megabytes, minutes, safe_link, short, span, text_width, \
     tilde
 from ..widgets import Panel, Part, Table, label_column
-from .common import Item, Model, bar, expected_run, meta_text, priority_mark, priority_of, share, share_style, ticket_of
+from .common import EMOJI, Item, Marks, Model, bar, expected_run, marks_of, meta_text, priority_mark, priority_of, share, share_style, ticket_of
 
 Fact = tuple[str, list[Part]]
 BUILTIN_CONTEXT = {"class", "priority", "ticket", "lane", "phase", "kind", "check", "sha", "on", "session",
@@ -46,8 +46,8 @@ def detail_title(item: Optional[Item]) -> str:
     return "LEASE DETAILS" if item is not None and item["kind"] != "waiting" else "REQUEST DETAILS"
 
 
-def queue_policy(model: Model) -> dict[str, str]:
-    """Admission estimates and deadlines for the head, exposed as table fields."""
+def queue_policy(model: Model, moment: Optional[datetime.datetime] = None) -> dict[str, str]:
+    """Admission estimates and deadlines for the head, exposed as table fields; times off `moment`'s day say it."""
     waiters = cast(list[Item], model["waiters"])
     if not waiters:
         return {}
@@ -57,19 +57,22 @@ def queue_policy(model: Model) -> dict[str, str]:
     fields: dict[str, str] = {}
     since = cast(Optional[datetime.datetime], head.get("since"))
     if model["free"] and head.get("passable") and since:
-        fields["pass until"] = clock(since + datetime.timedelta(seconds=float(model.get("overtake_window") or 0)))
+        fields["pass until"] = clock(since + datetime.timedelta(seconds=float(model.get("overtake_window") or 0)),
+                                     moment)
     if model.get("order") == "backfill" and model.get("start") is not None and since:
-        fields["start est"] = clock(model["start"])
+        fields["start est"] = clock(model["start"], moment)
         promised = model.get("reserved")  # the start it is promised: nothing that passes it ends later
         if promised is not None:
-            fields["reserved"] = clock(promised)
+            fields["reserved"] = clock(promised, moment)
         if model.get("limit"):
-            fields["pass until"] = clock(since + datetime.timedelta(seconds=model["limit"]))
+            fields["pass until"] = clock(since + datetime.timedelta(seconds=model["limit"]), moment)
     return fields
 
 
-def request_facts(item: Item, model: Model, position: int, moment: datetime.datetime) -> list[Fact]:
-    """The facts of a request: label, status, priority, ticket, its context, then how it waits or runs."""
+def request_facts(item: Item, model: Model, position: int, moment: datetime.datetime, marks: Marks = EMOJI,
+                  track: str = "■") -> list[Fact]:
+    """The facts of a request: label, status, priority, ticket, its context, then how it waits or runs; `marks` and
+    `track` (a bar's empty cell) are the canvas's."""
     lane: dict[str, Any] = item.get("lane") or {}
     context: dict[str, str] = item.get("context") or {}
     ticket_text, ticket_url = detail_ticket(item, lane)
@@ -80,7 +83,7 @@ def request_facts(item: Item, model: Model, position: int, moment: datetime.date
                    + f" · {item['count']} slot{'s' if item['count'] != 1 else ''}")
     facts: list[Fact] = [("label", [(item["label"] or "(no label)", "bold")]), ("status", [(heading, "text")])]
     priority = priority_of({"priority": item.get("served") or item.get("priority")})
-    mark = priority_mark(item)
+    mark = priority_mark(item, marks)
     asked = priority_of({"priority": item.get("priority")})
     how = f" · aged from {asked}" if priority != asked else ""
     how += f" · reprioritized from {item['reprioritized']}" if item.get("reprioritized") else ""
@@ -93,11 +96,11 @@ def request_facts(item: Item, model: Model, position: int, moment: datetime.date
             facts.append((label, [(dashboard_text(context[key]), "dim" if key in ("sha", "session") else "text")]))
     if item["kind"] == "waiting":
         since = item["since"]
-        facts.append(("queued", [(f"{clock(since)} · waiting "
+        facts.append(("queued", [(f"{clock(since, moment)} · waiting "
                                   f"{span((moment - since).total_seconds()) if since else '?'}", "text")]))
         if position == 0:
             facts.append(("free", [(f"{model['free']} of {model['slots']} slots", "text")]))
-            facts.extend((name, [(value, "text")]) for name, value in queue_policy(model).items())
+            facts.extend((name, [(value, "text")]) for name, value in queue_policy(model, moment).items())
             if model["used"] and model["memory_block"]:
                 facts.append(("blocked", [(model["memory_block"], "warn")]))
         else:
@@ -105,17 +108,17 @@ def request_facts(item: Item, model: Model, position: int, moment: datetime.date
             facts.append(("ahead", [(f"{position} requests · {sum(w['count'] for w in waiters[:position])} slots",
                                      "text")]))
             if item.get("est_start") is not None:  # schedule.forecast(): if nothing more comes
-                facts.append(("start est", [(clock(item["est_start"]), "text")]))
+                facts.append(("start est", [(clock(item["est_start"], moment), "text")]))
         facts.extend(expected_facts(item))
     else:
         used, allotted = share(item, model)
         style = share_style(item, model)
         note = " · above its share" if style == "bad" else ""
-        facts.append(("cpu", bar(used / allotted if allotted else 0, 10, style) +
+        facts.append(("cpu", bar(used / allotted if allotted else 0, 10, style, track) +
                       [(f" {used:.1f} of {short(allotted)} cores{note}", "text")]))
         if item["granted"]:
             waited = f" · waited {span((item['granted'] - item['since']).total_seconds())}" if item["since"] else ""
-            facts.append(("granted", [(f"{clock(item['granted'])}{waited} · running "
+            facts.append(("granted", [(f"{clock(item['granted'], moment)}{waited} · running "
                                        f"{span((moment - item['granted']).total_seconds())}", "text")]))
         facts.extend(expected_facts(item))
         facts.append(("memory", [(f"{megabytes(item['rss'] / 1024)} in {item['procs']} processes", "text")]))
@@ -189,7 +192,8 @@ def draw_detail(canvas: Canvas, rect: Rect, model: Model, selected: int, cwd: Op
     lane: dict[str, Any] = item.get("lane") or {}
     context: dict[str, str] = item.get("context") or {}
     _, ticket_url = detail_ticket(item, lane)
-    facts = request_facts(item, model, selected - len(model["holders"]), moment)
+    facts = request_facts(item, model, selected - len(model["holders"]), moment, marks_of(canvas),
+                          canvas.theme.track)
     inner = panel.inner.width
     label_width, value_width = label_column([*(name for name, _ in facts), "command", "meta", "cwd"], inner)
     where = clip_start(tilde(item["queue"] or cwd or ""), value_width)

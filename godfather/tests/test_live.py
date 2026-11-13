@@ -160,23 +160,25 @@ class FocusTests(unittest.TestCase):
                 self.assertEqual("\x1b[0;38;2;%d;%d;%dm" % view.current_theme.styles["accent"][0], view.sgr("accent", False),
                                  "our accent blue")
 
-    def test_every_frame_is_light_and_rounded_and_focus_shows_by_colour(self) -> None:
+    def test_frames_are_light_and_rounded_and_focus_shows_by_colour_and_heavy_rules(self) -> None:
         view = tool()
         canvas = view.Canvas(80, 20)
         canvas.focus = "details"
         frames_of(view, canvas)
         rows = ["".join(cell[0] for cell in row) for row in canvas.cells]
-        for x, name in ((0, "QUEUE"), (40, "DETAILS")):
-            self.assertEqual(("╭", "╮", "╰", "╯"), (rows[0][x], rows[0][x + 39], rows[9][x], rows[9][x + 39]), name)
-            self.assertEqual(("│", "─"), (rows[5][x], rows[9][x + 20]), name)
+        self.assertEqual(("╭", "╮", "╰", "╯"), (rows[0][0], rows[0][39], rows[9][0], rows[9][39]), "QUEUE")
+        self.assertEqual(("│", "─"), (rows[5][0], rows[9][20]), "QUEUE")
+        # fathers#139: the focused panel's top and bottom are heavy rules, its sides light
+        self.assertEqual(("┍", "┑", "┕", "┙"), (rows[0][40], rows[0][79], rows[9][40], rows[9][79]), "DETAILS")
+        self.assertEqual(("│", "━"), (rows[5][40], rows[9][60]), "DETAILS")
         self.assertEqual(("╭", "╮"), (rows[10][0], rows[10][79]))
-        self.assertFalse(set("┏┓┗┛━┃") & set("".join(rows)), "no heavy glyphs")
+        self.assertFalse(set("┏┓┗┛┃") & set("".join(rows)), "no heavy sides or corners")
         self.assertEqual({"accent"}, {cell[1] for cell in (canvas.cells[0][40], canvas.cells[0][79],
                                                             canvas.cells[5][40], canvas.cells[9][60])})
         self.assertEqual({"frame"}, {cell[1] for cell in (canvas.cells[0][0], canvas.cells[5][39], canvas.cells[15][0])})
         lines = canvas.lines(True)
         blue = view.sgr("accent", False)
-        self.assertIn(blue + "╭", lines[0], "the focused corner in our blue")
+        self.assertIn(blue + "┍", lines[0], "the focused corner in our blue")
         self.assertIn(blue + "│", lines[5], "and its sides")
         self.assertEqual("DETAILS", "".join(cell[0] for cell in canvas.cells[0][43:50]))
         self.assertEqual("title", canvas.cells[0][43][1], "the title in the foreground (bold), as on every panel")
