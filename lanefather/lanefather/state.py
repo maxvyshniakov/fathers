@@ -23,6 +23,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 from typing import Any
 
 from . import config
@@ -50,6 +51,8 @@ class Store:
         for path in sorted(self.directory.glob("*.json")):
             if path.name.count(".") == 1:
                 record = read_json(path, reject_duplicates=strict)
+                if record is None and read_json(path) is None and path.exists():
+                    raise LaneError(cut_short(path))
                 if record is not None and "id" in record:
                     if strict and (record["id"] != path.stem or record.get("status") not in (*OCCUPYING, *LANDED)):
                         raise LaneError(f"lane state {path} has invalid identity or status; collection refuses")
@@ -105,10 +108,43 @@ def read_json(path: Path, *, reject_duplicates: bool = False) -> dict[str, Any] 
     return data if isinstance(data, dict) else None  # pyright: ignore[reportUnknownVariableType]
 
 
+def cut_short(path: Path) -> str:
+    return (f"lane state {path} is empty or not a JSON object: a write was cut short or the file is damaged. "
+            "Restore the record or remove the file; until then it is not read as a lane, and start does not replace it")
+
+
+def atomic_write(path: Path, text: str, mode: int | None = None) -> None:
+    """Replace `path` with `text` so a reader sees the old file or the whole new one, and a crash after the call
+    returns keeps the new one (fathers#129).
+
+    Each writer gets its own temporary file beside the target, named so no glob of records matches it; the file
+    and then its directory are synced; a failed write removes the temporary file and leaves the target as it was.
+    `mode` sets the file's permissions; None leaves them to the umask, as for an ordinary new file."""
+    pending = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666 if mode is None else mode)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            if mode is not None:
+                os.fchmod(handle.fileno(), mode)
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(pending, path)
+    except BaseException:
+        pending.unlink(missing_ok=True)
+        raise
+    # The rename lasts once the directory entry does; a file system that cannot sync a directory has done what it
+    # can.
+    with contextlib.suppress(OSError):
+        folder = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(folder)
+        finally:
+            os.close(folder)
+
+
 def write_json(path: Path, data: Any) -> None:
-    pending = path.with_name(path.name + ".pending")
-    pending.write_text(json.dumps(data, indent=2) + "\n")
-    pending.replace(path)
+    atomic_write(path, json.dumps(data, indent=2) + "\n")
 
 
 def migrate(record: Record) -> Record:
@@ -123,7 +159,10 @@ def migrate(record: Record) -> Record:
 
 
 def load(lane_id: str) -> Record:
-    record = read_json(record_path(lane_id))
+    path = record_path(lane_id)
+    record = read_json(path)
+    if record is None and path.exists():
+        raise LaneError(cut_short(path))
     if not isinstance(record, dict):
         raise LaneError(f"no lane {lane_id}; register it with {config.prog()} start")
     return migrate(record)  # pyright: ignore[reportUnknownArgumentType]

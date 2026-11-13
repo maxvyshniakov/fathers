@@ -47,6 +47,11 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Changed
 
+- Lane records and receipts are written durably (fathers#129): each write has its own temporary file and is synced
+  with its directory before the rename, as the settings and the registry already were, so two writers no longer
+  share a `<name>.pending` file and a crash leaves the old record or the new one. A lane record that is empty or not
+  JSON is reported, naming the file, by every command that reads the lanes (`status` shows it as the project's
+  error) instead of reading as no lane: `start` no longer registers over it and its claims are not dropped.
 - Unmarked P1 and P2 review findings hold the batch gate, not only the move of dev, and P3 findings no longer
   block (fathers#109, owner decision): the refusal lists each finding with the two commands that mark it, P3 findings
   are reported, and `[review] blocks = ["P1", "P2", "P3"]` keeps P3 blocking. `lanefather findings <sha> [--since

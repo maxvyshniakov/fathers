@@ -241,6 +241,12 @@ lanefather writes nothing an older `tools/lane` cannot read, and reads everythin
 each running its own branch's `tools/lane`, share the state directory with an installed lanefather. `tests/test_compat.py` proves it in both
 directions against that tool (`tests/fixtures/legacy-lane`). A record of a newer schema is refused, never rewritten.
 
+Records, receipts, the settings, the registry and the installed command are written whole: each write goes through
+its own temporary file beside the target, synced with its directory before the rename. A lane record that is empty
+or not a JSON object (a write a crash cut short) is reported by every command that reads the lanes, naming the
+file; it is never read as no lane, so `start` does not register over it and its claims are not silently released.
+Restore the record or remove the file.
+
 Safe to change: messages, the modules' insides. Not without a schema bump and a migration: record and receipt keys,
 the landing lock's file format (a project's reference-transaction hook reads it), the queue file.
 
