@@ -21,7 +21,6 @@ import os
 from pathlib import Path
 import re
 import subprocess
-import tempfile
 from typing import Any, cast
 
 from . import config, events, journal, state
@@ -130,19 +129,8 @@ def note(project: config.Config) -> None:
                             "repository": repository(Path(main_checkout(common))),
                             "seen": now.strftime(journal.LEDGER_TIME)})
             entries.sort(key=lambda entry: (entry["state_dir"], str(entry.get("common_dir"))))
-            pending: Path | None = None
-            try:
-                with tempfile.NamedTemporaryFile("w", dir=registry.parent, prefix=".projects-",
-                                                 delete=False) as handle:
-                    pending = Path(handle.name)
-                    handle.write(json.dumps({"v": VERSION, "projects": entries}, indent=2) + "\n")
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                os.replace(pending, registry)
-                pending = None
-            finally:
-                if pending is not None:
-                    pending.unlink(missing_ok=True)
+            # 0600 as the temporary file it was written through before fathers#129.
+            state.atomic_write(registry, json.dumps({"v": VERSION, "projects": entries}, indent=2) + "\n", mode=0o600)
 
 
 def identity(entry: dict[str, Any]) -> tuple[str, str | None]:

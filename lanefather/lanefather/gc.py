@@ -1,5 +1,9 @@
 """Conservative collection of merged idle agent worktrees and their unused branches.
 
+The candidates are the worktrees under the main checkout's .claude/worktrees whose name, path or branch matches the
+project's [gc] dirs and branches (agent, lane, Claude Code and Codex session worktrees by default, fathers#44); the
+branches deleted are the merged ones the branch patterns name that no worktree or lane uses.
+
 One Project value owns the configuration, state snapshot and process source for this pass. Git and slotfather's
 project adapter supply observations; cleanup policy lives here, rather than in a project's janitor. Project build
 caches and scratchpads are outside this module: [gc] after_remove runs only after a worktree was actually removed.
@@ -21,8 +25,6 @@ from .errors import LaneError
 from .gitops import common_dir, git, git_ok, main_checkout, worktree_list
 
 IDLE_SECONDS = 2 * 3600
-DIRS = ("agent-*", "lane-*")
-BRANCHES = ("worktree-agent-*", "lane/*")
 
 
 @dataclass
@@ -81,10 +83,11 @@ class Project:
             in_use = {e.get("branch") for e in entries if e["path"] not in removed}
             in_use.update(f"worktree-{os.path.basename(e['path'])}" for e in entries if e["path"] not in removed)
             in_use.update(r.get("branch") for r in records)
-            for branch in git(self._root, "for-each-ref", "--format=%(refname:short)",
-                              "refs/heads/worktree-agent-*", "refs/heads/lane/").splitlines():
-                if branch in in_use or not any(git_ok(self._root, "merge-base", "--is-ancestor",
-                                                     f"refs/heads/{branch}", t) for t in targets):
+            for branch in git(self._root, "for-each-ref", "--format=%(refname:short)", "refs/heads/").splitlines():
+                if not self._branch_collected(branch) or branch in in_use:
+                    continue
+                if not any(git_ok(self._root, "merge-base", "--is-ancestor", f"refs/heads/{branch}", t)
+                           for t in targets):
                     continue
                 try:
                     if not dry_run:
@@ -98,11 +101,13 @@ class Project:
         path, branch = entry["path"], entry.get("branch", "")
         if self._invoked_from == path or self._invoked_from.startswith(path + "/"):
             return "the collector is running inside this worktree"
-        if not (any(fnmatch.fnmatchcase(os.path.basename(path), p) for p in DIRS)
-                or any(fnmatch.fnmatchcase(branch, p) for p in BRANCHES)):
-            return "not an agent or lane worktree"
+        if not (self._dir_collected(path) or self._branch_collected(branch)):
+            return "not a collected worktree: neither [gc] dirs nor [gc] branches names it"
         if branch in ("dev", "main") or branch.startswith("integrate/"):
             return f"it has {branch} checked out"
+        inside = next((w["path"] for w in worktree_list(self._root) if w["path"].startswith(path + "/")), None)
+        if inside:
+            return f"it holds the worktree {inside}"
         if any(os.path.realpath(r.get("worktree") or "/") == path or r.get("branch") == branch for r in records):
             return "a lane record that is not done owns it"
         lock = entry.get("locked")
@@ -123,6 +128,17 @@ class Project:
             return "no process source; worktree use is unknown"
         _, held = self._processes.sort_for_removal(path)
         return "in use by " + "; ".join(held[:3]) if held else None
+
+    def _dir_collected(self, path: str) -> bool:
+        """A pattern with a '/' matches the path from the main checkout, one without the directory's name."""
+        relative = os.path.relpath(path, os.path.realpath(self._root))
+        return any(fnmatch.fnmatchcase(relative if "/" in p else os.path.basename(path), p)
+                   for p in self._settings.gc_dirs)
+
+    def _branch_collected(self, branch: str) -> bool:
+        if not branch or branch in ("dev", "main") or branch.startswith("integrate/"):
+            return False
+        return any(fnmatch.fnmatchcase(branch, p) for p in self._settings.gc_branches)
 
     def _remove(self, entry: dict[str, str], targets: list[str], dry_run: bool, result: Result) -> None:
         path = entry["path"]
