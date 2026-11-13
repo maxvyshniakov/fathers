@@ -143,6 +143,14 @@ class Table:
         return None if started is None else max(0.0, self.moment - started)
 
 
+def read_or_none() -> Optional[Table]:
+    """The process table, or None when it cannot be read (for callers to whom unknown is an answer)."""
+    try:
+        return Table.read()
+    except ProcError:
+        return None
+
+
 def identities(pids: List[int], command: bool = False) -> Dict[int, Any]:
     """pid -> start time (with `command`, pid -> (start time, command)) for those of `pids` that still run and are
     not zombies. ProcError when ps cannot be asked: an unreadable answer is never "they are gone"."""

@@ -163,7 +163,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             if args.kind:
                 if args.detach:
                     raise Usage("--kind runs its command attached: the resource outlives it")
-                who = _launch.owner_of(store, os.environ, ["own", *command], args.agent, args.lane)
+                who = _owner.resolve(os.environ, _procs.read_or_none(), os.getcwd(), store, ["own", *command],
+                                     args.lane, args.agent)
                 return _resources.own_wrapped(store, args.kind, command, args.ttl, args.keep_for, args.label, who,
                                               args.remove, args.quiet)
             return _launch.own(store, command, args.ttl, args.keep_for, args.label, os.environ, args.detach,
@@ -224,7 +225,8 @@ def own_resource_command(store: Store, args: argparse.Namespace) -> int:
         stop = shlex.split(args.stop) if args.stop else None
     except ValueError as error:
         raise Usage(f"--alive/--stop: {error}") from None
-    who = _launch.owner_of(store, os.environ, ["own-resource", args.resource_id], args.agent, args.lane)
+    who = _owner.resolve(os.environ, _procs.read_or_none(), os.getcwd(), store, ["own-resource", args.resource_id],
+                         args.lane, args.agent)
     return _resources.own_resource(store, args.kind, args.resource_id, args.ttl, args.keep_for, args.label, who,
                                    alive, stop, args.remove)
 
@@ -428,24 +430,11 @@ def report(results: List[Dict[str, Any]], args: argparse.Namespace) -> int:
 # hand, extend
 
 def hand_command(store: Store, entry_id: str, to: str) -> int:
-    table = table_or_none()
-    if to == "self":
-        target = _owner.detect(os.environ, table, os.getcwd())
-        if not target.get("session"):
-            raise Usage("--to self needs an agent session (CLAUDE_CODE_SESSION_ID or CODEX_THREAD_ID)")
-    else:
-        target = {"kind": "claude", "session": to, "agent": None, "agent_type": None, "pid": None,
-                  "pid_start": None, "lane": None}
-        for record in _owner.registry() or []:
-            if record.get("sessionId") == to and table is not None and _owner.registered_alive(record, table):
-                proc = table.get(record["pid"])
-                target.update(pid=record["pid"], pid_start=proc.start if proc else None)
-                break
-        else:
-            target["kind"] = "codex" if not any(r.get("sessionId") == to for r in _owner.registry() or []) else "claude"
-            print(f"junkfather hand: no live Claude Code session {to} in the registry; the entry ends at its TTL or "
-                  "when swept as orphaned if that session never shows up", file=sys.stderr)
-    target["agent"] = None
+    target, warning = _owner.hand_target(to, os.environ, table_or_none(), os.getcwd())
+    if target is None:
+        raise Usage(warning)
+    if warning:
+        print(f"junkfather hand: {warning}", file=sys.stderr)
     entry = _entry.handed(store, entry_id, target)
     before: Dict[str, Any] = entry["handed"][-1]["from"] if entry is not None else {}
     if entry is None or not before:

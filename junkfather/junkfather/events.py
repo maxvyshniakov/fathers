@@ -20,6 +20,8 @@ import re
 import socket
 from typing import Any, Dict, Mapping, Optional
 
+from . import owner as _owner
+
 VERSION = 1
 SOURCE = "junkfather"
 ROTATE = 4 << 20
@@ -93,12 +95,7 @@ def godfather() -> Optional[str]:
 
 def caller(via: Optional[str] = None) -> Dict[str, Any]:
     """Whoever runs this command, from the environment (no process table): an agent or this process's parent."""
-    session = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID")
-    pid = os.environ.get("CLAUDE_PID", "")
-    owner = {"kind": "claude" if session else "shell", "session": session,
-             "pid": int(pid) if session and pid.isdigit() else os.getppid(),
-             "lane": os.environ.get("JUNKFATHER_LANE") or os.environ.get("LANEFATHER_LANE")}
-    return actor_of(owner, via)
+    return actor_of(_owner.from_env(os.environ), via)
 
 
 def line(kind: str, subject_: Mapping[str, Any], actor: Mapping[str, Any], details: Mapping[str, Any],

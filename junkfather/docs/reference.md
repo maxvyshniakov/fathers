@@ -167,6 +167,11 @@ junkfather, a hook not installed), or two agents of the session with a matching 
 other, leaves the entry to the session alone, and `own` says so: a session-level entry lives longer, never shorter. Claude Code passes `agent_id` to hooks but not to the Bash
 tool's environment, hence the claims.
 
+`own` and `own-resource` take the subagent from `--agent`, `JUNKFATHER_AGENT` or a claim; `adopt` takes it from
+`--agent` only, since the process it names was not started by the Bash call that runs it. `hand --to SESSION`
+records the session's process when the registry names it live; otherwise the entry waits for that session (a
+Codex one when the registry never named it) and ends at its TTL or when swept as orphaned.
+
 ## Hooks
 
 | Event | junkfather does |

@@ -208,34 +208,11 @@ def status(code: Optional[int]) -> int:
     return code if code >= 0 else 128 - code
 
 
-def owner_of(store: Store, env: Mapping[str, str], words: List[str], agent: Optional[str] = None,
-             lane: Optional[str] = None) -> Dict[str, Any]:
-    """The owner of what this command starts: the detected session, its subagent from the claim holding `words`
-    (junkfather's own arguments), and the --lane/--agent overrides."""
-    try:
-        table: Optional[_procs.Table] = _procs.Table.read()
-    except _procs.ProcError:
-        table = None
-    who = _owner.detect(env, table, os.getcwd())
-    if lane:
-        who["lane"] = lane
-    if agent:
-        who["agent"] = agent
-    elif who["kind"] == "claude" and env.get("JUNKFATHER_AGENT"):
-        who["agent"] = env["JUNKFATHER_AGENT"]
-    elif who["kind"] == "claude" and who.get("session"):
-        claim, note = _owner.find_claim(store, who["session"], words)
-        if claim is not None:
-            who["agent"], who["agent_type"] = claim.get("agent"), claim.get("agent_type")
-        who["claim_note"] = note
-    return who
-
-
 def own(store: Store, argv: List[str], ttl: float, keep: str, label: Optional[str], env: Mapping[str, str],
         detach: bool = False, log: Optional[str] = None, quiet: bool = False, agent: Optional[str] = None,
         lane: Optional[str] = None) -> int:
     cwd = os.getcwd()
-    who = owner_of(store, env, ["own", *argv], agent, lane)
+    who = _owner.resolve(env, _procs.read_or_none(), cwd, store, ["own", *argv], lane, agent)
     entry = new_entry(store, argv, ttl, keep, label, who, "detached" if detach else "attached", cwd)
     if detach:
         entry["log"] = log or str(store.logs_dir / f"{entry['id']}.log")
@@ -327,11 +304,7 @@ def adopt(store: Store, pid: int, ttl: float, keep: str, label: Optional[str], e
         print(f"junkfather adopt: refusing pid {pid}: {refusal}", file=sys.stderr)
         return 1
     assert proc is not None
-    who = _owner.detect(env, table, os.getcwd())
-    if lane:
-        who["lane"] = lane
-    if agent:
-        who["agent"] = agent
+    who = _owner.resolve(env, table, os.getcwd(), store, ["adopt", str(pid)], lane, agent, claims=False)
     entry = _entry.adopted(store, new_entry(store, [proc.cmd], ttl, keep, label, who, "adopted", os.getcwd()), proc,
                            [proc, *table.descendants(pid, prune=_safety.unsafe)])
     _events.write(store.root, "entry.adopted", _events.subject(entry), _events.actor_of(who),
