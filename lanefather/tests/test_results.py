@@ -163,6 +163,7 @@ class PlatformTests(unittest.TestCase):
 
     def test_the_host_platform_is_its_os_and_architecture_and_the_default(self):
         from lanefather import results
+        os.environ.pop("LANEFATHER_PLATFORM", None)  # setUp's patch restores the caller's
         rows = [("Darwin", "arm64", "darwin-arm64"), ("Linux", "x86_64", "linux-x64"), ("Linux", "aarch64", "linux-arm64"),
                 ("Linux", "AMD64", "linux-x64"), ("Windows", "AMD64", "win32-x64"), ("Linux", "armv7l", "linux-arm")]
         for system, machine, expected in rows:
@@ -364,6 +365,11 @@ class TreeReuseTests(LaneCase):
         self.assertIn("not verified", self.lane("results", "lookup", "integrate/q", "--full", ok=False))
 
     def test_the_lookup_command_answers_with_its_exit_status_and_json(self):
+        # This host records as a Mac, whatever runs the test; --platform asks for another. The command reads the
+        # environment LaneCase took in setUp.
+        patcher = unittest.mock.patch.dict(self.env, {"LANEFATHER_PLATFORM": "darwin-arm64"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         worktree = self.created("a", "lib/**")
         self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
         self.lane("check", "a")
@@ -386,7 +392,7 @@ class TreeReuseTests(LaneCase):
                                      ok=False))
         self.assertEqual((linux["verified"], linux["platform"]), (False, "linux-x64"))
         self.assertNotEqual(linux["plan"], key["plan"])
-        self.assertEqual(full["platform"], key["platform"])
+        self.assertEqual((full["platform"], key["platform"]), ("darwin-arm64", "darwin-arm64"))
         self.lane("results", "record", head, "--full", "--status", "green", "--source", "ci", "--platform", "linux-x64")
         self.assertTrue(json.loads(self.lane("results", "lookup", head, "--full", "--platform", "linux-x64",
                                              "--json"))["verified"])
