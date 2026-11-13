@@ -190,6 +190,13 @@ def reap(store: Store, entry_id: str, reason: str, grace: float = GRACE, dry_run
     try:
         table = table or reader()
     except _procs.ProcError as error:
+        unread = {"reason": reason, "left": [], "error": str(error)}
+        if not dry_run:  # like any failed reap: last_error on the entry, and the event that opens a streak
+            store.update(entry_id, lambda e: e.update(last_error={"at": time.time(), **unread})
+                         if e.get("state") == "running" else False)
+            if report_failure:
+                _events.write(store.root, "entry.reap_failed", _events.subject(entry), actor or _events.caller(),
+                              {**unread, "result": "failed", "how": "", "signals": [], "pids": []}, "error")
         return {"id": entry_id, "result": "failed", "reason": f"{reason}; {error}", "pids": [], "how": ""}
     targets, how = members(entry, table, force=force)
     if dry_run:

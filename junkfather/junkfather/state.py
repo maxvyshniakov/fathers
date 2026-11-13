@@ -13,6 +13,7 @@ detached commands and an append-only event log, all under one directory.
 from __future__ import annotations
 
 import contextlib
+import errno
 import fcntl
 import json
 import os
@@ -36,7 +37,9 @@ def state_dir() -> Path:
 
 def write_atomic(path: Path, data: Any) -> None:
     """Replace `path` with `data` as JSON in one rename, after the new content reached the disk (fsync of the file,
-    then of its directory). A write that fails leaves the old file as it was and removes its temp file."""
+    then of its directory). A write that fails leaves the old file as it was and removes its temp file. A failed
+    directory fsync raises (the new content is in place but not known to be durable), except on a filesystem that
+    cannot sync a directory (EINVAL, ENOTSUP)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", dir=path.parent, prefix=f".{path.name}.", delete=False) as handle:
         try:
@@ -55,12 +58,14 @@ def write_atomic(path: Path, data: Any) -> None:
         with contextlib.suppress(OSError):
             os.unlink(handle.name)
         raise
-    with contextlib.suppress(OSError):
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    except OSError as error:
+        if error.errno not in (errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP):
+            raise  # the rename is in place but not known to be on disk: the caller must not take it for durable
+    finally:
+        os.close(directory)
 
 
 def read_json(path: Path) -> Any:

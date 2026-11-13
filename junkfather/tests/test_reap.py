@@ -1,6 +1,7 @@
 """Which processes a reap may signal, and how it signals them: identity first, a reused pid never."""
 from __future__ import annotations
 
+import json
 import os
 import signal
 import unittest
@@ -304,3 +305,17 @@ class FailureStreakTests(Case):
         self.assertEqual(1, len(lines), "only the first failure of the streak is an event")
         self.assertEqual("running", self.state_of("jtest"))
         self.assertIn("left", (self.store.load("jtest") or {})["last_error"])
+
+    def test_an_unreadable_first_table_records_last_error_and_starts_the_streak_with_an_event(self):
+        self.store.save(entry(pid=4242, known=[[4242, A]]))
+
+        def unreadable():
+            raise procs.ProcError("ps did not answer")
+        first = reap.reap(self.store, "jtest", "ttl expired", reader=unreadable)
+        again = reap.reap(self.store, "jtest", "ttl expired", reader=unreadable, report_failure=False)
+        self.assertEqual(("failed", "failed"), (first["result"], again["result"]))
+        events = [json.loads(line) for line in (self.state / "events.jsonl").read_text().splitlines()]
+        self.assertEqual(["entry.reap_failed"], [e["kind"] for e in events])
+        self.assertEqual("ps did not answer", events[0]["details"]["error"])
+        recorded = self.store.load("jtest") or {}
+        self.assertEqual(("running", "ps did not answer"), (recorded["state"], recorded["last_error"]["error"]))
