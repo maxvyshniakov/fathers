@@ -27,7 +27,8 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   changed since the sweep listed it.
 - A TTL reap that fails no longer makes the supervisor retry in a busy loop. It retries after 1 s, doubling up to
   60 s, and writes one `entry.reap_failed` event per run of failures.
-- Entry files are written durably: fsync before the rename. A write that fails leaves the old file and no temp file.
+- Entry files are written durably: fsync before the rename, then of the directory. A write that fails leaves
+  the old file and no temp file, and one whose directory cannot be synced reports the error.
 - junkfather lives in the `fathers` repository: install it with `python3 install.py junkfather` from a `fathers`
   checkout.
 

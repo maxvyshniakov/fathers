@@ -70,9 +70,16 @@ class InstallOptionTests(Case):
         return path
 
     def test_launchd_writes_the_agent_and_loads_it_again(self):
-        plist = self.install_module.launchd(self.command)
+        import plistlib
+        real = self.script("junkfather-checkout", f'cd "{ROOT}" && exec "{sys.executable}" -m junkfather "$@"')
+        plist = self.install_module.launchd(real)
         self.assertEqual(self.home / "Library" / "LaunchAgents" / "com.junkfather.sweep.plist", plist)
-        self.assertEqual("<plist sweep --plist>\n", plist.read_text())
+        agent = plistlib.loads(plist.read_bytes())
+        self.assertEqual("com.junkfather.sweep", agent["Label"])
+        self.assertEqual(["sweep", "--quiet"], agent["ProgramArguments"][-2:])
+        self.assertEqual((3600, True), (agent["StartInterval"], agent["RunAtLoad"]))
+        self.assertEqual(str(self.state), agent["EnvironmentVariables"]["JUNKFATHER_STATE"])
+        self.assertEqual(str(self.state / "sweep.out"), agent["StandardOutPath"])
         domain = f"gui/{os.getuid()}"
         self.assertEqual([f"launchctl bootout {domain}/com.junkfather.sweep", f"launchctl bootstrap {domain} {plist}"],
                          self.calls.read_text().splitlines())
