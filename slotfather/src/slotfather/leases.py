@@ -525,6 +525,22 @@ def policy() -> str:
     return value
 
 
+def next_sequence(directory: Path) -> int:
+    """The next queue sequence, under the queue lock, written whole (state.write()). It is past every entry in the
+    queue too: a torn or lost `sequence` file (an older client writes it in place) must not put a new request
+    ahead of those already waiting (fathers#123). Older clients read the file with int(), which takes "42\n"."""
+    try:
+        sequence = int((directory / "sequence").read_text() or 0)
+    except (OSError, ValueError):
+        sequence = 0
+    for path in (directory / "queue").glob("*.json"):
+        number = path.name.split("-", 1)[0]
+        if number.isdigit():
+            sequence = max(sequence, int(number))
+    _state.write(directory / "sequence", sequence + 1)
+    return sequence + 1
+
+
 def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wait: float | None = None,
             note: str = "", meta: dict[str, str] | None = None, yieldable: bool = False, *,
             priority: str | None = None, ticket: str | int | None = None,
@@ -574,12 +590,7 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
                                             f"{session['name']})")
         whole = count == "all"
         count = _config.total() if whole else min(count, _config.total())
-        sequence_file = directory / "sequence"
-        try:
-            sequence = int(sequence_file.read_text() or 0) + 1
-        except (OSError, ValueError):
-            sequence = 1
-        sequence_file.write_text(str(sequence))
+        sequence = next_sequence(directory)
         path = directory / "queue" / f"{sequence:010d}-{me}.json"
         entry: dict[str, Any] = {"pid": me, "start": table.get(me, (0, ""))[1], "count": count, "label": label, "cmd": command,
                  "cwd": cwd, "since": _config.now(), "state": "waiting", "priority": selected_priority,

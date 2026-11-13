@@ -141,7 +141,7 @@ def status_lines(directory: Path | None = None) -> list[str]:
     legacy = _leases.legacy_holders(table)
     marked = idle_of(directory, live)
     expect = outlook(directory, [e for _, e in live], slots, sum(c for _, _, c in legacy))
-    lines = []
+    lines: list[str] = []
     for path, e in live:
         meta = _config.meta_of(e)
         tags = f" meta={_config.meta_text(meta)}" if meta else ""
@@ -160,6 +160,8 @@ def status_lines(directory: Path | None = None) -> list[str]:
                      f"cmd={e['cmd']}")
     lines += [f"legacy: {count} slot(s) {e.get('label')} pid={e.get('pid')} (earlier queue {path.parent.parent})"
               for path, e, count in legacy]
+    lines += [f"unreadable: queue/{path.name} (empty or not JSON; left in place)"
+              for path in _state.unreadable(directory)]
     used = held_slots([e for _, e in live], legacy, slots)
     return lines + [held_line(used, slots)]
 

@@ -119,6 +119,11 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- Queue entries and the `sequence` file are written whole and synced to disk, so a crash no longer leaves an empty
+  entry or loses the counter; a torn `sequence` no longer puts a new request ahead of those already waiting. An
+  entry that cannot be read is left in place and `status` lists it as `unreadable`.
+- queue.log no longer grows for ever: past 4 MiB it becomes queue.log.1, replacing the older one, as history.jsonl
+  does; the dashboard's load chart reads across both.
 - On macOS two clients in different locales (`LC_ALL`, `LC_TIME`) no longer reap each other's live leases: `ps`
   runs in the C locale everywhere, and an entry an older client wrote in its own locale's words still matches its
   holder.

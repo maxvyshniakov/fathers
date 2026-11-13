@@ -168,13 +168,25 @@ def queue_events(directory: Path) -> list[dict[str, Any]]:
     """The grants, releases and reaps at the end of queue.log, oldest first. Each event carries `delta`, the change
     it made to held slots. A release whose grant precedes the part read is taken to end a held lease; one whose
     pid was never granted in a fully read log is a waiter that gave up."""
-    try:
-        with open(directory / "queue.log", "rb") as handle:
-            start = max(0, handle.seek(0, os.SEEK_END) - LOG_TAIL)
-            handle.seek(start)
-            lines = handle.read().decode("utf-8", "replace").splitlines()[1 if start else 0:]
-    except OSError:
-        return []
+    # The current part, and the end of the rotated one (queue.log.1, fathers#123) where the current is shorter than
+    # the part read. `cut` where the log was not read whole: cut, or a rotated part exists (lines
+    # older than it are gone).
+    data, cut, begin = b"", False, 0
+    for name in ("queue.log", "queue.log.1"):
+        try:
+            with open(directory / name, "rb") as handle:
+                begin = max(0, handle.seek(0, os.SEEK_END) - (LOG_TAIL - len(data)))
+                handle.seek(begin)
+                part = handle.read()
+        except OSError:
+            if name == "queue.log":
+                return []
+            break
+        data = part + (b"\n" if data and part and not part.endswith(b"\n") else b"") + data
+        cut = cut or begin > 0 or name == "queue.log.1"
+        if len(data) >= LOG_TAIL:
+            break
+    lines = data.decode("utf-8", "replace").splitlines()[1 if begin else 0:]
     events: list[dict[str, Any]] = []
     granted: dict[int, str] = {}
     for line in lines:
@@ -189,7 +201,7 @@ def queue_events(directory: Path) -> list[dict[str, Any]]:
                            "delta": count})
         elif found := RELEASED.match(message):
             count, pid = int(found[1]), int(found[2])
-            held = pid in granted or start > 0
+            held = pid in granted or cut
             events.append({"when": when, "verb": "released" if held else "left", "count": count,
                            "label": granted.pop(pid, ""), "pid": pid, "delta": -count if held else 0,
                            # granted before the part read, or never: describe_events() asks its history line

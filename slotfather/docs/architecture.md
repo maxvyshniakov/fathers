@@ -42,10 +42,10 @@ A pinned installation shares one user's directory even when a service changes `H
 | File | Format and compatibility |
 | --- | --- |
 | `schema.json` | State schema 1. Unstamped queues are adopted without rewriting entries; unknown versions are refused before mutation. Old clients ignore the stamp and can release existing leases. |
-| `queue/*.json`, `sequence`, `.lock` | Existing queue format: atomic JSON entries and a shared advisory lock. PID plus process start time identifies a holder. |
+| `queue/*.json`, `sequence`, `.lock` | Existing queue format: atomic JSON entries and a shared advisory lock. PID plus process start time identifies a holder. Entries and `sequence` are written whole: fsynced, renamed, then the directory fsynced. A new request's sequence is past every entry in the queue as well as the file's, so a torn `sequence` (older clients write it in place) never puts it ahead. An entry that does not read is left in place and listed by `status` as `unreadable`. |
 | `capacity.json`, `order.json` | Shared settings. Keep old keys and meanings; older clients ignore added fields. |
 | `queue/*.yield` | Cooperative requests, never permission to stop a holder. |
-| `queue.log` | Timestamped grants, releases and reaping; retained event syntax supports existing history readers. |
+| `queue.log[.1]` | Timestamped grants, releases and reaping; retained event syntax supports existing history readers. Past 4 MiB it becomes `queue.log.1`, replacing the older one, under the queue lock; older clients keep appending to whichever file is current. |
 | `history.jsonl[.1]` | Current record version 2. Unversioned version-1 history remains readable. |
 | `machine.jsonl[.1]` | Record version 1; unavailable facts remain unavailable. |
 | `estimates.json` | Disposable cache version 2. Rebuilt when its version or history stamp changes. |
