@@ -8,7 +8,7 @@ import json
 import os
 import re
 import subprocess
-from typing import Any, List
+from typing import Any
 import unittest
 
 from support import ROOT, Case, proc, table
@@ -19,22 +19,10 @@ from junkfather import procs, safety
 class RefusalTests(Case):
     def setUp(self) -> None:
         super().setUp()
-        bin_dir = self.tmp / "bin"
-        bin_dir.mkdir()
-        self.claude = bin_dir / "claude"  # its command line reads `.../claude 600`: an agent session by its command
-        self.claude.symlink_to("/bin/sleep")
+        self.claude = self.fake_agent()  # its command line reads `.../claude 600`: an agent session by its command
 
     def started(self, child: subprocess.Popen[Any], below: bool = False) -> int:
-        """The pid of `child`, or with `below` of its child, once ps shows it running `600`."""
-        found: List[int] = []
-
-        def ready() -> bool:
-            here = procs.Table.read()
-            candidates = here.descendants(child.pid) if below else [here.get(child.pid)]
-            found[:] = [p.pid for p in candidates if p is not None and p.cmd.endswith(" 600")]
-            return bool(found)
-        self.wait_for(ready, what="the child")
-        return found[0]
+        return self.runs_600(child, below)
 
     def reap_later(self, pid: int) -> None:
         """Kill a grandchild this test started when the test ends, if it is still that process."""
@@ -74,8 +62,7 @@ class RefusalTests(Case):
                          self.refused("adopt", str(agent.pid)))
 
     def test_a_process_with_a_terminal_is_never_adopted(self):
-        script = self.spawn("script", "-q", "/dev/null", "sleep", "600", stdin=subprocess.PIPE,
-                            start_new_session=True)
+        script = self.under_terminal("sleep", "600")
         sleeper = self.started(script, below=True)
         self.reap_later(sleeper)
         tty = (procs.Table.read().get(sleeper) or proc(0)).tty

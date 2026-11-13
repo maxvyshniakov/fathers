@@ -27,7 +27,7 @@ START = re.compile(r"\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Ju
 ISO = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z")
 EPOCH = re.compile(r"\b1\d{9}(\.\d+)?\b")
 ENTRY = re.compile(r"\bj[0-9a-f]{6}\b")
-TTY = re.compile(r"\bttys?\d+\b")
+TTY = re.compile(r"\bttys?\d+\b|\bpts/\d+\b")
 
 
 class Recorder:
@@ -349,22 +349,17 @@ class GoldenTests(Case):
 
     def test_refusals_of_agents_terminals_and_held_pids(self):
         r = self.record
-        bin_dir = self.tmp / "bin"
-        bin_dir.mkdir()
-        fake = bin_dir / "claude"
-        fake.symlink_to("/bin/sleep")
+        fake = self.fake_agent()
         agent = self.spawn(str(fake), "600", start_new_session=True)
         r.pid(agent.pid)
         shell = self.spawn("sh", "-c", '"${0}ude" 600; true', str(fake)[:-3], start_new_session=True)
         r.pid(shell.pid)
-        script = self.spawn("script", "-q", "/dev/null", "sleep", "600", stdin=subprocess.PIPE,
-                            start_new_session=True)
+        script = self.under_terminal("sleep", "600")
         r.pid(script.pid)
-        below = self.below(shell.pid)
-        sleeper = self.below(script.pid)
+        below = self.below(shell)
+        sleeper = self.below(script)
         held = self.child()
-        self.wait_for(lambda: (procs.Table.read().get(agent.pid) or proc(0, cmd="")).cmd.endswith(" 600"),
-                      what="the agent stand-in")
+        self.runs_600(agent)
         r.run("adopt", str(agent.pid), env=self.as_claude)
         r.run("adopt", str(sleeper), env=self.as_claude)
         r.run("adopt", str(shell.pid), env=self.as_claude)
@@ -385,16 +380,10 @@ class GoldenTests(Case):
         r.snapshot("reaped")
         self.compare("refusals_live")
 
-    def below(self, parent: int) -> int:
-        """The child of `parent` once it runs its `600` command, registered with the recorder and killed at the end
-        if it is still that process."""
-        found: List[int] = []
-
-        def ready() -> bool:
-            found[:] = [p.pid for p in procs.Table.read().descendants(parent) if p.cmd.endswith(" 600")]
-            return bool(found)
-        self.wait_for(ready, what="the child")
-        pid = self.record.pid(found[0])
+    def below(self, parent: subprocess.Popen[Any]) -> int:
+        """The process below `parent` once it runs its `600` command, registered with the recorder and killed at
+        the end if it is still that process."""
+        pid = self.record.pid(self.runs_600(parent, below=True))
         start = procs.identities([pid]).get(pid)
 
         def kill() -> None:

@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -115,13 +116,64 @@ class Case(unittest.TestCase):
         entry_id = result.stdout.split()[1]
         return self.loaded(entry_id)
 
-    def wait_for(self, predicate: Callable[[], object], timeout: float = 20.0, what: str = "condition") -> None:
+    def wait_for(self, predicate: Callable[[], object], timeout: float = 20.0, what: str = "condition",
+                 seen: Optional[Callable[[], str]] = None) -> None:
+        """Poll `predicate`; on timeout fail with `seen()`, what the test observed, so a failure explains itself."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if predicate():
                 return
             time.sleep(0.1)
-        self.fail(f"timed out waiting for {what}")
+        self.fail(f"timed out waiting for {what}" + (f"; saw:\n{seen()}" if seen is not None else ""))
+
+    def fake_agent(self) -> Path:
+        """An executable named `claude` that sleeps for its argument: its command line (`<python> .../claude 600`)
+        reads as a Claude Code session. A script, not a symlink to sleep: a multicall coreutils (uutils, Ubuntu
+        26.04) picks its applet by argv[0] and exits at once for `claude`."""
+        path = self.tmp / "bin" / "claude"
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(f"#!{sys.executable}\nimport sys, time\ntime.sleep(float(sys.argv[1]))\n")
+        path.chmod(0o755)
+        return path
+
+    def under_terminal(self, *argv: str) -> subprocess.Popen[Any]:
+        """`argv` run by `script`, which gives it a pseudo-terminal of its own. BSD script (macOS) takes the command
+        after the file; util-linux script (Linux) takes it with -c. Skips the test where there is no `script`."""
+        found = shutil.which("script")
+        if found is None:
+            self.skipTest("no `script` here to give a command a terminal")
+        command = [found, "-q", "/dev/null", *argv] if sys.platform == "darwin" else \
+            [found, "-q", "-e", "-c", shlex.join(argv), "/dev/null"]
+        return self.spawn(*command, stdin=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+                          env={**os.environ, "SHELL": "/bin/sh"})
+
+    def tree_of(self, child: subprocess.Popen[Any]) -> str:
+        """What ps shows of `child` and its descendants, and whether it exited, for a timeout's message."""
+        try:
+            here = procs.Table.read()
+        except procs.ProcError as error:
+            return f"ps: {error}"
+        rows = [here.get(child.pid), *here.descendants(child.pid)]
+        lines = [f"  pid {p.pid} ppid {p.ppid} tty {p.tty or '-'}: {p.cmd}" for p in rows if p is not None]
+        code = child.poll()
+        if code is not None:
+            err = child.stderr.read() if child.stderr is not None else b""
+            lines.append(f"  pid {child.pid} exited {code}: {err.decode(errors='replace').strip()[:300]!r}")
+        return "\n".join(lines) or f"  pid {child.pid}: not in ps"
+
+    def runs_600(self, child: subprocess.Popen[Any], below: bool = False) -> int:
+        """The pid of `child`, or with `below` of a process below it, once ps shows it running its `600` command
+        (a shell that runs it, `sh -c ... 600`, is passed over for the command itself)."""
+        found: List[int] = []
+
+        def ready() -> bool:
+            here = procs.Table.read()
+            candidates = here.descendants(child.pid) if below else [here.get(child.pid)]
+            found[:] = [p.pid for p in candidates if p is not None and p.cmd.endswith(" 600")
+                        and p.program not in ("sh", "bash", "dash", "zsh")]
+            return bool(found)
+        self.wait_for(ready, what="the child", seen=lambda: self.tree_of(child))
+        return found[0]
 
     def loaded(self, entry_id: str) -> Dict[str, Any]:
         """The saved entry, as a plain mapping a test can index freely; fails the test when there is none."""
