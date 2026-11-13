@@ -1,0 +1,279 @@
+[
+ {
+  "report": {
+   "at": "<v>",
+   "dry_run": true,
+   "errors": [],
+   "gone": [
+    {
+     "how": "gone",
+     "id": "<id1>"
+    },
+    {
+     "how": "gone",
+     "id": "<id2>"
+    },
+    {
+     "how": "command gone",
+     "id": "<id3>"
+    }
+   ],
+   "notes": [],
+   "pruned": 0,
+   "reaped": [],
+   "running": 0,
+   "unlisted": [],
+   "unowned": [],
+   "unowned_resources": [],
+   "v": 1
+  },
+  "sweep": "dry"
+ },
+ {
+  "report": {
+   "at": "<v>",
+   "dry_run": false,
+   "errors": [],
+   "gone": [
+    {
+     "how": "gone",
+     "id": "<id1>"
+    },
+    {
+     "how": "gone",
+     "id": "<id2>"
+    },
+    {
+     "how": "command gone",
+     "id": "<id3>"
+    }
+   ],
+   "notes": [],
+   "pruned": 1,
+   "reaped": [],
+   "running": 0,
+   "unlisted": [],
+   "unowned": [],
+   "unowned_resources": [],
+   "v": 1
+  },
+  "sweep": "done",
+  "text": "0 running, 0 reaped, 3 gone, 0 unowned reported, 0 unowned resources"
+ },
+ {
+  "entries": [
+   {
+    "argv": [
+     "sleep",
+     "600"
+    ],
+    "created": "<v>",
+    "ended": "<v>",
+    "error": "never started",
+    "expires": "<v>",
+    "group": true,
+    "id": "<id4>",
+    "keep": "owner",
+    "known": [],
+    "mode": "detached",
+    "owner": {},
+    "pid": null,
+    "state": "failed",
+    "ttl": 3600.0,
+    "v": 1
+   },
+   {
+    "argv": [
+     "sleep",
+     "600"
+    ],
+    "created": "<v>",
+    "expires": "<v>",
+    "group": true,
+    "id": "<id5>",
+    "keep": "owner",
+    "known": [],
+    "mode": "detached",
+    "owner": {},
+    "pid": null,
+    "state": "starting",
+    "ttl": 3600.0,
+    "v": 1
+   },
+   {
+    "argv": [
+     "sleep",
+     "600"
+    ],
+    "created": "<v>",
+    "ended": "<v>",
+    "expires": "<v>",
+    "group": true,
+    "id": "<id1>",
+    "keep": "owner",
+    "known": [],
+    "mode": "detached",
+    "owner": {},
+    "pgid": <pid2>,
+    "pid": <pid2>,
+    "start": "<start>",
+    "state": "gone",
+    "ttl": 3600.0,
+    "v": 1
+   },
+   {
+    "argv": [
+     "sleep",
+     "600"
+    ],
+    "created": "<v>",
+    "ended": "<v>",
+    "expires": "<v>",
+    "group": true,
+    "id": "<id2>",
+    "keep": "owner",
+    "known": [],
+    "mode": "detached",
+    "owner": {},
+    "pgid": <pid3>,
+    "pid": <pid3>,
+    "reaping": {
+     "at": "<v>",
+     "by": 4242,
+     "by_start": "<start>"
+    },
+    "start": "<start>",
+    "state": "gone",
+    "ttl": 3600.0,
+    "v": 1
+   },
+   {
+    "argv": [
+     "sleep",
+     "600"
+    ],
+    "created": "<v>",
+    "ended": "<v>",
+    "expires": "<v>",
+    "group": false,
+    "id": "<id3>",
+    "keep": "owner",
+    "known": [],
+    "mode": "resource",
+    "owner": {},
+    "resource": {
+     "alive": [
+      "false"
+     ],
+     "id": "gone",
+     "kind": "command",
+     "stop": [
+      "true"
+     ]
+    },
+    "state": "gone",
+    "ttl": 3600.0,
+    "v": 1
+   }
+  ],
+  "events": [
+   {
+    "actor": {
+     "name": "junkfather",
+     "type": "tool",
+     "via": "sweep"
+    },
+    "details": {
+     "errors": [],
+     "failed": [],
+     "gone": [
+      "<id1>",
+      "<id2>",
+      "<id3>"
+     ],
+     "notes": [],
+     "pruned": 1,
+     "reaped": [],
+     "running": 0,
+     "unowned": 0,
+     "unowned_resources": 0
+    },
+    "host": "<host>",
+    "kind": "sweep.finished",
+    "source": "junkfather",
+    "subject": {
+     "id": "<time>",
+     "type": "sweep"
+    },
+    "time": "<v>",
+    "v": 1
+   }
+  ],
+  "snapshot": "swept"
+ },
+ {
+  "args": [
+   "status",
+   "--json"
+  ],
+  "code": 0,
+  "err": "",
+  "out": {
+   "json": {
+    "entries": [
+     {
+      "age": "<v>",
+      "agent": null,
+      "argv": [
+       "sleep",
+       "600"
+      ],
+      "cwd": null,
+      "end": null,
+      "exit": null,
+      "id": "<id5>",
+      "keep": "owner",
+      "label": null,
+      "lane": null,
+      "log": null,
+      "mode": "detached",
+      "owner": "None ?",
+      "owner_alive": null,
+      "pgid": null,
+      "pid": null,
+      "processes": 0,
+      "resource": null,
+      "session": null,
+      "state": "starting",
+      "ttl": 3600.0,
+      "ttl_left": "<v>"
+     }
+    ],
+    "errors": [],
+    "host": "<host>",
+    "sweep": {
+     "result": {
+      "errors": [],
+      "failed": [],
+      "gone": [
+       "<id1>",
+       "<id2>",
+       "<id3>"
+      ],
+      "notes": [],
+      "pruned": 1,
+      "reaped": [],
+      "running": 0,
+      "unowned": 0,
+      "unowned_resources": 0
+     },
+     "time": "<v>"
+    },
+    "time": "<v>",
+    "unowned": [],
+    "unowned_resources": [],
+    "v": 1
+   }
+  }
+ }
+]

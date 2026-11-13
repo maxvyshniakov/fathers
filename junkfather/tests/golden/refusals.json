@@ -1,0 +1,305 @@
+[
+ {
+  "args": [
+   "adopt",
+   "1"
+  ],
+  "code": 1,
+  "err": "junkfather adopt: refusing pid 1: another user's process\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "adopt",
+   "<pid0>"
+  ],
+  "code": 1,
+  "err": "junkfather adopt: refusing pid <pid0>: junkfather itself or one of its ancestors\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "adopt",
+   "999999"
+  ],
+  "code": 1,
+  "err": "junkfather adopt: refusing pid 999999: no such process\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "reap",
+   "--pid",
+   "<pid2>"
+  ],
+  "code": 1,
+  "err": "junkfather reap: pid <pid2> is not owned; junkfather stops an unowned process only with --force, and only one `junkfather sweep` listed\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "reap",
+   "--pid",
+   "<pid2>",
+   "--force"
+  ],
+  "code": 1,
+  "err": "junkfather reap: refusing pid <pid2>: the last sweep did not list it (run junkfather sweep)\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "reap",
+   "--pid",
+   "<pid2>",
+   "--force"
+  ],
+  "code": 1,
+  "err": "junkfather reap: refusing pid <pid2>: the pid now belongs to another process (its start time changed)\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "reap",
+   "--pid",
+   "<pid2>",
+   "--force"
+  ],
+  "code": 1,
+  "err": "junkfather reap: refusing pid <pid2>: the pid now belongs to another process (its command changed)\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "reap",
+   "--pid",
+   "<pid0>",
+   "--force"
+  ],
+  "code": 1,
+  "err": "junkfather reap: refusing pid <pid0>: not a process junkfather may stop\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "reap",
+   "--pid",
+   "999999",
+   "--force"
+  ],
+  "code": 1,
+  "err": "junkfather reap: refusing pid 999999: it no longer runs\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "reap",
+   "--pid",
+   "<pid2>",
+   "--force",
+   "--dry-run",
+   "--json"
+  ],
+  "code": 0,
+  "err": "",
+  "out": {
+   "json": {
+    "results": [
+     {
+      "how": "unowned",
+      "id": "pid <pid2>",
+      "pids": [
+       <pid2>
+      ],
+      "reason": "forced",
+      "result": "would-stop"
+     }
+    ],
+    "v": 1
+   }
+  }
+ },
+ {
+  "args": [
+   "reap",
+   "--pid",
+   "<pid2>",
+   "--force",
+   "--grace",
+   "2"
+  ],
+  "code": 0,
+  "err": "",
+  "out": "pid <pid2>: stopped (reap; pids <pid2>; unowned, forced)\n"
+ },
+ {
+  "entries": [],
+  "events": [
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "cmd": "sleep 600",
+     "pids": [
+      <pid2>
+     ],
+     "reason": "reap",
+     "result": "stopped",
+     "start": "<start>"
+    },
+    "host": "<host>",
+    "kind": "unowned.reaped",
+    "source": "junkfather",
+    "subject": {
+     "id": "<pid2>",
+     "pid": <pid2>,
+     "type": "process"
+    },
+    "time": "<v>",
+    "v": 1
+   }
+  ],
+  "snapshot": "forced"
+ },
+ {
+  "args": [
+   "reap"
+  ],
+  "code": 2,
+  "err": "junkfather: reap takes one of --id, --owner, --lane or --pid\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "reap",
+   "--agent",
+   "a",
+   "--lane",
+   "x"
+  ],
+  "code": 2,
+  "err": "junkfather: --agent goes with --owner SESSION\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "own",
+   "--"
+  ],
+  "code": 2,
+  "err": "junkfather: own needs a command after --\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "own",
+   "--log",
+   "x",
+   "--",
+   "true"
+  ],
+  "code": 2,
+  "err": "junkfather: --log goes with --detach\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "own",
+   "--remove",
+   "--",
+   "true"
+  ],
+  "code": 2,
+  "err": "junkfather: --remove goes with --kind docker\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "own",
+   "--kind",
+   "docker",
+   "--detach",
+   "--",
+   "true"
+  ],
+  "code": 2,
+  "err": "junkfather: --kind runs its command attached: the resource outlives it\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "own-resource",
+   "--kind",
+   "simulator",
+   "--id",
+   "x",
+   "--remove"
+  ],
+  "code": 2,
+  "err": "junkfather: --remove goes with --kind docker\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "own-resource",
+   "--kind",
+   "docker",
+   "--id",
+   "x",
+   "--alive",
+   "true"
+  ],
+  "code": 2,
+  "err": "junkfather: --alive and --stop go with --kind command\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "own-resource",
+   "--kind",
+   "command",
+   "--id",
+   "x"
+  ],
+  "code": 2,
+  "err": "junkfather own-resource: --kind command needs --alive CMD and --stop CMD\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "own-resource",
+   "--kind",
+   "safari-tp",
+   "--id",
+   "1"
+  ],
+  "code": 1,
+  "err": "junkfather own-resource: refusing safari-tp: an instance that runs cannot be told from a person's own browser; launch it through junkfather own --kind safari-tp -- open -g -a 'Safari Technology Preview'\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "sweep",
+   "--plist",
+   "--interval",
+   "10"
+  ],
+  "code": 2,
+  "err": "junkfather: --interval takes 60 seconds or more\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "changelog",
+   "--json",
+   "--since",
+   "nope"
+  ],
+  "code": 2,
+  "err": "junkfather: --since takes a version like 0.1.0, not 'nope'\n",
+  "out": ""
+ }
+]

@@ -1,0 +1,358 @@
+[
+ {
+  "args": [
+   "own-resource",
+   "--kind",
+   "command",
+   "--id",
+   "web",
+   "--alive",
+   "test -e <tmp>/marker",
+   "--stop",
+   "rm <tmp>/marker",
+   "--ttl",
+   "1h",
+   "--label",
+   "web"
+  ],
+  "code": 0,
+  "err": "",
+  "out": "junkfather: <id1> owns command web for claude s1 (no claim (is the junkfather PreToolUse hook installed?)), ttl 60m; stop it: junkfather reap --id <id1>\n"
+ },
+ {
+  "args": [
+   "own-resource",
+   "--kind",
+   "command",
+   "--id",
+   "web",
+   "--alive",
+   "test -e <tmp>/marker",
+   "--stop",
+   "rm <tmp>/marker"
+  ],
+  "code": 1,
+  "err": "junkfather own-resource: refusing command web: already owned by <id1>\n",
+  "out": ""
+ },
+ {
+  "entries": [
+   {
+    "argv": [],
+    "claim_note": "no claim (is the junkfather PreToolUse hook installed?)",
+    "created": "<v>",
+    "cwd": "<root>",
+    "expires": "<v>",
+    "group": false,
+    "handed": [],
+    "id": "<id1>",
+    "keep": "owner",
+    "known": [],
+    "known_seen": [],
+    "label": "web",
+    "log": null,
+    "mode": "resource",
+    "owner": {
+     "agent": null,
+     "agent_type": null,
+     "kind": "claude",
+     "lane": null,
+     "pid": <pid1>,
+     "pid_start": "<start>",
+     "session": "s1"
+    },
+    "pgid": null,
+    "pid": null,
+    "resource": {
+     "alive": [
+      "test",
+      "-e",
+      "<tmp>/marker"
+     ],
+     "id": "web",
+     "kind": "command",
+     "stop": [
+      "rm",
+      "<tmp>/marker"
+     ]
+    },
+    "seen": null,
+    "start": null,
+    "state": "running",
+    "supervisor": null,
+    "ttl": 3600.0,
+    "v": 1
+   }
+  ],
+  "events": [
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "argv": [],
+     "cwd": "<root>",
+     "keep": "owner",
+     "resource": {
+      "alive": [
+       "test",
+       "-e",
+       "<tmp>/marker"
+      ],
+      "id": "web",
+      "kind": "command",
+      "stop": [
+       "rm",
+       "<tmp>/marker"
+      ]
+     },
+     "ttl": 3600.0
+    },
+    "host": "<host>",
+    "kind": "resource.owned",
+    "source": "junkfather",
+    "subject": {
+     "entry": "<id1>",
+     "id": "command:web",
+     "kind": "command",
+     "label": "web",
+     "type": "resource"
+    },
+    "time": "<v>",
+    "v": 1
+   }
+  ],
+  "snapshot": "owned"
+ },
+ {
+  "args": [
+   "list",
+   "--json"
+  ],
+  "code": 0,
+  "err": "",
+  "out": {
+   "json": {
+    "at": "<v>",
+    "entries": [
+     {
+      "age": "<v>",
+      "agent": null,
+      "argv": [],
+      "cwd": "<root>",
+      "end": null,
+      "exit": null,
+      "id": "<id1>",
+      "keep": "owner",
+      "label": "web",
+      "lane": null,
+      "log": null,
+      "mode": "resource",
+      "owner": "claude s1",
+      "owner_alive": true,
+      "pgid": null,
+      "pid": null,
+      "processes": null,
+      "resource": {
+       "id": "web",
+       "kind": "command",
+       "name": null
+      },
+      "session": "s1",
+      "state": "running",
+      "ttl": 3600.0,
+      "ttl_left": "<v>"
+     }
+    ],
+    "v": 1
+   }
+  }
+ },
+ {
+  "args": [
+   "reap",
+   "--id",
+   "<id1>",
+   "--dry-run"
+  ],
+  "code": 0,
+  "err": "",
+  "out": "<id1>: would-stop (reap; pids -; command web)\n"
+ },
+ {
+  "args": [
+   "reap",
+   "--id",
+   "<id1>",
+   "--grace",
+   "1"
+  ],
+  "code": 0,
+  "err": "",
+  "out": "<id1>: stopped (reap; pids -; command web)\n"
+ },
+ {
+  "entries": [
+   {
+    "argv": [],
+    "claim_note": "no claim (is the junkfather PreToolUse hook installed?)",
+    "created": "<v>",
+    "cwd": "<root>",
+    "end": {
+     "how": "command web",
+     "pids": [],
+     "reason": "reap",
+     "result": "stopped",
+     "steps": [
+      {
+       "argv": [
+        "rm",
+        "<tmp>/marker"
+       ],
+       "exit": 0
+      }
+     ]
+    },
+    "ended": "<v>",
+    "expires": "<v>",
+    "group": false,
+    "handed": [],
+    "id": "<id1>",
+    "keep": "owner",
+    "known": [],
+    "known_seen": [],
+    "label": "web",
+    "log": null,
+    "mode": "resource",
+    "owner": {
+     "agent": null,
+     "agent_type": null,
+     "kind": "claude",
+     "lane": null,
+     "pid": <pid1>,
+     "pid_start": "<start>",
+     "session": "s1"
+    },
+    "pgid": null,
+    "pid": null,
+    "resource": {
+     "alive": [
+      "test",
+      "-e",
+      "<tmp>/marker"
+     ],
+     "id": "web",
+     "kind": "command",
+     "stop": [
+      "rm",
+      "<tmp>/marker"
+     ]
+    },
+    "seen": null,
+    "start": null,
+    "state": "reaped",
+    "supervisor": null,
+    "ttl": 3600.0,
+    "v": 1
+   }
+  ],
+  "events": [
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "argv": [],
+     "cwd": "<root>",
+     "keep": "owner",
+     "resource": {
+      "alive": [
+       "test",
+       "-e",
+       "<tmp>/marker"
+      ],
+      "id": "web",
+      "kind": "command",
+      "stop": [
+       "rm",
+       "<tmp>/marker"
+      ]
+     },
+     "ttl": 3600.0
+    },
+    "host": "<host>",
+    "kind": "resource.owned",
+    "source": "junkfather",
+    "subject": {
+     "entry": "<id1>",
+     "id": "command:web",
+     "kind": "command",
+     "label": "web",
+     "type": "resource"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "reason": "reap",
+     "resource": {
+      "alive": [
+       "test",
+       "-e",
+       "<tmp>/marker"
+      ],
+      "id": "web",
+      "kind": "command",
+      "stop": [
+       "rm",
+       "<tmp>/marker"
+      ]
+     },
+     "result": "stopped",
+     "steps": [
+      "rm <tmp>/marker: exit 0"
+     ]
+    },
+    "host": "<host>",
+    "kind": "resource.stopped",
+    "source": "junkfather",
+    "subject": {
+     "entry": "<id1>",
+     "id": "command:web",
+     "kind": "command",
+     "label": "web",
+     "type": "resource"
+    },
+    "time": "<v>",
+    "v": 1
+   }
+  ],
+  "snapshot": "reaped"
+ },
+ {
+  "args": [
+   "own-resource",
+   "--kind",
+   "command",
+   "--id",
+   "web",
+   "--alive",
+   "test -e <tmp>/marker",
+   "--stop",
+   "rm <tmp>/marker"
+  ],
+  "code": 1,
+  "err": "junkfather own-resource: refusing web: its --alive command says it is gone\n",
+  "out": ""
+ }
+]
