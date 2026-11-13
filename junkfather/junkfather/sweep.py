@@ -29,15 +29,16 @@ import sys
 import time
 from typing import Any, Dict, List, Optional
 
+from . import entry as _entry
 from . import events as _events
 from . import owner as _owner
 from . import procs as _procs
 from . import reap as _reap
 from . import resources as _resources
+from . import safety as _safety
+from .defaults import KEEP_FINISHED, REAPING_STUCK, STARTING_STUCK
 from .state import Store, VERSION, read_json, write_atomic
-
-KEEP_FINISHED = 7 * 86400.0
-REAPING_STUCK = 300.0
+from .text import duration
 LABEL = "com.junkfather.sweep"
 WORKTREES = ("/.claude/worktrees/", "/.codex/worktrees/")
 SPLIT = re.compile(r"[\s=:,]+")
@@ -68,12 +69,10 @@ def points_into(path: str, roots: List[str]) -> Optional[str]:
 def unowned(table: _procs.Table, cwds: Dict[int, str], owned: set, roots: List[str],
             sessions_alive: Dict[int, bool], uid: Optional[int] = None) -> List[Dict[str, Any]]:
     uid = os.getuid() if uid is None else uid
-    skip = _reap.protected(table)
+    skip = _safety.protected(table)
     found: Dict[int, Dict[str, Any]] = {}
     for proc in table.procs.values():
-        if proc.uid != uid or proc.pid in skip or proc.pid in owned or proc.tty:
-            continue
-        if _owner.CLAUDE.search(proc.cmd) or _owner.CODEX.search(proc.cmd):
+        if not _safety.reportable(proc, uid, skip, owned):
             continue
         why = root = None
         cwd = cwds.get(proc.pid)
@@ -88,11 +87,9 @@ def unowned(table: _procs.Table, cwds: Dict[int, str], owned: set, roots: List[s
                     break
         if why is None:
             continue
-        if any(sessions_alive.get(pid) for pid in table.ancestors(proc.pid)):
+        if _safety.below_session(proc.pid, table, sessions_alive) or _safety.untouchable_tree(proc.pid, table):
             continue
         below = table.descendants(proc.pid)
-        if any(_reap.unsafe(p) for p in below):
-            continue
         found[proc.pid] = {"pid": proc.pid, "start": proc.start, "ppid": proc.ppid, "pgid": proc.pgid,
                            "age": table.age(proc), "cwd": cwd, "cmd": proc.cmd, "why": why, "root": root,
                            "tree": [proc.pid] + [p.pid for p in below]}
@@ -112,7 +109,7 @@ def unowned(table: _procs.Table, cwds: Dict[int, str], owned: set, roots: List[s
 
 def agent_sessions(table: _procs.Table) -> Dict[int, bool]:
     """Agent session processes in the table (Claude Code, Codex): each is alive by being there."""
-    return {p.pid: True for p in table.procs.values() if _owner.CLAUDE.search(p.cmd) or _owner.CODEX.search(p.cmd)}
+    return {p.pid: True for p in table.procs.values() if _safety.agent(p)}
 
 
 def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = None,
@@ -133,20 +130,19 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
     for entry in store.entries():
         state = entry.get("state")
         reaping = entry.get("reaping") or {}
-        if state == "reaping" and now - float(reaping.get("at") or 0) > REAPING_STUCK \
+        if state == _entry.REAPING and now - float(reaping.get("at") or 0) > REAPING_STUCK \
                 and not table.alive(reaping.get("by"), reaping.get("by_start")):
             if not dry_run:
-                store.update(entry["id"], lambda e: e.update(state="running") if e.get("state") == "reaping" else False)
-            state = "running"
-        if state not in ("running", "starting"):
+                _entry.release_stuck(store, entry["id"])
+            state = _entry.RUNNING
+        if state not in _entry.OPEN:
             if entry.get("ended") and now - float(entry["ended"]) > KEEP_FINISHED and not dry_run:
                 prune(store, entry)
                 report["pruned"] += 1
             continue
-        if state == "starting":
-            if now - float(entry.get("created") or now) > 60 and not dry_run:
-                store.update(entry["id"], lambda e: e.update(state="failed", ended=now, error="never started")
-                             if e.get("state") == "starting" else False)
+        if state == _entry.STARTING:
+            if now - float(entry.get("created") or now) > STARTING_STUCK and not dry_run:
+                _entry.failed(store, entry["id"], "never started", now)
             continue
         if entry.get("mode") == "resource":
             sweep_resource(store, entry, snapshot, report, now, sessions, grace, dry_run)
@@ -160,8 +156,7 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
                 owned.add(supervisor["pid"])
                 continue
             if not dry_run:
-                store.update(entry["id"], lambda e: e.update(state="gone", ended=now, known=[])
-                             if e.get("state") == "running" else False)
+                _entry.gone(store, entry["id"], now)
             report["gone"].append({"id": entry["id"], "how": how})
             continue
         reason = None
@@ -180,7 +175,7 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
         if supervised:
             owned.add(supervisor["pid"])  # and it keeps `known` fresh itself
         elif not dry_run:
-            store.update(entry["id"], refresher([[p.pid, p.start] for p in members]))
+            _entry.known(store, entry["id"], members)
     if cwds is None:
         cwds = _procs.working_dirs(os.getuid())
         if not cwds:
@@ -203,8 +198,7 @@ def sweep_resource(store: Store, entry: Dict[str, Any], snapshot: "_resources.Sn
     alive = snapshot.alive(resource)
     if alive is False:
         if not dry_run:
-            store.update(entry["id"], lambda e: e.update(state="gone", ended=now)
-                         if e.get("state") == "running" else False)
+            _entry.gone(store, entry["id"], now)
         report["gone"].append({"id": entry["id"], "how": _resources.describe(resource)})
         return
     if alive is None:
@@ -263,15 +257,6 @@ def result_of(report: Dict[str, Any]) -> Dict[str, Any]:
             "pruned": report["pruned"], "errors": report["errors"], "notes": report.get("notes") or []}
 
 
-def refresher(known: List[List[Any]]):
-    def change(e: Dict[str, Any]) -> Optional[bool]:
-        if e.get("state") != "running":
-            return False
-        e["known"] = known
-        return None
-    return change
-
-
 def prune(store: Store, entry: Dict[str, Any]) -> None:
     try:
         store.path(entry["id"]).unlink()
@@ -285,19 +270,11 @@ def prune(store: Store, entry: Dict[str, Any]) -> None:
             pass
 
 
-def listed_unowned(store: Store, pid: int) -> Optional[Dict[str, Any]]:
-    data = read_json(store.root / "unowned.json")
-    items = data.get("items") if isinstance(data, dict) else None
-    for item in items if isinstance(items, list) else []:
-        if isinstance(item, dict) and item.get("pid") == pid:
-            return item
-    return None
-
-
 def text(report: Dict[str, Any], quiet: bool = False) -> str:
     lines = []
     for result in report["reaped"]:
-        lines.append(f"{'would reap' if result['result'] == 'would-stop' else 'reaped'} {result['id']}: "
+        verb = "would reap" if result["result"] == "would-stop" else "reaped"  # text, not a state
+        lines.append(f"{verb} {result['id']}: "
                      f"{result['reason']} -> {result['result']} (pids {', '.join(map(str, result['pids'])) or '-'})")
     for error in report["errors"]:
         lines.append(f"error: {error}")
@@ -323,7 +300,6 @@ def text(report: Dict[str, Any], quiet: bool = False) -> str:
 
 
 def _age(seconds: Optional[float]) -> str:
-    from .launch import duration
     return "age ?" if seconds is None else f"age {duration(seconds)}"
 
 

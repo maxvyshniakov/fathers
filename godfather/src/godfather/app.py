@@ -30,7 +30,7 @@ from .adapters import slotfather as _slotfather
 from .adapters.slotfather import SettingsClient, SettingsError, Unsupported
 from .sources import SnapshotError, Source
 from . import state as _state
-from .tui import Canvas, Loader, full_screen, read_keys, set_theme
+from .tui import Canvas, Loader, full_screen, read_keys
 from .views import common as _common
 from .views import details as _details
 from .views import overview as _overview
@@ -173,6 +173,7 @@ class Live:
         # What the terminal says about its colours (#14) and how wide it draws 👨‍🦳 (#15): asked with colour off too
         self.answers = _theme.Answers()
         self.ascii_only = "utf" not in (sys.stdout.encoding or "").lower()
+        self.theme = _theme.from_environment(answers=self.answers, mode=theme)  # each canvas is drawn in it
         self.state = _state.AppState(interval=interval, theme=theme, read=_news.load_read())
         self.saved = (interval, theme)  # Refresh every and Colour theme as saved; a change is written back
         self.shown: list[str] = []
@@ -192,7 +193,13 @@ class Live:
             os.close(fd)
 
     def apply_theme(self) -> None:
-        set_theme(_theme.from_environment(answers=self.answers, mode=self.state.theme))
+        self.theme = _theme.from_environment(answers=self.answers, mode=self.state.theme)
+
+    def marks(self) -> _common.Marks:
+        return terminal_marks(self.ascii_only, self.answers)
+
+    def canvas(self, width: int, height: int) -> Canvas:
+        return Canvas(width, height, self.theme, self.marks())
 
     def send(self, event: _state.Event) -> None:
         """One event through the reducer, and its effects carried out; any change is drawn at the next pass."""
@@ -231,7 +238,7 @@ class Live:
                 self.send(_state.SettingsFailed(str(failure)))
                 return
             size = os.get_terminal_size(self.fd_out)
-            panel.draw(Canvas(size.columns, size.lines), self.state.model)  # its hit-test geometry, before a click
+            panel.draw(self.canvas(size.columns, size.lines), self.state.model)  # its hit-test geometry, before a click
             self.send(_state.SettingsOpened(panel))
 
     def load_model(self) -> None:
@@ -245,7 +252,7 @@ class Live:
                 self.send(_state.ModelFailed(str(failure)))
             else:
                 model, problem = value
-                self.send(_state.ModelLoaded(model, problem))
+                self.send(_state.ModelLoaded(model, problem, self.theme.holders()))
         for _, value, failure in self.news.take():
             if failure is None:  # a failed load leaves what's new as it was
                 self.send(_state.NewsLoaded(value))
@@ -253,7 +260,7 @@ class Live:
             lane, cwd = value if failure is None and value else (None, None)
             self.send(_state.DetailsLoaded(key, lane, cwd, None if failure is None else str(failure) or
                                            type(failure).__name__))
-        self.send(_state.Tick())
+        self.send(_state.Tick(datetime.datetime.now(datetime.timezone.utc)))
         if time.monotonic() - self.fetched >= self.state.interval and not self.models.wants("model"):
             self.load_model()
 
@@ -274,7 +281,7 @@ class Live:
         loading = self.loading()
         if not (self.dirty or loading or now - self.drawn >= 1 or not self.shown):
             return loading
-        canvas = Canvas(size.columns, size.lines)
+        canvas = self.canvas(size.columns, size.lines)
         _overview.render(canvas, self.state, now, self.screen.notice())
         self.send(_state.Drawn(_state.Frame(canvas.width, canvas.height, canvas.tables, canvas.version_at,
                                             tuple(canvas.hint_hits), canvas.order, tuple(canvas.filter_hits))))
@@ -306,7 +313,7 @@ class Live:
             return
         reports: list[str] = []
         pressed = read_keys(self.fd_in, reports)
-        if reports and theme_reports(reports, self.answers, self.fd_out, self.ascii_only):
+        if reports and theme_reports(reports, self.answers, self.fd_out):
             self.apply_theme()
             self.shown, self.dirty = [], True  # every row's colours changed
         for key in pressed:
@@ -318,8 +325,6 @@ class Live:
     def run(self) -> None:
         with full_screen(self.fd_in, self.fd_out, self.answers, _common.MARKS["legacy"][0]):
             self.apply_theme()
-            # 👨‍🦳 is one glyph where the cursor ended two cells on (column 3); without an answer, assume it is
-            _common.use_marks(self.ascii_only, joined=self.answers.column in (None, 3))
             self.load_model()
             self.news.request("news")
             while not self.done:
@@ -336,16 +341,22 @@ def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE, screen: Sc
         live.close()
 
 
-def theme_reports(reports: list[str], answers: _theme.Answers, fd_out: int, ascii_only: bool = False) -> bool:
+def terminal_marks(ascii_only: bool, answers: _theme.Answers) -> _common.Marks:
+    """The marks this terminal draws: ASCII without UTF-8; 👨‍🦳 is one glyph where the cursor ended two cells on
+    (column 3), and without an answer it is assumed to be."""
+    return _common.marks_for(ascii_only, joined=answers.column in (None, 3))
+
+
+def theme_reports(reports: list[str], answers: _theme.Answers, fd_out: int) -> bool:
     """Takes what the terminal reported; True when a colour or the width of 👨‍🦳 changed: everything is drawn
     again. A colour-scheme change notification (mode 2031) asks for the colours again: their answers arrive with
-    later keys. A width reply later than ask() waited for (a slow link) still picks the glyph (#15)."""
+    later keys. A width reply later than ask() waited for (a slow link) still picks the glyph (#15): the marks
+    follow `answers` (Live.marks())."""
     changed = False
     for report in reports:
         column = answers.column
         changed = answers.feed(report) or changed
         if answers.column != column:
-            _common.use_marks(ascii_only, joined=answers.column in (None, 3))
             changed = True
         if _theme.SCHEME_REPLY.match(report):
             os.write(fd_out, _theme.QUERY)
@@ -353,22 +364,24 @@ def theme_reports(reports: list[str], answers: _theme.Answers, fd_out: int, asci
 
 
 
-def once(width: int | None, height: int | None, colour: bool | None, interval: float) -> int:
-    """One frame of the overview, as `slotfather dashboard --once` printed it."""
+def once(width: int | None, height: int | None, colour: bool | None, interval: float,
+         theme: _theme.Theme | None = None) -> int:
+    """One frame of the overview, as `slotfather dashboard --once` printed it, in `theme`."""
+    theme = theme if theme is not None else _theme.from_environment()
     screen = Screen()
     model, error = screen.load()
     items = cast(list[dict[str, Any]], (model["holders"] + model["waiters"]) if model else [])
     cwd = None
     if model:
-        _common.dashboard_colours(model, {})
+        _common.dashboard_colours(model, {}, theme.holders())
         if items:
             _details.enrich_details(items[0])
             cwd = _sources.process_cwd(items[0]["pid"]) if items[0]["kind"] != "waiting" else None
     ascii_only = "utf" not in (sys.stdout.encoding or "").lower()
-    _common.use_marks(ascii_only)
     size_now = shutil.get_terminal_size((120, 40))
-    canvas = Canvas(width or size_now.columns, height or size_now.lines)
-    _overview.dashboard_draw(canvas, model, error=error, cwd=cwd, notice=screen.notice())
+    canvas = Canvas(width or size_now.columns, height or size_now.lines, theme, _common.marks_for(ascii_only))
+    _overview.dashboard_draw(canvas, model, error=error, cwd=cwd, notice=screen.notice(),
+                             moment=datetime.datetime.now(datetime.timezone.utc))
     tty = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
     print(canvas.render(colour if colour is not None else tty, ascii_only))
     return 1 if model is None else 0  # the frame says why: no tool, no contract, or a failed snapshot
@@ -411,11 +424,11 @@ def command(argv: list[str]) -> int:
             raise UsageError(f"unknown argument {argv[0]!r}\n{USAGE}")
     try:
         interval, theme = starting_choices(interval)
-        set_theme(_theme.from_environment(mode=theme))  # --once cannot ask the terminal: GODFATHER_TERMINAL_BG/_FG
+        resolved = _theme.from_environment(mode=theme)  # --once cannot ask the terminal: GODFATHER_TERMINAL_BG/_FG
     except ValueError as error:
         raise UsageError(str(error)) from None
     if run_once:
-        return once(width, height, colour, interval)
+        return once(width, height, colour, interval, resolved)
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         print(USAGE, file=sys.stderr)
         print("godfather: the live view needs an interactive terminal; --once prints one frame", file=sys.stderr)

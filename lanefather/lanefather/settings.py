@@ -27,10 +27,9 @@ import os
 from pathlib import Path
 import re
 import sys
-import tempfile
 from typing import Any, cast
 
-from . import config, events, registry
+from . import config, events, registry, state
 from .errors import LaneError
 
 VERSION = 1
@@ -237,19 +236,8 @@ def write(change: dict[str, Any | None], expected: str | None) -> None:
                 values.pop(key, None)
             else:
                 values[key] = item
-        pending: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile("w", dir=target.parent, prefix=".settings-", delete=False) as handle:
-                pending = Path(handle.name)
-                handle.write(json.dumps({"v": VERSION, "settings": dict(sorted(values.items()))}, indent=2) + "\n")
-                handle.flush()
-                os.fchmod(handle.fileno(), 0o600)
-                os.fsync(handle.fileno())
-            os.replace(pending, target)
-            pending = None
-        finally:
-            if pending is not None:
-                pending.unlink(missing_ok=True)
+        state.atomic_write(target, json.dumps({"v": VERSION, "settings": dict(sorted(values.items()))}, indent=2)
+                           + "\n", mode=0o600)
 
 
 def stored(raw: bytes) -> dict[str, Any]:

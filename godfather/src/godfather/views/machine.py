@@ -15,7 +15,8 @@ from . import common as _common
 from .common import Model, ramp_bar
 
 SPARK = "▁▂▃▄▅▆▇█"
-HISTORY_WINDOW = 3600  # seconds of queue.log the utilisation strip rebuilds
+CHART_TITLE = "slots held"  # what the history chart shows (fathers#140)
+HISTORY_WINDOW = 3600  # seconds of queue.log the utilisation strip rebuilds; a model's `history_window` overrides it
 PRESSURE_LEVELS = {1: ("normal", 1), 2: ("warning", 2), 4: ("critical", 3)}  # kern.memorystatus_vm_pressure_level
 Step = tuple[datetime.datetime, datetime.datetime, int]
 
@@ -38,15 +39,20 @@ def held_history(events: list[dict[str, Any]], held_now: int, now_moment: dateti
     return steps[::-1]
 
 
-def history_buckets(steps: list[Step], columns: int) -> list[int]:
-    """Peak slots per fixed wall-clock bucket; only the newest bucket is incomplete.
+def history_window(model: Model) -> float:
+    """The seconds the history chart spans: the model's own (the demo's short zoom), else HISTORY_WINDOW."""
+    return float(model.get("history_window") or HISTORY_WINDOW)
+
+
+def history_buckets(steps: list[Step], columns: int, window: float = HISTORY_WINDOW) -> list[int]:
+    """Peak slots per fixed wall-clock bucket over `window` seconds; only the newest bucket is incomplete.
 
     Anchoring buckets to the clock keeps old peaks stable between scroll steps.
     """
     if not steps or columns <= 0:
         return []
     end = steps[-1][1]
-    seconds = max(1, math.ceil(HISTORY_WINDOW / columns))
+    seconds = max(1, math.ceil(window / columns))
     edge = math.ceil(end.timestamp() / seconds) * seconds
     end = datetime.datetime.fromtimestamp(edge, end.tzinfo)
     width = datetime.timedelta(seconds=seconds)
@@ -58,10 +64,10 @@ def history_buckets(steps: list[Step], columns: int) -> list[int]:
     return buckets
 
 
-def history_summary(steps: list[Step], slots: int) -> dict[str, Any]:
+def history_summary(steps: list[Step], slots: int, window: float = HISTORY_WINDOW) -> dict[str, Any]:
     # Retain extra history for whole clock buckets, but summarise only the trailing hour.
     if steps:
-        begin = steps[-1][1] - datetime.timedelta(seconds=HISTORY_WINDOW)
+        begin = steps[-1][1] - datetime.timedelta(seconds=window)
         steps = [(max(start, begin), stop, level) for start, stop, level in steps if stop > begin]
     total_seconds = sum((stop - start).total_seconds() for start, stop, _ in steps) or 1
     held = sum((stop - start).total_seconds() * min(level, slots) for start, stop, level in steps)
@@ -146,12 +152,13 @@ def draw_resource_rows(canvas: Canvas, area: Rect, resources: list[Resource]) ->
     bar_width, shortened = _layout.resource_bars(area.width, max(text_width(item.value) for item in resources),
                                                  max(text_width(item.short) for item in resources))
     values = [resource.short if shortened else resource.value for resource in resources]
+    health = _common.marks_of(canvas).health
     for line, (resource, value) in enumerate(zip(resources, values), area.y):
-        canvas.put(line, area.x, _common.health_marks["hot" if resource.critical else "ok"], "text", 2)
+        canvas.put(line, area.x, health["hot" if resource.critical else "ok"], "text", 2)
         canvas.put(line, area.x + 3, resource.label, "dim")
         if bar_width and resource.fraction is not None:
             canvas.segments(line, area.x + _layout.MACHINE_LABEL,
-                            ramp_bar(resource.fraction, bar_width, resource.critical), bar_width)
+                            ramp_bar(resource.fraction, bar_width, resource.critical, canvas.theme.track), bar_width)
         canvas.put(line, area.x + area.width - text_width(value), value, "text")
 
 
@@ -169,24 +176,30 @@ def draw_machine(canvas: Canvas, rect: Rect, model: Model) -> None:
     elif inside.compact is not None:
         canvas.segments(inside.compact.y, inside.compact.x, compact_resources(
             [(resource.label, resource.fraction, resource.value, resource.critical) for resource in resources],
-            inside.compact.width, [resource.short for resource in resources]), inside.compact.width)
+            inside.compact.width, [resource.short for resource in resources], _common.marks_of(canvas),
+            canvas.theme.track), inside.compact.width)
     if inside.chart is not None:
-        draw_chart(canvas, inside.chart, model, slots)
+        draw_chart(canvas, inside.chart, model, slots, titled=inside.side)
 
 
-def draw_chart(canvas: Canvas, area: Rect, model: Model, slots: int) -> None:
+def draw_chart(canvas: Canvas, area: Rect, model: Model, slots: int, titled: bool = False) -> None:
     """The history chart in the area's rows, with half a cell of air at each end (owner, 2026-11-12), and its axis
-    line right under it."""
+    line right under it. It says it shows slots held (fathers#140): `titled` (beside the gauges, whose rows its own
+    would otherwise read as sparklines of) in the blank row above it, else in the axis line, costing no row."""
     chart_width = max(1, area.width)
     history = cast(list[Step], model["history"])
-    buckets = history_buckets(history, chart_width)
+    window = history_window(model)
+    buckets = history_buckets(history, chart_width, window)
     rows = area.height
     for line, column_glyphs in enumerate(chart_cells(buckets, slots, rows)):
         colour = round((rows - 1 - line) / (rows - 1) * (_theme.CHART_STEPS - 1))
         for column, glyph in enumerate(column_glyphs):
             canvas.put(area.y + line, area.x + column, glyph, f"chart{colour}" if glyph != " " else "dim")
-    summary = history_summary(history, slots)
-    canvas.segments(area.y + rows, area.x, machine_legend(summary, slots, chart_width), area.width)
+    summary = history_summary(history, slots, window)
+    if titled:
+        canvas.put(area.y - 1, area.x, CHART_TITLE, "dim", area.width)
+    canvas.segments(area.y + rows, area.x, machine_legend(summary, slots, chart_width, window,
+                                                         "" if titled else CHART_TITLE), area.width)
 
 
 def chart_cells(buckets: list[int], slots: int, rows: int, half_gaps: bool = True) -> list[list[str]]:
@@ -219,7 +232,8 @@ def gigabytes(value_mb: Optional[float], total: bool = False) -> str:
 
 
 def compact_resources(resources: list[tuple[str, Optional[float], str, bool]], width: int,
-                      shorts: Optional[list[str]] = None) -> list[Part]:
+                      shorts: Optional[list[str]] = None, marks: _common.Marks = _common.EMOJI,
+                      track: str = "■") -> list[Part]:
     """Load, memory and swap on one line (owner, 2026-11-12) when MACHINE is too short for their rows: short ramp
     bars (6 to 4 cells, red when critical), else the numbers alone, a critical one in red; at the narrowest the
     short values (`23/32G`), then no marks. Never drops one."""
@@ -235,10 +249,10 @@ def compact_resources(resources: list[tuple[str, Optional[float], str, bool]], w
             if index:
                 parts.append((separator, "dim"))
             if marked:
-                parts.append((_common.health_marks["hot" if critical else "ok"] + " ", "text"))
+                parts.append((marks.health["hot" if critical else "ok"] + " ", "text"))
             parts.append((label + " ", "dim"))
             if bar_width and fraction is not None:
-                parts += ramp_bar(fraction, bar_width, critical) + [(" ", "text")]
+                parts += ramp_bar(fraction, bar_width, critical, track) + [(" ", "text")]
             parts.append((value, "bad" if critical and not bar_width else "text"))
         if sum(text_width(text) for text, _ in parts) <= width:
             break
@@ -256,14 +270,18 @@ def window_text(seconds: float) -> str:
     return f"−{round(minutes / 60)}h"
 
 
-def machine_legend(summary: dict[str, Any], slots: int, chart_width: int) -> list[Part]:
+def machine_legend(summary: dict[str, Any], slots: int, chart_width: int, window: float = HISTORY_WINDOW,
+                   label: str = "") -> list[Part]:
     """The history chart's legend, a time axis under it: the window it shows on the left, under its first column,
-    `now` on the right under its last, and between them, centred, the mean and most held slots and the share of
-    the time every slot was held. A narrow chart drops full, then peak, then avg; the axis stays."""
-    left, right = window_text(chart_width * max(1, math.ceil(HISTORY_WINDOW / chart_width))), "now"
+    `now` on the right under its last, and between them, centred, `label` (what the chart shows, where nothing above
+    it says so), the mean and most held slots and the share of the time every slot was held. A narrow chart drops
+    full, then peak, then avg, then the label; the axis stays."""
+    left, right = window_text(chart_width * max(1, math.ceil(window / chart_width))), "now"
     stats: list[list[Part]] = [[("avg", "dim"), (f" {summary['average'] * slots:.1f}/{slots}", "text")],
                                [("peak", "dim"), (f" {summary['peak']}", "text")],
                                [("full", "dim"), (f" {summary['full']:.0%}", "text")]]
+    if label:
+        stats.insert(0, [(label, "dim")])
     room = chart_width - text_width(left) - text_width(right) - 4  # two cells each side of the stats
     parts: list[Part] = []
     while stats:

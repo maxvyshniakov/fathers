@@ -1,0 +1,138 @@
+[
+ {
+  "args": [
+   "capabilities",
+   "--json"
+  ],
+  "code": 0,
+  "err": "",
+  "out": {
+   "json": {
+    "commit": "checkout",
+    "dashboard": {
+     "actions": [
+      "reap",
+      "extend"
+     ],
+     "changelog": "<root>/CHANGELOG.md",
+     "events": {
+      "kinds": [
+       "entry.owned",
+       "entry.adopted",
+       "entry.exited",
+       "entry.extended",
+       "entry.handed",
+       "entry.reaped",
+       "entry.reap_failed",
+       "resource.owned",
+       "resource.stopped",
+       "resource.stop_failed",
+       "unowned.reported",
+       "unowned.reaped",
+       "sweep.finished",
+       "hook.failed"
+      ],
+      "path": "<tmp>/state/events.jsonl",
+      "versions": [
+       1
+      ]
+     },
+     "snapshot": {
+      "argv": [
+       "status",
+       "--json"
+      ],
+      "poll": 5,
+      "versions": [
+       1
+      ]
+     },
+     "tag": "junk",
+     "v": 1
+    },
+    "tool": "junkfather",
+    "v": 1,
+    "version": "0.1.0"
+   }
+  }
+ },
+ {
+  "args": [
+   "list",
+   "--json"
+  ],
+  "code": 0,
+  "err": "",
+  "out": {
+   "json": {
+    "at": "<v>",
+    "entries": [],
+    "v": 1
+   }
+  }
+ },
+ {
+  "args": [
+   "list"
+  ],
+  "code": 0,
+  "err": "",
+  "out": "nothing owned is running (--all shows finished entries)\n"
+ },
+ {
+  "args": [
+   "list",
+   "--all"
+  ],
+  "code": 0,
+  "err": "",
+  "out": "nothing owned is running\n"
+ },
+ {
+  "args": [
+   "status",
+   "--json"
+  ],
+  "code": 0,
+  "err": "",
+  "out": {
+   "json": {
+    "entries": [],
+    "errors": [],
+    "host": "<host>",
+    "sweep": {
+     "result": null,
+     "time": null
+    },
+    "time": "<v>",
+    "unowned": [],
+    "unowned_resources": [],
+    "v": 1
+   }
+  }
+ },
+ {
+  "args": [
+   "version"
+  ],
+  "code": 0,
+  "err": "",
+  "out": "junkfather 0.1.0 (checkout)\n"
+ },
+ {
+  "args": [
+   "changelog",
+   "--json"
+  ],
+  "code": 0,
+  "err": "",
+  "out": {
+   "json": {
+    "source": "<root>/CHANGELOG.md",
+    "tool": "junkfather",
+    "v": 1,
+    "version": "0.1.0"
+   }
+  }
+ }
+]

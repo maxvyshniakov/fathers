@@ -51,11 +51,12 @@ class MarkTests(unittest.TestCase):
                          [self.tool.row_state(item, model) for item in model["holders"] + model["waiters"]],
                          "asked over idle over hot over legacy; waiting rows waiting or yielded")
         self.assertEqual({"asked": "❓", "idle": "💤", "hot": "🔥", "legacy": "👨‍🦳", "running": "▶️",
-                          "yielded": "↩️", "waiting": "⏸️"}, self.tool.marks)
-        self.assertEqual("⏸️", self.tool.marks["waiting"], "⏸️ with VS16")
+                          "yielded": "↩️", "waiting": "⏸️"}, self.tool.EMOJI.state)
+        self.assertEqual("⏸️", self.tool.EMOJI.state["waiting"], "⏸️ with VS16")
 
     def test_every_emoji_is_one_two_cell_glyph(self) -> None:
-        for emoji in [*self.tool.marks.values(), *self.tool.priority_marks.values(), *self.tool.health_marks.values(),
+        marks = self.tool.EMOJI
+        for emoji in [*marks.state.values(), *marks.priority.values(), *marks.health.values(),
                       self.tool.OLD_FALLBACK]:
             self.assertEqual([emoji], self.tool.clusters(emoji), emoji)
             self.assertEqual(2, self.tool.text_width(emoji), emoji)
@@ -101,8 +102,7 @@ class MarkTests(unittest.TestCase):
                           "next": ("⚡", "", " "), "again": (" ", " ", " ")}, found, "a waiting request has one too")
         self.assertEqual(2, self.tool.text_width("⚡"))
         self.assertEqual(2, self.tool.text_width("🐌"))
-        self.tool.use_marks(True)
-        ascii_lines = self.tool.Canvas(120, 14)
+        ascii_lines = self.tool.Canvas(120, 14, marks=self.tool.marks_for(True))
         self.tool.draw_requests(ascii_lines, Rect(0, 0, 14, 120), model, 0, self.now)
         plain = ascii_lines.lines(False, ascii_only=True)
         tags = {label: line[6] for line in plain for label in ("plain", "everything", "sleepy") if f" {label} " in line}
@@ -116,16 +116,14 @@ class MarkTests(unittest.TestCase):
                                              (None, "normal", "normal")):
             for ascii_only in (False, True):
                 with self.subTest(priority=priority, ascii_only=ascii_only):
-                    self.tool.use_marks(ascii_only)
                     item = dict(label="build", kind="held", count=1, pid=10, style="h0", cpu=50, since=now,
                                 granted=now, rss=1024, procs=1, queue="", cmd="work", tree=[], priority=priority)
                     model = {"holders": [item], "waiters": [], "slots": 4, "cores": 12}
-                    canvas = self.tool.Canvas(80, 20)
+                    canvas = self.tool.Canvas(80, 20, marks=self.tool.marks_for(ascii_only))
                     self.tool.draw_detail(canvas, Rect(0, 0, 20, 80), model, 0, None, now)
                     line = next(line for line in canvas.render(False).splitlines() if "priority" in line)
                     self.assertRegex(line, r"priority\s+" + (ascii_shown if ascii_only else shown) + r"\s")
                     self.assertNotRegex(line, r"priority\s+\S+\s+normal", "normal has no mark")
-        self.tool.use_marks(False)
 
     def test_a_long_label_is_cut_with_an_ellipsis_after_the_state(self) -> None:
         model = self.model()
@@ -178,9 +176,8 @@ class MarkTests(unittest.TestCase):
                     self.assertEqual(("#", "#"), (plain[0], plain[-1]), "ASCII: # on both sides")
 
     def test_ascii_terminals_get_one_character_tags(self) -> None:
-        self.tool.use_marks(True)
         model = self.model()
-        canvas = self.tool.Canvas(120, 14)
+        canvas = self.tool.Canvas(120, 14, marks=self.tool.marks_for(True))
         self.tool.draw_requests(canvas, Rect(0, 0, 14, 120), model, 0, self.now)
         lines = canvas.lines(False, ascii_only=True)
         self.assertTrue(all(line.isascii() for line in lines))
@@ -190,8 +187,7 @@ class MarkTests(unittest.TestCase):
                           "again": "<"}, found)
 
     def test_a_terminal_that_does_not_join_the_sequence_gets_the_old_man(self) -> None:
-        self.tool.use_marks(False, joined=False)
-        self.assertEqual("👴", self.tool.marks["legacy"])
+        self.assertEqual("👴", self.tool.marks_for(False, joined=False).state["legacy"])
         answers = theme.Answers()
         answers.feed("\x1b[1;5R")  # 👨‍🦳 drawn as 👨 and 🦳: the cursor four cells on
         self.assertEqual(5, answers.column)
@@ -245,9 +241,9 @@ class PlacementTests(unittest.TestCase):
         read, write = os.pipe()
         try:
             answers = theme.Answers()
-            self.tool.use_marks(False)
-            self.assertTrue(self.tool.theme_reports(["\x1b[1;5R"], answers, write, False), "a redraw")
-            self.assertEqual("👴", self.tool.marks["legacy"])
+            self.assertEqual("👨‍🦳", self.tool.terminal_marks(False, answers).state["legacy"], "no answer yet")
+            self.assertTrue(self.tool.theme_reports(["\x1b[1;5R"], answers, write), "a redraw")
+            self.assertEqual("👴", self.tool.terminal_marks(False, answers).state["legacy"])
         finally:
             os.close(read)
             os.close(write)

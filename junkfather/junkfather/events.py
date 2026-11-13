@@ -11,14 +11,17 @@ unowned.reaped, sweep.finished, hook.failed.
 """
 from __future__ import annotations
 
-import datetime
 import fcntl
 import json
 import os
 from pathlib import Path
 import re
 import socket
+import time
 from typing import Any, Dict, Mapping, Optional
+
+from . import owner as _owner
+from . import text as _text
 
 VERSION = 1
 SOURCE = "junkfather"
@@ -32,8 +35,7 @@ CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
 def now() -> str:
-    moment = datetime.datetime.now(datetime.timezone.utc)
-    return moment.strftime("%Y-%m-%dT%H:%M:%S.") + f"{moment.microsecond // 1000:03d}Z"
+    return str(_text.iso(time.time()))
 
 
 def host() -> str:
@@ -93,12 +95,7 @@ def godfather() -> Optional[str]:
 
 def caller(via: Optional[str] = None) -> Dict[str, Any]:
     """Whoever runs this command, from the environment (no process table): an agent or this process's parent."""
-    session = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID")
-    pid = os.environ.get("CLAUDE_PID", "")
-    owner = {"kind": "claude" if session else "shell", "session": session,
-             "pid": int(pid) if session and pid.isdigit() else os.getppid(),
-             "lane": os.environ.get("JUNKFATHER_LANE") or os.environ.get("LANEFATHER_LANE")}
-    return actor_of(owner, via)
+    return actor_of(_owner.from_env(os.environ), via)
 
 
 def line(kind: str, subject_: Mapping[str, Any], actor: Mapping[str, Any], details: Mapping[str, Any],

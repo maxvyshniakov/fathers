@@ -117,6 +117,10 @@ class Config:
     project_hooks: tuple[tuple[str, str], ...] = ()
     gc_after_remove: tuple[str, ...] = ()
     gc_after_remove_report: bool = False
+    # [gc] dirs and branches (fathers#44): the worktrees under .claude/worktrees gc may collect, by name (a pattern
+    # without '/') or by path from the main checkout, or by branch; and the merged branches it deletes.
+    gc_dirs: tuple[str, ...] = ("agent-*", "lane-*", ".claude/worktrees/*", "codex-*")
+    gc_branches: tuple[str, ...] = ("worktree-agent-*", "lane/*", "claude/*", "codex/*")
     admission_provider: str = "legacy"
     tickets: Tickets = Tickets()
 
@@ -232,7 +236,7 @@ TABLE_KEYS = {
     "gate": ("stamp_tool", "stamp_file", "pre_push_hook"),
     "promote": ("ship_refuses", "ship_refusal", "install", "deploy", "install_env_drop", "after"),
     "hooks": ("process_scan", "project"),
-    "gc": ("after_remove", "after_remove_report"),
+    "gc": ("after_remove", "after_remove_report", "dirs", "branches"),
     "tickets": ("integrated_label", "land_comment", "fixes_trailer", "release_comment", "preview", "repo"),
     "slots": ("priority",),
     "review": ("blocks",),
@@ -245,6 +249,13 @@ def _severities(table: dict[str, Any]) -> tuple[str, ...]:
     unknown = [s for s in found if s not in ("P1", "P2", "P3")]
     if unknown:
         raise LaneError(f"{CONFIG_NAME}: [review] blocks takes P1, P2 and P3, not {', '.join(unknown)}")
+    return found
+
+
+def _patterns(table: dict[str, Any], key: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    found = _strings(table, key, default)
+    if not all(found):
+        raise LaneError(f"{CONFIG_NAME}: [gc] {key} takes non-empty patterns")
     return found
 
 
@@ -352,6 +363,8 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         project_hooks=tuple(sorted((str(name), str(script)) for name, script in project_hooks.items())),
         gc_after_remove=_strings(gc, "after_remove", default.gc_after_remove),
         gc_after_remove_report=gc_report,
+        gc_dirs=_patterns(gc, "dirs", default.gc_dirs),
+        gc_branches=_patterns(gc, "branches", default.gc_branches),
         admission_provider=provider,
         tickets=_tickets(tickets),
     )

@@ -19,8 +19,21 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Changed
 
+- A reap no longer signals a leader it refused for a changed command: `known` lists the leader too, and the reap
+  found it there again. Its recorded children are still stopped; `reap --force` still takes the leader.
+- The command is now the second factor after pid and start time everywhere a process is signalled. A start time
+  has one-second granularity, so a pid taken again within that second looked like the same process. Each member's
+  command is recorded in the new entry field `known_seen`, and `reap --pid --force` refuses a pid whose command
+  changed since the sweep listed it.
+- A TTL reap that fails no longer makes the supervisor retry in a busy loop. It retries after 1 s, doubling up to
+  60 s, and writes one `entry.reap_failed` event per run of failures.
+- Entry files are written durably: fsync before the rename, then of the directory. A write that fails leaves
+  the old file and no temp file, and one whose directory cannot be synced reports the error.
 - junkfather lives in the `fathers` repository: install it with `python3 install.py junkfather` from a `fathers`
   checkout.
+- `junkfather status`, `capabilities` and `changelog` no longer require `--json`: without it they print for people
+  (the `list` table with the unowned processes and the last sweep's time; one line of capabilities; the changelog
+  by release). With `--json` they print what they always did.
 
 ## 0.1.0 - 2026-11-12
 
