@@ -1,0 +1,4 @@
+# Development only; the installed command uses the Python standard library. tools/check.py runs these through uvx
+# when they are not on PATH; the four packages pin the same versions (tools/test_checks.py at the root).
+ruff==0.14.3
+pyright==1.1.407

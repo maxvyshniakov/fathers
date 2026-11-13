@@ -1,0 +1,20 @@
+# The one Ruff rule set of the four packages (fathers#116). Each package's pyproject.toml extends this file and
+# sets only its own paths, its target version and the rules it does not pass yet (`extend-ignore`, the debt list
+# that its typing and tidy-up tickets shrink). Root tools/ follow it as is.
+line-length = 120
+target-version = "py39"
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PL"]
+ignore = [
+    "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR0917", "PLR2004",  # long commands are one story each; numbers are named in prose
+    "PLW0603",  # a run's configuration is one module global
+    "PLC0415",  # imports inside functions break command modules' import cycles and keep start-up fast
+    "PLW1510",  # every subprocess.run reads its returncode itself
+    "RUF005",
+    "SIM108",
+    "RUF001", "RUF002", "RUF003",  # prose uses the multiplication sign, arrows and dashes
+]
+
+[lint.isort]
+force-sort-within-sections = true

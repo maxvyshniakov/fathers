@@ -1,24 +1,7 @@
 # Publishing
 
-An explicit push request publishes the current `main` branch to its configured
-upstream, `origin/main` in `maxvyshniakov/slotfather`. Fetch and inspect the full
-outgoing range first, then push the verified commit with an explicit refspec:
-
-```sh
-git push origin <verified-sha>:refs/heads/main
-```
-
-Never force a push or skip a pre-push hook. There is currently no pre-push gate;
-run the quality and test commands in [checks](checks.md) before publishing. Reuse
-results when their inputs are unchanged, and do not run a gate twice if a hook
-is later configured to run it.
-
-The `CI` workflow in `.github/workflows/ci.yml` runs the same pinned Ruff/Pyright
-budget check and full unittest suite on Ubuntu and macOS. It checks out full Git
-history because the quality gate rejects shallow history. Follow both matrix
-jobs to successful completion on the exact pushed SHA; a green local test run
-does not substitute for either CI job. Fix code failures in new commits; rerun
-only infrastructure failures.
+Branches, the push, CI and installs are the repository's: [publishing](../../../docs/agents/publishing.md). Slotfather
+adds only its changelog rules and the cautions of an install below.
 
 ## Changelog and versions
 
@@ -28,7 +11,7 @@ sections only when they have entries, in the order Breaking, Added, Changed, Dep
 Security. Entries are user-facing. Before 1.0 a breaking or broad behaviour change takes a minor version,
 anything else a patch. A release moves the Unreleased entries under the new version and sets it in
 `pyproject.toml` and in `VERSION` in `src/slotfather/version.py`; `tests/test_changelog.py` checks the layout and
-that both match the newest release (until repo-kit's `check-changelogs` and `release` read `pyproject.toml`).
+that both match the newest release (Repo-Kit's `check-changelogs` reads only packages under `packages/`).
 `install.py` ships CHANGELOG.md with the package, where the dashboard's changelog (click the footer's version, or
 `v`) reads it.
 

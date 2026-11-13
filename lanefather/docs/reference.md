@@ -256,12 +256,13 @@ the landing lock's file format (a project's reference-transaction hook reads it)
 ## Checks
 
 ```sh
-python3 tools/check.py          # ruff, pyright strict against pyright-baseline.json, the tests (through slotfather)
-python3 tools/check.py --lint
-python3 tools/check.py --update-baseline
+python3 tools/check.py                    # Ruff and strict Pyright against tools/type-baseline.json
+python3 tools/check.py --shrink-baseline  # after fixing debt: remove its budget; refuses to add any
+python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-The pyright baseline counts errors per file and rule and only shrinks.
+`tools/check.py` is the lint gate every package of the repository shares; the baseline counts diagnostics per file,
+rule and message and only shrinks. The repository's [checks](../../docs/agents/checks.md) run both on a change here.
 
 ## Protected reference hook
 

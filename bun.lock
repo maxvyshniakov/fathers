@@ -1,0 +1,19 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "fathers-workspace",
+      "devDependencies": {
+        "@maxvyshniakov/repo-kit": "0.7.0",
+      },
+    },
+  },
+  "packages": {
+    "@maxvyshniakov/repo-kit": ["@maxvyshniakov/repo-kit@0.7.0", "https://npm.pkg.github.com/download/@maxvyshniakov/repo-kit/0.7.0/2d2161ddb9b1190cf9f0d4ff3b4784565374efd4", { "peerDependencies": { "playwright": ">=1.50.0" }, "bin": { "repo-kit": "src/cli.mjs", "repo-kit-lane": "src/lanefather.mjs" } }, "sha512-0i9v/YQOoPRk/vFk2fdSJWu7KKQTxn8rCa+zftIqYNBnIi3AFL04PUFSmL1gFr+21FqMzDi6dc6XtZHyFZYg8w=="],
+
+    "playwright": ["playwright@1.65.0", "", { "dependencies": { "playwright-core": "1.65.0" }, "bin": { "playwright": "cli.js" } }, "sha512-F3AMWcR44qMBt4kq+6Kb6mX7bjGXshktKFOPULd7reED6ZJWevjbNRqysP7q+AATE9kdPEZBibex1BYsvpVoeA=="],
+
+    "playwright-core": ["playwright-core@1.65.0", "", { "bin": { "playwright-core": "cli.js" } }, "sha512-vNSKgH6YqtN7cdT/L334zo0a+YwkrpicyrHJlWWPIm/Q+Nn2SWInil01oT0mbu96U4GgoRtCYQD9CzJQgju+lA=="],
+  }
+}

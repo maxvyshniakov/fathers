@@ -4,13 +4,17 @@ version = "0.1.0"  # the newest release in CHANGELOG.md; src/godfather/version.p
 requires-python = ">=3.9"
 
 [tool.ruff]
+extend = "../tools/ruff.toml"
 target-version = "py39"
-line-length = 120
 extend-include = ["godfather"]
 exclude = [".git", "__pycache__", ".venv", "assets"]
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "B"]
+# The shared rules (../tools/ruff.toml) this package does not pass yet; drop a code once its findings are fixed.
+ignore = [
+    "E501", "I001", "PLC0206", "PLR0402", "PLR1714", "PLR1730", "PLW2901", "PLW3301", "RUF012", "RUF021", "RUF059",
+    "RUF100", "SIM105", "SIM117", "SIM222", "SIM300", "UP006", "UP007", "UP031", "UP035", "UP037", "UP045",
+]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E402"]  # tests put src/ on sys.path (helpers) before importing the package
