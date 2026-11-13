@@ -32,6 +32,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 from . import entry as _entry
 from . import events as _events
 from . import procs as _procs
+from . import safety as _safety
 from .state import Entry, Store
 
 TIMEOUT = 20.0  # seconds a liveness or listing call may take
@@ -599,6 +600,7 @@ def unowned(snapshot: Snapshot, owned: Mapping[str, str]) -> Tuple[List[Dict[str
             continue
         for ident, info in sorted(listed.items()):
             resource = {"kind": kind.name, "id": ident, **info}
-            if key(resource) not in owned:
-                found.append({**resource, "key": key(resource), "why": f"a running {kind.name} no entry owns"})
+            item = _safety.unowned_resource(resource, key(resource), owned)
+            if item is not None:
+                found.append(item)
     return found, unknown

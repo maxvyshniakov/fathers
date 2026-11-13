@@ -107,6 +107,8 @@ A command run with `GODFATHER_ACTOR` set carries `via: "godfather"`.
   failure of a streak writes `entry.reap_failed`; each failure still updates `last_error`.
 - **Never** a process junkfather did not start or adopt, except `reap --pid PID --force` on a pid the last sweep
   listed as unowned, with the same start time and command and still unowned.
+- **One policy**: `adopt`, a reap, `reap --pid --force`, the sweep's unowned report and its unowned resources
+  decide what they may touch by the same rules (`junkfather/safety.py`).
 
 ## Resources
 
@@ -151,6 +153,12 @@ lives while its `codex` process runs; a shell owner (outside an agent) is the ne
 lives while it runs; a script or cron job has no such ancestor, so only the TTL ends its entries. When the process
 table cannot be read, or an owner has no process to check and the registry does not name it, its liveness is
 unknown, and unknown never reaps.
+
+Liveness compares a process's pid and start time only, by design: the owner's recorded process, an entry's
+supervisor and the reaper holding an entry in `reaping`. A start time has one-second granularity, so a pid taken
+again within that second reads as alive; that only delays a reap (the TTL still ends the entry, the sweep tries
+again), while every signal checks the command as well (Ending an entry). Recording each owner's command to compare
+it would add an owner field for no safety gain.
 
 The subagent comes from claims: the PreToolUse hook writes `claims/<session>/<tool_use_id>.json` (agent id, agent
 type, command) for each Bash call naming junkfather, and `own` takes the newest claim of its session whose command

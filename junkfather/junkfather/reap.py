@@ -23,35 +23,20 @@ from __future__ import annotations
 import contextlib
 import os
 import signal
+import sys
 import time
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from . import entry as _entry
 from . import events as _events
 from . import procs as _procs
+from . import safety as _safety
+from .procs import command_matches
 from .state import Entry, Store
 
 GRACE = 10.0  # seconds between SIGTERM and SIGKILL
 ROUNDS = 3  # reads of the entry's members: a process forked during the grace period is found by the next one
 STOPPED = ("stopped", "killed", "gone")
-
-
-def command_matches(now: str, seen: str) -> bool:
-    if now == seen:
-        return True
-    first = lambda text: os.path.basename((text.split() or [""])[0])  # noqa: E731
-    return bool(first(now)) and first(now) == first(seen)
-
-
-def protected(table: _procs.Table) -> Set[int]:
-    me = os.getpid()
-    return {0, 1, me, *table.ancestors(me)}
-
-
-def unsafe(proc: _procs.Proc) -> bool:
-    """A process no reap may touch, nor anything below it: a terminal's or an agent session."""
-    from .owner import CLAUDE, CODEX
-    return bool(proc.tty) or bool(CLAUDE.search(proc.cmd) or CODEX.search(proc.cmd))
 
 
 def seen_commands(entry: Entry) -> Dict[Tuple[int, str], str]:
@@ -74,7 +59,6 @@ def members(entry: Entry, table: _procs.Table, uid: Optional[int] = None, force:
     has pid and start only). `force` skips the command checks, never the start time. `ours`: the caller is the
     leader's parent and has not waited for it, so its pid cannot have been reused; only its command check is
     skipped. A leader refused for its command or start is never found again through `known`."""
-    uid = os.getuid() if uid is None else uid
     leader = table.get(entry.get("pid"))
     found: Dict[int, _procs.Proc] = {}
     seen = seen_commands(entry)
@@ -106,14 +90,9 @@ def members(entry: Entry, table: _procs.Table, uid: Optional[int] = None, force:
         if found:
             how = "known"
     for pid in list(found):
-        for proc in table.descendants(pid, prune=unsafe):
+        for proc in table.descendants(pid, prune=_safety.unsafe):
             found.setdefault(proc.pid, proc)
-    skip = protected(table)
-    excluded = {p.pid for p in found.values() if unsafe(p)}
-    for pid in excluded:
-        excluded = excluded | {p.pid for p in table.descendants(pid)}
-    chosen = [p for p in found.values() if p.uid == uid and p.pid not in skip and p.pid not in excluded]
-    return sorted(chosen, key=lambda p: p.pid), how
+    return sorted(_safety.signallable(found.values(), table, uid), key=lambda p: p.pid), how
 
 
 def stop(targets: List[_procs.Proc], grace: float = GRACE,
@@ -237,3 +216,35 @@ def reap(store: Store, entry_id: str, reason: str, grace: float = GRACE, dry_run
                   None if done else "error")
     return {"id": entry_id, "result": result, "reason": reason, "pids": pids, "how": how}
 
+
+def reap_unowned(store: Store, pid: int, table: _procs.Table, force: bool, reason: str, grace: float = GRACE,
+                 dry_run: bool = False, via: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+    """Stop an unowned process: only with `force`, only one the last sweep listed, only when it is still the same
+    process (start time and command) and still unowned (safety.refusal). None, after saying why on stderr, when
+    refused; else the one result row."""
+    if not force:
+        print(f"junkfather reap: pid {pid} is not owned; junkfather stops an unowned process only with --force, "
+              "and only one `junkfather sweep` listed", file=sys.stderr)
+        return None
+
+    def owned(candidate: int) -> bool:
+        return any(candidate in {p.pid for p in members(e, table)[0]} for e in store.entries()
+                   if e.get("state") in _entry.ACTIVE)
+
+    refused = _safety.refusal("force", pid, table, store, owned)
+    if refused:
+        print(f"junkfather reap: refusing pid {pid}: {refused}", file=sys.stderr)
+        return None
+    proc = table.get(pid)
+    assert proc is not None
+    targets = _safety.forced_targets(pid, table)
+    if dry_run:
+        return [{"id": f"pid {pid}", "result": "would-stop", "reason": "forced", "pids": [p.pid for p in targets],
+                 "how": "unowned"}]
+    outcome = stop(targets, grace)
+    _events.write(store.root, "unowned.reaped", {"type": "process", "id": str(pid), "pid": pid},
+                  _events.caller(via), {"cmd": proc.cmd, "start": proc.start, "reason": reason,
+                                        "result": outcome["result"], "pids": [p.pid for p in targets]},
+                  None if outcome["result"] in STOPPED else "error")
+    return [{"id": f"pid {pid}", "result": outcome["result"], "reason": reason, "pids": [p.pid for p in targets],
+             "how": "unowned, forced"}]

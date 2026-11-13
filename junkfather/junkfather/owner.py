@@ -27,13 +27,12 @@ import os
 from pathlib import Path
 import re
 import time
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from . import procs as _procs
+from . import safety as _safety
 from .state import Store, read_json, write_atomic
 
-CLAUDE = re.compile(r"(^|/)claude(\s|$)|/claude/versions/[^/\s]+(\s|$)|/claude\.app/Contents/MacOS/claude(\s|$)")
-CODEX = re.compile(r"(^|/)(codex|CodexCLI)(\s|$)|/codex-[\w-]+/vendor/[^\s]*/codex(\s|$)")
 CLAIM_WINDOW = 1800.0  # seconds a claim may wait for its command (a permission prompt can take a while)
 CLAIM_AMBIGUOUS = 60.0  # two agents' matching claims this close together: ambiguous
 CLAIM_KEEP = 86400.0  # claims older than this are pruned
@@ -74,12 +73,13 @@ def lane_of(env: Mapping[str, str], cwd: str) -> Optional[str]:
     return best[1] if best else None
 
 
-def nearest(table: Optional[_procs.Table], pid: int, pattern: "re.Pattern[str]") -> Optional[_procs.Proc]:
+def nearest(table: Optional[_procs.Table], pid: int, test: Callable[[str], bool]) -> Optional[_procs.Proc]:
+    """`pid` or its nearest ancestor whose command passes `test` (safety.claude, safety.codex)."""
     if table is None:
         return None
     for here in [pid, *table.ancestors(pid)]:
         proc = table.get(here)
-        if proc is not None and pattern.search(proc.cmd):
+        if proc is not None and test(proc.cmd):
             return proc
     return None
 
@@ -93,12 +93,12 @@ def detect(env: Mapping[str, str], table: Optional[_procs.Table], cwd: str, me: 
     if session:
         owner.update(kind="claude", session=session)
         pid = int(env["CLAUDE_PID"]) if (env.get("CLAUDE_PID") or "").isdigit() else None
-        proc = table.get(pid) if table is not None and pid else nearest(table, me, CLAUDE)
+        proc = table.get(pid) if table is not None and pid else nearest(table, me, _safety.claude)
         if proc is None and table is not None:
-            proc = nearest(table, me, CLAUDE)
+            proc = nearest(table, me, _safety.claude)
     elif codex:
         owner.update(kind="codex", session=codex)
-        proc = nearest(table, me, CODEX)
+        proc = nearest(table, me, _safety.codex)
     else:
         proc = None
         if table is not None and me in table.procs:
@@ -155,7 +155,7 @@ def registered_alive(record: Dict[str, Any], table: _procs.Table) -> bool:
             pass
     if isinstance(record.get("startedAt"), (int, float)):
         return -2 <= record["startedAt"] / 1000 - proc.started <= 120
-    return bool(CLAUDE.search(proc.cmd))
+    return _safety.claude(proc.cmd)
 
 
 def alive(owner: Owner, table: Optional[_procs.Table],

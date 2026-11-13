@@ -29,6 +29,7 @@ from . import events as _events
 from . import owner as _owner
 from . import procs as _procs
 from . import reap as _reap
+from . import safety as _safety
 from .entry import new as new_entry
 from .state import Entry, Store
 
@@ -320,21 +321,8 @@ def adopt(store: Store, pid: int, ttl: float, keep: str, label: Optional[str], e
         print(f"junkfather adopt: {error}", file=sys.stderr)
         return 1
     proc = table.get(pid)
-    refusal = None
-    if proc is None:
-        refusal = "no such process"
-    elif proc.uid != os.getuid():
-        refusal = "another user's process"
-    elif pid in _reap.protected(table):
-        refusal = "junkfather itself or one of its ancestors"
-    elif _owner.CLAUDE.search(proc.cmd) or _owner.CODEX.search(proc.cmd):
-        refusal = "an agent session"
-    elif proc.tty:
-        refusal = f"a process with a terminal ({proc.tty})"
-    elif any(_reap.unsafe(p) for p in table.descendants(pid)):
-        refusal = "its tree holds a terminal's process or an agent session"
-    elif any(e.get("state") == _entry.RUNNING and e.get("pid") == pid for e in store.entries()):
-        refusal = "already owned"
+    refusal = _safety.refusal("adopt", pid, table, store, lambda candidate: any(
+        e.get("state") == _entry.RUNNING and e.get("pid") == candidate for e in store.entries()))
     if refusal:
         print(f"junkfather adopt: refusing pid {pid}: {refusal}", file=sys.stderr)
         return 1
@@ -345,7 +333,7 @@ def adopt(store: Store, pid: int, ttl: float, keep: str, label: Optional[str], e
     if agent:
         who["agent"] = agent
     entry = _entry.adopted(store, new_entry(store, [proc.cmd], ttl, keep, label, who, "adopted", os.getcwd()), proc,
-                           [proc, *table.descendants(pid, prune=_reap.unsafe)])
+                           [proc, *table.descendants(pid, prune=_safety.unsafe)])
     _events.write(store.root, "entry.adopted", _events.subject(entry), _events.actor_of(who),
                   {"cmd": proc.cmd, "ttl": ttl, "keep": keep, "pgid": proc.pgid, "group": entry["group"]})
     scope = "its group" if entry["group"] else "it and its descendants (not its group: it does not lead one)"

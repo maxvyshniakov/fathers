@@ -35,6 +35,7 @@ from . import owner as _owner
 from . import procs as _procs
 from . import reap as _reap
 from . import resources as _resources
+from . import safety as _safety
 from .state import Store, VERSION, read_json, write_atomic
 
 KEEP_FINISHED = 7 * 86400.0
@@ -69,12 +70,10 @@ def points_into(path: str, roots: List[str]) -> Optional[str]:
 def unowned(table: _procs.Table, cwds: Dict[int, str], owned: set, roots: List[str],
             sessions_alive: Dict[int, bool], uid: Optional[int] = None) -> List[Dict[str, Any]]:
     uid = os.getuid() if uid is None else uid
-    skip = _reap.protected(table)
+    skip = _safety.protected(table)
     found: Dict[int, Dict[str, Any]] = {}
     for proc in table.procs.values():
-        if proc.uid != uid or proc.pid in skip or proc.pid in owned or proc.tty:
-            continue
-        if _owner.CLAUDE.search(proc.cmd) or _owner.CODEX.search(proc.cmd):
+        if not _safety.reportable(proc, uid, skip, owned):
             continue
         why = root = None
         cwd = cwds.get(proc.pid)
@@ -89,11 +88,9 @@ def unowned(table: _procs.Table, cwds: Dict[int, str], owned: set, roots: List[s
                     break
         if why is None:
             continue
-        if any(sessions_alive.get(pid) for pid in table.ancestors(proc.pid)):
+        if _safety.below_session(proc.pid, table, sessions_alive) or _safety.untouchable_tree(proc.pid, table):
             continue
         below = table.descendants(proc.pid)
-        if any(_reap.unsafe(p) for p in below):
-            continue
         found[proc.pid] = {"pid": proc.pid, "start": proc.start, "ppid": proc.ppid, "pgid": proc.pgid,
                            "age": table.age(proc), "cwd": cwd, "cmd": proc.cmd, "why": why, "root": root,
                            "tree": [proc.pid] + [p.pid for p in below]}
@@ -113,7 +110,7 @@ def unowned(table: _procs.Table, cwds: Dict[int, str], owned: set, roots: List[s
 
 def agent_sessions(table: _procs.Table) -> Dict[int, bool]:
     """Agent session processes in the table (Claude Code, Codex): each is alive by being there."""
-    return {p.pid: True for p in table.procs.values() if _owner.CLAUDE.search(p.cmd) or _owner.CODEX.search(p.cmd)}
+    return {p.pid: True for p in table.procs.values() if _safety.agent(p)}
 
 
 def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = None,
@@ -272,15 +269,6 @@ def prune(store: Store, entry: Dict[str, Any]) -> None:
             Path(log).unlink()
         except OSError:
             pass
-
-
-def listed_unowned(store: Store, pid: int) -> Optional[Dict[str, Any]]:
-    data = read_json(store.root / "unowned.json")
-    items = data.get("items") if isinstance(data, dict) else None
-    for item in items if isinstance(items, list) else []:
-        if isinstance(item, dict) and item.get("pid") == pid:
-            return item
-    return None
 
 
 def text(report: Dict[str, Any], quiet: bool = False) -> str:

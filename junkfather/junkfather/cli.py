@@ -402,7 +402,9 @@ def reap_command(store: Store, args: argparse.Namespace) -> int:
             return 1
         selected = [e for e in running if args.pid in {p.pid for p in _reap.members(e, table)[0]}]
         if not selected:
-            return reap_unowned(store, args, table)
+            unowned = _reap.reap_unowned(store, args.pid, table, args.force, args.reason, args.grace, args.dry_run,
+                                         args.via)
+            return 1 if unowned is None else report(unowned, args)
     if args.expired:
         selected = [e for e in selected if now >= float(e.get("expires") or 0)]
     for entry in selected:
@@ -421,53 +423,6 @@ def report(results: List[Dict[str, Any]], args: argparse.Namespace) -> int:
             pids = ", ".join(map(str, r["pids"])) or "-"
             print(f"{r['id']}: {r['result']} ({r['reason']}; pids {pids}{'; ' + r['how'] if r['how'] else ''})")
     return 1 if any(r["result"] in ("failed", "unknown") for r in results) else 0
-
-
-def reap_unowned(store: Store, args: argparse.Namespace, table: _procs.Table) -> int:
-    """Stop an unowned process: only with --force, only one the last sweep listed, only when it is still the same
-    process (start time) and still unowned."""
-    pid = args.pid
-    if not args.force:
-        print(f"junkfather reap: pid {pid} is not owned; junkfather stops an unowned process only with --force, "
-              "and only one `junkfather sweep` listed", file=sys.stderr)
-        return 1
-    listed = _sweep.listed_unowned(store, pid)
-    proc = table.get(pid)
-    refusal = None
-    if listed is None:
-        refusal = "the last sweep did not list it (run junkfather sweep)"
-    elif proc is None:
-        refusal = "it no longer runs"
-    elif proc.start != _procs.norm(listed.get("start") or ""):
-        refusal = "the pid now belongs to another process (its start time changed)"
-    elif listed.get("cmd") is not None and not _reap.command_matches(proc.cmd, str(listed["cmd"])):
-        refusal = "the pid now belongs to another process (its command changed)"
-    elif proc.uid != os.getuid() or _reap.unsafe(proc) or pid in _reap.protected(table):
-        refusal = "not a process junkfather may stop"
-    elif any(_reap.unsafe(p) for p in table.descendants(pid)):
-        refusal = "its tree holds a terminal's process or an agent session"
-    elif any(pid in {p.pid for p in _reap.members(e, table)[0]} for e in store.entries()
-             if e.get("state") in _entry.ACTIVE):
-        refusal = "an entry owns it now (reap that entry)"
-    if refusal:
-        print(f"junkfather reap: refusing pid {pid}: {refusal}", file=sys.stderr)
-        return 1
-    assert proc is not None
-    skip = _reap.protected(table)
-    targets = [proc] + [p for p in table.descendants(pid, prune=_reap.unsafe)
-                        if p.uid == os.getuid() and p.pid not in skip]
-    if args.dry_run:
-        results = [{"id": f"pid {pid}", "result": "would-stop", "reason": "forced", "pids": [p.pid for p in targets],
-                    "how": "unowned"}]
-    else:
-        outcome = _reap.stop(targets, args.grace)
-        _events.write(store.root, "unowned.reaped", {"type": "process", "id": str(pid), "pid": pid},
-                      _events.caller(args.via), {"cmd": proc.cmd, "start": proc.start, "reason": args.reason,
-                                                 "result": outcome["result"], "pids": [p.pid for p in targets]},
-                      None if outcome["result"] in _reap.STOPPED else "error")
-        results = [{"id": f"pid {pid}", "result": outcome["result"], "reason": args.reason,
-                    "pids": [p.pid for p in targets], "how": "unowned, forced"}]
-    return report(results, args)
 
 
 # hand, extend

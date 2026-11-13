@@ -3,7 +3,7 @@
 A process is known by its pid and its start time (`ps -o lstart` in the C locale and UTC, so every caller reads the
 same text whatever its TZ). A pid alone can be reused, and so can the pair: lstart has one-second granularity, so a
 pid that ends and is taken again within the same second keeps the same pair. The command is therefore the second
-factor: every decision to signal a process checks the pid, the start time and the command (reap.command_matches).
+factor: every decision to signal a process checks the pid, the start time and the command (command_matches).
 """
 from __future__ import annotations
 
@@ -42,6 +42,15 @@ class Proc(NamedTuple):
 
 def norm(start: str) -> str:
     return " ".join(str(start).split())
+
+
+def command_matches(now: str, seen: str) -> bool:
+    """Whether a command read now is the one seen before: the same command line, or the same program when a
+    process renamed its arguments."""
+    if now == seen:
+        return True
+    first = lambda text: os.path.basename((text.split() or [""])[0])  # noqa: E731
+    return bool(first(now)) and first(now) == first(seen)
 
 
 def started_at(lstart: str) -> Optional[float]:
