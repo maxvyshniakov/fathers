@@ -19,6 +19,7 @@ import json
 import os
 import re
 import socket
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, BinaryIO, Optional, cast
@@ -31,7 +32,9 @@ KEEP = START_EVENTS  # events kept per source for the panels
 POLL = 0.25  # seconds between looks at a log's size (stat; no platform file-watch API)
 LINE_MAX = _eventcheck.MAX_LINE_BYTES
 TAG = re.compile(r"[a-z][a-z0-9]{0,3}")  # a source tag: four cells at most
-SKIPS = ("invalid", "version", "host")  # why a line was skipped
+SKIPS = ("invalid", "version", "host", "source")  # why a line was skipped
+SKIP_WORDS = {"invalid": "invalid", "version": "unknown version", "host": "other host", "source": "other source"}
+READ_MAX = 1 << 20  # bytes one poll reads from a log at most; the rest waits for the next poll
 CONTROL = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 COMPACT_VALUE, COMPACT_MAX = 40, 160  # characters of one value, and of the whole, in a compact detail
 
@@ -128,13 +131,14 @@ class Tail:
     """One source's log followed by inode and offset (the module's docstring has the rules)."""
     source: str
     path: Path
-    host: str
+    host: Optional[str] = None  # None: this machine's name, looked up again on every read (it follows the network)
     skipped: dict[str, int] = field(default_factory=lambda: dict.fromkeys(SKIPS, 0))
     handle: Optional[BinaryIO] = None
     inode: Optional[int] = None
     pending: bytes = b""  # a last line not whole yet
     discarding: bool = False  # inside a line longer than LINE_MAX: skipped up to its newline
     order: int = 0
+    reading_for: str = ""  # the host name lines are read for in this read
 
     def close(self) -> None:
         if self.handle is not None:
@@ -143,10 +147,14 @@ class Tail:
         self.handle, self.inode, self.pending, self.discarding = None, None, b"", False
 
     def read(self) -> list[Event]:
-        """The events appended since the last read, oldest first; on the first read, the start window."""
+        """The events appended since the last read, at most READ_MAX bytes of them, oldest first; on the first read,
+        the start window."""
+        self.reading_for = self.host if self.host is not None else local_host()
         if self.handle is None:
             return self.start()
         data = self.drain()
+        if len(data) >= READ_MAX:  # more of this file waits: a rotation is looked at once it is read
+            return self.lines(data)
         try:
             info = os.stat(self.path)
         except OSError:
@@ -169,13 +177,13 @@ class Tail:
     def drain(self) -> bytes:
         assert self.handle is not None
         try:
-            return self.handle.read()
+            return self.handle.read(READ_MAX)
         except OSError:
             return b""
 
     def open(self, at: int) -> bool:
         try:
-            handle = open(self.path, "rb")
+            handle = open(self.path, "rb")  # noqa: SIM115 - kept open between reads: it follows the file by inode
         except OSError:
             return False
         self.handle, self.inode = handle, os.fstat(handle.fileno()).st_ino
@@ -257,8 +265,11 @@ class Tail:
             self.skipped["version" if version else "invalid"] += 1
             return None
         found = cast(dict[str, Any], found)
-        if found.get("host") != self.host:
+        if found.get("host") != self.reading_for:
             self.skipped["host"] += 1
+            return None
+        if found.get("source") != self.source:  # a line of another tool's in this tool's log
+            self.skipped["source"] += 1
             return None
         when = parse_time(found.get("time"))
         if when is None:  # the validator checked it; a reader never trusts that alone
@@ -285,7 +296,7 @@ class Feed:
             del self.tails[source]
             self.kept.pop(source, None)
         if path is not None and source not in self.tails:
-            self.tails[source] = Tail(source, Path(path), self.host if self.host is not None else local_host())
+            self.tails[source] = Tail(source, Path(path), self.host)
             self.kept[source] = []
 
     def poll(self) -> list[Event]:
@@ -303,7 +314,7 @@ class Feed:
         return merged([event for kept in self.kept.values() for event in kept])
 
     def skipped(self) -> dict[str, dict[str, int]]:
-        """Lines skipped per source and why (invalid, version, host): for Settings' STATUS."""
+        """Lines skipped per source and why (invalid, version, host, source): EVENTS' border and Settings' STATUS."""
         return {source: dict(tail.skipped) for source, tail in self.tails.items()}
 
     def close(self) -> None:
@@ -590,14 +601,20 @@ def subject_label(event: Event) -> str:
 
 def row(event: Event, tag: str) -> dict[str, Any]:
     """One EVENTS row: when, source and tag, kind, event word, slot cells, label, subject id, pid and the detail
-    parts; `key` is its identity in the feed (source, file order)."""
+    parts; `key` is its identity in the feed (identity())."""
     found = shown(event)
     pid = event.subject.get("pid")
-    return {"key": (event.source, event.order), "when": event.when, "source": event.source, "tag": tag,
+    return {"key": identity(event), "when": event.when, "source": event.source, "tag": tag,
             "kind": event.kind, "event": found.event, "count": found.count, "filled": found.filled,
             "label": found.label or subject_label(event), "id": str(event.subject.get("id") or ""),
             "pid": pid if isinstance(pid, int) and not isinstance(pid, bool) else None,
             "detail": list(found.detail), "lease": event.subject.get("lease_id"), "details": event.details}
+
+
+def identity(event: Event) -> tuple[str, str, int]:
+    """A row's identity, the same however often its log is read again (a Tail made anew numbers its lines from one
+    again): its source, its `time` as written and a checksum of its line."""
+    return event.source, str(event.data.get("time")), zlib.crc32(event.line.encode("utf-8"))
 
 
 def rows(events: list[Event], tags: dict[str, str]) -> list[dict[str, Any]]:

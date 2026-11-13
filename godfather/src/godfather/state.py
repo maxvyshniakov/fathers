@@ -123,7 +123,7 @@ class AppState:
     colours: dict[EntryId, int] = field(default_factory=lambda: cast(dict[EntryId, int], {}))
     fresh_events: int = 0  # events the filter lets through that arrived while EVENTS was scrolled down
     newest: Any = None  # the newest shown event's identity
-    events_filter: _events_view.Filter = _events_view.Filter()  # EVENTS' source and text filters (fathers#84)
+    events_filter: _events_view.Filter = field(default_factory=_events_view.Filter)  # EVENTS' filters (fathers#84)
     interval: float = 1.0  # Refresh every
     theme: str = "auto"  # Colour theme
     news: Any = None  # news.News: what's new, once the tools answered

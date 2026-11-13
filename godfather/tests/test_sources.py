@@ -190,7 +190,9 @@ class FakeContractTests(unittest.TestCase):
     def test_godfather_reads_the_fake_slotfather_through_its_cli(self) -> None:
         fake = FakeSlotfather()
         self.addCleanup(fake.close)
-        with fake.active():
+        # What is tested is the CLI contract, not how fast an interpreter starts on a loaded machine: no deadline
+        with fake.active(), mock.patch.object(sources, "CAPABILITIES_TIMEOUT", None), \
+                mock.patch.object(sources, "SNAPSHOT_TIMEOUT", None):
             screen = app.Screen()
             model, error = screen.load()
         self.assertIsNone(error)

@@ -123,10 +123,18 @@ def type_filter(state: AppState, key: str) -> Result:
     return state, []
 
 
+def clear_filter(state: AppState, _: str) -> Result:
+    """Esc on the main screen: a text filter Enter kept is cleared (the source filter stays, as Esc in the field
+    leaves it); nothing else happens."""
+    if not events_shown(state) or not state.events_filter.text:
+        return state, []
+    return filtered(state, _events_view.Filter(state.events_filter.source)), []
+
+
 FILTER_MAX = 40  # characters EVENTS' text filter takes
 
 MAIN: dict[str, Handler] = {
-    "q": quit_, "Q": quit_, "f": cycle_source, "/": open_filter,
+    "q": quit_, "Q": quit_, "f": cycle_source, "/": open_filter, "esc": clear_filter,
     "\t": focus_step(1), "back_tab": focus_step(-1),
     "?": open_help, "v": open_changelog, "s": open_settings,
     "j": select(lambda index, _: index + 1), "down": select(lambda index, _: index + 1),

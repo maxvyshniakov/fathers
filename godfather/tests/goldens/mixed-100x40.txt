@@ -28,13 +28,13 @@
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ EVENTS ── all sources ─ label ─────── detail ─╮ ╭─ MACHINE ─────── unleased 0.4 · no admission ─╮
 │                                                │ │                                               │
-│  11:59:35   s  released  agent-ae7…  ok 5m41s ╹│ │  🆗 load ■■■■■■■■■■■■■■■■■■■■■■░░░░░░ 9.3/12  │
-│  11:59:20   j  extended  vite dev    ttl 4h0…  │ │  🆗 mem  ■■■■■■■■■░░░░░░░░░░░░░░░░░░░ normal  │
-│  11:59:02   l  reviewed  644-build…  2 findi…  │ │  🆗 swap ■■■■■■■■■■■■■■■■■■■■■░░░░░░░ 4.4/6G  │
-│  11:58:33   s  released  agent-a1c…  ok 1m13s  │ │                       ▄▄     ▄▄               │
-│  11:58:10   l  gate      Strayligh…  red · 1…  │ │  ▄█████████▄ ▄     ▄▄██████████████▄▄▄█▄▄█▄▄  │
-│  11:57:48   l  post-me…  710-speec…  green ·…  │ │  ███████████████████████████████████████████  │
-│  11:57:20   s  granted   agent-a1c…   no wait  │ │  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
+│  11:59:35   s  released  agent-…     ok 5m41s ╹│ │  🆗 load ■■■■■■■■■■■■■■■■■■■■■■░░░░░░ 9.3/12  │
+│  11:59:20   j  extended  vite d…    ttl 4h00m  │ │  🆗 mem  ■■■■■■■■■░░░░░░░░░░░░░░░░░░░ normal  │
+│  11:59:02   l  reviewed  644-bu…  2 findings…  │ │  🆗 swap ■■■■■■■■■■■■■■■■■■■■■░░░░░░░ 4.4/6G  │
+│  11:58:33   s  released  agent-…     ok 1m13s  │ │                       ▄▄     ▄▄               │
+│  11:58:10   l  gate      Strayl…    red · 19m  │ │  ▄█████████▄ ▄     ▄▄██████████████▄▄▄█▄▄█▄▄  │
+│  11:57:48   l  post-me…  710-sp…  green · na…  │ │  ███████████████████████████████████████████  │
+│  11:57:20   s  granted   agent-…      no wait  │ │  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                                                │ │  −85s   avg 4.4/6 · peak 6 · full 10%    now  │
 ╰────────────────────────────────────────────────╯ ╰─ slots held ──────────────────────────────────╯
  Godfather what's new?      ↑↓ select   s settings   ? help   q quit       updated 11:59:39  ● live
