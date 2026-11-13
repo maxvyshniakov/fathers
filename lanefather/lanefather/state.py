@@ -109,8 +109,9 @@ def read_json(path: Path, *, reject_duplicates: bool = False) -> dict[str, Any] 
 
 
 def cut_short(path: Path) -> str:
-    return (f"lane state {path} is empty or not a JSON object: a write was cut short or the file is damaged. "
-            "Restore the record or remove the file; until then it is not read as a lane, and start does not replace it")
+    return (f"lane state {path} is unreadable, empty or not a JSON object: a write was cut short or the file is "
+            "damaged. Restore the record or remove the file; until then it is not read as a lane, and start does not "
+            "replace it")
 
 
 def atomic_write(path: Path, text: str, mode: int | None = None) -> None:
