@@ -397,14 +397,14 @@ class Replay:
                 cls = self.classes[number]
                 give_up = request.get("give_up")
                 # as the queue writes a new request (entry.new_request()), with its client's wait (run --wait)
-                label: str = request["label"]  # as recorded; a command may be None, which kind() reads as "?"
-                command: str = request["cmd"]
-                priority: str = cls
                 waiting[number] = sf_entry.new_request(
-                    number + 1, "", min(request["count"], self.slots), label, command, "", stamp(request["arrival"]),
-                    priority, f"replay-{number}",
-                    yieldable=client_yields(request, cls, self.slots),
+                    number + 1, "", min(request["count"], self.slots), "", "", "", stamp(request["arrival"]),
+                    "normal", f"replay-{number}", yieldable=client_yields(request, cls, self.slots),
                     until=stamp(give_up) if give_up is not None and self.policy.get("until", True) else None)
+                # its recorded label, command (None where none was recorded) and class, in their places
+                waiting[number]["label"] = request["label"]
+                waiting[number]["cmd"] = request["cmd"]
+                waiting[number]["priority"] = cls
                 waiting[number]["id"] = number
                 result[number]["defers"] = whole_batch(waiting[number], self.slots)
                 remaining[number] = self.run_of(request)
