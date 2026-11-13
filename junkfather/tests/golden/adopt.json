@@ -1,0 +1,947 @@
+[
+ {
+  "args": [
+   "adopt",
+   "<pid2>",
+   "--ttl",
+   "1h",
+   "--label",
+   "adopted"
+  ],
+  "code": 0,
+  "err": "",
+  "out": "junkfather: <id1> adopted pid <pid2> (its group) for claude s1, ttl 60m; stop it: junkfather reap --id <id1>\n"
+ },
+ {
+  "args": [
+   "adopt",
+   "<pid2>"
+  ],
+  "code": 1,
+  "err": "junkfather adopt: refusing pid <pid2>: already owned\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "extend",
+   "<id1>",
+   "--ttl",
+   "2h"
+  ],
+  "code": 0,
+  "err": "",
+  "out": "junkfather: <id1> now ends in 2h at the latest\n"
+ },
+ {
+  "entries": [
+   {
+    "argv": [
+     "sleep 600"
+    ],
+    "claim_note": "",
+    "created": "<v>",
+    "cwd": "/Users/maxwish/fathers-lane-jf-tidy/junkfather",
+    "expires": "<v>",
+    "group": true,
+    "handed": [],
+    "id": "<id1>",
+    "keep": "owner",
+    "known": [
+     [
+      <pid2>,
+      "<start>"
+     ]
+    ],
+    "known_seen": [
+     [
+      <pid2>,
+      "<start>",
+      "sleep 600"
+     ]
+    ],
+    "label": "adopted",
+    "log": null,
+    "mode": "adopted",
+    "owner": {
+     "agent": null,
+     "agent_type": null,
+     "kind": "claude",
+     "lane": null,
+     "pid": <pid1>,
+     "pid_start": "<start>",
+     "session": "s1"
+    },
+    "pgid": <pid2>,
+    "pid": <pid2>,
+    "seen": "sleep 600",
+    "start": "<start>",
+    "state": "running",
+    "supervisor": null,
+    "ttl": 7200.0,
+    "v": 1
+   }
+  ],
+  "events": [
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "cmd": "sleep 600",
+     "group": true,
+     "keep": "owner",
+     "pgid": <pid2>,
+     "ttl": 3600.0
+    },
+    "host": "<host>",
+    "kind": "entry.adopted",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "label": "adopted",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "expires": "<v>",
+     "ttl": 7200.0
+    },
+    "host": "<host>",
+    "kind": "entry.extended",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "label": "adopted",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   }
+  ],
+  "snapshot": "adopted and extended"
+ },
+ {
+  "args": [
+   "hand",
+   "<id1>",
+   "--to",
+   "s2"
+  ],
+  "code": 0,
+  "err": "",
+  "out": "junkfather: <id1> now belongs to claude s2\n"
+ },
+ {
+  "args": [
+   "hand",
+   "<id1>",
+   "--to",
+   "nobody"
+  ],
+  "code": 0,
+  "err": "junkfather hand: no live Claude Code session nobody in the registry; the entry ends at its TTL or when swept as orphaned if that session never shows up\n",
+  "out": "junkfather: <id1> now belongs to codex nobody\n"
+ },
+ {
+  "args": [
+   "hand",
+   "<id1>",
+   "--to",
+   "self"
+  ],
+  "code": 0,
+  "err": "",
+  "out": "junkfather: <id1> now belongs to claude s1\n"
+ },
+ {
+  "args": [
+   "hand",
+   "<id1>",
+   "--to",
+   "self"
+  ],
+  "code": 2,
+  "err": "junkfather: --to self needs an agent session (CLAUDE_CODE_SESSION_ID or CODEX_THREAD_ID)\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "hand",
+   "<id2>",
+   "--to",
+   "s2"
+  ],
+  "code": 1,
+  "err": "junkfather hand: no running entry <id2>\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "extend",
+   "<id2>",
+   "--ttl",
+   "1h"
+  ],
+  "code": 1,
+  "err": "junkfather extend: no running entry <id2>\n",
+  "out": ""
+ },
+ {
+  "entries": [
+   {
+    "argv": [
+     "sleep 600"
+    ],
+    "claim_note": "",
+    "created": "<v>",
+    "cwd": "/Users/maxwish/fathers-lane-jf-tidy/junkfather",
+    "expires": "<v>",
+    "group": true,
+    "handed": [
+     {
+      "at": "<v>",
+      "from": {
+       "agent": null,
+       "agent_type": null,
+       "kind": "claude",
+       "lane": null,
+       "pid": <pid1>,
+       "pid_start": "<start>",
+       "session": "s1"
+      },
+      "to": {
+       "agent": null,
+       "agent_type": null,
+       "kind": "claude",
+       "lane": null,
+       "pid": <pid3>,
+       "pid_start": "<start>",
+       "session": "s2"
+      }
+     },
+     {
+      "at": "<v>",
+      "from": {
+       "agent": null,
+       "agent_type": null,
+       "kind": "claude",
+       "lane": null,
+       "pid": <pid3>,
+       "pid_start": "<start>",
+       "session": "s2"
+      },
+      "to": {
+       "agent": null,
+       "agent_type": null,
+       "kind": "codex",
+       "lane": null,
+       "pid": null,
+       "pid_start": null,
+       "session": "nobody"
+      }
+     },
+     {
+      "at": "<v>",
+      "from": {
+       "agent": null,
+       "agent_type": null,
+       "kind": "codex",
+       "lane": null,
+       "pid": null,
+       "pid_start": null,
+       "session": "nobody"
+      },
+      "to": {
+       "agent": null,
+       "agent_type": null,
+       "kind": "claude",
+       "lane": null,
+       "pid": <pid1>,
+       "pid_start": "<start>",
+       "session": "s1"
+      }
+     }
+    ],
+    "id": "<id1>",
+    "keep": "owner",
+    "known": [
+     [
+      <pid2>,
+      "<start>"
+     ]
+    ],
+    "known_seen": [
+     [
+      <pid2>,
+      "<start>",
+      "sleep 600"
+     ]
+    ],
+    "label": "adopted",
+    "log": null,
+    "mode": "adopted",
+    "owner": {
+     "agent": null,
+     "agent_type": null,
+     "kind": "claude",
+     "lane": null,
+     "pid": <pid1>,
+     "pid_start": "<start>",
+     "session": "s1"
+    },
+    "pgid": <pid2>,
+    "pid": <pid2>,
+    "seen": "sleep 600",
+    "start": "<start>",
+    "state": "running",
+    "supervisor": null,
+    "ttl": 7200.0,
+    "v": 1
+   }
+  ],
+  "events": [
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "cmd": "sleep 600",
+     "group": true,
+     "keep": "owner",
+     "pgid": <pid2>,
+     "ttl": 3600.0
+    },
+    "host": "<host>",
+    "kind": "entry.adopted",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "label": "adopted",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "expires": "<v>",
+     "ttl": 7200.0
+    },
+    "host": "<host>",
+    "kind": "entry.extended",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "label": "adopted",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "from": {
+      "agent": null,
+      "kind": "claude",
+      "lane": null,
+      "session": "s1"
+     },
+     "to": {
+      "kind": "claude",
+      "lane": null,
+      "session": "s2"
+     }
+    },
+    "host": "<host>",
+    "kind": "entry.handed",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "label": "adopted",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "from": {
+      "agent": null,
+      "kind": "claude",
+      "lane": null,
+      "session": "s2"
+     },
+     "to": {
+      "kind": "codex",
+      "lane": null,
+      "session": "nobody"
+     }
+    },
+    "host": "<host>",
+    "kind": "entry.handed",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "label": "adopted",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "from": {
+      "agent": null,
+      "kind": "codex",
+      "lane": null,
+      "session": "nobody"
+     },
+     "to": {
+      "kind": "claude",
+      "lane": null,
+      "session": "s1"
+     }
+    },
+    "host": "<host>",
+    "kind": "entry.handed",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "label": "adopted",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   }
+  ],
+  "snapshot": "handed"
+ },
+ {
+  "args": [
+   "list",
+   "--json"
+  ],
+  "code": 0,
+  "err": "",
+  "out": {
+   "json": {
+    "at": "<v>",
+    "entries": [
+     {
+      "age": "<v>",
+      "agent": null,
+      "argv": [
+       "sleep 600"
+      ],
+      "cwd": "/Users/maxwish/fathers-lane-jf-tidy/junkfather",
+      "end": null,
+      "exit": null,
+      "id": "<id1>",
+      "keep": "owner",
+      "label": "adopted",
+      "lane": null,
+      "log": null,
+      "mode": "adopted",
+      "owner": "claude s1",
+      "owner_alive": true,
+      "pgid": <pid2>,
+      "pid": <pid2>,
+      "processes": 1,
+      "resource": null,
+      "session": "s1",
+      "state": "running",
+      "ttl": 7200.0,
+      "ttl_left": "<v>"
+     }
+    ],
+    "v": 1
+   }
+  }
+ },
+ {
+  "args": [
+   "status",
+   "--json"
+  ],
+  "code": 0,
+  "err": "",
+  "out": {
+   "json": {
+    "entries": [
+     {
+      "age": "<v>",
+      "agent": null,
+      "argv": [
+       "sleep 600"
+      ],
+      "cwd": "/Users/maxwish/fathers-lane-jf-tidy/junkfather",
+      "end": null,
+      "exit": null,
+      "id": "<id1>",
+      "keep": "owner",
+      "label": "adopted",
+      "lane": null,
+      "log": null,
+      "mode": "adopted",
+      "owner": "claude s1",
+      "owner_alive": true,
+      "pgid": <pid2>,
+      "pid": <pid2>,
+      "processes": 1,
+      "resource": null,
+      "session": "s1",
+      "state": "running",
+      "ttl": 7200.0,
+      "ttl_left": "<v>"
+     }
+    ],
+    "errors": [],
+    "host": "<host>",
+    "sweep": {
+     "result": null,
+     "time": null
+    },
+    "time": "<v>",
+    "unowned": [],
+    "unowned_resources": [],
+    "v": 1
+   }
+  }
+ },
+ {
+  "args": [
+   "reap",
+   "--pid",
+   "<pid2>",
+   "--dry-run",
+   "--json"
+  ],
+  "code": 0,
+  "err": "",
+  "out": {
+   "json": {
+    "results": [
+     {
+      "how": "leader",
+      "id": "<id1>",
+      "pids": [
+       <pid2>
+      ],
+      "reason": "reap",
+      "result": "would-stop"
+     }
+    ],
+    "v": 1
+   }
+  }
+ },
+ {
+  "args": [
+   "reap",
+   "--lane",
+   "none"
+  ],
+  "code": 0,
+  "err": "",
+  "out": "nothing to reap\n"
+ },
+ {
+  "args": [
+   "reap",
+   "--owner",
+   "s1"
+  ],
+  "code": 0,
+  "err": "",
+  "out": "<id1>: stopped (reap; pids <pid2>; leader)\n"
+ },
+ {
+  "args": [
+   "reap",
+   "--owner",
+   "s1",
+   "--agent",
+   "a1",
+   "--json"
+  ],
+  "code": 0,
+  "err": "",
+  "out": {
+   "json": {
+    "results": [],
+    "v": 1
+   }
+  }
+ },
+ {
+  "args": [
+   "reap",
+   "--id",
+   "<id1>",
+   "--grace",
+   "2",
+   "--reason",
+   "golden"
+  ],
+  "code": 0,
+  "err": "",
+  "out": "<id1>: skipped (already reaped; pids -)\n"
+ },
+ {
+  "entries": [
+   {
+    "argv": [
+     "sleep 600"
+    ],
+    "claim_note": "",
+    "created": "<v>",
+    "cwd": "/Users/maxwish/fathers-lane-jf-tidy/junkfather",
+    "end": {
+     "how": "leader",
+     "pids": [
+      <pid2>
+     ],
+     "reason": "reap",
+     "result": "stopped"
+    },
+    "ended": "<v>",
+    "expires": "<v>",
+    "group": true,
+    "handed": [
+     {
+      "at": "<v>",
+      "from": {
+       "agent": null,
+       "agent_type": null,
+       "kind": "claude",
+       "lane": null,
+       "pid": <pid1>,
+       "pid_start": "<start>",
+       "session": "s1"
+      },
+      "to": {
+       "agent": null,
+       "agent_type": null,
+       "kind": "claude",
+       "lane": null,
+       "pid": <pid3>,
+       "pid_start": "<start>",
+       "session": "s2"
+      }
+     },
+     {
+      "at": "<v>",
+      "from": {
+       "agent": null,
+       "agent_type": null,
+       "kind": "claude",
+       "lane": null,
+       "pid": <pid3>,
+       "pid_start": "<start>",
+       "session": "s2"
+      },
+      "to": {
+       "agent": null,
+       "agent_type": null,
+       "kind": "codex",
+       "lane": null,
+       "pid": null,
+       "pid_start": null,
+       "session": "nobody"
+      }
+     },
+     {
+      "at": "<v>",
+      "from": {
+       "agent": null,
+       "agent_type": null,
+       "kind": "codex",
+       "lane": null,
+       "pid": null,
+       "pid_start": null,
+       "session": "nobody"
+      },
+      "to": {
+       "agent": null,
+       "agent_type": null,
+       "kind": "claude",
+       "lane": null,
+       "pid": <pid1>,
+       "pid_start": "<start>",
+       "session": "s1"
+      }
+     }
+    ],
+    "id": "<id1>",
+    "keep": "owner",
+    "known": [
+     [
+      <pid2>,
+      "<start>"
+     ]
+    ],
+    "known_seen": [
+     [
+      <pid2>,
+      "<start>",
+      "sleep 600"
+     ]
+    ],
+    "label": "adopted",
+    "log": null,
+    "mode": "adopted",
+    "owner": {
+     "agent": null,
+     "agent_type": null,
+     "kind": "claude",
+     "lane": null,
+     "pid": <pid1>,
+     "pid_start": "<start>",
+     "session": "s1"
+    },
+    "pgid": <pid2>,
+    "pid": <pid2>,
+    "seen": "sleep 600",
+    "start": "<start>",
+    "state": "reaped",
+    "supervisor": null,
+    "ttl": 7200.0,
+    "v": 1
+   }
+  ],
+  "events": [
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "cmd": "sleep 600",
+     "group": true,
+     "keep": "owner",
+     "pgid": <pid2>,
+     "ttl": 3600.0
+    },
+    "host": "<host>",
+    "kind": "entry.adopted",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "label": "adopted",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "expires": "<v>",
+     "ttl": 7200.0
+    },
+    "host": "<host>",
+    "kind": "entry.extended",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "label": "adopted",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "from": {
+      "agent": null,
+      "kind": "claude",
+      "lane": null,
+      "session": "s1"
+     },
+     "to": {
+      "kind": "claude",
+      "lane": null,
+      "session": "s2"
+     }
+    },
+    "host": "<host>",
+    "kind": "entry.handed",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "label": "adopted",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "from": {
+      "agent": null,
+      "kind": "claude",
+      "lane": null,
+      "session": "s2"
+     },
+     "to": {
+      "kind": "codex",
+      "lane": null,
+      "session": "nobody"
+     }
+    },
+    "host": "<host>",
+    "kind": "entry.handed",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "label": "adopted",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "from": {
+      "agent": null,
+      "kind": "codex",
+      "lane": null,
+      "session": "nobody"
+     },
+     "to": {
+      "kind": "claude",
+      "lane": null,
+      "session": "s1"
+     }
+    },
+    "host": "<host>",
+    "kind": "entry.handed",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "label": "adopted",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "pid": <pid1>,
+     "session": "s1",
+     "type": "agent"
+    },
+    "details": {
+     "how": "leader",
+     "left": [],
+     "pids": [
+      <pid2>
+     ],
+     "reason": "reap",
+     "result": "stopped",
+     "signals": [
+      "TERM"
+     ]
+    },
+    "host": "<host>",
+    "kind": "entry.reaped",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "label": "adopted",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   }
+  ],
+  "snapshot": "reaped"
+ },
+ {
+  "args": [
+   "extend",
+   "<id1>",
+   "--ttl",
+   "1h"
+  ],
+  "code": 1,
+  "err": "junkfather extend: no running entry <id1>\n",
+  "out": ""
+ },
+ {
+  "args": [
+   "hand",
+   "<id1>",
+   "--to",
+   "s2"
+  ],
+  "code": 1,
+  "err": "junkfather hand: no running entry <id1>\n",
+  "out": ""
+ }
+]
