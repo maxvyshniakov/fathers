@@ -1,0 +1,78 @@
+[
+ {
+  "force": false,
+  "how": "leader",
+  "members": "group",
+  "pids": [
+   300,
+   301,
+   307
+  ]
+ },
+ {
+  "force": true,
+  "how": "leader",
+  "members": "group",
+  "pids": [
+   300,
+   301,
+   307
+  ]
+ },
+ {
+  "force": false,
+  "how": "known",
+  "members": "known only",
+  "pids": [
+   301,
+   307,
+   400
+  ]
+ },
+ {
+  "force": true,
+  "how": "known",
+  "members": "known only",
+  "pids": [
+   301,
+   307,
+   400
+  ]
+ },
+ {
+  "force": false,
+  "how": "known",
+  "members": "reused",
+  "pids": [
+   301,
+   307
+  ]
+ },
+ {
+  "force": true,
+  "how": "known",
+  "members": "reused",
+  "pids": [
+   301,
+   307
+  ]
+ },
+ {
+  "force": false,
+  "how": "known",
+  "members": "changed",
+  "pids": [
+   307
+  ]
+ },
+ {
+  "force": true,
+  "how": "leader",
+  "members": "changed",
+  "pids": [
+   300,
+   301,
+   307
+  ]
+ }
+]

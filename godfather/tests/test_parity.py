@@ -6,7 +6,8 @@ it drew, its help, and the same model as a `status --json --full` reply (tools/s
 stand-in). Godfather reads that reply in fixture mode, its adapter decodes it, and Godfather renders it at the same
 moment. Every cell, character and style, must be identical, emoji and ASCII, wide, one-column and narrow, but the
 footer (its name and version) and the EVENTS panel, whose columns Godfather changed on purpose after the move (time ·
-slots · label · result, owner 2026-11-12), and the focused panel's top and bottom rules, heavy since fathers#139, and the history chart's title (fathers#140);
+slots · label · result, owner 2026-11-12), and the focused panel's top and bottom rules, heavy since fathers#139, and what says the history chart shows slots held
+(fathers#140; chart_title());
 help likewise in every section but EVENTS. A missing or unreadable fixture
 fails the test; it never skips.
 """
@@ -23,8 +24,9 @@ from unittest import mock
 
 from helpers import ROOT, timezone
 
-from godfather import app, sources, state, tui
+from godfather import app, layout, sources, state, tui
 from godfather.adapters import slotfather as adapter
+from godfather.layout import Rect
 from godfather.views import common, overlays, overview
 
 
@@ -44,16 +46,23 @@ def read(name: str) -> Any:
 
 
 def chart_title(canvas: tui.Canvas) -> set[tuple[int, int]]:
-    """The row inside MACHINE's frame that says `slots held` (fathers#140): its title above the chart, or the axis
-    line it leads, whose stats it moves."""
-    found: set[tuple[int, int]] = set()
-    for row, cells in enumerate(canvas.cells):
-        text = "".join(str(cell[0]) or "\0" for cell in cells)
-        at = text.find("slots held")
-        if at >= 0:
-            start, end = text.rindex("│", 0, at), text.index("│", at)
-            found |= {(row, column) for column in range(start + 1, end)}
-    return found
+    """What MACHINE's chart shows since fathers#140, which Slotfather's dashboard never drew: beside the gauges, the
+    title row above the chart and the axis line between its window and `now`, whose figures moved up into that title;
+    stacked, only the ` slots held ` set into the bottom border (the axis line is compared as it was)."""
+    rows = ["".join(str(cell[0]) or "\0" for cell in cells) for cells in canvas.cells]
+    top = next((row for row, text in enumerate(rows) if "─ MACHINE " in text), None)
+    if top is None:
+        return set()
+    x = rows[top].index("─ MACHINE ") - 1
+    width = rows[top].index("╮", x) - x + 1
+    height = next(row for row in range(top + 1, len(rows)) if rows[row][x] == "╰") - top + 1
+    inside = layout.machine(Rect(top, x, height, width), 9)  # the rows' place does not depend on the values
+    chart = inside.chart
+    if chart is None:
+        return set()
+    if inside.side:  # both rows are otherwise blank left of the chart: their whole inside
+        return {(row, column) for row in (chart.y - 1, chart.y + chart.height) for column in range(x + 1, x + width - 1)}
+    return {(top + height - 1, column) for column in range(chart.x - 1, chart.x + 11)}
 
 
 RESTED = {"┍": "╭", "┑": "╮", "┕": "╰", "┙": "╯", "━": "─"}  # a focused frame's rules as a resting one's

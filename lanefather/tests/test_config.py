@@ -111,6 +111,8 @@ class ConfigTests(ConfigCase):
                             ('[gc]\nafter_remove_report = 1\n', "after_remove_report must be a boolean"),
                             ('[gc]\ndirs = [1]\n', "dirs must be a string or a list of strings"),
                             ('[gc]\nbranches = [""]\n', "[gc] branches takes non-empty patterns"),
+                            ('[gc]\ncollect_uncommitted_sessions = "yes"\n',
+                             "collect_uncommitted_sessions must be a boolean"),
                             ('[[promote.install]]\nargv = ["x"]\n', "needs a name and an argv"),
                             ('checks = "x"\n', "[checks] must be a table"),
                             ('[env]\nLANEFATHER_X = 1\n', "[env] maps"),
@@ -126,7 +128,9 @@ class ConfigTests(ConfigCase):
 
     def test_gc_patterns_default_to_agent_lane_claude_and_codex_worktrees(self):
         default = config.Config()
-        self.assertEqual(default.gc_dirs, ("agent-*", "lane-*", ".claude/worktrees/*", "codex-*"))
+        self.assertEqual(default.gc_dirs, ("agent-*", "lane-*", ".claude/worktrees/*"))
+        self.assertFalse(default.gc_collect_uncommitted_sessions)
+        self.assertIn("node_modules", default.gc_disposable)
         self.assertEqual(default.gc_branches, ("worktree-agent-*", "lane/*", "claude/*", "codex/*"))
         found = self.use('[gc]\ndirs = "agent-*"\nbranches = []\n')
         self.assertEqual((found.gc_dirs, found.gc_branches), (("agent-*",), ()))

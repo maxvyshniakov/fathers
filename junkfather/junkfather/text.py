@@ -1,4 +1,4 @@
-"""How junkfather reads and writes durations and times: `--ttl 2h` in, `2h05m` and RFC 3339 UTC out."""
+"""How Junkfather reads and writes durations and times: `--ttl 2h` in, `2h05m` and RFC 3339 UTC out."""
 from __future__ import annotations
 
 import argparse

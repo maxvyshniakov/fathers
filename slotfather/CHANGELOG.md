@@ -124,13 +124,15 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   entry that cannot be read is left in place and `status` lists it as `unreadable`.
 - queue.log no longer grows for ever: past 4 MiB it becomes queue.log.1, replacing the older one, as history.jsonl
   does; the dashboard's load chart reads across both.
-- On macOS two clients in different locales (`LC_ALL`, `LC_TIME`) no longer reap each other's live leases: `ps`
-  runs in the C locale everywhere, and an entry an older client wrote in its own locale's words still matches its
-  holder.
+- Two clients in different locales or time zones no longer reap each other's live leases: entries carry
+  `started`, the holder's start in epoch seconds, which current clients compare. `start` stays as each system's
+  older clients write it (macOS: the client's own locale), so older and current clients share a queue during an
+  upgrade as before; an older client's entry in another locale's words still matches its holder.
 - A `ps` that fails, times out, prints nothing or leaves out its caller no longer makes every holder look dead:
-  that look reaps no lease and grants nothing, says so in queue.log (`skipped reaping: ...`) and EVENTS
-  (`reap.skipped`), and waiters keep their place until the next good table. The dashboard's CPU sample refuses
-  such a table too.
+  that look reaps no lease and grants nothing, and waiters keep their place until the next good table. Each
+  client says so once per failure in queue.log (`skipped reaping: ...`, then `reaping resumed`) and EVENTS
+  (`reap.skipped`, `reap.resumed`); `status` and the dashboard fail without logging. The dashboard's CPU sample
+  refuses such a table too.
 - A batch `-n all` request no longer waits for as long as normal and interactive work keeps coming: on 2026-11-11 a
   Safari profile run waited 6 h 14 min and was given up. It now ages to normal after 30 minutes and is then the head.
 - QUEUE, EVENTS, the details, help, the changelog and Settings keep a blank row over and under their content

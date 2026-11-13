@@ -8,8 +8,9 @@ in two columns (QUEUE over EVENTS on the left, DETAILS over MACHINE on the right
 and at least 52); below that one column (QUEUE, DETAILS, then EVENTS beside MACHINE, or MACHINE alone where EVENTS
 would get under 38 columns, which is under 83); under SMALL_WIDTH or SMALL_HEIGHT only the slots and a note. MACHINE
 sits at its natural height (7 with its chart beside the rows, from 62 columns; 11 stacked); DETAILS takes the rest.
-Wide but too short for EVENTS under QUEUE at its rows (fathers#140), QUEUE keeps just its rows, MACHINE's compact line
-goes under it and DETAILS takes the whole right column.
+Wide, EVENTS shows from the height that gives it its least rows under QUEUE's least, and below that height QUEUE keeps
+its rows (less what MACHINE's three-row compact form needs), MACHINE goes under it and DETAILS takes the whole right
+column (fathers#140), so as a terminal grows taller panels only ever arrive.
 Tab goes by columns, left to right and each top to bottom."""
 from __future__ import annotations
 
@@ -114,11 +115,12 @@ def overview(width: int, height: int, rows: int, machine_natural: Callable[[int]
     if width >= WIDE:
         right = max(RIGHT_MIN, width * 2 // 5)
         left = width - right - 1
-        slack = available - queue
-        if MACHINE_SHORT <= slack < EVENTS_MIN:
-            # Short (fathers#140): EVENTS cannot fit under QUEUE at its rows, so QUEUE keeps just its rows, MACHINE's
-            # compact line takes the rows under it and DETAILS has the whole right column
-            column(panels, ("requests", "machine"), {"requests": queue, "machine": slack}, SLOTS_HEIGHT, 0, left)
+        if available < min(queue, QUEUE_MIN) + EVENTS_MIN:
+            # Short (fathers#140): EVENTS cannot have its least rows under QUEUE's, so QUEUE has its rows (less any
+            # MACHINE's three-row form needs), MACHINE's compact line the rest under it, DETAILS the right column
+            rows = min(queue, available - MACHINE_SHORT)
+            column(panels, ("requests", "machine"), {"requests": rows, "machine": available - rows}, SLOTS_HEIGHT, 0,
+                   left)
             panels["details"] = Rect(0, left + 1, height - 1, right)
         else:
             heights = stack(available, (Tier((("requests", min(queue, QUEUE_MIN)), ("events", EVENTS_MIN)),

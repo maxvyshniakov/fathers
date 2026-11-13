@@ -33,7 +33,7 @@ from . import entry as _entry
 from . import events as _events
 from . import procs as _procs
 from . import safety as _safety
-from .defaults import CREATE_TIMEOUT, SETTLE, STOP_TIMEOUT, TIMEOUT
+from .defaults import CREATE_TIMEOUT, RESOURCE_TIMEOUT, SETTLE, STOP_TIMEOUT
 from .state import Entry, Store
 from .text import duration
 
@@ -62,7 +62,7 @@ def tool(name: str) -> Optional[str]:
     return shutil.which(name) or shutil.which(name, path=os.pathsep.join(EXTRA_PATH))
 
 
-def run(argv: List[str], timeout: float = TIMEOUT) -> Ran:
+def run(argv: List[str], timeout: float = RESOURCE_TIMEOUT) -> Ran:
     """argv as given, never through a shell, with a timeout; no stdin."""
     found = tool(argv[0]) if "/" not in argv[0] else argv[0]
     if not found:

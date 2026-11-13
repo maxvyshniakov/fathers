@@ -100,7 +100,7 @@ class LoaderTests(unittest.TestCase):
     def test_a_result_is_kept_under_its_own_key_never_the_selected_one(self) -> None:
         view = tool()
         model = {"holders": [dict(key=(n, None), kind="held", pid=n) for n in (1, 2)], "waiters": []}
-        state, effects = view.reduce(view.AppState(model=model), view.ModelLoaded(model), 100.0)
+        state, effects = view.reduce(view.AppState(model=model), view.ModelLoaded(model, view.current_theme.holders()), 100.0)
         a = view.details_key(model["holders"][0], ((1, None), 0))
         b = view.details_key(model["holders"][1], ((2, None), 0))
         self.assertEqual([a], [effect.key for effect in effects if effect.kind == "load-details"], "row a loads")

@@ -90,6 +90,21 @@ class StatusTests(LaneCase):
         self.start("b", "docs/**")
         self.assertEqual([entry["project"] for entry in self.registry()["projects"]], ["Fixture"])
 
+    def test_a_cut_short_record_is_an_error_row_beside_the_healthy_lanes(self):
+        self.start("a", "lib/**")
+        self.start("b", "docs/**")
+        damaged = self.state / "b.json"
+        damaged.write_text('{"id": "b", "st')
+        [fixture] = self.status()["projects"]
+        self.assertEqual([lane["id"] for lane in fixture["lanes"]], ["a"])
+        [row] = fixture["damaged"]
+        self.assertEqual(row["path"], str(damaged))
+        self.assertIn("Restore the record or remove the file", row["error"])
+        text = self.lane("status", cwd=self.tmp)
+        self.assertIn(f"damaged {damaged}", text)
+        self.assertIn("a  planned", text)
+        self.assertIn("cut short", self.lane("start", "c", "--ticket", "1", "--claims", "src/**", ok=False))
+
     def test_status_reads_without_registering_or_writing(self):
         self.lane("status", "--json", cwd=self.repo)
         self.assertFalse(pathlib.Path(self.env["LANEFATHER_REGISTRY"]).exists())

@@ -287,7 +287,7 @@ class IdentityReducerTests(Case):
         colour = state.colours[("lease-b", 0)]
         # the first lease ends; the same pid and second come back as a new lease, which must not inherit anything
         reborn = entry(1, key="lease-c", label="first again")
-        state, _ = self.send(state, self.tool.ModelLoaded(model([second, reborn])))
+        state, _ = self.send(state, self.tool.ModelLoaded(model([second, reborn]), 8))
         self.assertEqual(("lease-b", 0), state.selection.key)
         self.assertEqual(0, state.selection.index, "the selection moved with its lease")
         self.assertEqual(colour, state.colours[("lease-b", 0)])

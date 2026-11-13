@@ -12,13 +12,6 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   `capabilities --json` reports it as `"host": {"min_disk_gb": 150}` (capability `host.min_disk_gb`), and a
   project hook finds it in `LANEFATHER_MIN_DISK_GB` and `<legacy_env_prefix>MIN_DISK_GB`, next to `DISK_FREE_GB`,
   so a project no longer reads `MIN_DISK_GB` out of the installed `host.py`.
-- `gc` collects the worktrees Claude Code and Codex sessions leave under `.claude/worktrees`, not only `agent-*`
-  and `lane-*` ones (fathers#44): the patterns are project config, `[gc] dirs` (default `agent-*`, `lane-*`,
-  `.claude/worktrees/*`, `codex-*`) and `[gc] branches` (default `worktree-agent-*`, `lane/*`, `claude/*`,
-  `codex/*`). The rules are unchanged (merged, clean, idle for 2 h, unused, no open lane), so with the defaults a
-  detached or feature-branch worktree there that meets them is removed too; a `.keep` file, a lock or narrower
-  patterns keep it. A merged branch is deleted only when the branch patterns name it, and a worktree that holds
-  another worktree is kept.
 - A check result stands only for the platform it ran on (owner decision 2026-11-13): the results store's entries
   name their `platform` (`<os>-<arch>`, such as `darwin-arm64` or `linux-x64`), its `env` and `plan` hash it, and a
   lookup from another platform reuses nothing, so a green gate on the Mac never skips the Linux run, while a second
@@ -58,11 +51,25 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Changed
 
+- `gc` now also collects the worktrees Claude Code and Codex sessions leave under `.claude/worktrees`, not only
+  `agent-*` and `lane-*` ones (fathers#44), with no configuration change: the patterns are `[gc] dirs` (default
+  `agent-*`, `lane-*`, `.claude/worktrees/*`, which covers Codex's `codex-*`) and `[gc] branches` (default
+  `worktree-agent-*`, `lane/*`, `claude/*`, `codex/*`). Agent and lane worktrees keep their rules. Any other
+  worktree there is a session worktree and is removed only when it is clean, idle for 2 h, unused, owned by no open
+  lane, its HEAD is in origin/dev or origin/main (a local `integrate/*` branch is not enough), it has a commit of its
+  own (`[gc] collect_uncommitted_sessions = true` drops that rule), and it holds no ignored file outside
+  `[gc] disposable` (build output such as `node_modules`, `target`, `__pycache__`); a merged `claude/*` or
+  `codex/*` branch is deleted only once it is in origin/dev or origin/main. To keep the old behaviour, set
+  `[gc] dirs = ["agent-*", "lane-*"]` and `branches = ["worktree-agent-*", "lane/*"]`; a `.keep` file or a
+  `git worktree lock` keeps one worktree. Every candidate is now kept when it holds another worktree or Git
+  repository, ignored directories included, and a `claude agent` lock whose pid is alive keeps its worktree.
 - Lane records and receipts are written durably (fathers#129): each write has its own temporary file and is synced
   with its directory before the rename, as the settings and the registry already were, so two writers no longer
   share a `<name>.pending` file and a crash leaves the old record or the new one. A lane record that is empty or not
-  JSON is reported, naming the file, by every command that reads the lanes (`status` shows it as the project's
-  error) instead of reading as no lane: `start` no longer registers over it and its claims are not dropped.
+  JSON is reported, naming the file and that restoring or removing it is the fix, instead of reading as no lane:
+  `start`, `land`, `promote`, `gc`, `list` and `show` refuse, so nothing registers over it or drops its claims,
+  while `status` lists the healthy lanes with the damaged file as a `damaged` row. A directory sync that fails
+  for any reason but an unsupported one (EINVAL, ENOTSUP) fails the write.
 - Unmarked P1 and P2 review findings hold the batch gate, not only the move of dev, and P3 findings no longer
   block (fathers#109, owner decision): the refusal lists each finding with the two commands that mark it, P3 findings
   are reported, and `[review] blocks = ["P1", "P2", "P3"]` keeps P3 blocking. `lanefather findings <sha> [--since

@@ -70,10 +70,16 @@ def loads() -> tuple[float, float, float]:
     return os.getloadavg()
 
 
-def ps_environment() -> dict[str, str]:
-    """The environment ps runs in for processes(): the C locale on every system, since ps writes lstart in the
-    locale's words and every client must write a holder's start alike (fathers#122). Clients before it ran macOS's
-    ps in the caller's locale; same_start() still matches what they wrote."""
+def ps_environment() -> dict[str, str] | None:
+    """The environment ps runs in for processes(), whose lstart a new entry writes as its `start`: on Linux the C
+    locale (procps writes lstart in the locale's words; every client since #653 writes C there); macOS keeps the
+    caller's locale and time zone, as every older client does, so that an older client still reads a current
+    client's `start` exactly as it read its own (fathers#122). Current clients compare `started` instead."""
+    return c_locale() if sys.platform.startswith("linux") else None
+
+
+def c_locale() -> dict[str, str]:
+    """This process's environment in the C locale, for a command whose output is parsed."""
     return {**os.environ, "LC_ALL": "C"}
 
 
@@ -108,10 +114,51 @@ def ancestors(table: dict, pid: int) -> set[int]:
 
 
 def alive(entry: dict[str, Any], table: dict[int, tuple[int, str]]) -> bool:
+    """Whether the holder an entry names is the live process `table` shows at its pid (same_holder())."""
     pid = entry.get("pid")
     process = table.get(pid) if isinstance(pid, int) else None
-    start = entry.get("start")
-    return process is not None and isinstance(start, str) and same_start(start, process[1])
+    return process is not None and same_holder(entry.get("start"), entry.get("started"), cast(int, pid), process[1])
+
+
+def start_epoch(pid: int) -> int | None:
+    """The second a live process started, as epoch seconds, independent of locale and time zone; None where it
+    cannot be read (another user's process on macOS, a /proc without the fields, other systems). macOS: libproc's
+    start time; Linux: /proc/PID/stat's starttime after /proc/stat's btime."""
+    if linux():
+        try:
+            ticks = int(proc_path(str(pid), "stat").read_text().rpartition(")")[2].split()[19])
+            for line in proc_path("stat").read_text().splitlines():
+                if line.startswith("btime "):
+                    return int(line.split()[1]) + ticks // os.sysconf("SC_CLK_TCK")
+        except (OSError, IndexError, ValueError):
+            return None
+        return None
+    if sys.platform == "darwin":
+        from . import macos_process
+        return macos_process.start_seconds(pid)
+    return None
+
+
+EPOCH_SLACK = 1  # seconds: Linux derives btime from the uptime and may round it either way between two reads
+
+
+def same_holder(start: object, started: object, pid: int, observed: str) -> bool:
+    """The one comparison of a holder's identity (fathers#122): whether the process with `start` (lstart as its
+    writer's ps printed it) and `started` (epoch seconds, written by current clients) is the one live at `pid`, whose
+    lstart `observed` is as this client's ps (or native table) prints it.
+    - Where the writer gave `started` and this client can read the pid's start: those two decide, within
+      EPOCH_SLACK, whatever locale or time zone either client runs in.
+    - Else `start`: "" matches any; the same text (spaces aside) matches; else same_start() compares the dates."""
+    if type(started) is int:
+        epoch = start_epoch(pid)
+        if epoch is not None:
+            return abs(started - epoch) <= EPOCH_SLACK
+    if not isinstance(start, str):
+        return False
+    written, shown = " ".join(start.split()), " ".join(observed.split())
+    if not written or written == shown:
+        return True
+    return same_start(written, shown, start_epoch(pid))
 
 
 CLOCK = re.compile(r"(?<!\d)(\d{1,2}):(\d{2}):(\d{2})(?!\d)")
@@ -127,27 +174,39 @@ def c_start(text: str) -> tuple[int, int, int, tuple[int, int, int]] | None:
     return int(words[4]), MONTHS.index(words[1]) + 1, int(words[2]), (int(clock[1]), int(clock[2]), int(clock[3]))
 
 
-def same_start(written: str, observed: str) -> bool:
-    """Whether a queue entry's `start` (as its client wrote it) names the process ps now shows started at
-    `observed` (C locale). "" matches any (an entry that names no start). Clients before fathers#122 ran macOS's ps
-    in their caller's locale ("пятница, 13 ноября 2026 г. 15:50:34", "Fr. 13 Nov. 15:50:34 2026"): such a start
-    matches when it holds the same clock time, day and year as whole numbers and no other number than the month's,
-    so a recycled pid, which starts at another second, never inherits the lease."""
-    written, observed = " ".join(written.split()), " ".join(observed.split())
-    if not written or written == observed:
-        return True
-    moment = c_start(observed)
-    if moment is None or c_start(written) is not None:
-        return False  # two C-locale times that differ name two processes
-    year, month, day, clock = moment
-    clocks = CLOCK.findall(written)
-    if [tuple(int(part) for part in found) for found in clocks] != [clock]:
+def same_start(written: str, observed: str, epoch: int | None = None) -> bool:
+    """Whether lstart text written in some locale ("пятница, 13 ноября 2026 г. 15:50:34", "Fr. 13 Nov. 15:50:34
+    2026", "金 11/13 15:50:34 2026") names the moment a process started: the one in local time of `epoch` where
+    given, else `observed` read as C-locale lstart. Compared: the clock time (exactly one, to the second); the year
+    and the day, each as a whole number; every other number must be the month; a C-locale month ("Nov") must be the
+    month. Not compared: a month written in another locale's words ("ноября", "Okt.", "nov.") or the weekday, and in an all-number date ("11/13") which number is the day and which the month, so a pid recycled
+    at the same second of the same day and year in another month (or with day and month swapped) can match; the
+    time zone the writer's ps ran in must be this client's."""
+    if epoch is not None:
+        local = time.localtime(epoch)
+        year, month, day = local.tm_year, local.tm_mon, local.tm_mday
+        clock = (local.tm_hour, local.tm_min, local.tm_sec)
+    else:
+        moment = c_start(observed)
+        if moment is None:
+            return False
+        year, month, day, clock = moment
+    if [tuple(int(part) for part in found) for found in CLOCK.findall(written)] != [clock]:
         return False
-    words = [word for word in re.split(r"[\s,./]+", CLOCK.sub(" ", written)) if re.search(r"\d", word)]
-    if not all(re.fullmatch(r"[0-9]+", word) for word in words):
-        return False  # a number run into letters ("2026x") is no date this matches
-    numbers = {int(word) for word in words}
-    return year in numbers and day in numbers and numbers <= {year, month, day}
+    words = [word for word in re.split(r"[\s,./]+", CLOCK.sub(" ", written)) if word]
+    numbers: list[int] = []
+    for word in words:
+        if re.search(r"\d", word):
+            if not re.fullmatch(r"[0-9]+", word):
+                return False  # a number run into letters ("2026x") is no date this matches
+            numbers.append(int(word))
+        elif word in MONTHS and MONTHS.index(word) + 1 != month:  # C, en_US, en_GB: "Nov"
+            return False
+    for known in (year, day):
+        if known not in numbers:
+            return False
+        numbers.remove(known)
+    return all(number == month for number in numbers)
 
 
 def memory_short() -> str | None:
@@ -442,7 +501,7 @@ def usage_table() -> dict[int, tuple[int, str, int, int, float]]:
     PS_TIMEOUT."""
     try:
         result = subprocess.run(["ps", "-axo", "pid=,ppid=,uid=,rss=,time=,lstart="], capture_output=True,
-                                text=True, env={**os.environ, "LC_ALL": "C"}, timeout=_config.PS_TIMEOUT)
+                                text=True, env=c_locale(), timeout=_config.PS_TIMEOUT)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise _config.SlotError(f"ps: {error}") from None
     table = {}
@@ -473,7 +532,7 @@ def carrying(pids: list[int], lease: str) -> set[int]:
         return found
     try:
         result = subprocess.run(["ps", "-wwE", "-o", "pid=,command=", "-p", ",".join(map(str, pids))],
-                                capture_output=True, text=True, env={**os.environ, "LC_ALL": "C"}, timeout=_config.PS_TIMEOUT)
+                                capture_output=True, text=True, env=c_locale(), timeout=_config.PS_TIMEOUT)
     except (OSError, subprocess.TimeoutExpired):
         return set()
     mark = " SLOTFATHER_LEASE=" + lease

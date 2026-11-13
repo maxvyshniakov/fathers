@@ -1,8 +1,8 @@
-"""Which processes junkfather may adopt, signal or report: one policy for `adopt`, a reap, `reap --pid --force`, the
+"""Which processes Junkfather may adopt, signal or report: one policy for `adopt`, a reap, `reap --pid --force`, the
 sweep's unowned report and its unowned resources (docs/reference.md, Ending an entry and Sweep).
 
 Never touched, nor anything below them: a process with a terminal and an agent session (Claude Code, Codex) are
-`unsafe`; pid 0 and 1, junkfather itself and its ancestors are `protected`; another user's process is not ours.
+`unsafe`; pid 0 and 1, Junkfather itself and its ancestors are `protected`; another user's process is not ours.
 An unowned process is only reported, and stopped only by `reap --pid --force` when the last sweep listed it and it
 is still that process; an unowned resource is only ever reported.
 """
@@ -77,48 +77,50 @@ def listed_unowned(store: Store, pid: int) -> Optional[Dict[str, Any]]:
     return None
 
 
-def refusal(kind: str, pid: int, table: _procs.Table, store: Store, owned: Callable[[int], bool]) -> Optional[str]:
-    """Why junkfather may not take this pid, or None. `kind` "adopt": own a running process; "force": stop an
-    unowned one (`reap --pid --force`). `owned` tells whether an entry holds the pid already."""
+def adopt_refusal(pid: int, table: _procs.Table, owned: Callable[[int], bool]) -> Optional[str]:
+    """Why `adopt` may not own this running pid, or None. `owned` tells whether an entry holds it already."""
     proc = table.get(pid)
-    if kind == "adopt":
-        if proc is None:
-            return "no such process"
-        if proc.uid != os.getuid():
-            return "another user's process"
-        if pid in protected(table):
-            return "junkfather itself or one of its ancestors"
-        if agent(proc):
-            return "an agent session"
-        if proc.tty:
-            return f"a process with a terminal ({proc.tty})"
-        if untouchable_tree(pid, table):
-            return "its tree holds a terminal's process or an agent session"
-        if owned(pid):
-            return "already owned"
-        return None
-    if kind == "force":
-        listed = listed_unowned(store, pid)
-        if listed is None:
-            return "the last sweep did not list it (run junkfather sweep)"
-        if proc is None:
-            return "it no longer runs"
-        if proc.start != _procs.norm(listed.get("start") or ""):
-            return "the pid now belongs to another process (its start time changed)"
-        if listed.get("cmd") is not None and not _procs.command_matches(proc.cmd, str(listed["cmd"])):
-            return "the pid now belongs to another process (its command changed)"
-        if proc.uid != os.getuid() or unsafe(proc) or pid in protected(table):
-            return "not a process junkfather may stop"
-        if untouchable_tree(pid, table):
-            return "its tree holds a terminal's process or an agent session"
-        if owned(pid):
-            return "an entry owns it now (reap that entry)"
-        return None
-    raise ValueError(f"not a refusal kind: {kind!r}")
+    if proc is None:
+        return "no such process"
+    if proc.uid != os.getuid():
+        return "another user's process"
+    if pid in protected(table):
+        return "junkfather itself or one of its ancestors"
+    if agent(proc):
+        return "an agent session"
+    if proc.tty:
+        return f"a process with a terminal ({proc.tty})"
+    if untouchable_tree(pid, table):
+        return "its tree holds a terminal's process or an agent session"
+    if owned(pid):
+        return "already owned"
+    return None
+
+
+def force_refusal(pid: int, table: _procs.Table, store: Store, owned: Callable[[int], bool]) -> Optional[str]:
+    """Why `reap --pid --force` may not stop this unowned pid, or None: the last sweep must have listed it, and it
+    must still be that process and still unowned. `owned` tells whether an entry holds it now."""
+    proc = table.get(pid)
+    listed = listed_unowned(store, pid)
+    if listed is None:
+        return "the last sweep did not list it (run junkfather sweep)"
+    if proc is None:
+        return "it no longer runs"
+    if proc.start != _procs.norm(listed.get("start") or ""):
+        return "the pid now belongs to another process (its start time changed)"
+    if listed.get("cmd") is not None and not _procs.command_matches(proc.cmd, str(listed["cmd"])):
+        return "the pid now belongs to another process (its command changed)"
+    if proc.uid != os.getuid() or unsafe(proc) or pid in protected(table):
+        return "not a process junkfather may stop"
+    if untouchable_tree(pid, table):
+        return "its tree holds a terminal's process or an agent session"
+    if owned(pid):
+        return "an entry owns it now (reap that entry)"
+    return None
 
 
 def forced_targets(pid: int, table: _procs.Table) -> List[_procs.Proc]:
-    """What `reap --pid --force` stops once `refusal` let it: the process and its descendants that are this user's
+    """What `reap --pid --force` stops once `force_refusal` let it: the process and its descendants that are this user's
     and not protected, leaving out unsafe ones with their subtrees."""
     proc = table.get(pid)
     if proc is None:

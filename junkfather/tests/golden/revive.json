@@ -1,0 +1,210 @@
+[
+ {
+  "entries": [
+   {
+    "argv": [
+     "sleep",
+     "600"
+    ],
+    "claim_note": "",
+    "created": "<v>",
+    "cwd": "<tmp>",
+    "ended": "<v>",
+    "expires": "<v>",
+    "group": true,
+    "handed": [],
+    "id": "<id1>",
+    "keep": "owner",
+    "known": [],
+    "known_seen": [
+     [
+      <pid2>,
+      "<start>",
+      "sleep 600"
+     ]
+    ],
+    "label": "revived",
+    "log": null,
+    "mode": "attached",
+    "owner": {
+     "kind": "process"
+    },
+    "pgid": <pid2>,
+    "pid": <pid2>,
+    "seen": "sleep 600",
+    "start": "<start>",
+    "state": "gone",
+    "supervisor": {
+     "pid": <pid0>,
+     "start": "<start>"
+    },
+    "ttl": 3600.0,
+    "v": 1
+   }
+  ],
+  "events": [
+   {
+    "actor": {
+     "type": "process"
+    },
+    "details": {
+     "argv": [
+      "sleep",
+      "600"
+     ],
+     "cwd": "<tmp>",
+     "keep": "owner",
+     "log": null,
+     "mode": "attached",
+     "pgid": <pid2>,
+     "ttl": 3600.0
+    },
+    "host": "<host>",
+    "kind": "entry.owned",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "label": "revived",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   }
+  ],
+  "snapshot": "gone"
+ },
+ {
+  "while running": {
+   "argv": [
+    "sleep",
+    "600"
+   ],
+   "claim_note": "",
+   "created": "<v>",
+   "cwd": "<tmp>",
+   "ended": null,
+   "expires": "<v>",
+   "group": true,
+   "handed": [],
+   "id": "<id1>",
+   "keep": "owner",
+   "known": [],
+   "known_seen": [
+    [
+     <pid2>,
+     "<start>",
+     "sleep 600"
+    ]
+   ],
+   "label": "revived",
+   "log": null,
+   "mode": "attached",
+   "owner": {
+    "kind": "process"
+   },
+   "pgid": <pid2>,
+   "pid": <pid2>,
+   "seen": "sleep 600",
+   "start": "<start>",
+   "state": "running",
+   "supervisor": {
+    "pid": <pid0>,
+    "start": "<start>"
+   },
+   "ttl": 3600.0,
+   "v": 1
+  }
+ },
+ {
+  "entries": [
+   {
+    "argv": [
+     "sleep",
+     "600"
+    ],
+    "claim_note": "",
+    "created": "<v>",
+    "cwd": "<tmp>",
+    "ended": "<v>",
+    "exit": -9,
+    "expires": "<v>",
+    "group": true,
+    "handed": [],
+    "id": "<id1>",
+    "keep": "owner",
+    "known": [],
+    "known_seen": [],
+    "label": "revived",
+    "log": null,
+    "mode": "attached",
+    "owner": {
+     "kind": "process"
+    },
+    "pgid": <pid2>,
+    "pid": <pid2>,
+    "seen": "sleep 600",
+    "start": "<start>",
+    "state": "exited",
+    "supervisor": {
+     "pid": <pid0>,
+     "start": "<start>"
+    },
+    "ttl": 3600.0,
+    "v": 1
+   }
+  ],
+  "events": [
+   {
+    "actor": {
+     "type": "process"
+    },
+    "details": {
+     "argv": [
+      "sleep",
+      "600"
+     ],
+     "cwd": "<tmp>",
+     "keep": "owner",
+     "log": null,
+     "mode": "attached",
+     "pgid": <pid2>,
+     "ttl": 3600.0
+    },
+    "host": "<host>",
+    "kind": "entry.owned",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "label": "revived",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "name": "junkfather",
+     "type": "tool",
+     "via": "supervisor"
+    },
+    "details": {
+     "exit": -9
+    },
+    "host": "<host>",
+    "kind": "entry.exited",
+    "source": "junkfather",
+    "subject": {
+     "id": "<id1>",
+     "label": "revived",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   }
+  ],
+  "snapshot": "exited"
+ }
+]

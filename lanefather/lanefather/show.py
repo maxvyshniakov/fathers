@@ -25,9 +25,10 @@ def summary(lane_id: str, directory: Path) -> dict[str, Any]:
     """Read records without creating a state directory, taking locks or running project hooks."""
     if not state.ID.fullmatch(lane_id):
         raise LaneError(f'lane id {lane_id!r}: use letters, digits, _ or -')
-    record = state.read_json(directory / f'{lane_id}.json')
+    path = directory / f'{lane_id}.json'
+    record = state.read_json(path)
     if record is None:
-        raise LaneError(f'no lane {lane_id}')
+        raise LaneError(state.cut_short(path) if path.exists() else f'no lane {lane_id}')
     record = state.migrate(record)
     if record.get('id') != lane_id:
         raise LaneError(f'lane id mismatch for {lane_id}')
