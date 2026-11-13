@@ -8,6 +8,7 @@ import sys as _path_sys
 from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from slotfather import config as sf_config
+from slotfather import entry as sf_entry
 from slotfather import leases as sf_leases
 from slotfather import platform as sf_platform
 from slotfather import query as sf_query
@@ -47,7 +48,7 @@ class GateTests(unittest.TestCase):
         self.assertEqual([WARNING, None, WARNING, WARNING], self.gate(grants, [{"count": 1}], 1, ("warning", "w")))
 
     def test_warning_holds_every_grant_while_a_pressed_lease_runs(self):
-        held = [{"count": 1, sf_schedule.PRESSED: True}]
+        held = [{"count": 1, sf_entry.PRESSED: True}]
         self.assertEqual([WARNING], self.gate([{"count": 1}], held, 1, ("warning", "w")))
         self.assertEqual([None], self.gate([{"count": 1}], held, 1, ("normal", None)), "normal again: as before")
 
@@ -68,7 +69,7 @@ class DashboardAdmissionTests(unittest.TestCase):
         settings = dict(sf_config.ORDER_DEFAULTS)
         held = [{"count": 1, "label": "running", "state": "held"}]
         self.assertEqual(1, sf_board.dashboard_admission([], held, 4, 0, WARNING, None, settings, "warning"))
-        self.assertEqual(0, sf_board.dashboard_admission([], [{**held[0], sf_schedule.PRESSED: True}], 4, 0,
+        self.assertEqual(0, sf_board.dashboard_admission([], [{**held[0], sf_entry.PRESSED: True}], 4, 0,
                                                          WARNING, None, settings, "warning"))
         self.assertEqual(0, sf_board.dashboard_admission([], held, 4, 0, "level 4", None, settings, "short"))
         self.assertEqual(0, sf_board.dashboard_admission([], held, 4, 0, "level 2", None,
@@ -107,14 +108,14 @@ class GrantTests(SlotCase):
         waiting = [self.entry("one", 1), self.entry("two", 2)]
         self.assertIsNone(self.grant("8000 1"))
         self.assertEqual(["held"] * 2, [self.state_of(p) for p in waiting])
-        self.assertFalse(any(sf_schedule.PRESSED in json.loads(p.read_text()) for p in waiting))
+        self.assertFalse(any(sf_entry.PRESSED in json.loads(p.read_text()) for p in waiting))
 
     def test_warning_admits_one_1_slot_lease_and_holds_the_second_until_it_releases(self):
         self.entry("running", 1, "held")
         first, second = self.entry("first", 1), self.entry("second", 1)
         self.assertEqual(WARNING, self.grant("8000 2"))
         self.assertEqual(("held", "waiting"), (self.state_of(first), self.state_of(second)))
-        self.assertTrue(json.loads(first.read_text())[sf_schedule.PRESSED])
+        self.assertTrue(json.loads(first.read_text())[sf_entry.PRESSED])
         self.assertEqual(WARNING, self.grant("8000 2"), "the next look holds it too")
         with mock.patch.dict(os.environ, self.env, clear=True):
             found: dict[str, Any] = cast(Any, sf_query).status_json(self.state)
@@ -136,7 +137,7 @@ class GrantTests(SlotCase):
         self.assertEqual("waiting", self.state_of(second))
         self.assertIsNone(self.grant("8000 1"))
         self.assertEqual("held", self.state_of(second))
-        self.assertNotIn(sf_schedule.PRESSED, json.loads(second.read_text()))
+        self.assertNotIn(sf_entry.PRESSED, json.loads(second.read_text()))
 
     def test_warning_refuses_two_slots_and_all(self):
         self.entry("running", 1, "held")

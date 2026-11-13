@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Iterable, cast
 
 from . import config as _config
+from . import entry as _entry
 from . import schedule as _schedule
 from . import state as _state
 
@@ -66,7 +67,7 @@ def project_of(item: dict[str, Any]) -> str:
 
 def keys(item: dict[str, Any]) -> list[str]:
     """An entry's or history line's run-type keys, most specific first."""
-    meta = _config.meta_of(item)
+    meta = _entry.meta_of(item)
     label = str(item.get("label") or "")
     found: list[str] = []
     phase = meta.get("phase")
@@ -97,7 +98,7 @@ def series(items: Iterable[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     for item in items:
         if not finished(item):
             continue
-        meta = _config.meta_of(item)
+        meta = _entry.meta_of(item)
         run = {"ran": float(item["ran"]), "ended": item.get("ended"), "plan": meta.get("plan"),
                "checks": meta.get("checks"), "lease_id": item.get("lease_id"), "verdict": item.get("verdict"),
                "run_key": item.get("run_key")}
@@ -304,7 +305,7 @@ def report(directory: Path | None = None, since: float | None = None, project: s
     for item in items:
         if not finished(item):
             continue
-        meta = _config.meta_of(item)
+        meta = _entry.meta_of(item)
         if project is not None and project_of(item) != project:
             continue
         if phase is not None and meta.get("phase") != phase:
@@ -327,7 +328,7 @@ def report(directory: Path | None = None, since: float | None = None, project: s
             verdict = done.get(str(item.get("lease_id"))) or item.get("verdict")
             if verdict:
                 verdicts[str(verdict)] = verdicts.get(str(verdict), 0) + 1
-        meta = _config.meta_of(members[-1])
+        meta = _entry.meta_of(members[-1])
         rows.append({"key": key, "project": project_of(members[-1]), "phase": meta.get("phase"),
                      "plan": meta.get("plan"), "checks": meta.get("checks"), "runs": len(members),
                      "weeks": [{"week": w, "count": len(v), "p50": round(percentile(v, 50) or 0, 1),
@@ -352,6 +353,6 @@ def entry_view(entry: dict[str, Any], known: dict[str, list[dict[str, Any]]], mo
     """`expected` (and `overrun`) for a status entry."""
     found = expected_of(entry, known)
     view: dict[str, Any] = {"expected": found}
-    if found is not None and entry.get("state") == "held" and found["p90"] is not None:
-        view["overrun"] = above(_schedule.held_for(entry, moment), found["p90"])
+    if found is not None and _entry.is_held(entry) and found["p90"] is not None:
+        view["overrun"] = above(_entry.held_for(entry, moment), found["p90"])
     return view

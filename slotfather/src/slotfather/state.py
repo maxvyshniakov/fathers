@@ -5,7 +5,6 @@ import contextlib
 import fcntl
 import hashlib
 import json
-import math
 import os
 from pathlib import Path
 import pwd
@@ -14,6 +13,7 @@ import time
 from typing import Any, Iterable, Iterator, cast
 
 from . import config as _config
+from . import entry as _entry
 
 
 def foreign_owner(directory: Path) -> int | None:
@@ -151,8 +151,8 @@ def record(directory: Path, entry: dict[str, Any], outcome: str, status: int | N
             "granted": entry.get("granted"), "ended": _config.now(), "outcome": outcome,
             "waited": None if queued is None else round((granted or ended) - queued),
             "ran": None if granted is None else round(ended - granted), "status": status,
-            "priority": _config.priority_of(entry)}
-    ticket = _config.ticket_of(entry)
+            "priority": _entry.priority_of(entry)}
+    ticket = _entry.ticket_of(entry)
     if ticket is not None:
         item["ticket"] = ticket
     with contextlib.suppress(_config.SlotError, OSError):
@@ -160,7 +160,7 @@ def record(directory: Path, entry: dict[str, Any], outcome: str, status: int | N
     item.update(usage or {})
     if entry.get("yields"):
         yielded = float(entry.get("yielded") or 0)
-        away = epoch(entry.get("yielded_at"))
+        away = _entry.epoch(entry.get("yielded_at"))
         item.update(yields=int(entry["yields"]), yielded=round(yielded + (max(0.0, ended - away) if away else 0), 2))
     if entry.get("until"):
         item["until"] = entry["until"]  # when its client would have given up (run --wait): the replay's patience
@@ -169,12 +169,12 @@ def record(directory: Path, entry: dict[str, Any], outcome: str, status: int | N
         item["aged"] = fields["aged"]  # the class it was granted in after ageing; `priority` stays the one it asked
     if fields.get("reprioritized") in _config.PRIORITIES:
         item["reprioritized"] = fields["reprioritized"]  # the class it asked first (slotfather reprioritize)
-    meta = _config.meta_of(entry)
+    meta = _entry.meta_of(entry)
     if meta:
         item["meta"] = meta
     if path is not None or isinstance(entry.get("lease_id"), str):
         # the entry's unique id, as status --json and EVENTS give it (an older client's entry: the same fallback)
-        item["lease_id"] = _config.lease_id(path.stem if path is not None else "", entry)
+        item["lease_id"] = _entry.lease_id(path.stem if path is not None else "", entry)
     if expected is not None and outcome == "released" and isinstance(item.get("ran"), (int, float)) \
             and not entry.get("session"):
         # the run type it is judged by and its verdict against that series (runtype.py, fathers#106)
@@ -295,7 +295,7 @@ def history_lines(limit: int, directory: Path | None = None) -> list[str]:
             wall = item.get("wall") or item.get("ran")
             cores_used = f"{item['cpu'] / wall:.1f} cores" if wall else f"{item['cpu']:.0f} s CPU"
             used = f" used {cores_used}, {item.get('rss_peak_mb', 0):.0f} MB"
-        meta = _config.meta_of(item)
+        meta = _entry.meta_of(item)
         tags = f" meta={_config.meta_text(meta)}" if meta else ""
         found.append(f"{when} {item.get('outcome')}: {item.get('count')} slot(s) {item.get('label')} waited "
                      f"{waited}{ran}{status}{used}{tags} cmd={item.get('cmd')}")
@@ -314,11 +314,6 @@ def asked(path: Path) -> dict[str, Any] | None:
     except (OSError, ValueError):
         return None
     return cast(dict[str, Any], found) if isinstance(found, dict) else None
-
-
-def epoch(value: Any) -> float | None:
-    """A moment stored as epoch seconds or as a now() stamp, as epoch seconds; None for anything else."""
-    return float(value) if type(value) in (int, float) and math.isfinite(value) else _config.seconds(value)
 
 
 QUEUE_LOG_MAX = 4 << 20  # bytes of queue.log; past it the file becomes queue.log.1, replacing the older one

@@ -21,7 +21,7 @@ import shutil
 import tempfile
 import time
 import unittest
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, cast
 from unittest import mock
 
 from slotfather import config as sf_config
@@ -36,6 +36,15 @@ T0 = 1762948800.0  # 2025-11-12T12:00:00Z
 START = "Wed Nov 12 11:00:00 2025"
 SELF = os.getpid()
 BASIS = {"slots": 4, "saved": True, "mode": "fixed", "gib_per_slot": None, "memory_gib": None}
+
+
+def unknown(*_: object) -> None:
+    """What cannot be read about a fake holder (its start in epoch seconds, its process group)."""
+    return None
+
+
+def own_uid(*_: object) -> int:
+    return os.geteuid()
 
 
 def stamp(moment: float) -> str:
@@ -80,6 +89,9 @@ class Queue:
         self.ids += 1
         return mock.Mock(hex=f"{self.ids:032x}")
 
+    def processes(self, *_: object) -> dict[int, tuple[int, str]]:
+        return dict(self.table)
+
     @contextlib.contextmanager
     def running(self) -> Iterator[None]:
         env = {k: v for k, v in os.environ.items() if not k.startswith(("SLOTFATHER", "STRAYLIGHT_SLOT"))}
@@ -94,10 +106,10 @@ class Queue:
             stack.enter_context(mock.patch.object(sf_config, "now", lambda: stamp(self.clock)))
             stack.enter_context(mock.patch.object(sf_config, "capacity_basis", lambda: dict(BASIS)))
             stack.enter_context(mock.patch.object(sf_platform, "processes", lambda: dict(self.table)))
-            stack.enter_context(mock.patch.object(sf_query, "status_processes", lambda *_: dict(self.table)))
-            stack.enter_context(mock.patch.object(sf_platform, "start_epoch", lambda pid: None))
-            stack.enter_context(mock.patch.object(sf_platform, "process_uid", lambda pid: os.geteuid()))
-            stack.enter_context(mock.patch.object(sf_platform, "process_group", lambda pid: None))
+            stack.enter_context(mock.patch.object(sf_query, "status_processes", self.processes))
+            stack.enter_context(mock.patch.object(sf_platform, "start_epoch", unknown))
+            stack.enter_context(mock.patch.object(sf_platform, "process_uid", own_uid))
+            stack.enter_context(mock.patch.object(sf_platform, "process_group", unknown))
             stack.enter_context(mock.patch.object(sf_leases.uuid, "uuid4", self.uuid))
             stack.enter_context(mock.patch.object(sf_events, "moment", lambda: stamp(self.clock)))
             stack.enter_context(mock.patch.object(sf_events, "host", lambda: "host"))
@@ -130,9 +142,9 @@ def normal(text: str) -> str:
 def plain(value: Any) -> Any:
     """normal() through JSON data: this process's pid as SELF in numbers and text."""
     if isinstance(value, dict):
-        return {normal(str(k)): plain(v) for k, v in value.items()}
+        return {normal(str(k)): plain(v) for k, v in cast(dict[Any, Any], value).items()}
     if isinstance(value, (list, tuple)):
-        return [plain(v) for v in value]
+        return [plain(v) for v in cast(list[Any], value)]
     if isinstance(value, str):
         return normal(value)
     return "SELF" if value == SELF and type(value) is int else value
@@ -186,7 +198,10 @@ def scenarios() -> dict[str, Callable[[Queue], None]]:
         queue.snapshot("the interactive waiter asks the gate to yield")
         queue.at(5)
         out = io.StringIO()
-        with mock.patch.object(sf_leases, "held_again", lambda path: queue.snapshot("the gate yielded")):
+        def yielded(path: _Path) -> None:
+            queue.snapshot("the gate yielded")
+
+        with mock.patch.object(sf_leases, "held_again", yielded):
             self_yielded = sf_leases.yield_lease(gate, out=out)
         assert self_yielded, out.getvalue()
         queue.at(65)
@@ -243,7 +258,9 @@ def scenarios() -> dict[str, Callable[[Queue], None]]:
             sf_leases.ask_yield(90061, START, queue.directory)
         queue.snapshot("asked by hand for the interactive waiter")
 
-    return {name: function for name, function in locals().items() if callable(function)}
+    return {"request_and_release": request_and_release, "grants": grants, "yield_and_resume": yield_and_resume,
+            "older_client_grant": older_client_grant, "yielded_waiter_leaves": yielded_waiter_leaves,
+            "reprioritize": reprioritize, "reap": reap, "ask_by_hand": ask_by_hand}
 
 
 def run(name: str, scenario: Callable[[Queue], None]) -> list[dict[str, Any]]:

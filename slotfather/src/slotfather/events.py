@@ -22,7 +22,7 @@ import re
 import socket
 from typing import Any, cast
 
-from . import config as _config
+from . import entry as _entry
 
 VERSION = 1
 EVENTS_MAX = 4 << 20  # bytes of events.jsonl before it becomes events.jsonl.1
@@ -78,7 +78,7 @@ def request(entry: dict[str, Any], entry_path: Path | None = None) -> dict[str, 
         subject["label"] = str(entry.get("label"))
     if entry_path is not None or isinstance(entry.get("lease_id"), str):
         # unique (fathers#101), as status --json gives it; `id` stays the entry's name
-        subject["lease_id"] = _config.lease_id(entry_path.stem if entry_path is not None else "", entry)
+        subject["lease_id"] = _entry.lease_id(entry_path.stem if entry_path is not None else "", entry)
     if isinstance(entry.get("pid"), int) and entry["pid"] > 0:
         subject["pid"] = entry["pid"]
     return subject
@@ -102,7 +102,7 @@ def actor(pid: int | None = None, lane: str | None = None, kind: str = "process"
 def holder(entry: dict[str, Any]) -> dict[str, Any]:
     """The actor of what a lease's own client does: its holder process and lane."""
     pid = entry.get("pid") if isinstance(entry.get("pid"), int) and entry["pid"] > 0 else None
-    return actor(pid, _config.meta_of(entry).get("lane"))
+    return actor(pid, _entry.meta_of(entry).get("lane"))
 
 
 def line(kind: str, subject: dict[str, Any], details: dict[str, Any], who: dict[str, Any],

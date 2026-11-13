@@ -26,6 +26,7 @@ import sys as _path_sys
 from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from slotfather import config as sf_config
+from slotfather import entry as sf_entry
 from slotfather import schedule as sf_schedule
 from slotfather import state as sf_state
 
@@ -53,6 +54,14 @@ ASSUMED_RUN = 600  # seconds a request that never ran and is like nothing else r
 
 def stamp(moment: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(moment))
+
+
+def grant(entry: dict[str, Any], moment: float) -> float:
+    """Grants a waiter at `moment` as the queue does (entry.to_held(): a resumed lease's `granted` stays its first);
+    returns the seconds it spent back in the queue since its last yield, 0 for one that never yielded."""
+    away = sf_entry.epoch(entry.get("yielded_at"))
+    sf_entry.to_held(entry, stamp(moment), moment)
+    return 0.0 if away is None else moment - away
 
 
 # The recorded requests
@@ -234,7 +243,7 @@ def leaves_at(request: Any) -> float | None:
 def whole_batch(entry: dict[str, Any], slots: int) -> bool:
     """A batch request for the whole machine: the one that pays for #5 by waiting for normal and interactive work
     to stop waiting."""
-    return sf_schedule.deferring(entry) and sf_schedule.whole_machine(entry, slots)
+    return sf_schedule.deferring(entry) and sf_entry.whole_machine(entry, slots)
 
 
 def one_slot_waits(waiting: Any) -> bool:
@@ -388,7 +397,7 @@ class Replay:
                 cls = self.classes[number]
                 waiting[number] = {"id": number, "label": request["label"], "cmd": request["cmd"],
                                    "count": min(request["count"], self.slots), "since": stamp(request["arrival"]),
-                                   "state": "waiting", "priority": cls,
+                                   "state": sf_entry.WAITING, "priority": cls,
                                    "yieldable": client_yields(request, cls, self.slots)}
                 result[number]["defers"] = whole_batch(waiting[number], self.slots)
                 remaining[number] = self.run_of(request)
@@ -418,10 +427,10 @@ class Replay:
                         asked[number] not in waiting:
                     continue  # the ask was withdrawn, or it ended first, or the asker started or left meanwhile
                 entry = held.pop(number)
-                entry["rank"] = sf_schedule.rank_time(waiting[asked.pop(number)], self.settings(), moment) + \
+                rank = sf_schedule.rank_time(waiting[asked.pop(number)], self.settings(), moment) + \
                     sf_config.YIELD_BEHIND
                 remaining[number] -= moment - began[number]
-                entry.update(state="waiting", yields=int(entry.get("yields") or 0) + 1, yielded_at=moment)
+                sf_entry.to_yielded(entry, moment, rank)  # as the queue keeps it
                 waiting[number] = entry
                 result[number]["yields"] += 1
                 self.yields += 1
@@ -432,13 +441,7 @@ class Replay:
                 for entry in self.decide(ordered, list(held.values()), moment):
                     number = entry["id"]
                     del waiting[number]
-                    if "yielded_at" in entry:  # back after a yield: as the queue keeps it, granted stays the first
-                        result[number]["yielded"] += moment - entry.pop("yielded_at")
-                        entry.update(yielded=result[number]["yielded"], resumed=stamp(moment),
-                                     granted=stamp(result[number]["granted"]))
-                    else:
-                        entry.update(granted=stamp(moment))
-                    entry["state"] = "held"
+                    result[number]["yielded"] += grant(entry, moment)
                     held[number] = entry
                     began[number] = moment
                     generation[number] = generation.get(number, 0) + 1

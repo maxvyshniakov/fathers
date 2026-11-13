@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from . import config as _config
+from . import entry as _entry
 from . import idle as _idle
 from . import leases as _leases
 from . import platform as _platform
@@ -54,7 +55,7 @@ def look(directory: Path | None = None) -> Look:
         basis: dict[str, Any] = _config.capacity_basis()
         requests = [_state.asked(path) for path, _ in found]
     marked = idle_of(directory, found)
-    live = [dict(entry, idle_since=marked.get(id(entry))) if entry.get("state") == "held" else entry
+    live = [dict(entry, idle_since=marked.get(id(entry))) if _entry.is_held(entry) else entry
             for _, entry in found]
     return Look(directory, table, found, live, basis, _leases.legacy_holders(table),
                 {id(entry): request for entry, request in zip(live, requests)})
@@ -72,7 +73,7 @@ def idle_of(directory: Path, live: list[tuple[Path, dict[str, Any]]]) -> dict[in
     settings), None where it is not."""
     settings = _schedule.order_settings(directory, environment=False)
     moment = time.time()
-    return {id(entry): _idle.idle_since(path, settings, moment) for path, entry in live if entry.get("state") == "held"}
+    return {id(entry): _idle.idle_since(path, settings, moment) for path, entry in live if _entry.is_held(entry)}
 
 
 def iso(moment: float | None) -> str | None:
@@ -99,9 +100,9 @@ def expected(directory: Path, entries: list[dict[str, Any]], slots: int, other: 
     works on copies (schedule.forecast())."""
     moment = time.time() if moment is None else moment
     settings = _schedule.order_settings(directory)
-    held = [e for e in entries if e.get("state") == "held"]
-    waiters = [dict(e) for e in entries if e.get("state") != "held"]
-    originals = {id(copy): e for copy, e in zip(waiters, [e for e in entries if e.get("state") != "held"])}
+    held, waiting = _entry.split(entries)
+    waiters = [dict(e) for e in waiting]
+    originals = {id(copy): e for copy, e in zip(waiters, waiting)}
     if not waiters:
         return {}
     estimate = _schedule.estimator(directory)
@@ -112,18 +113,18 @@ def expected(directory: Path, entries: list[dict[str, Any]], slots: int, other: 
                            settings=settings)
     # The order would start these now; memory may hold them back (grant()'s gate), with no start a forecast can tell.
     memory = _platform.memory_level() if found.grants else ("normal", None)
-    used = sum(_schedule.holds(e, slots) for e in held) + other
+    used = sum(_entry.holds(e, slots) for e in held) + other
     shared = _schedule.order_settings(directory, environment=False)  # the queue's rule, not this reader's
     held_back = {id(e): why for e, why in _schedule.memory_gate(found.grants, held, used, memory, shared) if why}
     warn = float(settings.get("warn_wait") or 0)
     result: dict[int, dict[str, Any]] = {}
     for copy in waiters:
-        began = _schedule.waiting_since(copy)
+        began = _entry.waiting_since(copy)
         waited = None if began is None else max(0.0, moment - began)
         is_head = copy is found.head
         result[id(originals[id(copy)])] = {
             "priority": _schedule.effective_priority(copy, settings, moment) if settings["order"] == "backfill"
-            else _config.priority_of(copy),
+            else _entry.priority_of(copy),
             "aged": settings["order"] == "backfill" and _schedule.aged(copy, settings, moment),
             "est_start": None if id(copy) in held_back else starts.get(id(copy)), "head": is_head,
             "memory_wait": held_back.get(id(copy)),
@@ -143,13 +144,13 @@ def status_lines(directory: Path | None = None) -> list[str]:
     expect = outlook(directory, [e for _, e in live], slots, sum(c for _, _, c in legacy))
     lines: list[str] = []
     for path, e in live:
-        meta = _config.meta_of(e)
+        meta = _entry.meta_of(e)
         tags = f" meta={_config.meta_text(meta)}" if meta else ""
         since = marked.get(id(e))
         if since is not None:  # #12: below the idle threshold for at least the idle duration
             tags += f" idle={_config.duration(time.time() - since)}"
         if e.get("yieldable"):
-            request = _state.asked(path) if e.get("state") == "held" else None
+            request = _state.asked(path) if _entry.is_held(e) else None
             tags += " yieldable" + (f" asked-to-yield-for={request.get('label')}" if request else "") + \
                 (f" yielded={e['yields']}" if e.get("yields") else "")
         if isinstance(e.get("session"), dict):
@@ -170,12 +171,12 @@ def waiter_tags(entry: dict[str, Any], expected: dict[str, Any] | None) -> str:
     """`status`' words for a waiter: its class when not normal (`priority=batch`, and `aged-from=batch` when ageing
     moved it up), `head` with its promised start, `est-start=` (UTC; `?` where the forecast does not reach it),
     `memory-wait="..."` while memory holds it back, and `long-wait=` once it has waited the warn time; for a lease granted after ageing, `aged-from=`."""
-    if entry.get("state") == "held":
+    if _entry.is_held(entry):
         served = entry.get("aged")
-        return f" priority={served} aged-from={_config.priority_of(entry)}" if served in _config.PRIORITIES else ""
+        return f" priority={served} aged-from={_entry.priority_of(entry)}" if served in _config.PRIORITIES else ""
     if expected is None:
         return ""
-    own = _config.priority_of(entry)
+    own = _entry.priority_of(entry)
     tags = f" priority={expected['priority']}" if expected["priority"] != "normal" or own != "normal" else ""
     if expected["aged"]:
         tags += f" aged-from={own}"
@@ -207,17 +208,17 @@ def long_wait_report(directory: Path, path: Path) -> tuple[str, dict[str, Any]] 
         live = _leases.reap(directory, table)
         slots = _config.total()
     mine = next((e for p, e in live if p == path), None)
-    if mine is None or mine.get("state") == "held":
+    if mine is None or _entry.is_held(mine):
         return None
     legacy = _leases.legacy_holders(table)
     expect = outlook(directory, [e for _, e in live], slots, sum(c for _, _, c in legacy)).get(id(mine))
     if expect is None:
         return None
     settings = _schedule.order_settings(directory)
-    serving = _schedule.ranked([e for _, e in live if e.get("state") != "held"], settings, time.time()) \
-        if settings["order"] == "backfill" else [e for _, e in live if e.get("state") != "held"]
+    held, waiting = _entry.split(e for _, e in live)
+    serving = _schedule.ranked(waiting, settings, time.time()) if settings["order"] == "backfill" else waiting
     ahead = next((n for n, e in enumerate(serving) if e is mine), 0)
-    running = sum(1 for _, e in live if e.get("state") == "held")
+    running = len(held)
     behind = [f"{running} running lease{'s' if running != 1 else ''}"] if running else []
     if ahead:
         behind.insert(0, f"{ahead} earlier request{'s' if ahead != 1 else ''}")
@@ -225,7 +226,7 @@ def long_wait_report(directory: Path, path: Path) -> tuple[str, dict[str, Any]] 
     when = time.strftime("%H:%M", time.localtime(start)) if start is not None else "unknown"
     up = {"batch": "normal", "normal": "interactive"}.get(expect["priority"])
     hint = f"; reprioritize with: slotfather reprioritize {mine.get('pid')} {up}" if up else ""
-    served = expect["priority"] + (f", aged from {_config.priority_of(mine)}" if expect["aged"] else "")
+    served = expect["priority"] + (f", aged from {_entry.priority_of(mine)}" if expect["aged"] else "")
     memory = f"; {expect['memory_wait']}" if expect.get("memory_wait") else ""
     line = (f"{mine.get('label')} (pid {mine.get('pid')}, {served}) waiting {_config.duration(expect['waited'] or 0)} "
             f"behind {' and '.join(behind) or 'nothing'}: est. start {when}{memory}{hint}")
@@ -237,7 +238,7 @@ def long_wait_report(directory: Path, path: Path) -> tuple[str, dict[str, Any]] 
 def held_slots(live: list[dict[str, Any]], legacy: list[tuple[Path, dict[str, Any], int]], slots: int) -> int:
     """The slots held now: each held lease's (an `-n all` one's at least the capacity, schedule.holds()) and the
     earlier queues'."""
-    return sum(_schedule.holds(e, slots) for e in live if e["state"] == "held") + sum(c for _, _, c in legacy)
+    return sum(_entry.holds(e, slots) for e in live if _entry.is_held(e)) + sum(c for _, _, c in legacy)
 
 
 def draining(held: int, slots: int) -> int:
@@ -297,12 +298,12 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
     entries_found: list[dict[str, Any]] = []
     for path, entry in live:
         tree = _platform.descendants(table, entry.get("pid"))
-        priority = _config.priority_of(entry)
-        item: dict[str, Any] = {"id": path.stem, "lease_id": _config.lease_id(path.stem, entry), "lease": str(path), "state": entry.get("state"), "count": entry.get("count"),
+        priority = _entry.priority_of(entry)
+        item: dict[str, Any] = {"id": path.stem, "lease_id": _entry.lease_id(path.stem, entry), "lease": str(path), "state": entry.get("state"), "count": entry.get("count"),
                 "label": entry.get("label"), "pid": entry.get("pid"), "pgid": _platform.process_group(entry.get("pid")),
                 "start": entry.get("start"), "since": entry.get("since"), "granted": entry.get("granted"),
-                "cmd": entry.get("cmd"), "cwd": entry.get("cwd"), "meta": _config.meta_of(entry), "tree": tree,
-                "priority": priority, "ticket": _config.ticket_of(entry),
+                "cmd": entry.get("cmd"), "cwd": entry.get("cwd"), "meta": _entry.meta_of(entry), "tree": tree,
+                "priority": priority, "ticket": _entry.ticket_of(entry),
                 "yieldable": bool(entry.get("yieldable")),
                 "yields": int(entry.get("yields") or 0),
                 "yield_asked": _state.asked(path) if asks is None else asks.get(id(entry)), "position": None,
@@ -313,8 +314,8 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
         entries_found.append(item)
     settings = _schedule.order_settings(directory)
     moment = time.time()
-    serving = _schedule.ranked([e for _, e in live if e.get("state") != "held"], settings, moment) \
-        if settings["order"] == "backfill" else [e for _, e in live if e.get("state") != "held"]
+    waiting = [e for _, e in live if not _entry.is_held(e)]
+    serving = _schedule.ranked(waiting, settings, moment) if settings["order"] == "backfill" else waiting
     places = {id(e): n for n, e in enumerate(serving, 1)}
     earlier = _leases.legacy_holders(table)
     # A guard asking about one process (--pid) needs no forecast.
@@ -372,10 +373,10 @@ def available(directory: Path | None = None, label: str = "", command: str = "")
     end before that waiter can start. Without `command` its run counts as unknown (the fallback)."""
     directory = directory or _config.state_dir()
     live, legacy, _, basis = locked_snapshot(directory)
-    held = [e for e in live if e["state"] == "held"]
+    held, waiters = _entry.split(live)
     other = sum(count for _, _, count in legacy)
     slots = int(basis["slots"])
-    return _schedule.room([e for e in live if e["state"] != "held"], max(0, slots - held_slots(live, legacy, slots)),
+    return _schedule.room(waiters, max(0, slots - held_slots(live, legacy, slots)),
                           held, _schedule.estimator(directory), other, label=label, command=command, slots=slots)
 
 
@@ -404,11 +405,11 @@ def advise(maximum: int | None = None, exclusive: bool = False, cores_now: int |
     "run_estimate", the run the history expects of it (None: unknown, counted as the fallback)."""
     live, legacy, table, basis = locked_snapshot()
     mine = _leases.inherited_lease(table)
-    holders = [e for e in live if e["state"] == "held" and not (mine and e["pid"] == mine[1]["pid"])]
+    holders = [e for e in live if _entry.is_held(e) and not (mine and e["pid"] == mine[1]["pid"])]
     other = sum(count for path, e, count in legacy if not (mine and path == mine[0]))
     slots = int(basis["slots"])
-    held = sum(_schedule.holds(e, slots) for e in holders) + other
-    waiters = [e for e in live if e["state"] != "held"]
+    held = sum(_entry.holds(e, slots) for e in holders) + other
+    waiters = [e for e in live if not _entry.is_held(e)]
     estimate = _schedule.estimator(_config.state_dir())
     waiting = bool(waiters) and _schedule.room(waiters, max(0, slots - held), holders, estimate, other, label=label,
                                                command=command, slots=slots) == 0

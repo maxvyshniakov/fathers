@@ -29,6 +29,7 @@ from types import FrameType
 from typing import Any, cast
 
 from . import config as _config
+from . import entry as _entry
 from . import events as _events
 from . import facts as _facts
 from . import leases as _leases
@@ -119,13 +120,13 @@ def parse_start(argv: list[str]) -> dict[str, Any]:
                 raise _config.SlotError(f"--priority takes {', '.join(_config.PRIORITIES)}, not {value!r}")
             spec["priority"] = value
         elif word == "--ticket":
-            spec["ticket"] = _config.checked_ticket(option_value(argv, at))
+            spec["ticket"] = _entry.checked_ticket(option_value(argv, at))
         else:
             raise _config.SlotError(f"unknown session start option {word}")
         at += 2
     if not spec["name"] or not _config.META_KEY.fullmatch(spec["name"]):
         raise _config.SlotError("session start takes --label NAME, a lowercase word (a-z, 0-9, _ . -)")
-    spec["meta"] = _config.parse_meta(spec["meta"])
+    spec["meta"] = _entry.parse_meta(spec["meta"])
     return spec
 
 
@@ -375,7 +376,7 @@ def run_inside(name: str, argv: list[str], label: str | None = None, meta: dict[
                     raise _config.SlotError(f"session {name} (pid {entry.get('pid')}) is another user's")
                 if entry["session"].get("stopping"):
                     raise _config.SlotError(f"session {name} is stopping: it starts no more runs")
-                uses = read_uses(path) if entry.get("state") == "held" else None
+                uses = read_uses(path) if _entry.is_held(entry) else None
                 if uses is not None:
                     since = _config.now()
                     uses.setdefault("active", {})[str(me)] = {"start": table.get(me, (0, ""))[1],

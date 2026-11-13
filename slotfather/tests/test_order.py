@@ -6,6 +6,7 @@ import sys as _path_sys
 from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from slotfather import config as sf_config
+from slotfather import entry as sf_entry
 from slotfather import state as sf_state
 from slotfather import schedule as sf_schedule
 
@@ -269,7 +270,7 @@ class CapacityChangeTests(PlanCase):
 
     def test_a_whole_machine_lease_keeps_a_grown_capacity_to_itself(self):
         whole = dict(holder("whole", 4, -60), all=True)  # granted all 4, then the capacity grew to 6
-        self.assertEqual((6, 4), (sf_schedule.holds(whole, 6), sf_schedule.holds(holder("four", 4, -60), 6)))
+        self.assertEqual((6, 4), (sf_entry.holds(whole, 6), sf_entry.holds(holder("four", 4, -60), 6)))
         self.assertEqual([], self.started([waiter("w", 1, -30)], [whole], slots=6))
         self.assertEqual(["w"], self.started([waiter("w", 1, -30)], [holder("four", 4, -60)], slots=6))
         with mock.patch.object(sf_config, "now", return_value=stamp(0)), mock.patch.object(time, "time", return_value=M):

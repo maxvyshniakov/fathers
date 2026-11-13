@@ -8,6 +8,7 @@ import sys as _path_sys
 from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from slotfather import config as sf_config
+from slotfather import entry as sf_entry
 from slotfather import schedule as sf_schedule
 
 import json
@@ -210,7 +211,7 @@ class StreamTests(unittest.TestCase):
                      moment: float) -> list[dict[str, Any]]:
             grants: list[dict[str, Any]] = decide(self, waiting, held, moment)
             mine = next((e for e in waiting if e.get("id") == 1), None)  # its entry as the queue keeps it
-            kept = None if mine is None else sf_schedule.reservation(mine)
+            kept = None if mine is None else sf_entry.reservation(mine)
             if kept is not None:
                 promised.append((moment, kept))
             return grants
@@ -331,7 +332,7 @@ class SafetyTests(SlotCase):
                 mock.patch.dict(os.environ, {"SLOTFATHER_DIR": str(self.state), "SLOTFATHER_LEGACY_DIRS": ""}):
             with self.assertRaisesRegex(sf_config.SlotError, "only its owner"):
                 leases.reprioritize(str(pid), "interactive", self.state)
-            self.assertEqual("normal", sf_config.priority_of(json.loads(next((self.state / "queue").glob("*.json"))
+            self.assertEqual("normal", sf_entry.priority_of(json.loads(next((self.state / "queue").glob("*.json"))
                                                                          .read_text())))
             with mock.patch.object(query, "expected", side_effect=ValueError("bad estimate")):
                 lines = query.status_lines(self.state)

@@ -13,6 +13,7 @@ Definitions: [glossary](../GLOSSARY.md). Naming and wire aliases: [terminology](
 | `config` | Environment settings, installation defaults, constants and shared errors. |
 | `platform` | macOS/Linux inspection: process identity and ancestry, memory, swap, PSI and cgroups. |
 | `state` | Queue locking, atomic files, bounded journals and persisted schema contracts. |
+| `entry` | A queue entry: its persisted fields, the accessors that read them whoever wrote the file, its phase, and the one definition of each transition (new request, grant and resume, yield, priority change, outcome). Pure: callers read and write the files and log. |
 | `schedule` | Queue ranking, backfill, runtime estimates and cooperative-yield decisions. |
 | `leases` | Taking, granting, releasing, reaping and inheriting leases; command execution. |
 | `usage` | Process-tree accounting and machine sampling while work runs. |
