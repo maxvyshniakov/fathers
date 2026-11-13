@@ -11,14 +11,14 @@ import runpy
 import sys
 from typing import Any, cast
 
-from . import __version__, config, events
+from . import __version__, config, events, host
 from .errors import LaneError
 from .project import Project
 
 MANIFEST = 'INSTALL.json'
 CAPABILITIES = ('project.readiness', 'project.update_queue', 'project-hook', 'canonical-reference-transaction',
                 'promote.step-leases', 'tickets.lifecycle', 'slots.priority', 'dashboard.events',
-                'dashboard.status', 'dashboard.settings')
+                'dashboard.status', 'dashboard.settings', 'host.min_disk_gb')
 # The dashboard contract versions Godfather reads (its SPEC.md, "Capabilities contract").
 DASHBOARD = 1
 
@@ -76,6 +76,8 @@ def dashboard() -> dict[str, Any]:
 def capabilities(args: argparse.Namespace) -> int:
     report = {'v': 1, 'tool': 'lanefather', 'version': __version__, 'state_schema': 1,
               'slotfather_query_versions': [1, 2], 'capabilities': CAPABILITIES, 'dashboard': dashboard(),
+              # The free disk under which start refuses a lane, in decimal GB (fathers#46).
+              'host': {'min_disk_gb': host.MIN_DISK_GB},
               'source': installed_identity(Path(__file__).resolve().parent.parent)}
     print(json.dumps(report, sort_keys=True) if args.json else json.dumps(report, indent=2, sort_keys=True))
     return 0
@@ -92,7 +94,11 @@ def project_hook(args: argparse.Namespace) -> int:
         raise LaneError(f"configured project hook {args.name!r} has no script at {path}")
     previous_argv, previous_cwd, previous_path = sys.argv, Path.cwd(), sys.path[:]
     arguments = args.arguments[1:] if args.arguments[:1] == ['--'] else args.arguments
+    # The free-disk minimum under each name of the shared setting, beside DISK_FREE_GB (fathers#46); Lanefather
+    # sets it for the hook and reads it from nowhere.
+    minimum = {name: os.environ.get(name) for name in project.config.names('MIN_DISK_GB')}
     try:
+        os.environ.update(dict.fromkeys(minimum, str(host.MIN_DISK_GB)))
         sys.argv = [str(path), *arguments]
         os.chdir(root)
         sys.path.insert(0, str(path.parent))
@@ -104,6 +110,11 @@ def project_hook(args: argparse.Namespace) -> int:
         print(str(error.code), file=sys.stderr)
         return 1
     finally:
+        for name, value in minimum.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
         sys.argv = previous_argv
         sys.path[:] = previous_path
         os.chdir(previous_cwd)

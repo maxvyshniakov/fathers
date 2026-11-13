@@ -19,12 +19,12 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-import tempfile
 
 # Inspect and copy source without creating uncommitted interpreter cache files in it.
 sys.dont_write_bytecode = True
 from lanefather.errors import LaneError  # noqa: E402
 from lanefather.runtime import MANIFEST, installed_identity, payload_digest, shipping_files  # noqa: E402
+from lanefather.state import atomic_write  # noqa: E402
 
 MIN_PYTHON = (3, 11)
 KEEP_RELEASES = 3
@@ -83,12 +83,7 @@ def version() -> str:
 
 def write_atomic(path: Path, text: str, mode: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", dir=path.parent, prefix=".lanefather-", delete=False) as handle:
-        handle.write(text)
-        handle.flush()
-        os.fchmod(handle.fileno(), mode)
-        os.fsync(handle.fileno())
-    os.replace(handle.name, path)
+    atomic_write(path, text, mode)
 
 
 def install(share: Path, bin_dir: Path, python: str) -> Path:

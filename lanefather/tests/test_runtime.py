@@ -131,3 +131,51 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(Path.cwd(), previous[0])
         self.assertIs(sys.argv, previous[1])
         self.assertEqual(sys.path, previous[2])
+
+
+class FreeDiskMinimumTests(unittest.TestCase):
+    """Projects read Lanefather's free-disk minimum from capabilities and in their hooks, not from host.py
+    (fathers#46)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix='lanefather-minimum-'))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def test_capabilities_report_the_free_disk_minimum(self):
+        import argparse
+        import contextlib
+        import io
+
+        from lanefather import host, runtime
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(runtime.capabilities(argparse.Namespace(json=True)), 0)
+        report = json.loads(out.getvalue())
+        self.assertEqual(report['host'], {'min_disk_gb': host.MIN_DISK_GB})
+        self.assertEqual(report['host']['min_disk_gb'], 150)
+        self.assertIn('host.min_disk_gb', report['capabilities'])
+
+    def test_a_project_hook_reads_the_minimum_next_to_disk_free_gb(self):
+        import argparse
+        from unittest.mock import patch
+
+        from lanefather import config, runtime
+        project = self.tmp / 'project'
+        project.mkdir()
+        seen = self.tmp / 'seen.json'
+        (project / 'policy.py').write_text(
+            "import json,os,sys\n"
+            "names = ('LANEFATHER_MIN_DISK_GB', 'STRAYLIGHT_LANE_MIN_DISK_GB', 'STRAYLIGHT_LANE_DISK_FREE_GB')\n"
+            f"open({str(seen)!r}, 'w').write(json.dumps({{n: os.environ.get(n) for n in names}}))\n")
+        configuration = project / '.lanefather.toml'
+        configuration.write_text('legacy_env_prefix = "STRAYLIGHT_LANE_"\n'
+                                 'shared_env = ["DISK_FREE_GB"]\n[hooks.project]\npolicy = "policy.py"\n')
+        clean = {k: v for k, v in os.environ.items() if not k.endswith(('MIN_DISK_GB', 'DISK_FREE_GB'))}
+        with patch.dict(os.environ, {**clean, 'STRAYLIGHT_LANE_DISK_FREE_GB': '500'}, clear=True), \
+                patch('lanefather.config.current', return_value=config.load(configuration)):
+            self.assertEqual(runtime.project_hook(argparse.Namespace(name='policy', arguments=[])), 0)
+            self.assertNotIn('LANEFATHER_MIN_DISK_GB', os.environ, 'the hook\'s environment is restored')
+            self.assertNotIn('STRAYLIGHT_LANE_MIN_DISK_GB', os.environ)
+        self.assertEqual(json.loads(seen.read_text()), {'LANEFATHER_MIN_DISK_GB': '150',
+                                                        'STRAYLIGHT_LANE_MIN_DISK_GB': '150',
+                                                        'STRAYLIGHT_LANE_DISK_FREE_GB': '500'})

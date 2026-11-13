@@ -67,6 +67,7 @@ self-contained configuration in the README for a Repo-Kit consumer.
 | `[lane]` `targets`, `cache_partitions` | build directories `done` removes |
 | `[gate]` `stamp_tool`, `stamp_file`, `pre_push_hook` | the verified-tree stamp of the full gate |
 | `[promote]` `install`, `deploy`, `after`, `ship_refuses` | what promote runs after it moved dev |
+| `[gc]` `dirs`, `branches` | what `gc` collects (fnmatch patterns, fathers#44). A worktree under the main checkout's `.claude/worktrees` is a candidate when a `dirs` pattern matches its name (a pattern without `/`) or its path from the main checkout (`.claude/worktrees/*`), or a `branches` pattern matches its branch; it is removed only when merged, clean, idle for 2 h, unused by any process, owned by no open lane and holding no other worktree. A merged branch is deleted only when `branches` names it and no worktree or lane uses it; any other branch outlives its worktree. Defaults: `dirs = ["agent-*", "lane-*", ".claude/worktrees/*", "codex-*"]`, `branches = ["worktree-agent-*", "lane/*", "claude/*", "codex/*"]`; `dev`, `main` and `integrate/*` are never collected. |
 | `[gc]` `after_remove`, `after_remove_report` | project cache cleanup after removal (`{worktree}`, `{name}`, `{project}`). Stdout is ignored by default, preserving existing hooks. With `after_remove_report = true`, a successful hook must emit `{"v":1,"freed":123}` to add its actually removed bytes; diagnostics go to stderr. Invalid reports add zero bytes and a report error. |
 | `[slots.priority]` `check`, `post-merge`, `gate`, `rerun`, `perf`, `default` | each run's Slotfather priority; see [slot priorities](#slot-priorities) |
 | `[admission]` `provider` | `legacy` by default; explicit `slotfather` uses the versioned lifetime-admission query, separately from execution jobs. See [rollout contract](../docs/admission.md). |
@@ -241,6 +242,12 @@ lanefather writes nothing an older `tools/lane` cannot read, and reads everythin
 each running its own branch's `tools/lane`, share the state directory with an installed lanefather. `tests/test_compat.py` proves it in both
 directions against that tool (`tests/fixtures/legacy-lane`). A record of a newer schema is refused, never rewritten.
 
+Records, receipts, the settings, the registry and the installed command are written whole: each write goes through
+its own temporary file beside the target, synced with its directory before the rename. A lane record that is empty
+or not a JSON object (a write a crash cut short) is reported by every command that reads the lanes, naming the
+file; it is never read as no lane, so `start` does not register over it and its claims are not silently released.
+Restore the record or remove the file.
+
 Safe to change: messages, the modules' insides. Not without a schema bump and a migration: record and receipt keys,
 the landing lock's file format (a project's reference-transaction hook reads it), the queue file.
 
@@ -400,6 +407,16 @@ manifest; a changed or missing manifest refuses verification. A checkout reports
 `installed: false`, so a project launcher can require the installed artifact.
 The installer accepts committed shipping inputs and reuses an identical existing
 release without replacing its bytes.
+
+Free disk (fathers#46). Two values, not to be confused:
+
+| Value | Meaning | Where a project reads it |
+| --- | --- | --- |
+| `host.min_disk_gb` | the free disk, in decimal GB, under which `start` refuses a lane (150); fixed in this release | `capabilities --json` (`"host": {"min_disk_gb": 150}`, capability `host.min_disk_gb`); in a project hook, `LANEFATHER_MIN_DISK_GB` and each other name of the setting (`<legacy_env_prefix>MIN_DISK_GB`) |
+| `DISK_FREE_GB` | a stand-in for the measured free space of the home volume: tests and hooks set it, admission reads it instead of measuring | `LANEFATHER_DISK_FREE_GB` or `<legacy_env_prefix>DISK_FREE_GB`, as the caller set it |
+
+Lanefather sets the minimum's variables for the hook's run and restores the caller's environment after it; it
+never reads them, so setting one does not change admission.
 
 `lanefather --config /path/to/.lanefather.toml project-hook NAME -- ARGS` runs only
 a named script from `[hooks.project]`, with the project's directory as its working
