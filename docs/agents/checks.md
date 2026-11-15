@@ -1,6 +1,6 @@
 # Checks
 
-The installed commands use only Python's standard library (3.9+; Lanefather 3.11+). Ruff, Pyright, Bun and Repo-Kit
+The installed commands use only Python's standard library (3.9+; Lanefather 3.11+: each package's `requires-python`). Ruff, Pyright, Bun and Repo-Kit
 are development tools only.
 
 ## Focused
@@ -24,7 +24,8 @@ are development tools only.
   Godfather's tests 1.5 min, Junkfather's 2, Slotfather's 4-5, Lanefather's 13-18 (the whole run: as long as Lanefather's).
 - The pre-push hook runs it on the pushed commits and a lane's `lanefather check` on the lane's diff
   ([orchestration](orchestration.md)); do not run it again by hand right before either.
-- CI runs each package's lint gate and tests on its own workflow ([publishing](publishing.md#ci)).
+- CI runs the same named checks (`<package> lint`, `<package> tests`) through one reusable workflow, on each
+  package's Python floor and the newest Python ([publishing](publishing.md#ci)).
 
 ## Lint gate
 

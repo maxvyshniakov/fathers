@@ -88,6 +88,8 @@ def owners(path: str) -> set[str] | None:
         workflow = Path(path).stem
         if workflow in PACKAGES:
             return {f"{workflow} lint", f"{workflow} tests"}
+        if workflow == "package":  # the shape the five call: tools/test_checks.py reads it
+            return set()
         return {"common lint", "common tests"} if workflow == "common" else None
     if path in KIT_FILES or first == ".githooks":
         return set()
@@ -177,11 +179,11 @@ def steps(environment: dict[str, str]) -> list[dict[str, object]]:
 
 
 def lint_tools(*arguments: str) -> list[str]:
-    """Ruff or Pyright for the root's own files: on PATH, else the pins every package shares (through uv)."""
+    """Ruff or Pyright for the root's own files: on PATH, else common/requirements-dev.txt's pins (through uv)."""
     tool = arguments[0]
     if shutil.which(tool):
         return list(arguments)
-    return ["uv", "run", "--quiet", "--no-project", "--with-requirements", "slotfather/requirements-dev.txt",
+    return ["uv", "run", "--quiet", "--no-project", "--with-requirements", "common/requirements-dev.txt",
             *arguments]
 
 
