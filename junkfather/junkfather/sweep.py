@@ -27,8 +27,9 @@ import plistlib
 import re
 import sys
 import time
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
+from . import cpu as _cpu
 from . import entry as _entry
 from . import events as _events
 from . import owner as _owner
@@ -114,13 +115,19 @@ def agent_sessions(table: _procs.Table) -> Dict[int, bool]:
     return {p.pid: True for p in table.procs.values() if _safety.agent(p)}
 
 
+Leases = Callable[[], Tuple[Optional[List[Dict[str, Any]]], str]]
+
+
 def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = None,
           cwds: Optional[Dict[int, str]] = None, sessions: Optional[List[Dict[str, Any]]] = None,
-          now: Optional[float] = None, grace: Optional[float] = None) -> Dict[str, Any]:
+          now: Optional[float] = None, grace: Optional[float] = None, leases: Optional[Leases] = None
+          ) -> Dict[str, Any]:
+    """One pass. `leases` reads Slotfather's queue (cpu.leases, `slotfather status --json`)."""
     now = time.time() if now is None else now
     grace = _settings.value("reap.grace", store.root) if grace is None else grace
     report: Dict[str, Any] = {"v": VERSION, "at": now, "dry_run": dry_run, "reaped": [], "gone": [], "pruned": 0,
                               "running": 0, "unowned": [], "unowned_resources": [], "notes": [], "errors": []}
+    members_of: Dict[str, Tuple[Optional[str], Sequence[_procs.Proc]]] = {}
     try:
         table = table or _procs.Table.read()
     except _procs.ProcError as error:
@@ -176,6 +183,7 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
                 continue
         report["running"] += 1
         owned.update(p.pid for p in members)
+        members_of[entry["id"]] = (entry.get("label"), members)
         if supervised:
             owned.add(supervisor["pid"])  # and it keeps `known` fresh itself
         elif not dry_run:
@@ -185,6 +193,7 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
         if not cwds:
             report["errors"].append("lsof listed no working directory; paths in commands only")
     report["unowned"] = unowned(table, cwds, owned, scratch_roots(), agent_sessions(table))
+    report["cpu"] = cpu_report(table, cwds, members_of, sessions, leases or _cpu.leases)
     found, unknown = _resources.unowned(snapshot, _resources.owned_keys(store))
     report["unowned_resources"] = found
     report["unlisted"] = unknown
@@ -192,6 +201,21 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
     if not dry_run:
         record(store, report)
     return report
+
+
+def cpu_report(table: _procs.Table, cwds: Dict[int, str],
+               members_of: Dict[str, Tuple[Optional[str], Sequence[_procs.Proc]]],
+               sessions: Optional[List[Dict[str, Any]]], leases: Leases) -> Dict[str, Any]:
+    """Whose processes the busy cores belong to (cpu.py): entries, Slotfather leases, agent sessions."""
+    notes: List[str] = []
+    rules = [_cpu.entry_rule(members_of)]
+    queue, why = leases()
+    if queue is None:
+        notes.append(f"Slotfather leases are left out: {why}")
+    else:
+        rules.append(_cpu.lease_rule(queue, table))
+    rules.append(_cpu.session_rule(table, sessions))
+    return _cpu.report(table, rules, cwds, notes)
 
 
 def sweep_resource(store: Store, entry: Entry, snapshot: "_resources.Snapshot", report: Dict[str, Any],
@@ -249,7 +273,8 @@ def record(store: Store, report: Dict[str, Any]) -> None:
             _events.write(store.root, "unowned.reported", subject, actor,
                           {k: v for k, v in item.items() if k != "key"}, "warn")
     summary = result_of(report)
-    write_atomic(store.root / "sweep.json", {"v": VERSION, "at": report["at"], "result": summary})
+    write_atomic(store.root / "sweep.json", {"v": VERSION, "at": report["at"], "result": summary,
+                                              "cpu": report.get("cpu")})
     _events.write(store.root, "sweep.finished", {"type": "sweep", "id": _events.now()}, actor, summary,
                   "error" if report["errors"] else None)
 
@@ -297,6 +322,7 @@ def text(report: Dict[str, Any], quiet: bool = False) -> str:
         lines.append(f"  own it: junkfather own-resource --kind {item['kind']} --id {item['id']} --ttl 1h")
     for note in as_list(report.get("notes")):
         lines.append(f"note: {note}")
+    lines += _cpu.text(as_dict(report.get("cpu")))
     lines.append(f"{report['running']} running, {len([r for r in report['reaped'] if r['result'] in _reap.STOPPED])} "
                  f"reaped, {len(report['gone'])} gone, {len(report['unowned'])} unowned reported, "
                  f"{len(report.get('unowned_resources') or [])} unowned resources"

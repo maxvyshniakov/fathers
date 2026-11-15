@@ -64,11 +64,12 @@ A command run with `GODFATHER_ACTOR` set carries `via: "godfather"`.
 ## Dashboard contract
 
 - `junkfather capabilities --json`: `{v, tool, version, commit, dashboard: {v: 1, tag: "junk", snapshot: {argv:
-  ["status", "--json"], versions: [1], poll: 5}, events: {path, versions: [1], kinds}, settings: {versions: [1]},
+  ["status", "--json"], versions: [2], poll: 5}, events: {path, versions: [1], kinds}, settings: {versions: [1]},
   actions: ["reap", "extend"], changelog}}`.
-- `junkfather status --json`: `{v: 1, host, time, entries: [the list --json rows of running entries], unowned:
+- `junkfather status --json`: `{v: 2, host, time, entries: [the list --json rows of running entries], unowned:
   [{pid, start, cmd, cwd, root, why, age, alive}] from the last sweep, unowned_resources: [{kind, id, name, why}]
-  from the last sweep, sweep: {time, result}, errors}`. A resource entry's row has `resource: {kind, id, name}` and
+  from the last sweep, sweep: {time, result}, cpu, errors}`; `cpu` is the last sweep's CPU report (Sweep), `null`
+  before one wrote it. Version 2 adds `cpu` to version 1 and changes nothing else. A resource entry's row has `resource: {kind, id, name}` and
   `processes: null`. It changes nothing.
 - `junkfather changelog --json [--since VERSION]`: the installed release's CHANGELOG.md for Godfather's what's new
   (`godfather/docs/contracts/changelog.md`): `{v: 1, tool: "junkfather", version, source, entries: [{version, date,
@@ -234,6 +235,16 @@ so it is reported; one item per tree and process group. It also reports booted s
 browser), once each in `unowned.reported`; a kind whose tool is not installed is skipped, and one that cannot be
 listed is noted. A resource entry whose kind says it is gone is marked `gone`. The report goes to `unowned.json`
 and never stops anything; there is no `--force` for a resource.
+
+**CPU report** (report only; `cpu` in `sweep.json` and in `status --json`). The sweep's one `ps` call reads `%cpu`
+(100 = one core), and each busy process goes to the first rule, in this order, that claims it or one of its
+ancestors: a running entry (its members as a reap finds them); a Slotfather lease from `slotfather status --json`
+(the holder, by pid and start time, and the tree Slotfather lists; `$JUNKFATHER_SLOTFATHER` names another command;
+missing or not answering, the step is left out and a note says so); an agent session among its ancestors. The rest
+is unattributed: `{v: 1, at, cores, attributed: {entry, lease, session: cores}, unattributed, owners: [{kind, id,
+label, cores, processes}] (20 busiest), top: [{pid, start, cmd (120 characters), cwd, uid, cpu, processes}] (the 10
+busiest unattributed trees, each under its topmost ancestor below launchd), notes}`. `%cpu` is ps's own average,
+not a measurement between two sweeps.
 
 ## Boundaries
 

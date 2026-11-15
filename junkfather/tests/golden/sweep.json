@@ -2,6 +2,21 @@
  {
   "report": {
    "at": "<v>",
+   "cpu": {
+    "at": "<v>",
+    "attributed": {
+     "entry": 0.0,
+     "session": 0.0
+    },
+    "cores": 0.0,
+    "notes": [
+     "Slotfather leases are left out: slotfather is not installed here"
+    ],
+    "owners": [],
+    "top": [],
+    "unattributed": 0.0,
+    "v": 1
+   },
    "dry_run": true,
    "errors": [],
    "gone": [
@@ -32,6 +47,21 @@
  {
   "report": {
    "at": "<v>",
+   "cpu": {
+    "at": "<v>",
+    "attributed": {
+     "entry": 0.0,
+     "session": 0.0
+    },
+    "cores": 0.0,
+    "notes": [
+     "Slotfather leases are left out: slotfather is not installed here"
+    ],
+    "owners": [],
+    "top": [],
+    "unattributed": 0.0,
+    "v": 1
+   },
    "dry_run": false,
    "errors": [],
    "gone": [
@@ -58,7 +88,7 @@
    "v": 1
   },
   "sweep": "done",
-  "text": "0 running, 0 reaped, 3 gone, 0 unowned reported, 0 unowned resources"
+  "text": "cpu: 0.0 cores busy; entry 0.0, session 0.0, unattributed 0.0\n  cpu note: Slotfather leases are left out: slotfather is not installed here\n0 running, 0 reaped, 3 gone, 0 unowned reported, 0 unowned resources"
  },
  {
   "entries": [
@@ -220,6 +250,21 @@
   "err": "",
   "out": {
    "json": {
+    "cpu": {
+     "at": "<v>",
+     "attributed": {
+      "entry": 0.0,
+      "session": 0.0
+     },
+     "cores": 0.0,
+     "notes": [
+      "Slotfather leases are left out: slotfather is not installed here"
+     ],
+     "owners": [],
+     "top": [],
+     "unattributed": 0.0,
+     "v": 1
+    },
     "entries": [
      {
       "age": "<v>",
@@ -272,7 +317,7 @@
     "time": "<v>",
     "unowned": [],
     "unowned_resources": [],
-    "v": 1
+    "v": 2
    }
   }
  }

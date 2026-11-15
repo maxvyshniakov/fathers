@@ -29,8 +29,9 @@ AGENT_VARIABLES = ("CLAUDE", "CODEX", "LANEFATHER_", "JUNKFATHER_")
 
 
 def proc(pid: int, ppid: int = 1, pgid: Optional[int] = None, uid: Optional[int] = None, tty: str = "",
-         start: str = "Thu Nov 12 10:00:00 2026", cmd: str = "sleep 300") -> procs.Proc:
-    return procs.Proc(pid, ppid, pid if pgid is None else pgid, os.getuid() if uid is None else uid, tty, start, cmd)
+         start: str = "Thu Nov 12 10:00:00 2026", cmd: str = "sleep 300", cpu: float = 0.0) -> procs.Proc:
+    return procs.Proc(pid, ppid, pid if pgid is None else pgid, os.getuid() if uid is None else uid, tty, start, cmd,
+                      cpu)
 
 
 def table(*items: procs.Proc, moment: Optional[float] = None) -> procs.Table:
@@ -60,12 +61,15 @@ class Case(unittest.TestCase):
         self.sessions = self.tmp / "sessions"
         self.sessions.mkdir()
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(AGENT_VARIABLES)}
-        self.env.update(JUNKFATHER_STATE=str(self.state), JUNKFATHER_CLAUDE_SESSIONS=str(self.sessions),
-                        JUNKFATHER_LANE_RECORDS=str(self.tmp / "no-lanes"), PYTHONDONTWRITEBYTECODE="1")
-        os.environ["JUNKFATHER_STATE"] = str(self.state)
-        os.environ["JUNKFATHER_CLAUDE_SESSIONS"] = str(self.sessions)
-        self.addCleanup(os.environ.pop, "JUNKFATHER_STATE", None)
-        self.addCleanup(os.environ.pop, "JUNKFATHER_CLAUDE_SESSIONS", None)
+        # The machine's Slotfather, agent-browser sessions and repositories stay out of every test: each test that
+        # needs one points these at its own fake.
+        isolated = {"JUNKFATHER_STATE": str(self.state), "JUNKFATHER_CLAUDE_SESSIONS": str(self.sessions),
+                    "JUNKFATHER_SLOTFATHER": str(self.tmp / "no-slotfather"),
+                    "JUNKFATHER_AGENT_BROWSER": str(self.tmp / "no-agent-browser"), "JUNKFATHER_REPOS": ""}
+        self.env.update(isolated, JUNKFATHER_LANE_RECORDS=str(self.tmp / "no-lanes"), PYTHONDONTWRITEBYTECODE="1")
+        for name, value in isolated.items():
+            os.environ[name] = value
+            self.addCleanup(os.environ.pop, name, None)
         self.store = Store(self.state)
         self.children: List[subprocess.Popen[Any]] = []
         self.addCleanup(self.kill_children)

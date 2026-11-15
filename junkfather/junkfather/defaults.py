@@ -32,6 +32,8 @@ SWEEP_INTERVAL_MIN = 60  # the shortest interval it accepts
 SWEEP_INTERVAL_MAX = 86400  # the longest interval the setting saves
 KEEP_FINISHED = 7 * 86400.0  # finished entries and their logs are pruned after this long
 REAPING_STUCK = 300.0  # an entry in `reaping` this long, whose reaper is gone, runs again
+CPU_TOP = 10  # the CPU report lists this many unattributed process trees
+CPU_OWNERS = 20  # and this many owners, busiest first
 
 # Claims (owner.py)
 CLAIM_WINDOW = 1800.0  # a claim may wait this long for its command (a permission prompt can take a while)

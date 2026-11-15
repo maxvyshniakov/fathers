@@ -26,6 +26,11 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   take `--json` and `--revision`; a stale revision exits 3 and a read-only row exits 5. The command-line flags still
   win, and `capabilities --json` lists `settings` in its dashboard block.
 
+- The hourly sweep says whose processes the busy cores belong to: a junkfather entry, a Slotfather lease (from
+  `slotfather status --json`, left out with a note when Slotfather is missing), an agent session, or nobody, with
+  the 10 busiest unattributed process trees. It stops nothing; the report is `cpu` in `sweep.json` and in
+  `status --json`, whose version is now 2 (`capabilities --json` lists `versions: [2]`).
+
 ### Changed
 
 - A reap no longer signals a leader it refused for a changed command: `known` lists the leader too, and the reap

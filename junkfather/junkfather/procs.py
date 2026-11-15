@@ -30,6 +30,7 @@ class Proc(NamedTuple):
     tty: str  # "" without a controlling terminal
     start: str  # lstart in the C locale, spaces normalized
     cmd: str
+    cpu: float = 0.0  # ps %cpu (100 = one core busy), as Table.read saw it
 
     @property
     def started(self) -> Optional[float]:
@@ -75,15 +76,23 @@ def run(argv: List[str], ok: Tuple[int, ...] = (0,)) -> str:
     return result.stdout
 
 
+FIELDS = "pid=,ppid=,pgid=,uid=,pcpu=,tty=,lstart=,command="
+
+
 def parse(text: str) -> Dict[int, Proc]:
+    """`ps -o FIELDS` lines as Procs; a line that does not read is skipped."""
     found: Dict[int, Proc] = {}
     for line in text.splitlines():
-        parts = line.split(None, 10)
-        if len(parts) < 10 or not all(part.isdigit() for part in parts[:4]):
+        parts = line.split(None, 11)
+        if len(parts) < 11 or not all(part.isdigit() for part in parts[:4]):
             continue
-        tty = "" if parts[4] in ("??", "?", "-") else parts[4]
+        try:
+            cpu = float(parts[4].replace(",", "."))
+        except ValueError:
+            continue
+        tty = "" if parts[5] in ("??", "?", "-") else parts[5]
         found[int(parts[0])] = Proc(int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3]), tty,
-                                    norm(" ".join(parts[5:10])), parts[10].strip() if len(parts) > 10 else "")
+                                    norm(" ".join(parts[6:11])), parts[11].strip() if len(parts) > 11 else "", cpu)
     return found
 
 
@@ -99,7 +108,7 @@ class Table:
 
     @classmethod
     def read(cls) -> "Table":
-        found = parse(run(["ps", "-ax", "-ww", "-o", "pid=,ppid=,pgid=,uid=,tty=,lstart=,command="]))
+        found = parse(run(["ps", "-ax", "-ww", "-o", FIELDS]))
         if not found:
             raise ProcError("ps listed no process")
         return cls(found)
