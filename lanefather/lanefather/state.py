@@ -193,6 +193,20 @@ def occupying(records: list[Record] | None = None) -> list[Record]:
     return [r for r in (lanes() if records is None else records) if r["status"] in OCCUPYING]
 
 
+def of_project(records: list[Record], common: str | None) -> list[Record]:
+    """The records of the repository whose Git common directory is `common` (fathers#149): a state directory several
+    projects share holds each one's lanes. None keeps every record; a record that names no repository is kept too,
+    as it may be this one's."""
+    return [r for r in records if common is None or r.get("common_dir") in (None, common)]
+
+
+def project_name(common: str | None) -> str:
+    """The repository a Git common directory belongs to, by its main checkout's directory name."""
+    if not common:
+        return "an unnamed repository"
+    return os.path.basename(os.path.dirname(common) if os.path.basename(common) == ".git" else common)
+
+
 @contextlib.contextmanager
 def locked(name: str, waiting: str | None = None) -> Generator[None]:
     """Hold the current project's state lock; explicit project callers use Store directly."""

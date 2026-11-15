@@ -128,10 +128,10 @@ def project_entry(entry: dict[str, Any]) -> dict[str, Any]:
     # A state directory several projects share holds each one's lanes: a project reports those of its repository.
     # A record a write cut short cannot say its repository: every project of the directory lists it (fathers#129).
     damaged: list[Path] = []
-    records = [r for r in state.Store(project, directory=directory).lanes(damaged=damaged)
-               if common is None or r.get("common_dir") == common]
+    everywhere = state.Store(project, directory=directory).lanes(damaged=damaged)
+    records = [r for r in everywhere if common is None or r.get("common_dir") == common]
     try:
-        decision = admission.evaluate(project, records)
+        decision = admission.evaluate(project, everywhere, common)
         cap, source = decision.cap, decision.source
     except LaneError as error:
         cap, source = host.lane_cap(project)

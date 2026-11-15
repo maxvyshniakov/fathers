@@ -2,8 +2,8 @@
 
 Statuses: planned (registered), active (has a worktree), landed (merged), released (merged with a green smoke while
 its agent still locks the worktree), done (cleaned up). Only planned and active lanes count toward the lane cap and
-hold their claims. start prints the brief header for the lane's prompt, ending with the rule snippets whose path
-globs overlap the lane's claims.
+hold their claims, each among the lanes of its own repository (fathers#149). start prints the brief header for the
+lane's prompt, ending with the rule snippets whose path globs overlap the lane's claims.
 """
 from __future__ import annotations
 
@@ -65,6 +65,18 @@ def prepare(cwd: Any, lane_id: str, ticket: str, lane_claims: list[str], base: s
     return record, rules
 
 
+def fix_parent(record: Record) -> str | None:
+    """The landed lane whose kept worktree a fix lane (review --fix-lane) takes over, else None."""
+    parent_id = record.get("review_fix_of")
+    if not isinstance(parent_id, str) or not state.ID.match(parent_id):
+        return None
+    parent = state.read_json(state.record_path(parent_id))
+    if (parent and parent.get("status") in ("landed", "released") and parent.get("worktree")
+            and parent.get("worktree") == record.get("worktree")):
+        return parent_id
+    return None
+
+
 def register(record: Record, rules: list[dict[str, Any]], force_reason: str | None, create: bool) -> None:
     """Enforce the cap, disk, load and claims, save the record and print its brief header."""
     prog = config.prog()
@@ -77,9 +89,13 @@ def register(record: Record, rules: list[dict[str, Any]], force_reason: str | No
         for name in after:
             if name not in {r["id"] for r in others if r["status"] != "done"}:
                 raise LaneError(f"--after {name}: no lane that is not done by that name")
-        active = state.occupying(others)
-        decision = admission.evaluate(config.current(), others)
+        parent = fix_parent(record)
+        decision = admission.evaluate(config.current(), others, record["common_dir"], cap_exempt=parent is not None)
         cap, source, info = decision.cap, decision.source, decision.machine
+        if parent is not None:
+            # fathers#45 (a): the fix lane takes its landed parent's place, outside the cap; the record says why.
+            source = record["cap_source"] = f"fix-lane of {parent}"
+        active = list(decision.occupying)
         refusals = list(decision.refusals)
         if refusals and not force_reason:
             raise LaneError("refused:\n- " + "\n- ".join(refusals))
@@ -123,7 +139,7 @@ def start(args: Any) -> int:
 
 
 def next_lane(args: Any) -> int:
-    data, ready, states = queue.next_ready()
+    data, ready, states = queue.next_ready(common_dir(os.getcwd()))
     for entry, reason in states:
         if reason and entry is not ready:
             print(f"  skip {entry['id']} (#{str(entry['ticket']).lstrip('#')}): {reason}", file=sys.stderr)
@@ -189,14 +205,18 @@ def receipt_state(record: Record) -> str:
 def list_lanes(args: Any) -> int:
     records = state.Store(config.current()).lanes(strict=True)
     shown = [r for r in records if args.all or r["status"] != "done"]
-    decision = admission.evaluate(config.current(), records)
+    common = common_dir(os.getcwd()) if git_ok(os.getcwd(), "rev-parse", "--git-dir") else None
+    decision = admission.evaluate(config.current(), records, common)
     cap, source, machine = decision.cap, decision.source, decision.machine
+    ceiling = decision.ceiling
     # Each run's effective slot priority and its source (lanefather#24).
     priorities = slots.priorities()
     if args.json:
         # Scripts read lanes here (#577): every record with its worktree (null until adopt) and receipt state.
         print(json.dumps({"lanes": [dict(r, receipt=receipt_state(r)) for r in shown],
-                          "active": len(state.occupying(records)), "cap": cap, "cap_source": source,
+                          "active": len(decision.occupying), "cap": cap, "cap_source": source,
+                          "global": {"active": len(decision.everywhere), "cap": ceiling[0] if ceiling else None,
+                                     "cap_source": ceiling[1] if ceiling else None},
                           "host": machine, "priorities": priorities}, indent=2))
         return 0
     for record in shown:
@@ -206,7 +226,9 @@ def list_lanes(args: Any) -> int:
               + (f"  after: {', '.join(record['after'])}" if record["after"] else ""))
         if record.get("worktree"):
             print(f"    worktree: {record['worktree']}")
-    print(f"{len(state.occupying(records))} of {cap} lanes planned or active (cap {source}); {host.host_line(machine)}")
+    across = f"{len(decision.everywhere)} of {ceiling[0]} across projects ({ceiling[1]}); " if ceiling else ""
+    print(f"{len(decision.occupying)} of {cap} lanes planned or active (cap {source}); {across}"
+          f"{host.host_line(machine)}")
     print("slot priorities: " + ", ".join(
         f"{phase} {found['priority']}" + ("" if found["source"] == "built-in" else f" ({found['source']})")
         for phase, found in priorities.items()))
