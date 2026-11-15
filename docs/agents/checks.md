@@ -9,13 +9,15 @@ are development tools only.
   `python3 -m unittest discover -s tests -t tests -p 'test_<area>.py'`).
 - One package's lint gate, from its directory: `python3 tools/check.py` (about 10 s).
 - The root tools: `python3 tools/checks.py run tools`. Any check by name: `python3 tools/checks.py run "<name>"`.
+- `common/`'s tests (the CLI convention's helper and the root entry points), from the root:
+  `python3 -m unittest discover -s common/tests`.
 
 ## Full gate
 
 - `bun run verify` (Repo-Kit, [repo-kit.config.mjs](../../repo-kit.config.mjs)) runs the checks the changes since
   `origin/main` select ([tools/checks.py](../../tools/checks.py)): `<package> lint` and `<package> tests` for each
-  changed package (every package for `common/`; Slotfather's sources also select `godfather tests`), `common` for
-  `common/` and `install.py`, and always `tools`, `kit` (`repo-kit check`) and `test hygiene`. A path no rule knows
+  changed package (every package for `common/`; Slotfather's sources also select `godfather tests`), `common lint`
+  and `common tests` for `common/` and `install.py`, and always `tools`, `kit` (`repo-kit check`) and `test hygiene`. A path no rule knows
   selects everything, and so does a tree without changes. `FATHERS_CHECKS=all bun run verify` runs every check;
   `FATHERS_CHECK_BASE=<ref>` names another base.
 - It leases two slots itself and runs the steps side by side. Every check took 2026-11-13: lint gates 2 to 14 s,

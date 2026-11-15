@@ -39,7 +39,7 @@ class SelectionTests(unittest.TestCase):
 
     def test_common_selects_every_package(self) -> None:
         every = set().union(*(package(name) for name in checks.PACKAGES))
-        self.assertEqual(every | {"common"} | ALWAYS, self.selected("common/eventcheck.py"))
+        self.assertEqual(every | package("common") | ALWAYS, self.selected("common/eventcheck.py"))
 
     def test_shared_rules_select_every_lint_gate(self) -> None:
         lint = {f"{name} lint" for name in checks.PACKAGES}
@@ -47,7 +47,7 @@ class SelectionTests(unittest.TestCase):
 
     def test_a_workflow_selects_its_package(self) -> None:
         self.assertEqual(package("slotfather") | ALWAYS, self.selected(".github/workflows/slotfather.yml"))
-        self.assertEqual({"common"} | ALWAYS, self.selected(".github/workflows/common.yml", "install.py"))
+        self.assertEqual(package("common") | ALWAYS, self.selected(".github/workflows/common.yml", "install.py"))
 
     def test_documentation_selects_only_the_cheap_root_checks(self) -> None:
         plan = checks.select(["AGENTS.md", "docs/agents/checks.md", "notes/sha-map.md", "LICENSE"])
@@ -142,6 +142,16 @@ class StepTests(unittest.TestCase):
                                 env={**os.environ, "FATHERS_CHECKS": "some"}, capture_output=True, text=True)
         self.assertEqual(2, result.returncode)
         self.assertIn("FATHERS_CHECKS", result.stderr)
+
+
+class CommandTests(unittest.TestCase):
+    def test_common_has_a_lint_and_a_test_check_like_the_packages(self) -> None:
+        directory, argvs = checks.commands("common tests")
+        self.assertEqual(ROOT, directory)
+        self.assertEqual([[sys.executable, "-m", "unittest", "discover", "-s", "common/tests"]], argvs)
+        ruff, pyright = checks.commands("common lint")[1]
+        self.assertIn("ruff", ruff)
+        self.assertIn("pyright", pyright)
 
 
 class RepositoryRuleTests(unittest.TestCase):

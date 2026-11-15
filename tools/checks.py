@@ -58,7 +58,8 @@ CHECKS = [
         Check(f"{name} lint", python_check(f"{name} lint"), 0.7),
         Check(f"{name} tests", python_check(f"{name} tests"), 0.3, 30 if name == "lanefather" else None),
     )),
-    Check("common", python_check("common"), 0.4),
+    Check("common lint", python_check("common lint"), 0.4),
+    Check("common tests", python_check("common tests"), 0.2),
     Check("tools", python_check("tools"), 0.2),
     Check("kit", ["run", "check:kit"], 0.2),
     Check("test hygiene", ["run", "check:hygiene"], 0.2),
@@ -76,9 +77,9 @@ def owners(path: str) -> set[str] | None:
             chosen.add("godfather tests")  # its contract tests run ../slotfather
         return chosen
     if first == "common":
-        return {name for name in NAMES if name.split()[0] in PACKAGES} | {"common"}
+        return {name for name in NAMES if name.split()[0] in PACKAGES} | {"common lint", "common tests"}
     if path == "install.py":
-        return {"common"}
+        return {"common lint", "common tests"}
     if path == "tools/ruff.toml":
         return {f"{name} lint" for name in PACKAGES}
     if first == "tools":
@@ -87,7 +88,7 @@ def owners(path: str) -> set[str] | None:
         workflow = Path(path).stem
         if workflow in PACKAGES:
             return {f"{workflow} lint", f"{workflow} tests"}
-        return {"common"} if workflow == "common" else None
+        return {"common lint", "common tests"} if workflow == "common" else None
     if path in KIT_FILES or first == ".githooks":
         return set()
     if path in DOCUMENTATION or first in ("docs", "notes") or ("/" not in path and path.endswith(".md")):
@@ -191,8 +192,10 @@ def commands(name: str) -> tuple[Path, list[list[str]]]:
         return ROOT / owner, [[sys.executable, "tools/check.py"]]
     if owner in PACKAGES and kind == "tests":
         return ROOT / owner, [[sys.executable, "-m", "unittest", "discover", *TESTS[owner]]]
-    if name == "common":  # the lint of .github/workflows/common.yml
+    if name == "common lint":
         return ROOT, [lint_tools("ruff", "check", "common", "install.py"), lint_tools("pyright", "-p", "common")]
+    if name == "common tests":  # the CLI convention's helper (docs/cli.md)
+        return ROOT, [[sys.executable, "-m", "unittest", "discover", "-s", "common/tests"]]
     if name == "tools":
         return ROOT, [[sys.executable, "-m", "unittest", "discover", "-s", "tools", "-p", "test_*.py"],
                       lint_tools("ruff", "check", "--config", "tools/ruff.toml", "tools", "tools/lane-check")]
