@@ -7,7 +7,7 @@ stays accepted where this page says so.
 
 ## Errors
 
-A refused command prints one line on stderr and nothing on stdout:
+A refused command says why on stderr and prints nothing on stdout:
 
 ```text
 slotfather: unknown option --nosuch for run
@@ -78,6 +78,9 @@ for something else.
   `"conflict": true`), 4 another user's queue (Slotfather), 5 read-only, 1 not saved for another reason.
 - Moved codes: Lanefather's settings answered 4 for read-only before fathers#130; it answers 5 from then, and
   Godfather's settings client accepts 4 from Lanefather as read-only for one release after.
+- 6 is new: a refusal that means "not found" today exits 1 (Lanefather's `LaneError`) or 2 (Slotfather's `session`
+  and `reprioritize`); each moves in its package's conformance ticket, and a reader that tests for the old code is
+  changed in the same release.
 
 ## Conformance
 
