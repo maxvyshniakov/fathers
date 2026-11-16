@@ -40,14 +40,12 @@ def process_table(directory: Path, log: bool = True) -> Table:
     except _config.ProcessTableError as error:
         if log and own and not _skipping:
             _skipping.append(str(error))
-            _state.log(directory, f"skipped reaping: {error}")
-            _events.emit(directory, "reap.skipped", {"type": "queue", "id": "processes"}, {"reason": str(error)},
+            _events.record(directory, f"skipped reaping: {error}", "reap.skipped", {"type": "queue", "id": "processes"}, {"reason": str(error)},
                          _events.actor(kind="tool"), level="warn")
         raise
     if log and own and _skipping:
         reason = _skipping.pop()
-        _state.log(directory, "reaping resumed: ps answers again")
-        _events.emit(directory, "reap.resumed", {"type": "queue", "id": "processes"}, {"after": reason},
+        _events.record(directory, "reaping resumed: ps answers again", "reap.resumed", {"type": "queue", "id": "processes"}, {"after": reason},
                      _events.actor(kind="tool"))
     return table
 
@@ -68,14 +66,13 @@ def reap(directory: Path, table: Table) -> list[tuple[Path, dict[str, Any]]]:
             _state.marker(path).unlink(missing_ok=True)
             _idle.path(path).unlink(missing_ok=True)
             path.with_suffix(".session").unlink(missing_ok=True)  # a session's runs (session.py)
-            _state.log(directory, f"reaped {entry.get('state')} lease of {entry.get('count')} for "
-                           f"{entry.get('label')} (pid {entry.get('pid')} exited)")
             item = _state.record(directory, entry, _entry.outcome(entry, reaped=True), path=path,
                                  capacity=_settings.total, above=run_above)
-            _events.emit(directory, "lease.reaped" if _entry.is_held(entry) else "request.reaped",
-                         _events.request(entry, path),
-                         {"count": entry.get("count"), "ran": item.get("ran"), "waited": item.get("waited"),
-                          "reason": "owner exited"}, _events.actor(kind="tool"), level="warn")
+            _events.record(directory, f"reaped {entry.get('state')} lease of {entry.get('count')} for "
+                           f"{entry.get('label')} (pid {entry.get('pid')} exited)",
+                           "lease.reaped" if _entry.is_held(entry) else "request.reaped", _events.request(entry, path),
+                           {"count": entry.get("count"), "ran": item.get("ran"), "waited": item.get("waited"),
+                            "reason": "owner exited"}, _events.actor(kind="tool"), level="warn")
     return live
 
 

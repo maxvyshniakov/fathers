@@ -50,9 +50,8 @@ def ask(directory: Path, live: list[tuple[Path, dict[str, Any]]], held: list[dic
                 continue
             _state.write(place, {"by": paths[id(who)].stem, "label": who.get("label"), "priority": _entry.priority_of(who),
                           "count": who["count"], "at": _config.now()})
-            _state.log(directory, f"asked {entry.get('label')} (pid {entry['pid']}) to yield {entry['count']} for "
-                           f"{who.get('label')}")
-            _events.emit(directory, "lease.yield_asked", _events.request(entry, path),
+            _events.record(directory, f"asked {entry.get('label')} (pid {entry['pid']}) to yield {entry['count']} for "
+                           f"{who.get('label')}", "lease.yield_asked", _events.request(entry, path),
                          {"count": entry["count"], "for": {"id": paths[id(who)].stem, "label": who.get("label"),
                                                            "priority": _entry.priority_of(who)}},
                          _events.actor(kind="tool"))
@@ -60,8 +59,7 @@ def ask(directory: Path, live: list[tuple[Path, dict[str, Any]]], held: list[dic
             if _entry.is_held(entry) and asked_by_hand(_state.asked(path), live):
                 continue  # `slotfather ask-yield` asked it: it stands while the waiter it names still waits
             place.unlink(missing_ok=True)
-            _state.log(directory, f"withdrew the yield request to {entry.get('label')} (pid {entry['pid']})")
-            _events.emit(directory, "lease.yield_withdrawn", _events.request(entry, path), {},
+            _events.record(directory, f"withdrew the yield request to {entry.get('label')} (pid {entry['pid']})", "lease.yield_withdrawn", _events.request(entry, path), {},
                          _events.actor(kind="tool"))
     for place in [*(directory / "queue").glob("*.yield"), *(directory / "queue").glob("*" + _idle.SUFFIX),
                   *(directory / "queue").glob("*.session")]:
@@ -135,9 +133,8 @@ def ask_yield(pid: int, start: str, directory: Path | None = None) -> tuple[dict
                    "priority": _schedule.effective_priority(chosen, settings, moment), "count": chosen["count"],
                    "at": _config.now(), "asker": asker.get("via") or f"pid {asker['pid']}"}
         _state.write(_state.marker(path), request)
-        _state.log(directory, f"asked {entry.get('label')} (pid {entry['pid']}) to yield {entry['count']} for "
-                              f"{chosen.get('label')}")
-        _events.emit(directory, "lease.yield_asked", _events.request(entry, path),
+        _events.record(directory, f"asked {entry.get('label')} (pid {entry['pid']}) to yield {entry['count']} for "
+                              f"{chosen.get('label')}", "lease.yield_asked", _events.request(entry, path),
                      {"count": entry["count"], "for": {"id": request["by"], "label": chosen.get("label"),
                                                        "priority": request["priority"]}, "by_hand": True}, asker)
     return entry, request, False
@@ -170,14 +167,12 @@ def yield_lease(path: Path, out=sys.stderr) -> bool:
                 asker = None
         if asker is None:  # it started, left or would still not start; the next look would withdraw the request
             _state.marker(path).unlink(missing_ok=True)
-            _state.log(directory, f"withdrew the yield request to {entry.get('label')} (pid {entry.get('pid')})")
-            _events.emit(directory, "lease.yield_withdrawn", _events.request(entry, path), {}, _events.holder(entry))
+            _events.record(directory, f"withdrew the yield request to {entry.get('label')} (pid {entry.get('pid')})", "lease.yield_withdrawn", _events.request(entry, path), {}, _events.holder(entry))
             return False
         _entry.to_yielded(entry, time.time(), behind)
         _state.write(path, entry)
         _state.marker(path).unlink(missing_ok=True)
-        _state.log(directory, f"yielded {entry['count']} ({path.name}) to {asker.get('label')}")
-        _events.emit(directory, "lease.yielded", _events.request(entry, path),
+        _events.record(directory, f"yielded {entry['count']} ({path.name}) to {asker.get('label')}", "lease.yielded", _events.request(entry, path),
                      {"count": entry["count"], "to": {"id": request.get("by"), "label": asker.get("label")},
                       "yields": entry["yields"]}, _events.holder(entry))
         with contextlib.suppress(_config.SlotError):  # held_again()'s looks grant it then
@@ -234,9 +229,8 @@ def reprioritize(target: str, priority: str, directory: Path | None = None,
                 continue
             _entry.to_reprioritized(entry, priority, time.time())
             _state.write(path, entry)
-            _state.log(directory, f"reprioritized {entry.get('label')} (pid {entry.get('pid')}) from {before} to "
-                                  f"{priority}")
-            _events.emit(directory, "request.reprioritized", _events.request(entry, path),
+            _events.record(directory, f"reprioritized {entry.get('label')} (pid {entry.get('pid')}) from {before} to "
+                                  f"{priority}", "request.reprioritized", _events.request(entry, path),
                          {"from": before, "to": priority, "state": entry.get("state")})
             changed.append(entry)
         with contextlib.suppress(_config.SlotError):  # the change stands; the waiters' looks grant by it
@@ -260,8 +254,7 @@ def yield_for_lock(path: Path, lock: str) -> bool:
         _entry.to_lock_waiting(entry, time.time(), lock)
         _state.write(path, entry)
         _state.marker(path).unlink(missing_ok=True)  # a yield request is moot: its slots are free now
-        _state.log(directory, f"yielded {entry['count']} ({path.name}) while waiting for lock {lock}")
-        _events.emit(directory, "lease.yielded", _events.request(entry, path),
+        _events.record(directory, f"yielded {entry['count']} ({path.name}) while waiting for lock {lock}", "lease.yielded", _events.request(entry, path),
                      {"count": entry["count"], "to": {"id": None, "label": f"lock {lock}"}, "lock": lock,
                       "yields": int(entry.get("yields") or 0)}, _events.holder(entry))
         with contextlib.suppress(_config.SlotError):  # the next look grants the freed slots otherwise
@@ -282,7 +275,7 @@ def lock_taken(path: Path, wait: bool = True) -> None:
             lock = _entry.lock_of(entry)
             _entry.lock_taken(entry)
             _state.write(path, entry)
-            _state.log(directory, f"took lock {lock} for {entry.get('label')} (pid {entry.get('pid')}); waiting for "
+            _events.record(directory, f"took lock {lock} for {entry.get('label')} (pid {entry.get('pid')}); waiting for "
                                   f"{entry['count']} slot(s) again" if wait else
                        f"stopped waiting for lock {lock} for {entry.get('label')} (pid {entry.get('pid')})")
             with contextlib.suppress(_config.SlotError):
@@ -366,7 +359,6 @@ def grant(directory: Path, table: _queue.Table) -> str | None:
         _entry.to_held(entry, granted, time.time(), pressed=memory[0] != "normal", served=served)
         _state.write(paths[id(entry)], entry)
         used += entry["count"]
-        _state.log(directory, f"granted {entry['count']} to {entry.get('label')} (pid {entry['pid']})")
         details: dict[str, Any] = {"count": entry["count"], "priority": _entry.priority_of(entry),
                                    "waited": None if waited_from is None else
                                    round(max(0.0, began - waited_from))}
@@ -379,8 +371,8 @@ def grant(directory: Path, table: _queue.Table) -> str | None:
             details["meta"] = meta
         if isinstance(entry.get("session"), dict):
             details["session"] = entry["session"].get("name")
-        _events.emit(directory, "lease.granted", _events.request(entry, paths[id(entry)]), details,
-                     _events.holder(entry))
+        _events.record(directory, f"granted {entry['count']} to {entry.get('label')} (pid {entry['pid']})",
+                       "lease.granted", _events.request(entry, paths[id(entry)]), details, _events.holder(entry))
     if short:  # memory holds a request back: no yield is asked, since the slots it frees might not start it
         return short
     rest = [e for e in waiters if not any(e is g for g in found.grants)]
@@ -436,7 +428,7 @@ class Lease:
                 except (OSError, ValueError):
                     entry = None
                 self.path.unlink(missing_ok=True)
-                _state.log(directory, f"released {self.count} ({self.path.name})")
+                released = f"released {self.count} ({self.path.name})"
                 _state.marker(self.path).unlink(missing_ok=True)
                 _idle.path(self.path).unlink(missing_ok=True)
                 if isinstance(entry, dict):
@@ -446,16 +438,17 @@ class Lease:
                                          path=self.path, expected=expected, capacity=_settings.total,
                                          above=_queue.run_above)
                     if outcome == "released":
-                        _events.emit(directory, "lease.released", _events.request(entry, self.path),
-                                     {"count": self.count, "exit": item.get("status"), "ran": item.get("ran"),
-                                      "cpu": item.get("cpu"), "rss_peak_mb": item.get("rss_peak_mb")},
-                                     _events.holder(entry))
+                        _events.record(directory, released, "lease.released", _events.request(entry, self.path),
+                                       {"count": self.count, "exit": item.get("status"), "ran": item.get("ran"),
+                                        "cpu": item.get("cpu"), "rss_peak_mb": item.get("rss_peak_mb")},
+                                       _events.holder(entry))
                     else:
-                        _events.emit(directory, "request.left", _events.request(entry, self.path),
-                                     {"count": self.count, "gave_up_after": item.get("waited")}, _events.holder(entry))
+                        _events.record(directory, released, "request.left", _events.request(entry, self.path),
+                                       {"count": self.count, "gave_up_after": item.get("waited")},
+                                       _events.holder(entry))
                 else:  # the entry was gone already: queue.log has its release, nothing more is known
-                    _events.emit(directory, "lease.released", {"type": "request", "id": self.path.stem},
-                                 {"count": self.count, "unknown": True})
+                    _events.record(directory, released, "lease.released", {"type": "request", "id": self.path.stem},
+                                   {"count": self.count, "unknown": True})
                 # Hand the slots on now: waiters look at the queue less often the longer they wait.
                 with contextlib.suppress(_config.SlotError, OSError):
                     grant(directory, _queue.process_table(directory))
@@ -606,8 +599,7 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
                         line, facts = report
                         print(f"slot: {line}", file=out, flush=True)
                         with _state.locked(directory):
-                            _state.log(directory, f"waiting long: {line}")
-                            _events.emit(directory, "request.waiting_long", _events.request(entry, path), facts,
+                            _events.record(directory, f"waiting long: {line}", "request.waiting_long", _events.request(entry, path), facts,
                                          _events.holder(entry), level="warn")
             if waiting != said:
                 print(f"slot: {label} waits for {count} slot(s): {waiting or 'earlier requests first'}",

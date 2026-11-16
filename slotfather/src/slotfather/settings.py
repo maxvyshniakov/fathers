@@ -375,10 +375,10 @@ def configure(changes: Mapping[str, Mapping[str, Any] | None], *,
             if name == "capacity.json":
                 with contextlib.suppress(_config.SlotError, OSError):
                     basis = capacity_basis()
-                    _events.emit(directory, "capacity.changed", {"type": "capacity", "id": "capacity"},
+                    _events.record(directory, None, "capacity.changed", {"type": "capacity", "id": "capacity"},
                                  {"saved": values[name], "mode": basis["mode"], "slots": basis["slots"]})
             elif name == "order.json":
-                _events.emit(directory, "order.changed", {"type": "order", "id": "order"},
+                _events.record(directory, None, "order.changed", {"type": "order", "id": "order"},
                              {"reset": True} if changes[name] is None else {"saved": changes[name]})
         if granted is not None:  # what the new settings start, granted now as a release does
             with contextlib.suppress(_config.SlotError, OSError):

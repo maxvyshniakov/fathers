@@ -262,7 +262,7 @@ class Holder:
                                         busy=round(float(uses.get("busy") or 0), 1), ended_by=reason)
                 _state.write(path, entry)
                 uses_path(path).unlink(missing_ok=True)
-                _events.emit(directory, "session.ended", _events.request(entry, path),
+                _events.record(directory, None, "session.ended", _events.request(entry, path),
                              {"reason": reason, "runs": entry["session"]["runs"], "busy": entry["session"]["busy"],
                               "held": round(moment - began)}, _events.holder(entry))
             break
@@ -386,7 +386,7 @@ def run_inside(name: str, argv: list[str], label: str | None = None, meta: dict[
                                                               "started": _platform.start_epoch(me), "label": label,
                                                               "cmd": _events.command(" ".join(argv)), "since": since}
                     _state.write(uses_path(path), uses)
-                    _events.emit(directory, "session.run_started", _events.request(entry, path),
+                    _events.record(directory, None, "session.run_started", _events.request(entry, path),
                                  {"session": name, "run": {"pid": me, "label": label,
                                                            "cmd": _events.command(" ".join(argv))}})
                     break
@@ -424,5 +424,5 @@ def run_inside(name: str, argv: list[str], label: str | None = None, meta: dict[
                 run["meta"] = meta  # --meta cache=..., per run
             if git:
                 run["git"] = git  # the tree this run checked
-            _events.emit(directory, "session.run_ended", _events.request(entry, path), {"session": name, "run": run})
+            _events.record(directory, None, "session.run_ended", _events.request(entry, path), {"session": name, "run": run})
     return status

@@ -169,15 +169,15 @@ def sweep(directory: Path, live: bool = False, dev_servers: bool = False, only: 
             if item["action"] == "stop":
                 item.update(stop(item, snap, found_settings["grace"]))
                 item["action"] = item.pop("result")
-                _state.log(directory, f"sweep {item['action']} {item['class']} pid {item['pid']} ({item['kind']}, "
-                                  f"age {_config.duration(item['age'])}, {len(item['tree'])} process(es)): "
-                                  f"{item['cmd'][:120]}")
                 swept = item
-                _events.emit(directory, "process.swept", {"type": "process", "id": str(swept["pid"]), "pid": swept["pid"]},
-                             {"action": swept["action"], "class": swept["class"], "kind": swept["kind"],
-                              "age": round(float(swept["age"])), "processes": len(cast(list[Any], swept["tree"])),
-                              "cmd": _events.command(swept["cmd"])},
-                             dict(_events.actor(kind="tool"), via="sweep"), level="warn")
+                _events.record(directory, f"sweep {item['action']} {item['class']} pid {item['pid']} ({item['kind']}, "
+                                          f"age {_config.duration(item['age'])}, {len(item['tree'])} process(es)): "
+                                          f"{item['cmd'][:120]}",
+                               "process.swept", {"type": "process", "id": str(swept["pid"]), "pid": swept["pid"]},
+                               {"action": swept["action"], "class": swept["class"], "kind": swept["kind"],
+                                "age": round(float(swept["age"])), "processes": len(cast(list[Any], swept["tree"])),
+                                "cmd": _events.command(swept["cmd"])},
+                               dict(_events.actor(kind="tool"), via="sweep"), level="warn")
     enabled = set(found_settings["classes"])
     docker: dict[str, Any] = sweep_os.containers(found_settings) if "container" in enabled and only is None else \
         {"available": None, "items": []}

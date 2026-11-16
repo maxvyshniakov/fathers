@@ -305,7 +305,7 @@ def after_release(directory: Path, item: dict[str, Any]) -> None:
                     {"lease_id": run["lease_id"], "verdict": verdict, "key": key, "ran": run["ran"],
                      "at": _config.now()}) + "\n", _config.HISTORY_MAX)
                 if verdict == "outlier":
-                    _events.emit(directory, "run.outlier", {"type": "run_type", "id": str(key)},
+                    _events.record(directory, None, "run.outlier", {"type": "run_type", "id": str(key)},
                                  {"lease_id": run["lease_id"], "ran": run["ran"], "p50": round(p50 or 0, 1),
                                   "p90": round(p90, 1), "ended": run.get("ended"),
                                   "later": [round(r["ran"], 1) for r in later]},
@@ -327,7 +327,7 @@ def after_release(directory: Path, item: dict[str, Any]) -> None:
             _state.write(path, trends)
             if first and found["verdict"] == "steady":
                 return  # nothing to say about a key's first steady trend
-            _events.emit(directory, "run.trend", {"type": "run_type", "id": str(key)},
+            _events.record(directory, None, "run.trend", {"type": "run_type", "id": str(key)},
                          {k: found[k] for k in ("verdict", "p50_recent", "p50_before", "ratio", "recent", "before",
                                                 "plan_change", "why")}, _events.actor(kind="tool"),
                          level="warn" if found["verdict"] == "slower" else None)
