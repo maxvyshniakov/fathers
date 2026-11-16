@@ -173,12 +173,12 @@ class ColumnTests(unittest.TestCase):
     """fathers#145: the help fits the standard screen in columns, read down then across, and scrolls only below
     it. No unread mark for what's new (owner, 2026-11-13)."""
 
-    def test_the_whole_legend_shows_at_156x51_without_scrolling(self) -> None:
-        """156x43 until the pages' keys and legend (fathers#85) and the row actions (fathers#88) came: from 51."""
+    def test_the_whole_legend_shows_at_156x43_without_scrolling(self) -> None:
+        """fathers#145: with the pages' keys and legend (fathers#85) and the row actions (fathers#88) too."""
         from godfather import overlay_text, tui
         from godfather.views import overlays
 
-        canvas = tui.Canvas(156, 51)
+        canvas = tui.Canvas(156, 43)
         overlays.draw_help(canvas, 0)
         text = canvas.render(False)
         view = canvas.help_view

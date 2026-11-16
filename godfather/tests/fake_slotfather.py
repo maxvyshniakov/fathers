@@ -15,7 +15,7 @@ import math
 import os
 import sys
 import time
-from typing import Any
+from typing import Any, cast
 
 CORES_PER_SLOT, AUTO_GIB_PER_SLOT, CAPACITY_PER_CORE = 3, 4.0, 4
 ORDER_DEFAULTS = {"order": "backfill", "safety": 3.0, "limit": 0.0, "fallback": 3600.0, "overrun": 0.5,
@@ -263,6 +263,55 @@ def reply(value: Any, code: int = 0) -> int:
     return code
 
 
+def host() -> str:
+    """This machine's short name as the tools write it, so Godfather reads the line as its own host's."""
+    import re
+    import socket
+
+    name = re.sub(r"[^a-z0-9-]", "-", socket.gethostname().split(".")[0].lower()).strip("-")[:63]
+    return name.strip("-") or "localhost"
+
+
+def action(state: dict[str, Any], argv: list[str]) -> int:
+    """`reprioritize PID CLASS --start START` and `ask-yield PID --start START` on the snapshot's rows, Slotfather's
+    way: the pid and start must name a row, the change is saved in the snapshot, the event goes to the event log
+    with `actor.via` from GODFATHER_ACTOR (`godfather/<version>` gives `godfather`)."""
+    import datetime
+
+    start = argv[argv.index("--start") + 1] if "--start" in argv else None
+    pid = int(argv[1])
+    snapshot = cast(dict[str, Any], state.get("snapshot") or {})
+    block = cast(dict[str, Any], snapshot.get("dashboard") or {})
+    found = cast(list[dict[str, Any]], block.get("holders", [])) + cast(list[dict[str, Any]], block.get("waiters", []))
+    rows = [row for row in found if row.get("pid") == pid]
+    if not rows or rows[0].get("start") != start:
+        print(f"slotfather {argv[0]}: pid {pid} is not that request any more", file=sys.stderr)
+        return 1
+    row = rows[0]
+    details: dict[str, Any]
+    actor = os.environ.get("GODFATHER_ACTOR", "")
+    if argv[0] == "reprioritize":
+        kind, details = "request.reprioritized", {"from": row.get("priority"), "to": argv[2]}
+        row["priority"] = argv[2]
+        print(f"{row.get('label')} (pid {pid}, held): {argv[2]}")
+    else:
+        kind, details = "lease.yield_asked", {"for": "the waiter"}
+        row["asked"], row["asked_at"] = "the waiter", row.get("granted")
+        print(f"{row.get('label')} (pid {pid}): asked to yield 1 slot(s) for the waiter")
+    save(state)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    event: dict[str, Any] = {"v": 1, "time": now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z",
+             "host": host(), "source": "slotfather", "kind": kind,
+             "subject": {"type": "request", "id": f"r-{pid}", "label": row.get("label"), "pid": pid},
+             "actor": {"type": "process", "pid": os.getpid(), **({"via": actor.split("/")[0]} if actor else {})},
+             "details": details}
+    with open(os.path.join(os.path.dirname(os.path.abspath(PATH)), "events.jsonl"), "a", encoding="utf-8") as log:
+        log.write(json.dumps(event) + "\n")
+    with open(PATH + ".env", "a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"argv": argv, "GODFATHER_ACTOR": actor}) + "\n")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     calls = os.environ.get("FAKE_SLOTFATHER_CALLS")
     if calls:
@@ -280,12 +329,14 @@ def main(argv: list[str]) -> int:
             "v": 1, "tool": "slotfather", "version": state["version"],
             "dashboard": {"v": 1, "tag": "slot",
                           "snapshot": {"argv": ["status", "--json", "--full"], "versions": [2], "poll": 1},
-                          "settings": {"versions": [1]}, "actions": ["reprioritize"],
+                          "settings": {"versions": [1]}, "actions": state.get("actions") or ["reprioritize"],
                           # EVENTS' log (fathers#84), beside the state file: tests' LiveCase.queue() writes it
                           "events": {"path": os.path.join(os.path.dirname(os.path.abspath(PATH)), "events.jsonl"),
                                      "versions": [1]}}})
     if argv == ["status", "--json", "--full"]:
         return reply(state.get("snapshot") or idle_snapshot(state))
+    if command in ("reprioritize", "ask-yield"):  # fathers#88: as Slotfather does, its event's actor.via from
+        return action(state, argv)               # GODFATHER_ACTOR
     if command != "settings" or argv[-1:] != ["--json"]:
         print("fake slotfather: unknown command " + " ".join(argv), file=sys.stderr)
         return 2

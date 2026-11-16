@@ -199,6 +199,7 @@ def draw_notice(canvas: Canvas, lines: list[str]) -> None:
 def render(canvas: Canvas, state: AppState, now: float, notice: Optional[list[str]] = None) -> None:
     """An app state drawn at its moment: the focus, the details' spinner while they load, the thumbs that flash, then
     the screen. The selected entry's lane is in the model already (the reducer joins it, state.settle())."""
+    from .. import pages as _pages_state
     from .. import state as _state
 
     found = _state.items(state)
@@ -216,5 +217,5 @@ def render(canvas: Canvas, state: AppState, now: float, notice: Optional[list[st
                    state.notice.text if state.notice else None, failure, state.news, state.read, state.moment,
                    state.events_filter, _settings_view.context_of(state, canvas.width, canvas.height), event,
                    state.tools, state.page,
-                   _state.page_index(state, state.page) if state.page != "overview" else None,
+                   _pages_state.page_index(state, state.page) if state.page != "overview" else None,
                    state.notice.style if state.notice else "bad")

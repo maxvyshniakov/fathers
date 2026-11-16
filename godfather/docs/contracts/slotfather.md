@@ -100,9 +100,21 @@ entry:
   expected           object | null {"key": run type, "p50": s, "p90": s, "runs": int, "fallback": bool}
                                    (fathers#106); a malformed one is read as null
   overrun            bool          a held entry past its p90 (Slotfather's margin applied); absent: false
+  start              str | null    the holder's process start as `ps -o lstart=` gives it (fathers#88): QUEUE's row
+                                   actions pass it back as `--start START`, and a row without it offers none
+  uid                int           (wanted, not yet given) the holder's uid: a request of another user offers no
+                                   reprioritize, which Slotfather refuses
 ```
 
-A row that carries `lease_id`, `expected` or `overrun` itself is read from the row first.
+A row that carries `lease_id`, `expected`, `overrun` or `start` itself is read from the row first.
+
+### Row actions (fathers#88)
+
+`capabilities --json`'s `actions` list what QUEUE offers: `reprioritize` (`slotfather reprioritize PID CLASS --start
+START` to each other class) and `ask-yield` (`slotfather ask-yield PID --start START`, for a running yieldable lease
+of a lower class than a waiter that was not asked yet). Before either runs, Godfather reads `status --json --full`
+again and needs the same row (key, pid, start) still offering the same action; the command runs with
+`GODFATHER_ACTOR=godfather/<version>`, which Slotfather records as the event's `actor.via`.
 
 ### The event log: EVENTS
 

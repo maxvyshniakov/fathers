@@ -133,8 +133,8 @@ class ModeTableTests(Case):
                  "page_down": ({"picked"}, [], cursor(3 + page, 3)),
                  **{key: ({"picked", "scroll"}, [], cursor(0, None)) for key in ("page_up", "g", "home")},
                  **{key: ({"picked", "scroll", "glow"}, [], cursor(39, last)) for key in ("G", "end")},
-                 # another list: the cursor goes back to its newest row
-                 "r": ({"events_filter", "picked"}, [], lambda state: state.events_filter.raw),
+                 # another list: the cursor goes back to its newest row, the view to its top (fathers#88 review 8)
+                 "r": ({"events_filter", "picked", "scroll"}, [], lambda state: state.events_filter.raw),
                  # fathers#152: ← → switch EVENTS' log (one source here: nothing to switch)
                  "left": none, "h": none, "right": none, "l": none}
         overlay_scroll: dict[str, Row] = {key: ({"overlay", "glow"}, [], overlay("help", scroll=offset))

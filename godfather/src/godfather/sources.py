@@ -101,9 +101,10 @@ def run(tool: str, argv: list[str], timeout: float, executable: Optional[str] = 
 ACTION_TIMEOUT = 30.0  # seconds an action may take (SPEC 24)
 
 
-def act(tool: str, argv: list[str], actor: str, executable: Optional[str] = None) -> Reply:
+def act(tool: str, argv: list[str], actor: str, executable: Optional[str] = None, detach: bool = False) -> Reply:
     """A row action (fathers#88): `tool ARGV...` (or, with no tool, ARGV as it is: the platform opener) with no
-    shell, a 30 s timeout and GODFATHER_ACTOR in its environment. Under GODFATHER_FIXTURES it is recorded with its
+    shell, a 30 s timeout and GODFATHER_ACTOR in its environment; `detach` starts it in a session of its own and
+    does not wait (an opener that waits for what it opened is no failure). Under GODFATHER_FIXTURES it is recorded with its
     actor, never run, and answered from DIR/<tool>/replies.json where a reply is recorded (else it succeeds)."""
     root = fixtures()
     if root is not None:
@@ -117,6 +118,13 @@ def act(tool: str, argv: list[str], actor: str, executable: Optional[str] = None
         found = _fixture_reply(root, tool, argv) if tool else Reply(127, "", "")
         return found if found.code != 127 else Reply(0, f"recorded: {' '.join(line)}", "")
     command = [executable or shutil.which(tool) or tool, *argv] if tool else list(argv)
+    if detach:
+        try:
+            subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True, env=dict(os.environ, GODFATHER_ACTOR=actor))
+        except OSError as error:
+            return Reply(126, "", f"cannot run {command[0]}: {error.strerror or error}")
+        return Reply(0, f"opened {argv[-1] if argv else command[0]}", "")
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=ACTION_TIMEOUT,
                                 stdin=subprocess.DEVNULL, env=dict(os.environ, NO_COLOR="1", GODFATHER_ACTOR=actor))
