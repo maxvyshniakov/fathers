@@ -9,6 +9,7 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 import unittest
+from unittest import mock
 
 from support import Case, as_entry, proc, table
 
@@ -18,6 +19,14 @@ DAY = 86400.0
 OLD = "Thu Nov 12 10:00:00 2026"  # every fake process started then
 NEWER = "Thu Nov 12 10:05:00 2026"
 DAEMON = "/opt/homebrew/lib/node_modules/agent-browser/bin/agent-browser-darwin-arm64"
+
+
+def interpreter() -> str:
+    """The Python binary that keeps the argv[0] it is given. A macOS framework build's bin/python3 (python.org's,
+    GitHub's setup-python, Xcode's) is a launcher that runs Resources/Python.app/Contents/MacOS/Python with argv[0]
+    replaced, so a renamed argv[0] needs that binary itself."""
+    app = os.path.join(sys.base_prefix, "Resources", "Python.app", "Contents", "MacOS", "Python")
+    return app if sys.platform == "darwin" and os.path.isfile(app) else sys.executable
 
 
 class BrowserCase(Case):
@@ -103,9 +112,12 @@ class LeftoverTests(BrowserCase):
         self.session("old-1")
         self.session("old-2")
         here = table(proc(5))
-        found = sweep.sweep(self.store, dry_run=True, table=here, cwds={}, sessions=[], now=self.now)
+        # The second read before the removals is the fake table too: on Linux pid 2 (kthreadd) runs, and a session
+        # named for a starting pid that runs is kept.
+        with mock.patch.object(procs, "read_or_none", return_value=here):
+            found = sweep.sweep(self.store, dry_run=True, table=here, cwds={}, sessions=[], now=self.now)
         report = found["agent_browser"]["leftovers"]
-        self.assertEqual((2, ["old-1", "old-2"]), (report["removed"], report["names"]))
+        self.assertEqual((2, ["old-1", "old-2"]), (report["removed"], report["names"]), report)
         self.assertEqual(6, len(os.listdir(self.dir)))
         self.assertIn("agent-browser: would remove 2 leftover session(s), 6 files, 60 bytes: old-1, old-2",
                       sweep.text(found))
@@ -205,15 +217,17 @@ class RealDaemonTests(BrowserCase):
         """A program that shows as agent-browser-fake and double-forked, so launchd adopted it, as agent-browser's
         daemon does (Python itself, its argv[0] renamed)."""
         name = str(self.tmp / "bin" / "agent-browser-fake")
+        python = interpreter()
         script = ("import os, sys\npid = os.fork()\nif pid:\n    print(pid, flush=True)\n    os._exit(0)\n"
                   "os.setsid()\nnull = os.open(os.devnull, os.O_RDWR)\nfor fd in (0, 1, 2):\n    os.dup2(null, fd)\n"
-                  f"os.execv(sys.executable, [{name!r}, '-c', 'import time; time.sleep(600)'])\n")
+                  f"os.execv({python!r}, [{name!r}, '-c', 'import time; time.sleep(600)'])\n")
         done = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30,
                               stdin=subprocess.DEVNULL)
         pid = int(done.stdout.strip())
         self.addCleanup(self.kill_quietly, pid)
         self.wait_for(lambda: (procs.Table.read().get(pid) or proc(0, cmd="")).program == "agent-browser-fake",
-                      what="the detached daemon")
+                      what=f"pid {pid} to show as agent-browser-fake (run as {python})",
+                      seen=lambda: f"pid {pid}: {(procs.Table.read().get(pid) or proc(0, cmd='(not running)')).cmd}")
         return pid
 
     def kill_quietly(self, pid: int) -> None:
