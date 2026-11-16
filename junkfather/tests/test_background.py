@@ -5,6 +5,9 @@ Claude Code starts a Bash call: a group of its own running `eval '<command>' && 
 from __future__ import annotations
 
 import json
+import os
+import select
+import signal
 import subprocess
 import sys
 import time
@@ -61,20 +64,19 @@ class RewriteTests(Case):
         self.assertEqual([], self.answer(call("junkfather own --ttl 1h -- vite")))
         self.assertTrue((self.state / "claims" / "s1" / "toolu_01.json").exists(), "the claim for own, as before")
 
-    def test_only_a_command_whose_program_is_junkfather_counts_as_running_it(self):
-        runs = ("junkfather own -- vite", "cd app && ~/.local/bin/junkfather own --detach -- npm start",
-                "PORT=1 junkfather own -- vite", "nohup junkfather own -- x", "env -i A=1 junkfather list",
-                "echo start\n/usr/local/bin/junkfather own -- x", "make || junkfather reap --id j1",
-                "python3 -m junkfather own -- x", "x=$(junkfather list --json)", 'echo "$(junkfather list)"',
-                "echo `junkfather list`", "(junkfather own -- x)", "if true; then junkfather list; fi",
-                'echo "unterminated junkfather')
-        for command in runs:
-            self.assertTrue(background.runs_junkfather(command), command)
-        others = ("cd ~/fathers/junkfather && make", "python3 -m unittest discover -s junkfather/tests",
-                  "grep -rn junkfather docs | head", "echo junkfather > junkfather.txt", "ls < junkfather",
-                  "sleep 600", "cat ~/.local/bin/junkfather")
-        for command in others:
-            self.assertFalse(background.runs_junkfather(command), command)
+    def test_only_one_explicit_ownership_command_is_left_to_junkfather(self):
+        alone = ("junkfather own -- vite", "~/.local/bin/junkfather own --detach -- npm start",
+                 "PORT=1 junkfather own -- vite", "nohup junkfather own -- x", "env -i A=1 junkfather adopt 42",
+                 "python3 -m junkfather own -- x", "junkfather own-resource --kind docker --id db",
+                 "junkfather own --ttl 1h -- sh -c 'a; b'", "junkfather own -- x\n")
+        for command in alone:
+            self.assertTrue(background.owns_itself(command), command)
+        owned = ("junkfather list; until grep -q exit= out; do sleep 15; done", "cd app && junkfather own -- x",
+                 "junkfather list", "junkfather own -- x | tee log", "(junkfather own -- x)", "x=$(junkfather list)",
+                 "cd ~/fathers/junkfather && make", "timeout 600 junkfather own -- x", "bash -c 'junkfather own -- x'",
+                 "junkfather own -- x > log", 'echo "unterminated junkfather own', "grep junkfather docs", "sleep 600")
+        for command in owned:
+            self.assertFalse(background.owns_itself(command), command)
 
     def test_a_command_that_only_names_junkfather_is_taken_over(self):
         (said,) = self.answer(call("cd ~/fathers/junkfather && until test -f done; do sleep 15; done"))
@@ -96,6 +98,15 @@ class BackgroundTests(Case):
         self.session_env = self.claude_env("s1", self.claude)
         self.work = self.tmp / "work"
         self.work.mkdir()
+        self.addCleanup(self.end_watchers)
+
+    def end_watchers(self) -> None:
+        """A watcher ends with its shell; one still there (a test that failed midway) is stopped by its identity."""
+        for entry in self.store.entries():
+            supervisor = entry.get("supervisor") or {}
+            if supervisor.get("pid") and procs.identities([supervisor["pid"]]).get(supervisor["pid"]) == \
+                    procs.norm(supervisor.get("start") or ""):
+                os.kill(supervisor["pid"], signal.SIGKILL)
 
     def rewritten(self, data: Dict[str, Any]) -> str:
         result = self.hook("PreToolUse", data.pop("session_id"), env=self.session_env, **data)
@@ -111,7 +122,17 @@ class BackgroundTests(Case):
         for pipe in (shell.stdout, shell.stderr):
             if pipe is not None:
                 self.addCleanup(pipe.close)
+        self.addCleanup(self.end_group, shell)
         return shell
+
+    def end_group(self, shell: subprocess.Popen[Any]) -> None:
+        """The shell's whole group, what the agent's command left in it too; only while the shell is not waited for,
+        so its pid, the group's id, cannot have been taken again."""
+        if shell.returncode is None:
+            try:
+                os.killpg(shell.pid, signal.SIGKILL)
+            except OSError:
+                pass
 
     def adopted(self) -> Dict[str, Any]:
         self.wait_for(lambda: any(e.get("state") == "running" for e in self.store.entries()), what="the entry",
@@ -161,10 +182,17 @@ class BackgroundTests(Case):
         self.assertEqual([(entry["id"], "ttl expired")], [(r["id"], r["reason"]) for r in swept["reaped"]])
         self.assertIsNotNone(shell.wait(10))
 
-    def test_a_main_session_call_belongs_to_the_session(self):
+    def test_a_main_session_call_belongs_to_the_session_and_has_no_ttl(self):
         shell = self.run_as_claude(self.rewritten(call("sleep 600", agent=None)))
         entry = self.adopted()
-        self.assertEqual(("s1", None), (entry["owner"]["session"], entry["owner"]["agent"]))
+        self.assertEqual(("s1", None, True), (entry["owner"]["session"], entry["owner"]["agent"], entry["no_ttl"]))
+        self.assertGreater(entry["expires"], time.time() + 50 * 365 * 86400, "older readers see it far from expiry")
+        self.store.update(entry["id"], lambda e: e.update(created=time.time() - 3 * 86400))  # three days on
+        self.hook("Stop", "s1", env=self.session_env)
+        self.assertEqual([], json.loads(self.cli("sweep", "--json").stdout)["reaped"], "no TTL to expire")
+        self.assertEqual("running", self.state_of(entry["id"]))
+        (row,) = json.loads(self.cli("list", "--json").stdout)["entries"]
+        self.assertTrue(row["no_ttl"])
         self.hook("SessionEnd", "s1", env=self.session_env, reason="other")
         self.wait_for(lambda: self.state_of(entry["id"]) == "reaped", what="the session end")
         self.assertIsNotNone(shell.wait(10))
@@ -205,13 +233,37 @@ class BackgroundTests(Case):
         shell.communicate(timeout=30)
         self.assertEqual(([], 0), (self.store.entries(), shell.returncode))
 
-    def test_the_next_background_call_marks_an_ended_shell_gone(self):
-        done = self.run_as_claude(self.rewritten(call("true", tool_use="toolu_01")))
+    def test_a_shell_that_ended_is_gone_at_once(self):
+        done = self.run_as_claude(self.rewritten(call("true")))
         done.communicate(timeout=30)
         (ended,) = map(plain, self.store.entries())
-        self.assertEqual("running", ended["state"], "nothing has looked since")
-        self.run_as_claude(self.rewritten(call("sleep 600", tool_use="toolu_02")))
-        self.wait_for(lambda: sorted(str(e.get("state")) for e in self.store.entries()) == ["gone", "running"],
-                      what="the ended shell marked gone, the new one running",
-                      seen=lambda: str([(e["id"], e.get("state")) for e in self.store.entries()]))
-        self.assertEqual("gone", self.state_of(ended["id"]))
+        self.wait_for(lambda: self.state_of(ended["id"]) == "gone", what="the watcher to mark it gone",
+                      seen=lambda: str(self.loaded(ended["id"])))
+
+    def test_what_the_command_leaves_or_execs_is_still_its_own(self):
+        """`exec` turns the shell into another program; `&` leaves a child once the shell exits. The watcher records
+        both, by the kernel's word (kqueue) or by looking every few seconds (poll), so the stop still ends them."""
+        for mode in ("kqueue", "poll") if hasattr(select, "kqueue") else ("poll",):
+            for n, command in enumerate(("exec sleep 600", "sleep 600 &")):
+                with self.subTest(mode=mode, command=command):
+                    self.stopped_with_its_agent(mode, f"agent-{mode}-{n}", command)
+
+    def stopped_with_its_agent(self, mode: str, agent: str, command: str) -> None:
+        env = {**self.session_env, "JUNKFATHER_WATCH": mode}
+        shell = self.run_as_claude(self.rewritten(call(command, agent=agent, tool_use=f"toolu_{agent}")), env)
+        self.wait_for(lambda: any(e.get("owner", {}).get("agent") == agent and e.get("supervisor")
+                                  for e in self.store.entries()), what="the watched entry")
+        (entry,) = [plain(e) for e in self.store.entries() if e["owner"]["agent"] == agent]
+        if command.endswith("&"):
+            self.assertIsNotNone(shell.wait(30), "the shell exits and leaves its child")
+
+        def sleepers() -> List[int]:
+            seen: List[List[Any]] = list(self.loaded(entry["id"]).get("known_seen") or [])
+            return [int(item[0]) for item in seen if str(item[2]).endswith("sleep 600")]
+        self.wait_for(sleepers, what="the watcher to record the sleep", seen=lambda: str(self.loaded(entry["id"])))
+        (sleeper,) = sleepers()
+        self.assertTrue(self.runs(sleeper))
+        self.hook("SubagentStop", "s1", env=self.session_env, agent_id=agent)
+        self.wait_for(lambda: self.state_of(entry["id"]) == "reaped", what="the stop to reap it",
+                      seen=lambda: str(self.loaded(entry["id"])))
+        self.wait_for(lambda: not self.runs(sleeper), what="the sleep to end")

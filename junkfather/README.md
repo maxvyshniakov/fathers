@@ -32,8 +32,9 @@ Copy this into an agent brief:
 > - Need more time: `junkfather extend <id> --ttl 1h`. See what you own: `junkfather list`.
 > - A process you started without junkfather: `junkfather adopt <pid> --ttl 1h`.
 > - Never `kill` a process junkfather lists; use `junkfather reap --id <id>`.
-> - A `run_in_background` Bash call is owned for you: it ends when you stop or after 2 h (`own.background_ttl`).
->   Something that must outlive you goes through `junkfather own --keep-for session` instead.
+> - A `run_in_background` Bash call is owned for you: a subagent's ends when it stops or after 2 h
+>   (`own.background_ttl`), the main session's when the session ends. Something that must outlive you goes through
+>   `junkfather own --keep-for session` instead.
 >
 > Something that outlives the command that made it (a booted simulator, a `docker run -d` container, a
 > `tailscale serve --bg` route, a Safari Technology Preview opened with `open -g`): put `--kind` before `--`, and
@@ -86,14 +87,13 @@ python3 ~/fathers/install.py junkfather --launchd --mastack
 settings of [Mastack](https://github.com/maxvyshniakov/mastack)'s hooks (`~/.config/mastack/hooks.json`) and runs
 Mastack's installer, which registers `SubagentStop`, `SessionEnd` and `Stop`, and the PreToolUse observer that
 tells junkfather which subagent ran a command. Without Mastack, register `junkfather hook` for those events in
-`~/.claude/settings.json` yourself. `--mastack` implies `--background`, which also works alone: it registers
-`junkfather hook` for Bash calls in `~/.claude/settings.json` directly, beside Mastack's hook, and adds the
-permission rule `Bash(<bin>/junkfather background:*)` to `permissions.allow`, each once, and says what it added.
-The hook rewrites a `run_in_background` call so that its shell is owned by the subagent (or session) that made it,
-with the `own.background_ttl` TTL; a foreground call, and one that runs junkfather itself, are left alone
-([reference](docs/reference.md#background-bash-calls)). The rule lets the line the hook adds run without a prompt,
-since the rewritten command is what Claude Code's permission rules see. There is no uninstall: remove the hook and
-the rule by hand.
+`~/.claude/settings.json` yourself. `--mastack` also registers, through Mastack, the PreToolUse rewriter for
+background Bash calls with the permission rule its added line needs, `Bash(<bin>/junkfather background:*)` (this
+needs a Mastack with lifecycle rewriters), and on macOS loads the sweep agent as `--launchd` does. The rewriter makes a
+`run_in_background` call's shell owned by the subagent that made it (with the `own.background_ttl` TTL) or by the
+session (no TTL); a foreground call, and one that is a single `junkfather own`, `own-resource` or `adopt`, are left
+alone ([reference](docs/reference.md#background-bash-calls)). The rule covers that line only: Claude Code judges the
+agent's own command as before.
 
 **Codex** (0.165) has the same hook events (`SubagentStop`, `SessionEnd`, `Stop`, `PreToolUse`) and JSON contract,
 but each hook must be trusted in `/hooks` before it runs, so the installer does not register it. To use it, add

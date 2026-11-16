@@ -2,9 +2,9 @@
 event's JSON on stdin; Mastack's hook dispatcher runs this for the events it is registered for.
 
   PreToolUse    a Bash call whose command names junkfather: write a claim (session, agent id, command) so that
-                `own` learns which subagent ran it (owner.py); a Bash call with `run_in_background` that does not run
-                junkfather: answer with the command rewritten to own its shell first (background.py), the one thing
-                the hook prints
+                `own` learns which subagent ran it (owner.py); a Bash call with `run_in_background` that is not
+                one explicit `junkfather own`: answer with the command rewritten to own its shell first
+                (background.py), the one thing the hook prints
   SubagentStop  reap what that subagent owns, except entries kept for the session
   SessionEnd    reap everything the session owns that was not handed to another session
   Stop          (end of a main-agent turn, not of the session) reap the session's entries whose TTL passed

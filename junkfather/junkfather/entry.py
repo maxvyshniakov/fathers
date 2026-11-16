@@ -60,6 +60,8 @@ class Entry(_Written, total=False):
     last_error: Dict[str, Any]  # the last reap that failed: {at, ...}
     daemons: List[List[Any]]  # [pid, start, command]: detached daemons its processes started (browser.py)
     auto: str  # "background": a background Bash call's shell, owned by the hook's rewrite (background.py)
+    tool_use_id: str  # the background call's
+    no_ttl: bool  # a main-session background call's: `expires` is far away (defaults.NO_TTL), the session ends it
 
 
 STARTING = "starting"

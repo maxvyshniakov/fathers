@@ -35,5 +35,6 @@ a running instance, a person's or another suite's, never makes their quit refuse
   removal (fathers#115). Any other deletion surface is a review finding.
 - Unknown liveness (unreadable process table, no owner process) never reaps.
 - The hook never blocks or fails, and prints only its answer to a background Bash call (docs/reference.md, Background
-  Bash calls): a slow reap runs detached. That rewrite adopts only the shell that runs it, and a background shell's
-  reap leaves out what another entry holds.
+  Bash calls): a slow reap runs detached. That rewrite adopts only the shell that runs it; its watcher takes from
+  the shell's group only at the kernel's word (or a start time that held), and an adopted entry's reap leaves out
+  what another entry holds.

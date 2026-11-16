@@ -152,6 +152,7 @@
       "lane": null,
       "log": null,
       "mode": "resource",
+      "no_ttl": false,
       "owner": "claude s1",
       "owner_alive": true,
       "pgid": null,

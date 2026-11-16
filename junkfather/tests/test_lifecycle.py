@@ -192,6 +192,22 @@ class TtlAndOrphanTests(Case):
 
 
 class AdoptTests(Case):
+    def test_reaping_an_adopted_shell_leaves_what_another_entry_owns_in_it(self):
+        """One reap policy for adopted entries (fathers#166): an adopted shell that ran an attached
+        `junkfather own --keep-for session` leaves that entry's junkfather and command running."""
+        env = {**self.env, "PYTHONPATH": str(ROOT)}
+        shell = self.spawn("/bin/sh", "-c", f"{sys.executable} -m junkfather own --keep-for session --ttl 1h -- "
+                           "sleep 602; :", start_new_session=True, env=env)
+        self.wait_for(lambda: any(e.get("state") == "running" for e in self.store.entries()), what="the own entry")
+        (kept,) = map(plain, self.store.entries())
+        self.assertEqual(0, self.cli("adopt", str(shell.pid), "--ttl", "1h").returncode)
+        (adopted,) = [plain(e) for e in self.store.entries() if e["id"] != kept["id"]]
+        self.assertEqual(0, self.cli("reap", "--id", adopted["id"]).returncode)
+        self.assertIsNotNone(shell.wait(10))
+        self.assertEqual("running", self.state_of(kept["id"]))
+        self.assertTrue(self.runs(kept["pid"]) and self.runs(kept["supervisor"]["pid"]))
+        self.assertEqual(0, self.cli("reap", "--id", kept["id"]).returncode)
+
     def test_adopt_refuses_what_is_not_ours_to_own(self):
         self.assertNotEqual(0, self.cli("adopt", "1").returncode)
         self.assertNotEqual(0, self.cli("adopt", str(os.getpid())).returncode, "the caller's ancestor")

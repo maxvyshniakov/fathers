@@ -22,7 +22,7 @@ import signal
 import subprocess
 import sys
 import time
-from typing import Any, Callable, Dict, List, Mapping, Optional, TextIO
+from typing import Any, Callable, Dict, List, Mapping, Optional, TextIO, cast
 
 from . import entry as _entry
 from . import events as _events
@@ -294,24 +294,40 @@ def supervise(store: Store, entry_id: str) -> int:
 
 def adopt(store: Store, pid: int, ttl: float, keep: str, label: Optional[str], env: Mapping[str, str],
           lane: Optional[str] = None, agent: Optional[str] = None) -> int:
-    """Record a running process (and, when it leads its own group, that group) as owned."""
+    """`junkfather adopt`: record a running process (and, when it leads its own group, that group) as owned."""
     try:
         table = _procs.Table.read()
     except _procs.ProcError as error:
         raise Refused(str(error)) from None
-    proc = table.get(pid)
-    refusal = _safety.adopt_refusal(pid, table, lambda candidate: any(
-        e.get("state") == _entry.RUNNING and e.get("pid") == candidate for e in store.entries()))
-    if refusal:
-        raise Refused(f"refusing pid {pid}: {refusal}", NOT_FOUND if proc is None else REFUSED)
-    assert proc is not None
+    if table.get(pid) is None:
+        raise Refused(f"refusing pid {pid}: no such process", NOT_FOUND)
     who = _owner.resolve(env, table, os.getcwd(), store, lane=lane, agent=agent, claims=False)
-    entry = _entry.adopted(store, new_entry(store, [proc.cmd], ttl, keep, label, who, "adopted", os.getcwd()), proc,
-                           [proc, *table.descendants(pid, prune=_safety.unsafe)])
-    _events.write(store.root, "entry.adopted", _events.subject(entry), _events.actor_of(who),
-                  {"cmd": proc.cmd, "ttl": ttl, "keep": keep, "pgid": proc.pgid, "group": entry["group"]})
+    entry = adopt_process(store, pid, table, ttl, keep, label, who)
     scope = "its group" if entry["group"] else "it and its descendants (not its group: it does not lead one)"
     print(f"junkfather: {entry['id']} adopted pid {pid} ({scope}) for {_owner.describe(who)}, ttl {duration(ttl)}; "
           f"stop it: junkfather reap --id {entry['id']}")
     return 0
+
+
+def adopt_process(store: Store, pid: int, table: _procs.Table, ttl: float, keep: str, label: Optional[str],
+                  who: Dict[str, Any], argv: Optional[List[str]] = None, own_parent: bool = False,
+                  extra: Optional[Dict[str, Any]] = None, now: Optional[float] = None) -> Entry:
+    """The one adoption, for `adopt` and a background call's shell (background.py): the refusals of
+    safety.adopt_refusal (`own_parent`: `pid` may be this process's parent, the one ancestor), the entry for `who`
+    with the process and its descendants as known members (`argv` shown for it, default its command; `extra` fields
+    on the entry and its event), saved as running, and its `entry.adopted` event. Refused when it may not."""
+    proc = table.get(pid)
+    refusal = _safety.adopt_refusal(pid, table, lambda candidate: any(
+        e.get("state") == _entry.RUNNING and e.get("pid") == candidate for e in store.entries()), own_parent=own_parent)
+    if refusal or proc is None:
+        raise Refused(f"refusing pid {pid}: {refusal or 'no such process'}", NOT_FOUND if proc is None else REFUSED)
+    made = new_entry(store, argv or [proc.cmd], ttl, keep, label, who, "adopted", os.getcwd(), now)
+    made.update(cast(Entry, dict(extra or {})))
+    mine = {os.getpid(), *(p.pid for p in table.descendants(os.getpid()))}  # this junkfather and its ps
+    entry = _entry.adopted(store, made, proc,
+                           [proc, *(p for p in table.descendants(pid, prune=_safety.unsafe) if p.pid not in mine)])
+    _events.write(store.root, "entry.adopted", _events.subject(entry), _events.actor_of(who),
+                  {"cmd": proc.cmd, "ttl": ttl, "keep": keep, "pgid": proc.pgid, "group": entry["group"],
+                   **(extra or {})})
+    return entry
 

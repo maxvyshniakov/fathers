@@ -13,7 +13,7 @@ Which processes belong to an entry:
 - the agent-browser daemons its processes started (`daemons`, pid, start time and command; browser.py), which
   launchd adopted and so left its tree;
 - the descendants (by parent pid in the same table) of all of these, for the children that left the group;
-- for a background shell's entry (background.py), less what another active entry holds (`targets_of`).
+- for an adopted entry, less what another active entry holds (`targets_of`).
 
 Never a member: a process with a terminal or an agent session (Claude Code, Codex), nor anything below one (a
 tmux server's panes and the agents in them), another user's process, pid 1, junkfather itself or its ancestors.
@@ -109,11 +109,11 @@ def members(entry: Entry, table: _procs.Table, uid: Optional[int] = None, force:
 
 def targets_of(store: Store, entry: Entry, table: _procs.Table, force: bool = False
                ) -> Tuple[List[_procs.Proc], str]:
-    """What a reap of the entry signals: its `members`, and for a background shell's entry (background.py) less
-    what another active entry holds, since anything the agent's command started may be owned on its own (an
-    attached `junkfather own --keep-for session` runs in the shell's group)."""
+    """What a reap of the entry signals: its `members`, and for an adopted entry (`adopt`, a background call's
+    shell) less what another active entry holds: what runs in an adopted shell may be owned on its own (an attached
+    `junkfather own --keep-for session` runs in the shell's group)."""
     found, how = members(entry, table, force=force)
-    if entry.get("auto") and found:
+    if entry.get("mode") == "adopted" and found:
         held = held_elsewhere(store, entry, table)
         found = [p for p in found if p.pid not in held]
     return found, how

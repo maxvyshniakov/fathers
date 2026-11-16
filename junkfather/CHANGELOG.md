@@ -6,14 +6,17 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
-- A subagent's background Bash commands are owned on their own (fathers#166). With the new `install.py --background`
-  (implied by `--mastack`), `junkfather hook` runs as a PreToolUse hook for Bash and rewrites a `run_in_background` call so that its shell is
-  adopted first, by the subagent (or session) that made the call; the agent's command, its output and its exit status
-  stay as they were. Its stop (`SubagentStop`) ends it, and so does its TTL, the new `own.background_ttl` setting
-  (2 h), when it never stops. Foreground calls and commands that run junkfather are left alone; one that only names
-  it (`cd ~/fathers/junkfather && make`) is owned. `list` and `status` show the owning subagent, and their rows gain
-  `agent_type` and `auto: "background"`. The installer also adds the permission rule `Bash(<bin>/junkfather
-  background:*)` for the line it puts before the command, and prints what it added.
+- A subagent's background Bash commands are owned on their own (fathers#166). `install.py --mastack` registers,
+  through Mastack's lifecycle rewriters, `junkfather hook` for `run_in_background` Bash calls, with the permission
+  rule `Bash(<bin>/junkfather background:*)` for the one line it puts before the agent's command; that line adopts
+  the call's shell and leaves a watcher on it. The agent's command, its output and its exit status stay as they
+  were. A subagent's call ends with its stop (`SubagentStop`) or its TTL, the new `own.background_ttl` setting (2 h);
+  a main-session call has no TTL and ends with the session. What the command `exec`s or leaves behind (`sleep 600 &`)
+  is still its own. Only a call that is one explicit `junkfather own`, `own-resource` or `adopt` is left alone;
+  `junkfather list; until ...; done` is owned. `list` and `status` show the owning subagent, and their rows gain
+  `agent_type`, `auto` and `no_ttl`. On macOS `--mastack` also loads the sweep agent, as `--launchd` does.
+- Reaping an adopted entry leaves out what another entry holds: an attached `junkfather own --keep-for session` run
+  in an adopted shell keeps running.
 - junkfather owns resources that outlive the command that made them. `junkfather own --kind KIND -- CMD` runs CMD
   and owns the simulator, container, `tailscale serve` route or Safari Technology Preview instance it made (kinds
   `simulator`, `docker`, `tailscale-serve`, `safari-tp`); `junkfather own-resource --kind KIND --id ID` owns one that

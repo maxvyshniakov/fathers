@@ -110,7 +110,10 @@ class InstallOptionTests(Case):
         self.assertEqual(["other hook", hook], data["lifecycle"]["Stop"])
         for event in ("SubagentStop", "SessionEnd"):
             self.assertEqual([hook], data["lifecycle"][event])
-        self.assertEqual([{"command": hook, "contains": ["junkfather"]}], data["lifecycle"]["PreToolUse"])
+        self.assertEqual([{"command": hook, "contains": ["junkfather"]},
+                          {"command": hook, "background": True, "rewrite": True,
+                           "allow": [f"Bash({self.command} background:*)"]}], data["lifecycle"]["PreToolUse"],
+                         "the observer, and the rewriter for background calls with its permission rule")
         self.assertEqual(["mastack --only hooks"] * 2, self.calls.read_text().splitlines())
 
     def test_mastack_refuses_missing_or_broken_settings_and_a_failing_installer(self):
@@ -126,36 +129,6 @@ class InstallOptionTests(Case):
         with self.assertRaisesRegex(self.install_module.InstallError, "Mastack's installer failed"):
             self.install_module.mastack(self.command)
 
-    def test_background_registers_the_bash_hook_and_its_rule_once_beside_the_others(self):
-        claude = self.tmp / "claude-config"
-        os.environ["CLAUDE_CONFIG_DIR"] = str(claude)
-        mastack = {"matcher": "Bash", "hooks": [{"type": "command", "command": "python3 bash_guard.py", "timeout": 10}]}
-        claude.mkdir()
-        (claude / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": [mastack]}, "model": "kept",
-                                                          "permissions": {"allow": ["Bash(ls:*)"]}}))
-        (claude / "settings.json").chmod(0o640)
-        line = f"""sh -c '[ -x "$0" ] || exit 0; exec "$0" hook' {self.command}"""
-        rule = f"Bash({self.command} background:*)"
-        path, added = self.install_module.background(self.command)
-        self.assertEqual((claude / "settings.json", [f"the PreToolUse hook for Bash: {line}",
-                                                     f"the permission rule {rule}"]), (path, added))
-        self.assertEqual((claude / "settings.json", []), self.install_module.background(self.command))
-        data = json.loads((claude / "settings.json").read_text())
-        self.assertEqual([mastack, {"matcher": "Bash", "hooks": [{"type": "command", "command": line, "timeout": 10}]}],
-                         data["hooks"]["PreToolUse"])
-        self.assertEqual(["Bash(ls:*)", rule], data["permissions"]["allow"])
-        self.assertEqual("kept", data["model"])
-        self.assertEqual(0o640, (claude / "settings.json").stat().st_mode & 0o777)
-        ran = subprocess.run(["/bin/sh", "-c", line.replace(str(self.command), str(self.tmp / "gone"))],
-                             capture_output=True, text=True)
-        self.assertEqual((0, ""), (ran.returncode, ran.stdout), "no command, no hook and no error")
-        (claude / "settings.json").write_text("{")
-        with self.assertRaisesRegex(self.install_module.InstallError, "not JSON"):
-            self.install_module.background(self.command)
-        (claude / "settings.json").write_text(json.dumps({"permissions": {"allow": "Bash"}}))
-        with self.assertRaisesRegex(self.install_module.InstallError, "permissions.allow"):
-            self.install_module.background(self.command)
-
     def test_the_rule_allows_the_line_the_hook_writes(self):
         from junkfather import background as hook_line
         command = self.tmp / "bin dir" / "junkfather"
@@ -164,30 +137,30 @@ class InstallOptionTests(Case):
         line = hook_line.adopting_line("toolu_1", hook_line.shlex.quote(str(command)))
         self.assertTrue(line.startswith(prefix + " "), (rule, line))
 
-    def test_mastack_implies_background_and_the_output_names_what_was_added(self):
-        module = self.install_module
-        added = ["the permission rule Bash(x background:*)"]
-        with mock.patch.object(module, "install", return_value=self.tmp / "release"), \
-                mock.patch.object(module, "mastack") as mastack, \
-                mock.patch.object(module, "background", return_value=(self.tmp / "settings.json", added)) \
-                as background, \
-                mock.patch("sys.stdout", new_callable=io.StringIO) as out:
-            code = module.main(["--bin", str(self.tmp / "bin"), "--share", str(self.tmp / "share"), "--mastack"])
-        self.assertEqual(0, code)
-        mastack.assert_called_once_with(self.tmp / "bin" / "junkfather")
-        background.assert_called_once_with(self.tmp / "bin" / "junkfather")
-        self.assertIn(f"Added to {self.tmp / 'settings.json'}: the permission rule Bash(x background:*)",
-                      out.getvalue())
-
     def test_the_flags_run_launchd_and_mastack_on_the_installed_command(self):
         module = self.install_module
-        with mock.patch.object(module, "install", return_value=self.tmp / "release"), \
-                mock.patch.object(module, "launchd", return_value=self.tmp / "agent.plist") as launchd, \
-                mock.patch.object(module, "mastack") as mastack, \
-                mock.patch.object(module, "background", return_value=(self.tmp / "settings.json", [])) as background:
-            code = module.main(["--bin", str(self.tmp / "bin"), "--share", str(self.tmp / "share"), "--launchd",
-                                "--mastack", "--background"])
-        self.assertEqual(0, code)
-        launchd.assert_called_once_with(self.tmp / "bin" / "junkfather")
-        mastack.assert_called_once_with(self.tmp / "bin" / "junkfather")
-        background.assert_called_once_with(self.tmp / "bin" / "junkfather")
+        for flags, darwin, loads in ((["--launchd"], False, True), (["--mastack"], True, True),
+                                     (["--mastack"], False, False)):
+            with self.subTest(flags=flags, darwin=darwin), \
+                    mock.patch.object(module, "install", return_value=self.tmp / "release"), \
+                    mock.patch.object(module, "launchd", return_value=self.tmp / "agent.plist") as launchd, \
+                    mock.patch.object(module, "mastack") as mastack, \
+                    mock.patch.object(module.sys, "platform", "darwin" if darwin else "linux"), \
+                    mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+                code = module.main(["--bin", str(self.tmp / "bin"), "--share", str(self.tmp / "share"), *flags])
+            self.assertEqual(0, code)
+            self.assertEqual(loads, launchd.called, "on macOS --mastack loads the sweep agent too")
+            self.assertEqual("--mastack" in flags, mastack.called)
+            if mastack.called:
+                mastack.assert_called_once_with(self.tmp / "bin" / "junkfather")
+                self.assertIn(f"Bash({self.tmp / 'bin' / 'junkfather'} background:*)", out.getvalue())
+
+    def test_a_relative_bin_is_made_absolute(self):
+        module = self.install_module
+        with mock.patch.object(module, "install", return_value=self.tmp / "release") as install, \
+                mock.patch("sys.stdout", new_callable=io.StringIO):
+            here = os.getcwd()
+            os.chdir(self.tmp)
+            self.addCleanup(os.chdir, here)
+            self.assertEqual(0, module.main(["--bin", "bin", "--share", "share"]))
+        self.assertEqual((self.tmp / "share", self.tmp / "bin"), install.call_args.args[:2])

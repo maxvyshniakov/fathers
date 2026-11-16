@@ -8,7 +8,10 @@ from __future__ import annotations
 
 # Owning
 TTL = 7200.0  # `own`, `own-resource` and `adopt` without --ttl (setting own.default_ttl)
-BACKGROUND_TTL = 7200.0  # a background Bash call's shell, which the hook owns (setting own.background_ttl)
+BACKGROUND_TTL = 7200.0  # a subagent's background Bash call's shell, which the hook owns (own.background_ttl)
+NO_TTL = 100 * 365 * 86400.0  # a main-session background call's: no TTL, it ends with the session (a far `expires`
+#                                older readers take as not expired)
+POLL_EVERY = 2.0  # a background shell's watcher looks this often where the kernel does not report its exit
 TTL_MIN = 60.0  # the shortest default TTL the setting saves (one slip would reap everything at once)
 TTL_MAX = 7 * 86400.0  # the longest default TTL the setting saves
 DETACH_WAIT = 15.0  # `own --detach` waits this long for the supervisor to start the command

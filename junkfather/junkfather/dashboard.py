@@ -50,6 +50,7 @@ class Row(TypedDict):
     exit: Optional[int]
     resource: Optional[Dict[str, Any]]  # {kind, id, name} for a resource entry
     auto: Optional[str]  # "background": owned by the hook's rewrite of a background Bash call
+    no_ttl: bool  # no TTL: a main-session background call's, which the session's end ends
 
 
 class UnownedProcess(TypedDict):
@@ -113,7 +114,7 @@ def row(entry: Entry, table: Optional[_procs.Table], now: float) -> Row:
             "mode": entry.get("mode"), "cwd": entry.get("cwd"), "argv": entry.get("argv"), "log": entry.get("log"),
             "end": entry.get("end"), "exit": entry.get("exit"),
             "resource": {k: resource.get(k) for k in ("kind", "id", "name")} if isinstance(resource, dict) else None,
-            "auto": entry.get("auto")}
+            "auto": entry.get("auto"), "no_ttl": bool(entry.get("no_ttl"))}
 
 
 def rows(store: Store, table: Optional[_procs.Table], now: float, everything: bool = False) -> List[Row]:
@@ -191,7 +192,7 @@ def rows_text(found: List[Row]) -> str:
     """Rows as the `list` table."""
     lines = [f"{'ID':8} {'STATE':8} {'OWNER':34} {'AGE':>7} {'TTL':>7} {'KEEP':7} {'PID':>6} {'PROCS':>5}  COMMAND"]
     for r in found:
-        ttl = duration(r["ttl_left"]) if r["state"] in _entry.ACTIVE else "-"
+        ttl = duration(r["ttl_left"]) if r["state"] in _entry.ACTIVE and not r.get("no_ttl") else "-"
         owner = r["owner"] + ("" if r["owner_alive"] is not False else " (gone)")
         what = _resources.describe(r["resource"]) if r["resource"] else " ".join(r["argv"] or [])
         command = (f"[{r['label']}] " if r["label"] else "") + what
