@@ -143,12 +143,16 @@ class Floor:
     cap: int = 0
     peak: float = DEFAULT_LANE_PEAK_GB
     source: str = "derived"
+    # Why the cap start applies is unknown (Slotfather, its provider, did not answer), when it is: `cap` is then
+    # the local derived cap standing in for it (fathers#163).
+    cap_unknown: str = ""
 
     def derivation(self) -> str:
         """The derived floor and its terms, whatever sets the floor: 49 GB (10^9) = 40 reserve + 3 x 3.0 GB lane
-        peak."""
-        return (f"{self.reserve + self.cap * self.peak:.0f} GB (10^9) = {self.reserve:.0f} reserve + {self.cap} x "
-                f"{self.peak:.1f} GB lane peak")
+        peak; with the cap unknown, which local cap stands in and why."""
+        terms = (f"{self.reserve + self.cap * self.peak:.0f} GB (10^9) = {self.reserve:.0f} reserve + {self.cap} x "
+                 f"{self.peak:.1f} GB lane peak")
+        return f"cap unknown ({self.cap_unknown}); local cap {self.cap} gives {terms}" if self.cap_unknown else terms
 
     def words(self) -> str:
         return self.derivation() if self.source == "derived" else f"{self.gb:g} GB (10^9; {self.source})"
@@ -163,13 +167,13 @@ def lane_peak_gb(records: list[dict[str, Any]]) -> float:
     return max(sizes) if sizes else DEFAULT_LANE_PEAK_GB
 
 
-def disk_floor(project: config.Config, cap: int, records: list[dict[str, Any]]) -> Floor:
+def disk_floor(project: config.Config, cap: int, records: list[dict[str, Any]], cap_unknown: str = "") -> Floor:
     """The free-disk floor for a repository whose lane cap is `cap`, first set wins (fathers#163):
     LANEFATHER_MIN_DISK_GB, the machine setting host.min_disk_gb, the derived reserve + cap x lane peak
     (fathers#157). Either setting takes auto (or 0) for the derived floor; an invalid variable warns and the next
     applies."""
     peak = lane_peak_gb(records)
-    derived = Floor(DISK_RESERVE_GB + cap * peak, DISK_RESERVE_GB, cap, peak)
+    derived = Floor(DISK_RESERVE_GB + cap * peak, DISK_RESERVE_GB, cap, peak, cap_unknown=cap_unknown)
     knob = settings.BY_KEY[settings.MIN_DISK]
     found = project.lookup("MIN_DISK_GB")
     if found and found[1].strip():

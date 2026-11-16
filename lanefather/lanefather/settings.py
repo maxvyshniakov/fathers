@@ -183,7 +183,9 @@ def row(knob: Knob, values: dict[str, Any], rev: str) -> dict[str, Any]:
     if knob.key == MIN_DISK:
         # What start applies here, and the derived floor auto stands for (fathers#163), for Godfather's row.
         floor = floor_here()
-        found.update(effective=gb(floor.gb), description=f"{knob.description} auto: {floor.derivation()}.")
+        found["description"] = f"{knob.description} auto: {floor.derivation()}."
+        if not (floor.cap_unknown and floor.source == "derived"):  # no applied floor is claimed without its cap
+            found["effective"] = gb(floor.gb)
     return found
 
 

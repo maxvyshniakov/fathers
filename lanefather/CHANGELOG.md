@@ -12,7 +12,9 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   GB) or `auto` (the default, the derived 40 GB reserve + lane cap x lane peak). `LANEFATHER_MIN_DISK_GB` still wins
   and makes the row read-only. Admission, `capabilities --json` (`host.min_disk_gb`) and the refusal use the same
   value; a refusal names its source. The row's description gives the current derived floor and its `effective` the
-  applied one, so Godfather's Settings shows and changes it. An older Lanefather ignores the saved value.
+  applied one, so Godfather's Settings shows and changes it. With Slotfather as the admission provider, the
+  reported floor uses Slotfather's cap, as start does, and the row says when Slotfather cannot answer instead of
+  showing the local cap's floor as applied. An older Lanefather ignores the saved value.
 
 - Lanes finish by themselves (fathers#157). A lane that becomes finished (landed, smoke green, review finished or
   exempt with every finding marked) runs `done`, as before, unless it is kept; `[done] auto = false` turns that off.

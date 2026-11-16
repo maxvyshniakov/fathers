@@ -483,7 +483,10 @@ the built-in; its source reads `lanefather settings slots.priority.<phase>`.
 The `host.min_disk_gb` row is a `number` in GB with `min` 0, `step` 5 and `zero: "auto"`; its `effective` is the floor
 start applies in the project the command runs in, and its description gives the derived floor `auto` stands for, for
 example `auto: 58 GB (10^9) = 40 reserve + 6 x 3.0 GB lane peak`, so Godfather's Settings shows it as `auto  effective
-here: 58 GB`. Admission, `capabilities --json` (`host.min_disk_gb`) and the refusal resolve the same value.
+here: 58 GB`. Admission, `capabilities --json` (`host.min_disk_gb`) and the refusal resolve the same value, with
+the cap start applies: Slotfather's when `[admission] provider = "slotfather"`, which they ask as start does. When
+Slotfather cannot answer, the description says so (`auto: cap unknown (lifetime admission unavailable: …); local cap
+3 gives 49 GB …`), the row has no `effective`, and `capabilities` reports the local cap's floor.
 
 ```text
 lanefather settings [--json]                                  the schema and the current values
