@@ -19,15 +19,19 @@ Definitions: [glossary](../GLOSSARY.md). Naming and wire aliases: [terminology](
 | `schedule` | The queue's policy (fathers#35): ranking, backfill, reservations, yield and idle asks, the memory gate and the forecast, on entries, capacity, order settings, a moment, the overtaking window and an estimate its callers hand it. It reads no file, environment or clock; `free_at()` is the one walk of when slots free by expected ends. |
 | `estimates` | Run-time estimates from the history's finished runs (`Estimates`), their `estimates.json` cache and `estimator()`, which asks a run type's expectations first. Loaded only when an estimate is first asked (`leases.estimator()`), off the admission path. |
 | `runtype` | Expected durations per run type (fathers#106) with their own cache, outliers and trends; `kind()` and `family()`, the command kind and label family the estimates key requests by. |
-| `leases` | Taking, granting, releasing, reaping and inheriting leases; command execution. |
+| `queue` | The queue as stored, read (fathers#36): the process table a look is judged on, reaping, the earlier queues' holders, unknown live entries, the lease this process runs under, and the lazy estimator. |
+| `leases` | The queue's transactions (fathers#37), each short and under the lock: a new request (`enqueue()`), `grant()`, yield requests, yields (also for a lock: `yield_for_lock()`, `lock_taken()`), `reprioritize()` and `release()`. |
+| `client` | The waiting client: `Lease`, `acquire()`, `held_again()` and `yield_now()`, one wait loop (`wait_held()`) with the poll settings read once. The library's entry point. |
+| `runner` | The command runner: `execute()` (environment, SIGTERM/SIGHUP forwarding, wait4, the usage `Watch`) and `run()`, `slotfather run`. |
+| `lockwait` | `slotfather lock PATH -- COMMAND` (fathers#159): an flock whose wait gives the enclosing lease's slots up. |
 | `usage` | Process-tree accounting and machine sampling while work runs. |
 | `lane_admission` | Stateless versioned lifetime lane policy and JSON validation; no execution state. |
-| `query` | Compatible queue snapshots and status output; `look()`, one look under the queue lock that `status --json --full` and the dashboard share (#20). |
+| `query` | Compatible queue snapshots and status output; `look()`, the one look under the queue lock that every reader takes (#20, fathers#36): `status`, `status --json` (with `--pid`, `--full`), the long-wait line, `available`, `advise`, `slots`, the dashboard block and the sweep's protection. |
 | `board` | The dashboard's model from one look, the `dashboard` block of `status --json --full` that Godfather draws. |
 | `settings` | The shared settings (fathers#34): capacity (`capacity_basis()`, `total()`, what a `slots` mode gives), order (`order_settings()`, `checked_order()`) and sweep settings, and `configure()`, the only write path of capacity.json, order.json and sweep.json (lock, ownership, conflicts, rollback; the caller passes the grant to run after a change). |
 | `settings_cli` | `settings --json/check/set/reset`: the shared settings as data; labels, checks and previews the Settings panel shares. |
 | `durations` | The three duration grammars: `clock()` (`1h30m`: order, settings, sessions), `span()` (`1d`: sweep config), `since()` (ages and dates: stats). |
-| `events` | events.jsonl in Godfather's shared event schema, appended beside each queue.log line; never fails an operation. |
+| `events` | `record()`, the one writer of a transaction's queue.log line and its event (fathers#37), and the event-kind table `KINDS` with a TypedDict per kind's details; events.jsonl in Godfather's shared event schema, never failing an operation. |
 | `capabilities` | `capabilities --json`: the dashboard contracts this release supports. |
 | `procs` | Read-only process queries for guards and other tools. |
 | `cli` | Argument validation and command dispatch. |

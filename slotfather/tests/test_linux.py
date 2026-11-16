@@ -10,6 +10,7 @@ _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from slotfather import cli as sf_cli
 from slotfather import config as sf_config
 from slotfather import leases as sf_leases
+from slotfather import client as sf_client
 from slotfather import platform as sf_platform
 from slotfather import process as sf_process
 from slotfather import settings as sf_settings
@@ -458,7 +459,7 @@ class OwnerTests(unittest.TestCase):
                 self.assertIn("belongs to uid", err.getvalue())
         self.assertEqual(before, self.files())
         with self.foreign, self.assertRaises(sf_config.SlotError):
-            sf_leases.acquire(1, "library")
+            sf_client.acquire(1, "library")
 
     def test_reading_commands_create_nothing(self):
         before = self.files()

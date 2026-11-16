@@ -89,10 +89,7 @@ def record(entry: Path, since: float | None, rate: float, moment: float) -> None
 def stale_after() -> float:
     """How long a record holds: three of this process's longest intervals between looks, at least 30 s; written by
     the holder into its record (`expires`)."""
-    try:
-        longest = max(0.05, float(_config.setting("SAMPLE_MAX") or _config.SAMPLE_MAX))
-    except ValueError:
-        longest = float(_config.SAMPLE_MAX)
+    longest = _config.sample_max()
     return max(STALE_LEAST, STALE_LOOKS * longest)
 
 

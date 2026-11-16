@@ -60,6 +60,8 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Changed
 
+- The library's `acquire()` and `Lease` are in `slotfather.client` (were `slotfather.leases`), `run()` and
+  `execute()` in `slotfather.runner`; `slotfather.leases` keeps the queue transactions (fathers#37).
 - The installer retries a held queue lock for up to 15 seconds (`SLOTFATHER_INSTALL_LOCK_WAIT`) before it refuses.
 - Slotfather lives in the `fathers` repository with Lanefather, junkfather and Godfather: install it with
   `python3 install.py slotfather` from a `fathers` checkout. `slotfather dashboard` without Godfather points there.

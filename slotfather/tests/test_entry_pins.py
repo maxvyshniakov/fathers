@@ -27,6 +27,7 @@ from unittest import mock
 from slotfather import config as sf_config
 from slotfather import events as sf_events
 from slotfather import leases as sf_leases
+from slotfather import client as sf_client
 from slotfather import queue as sf_queue
 from slotfather import platform as sf_platform
 from slotfather import process as sf_process
@@ -158,14 +159,14 @@ def scenarios() -> dict[str, Callable[[Queue], None]]:
         cwd = os.getcwd()
         os.chdir(queue.directory)
         try:
-            lease = sf_leases.acquire(1, "plain", "make plain", out=io.StringIO())
+            lease = sf_client.acquire(1, "plain", "make plain", out=io.StringIO())
             queue.snapshot("a plain request granted at once")
             queue.at(90)
             lease.status = 0
             lease.release()
             queue.snapshot("released after it ran")
             queue.at(100)
-            lease = sf_leases.acquire("all", "every", "make every", out=io.StringIO(), wait=60,
+            lease = sf_client.acquire("all", "every", "make every", out=io.StringIO(), wait=60,
                                       meta={"lane": "l1", "cache": "warm"}, yieldable=True, priority="batch",
                                       ticket="#12", naming={"given": "g", "derived": "d", "project": "p"})
             queue.snapshot("a request with every field")
@@ -204,15 +205,15 @@ def scenarios() -> dict[str, Callable[[Queue], None]]:
         def yielded(path: _Path) -> None:
             queue.snapshot("the gate yielded")
 
-        with mock.patch.object(sf_leases, "held_again", yielded):
-            self_yielded = sf_leases.yield_lease(gate, out=out)
+        with mock.patch.object(sf_client, "held_again", yielded):
+            self_yielded = sf_client.yield_now(gate, out=out)
         assert self_yielded, out.getvalue()
         queue.at(65)
-        sf_leases.Lease(4, quick).release()
+        sf_client.Lease(4, quick).release()
         queue.snapshot("quick released: the gate resumes")
-        sf_leases.held_again(gate)
+        sf_client.held_again(gate)
         queue.at(125)
-        lease = sf_leases.Lease(4, gate)
+        lease = sf_client.Lease(4, gate)
         lease.status = 0
         lease.release()
         queue.snapshot("the gate released after its yield")
@@ -221,7 +222,7 @@ def scenarios() -> dict[str, Callable[[Queue], None]]:
         gate = queue.entry(90021, "gate", 2, "held", since=-7200, priority="batch", yieldable=True, yields=1,
                            yielded_at=T0 - 300, first_granted=stamp(T0 - 7000), rank=T0 - 1000.5,
                            granted=stamp(T0 - 30))
-        sf_leases.held_again(gate)
+        sf_client.held_again(gate)
         queue.snapshot("an older client granted the yielded gate; its holder settles the resume")
 
     def yielded_waiter_leaves(queue: Queue) -> None:
@@ -231,9 +232,9 @@ def scenarios() -> dict[str, Callable[[Queue], None]]:
         queue.entry(90032, "holder", 4, "held", since=-900)
         lone = queue.entry(90033, "lone", 1, since=-100)
         queue.snapshot("a yielded lease and a waiter behind a full machine")
-        sf_leases.Lease(4, gate).release()
+        sf_client.Lease(4, gate).release()
         queue.snapshot("the yielded lease gave up: released, it ran")
-        sf_leases.Lease(1, lone).release()
+        sf_client.Lease(1, lone).release()
         queue.snapshot("the waiter gave up: left")
 
     def reprioritize(queue: Queue) -> None:

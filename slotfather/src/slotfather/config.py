@@ -216,6 +216,22 @@ def overtake_window() -> float:
         return 0.0
 
 
+def poll_settings() -> tuple[float, float]:
+    """(SLOTFATHER_POLL, SLOTFATHER_POLL_MAX): how often a waiter checks its own entry, and the longest pause
+    between its looks over the queue (at least the first). A waiter reads them once per wait."""
+    poll = float(setting("POLL") or 2)
+    return poll, max(poll, float(setting("POLL_MAX") or POLL_MAX))
+
+
+def sample_max() -> float:
+    """SLOTFATHER_SAMPLE_MAX: the longest pause between the holder's looks at its command's tree (usage.Watch),
+    which the idle record's lifetime is counted in (idle.stale_after()); SAMPLE_MAX where it is not a number."""
+    try:
+        return max(0.05, float(setting("SAMPLE_MAX") or SAMPLE_MAX))
+    except ValueError:
+        return float(SAMPLE_MAX)
+
+
 def legacy_dirs() -> list[Path]:
     value = setting("LEGACY_DIRS", DEFAULT_LEGACY_DIRS)
     own = state_dir().resolve()

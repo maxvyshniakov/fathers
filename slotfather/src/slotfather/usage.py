@@ -125,10 +125,7 @@ class Watch(threading.Thread):
         super().__init__(daemon=True, name="slotfather-watch")
         self.usage, self.directory, self.entry = usage, directory, entry
         self.idle = _idle.Tracker()  # since when the tree has been low (#12), recorded beside the entry
-        try:
-            self.most = max(0.05, float(_config.setting("SAMPLE_MAX") or _config.SAMPLE_MAX))
-        except ValueError:
-            self.most = _config.SAMPLE_MAX
+        self.most = _config.sample_max()
         self.stopped = threading.Event()
         self.lock = threading.Lock()
 

@@ -84,7 +84,9 @@ def wait(handle: int, path: Path) -> None:
             signal.signal(number, handler)
     if lease is not None:
         print(f"slot: took lock {path}; waiting for this lease's slots again", file=sys.stderr, flush=True)
+        from . import client as _client
         _leases.lock_taken(lease)
+        _client.held_again(lease)
         print("slot: holding the slots again", file=sys.stderr, flush=True)
 
 

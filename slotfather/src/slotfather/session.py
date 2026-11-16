@@ -28,15 +28,16 @@ import time
 from types import FrameType
 from typing import Any, cast
 
+from . import client as _client
 from . import config as _config
 from . import durations as _durations
 from . import entry as _entry
 from . import events as _events
 from . import facts as _facts
-from . import leases as _leases
 from . import platform as _platform
 from . import process as _process
 from . import queue as _queue
+from . import runner as _runner
 from . import state as _state
 
 IDLE_DEFAULT = 120.0  # seconds without an active run before a session releases its slots
@@ -184,7 +185,7 @@ class Holder:
 
     def __init__(self, spec: dict[str, Any]):
         self.spec, self.stop_asked = spec, False
-        self.lease: _leases.Lease | None = None
+        self.lease: _client.Lease | None = None
 
     def ask_stop(self, _signum: int, _frame: FrameType | None) -> None:
         self.stop_asked = True
@@ -200,7 +201,7 @@ class Holder:
         note = (f"session {spec['name']} holds its slots between runs until it is stopped or idle for "
                 f"{_config.duration(spec['idle'])}")
         try:
-            lease = _leases.acquire(spec["count"], spec["name"], f"slotfather session {spec['name']}",
+            lease = _client.acquire(spec["count"], spec["name"], f"slotfather session {spec['name']}",
                                     wait=spec.get("wait"), note=note, meta=spec.get("meta") or None,
                                     priority=spec.get("priority"), ticket=spec.get("ticket"), session=session)
         except _config.SlotTimeout as error:
@@ -363,7 +364,7 @@ def run_inside(name: str, argv: list[str], label: str | None = None, meta: dict[
     _state.require_own(directory, "a session run")
     me = os.getpid()
     said = False
-    poll = float(_config.setting("POLL") or 2)
+    poll, _ = _config.poll_settings()
     while True:
         with _state.locked(directory):
             try:
@@ -405,7 +406,7 @@ def run_inside(name: str, argv: list[str], label: str | None = None, meta: dict[
     began = time.monotonic()
     status, usage = 1, None
     try:
-        status, usage = _leases.execute(argv, environment, _leases.policy() == "background", directory=directory)
+        status, usage = _runner.execute(argv, environment, _client.policy() == "background", directory=directory)
     finally:
         ran = time.monotonic() - began
         with _state.locked(directory):

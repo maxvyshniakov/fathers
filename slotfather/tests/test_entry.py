@@ -21,6 +21,7 @@ from unittest import mock
 from slotfather import config as sf_config
 from slotfather import entry as sf_entry
 from slotfather import leases as sf_leases
+from slotfather import client as sf_client
 from slotfather import queue as sf_queue
 from slotfather import schedule as sf_schedule
 from slotfather import settings as sf_settings
@@ -204,7 +205,7 @@ class SequenceTests(unittest.TestCase):
         mirror: dict[str, dict[str, Any]] = {}
         done: list[str] = []
         pids = iter(range(91000, 92000))
-        with queue.running(), mock.patch.object(sf_leases, "held_again", unknown):
+        with queue.running(), mock.patch.object(sf_client, "held_again", unknown):
             sf_settings.configure({"order.json": dict(sf_config.ORDER_DEFAULTS, **AGES_OFF)}, directory=queue.directory)
             # Half the sequences carry a newer client's entry (a state this one does not know), alive or not: it
             # must stay as it is through every step (fathers#19).
@@ -234,7 +235,7 @@ class SequenceTests(unittest.TestCase):
                     rank = sf_schedule.rank_time(live[asker], settings, queue.clock) + sf_config.YIELD_BEHIND
                     sf_state.write(sf_state.marker(path), {"by": asker[:-5], "label": live[asker]["label"],
                                                           "priority": "interactive", "count": 1, "at": "now"})
-                    if sf_leases.yield_lease(path, out=io.StringIO()):
+                    if sf_client.yield_now(path, out=io.StringIO()):
                         sf_entry.to_yielded(mirror[name], queue.clock, rank)
                         self.granted(queue, mirror, done)
                         done.append("yield")
@@ -248,7 +249,7 @@ class SequenceTests(unittest.TestCase):
                     done.append("reprioritize")
                 elif op == "release":
                     name = rng.choice(list(live))
-                    lease = sf_leases.Lease(int(live[name]["count"]), queue.directory / "queue" / name)
+                    lease = sf_client.Lease(int(live[name]["count"]), queue.directory / "queue" / name)
                     lease.status = 0
                     lease.release()
                     line = json.loads((queue.directory / "history.jsonl").read_text().splitlines()[-1])

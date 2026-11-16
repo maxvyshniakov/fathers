@@ -177,7 +177,7 @@ def parse_count(value: str) -> int:
 
 
 def run_command(argv: list[str]) -> int:
-    from . import leases as _leases
+    from . import runner as _runner
     count, label, wait, yieldable = 1, os.path.basename(os.getcwd()), None, False
     pairs: list[str] = []
     priority: str | None = None
@@ -224,7 +224,7 @@ def run_command(argv: list[str]) -> int:
             raise _config.SlotError("run --session takes only --label and --meta: the session's lease is already held")
         from .session import run_inside
         return run_inside(session, argv, label if labelled else None, parse_meta(pairs))
-    return _leases.run(count, label, argv, wait, parse_meta(pairs), yieldable, priority=priority, ticket=ticket,
+    return _runner.run(count, label, argv, wait, parse_meta(pairs), yieldable, priority=priority, ticket=ticket,
                        labelled=labelled)
 
 
@@ -256,7 +256,7 @@ def request_options(argv: list[str], what: str, flags: dict) -> tuple[dict, str,
 def yield_command(argv: list[str]) -> int:
     """`slotfather yield`, from inside a yieldable lease between two steps: yields if asked and returns once the
     lease is held again; returns at once when nothing asked. Exit 0 either way."""
-    from . import leases as _leases
+    from . import client as _client
     from . import process as _process
     from . import queue as _queue
     from . import state as _state
@@ -266,7 +266,7 @@ def yield_command(argv: list[str]) -> int:
     found = _queue.inherited_lease(_process.processes())
     if found is None or found[0].parent.parent != _config.state_dir():
         raise _config.SlotError("yield runs inside a lease of this queue (SLOTFATHER_LEASE, or a holder among its ancestors)")
-    if not _leases.yield_lease(found[0]):
+    if not _client.yield_now(found[0]):
         print("slot: no yield requested", file=sys.stderr)
     return 0
 
