@@ -25,6 +25,7 @@ from dataclasses import dataclass
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -124,20 +125,33 @@ def value(key: str) -> Any:
     return saved().get(key)
 
 
-def parse(knob: Knob, text: str) -> Any:
-    """The value of `text` for `knob`, as the command line and the settings file give it; SettingError if invalid."""
+def disk_gb(key: str, text: str, limit: float | None = MAX_DISK_GB) -> float | int:
+    """auto (0) or a finite, non-negative number of decimal GB as Python's float reads it (150, 60.5, 1.5e2,
+    1e-05), at most `limit`: the setting's syntax and, without a limit, LANEFATHER_MIN_DISK_GB's as it was before
+    the setting (review of fathers#163). Every value it accepts reads back from the JSON it saves as."""
+    text = text.strip()
+    if text.lower() == "auto":
+        return 0
+    try:
+        gb = float(text)
+    except ValueError:
+        gb = math.nan
+    if not math.isfinite(gb) or gb < 0 or (limit is not None and gb > limit):
+        raise SettingError(f"{key}: {text!r} is not auto or a number of decimal GB"
+                           + (f" up to {limit}" if limit is not None else ""))
+    return int(gb) if gb.is_integer() else gb
+
+
+def parse(knob: Knob, text: str, environment: bool = False) -> Any:
+    """The value of `text` for `knob`, as the command line and the settings file give it, or the environment when
+    `environment`; SettingError if invalid."""
     text = text.strip()
     if knob.type == "choice":
         if text not in {choice for choice, _ in knob.choices}:
             raise SettingError(f"{knob.key}: {text!r} is not one of {', '.join(c for c, _ in knob.choices)}")
         return text
     if knob.type == "number":
-        if text.lower() == "auto":
-            return 0
-        if not re.fullmatch(r"\d+(?:\.\d+)?", text) or float(text) > MAX_DISK_GB:
-            raise SettingError(f"{knob.key}: {text!r} is not auto or a number of decimal GB up to {MAX_DISK_GB}")
-        gb = float(text)
-        return int(gb) if gb.is_integer() else gb
+        return disk_gb(knob.key, text, None if environment else MAX_DISK_GB)
     match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([smh]?)", text)
     if not match:
         raise SettingError(f"{knob.key}: {text!r} is not a duration; give seconds, or a number with s, m or h")
@@ -177,7 +191,7 @@ def row(knob: Knob, values: dict[str, Any], rev: str) -> dict[str, Any]:
     if env:
         found.update(source=f"env {env[0]}", writable=False)
         try:
-            found["value"] = parse(knob, env[1])
+            found["value"] = parse(knob, env[1], environment=True)
         except SettingError as error:
             found.update(value=env[1], error=str(error))
     if knob.key == MIN_DISK:

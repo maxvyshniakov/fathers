@@ -88,6 +88,13 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Changed
 
+- One column from 83 to 109 columns (fathers#169): EVENTS takes the full-width band under QUEUE and the bottom row
+  holds MACHINE on the left and DETAILS on the right; Tab goes QUEUE, EVENTS, DETAILS. Heights come from floors and
+  priorities: QUEUE up to 6 rows, EVENTS 3 rows and a bottom row that shows DETAILS' key fields (label to owner
+  pid, as many as any QUEUE entry has) without scrolling come first; short of rows the bottom row gives way first,
+  MACHINE's chart then its blank rows, then EVENTS; rows left over go to QUEUE's rows, then EVENTS. MACHINE in that
+  taller row draws a taller chart.
+  Under 83 columns, or where the bottom row gets no rows, DETAILS keeps the band as before.
 - EVENTS' log switch and the focus frame (fathers#165): the title's arrows are `❮ SLOTS LOG ❯`, a size up from
   `◂ ▸` and one cell wide in every terminal, in the frame's colour (the accent while EVENTS has the focus); the key
   that switches the log (← →, `f`, a click on the title) flashes the arrow on its side as a scroll flashes the
@@ -116,9 +123,9 @@ Versions and release rules: [README.md](README.md#versions).
   a section going on in the next column between two rows, and shows whole with nothing to scroll; a smaller
   screen gets the one scrolling column as before.
 - EVENTS shows one tool's log at a time (fathers#152): its title is the switch, `◂ SLOTS LOG ▸` (default where
-  Slotfather is present), `LANES LOG`, `PROCS LOG`, then `ALL LOG`, cycled with ← → while EVENTS has the focus, `f`
+  Slotfather is present), `LANES LOG`, `PROCS LOG`, then `FULL LOG`, cycled with ← → while EVENTS has the focus, `f`
   or a click on the title. Each log has its own columns, so labels keep their width: SLOTS LOG time, slots, label,
-  waited, outcome and pid; LANES LOG event, lane, result and ticket; PROCS LOG event, label, detail and pid; ALL LOG
+  waited, outcome and pid; LANES LOG event, lane, result and ticket; PROCS LOG event, label, detail and pid; FULL LOG
   a type (`slot run`, `lane checked`, `proc reaped`, in the tool's colour) and one sentence (`sid-kit build · ok 1s
   · 1 slot`). A Slotfather run is one row, `running 3m` while it holds its slots and how it ended once done; `r`
   shows every event as logged. A run's trend is a mark on its row (↗ slower, ↘ faster, ▲ outlier), no longer a row

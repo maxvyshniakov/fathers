@@ -18,6 +18,9 @@ from .errors import LaneError
 from .gitops import common_dir, git_ok, main_checkout
 
 TIMEOUT = 5.0
+# What a report of the floor (capabilities, the settings row) waits for Slotfather's cap: inside Godfather's
+# deadlines, 2 s for capabilities and 5 s for a settings call with the start-up (review of fathers#163).
+REPORT_TIMEOUT = 1.0
 MAX_OUTPUT = 65536
 
 
@@ -40,8 +43,9 @@ class Decision:
     disk_short: bool = False
 
 
-def transport(command: str, request: dict[str, Any]) -> bytes:
-    """Bound input, both output streams and elapsed time while draining; own child group only."""
+def transport(command: str, request: dict[str, Any], timeout: float = TIMEOUT) -> bytes:
+    """Bound input, both output streams and elapsed time (`timeout` seconds) while draining; own child group
+    only."""
     payload = json.dumps(request, allow_nan=False).encode()
     if len(payload) > MAX_OUTPUT:
         raise LaneError("lifetime admission unavailable: request too large")
@@ -54,7 +58,7 @@ def transport(command: str, request: dict[str, Any]) -> bytes:
         output = bytearray()
         total = 0
         sent = 0
-        deadline = time.monotonic() + TIMEOUT
+        deadline = time.monotonic() + timeout
         with selectors.DefaultSelector() as selector:
             for pipe, event, name in ((process.stdin, selectors.EVENT_WRITE, "stdin"),
                                       (process.stdout, selectors.EVENT_READ, "stdout"),
@@ -225,15 +229,15 @@ def grouped(records: list[state.Record]) -> str:
                      for common in sorted(groups, key=lambda c: (names[c], c or "")))
 
 
-def ask(project: config.Config, occupied: int) -> dict[str, Any]:
-    """Slotfather's lifetime answer for one more lane with `occupied` lanes planned or active; LaneError when it
-    cannot give one. A query: it registers nothing."""
+def ask(project: config.Config, occupied: int, timeout: float = TIMEOUT) -> dict[str, Any]:
+    """Slotfather's lifetime answer for one more lane with `occupied` lanes planned or active, within `timeout`
+    seconds; LaneError when it cannot give one. A query: it registers nothing."""
     command = slots.command()
     if command is None:
         raise LaneError("lifetime admission unavailable: slotfather is not on PATH")
     try:
         request = request_for(project, occupied)
-        return response_for(transport(command, request), request)
+        return response_for(transport(command, request, timeout), request)
     except (OSError, ValueError, KeyError, TypeError, OverflowError,
             subprocess.SubprocessError, RecursionError) as error:
         raise LaneError(f"lifetime admission unavailable: {error}") from None
@@ -241,12 +245,13 @@ def ask(project: config.Config, occupied: int) -> dict[str, Any]:
 
 def start_cap(project: config.Config, records: list[state.Record]) -> tuple[int, str]:
     """The lane cap start applies to `project` (fathers#163): the local cap, or Slotfather's when it is the
-    provider. When Slotfather cannot answer, the local cap and why it stands in."""
+    provider, asked within REPORT_TIMEOUT: this reports the floor, start asks with its own deadline. When
+    Slotfather cannot answer in time, the local cap and why it stands in."""
     if project.admission_provider != "slotfather":
         return host.lane_cap(project)[0], ""
     occupied = len(state.occupying(state.of_project(records, running_common(project))))
     try:
-        return int(ask(project, occupied)["cap"]), ""
+        return int(ask(project, occupied, REPORT_TIMEOUT)["cap"]), ""
     except LaneError as error:
         return host.lane_cap(project)[0], str(error)
 

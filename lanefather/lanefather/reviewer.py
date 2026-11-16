@@ -68,7 +68,8 @@ class Answer:
 @dataclass(frozen=True)
 class Model:
     """One review choice: the model's alias in the models file, its id, CLI (codex or claude) and effort, the share
-    of the weekly Codex limit it needs (`when.limit.codex_weekly`), its family and `when.not_family`."""
+    of the weekly Codex limit it needs (`when.limit.codex_weekly`), its family, `when.not_family` and the choice's
+    `note` for the person reading the review ("same family as the implementer: fresh context only")."""
     alias: str
     id: str
     cli: str
@@ -76,6 +77,7 @@ class Model:
     min_left: int | None = None
     family: str | None = None
     not_family: bool = False
+    note: str | None = None
 
 
 DEFAULTS = (Model("sol", "gpt-6.1-sol", "codex", "medium", DEFAULT_MIN_LEFT, "openai"),
@@ -106,8 +108,10 @@ class Conditions:
             self.quota = _codex_limit(self.codex) if self.codex else {"left": None, "blocked": None}
         return self.quota
 
-    def reason(self, model: Model, forced: bool = False) -> str | None:
-        """Why the model may not review now, or None."""
+    def reason(self, model: Model, forced: bool = False, panel: bool = False) -> str | None:
+        """Why the model may not review now, or None. A panel member (`panel`) is never kept off for its family
+        (owner decision 2026-11-16, fathers#151: the panel compares reviewers on the same diff): only its CLI and
+        the Codex limit count, so role's skip reasons, which mix both, are not read for it."""
         if model.cli == "codex" and not self.codex:
             return f"no Codex CLI ({self.project.env_names('CODEX')}, CODEX_CLI_PATH, codex on PATH)"
         if model.cli == "claude" and not self.claude:
@@ -116,9 +120,9 @@ class Conditions:
             return f"{model.alias} runs on {model.cli}, which Lanefather cannot start"
         if forced:
             return None
-        if self.role is not None and model.alias in self.role.skipped:
+        if not panel and self.role is not None and model.alias in self.role.skipped:
             return self.role.skipped[model.alias]
-        if model.not_family and self.family and model.family == self.family:
+        if not panel and model.not_family and self.family and model.family == self.family:
             return f"same family as the implementer ({self.family})"
         if model.min_left is not None:
             limit = self.limit()
@@ -185,15 +189,17 @@ class Reviewer:
     def _panel(self, panel: tuple[str, ...], models: dict[str, Model], ordered: list[Model],
                conditions: Conditions, forced: bool) -> list[Slot]:
         """Each member, or what reviews in its place. A configured member whose condition fails (a used-up Codex
-        week, the implementer's own family) is replaced by the first choice that holds, or skipped when that is on
-        the panel already (fathers#151); a forced member (`--reviewer`) runs whatever the limit, or fails."""
+        week, no CLI) is replaced by the first choice that holds, or skipped when that is on the panel already
+        (fathers#151); a forced member (`--reviewer`) runs whatever the limit, or fails. A member of the
+        implementer's family stays and runs the table's choice for that case, with its note."""
         slots: list[Slot] = []
         stand_in = ordered[0] if ordered else None
         for alias in panel:
-            model = models.get(alias)
-            why = (conditions.reason(model, forced) if model is not None
+            model, note = self._same_family(models.get(alias), conditions.family)
+            why = (conditions.reason(model, forced, panel=True) if model is not None
                    else f"{alias} is not a model of the models file ({_models_path(self.project) or 'the defaults'})")
-            entry: dict[str, Any] = {"member": alias, "reviewer": alias, "status": "pending", "reason": None}
+            entry: dict[str, Any] = {"member": alias, "reviewer": alias, "status": "pending", "reason": None,
+                                     **({"note": note} if note else {})}
             if why is None and model is not None:
                 slots.append(Slot(entry, [model]))
                 continue
@@ -212,6 +218,16 @@ class Reviewer:
                 entry.update(model=model.id, effort=model.effort)
             slots.append(Slot(entry, []))
         return slots
+
+    def _same_family(self, model: Model | None, family: str | None) -> tuple[Model | None, str | None]:
+        """A panel member of the implementer's family: the review role's choice for that model that does not ask
+        for another family (Mastack's same-family Opus), and the note it gives, else this note: the person reading
+        the review learns the answer is from the implementer's family."""
+        if model is None or not family or model.family != family:
+            return model, None
+        own = next((c for c in self.choices if c.alias == model.alias and not c.not_family), None)
+        chosen = own if model.not_family and own is not None else model
+        return chosen, chosen.note or (own.note if own else None) or f"same family as the implementer ({family})"
 
     def _execute(self, label: str, checkout: str, request: Request, slots: list[Slot], output: Path, log: Path,
                  evidence: dict[str, Any]) -> Answer:
@@ -399,8 +415,9 @@ def _models(project: Config) -> tuple[dict[str, Model], list[Model]]:
             # A Codex choice without a limit still needs DEFAULT_MIN_LEFT: no review runs on credits unread.
             min_left = (int(limit) if isinstance(limit, (int, float))
                         else DEFAULT_MIN_LEFT if base.cli == "codex" else None)
+            note = choice.get("note")
             choices.append(Model(base.alias, base.id, base.cli, str(choice.get("effort", "medium")), min_left,
-                                 base.family, bool(when.get("not_family"))))
+                                 base.family, bool(when.get("not_family")), note if isinstance(note, str) else None))
         if not choices:
             raise ValueError("the review role lists no choices")
         for model in reversed(choices):
@@ -467,8 +484,10 @@ def _role(project: Config, codex: str | None, family: str | None, evidence: dict
         print(f"lane: review: role review chose {alias}"
               + (f"; skipped {'; '.join(reasons)}" if skips else "")
               + (f"; {chosen['caution']}" if chosen.get("caution") else ""), flush=True)
+    note = chosen.get("note")
     model = Model(alias, str(chosen["id"]), str(chosen.get("cli")), str(chosen.get("effort") or "medium"),
-                  None, chosen.get("family") if isinstance(chosen.get("family"), str) else None)
+                  None, chosen.get("family") if isinstance(chosen.get("family"), str) else None,
+                  note=note if isinstance(note, str) else None)
     return Role(model, skipped, quota)
 
 

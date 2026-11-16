@@ -5,9 +5,17 @@ given and do no arithmetic of their own about where things go.
 
 Today's rules, which these tables reproduce exactly: SLOTS on top at its five rows; from WIDE columns the panels sit
 in two columns (QUEUE over EVENTS on the left, DETAILS over MACHINE on the right, the right column 2/5 of the width
-and at least 52); below that one column (QUEUE, DETAILS, then EVENTS beside MACHINE, or MACHINE alone where EVENTS
-would get under 38 columns, which is under 83); under SMALL_WIDTH or SMALL_HEIGHT only the slots and a note. MACHINE
-sits at its natural height (7 with its chart beside the rows, from 62 columns; 11 stacked); DETAILS takes the rest.
+and at least 52); below that one column: QUEUE, a full-width band, then a bottom row. From 83 columns the band is
+EVENTS' and the bottom row holds MACHINE on the left and DETAILS on the right (fathers#169); below 83, where DETAILS
+would get under 38 columns beside MACHINE, or where the bottom row gets no rows, the band is DETAILS' and MACHINE has
+the bottom row alone (EVENTS is not shown). Under SMALL_WIDTH or SMALL_HEIGHT only the slots and a note.
+One column's rows (fathers#169, `allocate`): each band has floors, its least rows from the most comfortable down, and
+first every band has its most comfortable floor; short of rows the bottom row gives way a floor at a time (DETAILS'
+wanted rows beside MACHINE, then MACHINE's natural height, its chart-less rows, its least), then the band (EVENTS'
+three rows, then one; DETAILS' key fields, then its least), and last QUEUE keeps fewer of its rows. Rows left over go
+to QUEUE up to all its rows, then to the bottom row up to MACHINE's natural height or DETAILS' wanted rows, whichever
+is more; the band takes the rest. MACHINE's natural height is 7 with its chart beside the rows, from 62 columns, and
+11 stacked; a stacked MACHINE in a taller bottom row gives its chart the extra rows.
 Wide, EVENTS shows from the height that gives it its least rows under QUEUE's least, and below that height QUEUE keeps
 its rows (less what MACHINE's three-row compact form needs), MACHINE goes under it and DETAILS takes the whole right
 column (fathers#140), so as a terminal grows taller panels only ever arrive.
@@ -32,10 +40,14 @@ SMALL_WIDTH, SMALL_HEIGHT = 50, 14  # below either, only the slots and a note
 SLOTS_HEIGHT = 5
 SMALL_NOTE_ROW = 6
 RIGHT_MIN = 52  # the right column's least width; it takes 2/5 of the screen where that is more
-NARROW_MACHINE, NARROW_EVENTS = 44, 38  # the least width each takes side by side in one column; below both, EVENTS goes
-QUEUE_MIN, QUEUE_FLOOR, DETAILS_FLOOR = 10, 6 + 4, 9 + 4  # rows: QUEUE's least, one column's comfortable floors
+NARROW_MACHINE, NARROW_DETAILS = 44, 38  # the least width each takes side by side in one column; below both, EVENTS
+# goes and DETAILS takes the band
+QUEUE_MIN, QUEUE_FLOOR, DETAILS_FLOOR = 10, 6 + 4, 9 + 4  # rows: QUEUE's least, one column's comfortable floors (the
+# band's, whichever panel has it)
 EVENTS_MIN, DETAILS_MIN, DETAILS_WIDE_MIN, MACHINE_MIN = 5, 5, 10, 6
 MACHINE_SHORT = 3  # MACHINE's least rows as one compact line in its frame: the short wide arrangement (fathers#140)
+MACHINE_BARE = 7  # MACHINE without its chart: the frame, a blank row over and under the three rows
+EVENTS_LEAST = 4 + 3  # EVENTS' comfortable least in one column: its frame and padding, and three rows (fathers#169)
 
 # MACHINE inside: a frame, a blank row, three resource rows and the history chart with its axis line under it
 CHART_ROWS, MIN_CHART_ROWS = 4, 2  # the chart's rows when there is room; fewer than two, it goes (owner)
@@ -98,14 +110,52 @@ class Overview(NamedTuple):
     note_row: Optional[int] = None  # the small screen's note
 
 
-def queue_height(rows: int) -> int:
-    """QUEUE's natural height for its table rows: a frame and a blank padding row above and below them."""
+def framed(rows: int) -> int:
+    """A panel's height for its content rows: a frame and a blank padding row above and below them (widgets.Panel)."""
     return rows + 4
 
 
-def overview(width: int, height: int, rows: int, machine_natural: Callable[[int], int]) -> Overview:
+def queue_height(rows: int) -> int:
+    """QUEUE's natural height for its table rows."""
+    return framed(rows)
+
+
+class Band(NamedTuple):
+    """One band of a column for `allocate`: its floors, the least rows it takes from the most comfortable down (each
+    tier gives way to the next), and its natural height, which leftover rows grow it to (0: none)."""
+    name: str
+    floors: tuple[int, ...]
+    natural: int = 0
+
+
+def allocate(available: int, bands: tuple[Band, ...], give_way: tuple[str, ...], grow: tuple[str, ...],
+             rest: tuple[str, ...]) -> dict[str, int]:
+    """A column's rows (fathers#169): every band at its first floor if all fit, else the bands in `give_way` order step
+    down their floors one at a time until all fit; at the last floors, those that fit, from the top. Then rows left
+    over grow the bands in `grow` order to their natural heights, and the first placed of `rest` takes what is left."""
+    at = {band.name: band.floors[0] for band in bands}
+    steps = [dict(at)]
+    for name in give_way:
+        for floor in next(band for band in bands if band.name == name).floors[1:]:
+            at[name] = floor
+            steps.append(dict(at))
+    naturals = {band.name: band.natural for band in bands}
+    tiers = tuple(Tier(tuple((band.name, step[band.name]) for band in bands), grow, rest, whole=True)
+                  for step in steps)
+    return stack(available, (*tiers, tiers[-1]._replace(whole=False)), naturals)
+
+
+def floors(*heights: int) -> tuple[int, ...]:
+    """Floors from the most comfortable down, each once."""
+    return tuple(sorted(set(heights), reverse=True))
+
+
+def overview(width: int, height: int, rows: int, machine_natural: Callable[[int], int],
+             details: int = DETAILS_FLOOR) -> Overview:
     """The overview at this size; `rows` is QUEUE's table rows (its entries, at least one, and the gap between
-    running and waiting), `machine_natural` MACHINE's natural height at a width."""
+    running and waiting), `machine_natural` MACHINE's natural height at a width, `details` the rows DETAILS wants
+    (the views ask for its key fields in their frame, the most any QUEUE entry has, or its least with nothing to
+    show)."""
     if width < SMALL_WIDTH or height < SMALL_HEIGHT:
         return Overview("small", {}, ("requests",), Rect(min(2, height - 4), 3, 2, width - 6),
                         SMALL_NOTE_ROW if SMALL_NOTE_ROW < height - 1 else None)
@@ -132,21 +182,26 @@ def overview(width: int, height: int, rows: int, machine_natural: Callable[[int]
         arrangement = "wide"
         slots_width = left
     else:
-        machine_width, events_width = split(width, (width - 1) // 2, NARROW_MACHINE, NARROW_EVENTS)
-        bottom = machine_natural(machine_width)
-        heights = stack(available, (
-            Tier((("requests", min(queue, QUEUE_FLOOR)), ("details", DETAILS_FLOOR), ("bottom", MACHINE_MIN)),
-                 grow=("bottom", "requests"), rest=("details", "requests"), whole=True),
-            Tier((("requests", min(queue, QUEUE_MIN)), ("details", DETAILS_MIN), ("bottom", MACHINE_MIN)),
-                 grow=("requests", "details", "bottom"), rest=("details", "requests"))),
-            {"requests": queue, "details": DETAILS_MIN, "bottom": bottom})
-        column(panels, ("requests", "details", "bottom"), heights, SLOTS_HEIGHT, 0, width)
-        row = panels.pop("bottom", None)
-        if row is not None and events_width:  # EVENTS on the left, MACHINE on the right (owner, 2026-11-12)
-            panels["events"] = Rect(row.y, 0, row.height, events_width)
-            panels["machine"] = Rect(row.y, events_width + 1, row.height, machine_width)
-        elif row is not None:
-            panels["machine"] = row
+        machine_width, details_width = split(width, (width - 1) // 2, NARROW_MACHINE, NARROW_DETAILS)
+        machine_rows = machine_natural(machine_width)
+        bottom = max(machine_rows, details) if details_width else machine_rows  # DETAILS beside MACHINE, or not
+        heights = allocate(available, (
+            Band("requests", (min(queue, QUEUE_MIN),), queue),
+            Band("band", floors(EVENTS_LEAST, EVENTS_MIN) if details_width else floors(DETAILS_FLOOR, DETAILS_MIN)),
+            Band("bottom", floors(bottom, machine_rows, MACHINE_BARE, MACHINE_MIN), bottom)),
+            give_way=("bottom", "band"), grow=("requests", "bottom"), rest=("band", "requests"))
+        column(panels, ("requests", "band", "bottom"), heights, SLOTS_HEIGHT, 0, width)
+        band, row = panels.pop("band", None), panels.pop("bottom", None)
+        if band is not None and row is not None and details_width:
+            # EVENTS the full-width band; MACHINE on the left and DETAILS on the right under it (owner, fathers#169)
+            panels["events"] = band
+            panels["machine"] = Rect(row.y, 0, row.height, machine_width)
+            panels["details"] = Rect(row.y, machine_width + 1, row.height, details_width)
+        else:
+            if band is not None:
+                panels["details"] = band
+            if row is not None:
+                panels["machine"] = row
         arrangement = "column"
         slots_width = width
     panels = {"slots": Rect(0, 0, SLOTS_HEIGHT, slots_width), **panels}
@@ -223,7 +278,8 @@ def machine_height(width: int) -> int:
 def machine(panel: Rect, values: int) -> Machine:
     """MACHINE's inside; `values` is the widest resource value. Wide (owner, 2026-11-12): the chart beside the rows,
     its rows level with theirs, its axis under it alone. Stacked: a blank row, the rows, the chart and its axis line,
-    which the bottom frame follows directly. Short of rows the chart gives up height first, 4 → 3 → 2 rows and then
+    which the bottom frame follows directly; the chart has CHART_ROWS at MACHINE's natural height and every row a
+    taller panel gives it (one column's bottom row beside a taller DETAILS, fathers#169). Short of rows the chart gives up height first, 4 → 3 → 2 rows and then
     entirely (never one row); then the blank rows; then the rows become one compact line. Without the chart a blank
     row stays under the rows as well as over them (owner); with room for one only, it is the lower one."""
     y, x, height, width = panel
@@ -233,7 +289,7 @@ def machine(panel: Rect, values: int) -> Machine:
         return Machine(True, Rect(y + 2, x + 3, rows, metrics), None,
                        Rect(y + 2, x + 3 + metrics + MACHINE_GAP, min(CHART_ROWS, interior - 2),
                             inner - metrics - MACHINE_GAP))
-    chart_rows = min(CHART_ROWS, interior - 1 - rows - 1)
+    chart_rows = interior - 1 - rows - 1  # all the rows it has: more than CHART_ROWS only in a taller bottom row
     chart_rows = chart_rows if chart_rows >= MIN_CHART_ROWS else 0
     row = y + 2 if interior >= rows + (1 if chart_rows else 2) else y + 1
     lines: Optional[Rect] = None

@@ -638,7 +638,7 @@ def settle(state: AppState, now: float) -> Result:
     if not state.scroll.get("events") and state.fresh_events:
         state = dataclasses.replace(state, fresh_events=0)
     # DETAILS follows the focused panel (fathers#152): QUEUE's entry or EVENTS' row, whichever was focused last; with
-    # EVENTS not drawn (one column), QUEUE's
+    # EVENTS not drawn (one column under 83 columns or short), QUEUE's
     shows = state.focus if state.focus in ("requests", "events") and state.page == "overview" else state.shows
     if shows == "events" and state.frame.width and "events" not in state.frame.tables:
         shows = "requests"

@@ -290,7 +290,7 @@ class EventDetailTests(unittest.TestCase):
         return canvas, canvas.render(False).splitlines()
 
     def test_slotfather_alone_has_time_slots_label_waited_outcome_and_pid(self) -> None:
-        for width in (156, 120, 92):  # wide, the one-column layout's EVENTS beside MACHINE
+        for width in (156, 120, 92):  # wide, and the one-column layout's full-width EVENTS
             with self.subTest(width=width):
                 _, lines = self.draw(width)
                 header = lines[0]
@@ -834,9 +834,15 @@ class MemoryBarTests(unittest.TestCase):
                 left=lines[top].index("╭─ MACHINE ")
                 right=lines[top].index("╮",left)
                 bottom=next(y for y in range(top+1,height) if lines[y][left:].startswith("╰"))
-                self.assertEqual(tool.machine_height(right-left+1),bottom-top+1,"MACHINE at its own height")
-                details=canvas.tables["details"]
-                self.assertEqual(top,details["y"]+details["height"],"the details take everything above it")
+                if width>=tool.WIDE:
+                    self.assertEqual(tool.machine_height(right-left+1),bottom-top+1,"MACHINE at its own height")
+                else:  # one column (fathers#169): as tall as DETAILS' key fields beside it, its chart the taller
+                    keys=7  # build's key fields: label status priority cpu granted memory owner pid
+                    self.assertEqual(max(tool.machine_height(right-left+1),tool.framed(keys)),bottom-top+1)
+                    self.assertEqual(canvas.tables["details"]["height"],bottom-top+1)
+                    self.assertIn("now",lines[bottom-1],"its axis right over the bottom border: no blank rows")
+                above=canvas.tables["details" if width>=tool.WIDE else "events"]  # one column: EVENTS (fathers#169)
+                self.assertEqual(top,above["y"]+above["height"],"the panel above takes everything over it")
 
     def test_mem_shows_what_admission_reads(self):
         tool=load_dashboard()
@@ -867,15 +873,38 @@ class MemoryBarTests(unittest.TestCase):
                 canvas=tool.Canvas(width,height)
                 tool.dashboard_draw(canvas,model)
                 details,queue=canvas.tables["details"],canvas.tables["requests"]
-                self.assertGreaterEqual(details["height"],tool.DETAILS_FLOOR,"the details keep 9 rows and more")
+                self.assertGreaterEqual(details["visible"],7,"every key field, label to owner pid")
                 self.assertGreaterEqual(queue["height"],tool.QUEUE_FLOOR)
-                if width<tool.WIDE:  # one column: QUEUE scrolls instead of growing into the details
-                    self.assertLess(queue["visible"],queue["count"])
+                if width<tool.WIDE:  # one column (fathers#169): QUEUE grows first, EVENTS keeps its three rows
+                    self.assertGreaterEqual(canvas.tables["events"]["height"],tool.EVENTS_LEAST)
+                    self.assertEqual(height-1-5-tool.EVENTS_LEAST-tool.MACHINE_HEIGHT>=21,
+                                     queue["visible"]==queue["count"],"QUEUE scrolls only short of rows")
                 else:  # wide: the details have their own column, the whole right side above MACHINE
                     self.assertGreater(details["height"],20)
-        self.assertEqual(dict(requests=13,details=5,machine=6),{name:rect.height for name,rect in
-                         tool.overview(100,30,17,tool.machine_height).panels.items() if name!="slots" and name!="events"},
-                         "too short for the floors: the earlier order")
+        self.assertEqual(dict(requests=10,events=7,machine=7,details=7),{name:rect.height for name,rect in
+                         tool.overview(100,30,17,tool.machine_height).panels.items() if name!="slots"},
+                         "too short for the floors: the bottom row gives way first, then EVENTS")
+
+    def test_one_column_details_fit_every_key_field_up_to_owner_pid(self):
+        # gf-heights review: DETAILS asks for the rows its key fields (request_facts(), label to owner pid) take, the
+        # most any QUEUE entry has, so moving the selection never moves the panels
+        tool=load_dashboard()
+        model=self.layout_model()
+        old=model["updated"]-datetime.timedelta(minutes=20)
+        busy=dict(model["holders"][0],label="busy",pid=11,key=(11,None),ticket="#7",idle_since=old,yieldable=True,
+                  context=dict(phase="check",kind="gate",check="unit",session="s1"))
+        model["holders"].append(busy)
+        model["slots"],model["used"],model["free"]=4,2,2
+        for selected in (0,1):
+            with self.subTest(selected=selected):
+                canvas=tool.Canvas(100,50)
+                tool.dashboard_draw(canvas,model,selected)
+                details=canvas.tables["details"]
+                # label status priority ticket phase kind check session cpu granted memory idle yield owner pid
+                self.assertEqual(4+14,details["height"],"busy's 14 key fields and the frame, whichever is selected")
+                lines=canvas.render(False).splitlines()
+                rows=[lines[y][details["x"]:] for y in range(details["top"],details["top"]+details["visible"])]
+                self.assertTrue(any("owner pid" in row for row in rows),"owner pid shows without scrolling")
 
     def layout_model(self) -> dict[str, Any]:
         now=datetime.datetime.now(datetime.timezone.utc)

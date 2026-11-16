@@ -32,8 +32,10 @@ class AdmissionTests(LaneCase):
         path.write_text(path.read_text() + '\n[admission]\nprovider="slotfather"\n')
         binary = self.tmp / "bin" / "slotfather"
         binary.write_text(script or '''#!/usr/bin/env python3
-import json, os, sys
+import json, os, sys, threading
 request=json.load(sys.stdin)
+if os.environ.get("ADMISSION_HANG"):
+    threading.Event().wait()  # never answers: the caller's deadline ends it
 host={"cores":{"value":6,"source":"physical"},"memory_gib":{"value":20,"source":"physical"},"load15":{"value":0.1,"source":"physical"}}
 host.update(request["sample_overrides"])
 answer={"v":1,"kind":"lane-lifetime","policy":"lane-lifetime-v1","available":True,
@@ -88,6 +90,32 @@ print(json.dumps(answer))
         self.assertNotIn("effective", row, "no applied floor is claimed")
         self.assertIn("auto: cap unknown (lifetime admission unavailable", row["description"])
         self.assertIn("local cap 3 gives 49 GB (10^9) = 40 reserve + 3 x 3.0 GB lane peak", row["description"])
+
+    def test_a_provider_that_never_answers_reports_the_cap_unknown_within_the_reporting_deadline(self):
+        """Review of fathers#163 (P2): capabilities and settings reads ask Slotfather with a deadline inside
+        Godfather's (2 s for capabilities, 5 s for a settings call), not start's."""
+        self.provider()
+        self.env["ADMISSION_HANG"] = "1"
+        gb, row = self.floor_report()
+        self.assertEqual(gb, 49)
+        self.assertIn("auto: cap unknown (lifetime admission unavailable: query timed out); local cap 3 gives 49 GB",
+                      row["description"])
+        self.assertNotIn("effective", row)
+        from lanefather import admission
+        seen: list[float] = []
+
+        def transport(command: str, request: dict[str, Any], timeout: float = admission.TIMEOUT) -> bytes:
+            del command, request
+            seen.append(timeout)
+            raise TimeoutError("query timed out")
+
+        with patch.dict("os.environ", self.env, clear=True), patch.object(admission, "transport", transport):
+            project = config.load(self.integration / ".lanefather.toml")
+            self.assertIn("timed out", admission.start_cap(project, [])[1])
+            with self.assertRaises(LaneError):
+                admission.evaluate(project, [])
+        self.assertEqual(seen, [admission.REPORT_TIMEOUT, admission.TIMEOUT], "start keeps its own deadline")
+        self.assertLessEqual(admission.REPORT_TIMEOUT, 1.0)
 
     def test_corrupt_registry_cannot_be_bypassed_with_force(self):
         self.state.mkdir(parents=True)

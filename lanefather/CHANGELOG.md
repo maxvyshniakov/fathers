@@ -8,13 +8,26 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Two routine cleanups without `--force-reason` (fathers#167). `lanefather drop ID` removes a planned or active lane
+  that adds nothing to its base (no commits beyond it, its tree already the base's, or commits that change nothing)
+  and whose worktree has no uncommitted or untracked changes, with `done`'s cleanup; it refuses a lane with work and
+  has no override. `done` no longer refuses a landed lane whose red post-merge smoke a later green run on the same
+  integration branch cleared: the batch gate, or another lane's smoke that ran each check the red one ran, on a commit
+  holding the merge, finished after the red smoke on its platform; the ledger and the record (`post_merge.cleared_by`)
+  name that receipt, and `done --finished` counts such a lane as finished. `lanefather recheck ID` reruns the red
+  smoke's checks on the integration tip, one recheck of a lane at a time; green, it replaces the red result and
+  finishes the lane as land would. The batch gate's receipt names its `platform`. New event kinds `lane.dropped` and
+  `lane.rechecked`; capabilities `lane.drop` and `post_merge.cleared`. An older Lanefather reads a dropped lane as
+  done and a rechecked one as green.
+
 - The free-disk floor is a machine setting (fathers#163): `lanefather settings set host.min_disk_gb 150` (decimal
   GB) or `auto` (the default, the derived 40 GB reserve + lane cap x lane peak). `LANEFATHER_MIN_DISK_GB` still wins
   and makes the row read-only. Admission, `capabilities --json` (`host.min_disk_gb`) and the refusal use the same
   value; a refusal names its source. The row's description gives the current derived floor and its `effective` the
   applied one, so Godfather's Settings shows and changes it. With Slotfather as the admission provider, the
   reported floor uses Slotfather's cap, as start does, and the row says when Slotfather cannot answer instead of
-  showing the local cap's floor as applied. An older Lanefather ignores the saved value.
+  showing the local cap's floor as applied; a report waits at most 1 s for Slotfather. `LANEFATHER_MIN_DISK_GB`
+  keeps its numeric syntax (`1.5e2` still sets 150 GB). An older Lanefather ignores the saved value.
 
 - Lanes finish by themselves (fathers#157). A lane that becomes finished (landed, smoke green, review finished or
   exempt with every finding marked) runs `done`, as before, unless it is kept; `[done] auto = false` turns that off.
@@ -31,8 +44,11 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   frozen checkout with the same prompt (its `prompt_sha256` in the receipt), each in its own process, its answer in
   a private directory until every member finished. The receipt's `panel` keeps each reviewer's model, effort,
   seconds, status and findings; the one `findings` list numbers them across the panel, so `review --mark N` and the
-  gate work as before. A member whose conditions fail (a used-up Codex week, the implementer's own family) is
-  replaced by the first choice that holds, or skipped when that is already on the panel; one whose run fails keeps
+  gate work as before. A member whose conditions fail (a used-up Codex week, no CLI) is replaced by the first choice
+  that holds, or skipped when that is already on the panel. A member of the implementer's family stays on the panel
+  (owner decision 2026-11-16: the panel compares reviewers; the single reviewer still avoids the implementer's
+  family): it runs the review role's choice for that case, and its entry, `review` and `--compare` carry that
+  choice's note ("same family as the implementer: fresh context only"). One whose run fails keeps
   the others' answers, and holds the gate only with `[review] panel_required = true`. `review ID --compare` shows
   who found what and how it was marked; `stats --json` adds per-reviewer totals (`reviewers`). Without `panel`,
   one reviewer as before. An earlier release refuses the `panel` key: install this one first.

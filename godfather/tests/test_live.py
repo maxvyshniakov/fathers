@@ -319,9 +319,9 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
         self.assertEqual("details", tabs(canvas, "back_tab")[1], "Shift-Tab backwards")
         narrow = view.Canvas(100, 60)
         view.dashboard_draw(narrow, sample_model())
-        self.assertEqual(["requests", "details", "events"], tabs(narrow)[:3], "one column: top to bottom")
+        self.assertEqual(["requests", "events", "details"], tabs(narrow)[:3], "one column: in reading order")
 
-    def test_one_column_puts_machine_and_events_side_by_side_or_drops_events(self) -> None:
+    def test_one_column_puts_events_full_width_over_machine_and_details_or_drops_events(self) -> None:
         view = tool()
         for width, beside in ((109, True), (100, True), (83, True), (82, False), (60, False)):
             with self.subTest(width=width):
@@ -329,26 +329,26 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
                 view.dashboard_draw(canvas, sample_model())
                 lines = canvas.render(False).splitlines()
                 machine = next(y for y, line in enumerate(lines) if " MACHINE " in line)
-                self.assertEqual(beside, " SLOTS LOG " in lines[machine], "on MACHINE's row")
+                self.assertEqual(beside, " DETAILS " in lines[machine], "on MACHINE's row")
                 self.assertEqual(beside, "events" in canvas.tables, "a hidden EVENTS is no Tab stop")
-                self.assertTrue(lines[machine].startswith("╭─ SLOTS LOG " if beside else "╭─ MACHINE "),
-                                "EVENTS on the left, MACHINE on the right (alone: the whole width)")
+                self.assertTrue(lines[machine].startswith("╭─ MACHINE "), "MACHINE on the left (alone: the whole width)")
                 order = tabs(canvas)
-                expected = ["requests", "details", "events", "requests"] if beside else ["requests", "details",
+                expected = ["requests", "events", "details", "requests"] if beside else ["requests", "details",
                                                                                          "requests", "details"]
-                self.assertEqual(expected, order, "by columns, top to bottom")
-                if beside:
-                    events = canvas.tables["events"]
-                    self.assertEqual(0, events["x"])
-                    self.assertGreaterEqual(events["width"], view.NARROW_EVENTS)
-                    machine_x = lines[machine].index("╭─ MACHINE")
-                    self.assertEqual(events["width"] + 1, machine_x, "one column between them")
-                    self.assertGreaterEqual(width - machine_x, view.NARROW_MACHINE, "MACHINE keeps its least width")
+                self.assertEqual(expected, order, "in reading order: QUEUE, EVENTS, then DETAILS beside MACHINE")
+                if beside:  # fathers#169: EVENTS the full width under QUEUE; MACHINE left and DETAILS right under it
+                    events, details = canvas.tables["events"], canvas.tables["details"]
+                    self.assertEqual((0, width), (events["x"], events["width"]))
+                    self.assertEqual(machine, events["y"] + events["height"], "the bottom row right under EVENTS")
+                    details_x = lines[machine].index("╭─", 1)
+                    self.assertEqual(details_x, details["x"])
+                    self.assertGreaterEqual(details_x - 1, view.NARROW_MACHINE, "MACHINE keeps its least width")
+                    self.assertGreaterEqual(width - details_x, view.NARROW_DETAILS)
                     self.assertTrue(lines[machine].rstrip().endswith("╮"))
 
-    def test_side_by_side_machine_keeps_its_own_height_and_the_details_get_the_rest(self) -> None:
+    def test_the_bottom_row_is_as_tall_as_details_key_fields_and_events_gets_the_rest(self) -> None:
         view = tool()
-        for height in (60, 44, 40):  # 34 and less: the details keep their floor, MACHINE gives way
+        for height in (60, 44, 40):  # shorter: the bottom row gives way first, then EVENTS (fathers#169)
             with self.subTest(height=height):
                 canvas = view.Canvas(100, height)
                 view.dashboard_draw(canvas, sample_model())
@@ -356,14 +356,15 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
                 top = next(y for y, line in enumerate(lines) if "╭─ MACHINE " in line)
                 left = lines[top].index("╭─ MACHINE ")
                 bottom = next(y for y in range(top + 1, height) if lines[y][left:].startswith("╰"))
-                self.assertEqual(view.MACHINE_HEIGHT, bottom - top + 1, "MACHINE at its own height, chart and all")
+                row = max(view.MACHINE_HEIGHT, view.framed(7))  # MACHINE's own, or DETAILS' 7 key fields
+                self.assertEqual(row, bottom - top + 1, "MACHINE as tall as the row, its chart the taller")
                 self.assertIn("now", lines[bottom - 1], "its axis right over the bottom border: no blank rows")
-                events = canvas.tables["events"]
-                self.assertEqual((top, view.MACHINE_HEIGHT), (events["y"], events["height"]), "EVENTS beside it")
-                details, queue = canvas.tables["details"], canvas.tables["requests"]
-                self.assertEqual(top, details["y"] + details["height"], "the details right above")
-                self.assertEqual(height - 1 - 5 - queue["height"] - view.MACHINE_HEIGHT, details["height"],
-                                 "the details take what QUEUE and MACHINE leave")
+                details = canvas.tables["details"]
+                self.assertEqual((top, row), (details["y"], details["height"]), "DETAILS beside it")
+                events, queue = canvas.tables["events"], canvas.tables["requests"]
+                self.assertEqual(top, events["y"] + events["height"], "EVENTS right above")
+                self.assertEqual(height - 1 - 5 - queue["height"] - row, events["height"],
+                                 "EVENTS takes what QUEUE and the bottom row leave")
 
     def test_a_scrolled_thumb_flashes_and_fades_with_one_wake(self) -> None:
         view = tool()

@@ -1,6 +1,6 @@
 """EVENTS: one tool's log at a time (fathers#152), newest first, read from the tools' event logs (fathers#84).
 
-The panel's title is the switch: `SLOTS LOG`, `LANES LOG`, `PROCS LOG` for each present tool, then `ALL LOG` where
+The panel's title is the switch: `SLOTS LOG`, `LANES LOG`, `PROCS LOG` for each present tool, then `FULL LOG` where
 there are several; ← → while EVENTS has focus, `f` anywhere, or a click on the title, cycle it; SLOTS LOG is the
 default where Slotfather is present. `❮ SLOTS LOG ❯` says it cycles where there is room, the bare title where not; its
 arrows are in the frame's colour, and the one on the side a key switched to flashes as a scrolled thumb does.
@@ -10,7 +10,7 @@ Each log has its own columns:
     SLOTS LOG  time · slots · label · waited · outcome · pid      one row per run (a grant and what ended it)
     LANES LOG  time · event · lane · result · ticket
     PROCS LOG  time · event · label · detail · pid
-    ALL LOG    time · type · description                            `slot run`, `lane checked`, `proc reaped`
+    FULL LOG    time · type · description                            `slot run`, `lane checked`, `proc reaped`
 
 A Slotfather run's grant and its release, reap or yield are one row, `running 3m` while held and how it ended once
 done; `r` shows every event as logged instead. A run's trend and outlier are marks on its row (▲, ↗, ↘), never rows
@@ -32,12 +32,12 @@ DETAIL_MIN, DETAIL_MAX = 6, 28  # a detail column's least and greatest width; it
 EVENT_MAX = 10  # the event column's greatest width
 TIME_WIDTH = 8  # `11:59:35`
 OUTCOME_MAX, WAIT_MAX = 18, 10
-TYPE_MAX = 15  # ALL LOG's type: `lane post-merge`
+TYPE_MAX = 15  # FULL LOG's type: `lane post-merge`
 SOURCE_STYLES = {"slot": "source-slot", "lane": "source-lane", "junk": "source-junk"}  # theme tokens by tag
 TOO_OLD = "slotfather too old for events"  # its capabilities name no event log
 TOO_NEW = "slotfather's events need a newer godfather"  # they name one of no schema version this one reads
-TITLES = {"slotfather": "SLOTS LOG", "lanefather": "LANES LOG", "junkfather": "PROCS LOG", ALL: "ALL LOG"}
-TYPES = {"slotfather": "slot", "lanefather": "lane", "junkfather": "proc"}  # ALL LOG's type: the tool in a word
+TITLES = {"slotfather": "SLOTS LOG", "lanefather": "LANES LOG", "junkfather": "PROCS LOG", ALL: "FULL LOG"}
+TYPES = {"slotfather": "slot", "lanefather": "lane", "junkfather": "proc"}  # FULL LOG's type: the tool in a word
 # The switch's arrows (fathers#165): heavy angle ornaments, a size up from ◂ ▸ and one cell wide wherever the
 # width tables agree (East Asian width neutral, no emoji form); ◀ ▶ are ambiguous-width and have an emoji form (▶️)
 ARROWS = ("❮ ", " ❯")
@@ -140,7 +140,7 @@ def slot_values(row: dict[str, Any], marks: _common.Marks, moment: Optional[date
 
 
 def description(row: dict[str, Any], marks: _common.Marks, moment: Optional[datetime.datetime]) -> list[Part]:
-    """ALL LOG's one sentence from the event's fields: `sid-kit build · ok 1s · 1 slot`, `review-fixes · red · 2
+    """FULL LOG's one sentence from the event's fields: `sid-kit build · ok 1s · 1 slot`, `review-fixes · red · 2
     suites`, `vite dev · ttl 4h00m`."""
     if row.get("kind") == "run.trend":
         name, why = trend_words(row)
@@ -156,7 +156,7 @@ def description(row: dict[str, Any], marks: _common.Marks, moment: Optional[date
 
 
 def type_of(row: dict[str, Any]) -> Part:
-    """ALL LOG's type: the tool and the event in a word each, in the tool's colour."""
+    """FULL LOG's type: the tool and the event in a word each, in the tool's colour."""
     tool = TYPES.get(str(row.get("source")), str(row.get("tag") or "?"))
     event = "trend" if row.get("kind") == "run.trend" else str(row.get("event") or row.get("kind") or "")
     return f"{tool} {event}", source_style(str(row.get("tag") or ""))

@@ -15,9 +15,13 @@
                                      the independent review (lanefather.review)
   findings <sha> [--since REF]       whether a review holds the SHA (unmarked P1/P2 findings), for a publish
   done <id>                          after landing: stop what the lane left running, remove its worktree,
-                                     branches, build directories and scratch
+                                     branches, build directories and scratch; a red post-merge smoke that a
+                                     later green gate or smoke on the integration branch cleared does not refuse
   done --finished [--dry-run]        done on every finished lane of the registered projects; --dry-run lists
                                      them with their sizes
+  drop <id>                          an active lane that adds nothing to its base: done's cleanup, no force
+  recheck <id> [--slots N]           a landed lane's red post-merge smoke again, on the integration tip that
+                                     holds its merge; green replaces the red result (lanefather.land)
   keep <id> [--off]                  auto-done, done --finished and start's disk repair leave the lane
   promote <sha> [--ship] [--no-push] [--install [--deploy HOST]]
   sync [--drop-local]
@@ -211,6 +215,16 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="with --finished: list the lanes and sizes, remove nothing")
     p.add_argument("--force-reason", help="clean up a lane that is not landed or lacks a ticket comment; logged")
     p.set_defaults(run=done.done)
+    p = commands.add_parser("drop", help="remove a planned or active lane that adds nothing to its base: no commits "
+                                         "beyond it, or commits that change nothing; refuses otherwise")
+    p.add_argument("id")
+    p.set_defaults(run=done.drop)
+    p = commands.add_parser("recheck", help="rerun a landed lane's red post-merge smoke on the integration tip that "
+                                            "holds its merge; green replaces the red result")
+    p.add_argument("id")
+    p.add_argument("--slots", type=int, choices=range(1, 5),
+                   help="worker budget passed as verify --jobs (default: slotfather advise --max 3)")
+    p.set_defaults(run=land.recheck)
     p = commands.add_parser("keep", help="keep a lane from auto-done and done --finished (its scratch is in use)")
     p.add_argument("id")
     p.add_argument("--off", action="store_true", help="release the lane to auto-done again")

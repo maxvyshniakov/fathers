@@ -15,7 +15,7 @@ and keeps its evidence outside the disposable worktrees.
 | A task says “tests passed” but its code changed afterwards | A verification receipt identifies the committed tree and configured check results. |
 | Every task reruns everything while integration keeps moving | Lane checks, post-merge verification and the batch gate have distinct evidence and reuse rules; a result belongs to a tree and a plan, so a tree already verified with a plan on a platform is not checked again there ([results](docs/results.md)). |
 | Several agents push or move shared branches at once | Landing and promotion use a shared lock; an optional reference-transaction hook guards agent updates to `dev` and `main`. |
-| Finished work leaves branches, processes and build folders behind | `done` and conservative `gc` check ownership, merge state and worktree use before cleanup. |
+| Finished work leaves branches, processes and build folders behind | `done` and conservative `gc` check ownership, merge state and worktree use before cleanup; `drop` removes a lane that adds nothing, and a red smoke a later green run cleared does not hold `done` ([routine cleanups](docs/reference.md#routine-cleanups-without---force-reason)). |
 
 A **lane** is a registered unit of work, not an agent process or a machine slot. Path claims coordinate edits;
 they are not filesystem locks. A landed lane can still have review or cleanup pending.
@@ -108,6 +108,10 @@ was retained. Ticket-linked tasks also follow the configured issue/report requir
 By default, landing starts an authenticated AI reviewer in the background; source diffs and context can be sent
 to that provider and can consume its paid usage or quota. `promote --ship` also starts an overall review; findings
 can create a GitHub issue. [Configure the reviewer](docs/reference.md#reviewer-configuration) before using those commands.
+
+A project can set a review panel (`[review] panel = ["sol", "opus"]`) to have several reviewers read the same diff at
+once and compare them (`review ID --compare`); a panel member of the implementer's own model family still reviews,
+marked with a note, while a single reviewer is chosen from another family when the models file asks for it.
 
 Set `LANEFATHER_REVIEW_START=manual` to defer automatic starts and receive the review command instead. Required
 review still has to finish before promotion. Documentation-only changes outside steering files have the explicit

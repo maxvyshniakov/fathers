@@ -24,7 +24,7 @@ the state and returns the new state and its effects; a key a mode does not list 
     confirm  an irreversible action: `y` runs it, `n` or Esc cancels; nothing is preselected
     filter   EVENTS' text field, opened by `/` (fathers#84): what is typed goes into it, Backspace deletes, Enter
              keeps the filter, Esc clears it; on the main screen and a panel `f` cycles EVENTS' log
-             (SLOTS LOG, LANES LOG, PROCS LOG, ALL LOG), as ← → do while EVENTS has the focus and a click on its
+             (SLOTS LOG, LANES LOG, PROCS LOG, FULL LOG), as ← → do while EVENTS has the focus and a click on its
              title; `r` shows every event as logged instead of one row per run (fathers#152)
 
 A key is a hotkey by its US-QWERTY position (#13) everywhere but while a Settings value is typed. A click on a footer
@@ -118,7 +118,7 @@ def events_shown(state: AppState) -> bool:
 
 
 def switch_log(step: int) -> Handler:
-    """EVENTS' log (fathers#152): the next one the title names, SLOTS LOG, LANES LOG, PROCS LOG, then ALL LOG, of
+    """EVENTS' log (fathers#152): the next one the title names, SLOTS LOG, LANES LOG, PROCS LOG, then FULL LOG, of
     the tools present. `f` anywhere EVENTS is drawn, ← → while it has the focus. The arrow on that side flashes
     (fathers#165): the reducer lights it as it lights a scrolled thumb."""
     def handler(state: AppState, _: str) -> Result:

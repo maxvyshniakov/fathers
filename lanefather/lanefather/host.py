@@ -178,7 +178,7 @@ def disk_floor(project: config.Config, cap: int, records: list[dict[str, Any]], 
     found = project.lookup("MIN_DISK_GB")
     if found and found[1].strip():
         try:
-            value = settings.parse(knob, found[1])
+            value = settings.parse(knob, found[1], environment=True)
         except settings.SettingError:
             print(f"lane: warning: {found[0]}={found[1]!r} is not auto or a positive number of GB; the floor is "
                   f"{settings.MIN_DISK} or derived", file=sys.stderr)

@@ -188,8 +188,32 @@ class SettingsTests(LaneCase):
         self.env["LANEFATHER_MIN_DISK_GB"] = "auto"
         self.assertEqual(self.floor_gb(), 49)
 
+    def test_every_accepted_floor_reads_back_as_saved(self):
+        """Review of fathers#163 (P3): a value set saves as JSON and reads back as the same value, small, large and
+        in Python's float syntax alike."""
+        for given, expected in (("0.00001", 1e-05), ("1e-05", 1e-05), ("1.5e2", 150), ("150", 150), ("60.5", 60.5),
+                                ("100000", 100000), ("99999.99999", 99999.99999), (" 75 ", 75)):
+            row = self.rows(self.settings("set", "host.min_disk_gb", given))["host.min_disk_gb"]
+            self.assertEqual((row["value"], row["source"]), (expected, "saved"), given)
+            self.assertEqual(self.rows(self.settings())["host.min_disk_gb"]["value"], expected, given)
+            self.assertEqual(self.floor_gb(), round(expected, 1), given)
+
+    def test_the_environment_keeps_its_numeric_syntax(self):
+        """Review of fathers#163 (P1): LANEFATHER_MIN_DISK_GB takes any finite positive number, as before the
+        setting, beyond the setting's own range too."""
+        self.settings("set", "host.min_disk_gb", "60")
+        for given, expected in (("1.5e2", 150), ("250000", 250000), ("75.5", 75.5)):
+            self.env["LANEFATHER_MIN_DISK_GB"] = given
+            self.assertEqual(self.floor_gb(), expected, given)
+            row = self.rows(self.settings())["host.min_disk_gb"]
+            self.assertEqual((row["value"], row["writable"]), (expected, False), given)
+            self.assertNotIn("error", row, given)
+        for given in ("-5", "inf", "nan", "lots"):
+            self.env["LANEFATHER_MIN_DISK_GB"] = given
+            self.assertEqual(self.floor_gb("is not auto or a positive number of GB"), 60, given)
+
     def test_an_invalid_floor_is_refused_with_the_settings_error(self):
-        for bad in ("lots", "-5", "inf", "nan", "1e9", "", "50 GB"):
+        for bad in ("lots", "-5", "inf", "nan", "1e9", "100000.1", "", "50 GB"):
             reply = self.settings("set", "host.min_disk_gb", bad, code=2)
             self.assertEqual((reply["v"], reply["ok"], reply["preview"]), (1, False, None))
             self.assertIn("host.min_disk_gb", reply["error"], bad)

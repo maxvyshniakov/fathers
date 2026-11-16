@@ -7,7 +7,8 @@ stand-in). Godfather reads that reply in fixture mode, its adapter decodes it, a
 moment. Every cell, character and style, must be identical, emoji and ASCII, wide, one-column and narrow, but the
 footer (its name and version) and the EVENTS panel, whose columns Godfather changed on purpose after the move (time ·
 slots · label · result, owner 2026-11-12), and the focused panel's frame, heavy since fathers#139 (all four sides since fathers#165) with a selected row's markers leaning toward it, and what says the history chart shows slots held
-(fathers#140; chart_title());
+(fathers#140; chart_title()), and from 83 to 109 columns everything under QUEUE (fathers#169: EVENTS full width,
+MACHINE and DETAILS beside each other under it, at heights of their own), which the other sizes compare;
 help likewise in every section but EVENTS. A missing or unreadable fixture
 fails the test; it never skips.
 """
@@ -77,6 +78,17 @@ def chart_title(canvas: tui.Canvas) -> set[tuple[int, int]]:
     if inside.side:  # both rows are otherwise blank left of the chart: their whole inside
         return {(row, column) for row in (chart.y - 1, chart.y + chart.height) for column in range(x + 1, x + width - 1)}
     return {(top + height - 1, column) for column in range(chart.x - 1, chart.x + 11)}
+
+
+def swapped(canvas: tui.Canvas) -> set[tuple[int, int]]:
+    """fathers#169: in one column from 83 columns EVENTS has the band Slotfather's DETAILS had, and the bottom row is
+    MACHINE then DETAILS, as tall as DETAILS' key fields, where Slotfather's was EVENTS then MACHINE at MACHINE's
+    height: every cell from the band down, masked (DETAILS and MACHINE are compared at the other sizes); none in the
+    other layouts."""
+    details, events = canvas.tables.get("details"), canvas.tables.get("events")
+    if not details or not events or details["x"] == 0 or events["width"] != canvas.width:
+        return set()
+    return {(row, column) for row in range(events["y"], canvas.height) for column in range(canvas.width)}
 
 
 RESTED = {"┏": "╭", "┓": "╮", "┗": "╰", "┛": "╯", "━": "─", "┃": "│"}  # a focused frame as a resting one
@@ -151,7 +163,8 @@ class ParityTests(unittest.TestCase):
                 focused = canvas.tables.get("requests", dict(x=0, y=-1, width=0, height=0))
                 rules = {focused["y"], focused["y"] + focused["height"] - 1}
                 sides = {focused["x"], focused["x"] + focused["width"] - 1}
-                masked |= chart_title(canvas) | admission_note(canvas)
+                moved = swapped(canvas)
+                masked |= chart_title(canvas) | admission_note(canvas) | moved
                 for row in range(height - 1):
                     for column in range(width):
                         if (row, column) not in masked:
@@ -164,7 +177,7 @@ class ParityTests(unittest.TestCase):
                             elif column in sides:
                                 cell = [MARKED.get(str(cell[0]), cell[0]), *cell[1:]]
                             self.assertEqual(expected[row][column], cell, f"{name}: row {row}, column {column}")
-                if events:  # the same frame and place, other columns
+                if events and not moved:  # the same frame and place, other columns
                     for row, column in ((events["y"], events["x"]), (events["y"] + events["height"] - 1,
                                                                      events["x"] + events["width"] - 1)):
                         self.assertEqual(expected[row][column], canvas.cells[row][column], f"{name}: EVENTS' frame")

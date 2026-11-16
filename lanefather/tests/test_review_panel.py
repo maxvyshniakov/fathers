@@ -10,7 +10,7 @@ import textwrap
 from typing import Any
 import unittest
 
-from support import FIXTURES, NO_FINDINGS, TWO_FINDINGS, LaneCase
+from support import FIXTURES, MODELS_TABLE, NO_FINDINGS, TWO_FINDINGS, LaneCase
 
 OPUS_FINDINGS = textwrap.dedent("""\
     ```json
@@ -159,7 +159,27 @@ class PanelTests(ReviewCase):
         # The rules skipped Sol: nothing that should have answered is missing (fathers#151 review, finding 6).
         self.assertFalse(json.loads(self.lane("findings", self.tip(), "--json", ok=None))["held"])
 
-    def test_an_openai_implementer_keeps_sol_off_the_panel_with_and_without_role(self):
+    def test_a_same_family_member_stays_on_the_panel_with_the_tables_note(self):
+        """Owner decision 2026-11-16 (fathers#151): the panel compares reviewers, so `not_family` never takes a member
+        off it; the member runs the table's choice for its own family and carries that choice's note."""
+        self.table(MODELS_TABLE)
+        self.panel()
+        note = "same family as the implementer: fresh context only"
+        self.landed("own", "lib/own.txt", "baz\n", agent="claude-code")
+        output = self.lane("review", "own")
+        self.assertEqual(self.members("own"), [("sol", "finished"), ("opus", "finished")])
+        opus = self.review("own")["panel"][1]
+        self.assertEqual((opus["reviewer"], opus["note"]), ("opus", note))
+        self.assertNotIn("note", self.review("own")["panel"][0])
+        self.assertIn(f"note: {note}", output)
+        self.assertIn(f"note: {note}", self.lane("review", "own", "--compare"))
+        self.with_role()
+        self.landed("role", "lib/role.txt", "baz\n", agent="claude-code")
+        self.lane("review", "role")
+        self.assertEqual(self.members("role"), [("sol", "finished"), ("opus", "finished")])
+        self.assertEqual(self.review("role")["panel"][1]["note"], note)
+
+    def test_an_openai_implementer_keeps_sol_on_the_panel_with_and_without_role(self):
         self.table(textwrap.dedent("""\
             schema = 1
             [models.opus]
@@ -179,14 +199,24 @@ class PanelTests(ReviewCase):
         self.panel()
         self.landed("own", "lib/own.txt", "baz\n", agent="codex")
         self.lane("review", "own")
-        self.assertEqual(self.members("own"), [("sol", "skipped"), ("opus", "finished")])
-        self.assertIn("same family as the implementer (openai)", self.review("own")["panel"][0]["reason"])
+        self.assertEqual(self.members("own"), [("sol", "finished"), ("opus", "finished")])
+        # The table gives Sol no choice of its own family: the note says what holds.
+        self.assertEqual(self.review("own")["panel"][0]["note"], "same family as the implementer (openai)")
         self.with_role()
         self.landed("role", "lib/role.txt", "baz\n", agent="codex")
         self.lane("review", "role")
-        self.assertEqual(self.members("role"), [("sol", "skipped"), ("opus", "finished")])
-        self.assertIn("sol: same family as the implementer (openai)", self.review("role")["panel"][0]["reason"])
-        self.assertEqual([c for c in self.codex_calls() if c[2] == "exec"], [])
+        self.assertEqual(self.members("role"), [("sol", "finished"), ("opus", "finished")])
+        self.assertEqual(len([c for c in self.codex_calls() if c[2] == "exec"]), 2)
+
+    def test_the_single_reviewer_still_skips_its_own_familys_choice(self):
+        self.table(MODELS_TABLE)
+        self.env["FIXTURE_CODEX_USED"] = "95"
+        self.landed(agent="claude-code")
+        self.lane("review", "a")
+        receipt = self.review("a")
+        self.assertEqual(receipt["reviewer"], "opus")
+        self.assertIn("same family as the implementer (anthropic)", receipt["fallback"])
+        self.assertNotIn("panel", receipt)
 
     def test_a_panel_member_role_chose_runs_with_roles_model_and_effort(self):
         self.with_role()
@@ -259,7 +289,8 @@ class RoleTests(ReviewCase):
         self.landed("panel", "lib/panel.txt", "baz\n")
         output = self.lane("review", "panel")
         self.assertEqual(self.members("panel"), [("sol", "skipped"), ("opus", "finished")])
-        self.assertIn("sol: codex_weekly 0% left, needs 15%; its fallback opus is already on the panel",
+        # A panel member's limit is judged here on role's read (role's reasons mix in the family, fathers#151).
+        self.assertIn("Codex has 0% of the weekly limit left, under 15%; its fallback opus is already on the panel",
                       self.review("panel")["panel"][0]["reason"])
         self.assertIn("panel member sol:", output)
         self.assertEqual(self.codex_calls(), [], "neither Sol nor a second limit read runs")

@@ -13,28 +13,28 @@
 ┃  ⏸️    lane-555-host-rename-names                   ▪        waiting #2            10s    10004  ┃
 ┃                                                                                                  ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-╭─ LEASE DETAILS ──────────────────────────────────────────────────────────────────────────────────╮
+╭─ ❮ LANES LOG ❯ ─────── lane ────────────────────────────── result ────────────────────── ticket ─╮
 │                                                                                                  │
-│  label      lane-644-build-once                                                                 ┃│
-│  status     running · 1 slot                                                                    ┃│
-│  priority   normal                                                                              ┃│
-│  ticket     #644                                                                                 │
-│  phase      check                                                                                │
-│  cpu        ■■■■░░░░░░ 0.9 of 2 cores                                                            │
-│  granted    11:24:29 · waited 19m34s · running 35m10s                                            │
-│  memory     20 MB in 1 processes                                                                 │
-│  owner pid  10000                                                                                │
+│  11:59:02  reviewed    644-build-once                      2 findings · 9m                 #644  │
+│  11:58:10  gate        Straylight cedf8b972d               red · 19m                             │
+│  11:57:48  post-merge  710-speech-paste-phase              green · narrowed                #710  │
+│  11:56:05  landed      710-speech-paste-phase              onto integrate/queue-347        #710  │
+│  11:53:40  checked     710-speech-paste-phase              green · 2 suites                #710  │
+│  11:50:12  started     710-speech-paste-phase              on integrate/queue-347 · 2 …    #710  │
+│                                                                                                  │
 │                                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
-╭─ ❮ LANES LOG ❯ ─────── lane ────── result ─────╮ ╭─ MACHINE ─────────── queue ahead · 2 waiting ─╮
-│                                                │ │                                               │
-│  11:59:02  reviewed    644-build…  2 finding…  │ │  🆗 load ■■■■■■■■■■■■■■■■■■■■■■░░░░░░ 9.3/12  │
-│  11:58:10  gate        Strayligh…  red · 19m   │ │  🆗 mem  ■■■■■■■■■░░░░░░░░░░░░░░░░░░░ normal  │
-│  11:57:48  post-merge  710-speec…  green · n…  │ │  🆗 swap ■■■■■■■■■■■■■■■■■■■■■░░░░░░░ 4.4/6G  │
-│  11:56:05  landed      710-speec…  onto inte…  │ │                       ▄▄     ▄▄               │
-│  11:53:40  checked     710-speec…  green · 2…  │ │  ▄█████████▄ ▄     ▄▄██████████████▄▄▄█▄▄█▄▄  │
-│  11:50:12  started     710-speec…  on integr…  │ │  ███████████████████████████████████████████  │
-│                                                │ │  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
-│                                                │ │  −85s   avg 4.4/6 · peak 6 · full 10%    now  │
-╰────────────────────────────────────────────────╯ ╰─ slots held ──────────────────────────────────╯
+╭─ MACHINE ─────────── queue ahead · 2 waiting ─╮ ╭─ LEASE DETAILS ────────────────────────────────╮
+│                                               │ │                                                │
+│  🆗 load ■■■■■■■■■■■■■■■■■■■■■■░░░░░░ 9.3/12  │ │  label      lane-644-build-once               ┃│
+│  🆗 mem  ■■■■■■■■■░░░░░░░░░░░░░░░░░░░ normal  │ │  status     running · 1 slot                  ┃│
+│  🆗 swap ■■■■■■■■■■■■■■■■■■■■■░░░░░░░ 4.4/6G  │ │  priority   normal                            ╹│
+│                       ▄▄     ▄▄               │ │  ticket     #644                               │
+│   ▆▆▆▆▆▆▆▆▆          ▆██▆▆▆▆▆██▆▆▆▆   ▆  ▆    │ │  phase      check                              │
+│  ▇█████████▇ ▇     ▇▇██████████████▇▇▇█▇▇█▇▇  │ │  cpu        ■■■■░░░░░░ 0.9 of 2 cores          │
+│  ███████████████████████████████████████████  │ │  granted    11:24:29 · waited 19m34s · runni…  │
+│  ███████████████████████████████████████████  │ │  memory     20 MB in 1 processes               │
+│  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │ │  owner pid  10000                              │
+│  −85s   avg 4.4/6 · peak 6 · full 10%    now  │ │                                                │
+╰─ slots held ──────────────────────────────────╯ ╰────────────────────────────────────────────────╯
  Godfather what's new?      ↑↓ select   1 2 3 pages   ? help   q quit      updated 11:59:39  ● live
