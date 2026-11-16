@@ -506,6 +506,7 @@
   "err": "",
   "out": {
    "json": {
+    "cpu": null,
     "entries": [
      {
       "age": "<v>",
@@ -543,7 +544,7 @@
     "time": "<v>",
     "unowned": [],
     "unowned_resources": [],
-    "v": 1
+    "v": 2
    }
   }
  },

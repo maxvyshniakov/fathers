@@ -79,7 +79,8 @@ def detached(argv: List[str]) -> None:
     log = Store().root / "hook.out"
     log.parent.mkdir(parents=True, exist_ok=True)
     with open(os.devnull, "rb") as null, open(log, "ab") as out:
-        subprocess.Popen(argv, stdin=null, stdout=out, stderr=out, start_new_session=True, close_fds=True)
+        # In "/": the reaper must not hold the folder the hook ran in (a worktree its reap may remove).
+        subprocess.Popen(argv, stdin=null, stdout=out, stderr=out, start_new_session=True, close_fds=True, cwd="/")
 
 
 def main() -> int:

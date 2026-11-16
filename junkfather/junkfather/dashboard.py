@@ -8,6 +8,7 @@ import time
 from typing import Any, Dict, List, Optional, TypedDict
 
 from . import __version__
+from . import cpu as _cpu
 from . import release as _release
 from . import entry as _entry
 from . import events as _events
@@ -20,7 +21,7 @@ from .entry import Entry
 from .state import Store, as_dict, as_list, read_json
 from .text import duration, iso
 
-STATUS_VERSION = 1
+STATUS_VERSION = 2  # 2: `cpu`, the last sweep's CPU report (fathers#98)
 
 
 class Row(TypedDict):
@@ -60,11 +61,18 @@ class UnownedProcess(TypedDict):
     alive: Optional[bool]
 
 
-class UnownedResource(TypedDict):
+class _UnownedResource(TypedDict):
     kind: Any
     id: Any
     name: Any
     why: Any
+
+
+class UnownedResource(_UnownedResource, total=False):
+    repo: Any  # a worktree's: its main checkout, branch, age (seconds idle) and size (bytes)
+    branch: Any
+    age: Any
+    size: Any
 
 
 class LastSweep(TypedDict):
@@ -82,6 +90,7 @@ class Status(TypedDict):
     unowned: List[UnownedProcess]
     unowned_resources: List[UnownedResource]
     sweep: LastSweep
+    cpu: Any  # the last sweep's CPU report (cpu.py), None before a sweep wrote one
     errors: List[str]
 
 
@@ -131,13 +140,23 @@ def status(store: Store) -> Status:
         unowned.append({"pid": item.get("pid"), "start": item.get("start"), "cmd": item.get("cmd"),
                         "cwd": item.get("cwd"), "root": item.get("root"), "why": item.get("why"),
                         "age": None if started is None else max(0.0, now - started), "alive": alive})
-    resources: List[UnownedResource] = [
-        {"kind": item.get("kind"), "id": item.get("id"), "name": item.get("name"), "why": item.get("why")}
-        for item in map(as_dict, filter(_is_dict, as_list(listed.get("resources"))))]
+    resources: List[UnownedResource] = [resource_row(item)
+                                        for item in map(as_dict, filter(_is_dict, as_list(listed.get("resources"))))]
     return {"v": STATUS_VERSION, "host": _events.host(), "time": _events.now(), "entries": rows(store, table, now),
             "unowned": unowned, "unowned_resources": resources,
-            "sweep": {"time": iso(last.get("at")), "result": last.get("result")},
+            "sweep": {"time": iso(last.get("at")), "result": last.get("result")}, "cpu": last.get("cpu"),
             "errors": [] if table is not None else ["the process table cannot be read"]}
+
+
+def resource_row(item: Dict[str, Any]) -> UnownedResource:
+    """An unowned resource as status shows it: kind, id, name, why, and for a worktree its repo, branch, age and
+    size too."""
+    row: UnownedResource = {"kind": item.get("kind"), "id": item.get("id"), "name": item.get("name"),
+                            "why": item.get("why")}
+    if item.get("kind") == "worktree":
+        row.update({"repo": item.get("repo"), "branch": item.get("branch"), "age": item.get("age"),
+                    "size": item.get("size")})
+    return row
 
 
 def _is_dict(value: Any) -> bool:
@@ -183,6 +202,7 @@ def status_text(snapshot: Status) -> str:
     lines = [rows_text(snapshot["entries"])] if snapshot["entries"] else []
     lines += [f"unowned pid {item['pid']} ({item['why']}): {str(item['cmd'])[:120]}" for item in snapshot["unowned"]]
     lines += [f"unowned {_resources.describe(item)}: {item['why']}" for item in snapshot["unowned_resources"]]
+    lines += _cpu.text(as_dict(snapshot.get("cpu")))[:1]
     lines += [f"error: {error}" for error in snapshot["errors"]]
     lines.append(f"{len(snapshot['entries'])} running, {len(snapshot['unowned'])} unowned, "
                  f"{len(snapshot['unowned_resources'])} unowned resources; last sweep "

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypedDict
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypedDict, cast
 
 from . import procs as _procs
 from .state import Store, VERSION
@@ -58,6 +58,7 @@ class Entry(_Written, total=False):
     end: Optional[Dict[str, Any]]  # {reason, result, how, pids} once reaped
     error: str  # why it failed
     last_error: Dict[str, Any]  # the last reap that failed: {at, ...}
+    daemons: List[List[Any]]  # [pid, start, command]: detached daemons its processes started (browser.py)
 
 
 STARTING = "starting"
@@ -192,6 +193,26 @@ def refreshed(store: Store, entry_id: str, members_of: Callable[[Entry], List[_p
 def known(store: Store, entry_id: str, members: Sequence[_procs.Proc]) -> Optional[Entry]:
     """A running entry's `known` members, refreshed (by a sweep when no supervisor does it)."""
     return _move(store, entry_id, _from(RUNNING), lambda e: set_known(e, members))
+
+
+def add_daemons(entry: Entry, found: Sequence[_procs.Proc]) -> None:
+    """`found` joins the entry's `daemons` ([pid, start, command]), each once."""
+    have = {(item[0], item[1]) for item in entry.get("daemons") or [] if len(item) >= 2}
+    entry["daemons"] = list(entry.get("daemons") or []) + [[p.pid, p.start, p.cmd] for p in found
+                                                            if (p.pid, p.start) not in have]
+
+
+def with_daemons(entry: Entry, found: Sequence[_procs.Proc]) -> Entry:
+    """A copy of the entry with `found` among its daemons, not saved (a dry run)."""
+    copy: Entry = cast(Entry, dict(entry))
+    add_daemons(copy, found)
+    return copy
+
+
+def daemons(store: Store, entry_id: str, found: Sequence[_procs.Proc]) -> Optional[Entry]:
+    """A running entry's detached daemons (agent-browser's, which launchd adopted) join its `daemons`, which a reap
+    takes with its members (reap.members)."""
+    return _move(store, entry_id, _from(RUNNING), lambda e: add_daemons(e, found))
 
 
 def gone(store: Store, entry_id: str, now: Optional[float] = None) -> Optional[Entry]:
