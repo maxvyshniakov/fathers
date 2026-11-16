@@ -312,13 +312,15 @@ class SeamTests(ConfigCase):
             ]
             """))
         os.environ["LANEFATHER_MODELS"] = str(models)
-        chosen = reviewer.Reviewer(config.current()).models
-        self.assertEqual((chosen["sol"], chosen["sol_effort"], chosen["sol_min_left"], chosen["opus"],
-                          chosen["opus_effort"]), ("gpt-9-sol", "high", 30, "claude-opus-9", "low"))
+        runner = reviewer.Reviewer(config.current())
+        self.assertEqual([(m.alias, m.id, m.effort, m.min_left, m.not_family) for m in runner.choices],
+                         [("sol", "gpt-9-sol", "high", 30, True), ("opus", "claude-opus-9", "low", None, True),
+                          ("opus", "claude-opus-9", "medium", None, False)])
+        self.assertEqual((runner.effort, runner.models["opus"].effort), ("high", "low"))
         models.write_text("schema = 1\n")
-        self.assertEqual(reviewer.Reviewer(config.current()).models, reviewer.DEFAULT_MODELS)
+        self.assertEqual(reviewer.Reviewer(config.current()).choices, list(reviewer.DEFAULTS))
         os.environ["LANEFATHER_MODELS"] = str(self.tmp / "missing.toml")
-        self.assertEqual(reviewer.Reviewer(config.current()).models, reviewer.DEFAULT_MODELS)
+        self.assertEqual(reviewer.Reviewer(config.current()).choices, list(reviewer.DEFAULTS))
 
 
 if __name__ == "__main__":
