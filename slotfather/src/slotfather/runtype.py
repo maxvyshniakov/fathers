@@ -102,13 +102,12 @@ def above(ran: float, p90: float | None) -> bool:
 
 
 def project_of(item: dict[str, Any]) -> str:
-    """The git repository the request ran in (`project`, which `run` records), else the first part of its derived
-    label, else its label's family (an older client's or a library caller's request)."""
+    """The git repository the request ran in (`project`, which `run` records), else its label's family: a request
+    outside any repository (a temporary directory), an older client's or a library caller's. Not the first part of
+    its derived label: without a project that part is the command's name ("true · check"), so one request's run
+    type would change with its command (fathers#106)."""
     if isinstance(item.get("project"), str) and item["project"]:
         return item["project"]
-    derived = item.get("label_derived")
-    if isinstance(derived, str) and derived:
-        return derived.split(SEP)[0]
     return family(item.get("label"))
 
 

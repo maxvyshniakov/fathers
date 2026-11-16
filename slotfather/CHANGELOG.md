@@ -131,6 +131,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- A request run outside any git repository (a temporary directory, a clean worktree there) no longer gets a
+  run type named after its command (`true · check`, `echo · check`): its run type keys by its label's family,
+  so its runs form one series whatever their command (fathers#106).
 - A lease whose tree runs a container or VM program (`docker`, `podman`, `qemu-system-*`, `limactl`, ...) is
   never idle, though the work it waits on uses no host CPU (fathers#159).
 - `procs --json --cwd` no longer lists in `cwd_unknown` or `lease_unknown` a process that exited between the scan
