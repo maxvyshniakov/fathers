@@ -45,6 +45,14 @@ def steady(block: dict[str, Any]) -> dict[str, Any]:
     return found
 
 
+def counting(function: Any, calls: list[object]) -> Any:
+    """`function`, recording each call's arguments in `calls`."""
+    def counted(*args: Any, **kwargs: Any) -> Any:
+        calls.append(args)
+        return function(*args, **kwargs)
+    return counted
+
+
 class BoardTests(SlotCase):
     def setUp(self) -> None:
         super().setUp()
@@ -120,10 +128,51 @@ class BoardTests(SlotCase):
             self.assertEqual(entry["state"] == "held", row["kind"] == "held")
         waiter = next(entry for entry in found["entries"] if entry["id"] == stem)
         self.assertEqual("stray", waiter["yield_asked"]["label"])
+        # The text status reads the same look (fathers#36): the yield request of the holder, none of the waiter's
+        text = self.status()
+        self.assertRegex(text, r"held: 1 slot\(s\) holder .* yieldable asked-to-yield-for=waiter")
+        self.assertRegex(text, r"waiting: 4 slot\(s\) waiter (?!.*asked-to-yield)")
+        self.assertIn(f"{found['held']} of {found['slots']} slots held", text)
         for label in ("holder", "other"):
             self.release(label)
         for process in processes:
             self.finish(process)
+
+    def test_every_reader_takes_the_queue_lock_once_and_reads_ps_at_most_once(self) -> None:
+        """fathers#36: each reader of the queue reads it from one look under the lock."""
+        processes, stem = self.fixture()
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            query = importlib.import_module("slotfather.query")
+            state = importlib.import_module("slotfather.state")
+            process = importlib.import_module("slotfather.process")
+            cli = importlib.import_module("slotfather.cli")
+            sweep = importlib.import_module("slotfather.sweep")
+            path = self.state / "queue" / f"{stem}.json"
+            readers = {
+                "status": lambda: query.status_lines(),
+                "status --json": lambda: query.status_json(),
+                "status --json --pid": lambda: query.status_json(pid=os.getpid()),
+                "long wait": lambda: query.long_wait_report(self.state, path),
+                "available": lambda: query.available(),
+                "advise": lambda: query.advise(),
+                "slots": lambda: cli.slots_command([]),
+                "sweep protection": lambda: sweep.leases(self.state),
+            }
+            real_lock, real_table = state.locked, process.processes
+            for name, reader in readers.items():
+                locks: list[object] = []
+                tables: list[object] = []
+                with self.subTest(reader=name), \
+                        mock.patch.object(state, "locked", counting(real_lock, locks)), \
+                        mock.patch.object(process, "processes", counting(real_table, tables)), \
+                        mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+                    reader()
+                    self.assertEqual(1, len(locks), f"{name} took the queue lock {len(locks)} times")
+                    self.assertLessEqual(len(tables), 1, f"{name} read the process table {len(tables)} times")
+        for label in ("holder", "other"):
+            self.release(label)
+        for process_ in processes:
+            self.finish(process_)
 
     def test_full_status_is_the_status_older_readers_read_and_more(self) -> None:
         holder = self.request("holder", 1)

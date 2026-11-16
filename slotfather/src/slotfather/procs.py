@@ -164,6 +164,26 @@ def read_cwds(processes: dict[int, Process], uid: int) -> dict[int, str]:
     return found
 
 
+def recheck(processes: dict[int, Process], cwd_unknown: list[int],
+            lease_unknown: list[int]) -> tuple[list[int], list[int], list[dict[str, Any]]]:
+    """Keep of the pids whose cwd or environment could not be read those that still run as the process the table
+    showed (fathers#158): a short-lived helper (lsof, git, a shell) that exited between the scan and the read is
+    gone, not unknown, and would otherwise refuse every `lanefather done` on a busy machine. Returns both lists and
+    one record per unknown pid with its start and command, so a consumer can name it. A re-check that gets no
+    answer fails the query: an unknown is never dropped unchecked."""
+    wanted = set(cwd_unknown) | set(lease_unknown)
+    try:
+        live = _process.running({number: processes[number].start for number in wanted})
+    except _process.PsError as error:
+        message = str(error) if error.detail.startswith("ps ") else f"cannot re-check processes: {error.detail}"
+        raise ProcsError(message) from None
+    cwd = [number for number in cwd_unknown if number in live]
+    lease = [number for number in lease_unknown if number in live]
+    named = [{"pid": number, "start": processes[number].start, "cmd": processes[number].cmd,
+              "cwd_unknown": number in cwd, "lease_unknown": number in lease} for number in sorted(live)]
+    return cwd, lease, named
+
+
 def query(pid: int | None = None, cwd: str | None = None, directory: Path | None = None) -> dict[str, Any]:
     """Observe processes; ``--pid`` is exact and does not scan working directories."""
     strange: list[tuple[Path, dict[str, Any], bool]] = []
@@ -194,6 +214,7 @@ def query(pid: int | None = None, cwd: str | None = None, directory: Path | None
     parents = {number: process.ppid for number, process in processes.items()}
     membership = _process.lease_membership(parents, [_process.Lease(str(lease["lease"]), lease["pid"])
                                                      for lease in leases], selected, detached_only=True)
+    unknown, lease_unknown, named = recheck(processes, unknown, membership.unknown)
     records: list[dict[str, Any]] = []
     for number in selected:
         process = processes[number]
@@ -203,7 +224,8 @@ def query(pid: int | None = None, cwd: str | None = None, directory: Path | None
                                      for item in [number, *chain] if session(processes[item])],
                         "leases": [{**leases[index], "via": via} for index, via in membership.leases.get(number, [])]})
     return {"v": 2, "query": {"pid": pid, "cwd": cwd, "start": processes[pid].start if pid in processes else None},
-            "cwd_unknown": unknown, "lease_unknown": membership.unknown, "processes": records, "warnings": warnings}
+            "cwd_unknown": unknown, "lease_unknown": lease_unknown, "unknown": named, "processes": records,
+            "warnings": warnings}
 
 
 USAGE = "usage: slotfather procs --json [--pid PID] [--cwd PATH]"

@@ -44,8 +44,8 @@ class PriorityTests(unittest.TestCase):
                    if not key.startswith(('SLOTFATHER', 'STRAYLIGHT_SLOT'))}
             env.update(SLOTFATHER_DIR=tmp, SLOTFATHER_LEGACY_DIRS='', SLOTFATHER_CORES='8',
                        PYTHONPATH=str(ROOT / 'src'))
-            code = ('import json; from slotfather import leases; '
-                    'lease=leases.acquire(1,"api",priority="interactive",ticket=42); '
+            code = ('import json; from slotfather import client; '
+                    'lease=client.acquire(1,"api",priority="interactive",ticket=42); '
                     'print(lease.path.read_text()); lease.release()')
             run = subprocess.run([sys.executable, '-c', code], env=env, text=True, capture_output=True, timeout=10)
             self.assertEqual(0, run.returncode, run.stderr)

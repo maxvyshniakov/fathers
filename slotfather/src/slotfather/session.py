@@ -28,14 +28,16 @@ import time
 from types import FrameType
 from typing import Any, cast
 
+from . import client as _client
 from . import config as _config
 from . import durations as _durations
 from . import entry as _entry
 from . import events as _events
-from . import facts as _facts
-from . import leases as _leases
+from . import labels as _labels
 from . import platform as _platform
 from . import process as _process
+from . import queue as _queue
+from . import runner as _runner
 from . import state as _state
 
 IDLE_DEFAULT = 120.0  # seconds without an active run before a session releases its slots
@@ -143,10 +145,10 @@ def start(argv: list[str]) -> int:
     spec = parse_start(argv)
     directory = _config.state_dir()
     _state.require_own(directory, "a session")
-    if _leases.inherited_lease(_process.processes()) is not None:
+    if _queue.inherited_lease(_process.processes()) is not None:
         raise _config.SlotError("a session cannot start inside a lease: it would wait for the slots its caller holds")
     with _state.locked(directory):  # the process table of this moment: one taken earlier would reap new waiters
-        found = find(_leases.reap(directory, _leases.process_table(directory)), spec["name"])
+        found = find(_queue.reap(directory, _queue.process_table(directory)), spec["name"])
     if found is not None:
         raise _config.SlotError(f"session {spec['name']} exists (pid {found[1].get('pid')}, {found[1].get('state')})")
     env = {k: v for k, v in os.environ.items() if k not in ("SLOTFATHER_LEASE", "SLOTFATHER_COUNT", "SLOTFATHER_YIELD")}
@@ -183,7 +185,7 @@ class Holder:
 
     def __init__(self, spec: dict[str, Any]):
         self.spec, self.stop_asked = spec, False
-        self.lease: _leases.Lease | None = None
+        self.lease: _client.Lease | None = None
 
     def ask_stop(self, _signum: int, _frame: FrameType | None) -> None:
         self.stop_asked = True
@@ -199,7 +201,7 @@ class Holder:
         note = (f"session {spec['name']} holds its slots between runs until it is stopped or idle for "
                 f"{_config.duration(spec['idle'])}")
         try:
-            lease = _leases.acquire(spec["count"], spec["name"], f"slotfather session {spec['name']}",
+            lease = _client.acquire(spec["count"], spec["name"], f"slotfather session {spec['name']}",
                                     wait=spec.get("wait"), note=note, meta=spec.get("meta") or None,
                                     priority=spec.get("priority"), ticket=spec.get("ticket"), session=session)
         except _config.SlotTimeout as error:
@@ -261,7 +263,7 @@ class Holder:
                                         busy=round(float(uses.get("busy") or 0), 1), ended_by=reason)
                 _state.write(path, entry)
                 uses_path(path).unlink(missing_ok=True)
-                _events.emit(directory, "session.ended", _events.request(entry, path),
+                _events.record(directory, None, "session.ended", _events.request(entry, path),
                              {"reason": reason, "runs": entry["session"]["runs"], "busy": entry["session"]["busy"],
                               "held": round(moment - began)}, _events.holder(entry))
             break
@@ -318,8 +320,8 @@ def stop(argv: list[str]) -> int:
     directory = _config.state_dir()
     _state.require_own(directory, "a session stop")
     with _state.locked(directory):
-        table = _leases.process_table(directory)
-        found = find(_leases.reap(directory, table), name)
+        table = _queue.process_table(directory)
+        found = find(_queue.reap(directory, table), name)
         if found is None:
             raise _config.SlotError(f"no session {name} in this queue")
         path, entry = found
@@ -338,7 +340,7 @@ def stop(argv: list[str]) -> int:
         if time.monotonic() - reaped >= 5:
             reaped = time.monotonic()
             with _state.locked(directory), contextlib.suppress(_config.SlotError):
-                _leases.reap(directory, _leases.process_table(directory))
+                _queue.reap(directory, _queue.process_table(directory))
     if path.exists():
         print(f"slot: session {name} still holds its slots after {STOP_WAIT:g} s", file=sys.stderr)
         return 1
@@ -362,15 +364,15 @@ def run_inside(name: str, argv: list[str], label: str | None = None, meta: dict[
     _state.require_own(directory, "a session run")
     me = os.getpid()
     said = False
-    poll = float(_config.setting("POLL") or 2)
+    poll, _ = _config.poll_settings()
     while True:
         with _state.locked(directory):
             try:
-                table = _leases.process_table(directory)
+                table = _queue.process_table(directory)
             except _config.ProcessTableError:
                 table = None  # no table to trust: this look reaps nothing, and the run looks again
             if table is not None:
-                found = find(_leases.reap(directory, table), name)
+                found = find(_queue.reap(directory, table), name)
                 if found is None:
                     raise _config.SlotError(f"no session {name} in this queue (slotfather session start --label {name})")
                 path, entry = found
@@ -385,7 +387,7 @@ def run_inside(name: str, argv: list[str], label: str | None = None, meta: dict[
                                                               "started": _platform.start_epoch(me), "label": label,
                                                               "cmd": _events.command(" ".join(argv)), "since": since}
                     _state.write(uses_path(path), uses)
-                    _events.emit(directory, "session.run_started", _events.request(entry, path),
+                    _events.record(directory, None, "session.run_started", _events.request(entry, path),
                                  {"session": name, "run": {"pid": me, "label": label,
                                                            "cmd": _events.command(" ".join(argv))}})
                     break
@@ -395,7 +397,7 @@ def run_inside(name: str, argv: list[str], label: str | None = None, meta: dict[
             said = True
         time.sleep(poll)
     try:
-        git = _facts.git(os.getcwd())
+        git = _labels.git(os.getcwd())
     except OSError:
         git = None
     environment: dict[str, str] = {}
@@ -404,7 +406,7 @@ def run_inside(name: str, argv: list[str], label: str | None = None, meta: dict[
     began = time.monotonic()
     status, usage = 1, None
     try:
-        status, usage = _leases.execute(argv, environment, _leases.policy() == "background", directory=directory)
+        status, usage = _runner.execute(argv, environment, _client.policy() == "background", directory=directory)
     finally:
         ran = time.monotonic() - began
         with _state.locked(directory):
@@ -423,5 +425,5 @@ def run_inside(name: str, argv: list[str], label: str | None = None, meta: dict[
                 run["meta"] = meta  # --meta cache=..., per run
             if git:
                 run["git"] = git  # the tree this run checked
-            _events.emit(directory, "session.run_ended", _events.request(entry, path), {"session": name, "run": run})
+            _events.record(directory, None, "session.run_ended", _events.request(entry, path), {"session": name, "run": run})
     return status

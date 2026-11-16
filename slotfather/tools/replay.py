@@ -27,6 +27,8 @@ from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from slotfather import config as sf_config
 from slotfather import entry as sf_entry
+from slotfather import estimates as sf_estimates
+from slotfather import runtype as sf_runtype
 from slotfather import schedule as sf_schedule
 from slotfather import settings as sf_settings
 from slotfather import state as sf_state
@@ -196,7 +198,7 @@ def classify(request: dict, slots: int) -> str:
     gate (verify with a check list of 50 or more, a post-merge smoke, Sid-Kit's verify.mjs, a lane check of an old
     client, which ran full gates), and measurements (every slot, or a label that says so); normal otherwise."""
     label, command = request.get("label") or "", request.get("cmd") or ""
-    what = sf_schedule.kind(command)
+    what = sf_runtype.kind(command)
     if "pre-push" in command or label.startswith("publish"):
         return "interactive"
     if request["count"] >= slots or MEASURING.search(label):
@@ -212,7 +214,7 @@ def classify(request: dict, slots: int) -> str:
     checks = re.search(r"--checks \[(\d+)\]", what)
     if (checks and int(checks[1]) >= 50) or "--suites" in what or "verify.mjs" in what:
         return "batch"
-    family = sf_schedule.family(label)
+    family = sf_runtype.family(label)
     if family in ("post-merge", "post-merge-pin-ui-libs", "ci-baseline-cold", "ci-baseline-warm"):
         return "batch"
     if family.startswith("lane") and not command:
@@ -283,10 +285,12 @@ def short_first(limit: float, bonus: float) -> Callable[[list[dict[str, Any]], C
 def plan_all_only(waiters: list[dict[str, Any]], held: list[dict[str, Any]], slots: int, moment: float,
                   estimate: sf_schedule.Estimate, settings: dict[str, Any]) -> sf_schedule.Plan:
     """Backfill around an all-slot waiter only; any other waiter that does not fit keeps the window order."""
-    first = sf_schedule.plan(waiters, held, slots, moment, "window", settings=settings)
+    first = sf_schedule.plan(waiters, held, slots, moment, "window", settings=settings,
+                             window=sf_config.overtake_window())
     if not any(e["count"] >= slots for e in waiters):
         return first
-    backfill = sf_schedule.plan(waiters, held, slots, moment, "backfill", estimate, settings=settings)
+    backfill = sf_schedule.plan(waiters, held, slots, moment, "backfill", estimate, settings=settings,
+                                window=sf_config.overtake_window())
     if backfill.head is not None and backfill.head["count"] >= slots:
         return backfill
     return first
@@ -298,7 +302,7 @@ class Replay:
     def __init__(self, requests: list[dict], slots: int, policy: dict, seed: list[tuple] = (),
                  assumed: dict | None = None):
         self.requests, self.slots, self.policy = requests, slots, policy
-        self.estimates = sf_schedule.Estimates(seed)
+        self.estimates = sf_estimates.Estimates(cast(list[Any], seed))
         self.assumed = assumed or {}
         self.classes: list[str] = [recorded_priority(r) or classify(r, slots) for r in requests]
         self.asks = self.yields = 0
@@ -320,6 +324,16 @@ class Replay:
             error = random.Random(f"{self.policy.get('seed', 1)}-{entry['id']}").gauss(0, self.policy["noise"])
             found *= math.exp(error)
         return None if found is None else found * bias
+
+    def p90(self, entry: dict[str, Any]) -> float | None:
+        """The p90 run a request that passes a blocked head runs by, from the same history as estimate(), as grant()
+        reads it live (estimates.p90_estimator(); fathers#160): one policy entry point."""
+        me = cast(Any, self)  # the replay's attributes are untyped (tools/type-baseline.json)
+        policy = cast(dict[str, Any], me.policy)
+        if policy.get("oracle"):
+            return float(me.run_of(me.requests[entry["id"]]))
+        found = self.estimates.p90(entry.get("label"), entry.get("cmd"))
+        return None if found is None else found * float(policy.get("bias", 1.0))
 
     def settings(self) -> dict[str, Any]:
         """The queue's defaults before classes (no class moves, nobody asked, no ageing, the head's limit of 2700 s),
@@ -343,10 +357,12 @@ class Replay:
             ordered, bonus = reorder(waiting, self.estimate)
             inner = "backfill" if name == "short+backfill" else "window"
             found = sf_schedule.plan(ordered, held, self.slots, moment, inner, self.estimate,
-                            settings={**settings, "interactive": bonus, "batch": 0.0}).grants
+                            settings={**settings, "interactive": bonus, "batch": 0.0},
+                            window=sf_config.overtake_window(), p90=self.p90).grants
             by_id = {e["id"]: e for e in waiting}
             return [by_id[e["id"]] for e in found]
-        found = sf_schedule.plan(waiting, held, self.slots, moment, name, self.estimate, settings=settings)
+        found = sf_schedule.plan(waiting, held, self.slots, moment, name, self.estimate, settings=settings,
+                                 window=sf_config.overtake_window(), p90=self.p90)
         if settings.get("keep"):  # the head keeps its reservation from look to look, as grant() keeps it
             sf_schedule.reservations(waiting, found)
         return found.grants
@@ -459,7 +475,7 @@ class Replay:
                     ordered = sorted(waiting.values(), key=lambda e: (sf_config.seconds(e["since"]), e["id"]))
                     holders = list(held.values())
                     wanted = sf_schedule.yield_asks(ordered, holders, self.slots, moment, self.estimate, settings=settings,
-                                           asked=[held[n] for n in asked])
+                                           asked=[held[n] for n in asked], window=sf_config.overtake_window())
                     chosen = {h["id"]: w["id"] for h, w in wanted}
                     for number in [n for n in asked if n not in chosen]:
                         del asked[number]  # withdrawn
@@ -614,7 +630,7 @@ def validate(requests: list[dict], results: list[dict], start: float, until: flo
 
 
 def family_patience(found: list[dict]) -> list[dict]:
-    """Gives every request a client wait as its family's (sf_schedule.family() of its label) longest recorded give-up, where
+    """Gives every request a client wait as its family's (sf_runtype.family() of its label) longest recorded give-up, where
     any request of that family gave up and the history has no `until` for it: lines before the history recorded
     `until` do not say which requests had a wait, and taking only those that gave up as having one hides what a
     head that gives up costs when it would not have. A request that waited longer than that in fact had no such
@@ -622,10 +638,10 @@ def family_patience(found: list[dict]) -> list[dict]:
     longest = {}
     for request in found:
         if request["source"] == "history" and request["patience"] is not None:
-            name = sf_schedule.family(request["label"])
+            name = sf_runtype.family(request["label"])
             longest[name] = max(longest.get(name, 0.0), float(request["patience"]))
     for request in found:
-        patience = longest.get(sf_schedule.family(request["label"]))
+        patience = longest.get(sf_runtype.family(request["label"]))
         if request["source"] == "log" or request.get("give_up") is not None or patience is None:
             continue
         if request["waited"] is not None and request["waited"] > patience:
@@ -645,7 +661,7 @@ def compare(directory: Path, moment: float, slots: int, policies: dict = POLICIE
     start = min((r["arrival"] for r in found if r["source"] == "history"), default=moment)
     until = max((r["arrival"] for r in found), default=moment) if until is None else until
     first = start if since is None else since
-    whole = sf_schedule.Estimates((r["label"], r["cmd"], r["run"]) for r in found
+    whole = sf_estimates.Estimates((r["label"], r["cmd"], r["run"]) for r in found
                          if r["run"] is not None and r.get("outcome") not in sf_config.UNFINISHED)
     seed = seed_runs(directory, start) if seed_log else []
     table, validation = {}, None

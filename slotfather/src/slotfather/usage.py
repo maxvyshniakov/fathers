@@ -125,10 +125,7 @@ class Watch(threading.Thread):
         super().__init__(daemon=True, name="slotfather-watch")
         self.usage, self.directory, self.entry = usage, directory, entry
         self.idle = _idle.Tracker()  # since when the tree has been low (#12), recorded beside the entry
-        try:
-            self.most = max(0.05, float(_config.setting("SAMPLE_MAX") or _config.SAMPLE_MAX))
-        except ValueError:
-            self.most = _config.SAMPLE_MAX
+        self.most = _config.sample_max()
         self.stopped = threading.Event()
         self.lock = threading.Lock()
 
@@ -164,6 +161,9 @@ class Watch(threading.Thread):
             if children is not None:
                 members[key] += children
         since = self.idle.observe(moment, members, threshold)
+        if since is not None and any(_idle.container(command)
+                                     for command in _process.commands(key[0] for key in members).values()):
+            since = self.idle.since = None  # a container or VM runs in the tree: its work uses no host CPU (#159)
         if self.entry.exists():  # a release removes the entry, and with it the record
             _idle.record(self.entry, since, self.idle.rate, moment)
 
@@ -176,7 +176,7 @@ class Watch(threading.Thread):
             self.look()
             interval = min(interval * 1.5, self.most)
 
-    def finish(self, rusage, wall: float) -> dict | None:
+    def finish(self, rusage: Any, wall: float) -> dict[str, Any] | None:
         """Stops sampling, takes the last look (after the command exited) and returns the usage. Waits at most
         WATCH_JOIN seconds for the sampler, and skips the last look when it is still stuck: the release goes on."""
         self.usage.root_gone = True

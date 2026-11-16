@@ -3,6 +3,8 @@
   slotfather run [-n N|all] [--label L] [--meta K=V]... [--priority P] [--ticket ID] [--yieldable] [--wait S] [--] COMMAND...
                                                                      run COMMAND holding N slots (default 1)
   slotfather yield                                                   inside a yieldable lease: yield if asked
+  slotfather lock PATH -- COMMAND...                                 run COMMAND holding a flock on PATH; the
+                                                                     enclosing lease frees its slots while it waits
   slotfather session start --label NAME [-n N|all] [--idle S] [--expect S] ...  hold the machine for a series of
                                                                      `run --session NAME -- COMMAND`; session stop NAME
   slotfather status [--json [--pid PID | --full]]                    running and waiting requests, in queue order
@@ -142,6 +144,7 @@ def dashboard(argv: list[str]) -> int:
 USAGE = ("usage: slotfather                     (in a terminal: the live dashboard, godfather)\n"
          "       slotfather run [-n N|all] [--label L] [--meta KEY=VALUE]... [--priority interactive|normal|batch] [--ticket ID]\n"
          "                      [--yieldable] [--wait SECONDS] [--] COMMAND...      (inside a lease: slotfather yield)\n"
+         "       slotfather lock PATH -- COMMAND...    (the enclosing lease frees its slots while it waits for the lock)\n"
          "       slotfather session start --label NAME [-n N|all] [--idle S] [--expect S] [--priority P] [--ticket ID]\n"
          "                      [--meta K=V]... [--wait S] | session stop NAME | run --session NAME [--label L] -- COMMAND...\n"
          "       slotfather status [--json [--pid PID | --full]] | available [--label L] [-- COMMAND...]\n"
@@ -174,7 +177,7 @@ def parse_count(value: str) -> int:
 
 
 def run_command(argv: list[str]) -> int:
-    from . import leases as _leases
+    from . import runner as _runner
     count, label, wait, yieldable = 1, os.path.basename(os.getcwd()), None, False
     pairs: list[str] = []
     priority: str | None = None
@@ -221,7 +224,7 @@ def run_command(argv: list[str]) -> int:
             raise _config.SlotError("run --session takes only --label and --meta: the session's lease is already held")
         from .session import run_inside
         return run_inside(session, argv, label if labelled else None, parse_meta(pairs))
-    return _leases.run(count, label, argv, wait, parse_meta(pairs), yieldable, priority=priority, ticket=ticket,
+    return _runner.run(count, label, argv, wait, parse_meta(pairs), yieldable, priority=priority, ticket=ticket,
                        labelled=labelled)
 
 
@@ -253,16 +256,17 @@ def request_options(argv: list[str], what: str, flags: dict) -> tuple[dict, str,
 def yield_command(argv: list[str]) -> int:
     """`slotfather yield`, from inside a yieldable lease between two steps: yields if asked and returns once the
     lease is held again; returns at once when nothing asked. Exit 0 either way."""
-    from . import leases as _leases
+    from . import client as _client
     from . import process as _process
+    from . import queue as _queue
     from . import state as _state
     if argv:
         raise _config.SlotError("yield takes no arguments")
     _state.require_own(_config.state_dir(), "yield")
-    found = _leases.inherited_lease(_process.processes())
+    found = _queue.inherited_lease(_process.processes())
     if found is None or found[0].parent.parent != _config.state_dir():
         raise _config.SlotError("yield runs inside a lease of this queue (SLOTFATHER_LEASE, or a holder among its ancestors)")
-    if not _leases.yield_lease(found[0]):
+    if not _client.yield_now(found[0]):
         print("slot: no yield requested", file=sys.stderr)
     return 0
 
@@ -343,14 +347,16 @@ def order_line(found: dict) -> str:
             f"{found['fallback']:g} s, overrun {found['overrun']:g}; interactive {found['interactive']:g} s ahead, "
             f"batch {found['batch']:g} s behind, yield after {found['yield_after']:g} s; idle below "
             f"{found['idle_cpu']:g} cores for {found['idle_after']:g} s; batch ages {ages('aging_batch')}, normal "
-            f"{ages('aging_normal')}; warn after {found['warn_wait']:g} s waiting; memory pressure warning admits "
+            f"{ages('aging_normal')}; warn after {found['warn_wait']:g} s waiting; a blocked head gives way "
+            f"{ages('reservation_timeout')} past its reserved start; memory pressure warning admits "
             f"{'one 1-slot lease at a time' if found['warning_admits'] >= 1 else 'nothing'} "
             f"({'saved' if found['saved'] else 'default'})")
 
 
 def order_command(argv: list[str]) -> int:
     """`slotfather order [backfill|window] [--safety X] [--limit S] [--fallback S] [--overrun X] [--idle-cpu C]
-    [--idle-after S] [--aging-batch S] [--aging-normal S] [--warn-wait S] [--warning-admits 1|0] | reset`; S is
+    [--idle-after S] [--aging-batch S] [--aging-normal S] [--warn-wait S] [--reservation-timeout S]
+    [--warning-admits 1|0] | reset`; S is
     seconds or 30m, 1.5h."""
     from . import durations as _durations
     from . import leases as _leases
@@ -375,7 +381,7 @@ def order_command(argv: list[str]) -> int:
         else:
             raise _config.SlotError(f"order takes backfill or window, --safety, --limit, --fallback, --overrun, "
                             f"--interactive, --batch, --yield-after, --idle-cpu, --idle-after, --aging-batch, "
-                            f"--aging-normal, --warn-wait, --warning-admits, or reset; not {word!r}")
+                            f"--aging-normal, --warn-wait, --reservation-timeout, --warning-admits, or reset; not {word!r}")
     if reset and changes:
         raise _config.SlotError("order reset takes nothing else")
     if changes or reset:
@@ -386,7 +392,8 @@ def order_command(argv: list[str]) -> int:
     if (changes or reset) and moved:
         print(f"slotfather: note: order.json now holds {', '.join(moved)}, which an older slotfather may not know "
               f"(3e3a621 and older know no classes, those before ageing no aging or warn settings, those before "
-              f"the memory warning allowance no warning_admits): their looks fall "
+              f"the memory warning allowance no warning_admits, those before fathers#160 no "
+              f"reservation_timeout): their looks fall "
               f"back to the window order until they are updated", file=sys.stderr)
     print(order_line(_settings.order_settings(directory)))
     return 0
@@ -408,9 +415,8 @@ def slots_command(argv: list[str]) -> int:
         _state.require_own(directory, "a capacity change")
         # applies at the next grant, busy or not (#7)
         _settings.configure({"capacity.json": slots_value(argv)}, granted=_leases.grant_now)
-    live, legacy, _, found = _query.locked_snapshot(directory)
-    held = _query.held_slots(live, legacy, int(found["slots"]))
-    drain = _query.draining(held, found["slots"])
+    look = _query.look(directory)
+    found, held, drain = look.basis, look.held, look.draining
     if drain:
         print(f"slotfather: note: {held} slots held: draining {drain}; running work keeps its slots and nothing "
               f"more starts until at most {found['slots']} are held", file=sys.stderr)
@@ -467,6 +473,9 @@ def main(argv: list[str] | None = None) -> int:
             return status_command(rest[1:])
         if command == "yield":
             return yield_command(rest)
+        if command == "lock":
+            from .lockwait import command as lock_command
+            return lock_command(rest)
         if command == "reprioritize":
             return reprioritize_command(rest)
         if command == "ask-yield":

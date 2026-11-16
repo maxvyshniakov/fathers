@@ -13,7 +13,7 @@ per group the median and 90th percentile of wait and run, and the cores used per
 seconds times slots. The machine part gives the share of sampled time the one-minute load stood over the cores
 (more runnable threads than cores) and under them, the CPU busy share, and how often a slot's worth of cores sat
 idle. The sweeps (sweep.jsonl, `slotfather sweep`) add what was found and stopped. `asks` compares, per label
-family, the slots asked with the cores used (askuse.py); `--by family` groups by it. `--host HOST` reads the history
+family, the slots asked with the cores used (runtype.py); `--by family` groups by it. `--host HOST` reads the history
 imported from HOST (`slotfather history import HOST`). It only reads; it lives apart from the queue and loads the slotfather beside it.
 """
 from __future__ import annotations
@@ -26,12 +26,10 @@ import time
 from typing import Any, Iterable, cast
 
 
-from . import askuse as _askuse
 from . import runtype as _runtype
 from . import config as _config
 from . import durations as _durations
 from . import entry as _entry
-from . import schedule as _schedule
 from . import settings as _settings
 from . import state as _state
 
@@ -56,7 +54,7 @@ def percentile(values: list[float], q: float) -> float | None:
     return ordered[low] + (ordered[high] - ordered[low]) * (rank - low)
 
 
-kind = _schedule.kind  # the command kind the queue's run-time estimates use too
+kind = _runtype.kind  # the command kind the queue's run-time estimates use too
 
 
 def parse_since(text: str, moment: float | None = None) -> float:
@@ -239,7 +237,7 @@ def summarize(directory: Path | None = None, since: float | None = None, label: 
     for item in items:
         if field:
             value = _entry.priority_of(item) if field == "priority" else _entry.ticket_of(item) \
-                if field == "ticket" else _schedule.family(item.get("label")) if field == "family" \
+                if field == "ticket" else _runtype.family(item.get("label")) if field == "family" \
                 else item.get("label_derived") or item.get("label")
             key = (value, None)
         elif meta_key:
@@ -280,7 +278,7 @@ def summarize(directory: Path | None = None, since: float | None = None, label: 
         "machine": machine(samples, cores, capacity),
         "fill_slots": round(cores / per_slot, 1) if per_slot else None,
         "sweeps": sweeps(swept),
-        "asks": _askuse.by_family(items, cores / max(1, capacity)),
+        "asks": _runtype.by_family(items, cores / max(1, capacity)),
         "groups": rows,
     }
 

@@ -6,6 +6,7 @@ import sys as _path_sys
 from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from slotfather import labels  # noqa: E402
+from slotfather import runtype  # noqa: E402
 
 import json
 import os
@@ -110,8 +111,7 @@ class DeriveTests(unittest.TestCase):
         self.assertEqual("lane-doc-xy", same_as_worktree["label"], "a lane worktree's own name is a good label")
         scratch = labels.choose("scratchpad", SCRATCH, argv, look=look)
         self.assertEqual("godfather · measure_cpu · scratchpad", scratch["label"])
-        from slotfather import schedule
-        self.assertEqual("godfather", schedule.family(scratch["label"]), "the family is the project, not the word")
+        self.assertEqual("godfather", runtype.family(scratch["label"]), "the family is the project, not the word")
         self.assertIn("says little", scratch["hint"] or "")
         project = labels.choose("mastack", f"{HOME}/mastack", ["bin/check"], look=look)
         self.assertEqual(("mastack · bin/check", "mastack", "mastack · bin/check"),
@@ -121,9 +121,8 @@ class DeriveTests(unittest.TestCase):
         self.assertEqual("request", nothing["label"])
 
     def test_the_family_is_the_project(self):
-        from slotfather import schedule
-        self.assertEqual("straylight", schedule.family("straylight · lane 743 · check"))
-        self.assertEqual("lane", schedule.family("lane-636-measure"))
+        self.assertEqual("straylight", runtype.family("straylight · lane 743 · check"))
+        self.assertEqual("lane", runtype.family("lane-636-measure"))
 
 
 class DefaultLabelTests(SlotCase):

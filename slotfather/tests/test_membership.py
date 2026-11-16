@@ -70,6 +70,9 @@ class MembershipTests(unittest.TestCase):
         elif sf_process.MEMBERS in argv:
             text = "".join(f"{pid} {ppid} {UID} ?? S {BORN} {COMMANDS.get(pid, 'python3 -m unittest')}\n"
                            for pid, ppid in rows.items())
+        elif sf_process.STARTS in argv:  # procs' re-check of an unknown (fathers#158)
+            wanted = {int(pid) for pid in argv[argv.index("-p") + 1].split(",")}
+            text = "".join(f"{pid} S {BORN}\n" for pid in rows if pid in wanted)
         else:
             raise AssertionError(f"unexpected command {argv}")
         return subprocess.CompletedProcess(argv, 0, text, "")

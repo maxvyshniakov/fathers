@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any, Mapping, cast
 
@@ -19,6 +20,29 @@ from . import state as _state
 SUFFIX = ".idle"
 STALE_LOOKS = 3  # a record older than this many of the holder's longest intervals between looks says nothing
 STALE_LEAST = 30.0  # seconds, whatever the interval
+
+
+# What runs a container or a virtual machine, whose work goes on elsewhere at no CPU of the host's own (fathers#159):
+# a tree with one running is never idle. Only a process that runs one counts, not every tool of that family (a
+# `kubectl port-forward` or `docker ps` left running is no work) (fathers#159 review).
+CONTAINER_CLIENTS = ("docker", "podman", "nerdctl", "container")  # with one of RUNS: a container's own client
+RUNS = ("run", "exec", "start", "attach", "up", "build", "buildx")  # what makes a client run one (compose: up/run)
+VMS = ("qemu-system", "vfkit", "firecracker", "krunvm", "vboxheadless", "com.apple.virtualization.virtualmachine",
+       "lima-guestagent", "hyperkit")  # a virtual machine's own process
+
+
+def container(command: str) -> bool:
+    """Whether a process's command line (ps `command`) runs a container or a virtual machine: a VM's own process
+    (VMS: `qemu-system-aarch64 ...`, `vfkit ...`), or a container client (CONTAINER_CLIENTS, `docker-compose`) with
+    a command that runs one (RUNS: `docker run ...`, `docker compose up`, `podman exec ...`)."""
+    words = command.split()
+    if not words:
+        return False
+    program = os.path.basename(words[0]).lower()
+    if any(program == vm or program.startswith(vm) for vm in VMS):
+        return True
+    client = program in CONTAINER_CLIENTS or program in ("docker-compose", "podman-compose")
+    return client and any(word in RUNS for word in words[1:])
 
 
 def path(entry: Path) -> Path:
@@ -74,10 +98,7 @@ def record(entry: Path, since: float | None, rate: float, moment: float) -> None
 def stale_after() -> float:
     """How long a record holds: three of this process's longest intervals between looks, at least 30 s; written by
     the holder into its record (`expires`)."""
-    try:
-        longest = max(0.05, float(_config.setting("SAMPLE_MAX") or _config.SAMPLE_MAX))
-    except ValueError:
-        longest = float(_config.SAMPLE_MAX)
+    longest = _config.sample_max()
     return max(STALE_LEAST, STALE_LOOKS * longest)
 
 

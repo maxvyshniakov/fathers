@@ -9,7 +9,7 @@ from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from slotfather import config as sf_config
 from slotfather import entry as sf_entry
-from slotfather import leases as sf_leases
+from slotfather import client as sf_client
 from slotfather import schedule as sf_schedule
 from slotfather import settings as sf_settings
 from slotfather import state as sf_state
@@ -421,7 +421,7 @@ class ProtocolTests(SlotCase):
         with mock.patch.dict(os.environ, {"SLOTFATHER_DIR": str(self.state), "SLOTFATHER_LEGACY_DIRS": "",
                                           "SLOTFATHER_CORES": "12", "SLOTFATHER_MEMORY_GIB": "64",
                                           "SLOTFATHER_MEMORY_FILE": str(self.memory)}):
-            self.assertFalse(sf_leases.yield_lease(gate))
+            self.assertFalse(sf_client.yield_now(gate))
         self.assertEqual("held", json.loads(gate.read_text())["state"])
         self.assertFalse(sf_state.marker(gate).exists(), "the request is withdrawn")
 
@@ -443,7 +443,7 @@ class ProtocolTests(SlotCase):
                                     "granted": "2026-11-03T00:20:00Z", "first_granted": "2026-11-03T00:01:00Z",
                                     "yielded_at": "2026-11-03T00:10:00Z", "yields": 1, "rank": 1.0}))
         with mock.patch.dict(os.environ, {"SLOTFATHER_DIR": str(self.state), "SLOTFATHER_LEGACY_DIRS": ""}):
-            sf_leases.held_again(path)
+            sf_client.held_again(path)
         entry = json.loads(path.read_text())
         self.assertEqual(("2026-11-03T00:01:00Z", "2026-11-03T00:20:00Z", 600), (entry["granted"], entry["resumed"],
                                                                                entry["yielded"]))

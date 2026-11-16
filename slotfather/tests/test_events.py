@@ -7,12 +7,14 @@ from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from slotfather import events as sf_events
 
+import ast
 import json
 import os
 import re
 import stat
 import time
 from typing import Any
+import unittest
 from unittest import mock
 
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[2] / "common"))
@@ -189,3 +191,34 @@ class EventLogTests(SlotCase):
     def test_capabilities_name_the_log(self) -> None:
         found = json.loads(self.tool("capabilities", "--json").stdout)["dashboard"]["events"]
         self.assertEqual({"path": str(self.state / "events.jsonl"), "versions": [1]}, found)
+
+
+class WriterTests(unittest.TestCase):
+    """fathers#37: one writer of queue.log lines and events, driven by the event-kind table."""
+
+    SOURCE = _Path(__file__).resolve().parents[1] / "src" / "slotfather"
+
+    def calls(self) -> list[tuple[str, int, str, ast.Call]]:
+        found: list[tuple[str, int, str, ast.Call]] = []
+        for path in sorted(self.SOURCE.glob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, ast.Call):
+                    found.append((path.name, node.lineno, ast.unparse(node.func), node))
+        return found
+
+    def test_no_queue_log_line_or_event_is_written_outside_the_writer(self) -> None:
+        outside = [(name, line, func) for name, line, func, _ in self.calls()
+                   if name != "events.py" and (func.endswith("_state.log") or func.endswith("_events.emit")
+                                               or func in ("log", "emit", "state.log"))]
+        self.assertEqual([], outside)
+
+    def test_every_kind_written_is_in_the_kind_table(self) -> None:
+        kinds: set[str] = set()
+        for _, _, func, node in self.calls():
+            if func == "_events.record" and len(node.args) > 2:
+                for value in ast.walk(node.args[2]):
+                    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                        kinds.add(value.value)
+        self.assertTrue(kinds, "found the writer's calls")
+        self.assertEqual(set(), kinds - set(sf_events.KINDS))
+        self.assertTrue(all(shape.__annotations__ for shape in sf_events.KINDS.values() if shape is not sf_events.Empty))

@@ -46,10 +46,10 @@ from typing import Any, cast
 
 from . import config as _config
 from . import events as _events
-from . import leases as _leases
 from . import durations as _durations
 from . import lineage as _lineage
 from . import process as _process
+from . import query as _query
 from . import settings as _settings
 from . import state as _state
 from . import sweep_os, sweep_plan
@@ -78,14 +78,12 @@ def leases(directory: Path) -> tuple[dict[int, int], Labelled]:
     process table they were judged on (pid -> ppid). That table is read under the queue lock, where the reap needs it,
     not the snapshot's, which is read without it. A table ps could not give raises (fathers#121): this sweep stops
     nothing."""
-    with _state.locked(directory):
-        processes = _leases.process_table(directory)
-        live = _leases.reap(directory, processes)
+    look = _query.look(directory, log=True)  # the one look every reader takes (fathers#36)
     found: Labelled = [(_process.Lease(str(path), entry.get("pid")), str(entry.get("label") or path.stem))
-                       for path, entry in live]
+                       for path, entry in look.found]
     found += [(_process.Lease(str(path), entry.get("pid")), str(entry.get("label") or path.stem))
-              for path, entry, _ in _leases.legacy_holders(processes)]
-    return _lineage.parents_of(processes), found
+              for path, entry, _ in look.legacy]
+    return _lineage.parents_of(look.table), found
 
 
 def protection(parents: dict[int, int], found: Labelled) -> tuple[dict[int, str], Carriers | None]:
@@ -171,15 +169,15 @@ def sweep(directory: Path, live: bool = False, dev_servers: bool = False, only: 
             if item["action"] == "stop":
                 item.update(stop(item, snap, found_settings["grace"]))
                 item["action"] = item.pop("result")
-                _state.log(directory, f"sweep {item['action']} {item['class']} pid {item['pid']} ({item['kind']}, "
-                                  f"age {_config.duration(item['age'])}, {len(item['tree'])} process(es)): "
-                                  f"{item['cmd'][:120]}")
                 swept = item
-                _events.emit(directory, "process.swept", {"type": "process", "id": str(swept["pid"]), "pid": swept["pid"]},
-                             {"action": swept["action"], "class": swept["class"], "kind": swept["kind"],
-                              "age": round(float(swept["age"])), "processes": len(cast(list[Any], swept["tree"])),
-                              "cmd": _events.command(swept["cmd"])},
-                             dict(_events.actor(kind="tool"), via="sweep"), level="warn")
+                _events.record(directory, f"sweep {item['action']} {item['class']} pid {item['pid']} ({item['kind']}, "
+                                          f"age {_config.duration(item['age'])}, {len(item['tree'])} process(es)): "
+                                          f"{item['cmd'][:120]}",
+                               "process.swept", {"type": "process", "id": str(swept["pid"]), "pid": swept["pid"]},
+                               {"action": swept["action"], "class": swept["class"], "kind": swept["kind"],
+                                "age": round(float(swept["age"])), "processes": len(cast(list[Any], swept["tree"])),
+                                "cmd": _events.command(swept["cmd"])},
+                               dict(_events.actor(kind="tool"), via="sweep"), level="warn")
     enabled = set(found_settings["classes"])
     docker: dict[str, Any] = sweep_os.containers(found_settings) if "container" in enabled and only is None else \
         {"available": None, "items": []}

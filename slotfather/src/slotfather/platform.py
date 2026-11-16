@@ -483,7 +483,9 @@ def cpu_ticks() -> list[int] | None:
     return None
 
 
-def process_group(pid) -> int | None:
+def process_group(pid: object) -> int | None:
+    if not isinstance(pid, int):
+        return None  # what os.getpgid() refuses with TypeError
     try:
         return os.getpgid(pid)
     except (OSError, TypeError):
