@@ -9,7 +9,6 @@ from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from slotfather import config as sf_config
 from slotfather import entry as sf_entry
-from slotfather import leases as sf_leases
 from slotfather import client as sf_client
 from slotfather import schedule as sf_schedule
 from slotfather import settings as sf_settings

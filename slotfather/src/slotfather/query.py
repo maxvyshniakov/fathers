@@ -6,7 +6,7 @@ import math
 import time
 import sys
 from pathlib import Path
-from typing import Any, Callable, NamedTuple, cast
+from typing import Any, Callable, NamedTuple
 
 from . import config as _config
 from . import entry as _entry
@@ -411,7 +411,7 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
         with contextlib.suppress(Exception):
             from . import runtype as _runtype
             known = _runtype.cached(directory)
-    for (path, entry), item in zip(live, entries_found):
+    for (_, entry), item in zip(live, entries_found):
         if known is not None:
             with contextlib.suppress(Exception):  # the dashboard's poll never fails for it
                 from . import runtype as _runtype
@@ -427,7 +427,7 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
                     reserved=iso(found["reserved"]) if found else None,
                     waited=None if not found or found["waited"] is None else round(found["waited"]),
                     long_wait=bool(found and found["long_wait"]), memory_wait=found["memory_wait"] if found else None)
-    legacy = []
+    legacy: list[dict[str, Any]] = []
     for path, entry, count in earlier:
         legacy.append({"id": path.stem, "lease": str(path), "state": "held", "count": count,
                        "label": entry.get("label"), "pid": entry.get("pid"), "pgid": _platform.process_group(entry.get("pid")),
@@ -438,7 +438,7 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
     found = {}
     if pid is not None:
         # The one membership rule (process.lease_membership(), fathers#38): `procs` and the sweep decide the same way.
-        both: list[dict[str, Any]] = [*entries_found, *cast(list[dict[str, Any]], legacy)]
+        both: list[dict[str, Any]] = [*entries_found, *legacy]
         membership = _process.lease_membership(_lineage.parents_of(table),
                                                [_process.Lease(str(item["lease"]), item["pid"], n < len(entries_found))
                                                 for n, item in enumerate(both)], [pid])
@@ -469,7 +469,7 @@ def available(directory: Path | None = None, label: str = "", command: str = "")
 
 
 def size(maximum: int, cores: int, total: int, averages: tuple[float, float, float], held: int,
-         waiting: bool = False, exclusive: bool = False) -> dict:
+         waiting: bool = False, exclusive: bool = False) -> dict[str, Any]:
     """A job count for work that runs beside `held` leased slots (or after them, when `exclusive`) under load
     `averages` (1, 5 and 15 minutes) that include processes taking no lease. The module docstring has the formula."""
     per_slot = cores / total
@@ -487,14 +487,14 @@ def size(maximum: int, cores: int, total: int, averages: tuple[float, float, flo
 
 
 def advise(maximum: int | None = None, exclusive: bool = False, cores_now: int | None = None,
-           averages: tuple[float, float, float] | None = None, label: str = "", command: str = "") -> dict:
+           averages: tuple[float, float, float] | None = None, label: str = "", command: str = "") -> dict[str, Any]:
     """size() for the queue as it is now: slots held by others (the caller's own lease is not one) and
     whether a request waits, a request for `command` under `label` when given (else one of unknown run), with
     "run_estimate", the run the history expects of it (None: unknown, counted as the fallback)."""
     live, legacy, table, basis = locked_snapshot()
     mine = _queue.inherited_lease(table)
     holders = [e for e in live if _entry.is_held(e) and not (mine and e["pid"] == mine[1]["pid"])]
-    other = sum(count for path, e, count in legacy if not (mine and path == mine[0]))
+    other = sum(count for path, _, count in legacy if not (mine and path == mine[0]))
     slots = int(basis["slots"])
     held = sum(_entry.holds(e, slots) for e in holders) + other
     waiters = [e for e in live if _entry.is_waiting(e)]

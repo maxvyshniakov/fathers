@@ -302,7 +302,7 @@ class Replay:
     def __init__(self, requests: list[dict], slots: int, policy: dict, seed: list[tuple] = (),
                  assumed: dict | None = None):
         self.requests, self.slots, self.policy = requests, slots, policy
-        self.estimates = sf_estimates.Estimates(seed)
+        self.estimates = sf_estimates.Estimates(cast(list[Any], seed))
         self.assumed = assumed or {}
         self.classes: list[str] = [recorded_priority(r) or classify(r, slots) for r in requests]
         self.asks = self.yields = 0

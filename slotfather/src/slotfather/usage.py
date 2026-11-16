@@ -175,7 +175,7 @@ class Watch(threading.Thread):
             self.look()
             interval = min(interval * 1.5, self.most)
 
-    def finish(self, rusage, wall: float) -> dict | None:
+    def finish(self, rusage: Any, wall: float) -> dict[str, Any] | None:
         """Stops sampling, takes the last look (after the command exited) and returns the usage. Waits at most
         WATCH_JOIN seconds for the sampler, and skips the last look when it is still stuck: the release goes on."""
         self.usage.root_gone = True

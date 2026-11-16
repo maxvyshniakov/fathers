@@ -10,7 +10,7 @@ import signal
 import subprocess
 import sys
 import time
-from typing import Any, cast
+from typing import Any
 
 from . import client as _client
 from . import config as _config
@@ -68,7 +68,7 @@ def execute(argv: list[str], environment: dict[str, str], background: bool = Fal
     child.returncode = status
     usage: dict[str, Any] | None = None
     if watch is not None and watch.is_alive():
-        usage = cast("dict[str, Any] | None", watch.finish(rusage, time.monotonic() - began))
+        usage = watch.finish(rusage, time.monotonic() - began)
     return (128 - status if status < 0 else status), usage
 
 

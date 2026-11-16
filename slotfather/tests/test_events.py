@@ -214,11 +214,11 @@ class WriterTests(unittest.TestCase):
 
     def test_every_kind_written_is_in_the_kind_table(self) -> None:
         kinds: set[str] = set()
-        for name, line, func, node in self.calls():
+        for _, _, func, node in self.calls():
             if func == "_events.record" and len(node.args) > 2:
                 for value in ast.walk(node.args[2]):
                     if isinstance(value, ast.Constant) and isinstance(value.value, str):
                         kinds.add(value.value)
         self.assertTrue(kinds, "found the writer's calls")
         self.assertEqual(set(), kinds - set(sf_events.KINDS))
-        self.assertTrue(all(isinstance(shape, type) for shape in sf_events.KINDS.values()))
+        self.assertTrue(all(shape.__annotations__ for shape in sf_events.KINDS.values() if shape is not sf_events.Empty))

@@ -45,6 +45,14 @@ def steady(block: dict[str, Any]) -> dict[str, Any]:
     return found
 
 
+def counting(function: Any, calls: list[object]) -> Any:
+    """`function`, recording each call's arguments in `calls`."""
+    def counted(*args: Any, **kwargs: Any) -> Any:
+        calls.append(args)
+        return function(*args, **kwargs)
+    return counted
+
+
 class BoardTests(SlotCase):
     def setUp(self) -> None:
         super().setUp()
@@ -150,21 +158,13 @@ class BoardTests(SlotCase):
                 "slots": lambda: cli.slots_command([]),
                 "sweep protection": lambda: sweep.leases(self.state),
             }
+            real_lock, real_table = state.locked, process.processes
             for name, reader in readers.items():
                 locks: list[object] = []
                 tables: list[object] = []
-                real_lock, real_table = state.locked, process.processes
-
-                def counted_lock(*args: Any, **kwargs: Any) -> Any:
-                    locks.append(args)
-                    return real_lock(*args, **kwargs)
-
-                def counted_table(*args: Any, **kwargs: Any) -> Any:
-                    tables.append(args)
-                    return real_table(*args, **kwargs)
-
-                with self.subTest(reader=name), mock.patch.object(state, "locked", counted_lock), \
-                        mock.patch.object(process, "processes", counted_table), \
+                with self.subTest(reader=name), \
+                        mock.patch.object(state, "locked", counting(real_lock, locks)), \
+                        mock.patch.object(process, "processes", counting(real_table, tables)), \
                         mock.patch("sys.stdout"), mock.patch("sys.stderr"):
                     reader()
                     self.assertEqual(1, len(locks), f"{name} took the queue lock {len(locks)} times")

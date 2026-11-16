@@ -19,7 +19,6 @@ from . import entry as _entry
 from . import facts as _facts
 from . import leases as _leases
 from . import process as _process
-from . import query as _query
 from . import queue as _queue
 from . import settings as _settings
 from . import state as _state
@@ -110,19 +109,19 @@ class Lease:
     def environment(self) -> dict[str, str]:
         if self.path is None:
             return {}
-        env = {}
+        env: dict[str, str] = {}
         for prefix in _config.LEASE_ENV_PREFIXES:
             env.update({prefix + "LEASE": str(self.path), prefix + "COUNT": str(self.count)})
             if self.yieldable and not self.inherited:
                 env[prefix + "YIELD"] = str(_state.marker(self.path))
         return env
 
-    def yield_requested(self) -> dict | None:
+    def yield_requested(self) -> dict[str, Any] | None:
         """The yield request for this lease, or None: {"by", "label", "class", "count", "at"} of the waiter that
         asked. Cheap (one stat and a small read); call it between steps."""
         return None if self.path is None or self.inherited else _state.asked(self.path)
 
-    def yield_slots(self, out=sys.stderr) -> bool:
+    def yield_slots(self, out: Any = sys.stderr) -> bool:
         """Yields the lease if it was asked to: back among the waiters, just behind the waiter that asked, until it is
         granted again; returns True then, False at once when nothing asked (or the asker no longer waits). Call it
         only between steps, with none of the lease's own work running."""
@@ -162,7 +161,7 @@ def policy() -> str:
     return value
 
 
-def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wait: float | None = None,
+def acquire(count: int | str, label: str, command: str = "", out: Any = sys.stderr, wait: float | None = None,
             note: str = "", meta: dict[str, str] | None = None, yieldable: bool = False, *,
             priority: str | None = None, ticket: str | int | None = None,
             session: dict[str, Any] | None = None, naming: dict[str, str] | None = None) -> Lease:
@@ -212,6 +211,7 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
                                                           time.monotonic() - warned[-1] >= _config.WARN_REPEAT):
             warned.append(time.monotonic())
             with contextlib.suppress(Exception):  # a display must never cost the request its place
+                from . import query as _query  # only a request that waits loads the views
                 report = _query.long_wait_report(directory, path)
                 if report:  # the client's own stderr, and queue.log (EVENTS): a long wait does not go unnoticed
                     line, facts = report
@@ -220,6 +220,7 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
 
     def changed(waiting: str | None) -> None:
         print(f"slot: {label} waits for {count} slot(s): {waiting or 'earlier requests first'}", file=out, flush=True)
+        from . import query as _query  # only a request that waits loads the views
         with contextlib.suppress(_config.ProcessTableError):  # a display must never cost the request its place
             for line in _query.status_lines(directory):
                 print(f"  {line}", file=out, flush=True)

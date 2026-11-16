@@ -128,7 +128,7 @@ def ask_yield(pid: int, start: str, directory: Path | None = None) -> tuple[dict
         asker = _events.actor()
         request = {"by": paths[id(chosen)].stem, "label": chosen.get("label"),
                    "priority": _schedule.effective_priority(chosen, settings, moment), "count": chosen["count"],
-                   "at": _config.now(), "asker": asker.get("via") or f"pid {asker['pid']}"}
+                   "at": _config.now(), "asker": asker.get("via") or f"pid {asker.get('pid')}"}
         _state.write(_state.marker(path), request)
         _events.record(directory, f"asked {entry.get('label')} (pid {entry['pid']}) to yield {entry['count']} for "
                               f"{chosen.get('label')}", "lease.yield_asked", _events.request(entry, path),
@@ -157,8 +157,8 @@ def yield_lease(path: Path) -> tuple[dict[str, Any], dict[str, Any]] | None:
         behind = _schedule.rank_time(asker, settings, time.time()) + _config.YIELD_BEHIND if asker is not None else None
         if asker is not None:  # would the asker start? Things may have changed since it asked.
             table = _queue.process_table(directory)
-            held = [e for p, e in live if _entry.is_held(e) and p != path]
-            waiters = [e for p, e in live if _entry.is_waiting(e)] + [_entry.trial_yielded(entry, behind)]
+            held = [e for other, e in live if _entry.is_held(e) and other != path]
+            waiters = [e for _, e in live if _entry.is_waiting(e)] + [_entry.trial_yielded(entry, behind)]
             trial = _schedule.plan(waiters, held, _settings.total(), time.time(), estimate=_queue.estimator(directory),
                          other=_queue.used_elsewhere(directory, table), settings=settings, window=_config.overtake_window())
             if not any(e is asker for e in trial.grants):

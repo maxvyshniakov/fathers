@@ -12,7 +12,7 @@ import json
 import os
 from pathlib import Path
 import re
-from typing import Any, cast
+from typing import Any, Iterable, Optional, cast
 
 from . import config as _config
 from . import entry as _entry
@@ -21,20 +21,24 @@ from . import schedule as _schedule
 from . import state as _state
 
 
+Key = tuple[Optional[str], ...]  # ("label", label, kind), ("family", family, kind), ("kind", kind), ...
+Run = tuple[Optional[str], Optional[str], float]  # (label, command, seconds it ran)
+
+
 class Estimates:
     """Run times of finished requests, for how long a request will run: the median of the last ESTIMATE_RUNS runs
     of the closest kind that ran before (same label and command kind; same label family and command kind; the same
     family with a check list of about the same size; the command kind under any label; about the same size under
     any label; same label; same family), or None for a request like nothing before."""
 
-    def __init__(self, runs=()):
-        self.runs = {}
-        for label, command, ran in runs:
+    def __init__(self, runs: Iterable[Any] = ()) -> None:  # Run tuples, as the history or a replay gives them
+        self.runs: dict[Key, list[float]] = {}
+        for label, command, ran in cast(Iterable[Run], runs):
             self.add(label, command, ran)
 
     @staticmethod
-    def keys(label: str | None, command: str | None) -> list[tuple]:
-        found = []
+    def keys(label: str | None, command: str | None) -> list[Key]:
+        found: list[Key] = []
         if command:
             what = _runtype.kind(command)
             # A list of checks keeps its size within a factor of two: 140 checks are not 4.
@@ -49,13 +53,14 @@ class Estimates:
             recent.append(float(ran))
             del recent[:-_config.ESTIMATE_RUNS]
 
-    def save(self) -> dict:
+    def save(self) -> dict[str, list[float]]:
         return {json.dumps(key): runs for key, runs in self.runs.items()}
 
     @classmethod
-    def load(cls, saved: dict) -> "Estimates":
+    def load(cls, saved: dict[str, Any]) -> "Estimates":
         found = cls()
-        found.runs = {tuple(json.loads(key)): [float(v) for v in runs] for key, runs in saved.items()}
+        found.runs = {tuple(cast(list[Any], json.loads(key))): [float(v) for v in cast(list[Any], runs)]
+                      for key, runs in saved.items()}
         return found
 
     def of(self, label: str | None, command: str | None) -> float | None:
@@ -74,7 +79,7 @@ def history_estimates(directory: Path) -> Estimates:
     orphan of a hung CI job that kept its slots for most of an hour; so is one that gave up (`left`). Requests whose
     holder ran a slotfather that records no history (before #635) are not in it."""
     path = directory / "history.jsonl"
-    runs = []
+    runs: list[Run] = []
     for part in (path.with_name(path.name + ".1"), path):
         try:
             with open(part, "rb") as handle:
@@ -90,7 +95,7 @@ def history_estimates(directory: Path) -> Estimates:
     return Estimates(runs)
 
 
-_estimates = {}  # history files' (size, mtime) -> Estimates, so a waiter's repeated looks read the history once
+_estimates: dict[str, Estimates] = {}  # history files' (size, mtime) -> Estimates, so a waiter's repeated looks read the history once
 
 
 def cached_estimates(directory: Path) -> Estimates:
@@ -100,7 +105,7 @@ def cached_estimates(directory: Path) -> Estimates:
     again, so runs that version counted (reaped leases, before version 2) do not linger until the history changes;
     an older client reads past the "v"."""
     path = directory / "history.jsonl"
-    stamp = []
+    stamp: list[list[Any]] = []
     for part in (path.with_name(path.name + ".1"), path):
         with contextlib.suppress(OSError):
             info = part.stat()
@@ -109,9 +114,9 @@ def cached_estimates(directory: Path) -> Estimates:
     if key in _estimates:
         return _estimates[key]
     cache = directory / "estimates.json"
-    found = None
+    found: Estimates | None = None
     with contextlib.suppress(OSError, ValueError, TypeError, AttributeError, KeyError):
-        saved = json.loads(cache.read_text())
+        saved: dict[str, Any] = json.loads(cache.read_text())
         if saved["stamp"] == stamp and saved.get("v") == _config.ESTIMATES_VERSION:
             found = Estimates.load(saved["runs"])
     if found is None:

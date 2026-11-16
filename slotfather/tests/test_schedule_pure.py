@@ -100,7 +100,7 @@ def yield_loop(ends: list[tuple[float, int]], free: int, count: int, moment: flo
 
 
 class FreeAtTests(unittest.TestCase):
-    CASES = [
+    CASES: list[tuple[str, list[tuple[float, int]], int, int]] = [
         ("fits now", [(M + 100, 2)], 3, 2),
         ("one end", [(M + 100, 2), (M + 50, 1)], 1, 3),
         ("several ends", [(M + 300, 1), (M + 100, 2), (M + 200, 3)], 0, 6),
