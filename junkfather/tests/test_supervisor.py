@@ -1,4 +1,4 @@
-"""The supervisor's loop, driven by an injected clock: a failing TTL reap backs off, a `gone` entry is revived."""
+"""The supervisor's loop, driven by injected clocks: the TTL, a failing TTL reap backs off, a `gone` entry is revived."""
 from __future__ import annotations
 
 import json
@@ -52,6 +52,26 @@ class SupervisorLoopTests(Case):
             self.assertGreaterEqual(gap, delay)
         self.assertEqual([True, False, False, False], [report for _, report in attempts])
         self.assertLessEqual(launch.retry_delay(50), launch.RETRY_MAX)
+
+    def test_the_ttl_is_read_on_the_injected_wall_clock(self):
+        child, entry_id = self.supervised(ttl=3600)
+        expires = float(self.loaded(entry_id)["expires"])
+        wall = [expires - 3 * launch.POLL]
+        reaped_at: List[float] = []
+
+        def reaper(store: Store, ident: str, reason: str, **options: Any) -> Dict[str, Any]:
+            reaped_at.append(wall[0])
+            child.kill()
+            child.wait()
+            store.update(ident, lambda e: e.update(state="reaped"))
+            return {"id": ident, "result": "killed", "reason": reason, "pids": [child.pid], "how": "leader"}
+
+        launch.Supervisor(self.store, entry_id, child, quiet=True, catcher=Quiet(), reaper=reaper,
+                          clock=lambda: 0.0, wall=lambda: wall[0],
+                          pause=lambda s: wall.__setitem__(0, wall[0] + s)).run()
+        self.assertEqual(1, len(reaped_at), "one TTL reap, after an hour that took no time")
+        self.assertGreaterEqual(reaped_at[0], expires)
+        self.assertLess(reaped_at[0], expires + launch.POLL)
 
     def test_a_gone_entry_whose_child_still_runs_is_revived(self):
         child, entry_id = self.supervised()

@@ -96,15 +96,16 @@ def record_child(store: Store, entry_id: str, child: subprocess.Popen[bytes], su
 class Supervisor:
     """Waits on the leader, enforces the TTL, keeps `known` fresh, and stops the group on a signal. A TTL reap that
     fails is tried again after a capped backoff (retry_delay), and only the first failure of a streak is an event.
-    Tests inject `clock` (monotonic), `pause` and `reaper`."""
+    Tests inject `clock` (monotonic: the backoff and the refresh of `known`), `wall` (epoch seconds: the TTL against
+    the entry's `expires`), `pause` and `reaper`."""
 
     def __init__(self, store: Store, entry_id: str, child: subprocess.Popen[bytes], quiet: bool = False,
                  attached: bool = True, catcher: Optional["Catcher"] = None,
                  clock: Callable[[], float] = time.monotonic, pause: Callable[[float], None] = time.sleep,
-                 reaper: Optional[Callable[..., Dict[str, Any]]] = None):
+                 reaper: Optional[Callable[..., Dict[str, Any]]] = None, wall: Callable[[], float] = time.time):
         self.store, self.id, self.child, self.quiet, self.attached = store, entry_id, child, quiet, attached
         self.catcher = catcher or Catcher()
-        self.clock, self.pause, self.reaper = clock, pause, reaper or _reap.reap
+        self.clock, self.wall, self.pause, self.reaper = clock, wall, pause, reaper or _reap.reap
 
     def say(self, text: str) -> None:
         if not self.quiet:
@@ -141,7 +142,7 @@ class Supervisor:
                 if entry is not None and entry.get("state") == _entry.REAPED:
                     self.say(f"{self.id} reaped ({(entry.get('end') or {}).get('reason')})")
                 return status(code)
-            if entry.get("state") == _entry.RUNNING and time.time() >= float(entry.get("expires") or 0) \
+            if entry.get("state") == _entry.RUNNING and self.wall() >= float(entry.get("expires") or 0) \
                     and self.clock() >= retry_at:
                 result = self.reaper(self.store, self.id, "ttl expired", actor=_events.tool("supervisor"),
                                      report_failure=not failures)

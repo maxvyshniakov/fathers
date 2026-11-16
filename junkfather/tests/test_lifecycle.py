@@ -46,9 +46,8 @@ class OwnTests(Case):
         self.assertFalse([pid for pid in group if self.runs(pid)])
 
     def test_detach_returns_at_once_and_logs_the_output(self):
-        started = time.monotonic()
+        # It returned (self.cli waits at most 60 s) while its 600 s command still runs: no clock needed.
         entry = self.own_detached(self.env, "--ttl", "1h", argv=("sh", "-c", "echo hello; sleep 600"))
-        self.assertLess(time.monotonic() - started, 10)
         self.assertEqual("running", entry["state"])
         self.assertTrue(self.runs(entry["pid"]))
         self.wait_for(lambda: "hello" in Path(entry["log"]).read_text(), what="the log")
@@ -81,6 +80,11 @@ class HookTests(Case):
                   tool_use_id=f"toolu_{time.time_ns()}", **fields)
         return self.own_detached(self.session_env, *options, argv=argv)
 
+    def assert_no_reap_started(self) -> None:
+        """The hook found nothing to reap: a reap it starts runs detached and writes hook.out (hook.detached), so
+        without that file there is nothing to wait for."""
+        self.assertFalse((self.state / "hook.out").exists(), "the hook started a reap")
+
     def test_the_claim_names_the_subagent(self):
         entry = self.own_as("agent-a", "--ttl", "1h")
         self.assertEqual(("claude", "s1", "agent-a", self.claude.pid),
@@ -100,7 +104,7 @@ class HookTests(Case):
     def test_keep_for_session_survives_a_subagent_stop_but_not_the_session_end(self):
         kept = self.own_as("agent-a", "--ttl", "1h", "--keep-for", "session")
         self.hook("SubagentStop", "s1", agent_id="agent-a")
-        time.sleep(1.5)
+        self.assert_no_reap_started()
         self.assertEqual("running", self.state_of(kept["id"]))
         self.assertTrue(self.runs(kept["pid"]))
         self.hook("SessionEnd", "s1", reason="other")
@@ -118,7 +122,7 @@ class HookTests(Case):
         self.assertEqual("s1", handed["handed"][0]["from"]["session"])
         self.hook("SubagentStop", "s1", agent_id="agent-a")
         self.hook("SessionEnd", "s1")
-        time.sleep(1.5)
+        self.assert_no_reap_started()
         self.assertEqual("running", self.state_of(entry["id"]))
         self.hook("SessionEnd", "s2")
         self.wait_for(lambda: self.state_of(entry["id"]) == "reaped", what="the new owner's end")
@@ -145,9 +149,10 @@ class TtlAndOrphanTests(Case):
 
     def test_sweep_reaps_an_adopted_entry_past_its_ttl(self):
         child = self.spawn("sleep", "600", start_new_session=True)
-        result = self.cli("adopt", str(child.pid), "--ttl", "1s")
+        result = self.cli("adopt", str(child.pid), "--ttl", "1h")
         self.assertEqual(0, result.returncode, result.stderr)
-        time.sleep(1.2)
+        (entry,) = map(plain, self.store.entries())
+        self.store.update(entry["id"], lambda e: e.update(expires=time.time() - 1))  # its TTL passed
         swept = json.loads(self.cli("sweep", "--json").stdout)
         self.assertEqual(["ttl expired"], [r["reason"] for r in swept["reaped"]])
         self.assertIsNotNone(child.wait(10))
@@ -176,10 +181,10 @@ class TtlAndOrphanTests(Case):
 
     def test_a_reused_pid_is_not_reaped_by_a_sweep(self):
         child = self.spawn("sleep", "600", start_new_session=True)
-        self.assertEqual(0, self.cli("adopt", str(child.pid), "--ttl", "1s").returncode)
+        self.assertEqual(0, self.cli("adopt", str(child.pid), "--ttl", "1h").returncode)
         (entry,) = map(plain, self.store.entries())
-        self.store.update(entry["id"], lambda e: e.update(start="Mon Jan  1 00:00:00 2024", known=[]))
-        time.sleep(1.2)
+        self.store.update(entry["id"], lambda e: e.update(start="Mon Jan  1 00:00:00 2024", known=[],
+                                                          expires=time.time() - 1))  # its TTL passed
         swept = json.loads(self.cli("sweep", "--json").stdout)
         self.assertEqual([], swept["reaped"])
         self.assertEqual([entry["id"]], [g["id"] for g in swept["gone"]])

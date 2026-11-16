@@ -152,12 +152,12 @@ class SimulatorTests(ResourceCase):
 
     def test_sweep_marks_gone_reaps_expired_and_leaves_unknown_alone(self):
         gone = self.own("--kind", "simulator", "--", "xcrun", "simctl", "boot", SIM)
-        expired = self.own("--kind", "simulator", "--ttl", "1s", "--", "xcrun", "simctl", "boot", OTHER_SIM)
+        expired = self.own("--kind", "simulator", "--ttl", "1h", "--", "xcrun", "simctl", "boot", OTHER_SIM)
+        self.store.update(expired["id"], lambda e: e.update(expires=time.time() - 1))  # its TTL passed
         state = self.fake_state()
         state["sims"][SIM]["state"] = "Shutdown"  # shut down by hand
         state["fail"] = [["xcrun", "simctl", "list"]]
         self.fake.write_text(json.dumps(state))
-        time.sleep(1.2)
         unknown = json.loads(self.cli("sweep", "--json", env=self.env).stdout)
         self.assertEqual(([], []), (unknown["reaped"], unknown["gone"]), "unknown liveness changes nothing")
         self.assertTrue(any("cannot be told" in note for note in unknown["notes"]))
@@ -380,12 +380,10 @@ class EventKindsTests(ResourceCase):
         original = resources.STOP_TIMEOUT
         resources.STOP_TIMEOUT = 0.5
         try:
-            started = time.monotonic()
             outcome = resources.stop({"kind": "command", "id": "x", "stop": ["sleep", "30"]}, 0.5, lambda: True,
                                      pause=lambda _s: None)
         finally:
             resources.STOP_TIMEOUT = original
         self.assertEqual("failed", outcome["result"])
-        self.assertIn("did not answer", outcome["error"])
-        self.assertLess(time.monotonic() - started, 10)
+        self.assertIn("did not answer", outcome["error"])  # `sleep 30` exits 0: only the timeout says this
 
