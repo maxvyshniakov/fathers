@@ -51,6 +51,16 @@ class KeyTests(unittest.TestCase):
         self.assertEqual(runtype.keys(outside("true"))[:2], runtype.keys(outside("echo"))[:2])
         self.assertEqual(runtype.trend_key(outside("true")), runtype.trend_key(outside("sh")))
 
+    def test_an_unlabelled_run_outside_a_repository_keys_by_its_phase_whatever_the_command(self):
+        """Without a project and without a label of its own, its label is the derived one, which begins with the
+        command's name: the phase alone names the series (fathers#106 review)."""
+        def unlabelled(cmd: str) -> dict[str, Any]:
+            item = dict(run(1, 0, label=f"{cmd} · check"), cmd=cmd, label_derived=f"{cmd} · check")
+            item.pop("project", None)
+            return item
+        self.assertEqual(["check · plan p1", "check"], runtype.keys(unlabelled("true"))[:2])
+        self.assertEqual(runtype.trend_key(unlabelled("true")), runtype.trend_key(unlabelled("echo")))
+
     def test_expected_falls_back_with_few_runs(self):
         known = runtype.series([run(100, 0, plan="old"), run(110, 1, plan="old"), run(120, 2, plan="new")])
         found = runtype.expected_of(run(0, 3, plan="new"), known)

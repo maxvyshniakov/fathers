@@ -426,7 +426,7 @@ def release(path: Path, count: int, status: int | None, usage: dict[str, Any] | 
         except (OSError, ValueError):
             entry = None
         path.unlink(missing_ok=True)
-        released = f"released {count} ({path.name})"
+        _events.record(directory, f"released {count} ({path.name})")  # queue.log first, before the history
         _state.marker(path).unlink(missing_ok=True)
         _idle.path(path).unlink(missing_ok=True)
         if isinstance(entry, dict):
@@ -435,15 +435,15 @@ def release(path: Path, count: int, status: int | None, usage: dict[str, Any] | 
             item = _state.record(directory, entry, outcome, status, usage, path=path, expected=expected,
                                  capacity=_settings.total, above=_queue.run_above)
             if outcome == "released":
-                _events.record(directory, released, "lease.released", _events.request(entry, path),
+                _events.record(directory, None, "lease.released", _events.request(entry, path),
                                {"count": count, "exit": item.get("status"), "ran": item.get("ran"),
                                 "cpu": item.get("cpu"), "rss_peak_mb": item.get("rss_peak_mb")},
                                _events.holder(entry))
             else:
-                _events.record(directory, released, "request.left", _events.request(entry, path),
+                _events.record(directory, None, "request.left", _events.request(entry, path),
                                {"count": count, "gave_up_after": item.get("waited")}, _events.holder(entry))
         else:  # the entry was gone already: queue.log has its release, nothing more is known
-            _events.record(directory, released, "lease.released", {"type": "request", "id": path.stem},
+            _events.record(directory, None, "lease.released", {"type": "request", "id": path.stem},
                            {"count": count, "unknown": True})
         # Hand the slots on now: waiters look at the queue less often the longer they wait.
         with contextlib.suppress(_config.SlotError, OSError):

@@ -102,12 +102,15 @@ def above(ran: float, p90: float | None) -> bool:
 
 
 def project_of(item: dict[str, Any]) -> str:
-    """The git repository the request ran in (`project`, which `run` records), else its label's family: a request
-    outside any repository (a temporary directory), an older client's or a library caller's. Not the first part of
-    its derived label: without a project that part is the command's name ("true · check"), so one request's run
-    type would change with its command (fathers#106)."""
+    """The git repository the request ran in (`project`, which `run` records); else, for a label the caller gave,
+    its family (an older client's or a library caller's request, or one outside any repository); else "" (fathers#106
+    review): a label derived outside any repository begins with the command's name ("true · check"), so neither it
+    nor its family may name the series, or one request's run type would change with its command."""
     if isinstance(item.get("project"), str) and item["project"]:
         return item["project"]
+    derived = item.get("label_derived")
+    if isinstance(derived, str) and derived and item.get("label") == derived:
+        return ""  # its label is the derived one: no project, and the label names the command
     return family(item.get("label"))
 
 
@@ -119,9 +122,10 @@ def keys(item: dict[str, Any]) -> list[str]:
     phase = meta.get("phase")
     if phase:
         project = project_of(item)
+        head = (project, phase) if project else (phase,)  # no project: the phase alone names the series
         if meta.get("plan"):
-            found.append(SEP.join((project, phase, "plan " + meta["plan"])))
-        found.append(SEP.join((project, phase)))
+            found.append(SEP.join((*head, "plan " + meta["plan"])))
+        found.append(SEP.join(head))
     found += [SEP.join((label, kind(item.get("cmd")))), label]
     return found
 

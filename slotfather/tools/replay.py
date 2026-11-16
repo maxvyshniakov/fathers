@@ -325,6 +325,16 @@ class Replay:
             found *= math.exp(error)
         return None if found is None else found * bias
 
+    def p90(self, entry: dict[str, Any]) -> float | None:
+        """The p90 run a request that passes a blocked head runs by, from the same history as estimate(), as grant()
+        reads it live (estimates.p90_estimator(); fathers#160): one policy entry point."""
+        me = cast(Any, self)  # the replay's attributes are untyped (tools/type-baseline.json)
+        policy = cast(dict[str, Any], me.policy)
+        if policy.get("oracle"):
+            return float(me.run_of(me.requests[entry["id"]]))
+        found = self.estimates.p90(entry.get("label"), entry.get("cmd"))
+        return None if found is None else found * float(policy.get("bias", 1.0))
+
     def settings(self) -> dict[str, Any]:
         """The queue's defaults before classes (no class moves, nobody asked, no ageing, the head's limit of 2700 s),
         and what the policy changes."""
@@ -348,11 +358,11 @@ class Replay:
             inner = "backfill" if name == "short+backfill" else "window"
             found = sf_schedule.plan(ordered, held, self.slots, moment, inner, self.estimate,
                             settings={**settings, "interactive": bonus, "batch": 0.0},
-                            window=sf_config.overtake_window()).grants
+                            window=sf_config.overtake_window(), p90=self.p90).grants
             by_id = {e["id"]: e for e in waiting}
             return [by_id[e["id"]] for e in found]
         found = sf_schedule.plan(waiting, held, self.slots, moment, name, self.estimate, settings=settings,
-                                 window=sf_config.overtake_window())
+                                 window=sf_config.overtake_window(), p90=self.p90)
         if settings.get("keep"):  # the head keeps its reservation from look to look, as grant() keeps it
             sf_schedule.reservations(waiting, found)
         return found.grants

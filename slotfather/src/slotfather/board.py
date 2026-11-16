@@ -355,12 +355,12 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
     # The class each waiter is served in and its expected start (query.outlook(); nothing when it cannot be read).
     expected: dict[int, dict[str, Any]] = {}
     with contextlib.suppress(Exception):
-        expected = _query.outlook(directory, live, slots, other)
+        expected = _query.outlook(directory, live, slots, other, settings=look.settings)
     # An `-n all` lease holds the whole capacity, also one grown under it (#7).
     held, live_waiters = _entry.split(live)
     holders = [item(e, "held", _entry.holds(e, slots)) for e in held]
     holders += [item(e, "legacy", count, str(path.parent.parent)) for path, e, count in legacy]
-    settings = _settings.order_settings(directory)
+    settings = look.settings or _settings.order_settings(directory)  # the look's (fathers#36)
     start: datetime.datetime | None = None
     reserved: datetime.datetime | None = None
     order = settings["order"]

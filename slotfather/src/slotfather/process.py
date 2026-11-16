@@ -134,16 +134,21 @@ def cpu_table() -> tuple[dict[int, tuple[float, int, str]], dict[int, list[int]]
     return own, children
 
 
-def starts(pids: Iterable[int], timeout: float | None = None) -> dict[int, tuple[str, bool]]:
-    """pid -> (lstart in the C locale, a zombie) for those of `pids` still in the process table; {} when ps gives
-    no answer."""
+def starts(pids: Iterable[int], timeout: float | None = None, strict: bool = False) -> dict[int, tuple[str, bool]]:
+    """pid -> (lstart in the C locale, a zombie) for those of `pids` still in the process table, from one targeted
+    ps. When ps gives no answer: {} (the sweep's check before a signal), or with `strict` PsError (running(): a pid
+    that cannot be re-checked is never read as gone)."""
     wanted = list(pids)
     if not wanted:
         return {}
     try:
         result = run(["-o", STARTS, "-p", ",".join(map(str, wanted))], env=_platform.c_locale(), timeout=timeout)
     except PsError:
+        if strict:
+            raise
         return {}
+    if strict and (result.returncode not in (0, 1) or result.returncode and result.stderr.strip()):
+        raise PsError(f"ps exited {result.returncode}: {result.stderr.strip()[:200]}", f"ps exited {result.returncode}")
     found: dict[int, tuple[str, bool]] = {}
     for line in result.stdout.splitlines():
         parts = line.split(None, 2)
@@ -154,23 +159,12 @@ def starts(pids: Iterable[int], timeout: float | None = None) -> dict[int, tuple
 
 def running(identities: Mapping[int, str], timeout: float | None = 5) -> set[int]:
     """Those of `identities` (pid -> start time as this client's ps or native table showed it) that still run as
-    that same process, from one targeted ps: one that exited, became a zombie or whose pid now names a process with
+    that same process (starts(), strict): one that exited, became a zombie or whose pid now names a process with
     another start time is not among them (fathers#158: a short-lived helper that exits between a scan and a read of
-    its cwd or environment is gone, not unknown). Raises PsError when ps gives no answer: a pid that cannot be
-    re-checked is never read as gone."""
-    if not identities:
-        return set()
-    result = run(["-o", STARTS, "-p", ",".join(map(str, sorted(identities)))], env=_platform.c_locale(),
-                  timeout=timeout)
-    if result.returncode not in (0, 1) or result.returncode and result.stderr.strip():
-        raise PsError(f"ps exited {result.returncode}: {result.stderr.strip()[:200]}", f"ps exited {result.returncode}")
-    found: set[int] = set()
-    for line in result.stdout.splitlines():
-        parts = line.split(None, 2)
-        if len(parts) == 3 and parts[0].isdigit() and int(parts[0]) in identities and not parts[1].startswith("Z") \
-                and _platform.same_holder(identities[int(parts[0])], None, int(parts[0]), parts[2]):
-            found.add(int(parts[0]))
-    return found
+    its cwd or environment is gone, not unknown). Raises PsError when ps gives no answer."""
+    found = starts(identities, timeout, strict=True)
+    return {pid for pid, (start, zombie) in found.items()
+            if pid in identities and not zombie and _platform.same_holder(identities[pid], None, pid, start)}
 
 
 def process_uid(pid: object) -> int | None:

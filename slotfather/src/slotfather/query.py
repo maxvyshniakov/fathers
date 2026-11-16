@@ -103,11 +103,14 @@ def look(directory: Path | None = None, processes: Callable[[], Table] | None = 
         requests = {path.stem: _state.asked(path) for path, _ in found}
         strange = tuple(_state.unknown(directory))
         kept = tuple(_queue.reserved(directory, table))
-    marked = idle_of(directory, found)
+        # all under the one lock (fathers#36 review): idle records, the earlier queues' holders, the order settings
+        marked = idle_of(directory, found)
+        legacy = _queue.legacy_holders(table)
+        settings = _settings.order_settings(directory)
     live = [dict(entry, idle_since=marked.get(id(entry))) if _entry.is_held(entry) else entry
             for _, entry in found]
-    return Look(directory, table, found, live, basis, _queue.legacy_holders(table), requests, strange, kept,
-                _settings.order_settings(directory), _queue.estimator(directory))
+    return Look(directory, table, found, live, basis, legacy, requests, strange, kept, settings,
+                _queue.estimator(directory))
 
 
 def locked_snapshot(directory: Path | None = None) -> tuple[list[dict[str, Any]], list[tuple[Path, dict[str, Any], int]],
@@ -132,24 +135,24 @@ def iso(moment: float | None) -> str | None:
 
 
 def outlook(directory: Path, entries: list[dict[str, Any]], slots: int, other: int,
-            moment: float | None = None) -> dict[int, dict[str, Any]]:
+            moment: float | None = None, settings: dict[str, Any] | None = None) -> dict[int, dict[str, Any]]:
     """expected() that never fails: {} when the forecast cannot be worked out (a malformed entry or estimate), so
     that `status`, a waiter's own lines and the dashboard show the queue without it."""
     try:
-        return expected(directory, entries, slots, other, moment)
+        return expected(directory, entries, slots, other, moment, settings)
     except Exception:  # a display must never fail the command, nor cost a waiter its place
         return {}
 
 
 def expected(directory: Path, entries: list[dict[str, Any]], slots: int, other: int,
-             moment: float | None = None) -> dict[int, dict[str, Any]]:
+             moment: float | None = None, settings: dict[str, Any] | None = None) -> dict[int, dict[str, Any]]:
     """What the queue expects of each waiter in `entries` (live queue entries) at `moment`: id(entry) ->
     {"priority" (the class it is served in), "aged", "est_start" (epoch seconds, None where the forecast does not
     reach it or memory holds it back), "head", "reserved" (the head's promised start), "waited", "long_wait",
     "memory_wait" (why memory holds back a request the order would start now, else None)}. Read only: the forecast
     works on copies (schedule.forecast())."""
     moment = time.time() if moment is None else moment
-    settings = _settings.order_settings(directory)
+    settings = settings or _settings.order_settings(directory)  # a look's own where it gives them (fathers#36)
     held, waiting = _entry.split(entries)
     waiters = [dict(e) for e in waiting]
     originals = {id(copy): e for copy, e in zip(waiters, waiting)}
@@ -202,7 +205,7 @@ def status_lines(directory: Path | None = None) -> list[str]:
     found = look(directory)  # the processes and capacity the plans of this moment read
     directory, table, live, slots = found.directory, found.table, found.found, found.slots
     legacy = found.legacy
-    expect = outlook(directory, [e for _, e in live], slots, found.other)
+    expect = outlook(directory, [e for _, e in live], slots, found.other, settings=found.settings)
     lines: list[str] = []
     for (path, e), item in zip(live, found.live):
         meta = _entry.meta_of(e)
@@ -330,7 +333,7 @@ def long_wait_report(directory: Path, path: Path) -> tuple[str, dict[str, Any]] 
     mine = next((e for p, e in live if p == path), None)
     if mine is None or _entry.is_held(mine):
         return None
-    expect = outlook(directory, [e for _, e in live], found.slots, found.other).get(id(mine))
+    expect = outlook(directory, [e for _, e in live], found.slots, found.other, settings=found.settings).get(id(mine))
     if expect is None:
         return None
     settings = found.settings or _settings.order_settings(directory)
@@ -431,7 +434,8 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
     places = {id(e): n for n, e in enumerate(serving, 1)}
     earlier = look.legacy
     # A guard asking about one process (--pid) needs no forecast.
-    expect = outlook(directory, [e for _, e in live], slots, sum(c for _, _, c in [*earlier, *kept]), moment) \
+    expect = outlook(directory, [e for _, e in live], slots, sum(c for _, _, c in [*earlier, *kept]), moment,
+                     look.settings) \
         if pid is None else {}
     known = None
     if pid is None:  # expected runs per run type (fathers#106); not for a guard asking about one process
