@@ -99,7 +99,7 @@ def clear_lock(directory: Path, path: Path, entry: dict[str, Any]) -> None:
     _events.record(directory, f"the waiter for lock {lock} is gone ({who}) for {entry.get('label')} "
                               f"(pid {entry.get('pid')})",
                    "lease.lock_ended", _events.request(entry, path),
-                   {"lock": lock, "why": "gone", "yielded": not _entry.is_held(entry), "waited": None},
+                   {"lock": lock or "", "why": "gone", "yielded": not _entry.is_held(entry), "waited": None},
                    _events.actor(kind="tool"), level="warn")
 
 

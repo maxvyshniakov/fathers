@@ -130,10 +130,12 @@ def ask_yield(pid: int, start: str, directory: Path | None = None) -> tuple[dict
                    "priority": _schedule.effective_priority(chosen, settings, moment), "count": chosen["count"],
                    "at": _config.now(), "asker": asker.get("via") or f"pid {asker.get('pid')}"}
         _state.write(_state.marker(path), request)
+        asked: _events.YieldAsked = {"count": entry["count"], "by_hand": True,
+                                     "for": {"id": request["by"], "label": chosen.get("label"),
+                                             "priority": str(request["priority"])}}
         _events.record(directory, f"asked {entry.get('label')} (pid {entry['pid']}) to yield {entry['count']} for "
-                              f"{chosen.get('label')}", "lease.yield_asked", _events.request(entry, path),
-                     {"count": entry["count"], "for": {"id": request["by"], "label": chosen.get("label"),
-                                                       "priority": request["priority"]}, "by_hand": True}, asker)
+                                  f"{chosen.get('label')}", "lease.yield_asked", _events.request(entry, path),
+                       asked, asker)
     return entry, request, False
 
 
@@ -360,9 +362,9 @@ def grant(directory: Path, table: _queue.Table) -> str | None:
         _entry.to_held(entry, granted, time.time(), pressed=memory[0] != "normal", served=served)
         _state.write(paths[id(entry)], entry)
         used += entry["count"]
-        details: dict[str, Any] = {"count": entry["count"], "priority": _entry.priority_of(entry),
-                                   "waited": None if waited_from is None else
-                                   round(max(0.0, began - waited_from))}
+        details: _events.Granted = {"count": entry["count"], "priority": _entry.priority_of(entry),
+                                    "waited": None if waited_from is None else
+                                    round(max(0.0, began - waited_from))}
         if served != _entry.priority_of(entry):
             details["served"] = served
         if back is not None:
@@ -476,7 +478,7 @@ def release(path: Path, count: int, status: int | None, usage: dict[str, Any] | 
         _runtype.after_release(directory, item)  # outliers and trends, outside the queue lock
 
 
-def waiting_long(directory: Path, path: Path, entry: dict[str, Any], line: str, facts: dict[str, Any]) -> None:
+def waiting_long(directory: Path, path: Path, entry: dict[str, Any], line: str, facts: _events.WaitingLong) -> None:
     """Records that the request at `path` has waited the warn time (queue.log and EVENTS)."""
     with _state.locked(directory):
         _events.record(directory, f"waiting long: {line}", "request.waiting_long", _events.request(entry, path), facts,

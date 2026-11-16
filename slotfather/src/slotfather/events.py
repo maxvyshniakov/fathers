@@ -22,7 +22,7 @@ import os
 from pathlib import Path
 import re
 import socket
-from typing import Any, Mapping, Optional, TypedDict, Union, cast
+from typing import Any, Literal, Mapping, Optional, TypedDict, Union, cast, overload
 
 from . import entry as _entry
 
@@ -289,10 +289,117 @@ def line(kind: str, subject: Mapping[str, Any], details: Mapping[str, Any], who:
     return data
 
 
+@overload
+def record(directory: Path, log: str, kind: None = None, subject: None = None, details: None = None,
+           who: None = None, level: None = None) -> None: ...
+
+
+@overload
+def record(directory: Path, log: str | None, kind: Literal["lease.granted"], subject: Mapping[str, Any],
+           details: Granted, who: Mapping[str, Any] | None = None, level: str | None = None) -> None: ...
+
+
+@overload
+def record(directory: Path, log: str | None, kind: Literal["lease.released"], subject: Mapping[str, Any],
+           details: Released, who: Mapping[str, Any] | None = None, level: str | None = None) -> None: ...
+
+
+@overload
+def record(directory: Path, log: str | None, kind: Literal["request.left"], subject: Mapping[str, Any],
+           details: Left, who: Mapping[str, Any] | None = None, level: str | None = None) -> None: ...
+
+
+@overload
+def record(directory: Path, log: str | None, kind: Literal["lease.reaped", "request.reaped"], subject: Mapping[str, Any],
+           details: Reaped, who: Mapping[str, Any] | None = None, level: str | None = None) -> None: ...
+
+
+@overload
+def record(directory: Path, log: str | None, kind: Literal["request.reprioritized"], subject: Mapping[str, Any],
+           details: Reprioritized, who: Mapping[str, Any] | None = None, level: str | None = None) -> None: ...
+
+
+@overload
+def record(directory: Path, log: str | None, kind: Literal["request.waiting_long"], subject: Mapping[str, Any],
+           details: WaitingLong, who: Mapping[str, Any] | None = None, level: str | None = None) -> None: ...
+
+
+@overload
+def record(directory: Path, log: str | None, kind: Literal["request.head_dropped"], subject: Mapping[str, Any],
+           details: HeadDropped, who: Mapping[str, Any] | None = None, level: str | None = None) -> None: ...
+
+
+@overload
+def record(directory: Path, log: str | None, kind: Literal["lease.yield_asked"], subject: Mapping[str, Any],
+           details: YieldAsked, who: Mapping[str, Any] | None = None, level: str | None = None) -> None: ...
+
+
+@overload
+def record(directory: Path, log: str | None, kind: Literal["lease.yield_withdrawn"], subject: Mapping[str, Any],
+           details: Empty, who: Mapping[str, Any] | None = None, level: str | None = None) -> None: ...
+
+
+@overload
+def record(directory: Path, log: str | None, kind: Literal["lease.yielded"], subject: Mapping[str, Any],
+           details: Yielded, who: Mapping[str, Any] | None = None, level: str | None = None) -> None: ...
+
+
+@overload
+def record(directory: Path, log: str | None, kind: Literal["lease.lock_ended"], subject: Mapping[str, Any],
+           details: LockEnded, who: Mapping[str, Any] | None = None, level: str | None = None) -> None: ...
+
+
+@overload
+def record(directory: Path, log: str | None, kind: Literal["capacity.changed"], subject: Mapping[str, Any],
+           details: CapacityChanged, who: Mapping[str, Any] | None = None, level: str | None = None) -> None: ...
+
+
+@overload
+def record(directory: Path, log: str | None, kind: Literal["order.changed"], subject: Mapping[str, Any],
+           details: OrderChanged, who: Mapping[str, Any] | None = None, level: str | None = None) -> None: ...
+
+
+@overload
+def record(directory: Path, log: str | None, kind: Literal["process.swept"], subject: Mapping[str, Any],
+           details: Swept, who: Mapping[str, Any] | None = None, level: str | None = None) -> None: ...
+
+
+@overload
+def record(directory: Path, log: str | None, kind: Literal["session.run_started", "session.run_ended"], subject: Mapping[str, Any],
+           details: SessionRun, who: Mapping[str, Any] | None = None, level: str | None = None) -> None: ...
+
+
+@overload
+def record(directory: Path, log: str | None, kind: Literal["session.ended"], subject: Mapping[str, Any],
+           details: SessionEnded, who: Mapping[str, Any] | None = None, level: str | None = None) -> None: ...
+
+
+@overload
+def record(directory: Path, log: str | None, kind: Literal["run.outlier"], subject: Mapping[str, Any],
+           details: Outlier, who: Mapping[str, Any] | None = None, level: str | None = None) -> None: ...
+
+
+@overload
+def record(directory: Path, log: str | None, kind: Literal["run.trend"], subject: Mapping[str, Any],
+           details: Trend, who: Mapping[str, Any] | None = None, level: str | None = None) -> None: ...
+
+
+@overload
+def record(directory: Path, log: str | None, kind: Literal["reap.skipped"], subject: Mapping[str, Any],
+           details: ReapSkipped, who: Mapping[str, Any] | None = None, level: str | None = None) -> None: ...
+
+
+@overload
+def record(directory: Path, log: str | None, kind: Literal["reap.resumed"], subject: Mapping[str, Any],
+           details: ReapResumed, who: Mapping[str, Any] | None = None, level: str | None = None) -> None: ...
+
+
 def record(directory: Path, log: str | None, kind: str | None = None, subject: Mapping[str, Any] | None = None,
            details: Mapping[str, Any] | None = None, who: Mapping[str, Any] | None = None,
            level: str | None = None) -> None:
     """The one writer of what a queue transaction did (fathers#37), after it did it: its queue.log line `log`
+    (typed per kind by the overloads above: each kind's `details` is its TypedDict, so a malformed event fails the
+    type check),
     (state.log(); callers hold the queue lock), then its event of `kind` (one of KINDS, `details` of that kind's
     shape) about `subject`, by `who` (this process unless given). Either may be None: a line no event mirrors (a
     long wait's), an event with no line (a session's, a settings change's). The event never fails the change."""

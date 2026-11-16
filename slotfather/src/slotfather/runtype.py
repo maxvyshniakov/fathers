@@ -332,10 +332,10 @@ def after_release(directory: Path, item: dict[str, Any]) -> None:
             _state.write(path, trends)
             if first and found["verdict"] == "steady":
                 return  # nothing to say about a key's first steady trend
-            _events.record(directory, None, "run.trend", {"type": "run_type", "id": str(key)},
-                         {k: found[k] for k in ("verdict", "p50_recent", "p50_before", "ratio", "recent", "before",
-                                                "plan_change", "why")}, _events.actor(kind="tool"),
-                         level="warn" if found["verdict"] == "slower" else None)
+            changed = cast(_events.Trend, {k: found[k] for k in ("verdict", "p50_recent", "p50_before", "ratio", "recent",
+                                                                 "before", "plan_change", "why")})
+            _events.record(directory, None, "run.trend", {"type": "run_type", "id": str(key)}, changed,
+                           _events.actor(kind="tool"), level="warn" if found["verdict"] == "slower" else None)
 
 
 def week(stamp: Any) -> str | None:

@@ -10,6 +10,7 @@ from typing import Any, Callable, NamedTuple
 
 from . import config as _config
 from . import entry as _entry
+from . import events as _events
 from . import idle as _idle
 from . import lineage as _lineage
 from . import platform as _platform
@@ -325,7 +326,7 @@ def long_wait(directory: Path, path: Path) -> str | None:
     return report[0] if report else None
 
 
-def long_wait_report(directory: Path, path: Path) -> tuple[str, dict[str, Any]] | None:
+def long_wait_report(directory: Path, path: Path) -> tuple[str, _events.WaitingLong] | None:
     """long_wait()'s line and its facts for the request.waiting_long event: {"waited" (seconds), "est_start" (UTC
     stamp or None), "behind": {"earlier", "running"}, "priority" (served), "aged"}."""
     found = look(directory)
