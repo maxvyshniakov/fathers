@@ -252,7 +252,7 @@ class ContainerIdleTests(unittest.TestCase):
         entry.write_text("{}")
         child = subprocess.Popen([argv0, "-c", "sleep 30; :", "run", "alpine"], executable="/bin/sh")
         self.addCleanup(lambda: (child.kill(), child.wait()))
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 30  # a functional bound: the child starts its sleep at once
         while not any(ppid == child.pid for ppid, _ in sf_process.processes().values()):
             self.assertLess(time.monotonic(), deadline, "the sleep to start")
         with mock.patch.dict(os.environ, {"SLOTFATHER_DIR": str(root / "state"), "SLOTFATHER_LEGACY_DIRS": ""}):
