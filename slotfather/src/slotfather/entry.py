@@ -380,6 +380,37 @@ def to_yielded(entry: Record, moment: float, rank: float | None) -> None:
     entry.pop(PRESSED, None)  # back in the queue it is no lease of a warning; its next grant decides
 
 
+LOCK = "lock"  # the path a yielded lease's command waits to lock (fathers#159); granted again once it has it
+
+
+def lock_of(entry: Mapping[str, Any]) -> str | None:
+    """The lock a lease gave up its slots to wait for (`slotfather lock`, fathers#159), or None. While it is set the
+    lease waits without a place a grant can give: nothing grants it (schedule.plan()), and once the lock is taken
+    the mark goes and it is granted again as any waiter in its place. An older client reads past the field: it
+    sees a yielded lease and may grant it early, which only holds the slots as before."""
+    value: object = entry.get(LOCK)
+    return value if isinstance(value, str) and value else None
+
+
+def to_lock_waiting(entry: Record, moment: float, lock: str) -> None:
+    """A held lease back among the waiters at `moment` while its command waits to lock `lock`: yielded as
+    to_yielded() writes it (an older client reads it as a lease that yielded), in its own place (no pinned rank)
+    and without counting a polite yield (`yields`, which YIELDS_MAX caps)."""
+    yields = entry.get("yields")
+    to_yielded(entry, moment, None)
+    entry.pop("rank", None)
+    if yields is None:
+        entry.pop("yields", None)
+    else:
+        entry["yields"] = yields
+    entry[LOCK] = lock
+
+
+def lock_taken(entry: Record) -> None:
+    """The lock a yielded lease waited for is taken: it waits to be granted again as any yielded lease."""
+    entry.pop(LOCK, None)
+
+
 def trial_yielded(entry: Mapping[str, Any], rank: float | None) -> Record:
     """A copy of a held lease as it would wait if it yielded now, at `rank`: for a plan that tries it."""
     return dict(entry, state=WAITING, rank=rank)

@@ -6,6 +6,10 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- `slotfather lock PATH -- COMMAND` runs COMMAND holding a `flock` on PATH; while it waits for the lock, the lease
+  it runs under gives up its slots (in its own place, never granted meanwhile) and takes them back before
+  COMMAND runs. `status` shows `waiting-for-lock=PATH`, `status --json` and the dashboard block `lock`
+  (fathers#159).
 - `status --json` gives every entry its `phase` (`waiting`, `yielded`, `held`, `asked` or `unknown`).
 - `run` without `--label` names the request after its project (the git repository of its directory, never a temporary
   one), the part of the command that names the work and its lane, ticket and phase: `godfather · measure_cpu`,
@@ -120,6 +124,8 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- A lease whose tree runs a container or VM program (`docker`, `podman`, `qemu-system-*`, `limactl`, ...) is
+  never idle, though the work it waits on uses no host CPU (fathers#159).
 - `procs --json --cwd` no longer lists in `cwd_unknown` or `lease_unknown` a process that exited between the scan
   and the read of its directory or environment (a short-lived `lsof`, git or shell helper), which made
   `lanefather done` refuse nearly every lane on a busy machine; only one still running with the same start

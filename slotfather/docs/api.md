@@ -210,6 +210,24 @@ with the start time the caller saw (`status --json`'s `start`):
   refuses a pid whose start differs, a pid that holds no lease, a lease that did not take `--yieldable` or has
   yielded `YIELDS_MAX` times, and a queue with no such waiter; asked twice, it says it was already asked.
 
+## Waiting on a lock
+
+`slotfather lock PATH -- COMMAND...` (fathers#159) runs COMMAND holding an exclusive `flock` on PATH (created if
+missing), released when it exits; it exits with COMMAND's status. When another process holds the lock, the lease the
+caller runs under (`SLOTFATHER_LEASE`, or a holder among its ancestors) gives up its slots while it waits: the entry
+goes back among the waiters in its own place, as a yielded lease (`yielded_at`, `first_granted`) with `lock: PATH`,
+and nothing grants it while that mark stands. Once the lock is taken the mark goes and COMMAND runs only after the
+lease is granted again. A lock wait spends none of the lease's polite yields (`yields`, `YIELDS_MAX`). Outside a
+lease it is a plain lock. A signal that ends the wait leaves the lease an ordinary yielded waiter, granted again at
+the next look. `status` tags such a waiter `waiting-for-lock=PATH`, `status --json` gives it `lock` (only on such an
+entry), the dashboard block's items carry `lock` (empty when none), queue.log says `yielded N (ENTRY) while waiting
+for lock PATH` and `took lock PATH`, and EVENTS gets a `lease.yielded` with `details.lock` and `to.label` `lock PATH`.
+An older client reads the entry as a yielded waiter and may grant it during the wait, which only holds the slots as
+before. Slotfather never yields a lease by itself for a lock it sees: a guess would free slots under running work.
+
+While a container or virtual machine program runs in a lease's tree (`docker`, `podman`, `qemu-system-*`,
+`limactl`, `vfkit` and the like: `idle.CONTAINERS`), the lease is never idle, though its work uses no host CPU.
+
 ## Process queries
 
 Use `procs` for process ownership checks and worktree inspection:

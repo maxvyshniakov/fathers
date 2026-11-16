@@ -349,6 +349,7 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
                 if foreseen.get("est_start") is not None else None,
                 "granted": parse_utc(entry.get("granted")), "passable": kind == "waiting" and _schedule.overtakable(entry, time.time(), _config.overtake_window()),
                 "all": bool(entry.get("all")),
+                "lock": dashboard_text(_entry.lock_of(entry) or ""),  # fathers#159: waiting for this lock
                 "style": "text" if kind == "waiting" else "legacy"}
 
     # The class each waiter is served in and its expected start (query.outlook(); nothing when it cannot be read).

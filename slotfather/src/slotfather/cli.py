@@ -3,6 +3,8 @@
   slotfather run [-n N|all] [--label L] [--meta K=V]... [--priority P] [--ticket ID] [--yieldable] [--wait S] [--] COMMAND...
                                                                      run COMMAND holding N slots (default 1)
   slotfather yield                                                   inside a yieldable lease: yield if asked
+  slotfather lock PATH -- COMMAND...                                 run COMMAND holding a flock on PATH; the
+                                                                     enclosing lease frees its slots while it waits
   slotfather session start --label NAME [-n N|all] [--idle S] [--expect S] ...  hold the machine for a series of
                                                                      `run --session NAME -- COMMAND`; session stop NAME
   slotfather status [--json [--pid PID | --full]]                    running and waiting requests, in queue order
@@ -142,6 +144,7 @@ def dashboard(argv: list[str]) -> int:
 USAGE = ("usage: slotfather                     (in a terminal: the live dashboard, godfather)\n"
          "       slotfather run [-n N|all] [--label L] [--meta KEY=VALUE]... [--priority interactive|normal|batch] [--ticket ID]\n"
          "                      [--yieldable] [--wait SECONDS] [--] COMMAND...      (inside a lease: slotfather yield)\n"
+         "       slotfather lock PATH -- COMMAND...    (the enclosing lease frees its slots while it waits for the lock)\n"
          "       slotfather session start --label NAME [-n N|all] [--idle S] [--expect S] [--priority P] [--ticket ID]\n"
          "                      [--meta K=V]... [--wait S] | session stop NAME | run --session NAME [--label L] -- COMMAND...\n"
          "       slotfather status [--json [--pid PID | --full]] | available [--label L] [-- COMMAND...]\n"
@@ -467,6 +470,9 @@ def main(argv: list[str] | None = None) -> int:
             return status_command(rest[1:])
         if command == "yield":
             return yield_command(rest)
+        if command == "lock":
+            from .lockwait import command as lock_command
+            return lock_command(rest)
         if command == "reprioritize":
             return reprioritize_command(rest)
         if command == "ask-yield":

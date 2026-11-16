@@ -21,6 +21,21 @@ STALE_LOOKS = 3  # a record older than this many of the holder's longest interva
 STALE_LEAST = 30.0  # seconds, whatever the interval
 
 
+# Programs whose running process means work goes on elsewhere (a container or a virtual machine), at no CPU of the
+# host's own (fathers#159): a tree with one in it is never idle.
+CONTAINERS = ("docker", "podman", "nerdctl", "buildah", "colima", "lima", "limactl", "qemu-system", "vfkit",
+              "container", "orb", "orbctl", "multipass", "krunvm", "firecracker", "virtualbox", "vboxmanage",
+              "vboxheadless", "prlctl", "vmrun", "utmctl", "tart", "kubectl")
+
+
+def container(name: str) -> bool:
+    """Whether a program name (ps `comm`) is a container or VM client or runtime (CONTAINERS): `docker`,
+    `docker-compose`, `qemu-system-aarch64`, `limactl` and the like."""
+    found = name.lower()
+    return any(found == known or found.startswith(known + "-") or (known == "qemu-system" and found.startswith(known))
+               for known in CONTAINERS)
+
+
 def path(entry: Path) -> Path:
     """The idle record beside a queue entry."""
     return entry.with_suffix(SUFFIX)

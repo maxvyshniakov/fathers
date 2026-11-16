@@ -202,6 +202,8 @@ def status_lines(directory: Path | None = None) -> list[str]:
             request = found.asks.get(path.stem) if _entry.is_held(e) else None
             tags += " yieldable" + (f" asked-to-yield-for={request.get('label')}" if request else "") + \
                 (f" yielded={e['yields']}" if e.get("yields") else "")
+        if _entry.lock_of(e) is not None:  # fathers#159: its slots are free while its command waits on a lock
+            tags += f" waiting-for-lock={_entry.lock_of(e)}"
         if isinstance(e.get("session"), dict):
             from .session import tags as session_tags
             tags += session_tags(path, e)
@@ -244,7 +246,8 @@ def entry_item(path: Path, entry: dict[str, Any], table: dict[int, tuple[int, st
             "since": entry.get("since"), "granted": entry.get("granted"), "cmd": entry.get("cmd"),
             "cwd": entry.get("cwd"), "meta": _entry.meta_of(entry), "tree": _lineage.descendants(table, pid),
             "priority": _entry.priority_of(entry), "ticket": _entry.ticket_of(entry),
-            "yieldable": bool(entry.get("yieldable")), "yields": int(entry.get("yields") or 0)}
+            "yieldable": bool(entry.get("yieldable")), "yields": int(entry.get("yields") or 0),
+            **({"lock": _entry.lock_of(entry)} if _entry.lock_of(entry) is not None else {})}
 
 
 def unknown_item(path: Path, entry: dict[str, Any], table: dict[int, tuple[int, str]]) -> dict[str, Any]:

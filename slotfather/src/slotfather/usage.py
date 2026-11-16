@@ -164,6 +164,8 @@ class Watch(threading.Thread):
             if children is not None:
                 members[key] += children
         since = self.idle.observe(moment, members, threshold)
+        if since is not None and any(_idle.container(name) for name in _process.names(key[0] for key in members).values()):
+            since = self.idle.since = None  # a container or VM runs in the tree: its work uses no host CPU (#159)
         if self.entry.exists():  # a release removes the entry, and with it the record
             _idle.record(self.entry, since, self.idle.rate, moment)
 

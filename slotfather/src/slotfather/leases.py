@@ -244,6 +244,53 @@ def reprioritize(target: str, priority: str, directory: Path | None = None,
     return changed
 
 
+def yield_for_lock(path: Path, lock: str) -> bool:
+    """Gives up the slots of the held lease at `path` while its command waits to lock `lock` (fathers#159): the
+    lease goes back among the waiters in its own place, marked with the lock (entry.to_lock_waiting()), so that
+    nothing grants it while it waits, and the queue grants at once. Returns False, changing nothing, when the lease
+    is not held (it waits already, or is gone)."""
+    directory = path.parent.parent
+    with _state.locked(directory):
+        try:
+            entry = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return False
+        if not _entry.is_held(entry):
+            return False
+        _entry.to_lock_waiting(entry, time.time(), lock)
+        _state.write(path, entry)
+        _state.marker(path).unlink(missing_ok=True)  # a yield request is moot: its slots are free now
+        _state.log(directory, f"yielded {entry['count']} ({path.name}) while waiting for lock {lock}")
+        _events.emit(directory, "lease.yielded", _events.request(entry, path),
+                     {"count": entry["count"], "to": {"id": None, "label": f"lock {lock}"}, "lock": lock,
+                      "yields": int(entry.get("yields") or 0)}, _events.holder(entry))
+        with contextlib.suppress(_config.SlotError):  # the next look grants the freed slots otherwise
+            grant(directory, _queue.process_table(directory))
+    return True
+
+
+def lock_taken(path: Path, wait: bool = True) -> None:
+    """The lock the yielded lease at `path` waited for is taken (or its wait ended): it becomes an ordinary yielded
+    lease in its own place, and with `wait` this waits until it is granted again (held_again())."""
+    directory = path.parent.parent
+    with _state.locked(directory):
+        try:
+            entry = json.loads(path.read_text())
+        except (OSError, ValueError):
+            raise _config.SlotError("the lease vanished from the queue") from None
+        if _entry.lock_of(entry) is not None:
+            lock = _entry.lock_of(entry)
+            _entry.lock_taken(entry)
+            _state.write(path, entry)
+            _state.log(directory, f"took lock {lock} for {entry.get('label')} (pid {entry.get('pid')}); waiting for "
+                                  f"{entry['count']} slot(s) again" if wait else
+                       f"stopped waiting for lock {lock} for {entry.get('label')} (pid {entry.get('pid')})")
+            with contextlib.suppress(_config.SlotError):
+                grant(directory, _queue.process_table(directory))
+    if wait:
+        held_again(path)
+
+
 def held_again(path: Path) -> None:
     """Waits until the yielded lease at `path` is granted again, looking at the queue as a waiter does."""
     directory = path.parent.parent

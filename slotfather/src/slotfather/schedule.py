@@ -240,12 +240,15 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
     unknown run keeps it the head), is no head: it would leave without running, so it holds nobody back. Nor is a
     batch waiter (deferring(); one that aged is normal) while a normal or interactive one waits (others_wait()),
     and a batch one for the whole machine does not start then; once none waits it is the head as any other.
+    A yielded lease whose command waits on a lock (entry.lock_of(), fathers#159) is left out: neither granted nor
+    the head until it has the lock.
     `settings` are the caller's settings.order_settings() (DEFAULTS where not given); `order` overrides theirs. The
     head's start is worked out when it holds no reservation yet, when a request behind it fits, or with
     `reserve_head`."""
     settings = settings or DEFAULTS
     order = order or settings["order"]
     estimate = estimate or no_estimate
+    waiters = [entry for entry in waiters if _entry.lock_of(entry) is None]  # waiting on a lock: not grantable
     if order == "backfill":
         waiters = ranked(waiters, settings, moment)
     fallback, safety, overrun, limit = (float(settings[key]) for key in ("fallback", "safety", "overrun", "limit"))
@@ -402,7 +405,7 @@ def yield_asks(waiters: list[Entry], held: list[Entry], slots: int, moment: floa
 
     for entry in ranked(waiters, settings, moment):
         asking = effective_priority(entry, settings, moment)  # an aged waiter asks as the class it is served in
-        if asking not in _config.ASKERS or any(entry is g for g in granted):
+        if asking not in _config.ASKERS or any(entry is g for g in granted) or _entry.lock_of(entry) is not None:
             continue
         own = entry.get("yield_after")  # its client's environment asks later, or never (0)
         if isinstance(own, (int, float)) and not isinstance(own, bool):

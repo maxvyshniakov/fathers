@@ -31,6 +31,7 @@ SWEEP = "pid=,ppid=,uid=,rss=,tty=,lstart=,command="  # the sweep's snapshot
 CPU = "pid=,ppid=,%cpu=,rss=,comm="  # the dashboard block's CPU sample
 STARTS = "pid=,stat=,lstart="  # the sweep's check before a signal; running()
 OWNER = "uid="  # process_uid()
+NAMES = "pid=,comm="  # names(): the idle check's container rule
 ENVIRONMENT = "pid=,command="  # with -wwE: the command and, where shown, the environment
 ARGUMENTS = "pid=,command="  # the full arguments, without the environment
 
@@ -182,6 +183,24 @@ def process_uid(pid: object) -> int | None:
         return None
     words = result.stdout.split()
     return int(words[0]) if result.returncode == 0 and len(words) == 1 and words[0].isdigit() else None
+
+
+def names(pids: Iterable[int], timeout: float = 5) -> dict[int, str]:
+    """pid -> the program name (ps `comm`, its path's last part) of those of `pids` still running; {} when ps gives
+    no answer (a caller that needs to know reads that as "not known")."""
+    wanted = sorted(set(pids))
+    if not wanted:
+        return {}
+    try:
+        result = run(["-o", NAMES, "-p", ",".join(map(str, wanted))], env=_platform.c_locale(), timeout=timeout)
+    except PsError:
+        return {}
+    found: dict[int, str] = {}
+    for line in result.stdout.splitlines():
+        number, _, name = line.strip().partition(" ")
+        if number.isdigit() and name.strip():
+            found[int(number)] = os.path.basename(name.strip())
+    return found
 
 
 def arguments(pids: Iterable[int], timeout: float = 5) -> subprocess.CompletedProcess[str]:
