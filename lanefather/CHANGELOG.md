@@ -32,8 +32,11 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   frozen checkout with the same prompt (its `prompt_sha256` in the receipt), each in its own process, its answer in
   a private directory until every member finished. The receipt's `panel` keeps each reviewer's model, effort,
   seconds, status and findings; the one `findings` list numbers them across the panel, so `review --mark N` and the
-  gate work as before. A member whose conditions fail (a used-up Codex week, the implementer's own family) is
-  replaced by the first choice that holds, or skipped when that is already on the panel; one whose run fails keeps
+  gate work as before. A member whose conditions fail (a used-up Codex week, no CLI) is replaced by the first choice
+  that holds, or skipped when that is already on the panel. A member of the implementer's family stays on the panel
+  (owner decision 2026-11-16: the panel compares reviewers; the single reviewer still avoids the implementer's
+  family): it runs the review role's choice for that case, and its entry, `review` and `--compare` carry that
+  choice's note ("same family as the implementer: fresh context only"). One whose run fails keeps
   the others' answers, and holds the gate only with `[review] panel_required = true`. `review ID --compare` shows
   who found what and how it was marked; `stats --json` adds per-reviewer totals (`reviewers`). Without `panel`,
   one reviewer as before. An earlier release refuses the `panel` key: install this one first.

@@ -109,6 +109,10 @@ By default, landing starts an authenticated AI reviewer in the background; sourc
 to that provider and can consume its paid usage or quota. `promote --ship` also starts an overall review; findings
 can create a GitHub issue. [Configure the reviewer](docs/reference.md#reviewer-configuration) before using those commands.
 
+A project can set a review panel (`[review] panel = ["sol", "opus"]`) to have several reviewers read the same diff at
+once and compare them (`review ID --compare`); a panel member of the implementer's own model family still reviews,
+marked with a note, while a single reviewer is chosen from another family when the models file asks for it.
+
 Set `LANEFATHER_REVIEW_START=manual` to defer automatic starts and receive the review command instead. Required
 review still has to finish before promotion. Documentation-only changes outside steering files have the explicit
 review exemption documented in the source.

@@ -278,9 +278,14 @@ panel_required = false    # true: a member that should have answered and did not
 Every member gets the same prompt, with the diff inline, on the same frozen checkout, each in its own process; the
 receipt keeps the prompt's `prompt_sha256`. Answers are written to a private temporary directory and move beside
 the receipt (`reviews/<label>.<reviewer>.md`) only once every member finished, so no member can read another's. A
-member whose conditions fail (any role reports, the Codex limit, `not_family`, its CLI) is replaced by the first
-choice that holds (role's choice when present), or skipped when that one is already on the panel; the reason is in
-its entry, and role's model id and effort are used for the model role chose. A member whose run fails or answers
+member whose conditions fail (the Codex limit, judged on role's read when role made one, or its CLI) is replaced by
+the first choice that holds (role's choice when present), or skipped when that one is already on the panel; the
+reason is in its entry, and role's model id and effort are used for the model role chose. `not_family` never takes a
+member off the panel (owner decision 2026-11-16): the panel exists to compare reviewers on the same diff, and a
+member of the implementer's family is a second opinion beside the other. It runs the review role's choice of that
+model that does not ask for another family (Mastack's same-family Opus), and its entry carries that choice's `note`
+(else "same family as the implementer (F)"), which `review` and `--compare` print. The single reviewer keeps
+`not_family` as above. A member whose run fails or answers
 empty is kept as `failed` and the others' answers stand. `panel_required` holds the gate on a `failed` member only:
 a member the rules skipped is not missing. The receipt's `panel` lists each member: `member`, `reviewer`, `model`,
 `effort`, `cli`, `status` (`finished`, `failed`, `skipped`), `reason`, `error`, `fallback`, `seconds`, `output` and
