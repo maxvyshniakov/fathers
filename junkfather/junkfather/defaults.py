@@ -1,13 +1,14 @@
 """Every tunable of Junkfather with its default, in one table. Seconds unless said otherwise.
 
-Three of them are settings a person may change (settings.py: own.default_ttl, sweep.interval, reap.grace): their
-readers call `settings.value(KEY)` when they run, which layers the saved value over the default here, and take None
-for "the setting" in their default arguments. The rest are imported by name (`from .defaults import PS_TIMEOUT`)
-and bound when the module loads."""
+Four of them are settings a person may change (settings.py: own.default_ttl, own.background_ttl, sweep.interval,
+reap.grace): their readers call `settings.value(KEY)` when they run, which layers the saved value over the default
+here, and take None for "the setting" in their default arguments. The rest are imported by name (`from .defaults
+import PS_TIMEOUT`) and bound when the module loads."""
 from __future__ import annotations
 
 # Owning
 TTL = 7200.0  # `own`, `own-resource` and `adopt` without --ttl (setting own.default_ttl)
+BACKGROUND_TTL = 7200.0  # a background Bash call's shell, which the hook owns (setting own.background_ttl)
 TTL_MIN = 60.0  # the shortest default TTL the setting saves (one slip would reap everything at once)
 TTL_MAX = 7 * 86400.0  # the longest default TTL the setting saves
 DETACH_WAIT = 15.0  # `own --detach` waits this long for the supervisor to start the command

@@ -75,14 +75,16 @@ def listed_unowned(store: Store, pid: int) -> Optional[Dict[str, Any]]:
     return None
 
 
-def adopt_refusal(pid: int, table: _procs.Table, owned: Callable[[int], bool]) -> Optional[str]:
-    """Why `adopt` may not own this running pid, or None. `owned` tells whether an entry holds it already."""
+def adopt_refusal(pid: int, table: _procs.Table, owned: Callable[[int], bool], parent: Optional[int] = None
+                  ) -> Optional[str]:
+    """Why `adopt` may not own this running pid, or None. `owned` tells whether an entry holds it already. `parent`:
+    this process's parent, the one ancestor `background` may own (the shell that runs it, background.py)."""
     proc = table.get(pid)
     if proc is None:
         return "no such process"
     if proc.uid != os.getuid():
         return "another user's process"
-    if pid in protected(table):
+    if pid in protected(table) and not (parent is not None and pid == parent == os.getppid() and pid > 1):
         return "junkfather itself or one of its ancestors"
     if agent(proc):
         return "an agent session"

@@ -39,6 +39,7 @@ import traceback
 from typing import Any, Callable, ClassVar, Dict, List, Mapping, NoReturn, Optional
 
 from . import __version__
+from . import background as _background
 from . import changelog as _changelog
 from . import dashboard as _dashboard
 from . import defaults
@@ -199,6 +200,8 @@ def parser() -> Parser:
     sub.add_parser("hook", help="the agent lifecycle hook (JSON on stdin)")
     p = sub.add_parser("supervise")  # internal (launch.py runs it): no help, so the help does not list it
     p.add_argument("id")
+    p = sub.add_parser("background")  # internal: the line the hook puts before a background Bash command
+    p.add_argument("tool_use_id")
     sub.add_parser("version", help="print junkfather's version")
     return top
 
@@ -469,5 +472,6 @@ COMMANDS: Dict[str, Callable[[Store, argparse.Namespace], int]] = {
     "status": status_command, "capabilities": capabilities_command, "changelog": changelog_command,
     "reap": reap_command, "hand": hand_command, "extend": extend_command, "sweep": sweep_command,
     "hook": lambda store, args: _hook.main(), "supervise": lambda store, args: _launch.supervise(store, args.id),
+    "background": lambda store, args: _background.adopt(store, args.tool_use_id, os.environ),
     "settings": settings_command, "version": version_command,
 }

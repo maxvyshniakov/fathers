@@ -125,13 +125,37 @@ class InstallOptionTests(Case):
         with self.assertRaisesRegex(self.install_module.InstallError, "Mastack's installer failed"):
             self.install_module.mastack(self.command)
 
+    def test_background_registers_the_bash_hook_once_beside_the_others(self):
+        claude = self.tmp / "claude-config"
+        os.environ["CLAUDE_CONFIG_DIR"] = str(claude)
+        mastack = {"matcher": "Bash", "hooks": [{"type": "command", "command": "python3 bash_guard.py", "timeout": 10}]}
+        claude.mkdir()
+        (claude / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": [mastack]}, "model": "kept"}))
+        (claude / "settings.json").chmod(0o640)
+        for _ in range(2):
+            self.assertEqual(claude / "settings.json", self.install_module.background(self.command))
+        data = json.loads((claude / "settings.json").read_text())
+        line = f"""sh -c '[ -x "$0" ] || exit 0; exec "$0" hook' {self.command}"""
+        self.assertEqual([mastack, {"matcher": "Bash", "hooks": [{"type": "command", "command": line, "timeout": 10}]}],
+                         data["hooks"]["PreToolUse"])
+        self.assertEqual("kept", data["model"])
+        self.assertEqual(0o640, (claude / "settings.json").stat().st_mode & 0o777)
+        ran = subprocess.run(["/bin/sh", "-c", line.replace(str(self.command), str(self.tmp / "gone"))],
+                             capture_output=True, text=True)
+        self.assertEqual((0, ""), (ran.returncode, ran.stdout), "no command, no hook and no error")
+        (claude / "settings.json").write_text("{")
+        with self.assertRaisesRegex(self.install_module.InstallError, "not JSON"):
+            self.install_module.background(self.command)
+
     def test_the_flags_run_launchd_and_mastack_on_the_installed_command(self):
         module = self.install_module
         with mock.patch.object(module, "install", return_value=self.tmp / "release"), \
                 mock.patch.object(module, "launchd", return_value=self.tmp / "agent.plist") as launchd, \
-                mock.patch.object(module, "mastack") as mastack:
+                mock.patch.object(module, "mastack") as mastack, \
+                mock.patch.object(module, "background", return_value=self.tmp / "settings.json") as background:
             code = module.main(["--bin", str(self.tmp / "bin"), "--share", str(self.tmp / "share"), "--launchd",
-                                "--mastack"])
+                                "--mastack", "--background"])
         self.assertEqual(0, code)
         launchd.assert_called_once_with(self.tmp / "bin" / "junkfather")
         mastack.assert_called_once_with(self.tmp / "bin" / "junkfather")
+        background.assert_called_once_with(self.tmp / "bin" / "junkfather")

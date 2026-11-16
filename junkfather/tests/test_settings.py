@@ -28,12 +28,13 @@ class SettingsCase(Case):
 
 
 class SchemaTests(SettingsCase):
-    def test_the_schema_lists_the_three_settings_at_their_defaults(self):
+    def test_the_schema_lists_the_four_settings_at_their_defaults(self):
         found = self.settings()
         self.assertEqual((1, "junkfather", True, None), (found["v"], found["tool"], found["writable"], found["reason"]))
         self.assertEqual(["own", "sweep", "reap", "environment"], [s["id"] for s in found["sections"]])
         rows = self.rows(found)
-        expected = {"own.default_ttl": (7200, 60), "sweep.interval": (3600, 60), "reap.grace": (10, 1)}
+        expected = {"own.default_ttl": (7200, 60), "own.background_ttl": (7200, 60), "sweep.interval": (3600, 60),
+                    "reap.grace": (10, 1)}
         for key, (default, least) in expected.items():
             row = rows[key]
             self.assertEqual(("duration", default, default, "default", True, "s", least),

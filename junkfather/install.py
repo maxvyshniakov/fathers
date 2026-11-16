@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Install junkfather: the package into ~/.local/share/junkfather and the `junkfather` command into ~/.local/bin.
 
-  python3 install.py [--python /path/to/python3] [--bin DIR] [--share DIR] [--launchd] [--mastack]
+  python3 install.py [--python /path/to/python3] [--bin DIR] [--share DIR] [--launchd] [--mastack] [--background]
 
 Each install is a new directory, share/releases/<version>-<commit>, and share/current points at it; the command reads
 `current` when it starts, so a running supervisor keeps the release it started from. The three newest releases stay.
@@ -13,6 +13,10 @@ The command runs on one named interpreter (this one, or --python; 3.9 or newer).
            SubagentStop, SessionEnd and Stop events, and the PreToolUse observer for Bash commands naming
            junkfather), then runs Mastack's installer (`~/mastack/bin/install --only hooks`, $MASTACK_ROOT moves it),
            which registers them in ~/.claude/settings.json.
+--background  registers `junkfather hook` as a PreToolUse hook for Bash in Claude Code's user settings
+           (~/.claude/settings.json, or $CLAUDE_CONFIG_DIR/settings.json), beside Mastack's: its answer makes a
+           background Bash call own its shell, so a subagent's stop or the TTL ends it (junkfather/background.py).
+           Mastack's PreToolUse observer cannot do it, since a lifecycle hook's output is discarded.
 """
 from __future__ import annotations
 
@@ -42,6 +46,9 @@ sys.exit(main())
 """
 HOOK = "{command} hook"
 EVENTS = ("SubagentStop", "SessionEnd", "Stop")
+# Runs the hook, and nothing once the command is gone (an uninstall leaves no failing hook behind).
+BACKGROUND_HOOK = """sh -c '[ -x "$0" ] || exit 0; exec "$0" hook' {command}"""
+BACKGROUND_TIMEOUT = 10  # seconds; a hook that times out leaves the call as it was
 
 
 class InstallError(Exception):
@@ -158,6 +165,39 @@ def mastack(command: Path) -> None:
         raise InstallError("Mastack's installer failed; its message is above")
 
 
+def background(command: Path) -> Path:
+    """Register the hook for Bash calls in Claude Code's user settings, once; the settings file's path."""
+    config = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser()
+    path = (config / "settings.json").resolve()  # a symlinked settings file stays a symlink
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        text = ""
+    except OSError as error:
+        raise InstallError(f"{path}: {error}") from None
+    try:
+        data: Any = json.loads(text) if text.strip() else {}
+    except ValueError as error:
+        raise InstallError(f"{path} is not JSON: {error}") from None
+    hooks: Any = cast(Dict[str, Any], data).setdefault("hooks", {}) if isinstance(data, dict) else None
+    groups: Any = cast(Dict[str, Any], hooks).setdefault("PreToolUse", []) if isinstance(hooks, dict) else None
+    if not isinstance(groups, list):
+        raise InstallError(f"`hooks.PreToolUse` in {path} is not a list")
+    line = BACKGROUND_HOOK.format(command=shlex.quote(str(command)))
+    present = False
+    for group in cast(List[Any], groups):
+        handlers: Any = cast(Dict[str, Any], group).get("hooks") if isinstance(group, dict) else None
+        if isinstance(handlers, list):
+            present = present or any(isinstance(h, dict) and cast(Dict[str, Any], h).get("command") == line
+                                     for h in cast(List[Any], handlers))
+    if not present:
+        handler = {"type": "command", "command": line, "timeout": BACKGROUND_TIMEOUT}
+        cast(List[Any], groups).append({"matcher": "Bash", "hooks": [handler]})
+        mode = path.stat().st_mode & 0o7777 if path.exists() else 0o600
+        write_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n", mode)
+    return path
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--python", help="the interpreter the command runs on (default: this one)")
@@ -165,6 +205,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--share", type=Path, default=Path.home() / ".local/share/junkfather")
     parser.add_argument("--launchd", action="store_true", help="install and load the hourly sweep agent")
     parser.add_argument("--mastack", action="store_true", help="register the hooks through Mastack")
+    parser.add_argument("--background", action="store_true",
+                        help="own background Bash calls: register the PreToolUse hook in Claude Code's settings")
     args = parser.parse_args(argv)
     try:
         python = interpreter(args.python)
@@ -174,6 +216,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Loaded {launchd(args.bin / 'junkfather')}")
         if args.mastack:
             mastack(args.bin / "junkfather")
+        if args.background:
+            print(f"Registered the background hook in {background(args.bin / 'junkfather')}")
     except (InstallError, OSError, subprocess.CalledProcessError) as error:
         print(f"install: {error}", file=sys.stderr)
         return 1

@@ -3,7 +3,7 @@ detached commands and an append-only event log, all under one directory.
 
   $JUNKFATHER_STATE (default ~/.local/state/junkfather)
     entries/<id>.json      one owned process group (docs/reference.md, Entry)
-    claims/<session>/<tool_use_id>.json   who ran a Bash command that names junkfather (hook.py)
+    claims/<session>/<tool_use_id>.json   who ran a Bash command that names junkfather, or a background one (hook.py)
     logs/<id>.log          stdout and stderr of a detached command
     events.jsonl           what was started, kept, handed over and reaped (events.py, Godfather schema v1)
     sweep.json             the last sweep: its time and result

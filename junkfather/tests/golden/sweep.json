@@ -303,10 +303,12 @@
      {
       "age": "<v>",
       "agent": null,
+      "agent_type": null,
       "argv": [
        "sleep",
        "600"
       ],
+      "auto": null,
       "cwd": null,
       "end": null,
       "exit": null,

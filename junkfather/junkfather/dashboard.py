@@ -31,6 +31,7 @@ class Row(TypedDict):
     owner: str
     session: Optional[str]
     agent: Optional[str]
+    agent_type: Optional[str]
     lane: Optional[str]
     owner_alive: Optional[bool]
     age: float
@@ -48,6 +49,7 @@ class Row(TypedDict):
     end: Optional[Dict[str, Any]]
     exit: Optional[int]
     resource: Optional[Dict[str, Any]]  # {kind, id, name} for a resource entry
+    auto: Optional[str]  # "background": owned by the hook's rewrite of a background Bash call
 
 
 class UnownedProcess(TypedDict):
@@ -102,14 +104,16 @@ def row(entry: Entry, table: Optional[_procs.Table], now: float) -> Row:
         alive = len(_reap.members(entry, table)[0])
     owner = entry.get("owner") or {}
     return {"id": entry["id"], "state": entry.get("state"), "owner": _owner.describe(owner),
-            "session": owner.get("session"), "agent": owner.get("agent"), "lane": owner.get("lane"),
+            "session": owner.get("session"), "agent": owner.get("agent"), "agent_type": owner.get("agent_type"),
+            "lane": owner.get("lane"),
             "owner_alive": _owner.alive(owner, table) if entry.get("state") in _entry.ACTIVE else None,
             "age": now - float(entry.get("created") or now), "ttl": entry.get("ttl"),
             "ttl_left": float(entry.get("expires") or now) - now, "keep": entry.get("keep"),
             "pid": entry.get("pid"), "pgid": entry.get("pgid"), "processes": alive, "label": entry.get("label"),
             "mode": entry.get("mode"), "cwd": entry.get("cwd"), "argv": entry.get("argv"), "log": entry.get("log"),
             "end": entry.get("end"), "exit": entry.get("exit"),
-            "resource": {k: resource.get(k) for k in ("kind", "id", "name")} if isinstance(resource, dict) else None}
+            "resource": {k: resource.get(k) for k in ("kind", "id", "name")} if isinstance(resource, dict) else None,
+            "auto": entry.get("auto")}
 
 
 def rows(store: Store, table: Optional[_procs.Table], now: float, everything: bool = False) -> List[Row]:

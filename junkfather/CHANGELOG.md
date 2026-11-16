@@ -6,6 +6,13 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- A subagent's background Bash commands are owned on their own (fathers#166). With the new `install.py --background`,
+  `junkfather hook` runs as a PreToolUse hook for Bash and rewrites a `run_in_background` call so that its shell is
+  adopted first, by the subagent (or session) that made the call; the agent's command, its output and its exit status
+  stay as they were. Its stop (`SubagentStop`) ends it, and so does its TTL, the new `own.background_ttl` setting
+  (2 h), when it never stops. Foreground calls and commands that run junkfather are left alone. `list` and `status`
+  show the owning subagent, and their rows gain `agent_type` and `auto: "background"`. Where Claude Code asks before
+  running commands, allow `Bash(<path>/junkfather background:*)`.
 - junkfather owns resources that outlive the command that made them. `junkfather own --kind KIND -- CMD` runs CMD
   and owns the simulator, container, `tailscale serve` route or Safari Technology Preview instance it made (kinds
   `simulator`, `docker`, `tailscale-serve`, `safari-tp`); `junkfather own-resource --kind KIND --id ID` owns one that

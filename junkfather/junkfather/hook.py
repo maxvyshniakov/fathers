@@ -2,13 +2,14 @@
 event's JSON on stdin; Mastack's hook dispatcher runs this for the events it is registered for.
 
   PreToolUse    a Bash call whose command names junkfather: write a claim (session, agent id, command) so that
-                `own` learns which subagent ran it (owner.py)
+                `own` learns which subagent ran it (owner.py); any other Bash call with `run_in_background`: answer
+                with the command rewritten to own its shell first (background.py), the one thing the hook prints
   SubagentStop  reap what that subagent owns, except entries kept for the session
   SessionEnd    reap everything the session owns that was not handed to another session
   Stop          (end of a main-agent turn, not of the session) reap the session's entries whose TTL passed
 
-The hook never blocks, never prints and always exits 0: a reap that has work to do runs in a detached process
-(`junkfather reap ...`), so the agent never waits for a grace period. It fails open on unreadable input.
+The hook never blocks and always exits 0, and prints only that answer: a reap that has work to do runs in a detached
+process (`junkfather reap ...`), so the agent never waits for a grace period. It fails open on unreadable input.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ import sys
 import time
 from typing import Any, Callable, Dict, List, Optional
 
+from . import background as _background
 from . import entry as _entry
 from . import owner as _owner
 from .state import Store, as_dict, as_list
@@ -51,13 +53,19 @@ def plan(data: Dict[str, Any], store: Store, now: Optional[float] = None) -> Opt
     return None
 
 
-def handle(data: Dict[str, Any], store: Store, spawn: Optional[Callable[[List[str]], None]] = None
-           ) -> Optional[List[str]]:
+def handle(data: Dict[str, Any], store: Store, spawn: Optional[Callable[[List[str]], None]] = None,
+           emit: Optional[Callable[[Dict[str, Any]], None]] = None) -> Optional[List[str]]:
+    """Act on one event: write a claim, answer a background Bash call (`emit`, default stdout), or start a reap
+    (`spawn`, default detached). Returns the reap's arguments."""
     event = data.get("hook_event_name")
     if event == "PreToolUse":
         command = _owner_command(data)
         if command is not None and "junkfather" in command:
             _owner.write_claim(store, data)
+            return None
+        answer = _background.rewrite(data, store)
+        if answer is not None:
+            (emit or _background.answer)(answer)
         return None
     arguments = plan(data, store)
     if arguments:

@@ -17,7 +17,10 @@ Terms shared with the other tools (owner, reap, orphan, sweep, process identity)
 - **Process identity**: a process's pid together with its start time; a reused pid has another identity. _Avoid_:
   identity alone.
 - **Known members**: the identities seen in an entry while it ran; a reap without a live leader signals only these.
-- **Hook claim**: the PreToolUse hook's record of which subagent ran a Bash command naming junkfather.
+- **Hook claim**: the PreToolUse hook's record of which subagent ran a Bash command naming junkfather, or a background
+  Bash call.
+- **Background entry**: the shell of a subagent's or session's `run_in_background` Bash call, which the PreToolUse
+  hook's rewrite made adopt itself (`auto: background`).
 - **Orphaned**: a running entry whose owner session is gone. Like **expired** (past its TTL, not reaped yet), it is a
   condition of a running entry, not an entry state.
 - **Unowned process**: a process in an agent's scratchpad or worktree that no entry holds; reported, never reaped.
