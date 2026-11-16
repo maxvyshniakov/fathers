@@ -16,6 +16,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from support import ROOT, Case, as_entry, plain, proc, table
 
 from junkfather import background, defaults, hook, procs
+from junkfather.entry import Entry
+from junkfather.state import Store
 
 
 def call(command: str, background_: Optional[bool] = True, agent: Optional[str] = "agent-a",
@@ -371,8 +373,10 @@ class WatcherTests(Case):
         made = self.entry(child)
         real = entry_module.begin_reap
 
-        def watcher_wrote_first(store: Any, entry_id: str, reason: str, table: Any = None) -> Any:
-            store.update(entry_id, lambda e: e.update(known_seen=[[child.pid, made["start"], "sleep 600"]]))
+        def watcher_wrote_first(store: Store, entry_id: str, reason: str, table: Any = None) -> Any:
+            def recorded(e: Entry) -> None:
+                e["known_seen"] = [[child.pid, made["start"], "sleep 600"]]
+            store.update(entry_id, recorded)
             return real(store, entry_id, reason, table)
         with mock.patch.object(entry_module, "begin_reap", side_effect=watcher_wrote_first):
             result = reap.reap(self.store, "jw", "subagent-stop", grace=1)
