@@ -8,6 +8,8 @@ checkout detached at the lane tip. It asks `codex app-server` for the weekly lim
 read-only sandbox; under the limit, a reached limit, no Codex CLI, a failed Sol run or an empty answer runs `claude
 -p` instead. A lane that changes only *.md and docs/**, none of them a steering file, and a fix lane are exempt.
 LANEFATHER_REVIEW_START=manual makes land and promote --ship print the review command instead of starting it.
+Mastack's `role` command, beside the models file, chooses the reviewer when present (fathers#150); `[review] panel`
+runs several reviewers at once, their findings numbered in one list for marks and the gate (fathers#151).
 """
 from __future__ import annotations
 
@@ -76,11 +78,42 @@ def review_state(label: str) -> tuple[bool, str]:
     if status != "finished":
         return False, f"review failed: {receipt.get('error')}; rerun {prog} review {label}"
     findings = receipt.get("findings", [])
+    missing = missing_members(receipt)
+    if missing and config.current().review_panel_required:
+        return False, (f"panel member {', '.join(missing)} gave no review ([review] panel_required): "
+                       f"{prog} review {label} --force-reason <why> reviews again")
     unmarked = [f for f in findings if not f.get("mark")]
     if unmarked:
         return False, (f"{len(unmarked)} of {len(findings)} review findings unmarked "
                        f"({', '.join('#' + str(f['n']) for f in unmarked)})")
     return True, f"reviewed by {receipt.get('reviewer')}: {len(findings)} findings, all marked"
+
+
+def asked_reviewers(args: Any) -> tuple[str, ...]:
+    """`--reviewer ALIAS|both` (fathers#155): the reviewers this one review runs whatever the Codex limit; `both`
+    is the configured panel, else Sol and Opus. () lets the panel or the models file choose."""
+    asked: str | None = getattr(args, "reviewer", None)
+    if not asked:
+        return ()
+    if asked == "both":
+        return config.current().review_panel or ("sol", "opus")
+    return (asked,)
+
+
+def missing_members(receipt: dict[str, Any]) -> list[str]:
+    """The panel members of a finished review that gave no answer: failed, or skipped with no stand-in."""
+    panel: list[dict[str, Any]] = receipt.get("panel") or []
+    return [str(e.get("member")) for e in panel if e.get("status") != "finished"]
+
+
+# The family of the agent that ran the lane's last check (lanefather.events.actor), for the role's `not_family`.
+FAMILIES = {"claude-code": "anthropic", "codex": "openai"}
+
+
+def implementer_family(lane_id: str) -> str | None:
+    """The implementer's model family: that of the agent whose `check` wrote the lane's receipt, None unknown."""
+    receipt = state.read_json(state.receipt_path(lane_id)) or {}
+    return FAMILIES.get(str(receipt.get("agent")))
 
 
 def steering() -> tuple[str, ...]:
@@ -152,7 +185,8 @@ def review_about(label: str, fields: dict[str, Any]) -> dict[str, Any]:
 
 
 def perform_review(label: str, fields: dict[str, Any], main: str, base: str, tip: str, subject: str,
-                   finalize: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
+                   finalize: Callable[[dict[str, Any]], None] | None = None,
+                   family: str | None = None, reviewers: tuple[str, ...] = ()) -> dict[str, Any]:
     """Review base...tip with Sol, or Opus when Sol may not or cannot run; write and return the receipt.
     `finalize` completes a finished receipt before anyone can read it as finished."""
     runner = reviewer.Reviewer(config.current())
@@ -171,7 +205,8 @@ def perform_review(label: str, fields: dict[str, Any], main: str, base: str, tip
     try:
         with terminable(), worktrees.review_checkout(main, label, tip) as checkout:
             standards = coding_standards(main, tip)
-            answer = runner.run(label, checkout, reviewer.Request(standards, subject, base, tip), output, log)
+            answer = runner.run(label, checkout, reviewer.Request(standards, subject, base, tip, family,
+                                                                     reviewers), output, log)
             receipt.update(answer.evidence)
             if answer.error is not None:
                 raise LaneError(answer.error)
@@ -198,7 +233,11 @@ def perform_review(label: str, fields: dict[str, Any], main: str, base: str, tip
                             "seconds": receipt["seconds"], "findings": len(findings),
                             "severities": {s.lower(): sum(1 for f in findings if f["severity"] == s)
                                            for s in SEVERITIES},
-                            "fallback": receipt["fallback"], "error": receipt.get("error")})
+                            "fallback": receipt["fallback"], "error": receipt.get("error"),
+                            **({"panel": [{"member": e.get("member"), "reviewer": e.get("reviewer"),
+                                           "status": e.get("status"), "model": e.get("model"),
+                                           "seconds": e.get("seconds"), "findings": len(e.get("numbers") or [])}
+                                          for e in receipt["panel"]]} if receipt.get("panel") else {})})
     return receipt
 
 
@@ -210,22 +249,33 @@ def review_lines(receipt: dict[str, Any]) -> list[str]:
         return [f"Review of {label}: running since {receipt.get('started')} (pid {receipt.get('pid')}, log "
                 f"{receipt.get('log')})"]
     left = receipt.get("codex_left")
+    forced: dict[str, Any] = receipt.get("forced") or {}
     head = (f"Review of {label} ({receipt.get('base', '')[:10]}...{receipt.get('tip', '')[:10]}) by "
             f"{receipt.get('model')} {receipt.get('effort')}"
             + (f", {left}% of the weekly Codex limit left" if left is not None else "")
             + (f"; fallback: {receipt['fallback']}" if receipt.get("fallback") else "")
+            + (f"; forced by --reviewer {', '.join(forced['reviewers'])}" if forced.get("by") == "flag" else "")
             + f", {receipt.get('seconds', 0):.0f} s")
     if receipt["status"] != "finished":
         return [head, f"review failed: {receipt.get('error')}"]
     findings = receipt.get("findings", [])
     lines = [head + f": {len(findings)} findings  ({receipt.get('output')})"]
+    panel: list[dict[str, Any]] = receipt.get("panel") or []
+    for entry in panel:
+        lines.append(f"  panel {entry.get('member')}: " + (
+            f"{entry.get('reviewer')} {entry.get('model')} {entry.get('effort')}, {entry.get('seconds', 0):.0f} s, "
+            f"{len(entry.get('numbers') or [])} findings" if entry.get("status") == "finished"
+            else f"failed: {entry.get('error')}" if entry.get("status") == "failed"
+            else f"skipped: {entry.get('reason')}")
+            + (f" ({entry['reason']})" if entry.get("status") == "finished" and entry.get("reason") else ""))
     for f in findings:
         where = f"{f['file']}:{f['line']}" if f.get("file") and f.get("line") else f.get("file") or "-"
         mark = f.get("mark")
         marked = ("" if not mark else f"  [fixed: {mark['merge'][:10]}]" if mark["kind"] == "fixed"
                   else f"  [rejected: {mark['reason']}]")
         category = f" [{f['category']}]" if f.get("category") else ""
-        lines.append(f"  {f['n']}. {f['severity']}{category} {where} {f['title']}{marked}")
+        by = f" ({f['reviewer']})" if f.get("reviewer") else ""
+        lines.append(f"  {f['n']}. {f['severity']}{category} {where} {f['title']}{by}{marked}")
         lines += [f"     {line}" for line in f.get("detail", "").splitlines()[:6]]
     if receipt.get("issue"):
         lines.append(f"Ticket: {receipt['issue']}")
@@ -343,12 +393,72 @@ def review_lane(args: Any) -> int:
         return 0
     tip, base = review_range(record)
     receipt = perform_review(args.id, {"kind": "lane", "lane": args.id, "ticket": record["ticket"]},
-                             main_checkout(record["common_dir"]), base, tip, ticket_text(record))
+                             main_checkout(record["common_dir"]), base, tip, ticket_text(record),
+                             family=implementer_family(args.id), reviewers=asked_reviewers(args))
     print("\n".join(review_lines(receipt)))
     if receipt["status"] != "finished":
         return 1
     if review_state(args.id)[0]:
         review_complete_finish(args.id)
+    return 0
+
+
+def reviewer_views(receipt: dict[str, Any]) -> list[dict[str, Any]]:
+    """Each reviewer of a finished review with its own findings (fathers#151): the panel's entries, or the one
+    reviewer of a single review."""
+    findings: list[dict[str, Any]] = receipt.get("findings", [])
+    panel: list[dict[str, Any]] = receipt.get("panel") or []
+    if not panel:
+        return [{"member": receipt.get("reviewer"), "reviewer": receipt.get("reviewer"), "model": receipt.get("model"),
+                 "effort": receipt.get("effort"), "seconds": receipt.get("seconds"), "status": receipt.get("status"),
+                 "reason": receipt.get("fallback"), "findings": findings}]
+    by_number = {f["n"]: f for f in findings}
+    views: list[dict[str, Any]] = []
+    for entry in panel:
+        numbers: list[int] = entry.get("numbers") or []
+        views.append(dict(entry, findings=[by_number[n] for n in numbers if n in by_number]))
+    return views
+
+
+def mark_counts(findings: list[dict[str, Any]]) -> dict[str, int]:
+    marks: list[dict[str, Any]] = [f.get("mark") or {} for f in findings]
+    kinds: list[str | None] = [m.get("kind") for m in marks]
+    return {"findings": len(findings), **{s.lower(): sum(1 for f in findings if f.get("severity") == s)
+                                          for s in SEVERITIES},
+            "fixed": kinds.count("fixed"), "rejected": kinds.count("rejected"), "unmarked": kinds.count(None)}
+
+
+def compare(args: Any) -> int:
+    """`review <id> --compare`: who found what and what held up, one block per reviewer with its marks."""
+    receipt = state.read_json(state.receipt_path(args.id, "review"))
+    if not receipt or receipt.get("status") != "finished":
+        raise LaneError(f"lane {args.id} has no finished review to compare ({review_state(args.id)[1]})")
+    views = reviewer_views(receipt)
+    lines = [f"Review of {args.id} ({receipt.get('base', '')[:10]}...{receipt.get('tip', '')[:10]}): "
+             f"{len(views)} reviewer{'s' if len(views) != 1 else ''}"]
+    width = max(len(str(v.get("reviewer"))) for v in views)
+    for view in views:
+        counts = mark_counts(view["findings"])
+        lines.append(f"  {view.get('reviewer')!s:<{width}}  {view.get('model')} {view.get('effort')}: "
+                     + (f"{counts['findings']} findings (p1 {counts['p1']}, p2 {counts['p2']}, p3 {counts['p3']}), "
+                        f"fixed {counts['fixed']}, rejected {counts['rejected']}, unmarked {counts['unmarked']}"
+                        if view.get("status") == "finished" else f"{view.get('status')}: "
+                        f"{view.get('error') or view.get('reason')}"))
+    for view in views:
+        if view.get("status") != "finished":
+            continue
+        lines += ["", f"{view.get('reviewer')} ({view.get('model')} {view.get('effort')}, "
+                      f"{view.get('seconds') or 0:.0f} s)" + (f", for {view['member']}: {view['reason']}"
+                                                              if view.get("member") != view.get("reviewer") else "")]
+        if not view["findings"]:
+            lines.append("  no findings")
+        for f in view["findings"]:
+            where = f"{f['file']}:{f['line']}" if f.get("file") and f.get("line") else f.get("file") or "-"
+            mark: dict[str, Any] = f.get("mark") or {}
+            held = (f"fixed: {mark['merge'][:10]}" if mark.get("kind") == "fixed"
+                    else f"rejected: {mark['reason']}" if mark.get("kind") == "rejected" else "unmarked")
+            lines.append(f"  #{f['n']} {f['severity']} {where} {f['title']}  [{held}]")
+    print("\n".join(lines))
     return 0
 
 
@@ -598,7 +708,7 @@ def overall_review(args: Any) -> int:
     subject = (f"The overall review before main ({prog} promote --ship): every change from {base[:10]} to "
                f"{sha[:10]}, many lanes at once. Look for seams between them as well as bugs in each.")
     receipt = perform_review(label, {"kind": "overall", "sha": sha}, main_checkout(common), base, sha, subject,
-                             finalize=lambda finished: file_ticket(finished, common))
+                             finalize=lambda finished: file_ticket(finished, common), reviewers=asked_reviewers(args))
     print("\n".join(review_lines(receipt)))
     return 0 if receipt["status"] == "finished" and not receipt.get("issue_error") else 1
 
@@ -608,6 +718,8 @@ def review(args: Any) -> int:
         return overall_review(args)
     if not args.id:
         raise LaneError("give a lane id, or --overall <sha> --since <base>")
+    if getattr(args, "compare", False):
+        return compare(args)
     if args.mark:
         return mark_review(args)
     if args.fix_lane:
@@ -660,6 +772,9 @@ def gate_report(cwd: str, common: str, sha: str, since: str | None = None) -> di
             continue
         if complete and receipt.get("status") == "exempt":
             continue
+        if missing_members(receipt) and config.current().review_panel_required:
+            report["unfinished"].append({"lane": record["id"], "ticket": record["ticket"],
+                                         "text": f"lane {record['id']} (#{record['ticket']}): {words}"})
         for finding in receipt.get("findings", []):
             mark = finding.get("mark") or {}
             entry = {"lane": record["id"], "ticket": record["ticket"], "n": finding.get("n"),

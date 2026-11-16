@@ -63,6 +63,7 @@ self-contained configuration in the README for a Repo-Kit consumer.
 | `unclaimed`, `merge_config` | paths no lane claims; `git -c` settings for land's merge |
 | `[checks]` `verify`, `plan_module`, `triage`, `toolchain`, `slot_env` | the check contract below |
 | `[review]` `blocks` | the unmarked review finding severities that hold the batch gate, promote and `findings` (default `["P1", "P2"]`; fathers#109) |
+| `[review]` `panel`, `panel_required` | the review panel (fathers#151): two or more model aliases of the models file that review every lane at once; `panel_required = true` holds the gate while a member gave no answer ([Reviewer configuration](#reviewer-configuration)) |
 | `[checks]` `gate_only` | check-id patterns (fnmatch) the post-merge smoke leaves to the batch gate, such as tooling self-tests (fathers#94); a tree whose plan names whole suites has no check ids to match, so its smoke runs them |
 | `[lane]` `targets`, `cache_partitions` | build directories `done` removes |
 | `[gate]` `stamp_tool`, `stamp_file`, `pre_push_hook` | the verified-tree stamp of the full gate |
@@ -181,9 +182,9 @@ lease id, also allowed at the report's top level). Lanefather hands each run its
 
 ## Reviewer configuration
 
-Authenticate the reviewer CLIs you intend to use according to their own documentation. The current source
-prefers Codex (`gpt-6.1-sol`, medium effort) when it can determine at least 15% weekly quota remains; otherwise it
-tries Claude (`claude-opus-5-5`, medium effort). A failed or empty Codex run can also fall back to Claude. Quota,
+Authenticate the reviewer CLIs you intend to use according to their own documentation. Without a models file
+Lanefather prefers Codex (`gpt-6.1-sol`, medium effort) when it can determine at least 15% weekly quota remains;
+otherwise it tries Claude (`claude-opus-5-5`, medium effort). A models file's review role sets the order. A failed or empty Codex run can also fall back to Claude. Quota,
 provider availability and account charges remain outside Lanefather.
 
 Set `LANEFATHER_CODEX` and `LANEFATHER_CLAUDE` to explicit executable paths if PATH discovery is unsuitable.
@@ -206,6 +207,42 @@ choices = [
   { model = "fallback", effort = "medium" },
 ]
 ```
+
+With Mastack's `role` command beside the models file (`<models dir>/bin/role`), Lanefather asks `role review
+[--implementer-family F] --json` for the reviewer and uses its model id, effort and skip reasons, printed where the
+limit line is and kept in the receipt's `role` (fathers#150); `role` reads the Codex limit with the CLI the review runs
+(`MASTACK_CODEX`) and the same models file (`MASTACK_MODELS`). The implementer's family is that of the agent whose
+`check` wrote the lane's receipt (`agent`: `claude-code` is anthropic, `codex` is openai); unknown, the flag is left
+out and `role`'s caution is shown. A `role` that fails or gives no choice leaves the choice to the models file as
+above.
+
+A review panel runs several reviewers on every lane at once:
+
+```toml
+[review]
+panel = ["sol", "opus"]   # model aliases of the models file
+panel_required = false    # true: a member that gave no answer holds the gate
+```
+
+Every member gets the same prompt, with the diff inline, on the same frozen checkout, each in its own process that
+never sees another's answer; the receipt keeps the prompt's `prompt_sha256`. A member whose condition fails (under
+its share of the weekly Codex limit, no CLI) is replaced by the role's choice (or the review role's first Claude
+model without `role`), or skipped when that one is already on the panel; the reason is in its entry. A member that
+fails or answers empty is kept as `failed` and the others' answers stand. The receipt's `panel` lists each member:
+`member`, `reviewer`, `model`, `effort`, `cli`, `status` (`finished`, `failed`, `skipped`), `reason`, `error`,
+`seconds`, `output`, `log` and `numbers`, its findings in the one `findings` list, which numbers them across the panel
+and names each one's `reviewer`; `review --mark N` and the gate read that list as before. `review ID --compare`
+prints each reviewer's findings with their marks, and `stats --json` gives per-reviewer totals.
+
+`roles.review.choices` is a priority list (fathers#155): without `role`, the first choice whose conditions hold
+runs (its `when.limit` share of the weekly Codex limit, a Codex CLI, and `not_family` when the implementer's family
+is known), and the next Claude choice after it is the fallback for a failed run. Listing Opus first makes Opus the
+reviewer and Sol nothing but a later choice.
+
+`lanefather review ID --reviewer sol|opus|both` (also with `--overall`) chooses the reviewer of that one review:
+an alias of the models file runs whatever the Codex limit says and with no stand-in, and `both` runs the configured
+panel (Sol and Opus without one) the same way. The receipt's `forced` names the request (`{"by": "flag",
+"reviewers": [...]}`; a configured panel records `"by": "panel"`), and `review` shows it.
 
 Use model IDs available to your accounts. Without an explicit file, the loader searches
 `~/.config/mastack/models.toml` and `~/mastack/models.toml`; Mastack is optional, and compiled defaults apply when

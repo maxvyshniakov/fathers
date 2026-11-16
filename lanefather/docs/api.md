@@ -64,5 +64,8 @@ ledger.log.
 ## `lanefather stats [--days N] [--lane ID] --json`
 
 `{"v": 1, "days", "lane", "lines", "checks": [{"check", "runs", "failed", "flakes", "p50", "p90",
-"total_seconds"}]}` from the run history (`<state>/history/`, lanefather.history), heaviest first. `--days 0` reads
-everything kept (twelve months).
+"total_seconds"}], "reviewers": [{"reviewer", "models", "reviews", "failed", "findings", "p1", "p2", "p3", "fixed",
+"rejected", "unmarked"}]}` from the run history (`<state>/history/`, lanefather.history), heaviest first. `--days 0`
+reads everything kept (twelve months). `reviewers` (fathers#151) counts the finished review receipts of the window
+(and lane) per reviewer alias: its reviews, its failed panel runs, its findings by severity and their marks now, so
+Sol and Opus compare as reviewers.

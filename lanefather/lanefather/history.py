@@ -9,7 +9,8 @@ A line is {"v": 1, "kind", "at", "lane", "phase", "tree", ...}:
 - kind "flake": a check that failed and then passed on the same tree under the same environment: check, failed_at,
   passed_at, how ("rerun-alone" or "later-run"), tests (the failed JUnit test names when the check reported them).
 
-`done` and `gc` leave the history alone; lanefather stats reads it.
+`done` and `gc` leave the history alone; lanefather stats reads it, and the review receipts for its per-reviewer
+totals (fathers#151).
 """
 from __future__ import annotations
 
@@ -158,7 +159,56 @@ def stats(days: float | None = 7, lane: str | None = None) -> dict[str, Any]:
                            p90=round(percentile(seconds, 0.9), 3) if seconds else None,
                            total_seconds=round(sum(seconds), 3)))
     checks.sort(key=lambda r: (-(r["total_seconds"] or 0), r["check"]))
-    return {"v": VERSION, "days": days, "lane": lane, "lines": len(lines), "checks": checks}
+    return {"v": VERSION, "days": days, "lane": lane, "lines": len(lines), "checks": checks,
+            "reviewers": reviewer_totals(days, lane)}
+
+
+def reviewer_totals(days: float | None = 7, lane: str | None = None) -> list[dict[str, Any]]:
+    """Per reviewer (fathers#151), over the finished review receipts of the window (and lane): reviews, failed
+    panel runs, findings by severity, and how many were marked fixed, rejected or are still unmarked."""
+    cutoff = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=days)) if days else None
+    table: dict[str, dict[str, Any]] = {}
+    try:
+        paths = sorted(state.state_dir().glob("*.review.json"))
+    except OSError:
+        return []
+    for path in paths:
+        receipt = state.read_json(path)
+        if not receipt or receipt.get("status") != "finished" or (lane is not None and receipt.get("lane") != lane):
+            continue
+        try:
+            if cutoff and parse_time(str(receipt.get("finished"))) < cutoff:
+                continue
+        except ValueError:
+            continue
+        findings: list[dict[str, Any]] = receipt.get("findings") or []
+        panel: list[dict[str, Any]] = receipt.get("panel") or []
+        members = panel or [{"reviewer": receipt.get("reviewer"), "model": receipt.get("model"), "status": "finished",
+                             "numbers": [f.get("n") for f in findings]}]
+        for member in members:
+            name = member.get("reviewer")
+            if not isinstance(name, str) or member.get("status") == "skipped":
+                continue
+            row = table.setdefault(name, {"reviewer": name, "models": [], "reviews": 0, "failed": 0, "findings": 0,
+                                          "p1": 0, "p2": 0, "p3": 0, "fixed": 0, "rejected": 0, "unmarked": 0})
+            if member.get("model") and member["model"] not in row["models"]:
+                row["models"].append(member["model"])
+            if member.get("status") != "finished":
+                row["failed"] += 1
+                continue
+            row["reviews"] += 1
+            numbers = set(member.get("numbers") or [])
+            for finding in findings:
+                if finding.get("n") not in numbers:
+                    continue
+                mark: dict[str, Any] = finding.get("mark") or {}
+                kind = mark.get("kind")
+                row["findings"] += 1
+                severity = str(finding.get("severity", "")).lower()
+                if severity in ("p1", "p2", "p3"):
+                    row[severity] += 1
+                row[kind if kind in ("fixed", "rejected") else "unmarked"] += 1
+    return sorted(table.values(), key=lambda r: r["reviewer"])
 
 
 def command(args: Any) -> int:
@@ -175,4 +225,10 @@ def command(args: Any) -> int:
         p90 = "-" if row["p90"] is None else f"{row['p90']:.1f}s"
         print(f"  {row['check']}: {row['runs']} runs, p50 {p50}, p90 {p90}, {row['failed']} red, "
               f"{row['flakes']} flakes")
+    if report["reviewers"]:
+        print("Reviewers:")
+    for row in report["reviewers"]:
+        print(f"  {row['reviewer']} ({', '.join(row['models'])}): {row['reviews']} reviews, {row['findings']} findings "
+              f"(p1 {row['p1']}, p2 {row['p2']}, p3 {row['p3']}), {row['fixed']} fixed, {row['rejected']} rejected, "
+              f"{row['unmarked']} unmarked" + (f", {row['failed']} failed" if row["failed"] else ""))
     return 0
