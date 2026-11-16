@@ -18,6 +18,10 @@ the state and returns the new state and its effects; a key a mode does not list 
              selection over the rows that can be selected; Esc goes back where a link came from, else to the
              overview; `1` `2` `3` switch pages on the main screen and every page; Tab moves the focus
     page-panel  a page's DETAILS or EVENTS strip focused: the same, but ↑↓ and the page keys scroll it
+    actions  a row's action menu (fathers#88), opened by Enter, `a` or a right-click on QUEUE's or a page's row:
+             ↑↓ move, Enter picks, Esc closes, q quits; a click picks, a click outside closes
+    reason   the reason a park asks for: what is typed, Backspace, Enter goes on (empty cancels), Esc cancels
+    confirm  an irreversible action: `y` runs it, `n` or Esc cancels; nothing is preselected
     filter   EVENTS' text field, opened by `/` (fathers#84): what is typed goes into it, Backspace deletes, Enter
              keeps the filter, Esc clears it; on the main screen and a panel `f` cycles EVENTS' log
              (SLOTS LOG, LANES LOG, PROCS LOG, ALL LOG), as ← → do while EVENTS has the focus and a click on its
@@ -33,16 +37,17 @@ from typing import Any, Callable, Union, cast
 from . import keys as _keys
 from . import layout as _layout
 from . import settings_model as _settings
-from .state import (LOAD_NEWS, OPEN_SETTINGS, PAGE_TABLES, QUIT, AppState, Changelog, Help, Key, Mouse, Result,
-                    SettingsOverlay, event_index, event_move, filtered, follow_link, go_back, items, move, open_page,
-                    overlay_box, page_move, page_select, settings_context, settings_result)
+from .state import (LOAD_NEWS, OPEN_SETTINGS, PAGE_TABLES, QUIT, ActionMenu, AppState, Changelog, Confirm, Effect, Help,
+                    Key, Mouse, Notice, Reason, Result, SettingsOverlay, event_index, event_move, filtered,
+                    follow_link, go_back, items, move, open_actions, open_page, overlay_box, page_move, page_select,
+                    settings_context, settings_result)
 from . import events as _events_view
 from . import overlay_text as _overlays
 
 Handler = Callable[[AppState, str], Result]
 NAVIGATION = ("up", "k", "down", "j", "page_up", "page_down", "home", "g", "end", "G")
 WHEEL = 3  # rows a wheel step scrolls
-LEFT, WHEEL_UP, WHEEL_DOWN = 0, 64, 65
+LEFT, RIGHT, WHEEL_UP, WHEEL_DOWN = 0, 2, 64, 65
 
 
 def same(state: AppState, _: str) -> Result:
@@ -431,7 +436,7 @@ def mode(state: AppState) -> str:
             return "settings-small"
         return "settings-edit" if overlay.editing else "settings"
     if overlay is not None:
-        return overlay.kind
+        return str(overlay.kind)
     if state.page != "overview":
         return "page" if state.focus == PAGE_TABLES[state.page] else "page-panel"
     if state.events_filter.editing:
@@ -439,11 +444,76 @@ def mode(state: AppState) -> str:
     return "main" if state.focus == "requests" else "panel"
 
 
+REASON_MAX = 120  # characters a park reason takes
+
+
+def pick(state: AppState, menu: ActionMenu, now: float) -> Result:
+    """The menu's action picked: a park asks its reason first, a confirmed one asks, any other runs now."""
+    action = menu.actions[menu.cursor]
+    if action.reason:
+        return dataclasses.replace(state, overlay=Reason(action)), []
+    if action.confirm:
+        return dataclasses.replace(state, overlay=Confirm(action)), []
+    return run_action(state, action, "", now)
+
+
+def run_action(state: AppState, action: Any, reason: str, now: float) -> Result:
+    """The action handed to the app, which checks the row in a fresh snapshot and runs it in the background."""
+    return dataclasses.replace(state, overlay=None, notice=Notice(f"{action.name}…", now, "dim")), [
+        Effect("action", item=(action, reason))]
+
+
+def cancelled(state: AppState, now: float, why: str = "nothing run") -> Result:
+    return dataclasses.replace(state, overlay=None, notice=Notice(why, now, "dim")), []
+
+
+def action_press(state: AppState, key: str, now: float) -> Result:
+    """A key in the action menu, the reason field or the confirmation (fathers#88)."""
+    overlay = state.overlay
+    if isinstance(overlay, ActionMenu):
+        hot = _keys.hotkey(key)
+        if hot in ("q", "Q"):
+            return state, [QUIT]
+        if hot == "esc":
+            return cancelled(state, now)
+        if hot in ("up", "k", "down", "j", "home", "g", "end", "G"):
+            last = len(overlay.actions) - 1
+            cursor = {"up": overlay.cursor - 1, "k": overlay.cursor - 1, "down": overlay.cursor + 1,
+                      "j": overlay.cursor + 1, "home": 0, "g": 0, "end": last, "G": last}[hot]
+            return dataclasses.replace(state, overlay=dataclasses.replace(overlay, cursor=min(max(cursor, 0), last))), []
+        if hot in ("\r", "\n", " "):
+            return pick(state, overlay, now)
+        return state, []
+    if isinstance(overlay, Reason):  # typed text stays as typed
+        if key == "esc":
+            return cancelled(state, now)
+        if key in ("\r", "\n"):
+            if not overlay.text.strip():
+                return cancelled(state, now, "no reason: nothing run")
+            return dataclasses.replace(state, overlay=Confirm(overlay.action, overlay.text.strip())), []
+        if key in ("\x7f", "\x08"):
+            return dataclasses.replace(state, overlay=dataclasses.replace(overlay, text=overlay.text[:-1])), []
+        if len(key) == 1 and key.isprintable() and len(overlay.text) < REASON_MAX:
+            return dataclasses.replace(state, overlay=dataclasses.replace(overlay, text=overlay.text + key)), []
+        return state, []
+    assert isinstance(overlay, Confirm)
+    hot = _keys.hotkey(key)
+    if hot in ("y", "Y"):
+        return run_action(state, overlay.action, overlay.reason, now)
+    if hot in ("n", "N", "esc"):
+        return cancelled(state, now)
+    return state, []
+
+
 def press(state: AppState, key: str, now: float) -> Result:
     """A key in the current mode: a hotkey by its US-QWERTY position (#13) unless a Settings value is typed."""
     overlay = state.overlay
     if isinstance(overlay, SettingsOverlay):
         return settings_press(state, key if overlay.editing else _keys.hotkey(key), now)
+    if isinstance(overlay, (ActionMenu, Reason, Confirm)):
+        return action_press(state, key, now)
+    if overlay is None and _keys.hotkey(key) in ("\r", "\n", "a") and mode(state) in ("main", "page"):
+        return open_actions(state, now), []  # a row's actions (fathers#88)
     if overlay is None and state.page == "overview" and state.events_filter.editing:  # typed text stays as typed
         return type_filter(state, key)
     key = _keys.hotkey(key)
@@ -460,6 +530,21 @@ def click(state: AppState, event: Mouse, now: float) -> Result:
     overlay, code = state.overlay, event.button & ~28  # Shift / Alt / Ctrl do not change the button
     if isinstance(overlay, SettingsOverlay):
         return settings_click(state, event, now)
+    if isinstance(overlay, (ActionMenu, Reason, Confirm)):
+        if not event.pressed or code != LEFT:
+            return state, []
+        box = _overlays.action_box(overlay, state.frame.width, state.frame.height)
+        if not (box.x <= event.x < box.x + box.width and box.y <= event.y < box.y + box.height):
+            return cancelled(state, now)
+        row = event.y - (box.y + 2)
+        if isinstance(overlay, ActionMenu) and 0 <= row < len(overlay.actions):
+            return pick(state, dataclasses.replace(overlay, cursor=row), now)
+        return state, []
+    if overlay is None and event.pressed and code == RIGHT:  # a right-click on a row: select it, then its actions
+        selected, effects = click(state, Mouse(LEFT, event.x, event.y, True), now)
+        if selected.overlay is None and mode(selected) in ("main", "page"):
+            return open_actions(selected, now), effects
+        return selected, effects
     if overlay is not None:
         view = overlay_box(state, overlay)
         inside = view.x <= event.x < view.x + view.width and view.y <= event.y < view.y + view.height

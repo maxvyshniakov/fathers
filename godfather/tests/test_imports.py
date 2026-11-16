@@ -11,7 +11,8 @@ from pathlib import Path
 PACKAGE = Path(__file__).resolve().parents[1] / "src" / "godfather"
 LAYERS = {
     # what the tools say and how it is read: no geometry, no drawing
-    "data": ("keys", "theme", "version", "eventcheck", "sources", "events", "news", "entries", "adapters", "text"),
+    "data": ("keys", "theme", "version", "eventcheck", "sources", "events", "news", "entries", "adapters", "text",
+             "actions"),
     # where things go and the one state and its reducer: no canvas, no terminal
     "layout": ("layout", "overlay_text", "settings_model", "state", "modes", "reducer"),
     # drawing: the canvas and terminal (tui), the shared widgets, the screens

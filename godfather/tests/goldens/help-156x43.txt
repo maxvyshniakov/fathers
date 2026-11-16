@@ -13,30 +13,30 @@
 │  ⏸️    lane-555-host-rename-names     │    r           events: every event as logged                            ┃│2                                      │
 │                                       │    /           events: filter by text (esc clears)                      ┃│ight/.claude/worktrees/agent-afa3816b  │
 ┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    1 2 3       the overview, lanes, processes (tools present)            │2/verify.sh --checks desktop-tests     │
-╭─ SLOTS LOG ─────── label ─────────────│    s           settings                                                  │oing --jobs 1                          │
-│                                       │    ?           help                                                      │ight                                   │
-│  11:59:35  ▫       agent-ae72d94beb6f0│    v           what's new (or click Godfather what's new?)               │                                       │
-│  11:58:33  ▫       agent-a1c75285bdf2c│    esc         close an overlay · leave a page                           │d-once                                 │
-│  11:57:15  ▫       agent-a1c75285bdf2c│    q           quit                                                      │ht                                     │
-│  11:55:44  ▪▪      desktop            │    shift+drag  select text                                               │                                       │
-│  11:55:31  ▫       desktop            │    Hotkeys work on any keyboard layout.                                  │-build-once                            │
-│  11:55:26  ▫       agent-a1c75285bdf2c│                                                                          │e/queue-347                            │
+╭─ SLOTS LOG ─────── label ─────────────│    enter · a   the selected row's actions (or right-click it)            │oing --jobs 1                          │
+│                                       │    s           settings                                                  │ight                                   │
+│  11:59:35  ▫       agent-ae72d94beb6f0│    ?           help                                                      │                                       │
+│  11:58:33  ▫       agent-a1c75285bdf2c│    v           what's new (or click Godfather what's new?)               │d-once                                 │
+│  11:57:15  ▫       agent-a1c75285bdf2c│    esc         close an overlay · leave a page                           │ht                                     │
+│  11:55:44  ▪▪      desktop            │    q           quit                                                      │                                       │
+│  11:55:31  ▫       desktop            │    shift+drag  select text                                               │-build-once                            │
+│  11:55:26  ▫       agent-a1c75285bdf2c│    Hotkeys work on any keyboard layout.                                  │e/queue-347                            │
 │  11:55:00  ▫       desktop            │                                                                          │ess                                    │
-│  11:54:02  ▫       agent-a1c75285bdf2c│  STATES                                                                  │ted                                    │
-│  11:52:53  ▫       agent-a1c75285bdf2c│                                                                          │rification_plan.py, tools/verify.py,   │
-│  11:52:30  ▫       desktop            │    ▶️  running                                                           │main-module.sh, tools/test-build-      │
-│  11:51:40  ▫       post-merge-456-rena│    ⏸️  waiting                                                           │odule.py, tools/app-build.py,          │
-│  11:51:24  ▫       agent-a1c75285bdf2c│    ↩️  yielded, back in the queue                                        │st-app-build.py, tools/cargo-test.py,  │
-│  11:49:34  ▫▫      data-grid          │    ❓  asked to yield its slots                                          │elopment.md, tools/test-cargo-build-   │
-│  11:48:30  ▫       agent-ae72d94beb6f0│    💤  idle: under 0.1 core for 5 min                                    │, tools/test-heavy.py,                 │
-│  11:47:21  ▫       agent-a0f998f4c57cd│    🔥  above 1.5× its CPU share                                          │rgo_build_cache.py                     │
-│  11:47:17  ▫       agent-a0f998f4c57cd│    👨‍🦳  lease of an older client                                          │                                       │
-│  11:47:13  ▫       agent-a0f998f4c57cd│                                                                          │                                       │
+│  11:54:02  ▫       agent-a1c75285bdf2c│                                                                          │ted                                    │
+│  11:52:53  ▫       agent-a1c75285bdf2c│  STATES                                                                  │rification_plan.py, tools/verify.py,   │
+│  11:52:30  ▫       desktop            │                                                                          │main-module.sh, tools/test-build-      │
+│  11:51:40  ▫       post-merge-456-rena│    ▶️  running                                                           │odule.py, tools/app-build.py,          │
+│  11:51:24  ▫       agent-a1c75285bdf2c│    ⏸️  waiting                                                           │st-app-build.py, tools/cargo-test.py,  │
+│  11:49:34  ▫▫      data-grid          │    ↩️  yielded, back in the queue                                        │elopment.md, tools/test-cargo-build-   │
+│  11:48:30  ▫       agent-ae72d94beb6f0│    ❓  asked to yield its slots                                          │, tools/test-heavy.py,                 │
+│  11:47:21  ▫       agent-a0f998f4c57cd│    💤  idle: under 0.1 core for 5 min                                    │rgo_build_cache.py                     │
+│  11:47:17  ▫       agent-a0f998f4c57cd│    🔥  above 1.5× its CPU share                                          │                                       │
+│  11:47:13  ▫       agent-a0f998f4c57cd│    👨‍🦳  lease of an older client                                          │                                       │
 │  11:47:10  ▫       agent-a0f998f4c57cd│                                                                          │───────────────────────────────────────╯
-│  11:47:07  ▫       agent-a0f998f4c57cd│  PRIORITY                                                                │nleased 0.4 · queue ahead · 2 waiting ─╮
-│  11:47:04  ▫       agent-a0f998f4c57cd│                                                                          │          slots held  avg 4.4/6        │
-│  11:46:08  ▫       post-merge-491-elec│    ⚡  interactive: someone is waiting on it                             │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
-│  11:45:53  ▫       agent-a1c75285bdf2c│    🐌  batch: unattended work, after the rest                            │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
+│  11:47:07  ▫       agent-a0f998f4c57cd│                                                                          │nleased 0.4 · queue ahead · 2 waiting ─╮
+│  11:47:04  ▫       agent-a0f998f4c57cd│  PRIORITY                                                                │          slots held  avg 4.4/6        │
+│  11:46:08  ▫       post-merge-491-elec│                                                                          │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
+│  11:45:53  ▫       agent-a1c75285bdf2c│    ⚡  interactive: someone is waiting on it                             │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
 │  11:45:09  ▫       agent-a1c75285bdf2c│                                                                          │░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                                       │                      ↑↓ scroll   esc close   q quit                  30% │          −80s                    now  │
 ╰───────────────────────────────────────╰──────────────────────────────────────────────────────────────────────────╯───────────────────────────────────────╯

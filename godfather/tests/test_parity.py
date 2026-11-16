@@ -173,7 +173,8 @@ class ParityTests(unittest.TestCase):
         esc = ["esc", "close an overlay · leave a page"]  # fathers#85: Esc leaves a page too
         self.assertIn(esc, ours["KEYS"])
         ours["KEYS"][ours["KEYS"].index(esc)] = ["esc", "close an overlay"]
-        for key in ("← → · f", "r", "/", "1 2 3"):  # fathers#84, #152: EVENTS' log, raw, text filter; #85: pages
+        # fathers#84, #152: EVENTS' log, raw, text filter; #85: pages; #88: row actions
+        for key in ("← → · f", "r", "/", "1 2 3", "enter · a"):
             ours["KEYS"] = [entry for entry in ours["KEYS"] if entry[0] != key]
         snail = ["🐌", "batch: unattended work, after the rest"]  # owner, 2026-11-12: batch is a snail, not a turtle
         self.assertIn(snail, ours["PRIORITY"])

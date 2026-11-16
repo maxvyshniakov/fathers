@@ -337,6 +337,29 @@ def full_screen(fd_in: int, fd_out: int, answers: _theme.Answers | None = None, 
         termios.tcsetattr(fd_in, termios.TCSAFLUSH if answers is not None else termios.TCSADRAIN, saved)
 
 
+@contextlib.contextmanager
+def suspended(fd_in: int, fd_out: int, answers: _theme.Answers | None = None):
+    """The terminal handed to another program (the pager, fathers#88) and taken back: the alternate screen, mouse,
+    kitty keyboard mode and cbreak left as full_screen() leaves them, then set up again as it does."""
+    saved = termios.tcgetattr(fd_in)
+    os.write(fd_out, _keys.KITTY_OFF + (_theme.SCHEME_OFF if answers is not None else b"")
+             + b"\x1b[?1006l\x1b[?1000l\x1b[0m\x1b[?7h\x1b[?25h\x1b[?1049l")
+    termios.tcsetattr(fd_in, termios.TCSADRAIN, _cooked(saved))
+    try:
+        yield
+    finally:
+        termios.tcsetattr(fd_in, termios.TCSANOW, saved)
+        os.write(fd_out, b"\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1006h\x1b[2J"
+                 + (_theme.SCHEME_ON if answers is not None else b"") + _keys.KITTY_ON)
+
+
+def _cooked(mode: list[Any]) -> list[Any]:
+    """`mode` with echo and canonical input back on, as a shell leaves a terminal for the programs it runs."""
+    found = list(mode)
+    found[3] = found[3] | termios.ECHO | termios.ICANON
+    return found
+
+
 class Loader:
     """One background thread running `work` for the newest request only (#15): a request made while one runs
     replaces any that waits, so moving quickly through rows loads just the row it ends on. Results are taken on the

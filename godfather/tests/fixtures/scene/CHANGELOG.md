@@ -6,6 +6,19 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Added
 
+- Row actions (fathers#88): Enter, `a` or a right-click on a QUEUE row or a page's row opens its action menu, only
+  the actions its tool advertises and that apply to the row now (`no actions` in the footer otherwise): reprioritize
+  a request to another class and ask a yieldable lease of a lower class than a waiter to yield (`slotfather
+  reprioritize|ask-yield PID … --start START`); reap an orphan or expired entry, or an unowned process the sweep
+  reported (`junkfather reap --id …` / `--pid … --force`), and extend a running entry's TTL by 1 h, 4 h or 1 d;
+  open a lane's ticket or worktree with the platform opener, its latest log in `$PAGER` (`less -R +G`; the screen,
+  kitty keyboard mode included, comes back after), and park an active lane with a reason where Lanefather
+  advertises park. Reaps and park ask first, naming the target and the exact command; `y` runs it, `n`, Esc or a
+  click outside cancel. The row is looked for again in a fresh snapshot first and the action dropped if it changed;
+  the command runs in the background with no shell, a 30 s timeout and `GODFATHER_ACTOR=godfather/<version>`; the
+  footer shows its first stdout line, or its first stderr line in red, and the source is polled at once. Land,
+  promote, done, sync, review and sweep are never offered. Under `GODFATHER_FIXTURES` actions are recorded, never run.
+
 - Junkfather is a source (fathers#86): its `junkfather status --json` (versions 1 and 2) is polled like
   Lanefather's. SLOTS' bottom border sums it up on the right, `3 procs 7 · 1 orphan · 1 expired · 2 unowned` (a
   narrow border drops unowned, then expired), and `3` or a click on it opens the Processes page: owned entries

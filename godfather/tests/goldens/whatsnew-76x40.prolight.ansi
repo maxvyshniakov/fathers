@@ -3,38 +3,38 @@
 [0;38;2;150;150;150m││[0m[0m                                                                        [0m[0;38;2;150;150;150m││[0m
 [0;38;2;150;150;150m││[0m[0m  Godfather[0m[0;38;2;112;112;112m · [0m[0;1munreleased[0m[0;38;2;112;112;112m · [0m[0;38;2;31;111;235minstalled 9f600e1[0m[0m                           [0m[0;38;2;112;112;112m┃[0m[0;38;2;150;150;150m││[0m
 [0;38;2;150;150;150m╰│[0m[0m                                                                       [0m[0;38;2;112;112;112m┃[0m[0;38;2;150;150;150m│╯[0m
-[0;38;2;31;111;235m┍[0m[0;38;2;150;150;150m│[0m[0m  [0m[0;38;2;112;112;112mADDED[0m[0m                                                                [0m[0;38;2;112;112;112m┃[0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m┑[0m
+[0;38;2;31;111;235m┍[0m[0;38;2;150;150;150m│[0m[0m  [0m[0;38;2;112;112;112mADDED[0m[0m                                                                [0m[0;38;2;112;112;112m╹[0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m┑[0m
 [0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m                                                                        [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
-[0;38;2;255;105;185m┃[0m[0;38;2;150;150;150m│[0m[0m  [0m[0;38;2;112;112;112m• [0m[0mJunkfather is a source (fathers#86): its junkfather status --json   [0m[0;38;2;150;150;150m│[0m[0;38;2;255;105;185m┃[0m
-[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    (versions 1 and 2) is polled like Lanefather's. SLOTS' bottom       [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
-[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    border sums it up on the right, 3 procs 7 · 1 orphan · 1 expired    [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
-[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    · 2 unowned (a narrow border drops unowned, then expired), and 3    [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
-[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    or a click on it opens the Processes page: owned entries            [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
-[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    (running, then orphan, then expired), then the last sweep's         [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
-[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    unowned processes and resources, each with its state, label, id,    [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
-[0;38;2;31;111;235m┕[0m[0;38;2;150;150;150m│[0m[0m    owner, lane, age, TTL left and pid, a resource with its kind and    [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m┙[0m
-[0;38;2;150;150;150m╭│[0m[0m    id; PROCESS DETAILS with its command, directory, log, owner and     [0m[0;38;2;150;150;150m│╮[0m
-[0;38;2;150;150;150m││[0m[0m    whether it lives, keep, mode, resource, and its lease and lane as   [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    links; and its Junkfather events under the table. DETAILS lists a   [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    request's owned processes (storybook · running · 1h46m, or none     [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    owned), each a link to the page, and LANE DETAILS a lane's.         [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    EVENTS words sweep.finished from its result. godfather --once       [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    --page processes prints the page.                                   [0m[0;38;2;150;150;150m││[0m
+[0;38;2;255;105;185m┃[0m[0;38;2;150;150;150m│[0m[0m  [0m[0;38;2;112;112;112m• [0m[0mRow actions (fathers#88): Enter, a or a right-click on a QUEUE      [0m[0;38;2;150;150;150m│[0m[0;38;2;255;105;185m┃[0m
+[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    row or a page's row opens its action menu, only the actions its     [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
+[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    tool advertises and that apply to the row now (no actions in the    [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
+[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    footer otherwise): reprioritize a request to another class and      [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
+[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    ask a yieldable lease of a lower class than a waiter to yield       [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
+[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    (slotfather reprioritize|ask-yield PID … --start START); reap an    [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
+[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    orphan or expired entry, or an unowned process the sweep reported   [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
+[0;38;2;31;111;235m┕[0m[0;38;2;150;150;150m│[0m[0m    (junkfather reap --id … / --pid … --force), and extend a running    [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m┙[0m
+[0;38;2;150;150;150m╭│[0m[0m    entry's TTL by 1 h, 4 h or 1 d; open a lane's ticket or worktree    [0m[0;38;2;150;150;150m│╮[0m
+[0;38;2;150;150;150m││[0m[0m    with the platform opener, its latest log in $PAGER (less -R +G;     [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    the screen, kitty keyboard mode included, comes back after), and    [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    park an active lane with a reason where Lanefather advertises       [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    park. Reaps and park ask first, naming the target and the exact     [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    command; y runs it, n, Esc or a click outside cancel. The row is    [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    looked for again in a fresh snapshot first and the action dropped   [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    if it changed; the command runs in the background with no shell,    [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    a 30 s timeout and GODFATHER_ACTOR=godfather/<version>; the         [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    footer shows its first stdout line, or its first stderr line in     [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    red, and the source is polled at once. Land, promote, done, sync,   [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    review and sweep are never offered. Under GODFATHER_FIXTURES        [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    actions are recorded, never run.                                    [0m[0;38;2;150;150;150m││[0m
 [0;38;2;150;150;150m││[0m[0m                                                                        [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m  [0m[0;38;2;112;112;112m• [0m[0mLanefather is a source (fathers#85): its machine-wide lanefather    [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    status --json is polled every 5 s (its hint, up to 10 s) and soon   [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    after one of its events. SLOTS' bottom border sums it up, 2 lanes   [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    3 active · 1 planned · 2 reviews · 🔥 gate red (a narrow border     [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    drops planned, then reviews; dimmed while stale), and 2 or a        [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    click on it opens the Lanes page: LANES by project (Straylight ·    [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    3 of 4 lanes, an unreadable project's error dimmed) with each       [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    lane's state, ticket, stage, receipt, review, claims and age;       [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m╰│[0m[0m    LANE DETAILS with its ticket and worktree links, the latest log     [0m[0;38;2;150;150;150m│╯[0m
-[0;38;2;150;150;150m╭│[0m[0m    and the leases running for it, each a link back to the request;     [0m[0;38;2;150;150;150m│╮[0m
-[0;38;2;150;150;150m││[0m[0m    and its Lanefather events under the table. DETAILS shows a          [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    request's lane as a link (710-speech-paste-phase · Straylight)      [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    when it joins: by its lane and Lanefather state directory, or by    [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m  [0m[0;38;2;112;112;112m• [0m[0mJunkfather is a source (fathers#86): its junkfather status --json   [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    (versions 1 and 2) is polled like Lanefather's. SLOTS' bottom       [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m╰│[0m[0m    border sums it up on the right, 3 procs 7 · 1 orphan · 1 expired    [0m[0;38;2;150;150;150m│╯[0m
+[0;38;2;150;150;150m╭│[0m[0m    · 2 unowned (a narrow border drops unowned, then expired), and 3    [0m[0;38;2;150;150;150m│╮[0m
+[0;38;2;150;150;150m││[0m[0m    or a click on it opens the Processes page: owned entries            [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    (running, then orphan, then expired), then the last sweep's         [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    unowned processes and resources, each with its state, label, id,    [0m[0;38;2;150;150;150m││[0m
 [0;38;2;150;150;150m││[0m[0m                                                                        [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m                    [0m[0;1m←→[0m[0;38;2;112;112;112m tool[0m[0m   [0m[0;1m↑↓[0m[0;38;2;112;112;112m scroll[0m[0m   [0m[0;1mesc[0m[0;38;2;112;112;112m close[0m[0m                  [0m[0;38;2;112;112;112m9%[0m[0m [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m                    [0m[0;1m←→[0m[0;38;2;112;112;112m tool[0m[0m   [0m[0;1m↑↓[0m[0;38;2;112;112;112m scroll[0m[0m   [0m[0;1mesc[0m[0;38;2;112;112;112m close[0m[0m                  [0m[0;38;2;112;112;112m8%[0m[0m [0m[0;38;2;150;150;150m││[0m
 [0;38;2;150;150;150m╰╰────────────────────────────────────────────────────────────────────────╯╯[0m
 [0m [0m[0;1mGodfather[0m[0;38;2;112;112;112m what's new?[0m[0m     [0m[0;1m↑↓[0m[0;38;2;112;112;112m select[0m[0m   [0m[0;1m?[0m[0;38;2;112;112;112m help[0m[0m   [0m[0;1mq[0m[0;38;2;112;112;112m quit[0m[0m     [0m[0;38;2;112;112;112m11:59:39[0m[0m  [0m[0;38;2;21;128;61m● live[0m[0m [0m

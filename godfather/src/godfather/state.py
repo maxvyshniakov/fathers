@@ -13,6 +13,7 @@ import datetime
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Union, cast
 
+from . import actions as _actions
 from . import news as _news
 from . import settings_model as _settings
 from . import entries as _entries
@@ -59,7 +60,33 @@ class Changelog:
 SettingsOverlay = _settings.Panel  # Settings (fathers#87): its sections, cursor, pending change and answers
 
 
-Overlay = Union[Help, Changelog, SettingsOverlay]
+@dataclass(frozen=True)
+class ActionMenu:
+    """A row's actions (fathers#88): only those its tool advertises and that apply to it now; `cursor` the one Enter
+    picks."""
+    actions: tuple[_actions.Action, ...]
+    cursor: int = 0
+    kind: str = "actions"
+
+
+@dataclass(frozen=True)
+class Reason:
+    """The reason a park asks for first, typed; an empty one cancels."""
+    action: _actions.Action
+    text: str = ""
+    kind: str = "reason"
+
+
+@dataclass(frozen=True)
+class Confirm:
+    """An irreversible action asked first: the action, its target and the exact command; `y` runs it, `n`, Esc or a
+    click outside cancel, nothing is preselected."""
+    action: _actions.Action
+    reason: str = ""
+    kind: str = "confirm"
+
+
+Overlay = Union[Help, Changelog, SettingsOverlay, ActionMenu, Reason, Confirm]
 
 
 @dataclass(frozen=True)
@@ -71,9 +98,11 @@ class Refresh:
 
 @dataclass(frozen=True)
 class Notice:
-    """A passing note in the footer, never the refresh state: a Settings panel that would not open."""
+    """A passing note in the footer, never the refresh state: a Settings panel that would not open, what an action
+    did (`style` ok, or bad for a failure, fathers#88), `no actions`."""
     text: str
     at: float
+    style: str = "bad"
 
 
 @dataclass(frozen=True)
@@ -270,6 +299,14 @@ class NewsLoaded:
 
 
 @dataclass(frozen=True)
+class ActionDone:
+    """An action ran (or was dropped): the tool's first stdout line on success, its first stderr line on failure."""
+    tool: str
+    ok: bool
+    line: str
+
+
+@dataclass(frozen=True)
 class ToolLoaded:
     """Another tool's snapshot polled (or why not): its Tool."""
     tool: Tool
@@ -288,7 +325,7 @@ class Tick:
 
 
 Event = Union[Key, Mouse, ModelLoaded, ModelFailed, DetailsLoaded, SettingsOpened, SettingsSections, SettingsRead,
-              SettingsChecked, SettingsWritten, SettingsFailed, NewsLoaded, ToolLoaded, Drawn, Tick]
+              SettingsChecked, SettingsWritten, SettingsFailed, NewsLoaded, ToolLoaded, ActionDone, Drawn, Tick]
 
 
 # Effects, for the app to carry out
@@ -312,6 +349,32 @@ Result = tuple[AppState, list[Effect]]
 def items(state: AppState) -> list[dict[str, Any]]:
     model = state.model
     return cast(list[dict[str, Any]], model["holders"] + model["waiters"]) if model else []
+
+
+def row_actions(state: AppState) -> list[_actions.Action]:
+    """The actions of the row the keys act on (fathers#88): QUEUE's selected request on the overview, a page's
+    selected row on a page; those its tool advertises and that apply to it now."""
+    if state.page == "overview":
+        item = selected_item(state)
+        if item is None or state.model is None:
+            return []
+        return _actions.for_request(item, cast(list[dict[str, Any]], state.model["waiters"]),
+                                    state.model.get("actions") or ())
+    rows = page_rows(state, state.page)
+    index = page_index(state, state.page, rows)
+    if index is None:
+        return []
+    if state.page == "processes":
+        return _actions.for_process(rows[index], tool(state, "junkfather").actions)
+    return _actions.for_lane(rows[index], tool(state, "lanefather").actions)
+
+
+def open_actions(state: AppState, now: float) -> AppState:
+    """Enter, `a` or a right-click on a row: its action menu, or `no actions` in the footer."""
+    found = row_actions(state)
+    if not found:
+        return dataclasses.replace(state, notice=Notice("no actions", now, "dim"))
+    return dataclasses.replace(state, overlay=ActionMenu(tuple(found)))
 
 
 def tool(state: AppState, name: str) -> Tool:

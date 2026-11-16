@@ -18,11 +18,13 @@ import math
 import os
 import select
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any, cast
 
+from . import actions as _actions
 from . import entries as _entries
 from . import events as _events
 from . import settings_model as _settings_model
@@ -39,7 +41,7 @@ from .adapters.slotfather import Unsupported
 from .sources import SnapshotError, Source
 from . import reducer as _reducer
 from . import state as _state
-from .tui import Canvas, Jobs, Loader, full_screen, read_keys
+from .tui import Canvas, Jobs, Loader, full_screen, read_keys, suspended
 from .views import common as _common
 from .views import details as _details
 from .views import events as _events_view
@@ -167,6 +169,7 @@ class Screen:
         model["sources"] = list(self.followed)
         model["events_skipped"] = self.feed.skipped()
         model["fresh_sources"] = sorted(self.fresh)  # an event polls its source at once, debounced (SPEC 9)
+        model["actions"] = list(_actions.offered(_lanefather.dashboard_block(source.capabilities).get("actions")))
         if not _events.log_path(source.capabilities):  # no event log of a version this Godfather reads: why
             named = isinstance(_events.dashboard_block(source.capabilities).get("events"), dict)
             model["events_note"] = _events_view.TOO_NEW if named else _events_view.TOO_OLD
@@ -194,6 +197,37 @@ class Screen:
             if source.state == "stale" and source.failed_at is not None else None
         return _state.Tool(name, source.state, source.problem, source.snapshot, since,
                            adapter.actions(source.capabilities), adapter.show_supported(source.capabilities))
+
+    def recheck(self, action: _actions.Action) -> bool:
+        """The row an action was offered for, looked for again in a fresh snapshot of its source (SPEC 23, step 3)."""
+        page = action.identity[0] if action.identity else ""
+        try:
+            if page == "overview":
+                if self.source.due():
+                    self.source.discover()
+                return _actions.still(action, _slotfather.decode(self.source.poll()))
+            name = "junkfather" if page == "processes" else "lanefather"
+            source = self.tool_sources[name]
+            if source.due():
+                source.discover()
+            return _actions.still(action, TOOL_ADAPTERS[name].decode(source.poll()))
+        except (SnapshotError, Unsupported):
+            return False
+
+    def act(self, action: _actions.Action, reason: str) -> _state.ActionDone:
+        """An action: the row checked again, then the command run (30 s, GODFATHER_ACTOR); the tool's first stdout
+        line on success, its first stderr line on failure, never a retry."""
+        if not self.recheck(action):
+            return _state.ActionDone(action.tool, False, f"{action.name}: the row changed or is gone; nothing run")
+        executable = self.source.executable if action.tool == "slotfather" else \
+            self.tool_sources[action.tool].executable if action.tool in self.tool_sources else None
+        argv = list(action.command(reason)[1:] if action.tool else action.command(reason))
+        reply = _sources.act(action.tool, argv, f"godfather/{_version.VERSION}", executable)
+        first = next((line for line in (reply.stdout if reply.code == 0 else reply.stderr).splitlines()
+                      if line.strip()), "")
+        if reply.code != 0:
+            return _state.ActionDone(action.tool, False, first or f"{action.shown(reason)} exited {reply.code}")
+        return _state.ActionDone(action.tool, True, first or f"{action.name}: done")
 
     def poll_every(self, name: str) -> float:
         """Seconds between a tool's polls: its capabilities' hint clamped to 5–10 (SPEC 9)."""
@@ -343,6 +377,7 @@ class Live:
         self.tool_due: dict[str, float] = {}  # an event's poll, debounced: when it runs
         self.news = Loader(load_news, self.wake_write)  # what's new: on start and each time it opens
         self.settings = Jobs(self.settings_work, self.wake_write)  # Settings' calls, in order (fathers#87)
+        self.acting = Jobs(self.action_work, self.wake_write)  # row actions, in order, in the background (fathers#88)
         self.asked = 0
         self.fetched = 0.0
 
@@ -392,8 +427,41 @@ class Live:
         elif kind == "settings":
             self.asked += 1
             self.settings.request(self.asked, effect.item)
+        elif kind == "action":
+            action, reason = effect.item
+            if action.kind == "pager":  # the terminal is the pager's until it quits
+                self.send(self.page_file(action))
+            else:
+                self.asked += 1
+                self.acting.request(self.asked, (action, reason))
+        elif kind == "poll":
+            if effect.key == "slotfather":
+                self.load_model()
+            elif effect.key in self.tools:
+                self.tool_due[effect.key] = time.monotonic()
         elif kind == "open-settings":  # at once; the tools' sections come from Settings' worker (fathers#87 review)
             self.send(_state.SettingsOpened((), loading=True))
+
+    def action_work(self, job: tuple[_actions.Action, str]) -> _state.Event:
+        try:
+            return self.screen.act(*job)
+        except Exception as failure:  # noqa: BLE001 - a failed action is a footer line, never the end of the view
+            return _state.ActionDone(job[0].tool, False, str(failure) or type(failure).__name__)
+
+    def page_file(self, action: _actions.Action) -> _state.Event:
+        """The latest log in $PAGER, the screen handed over and taken back (kitty keyboard mode too). Under
+        GODFATHER_FIXTURES the pager's argv is recorded, never run."""
+        command = list(action.command())
+        if _sources.fixtures() is not None:
+            _sources.act("", command, f"godfather/{_version.VERSION}")
+            return _state.ActionDone("", True, f"recorded: {' '.join(command)}")
+        with suspended(self.fd_in, self.fd_out, self.answers):
+            try:
+                code = subprocess.call(command)
+            except OSError as error:
+                return _state.ActionDone("", False, f"cannot run {command[0]}: {error.strerror or error}")
+        self.shown, self.dirty = [], True
+        return _state.ActionDone("", code == 0, "" if code == 0 else f"{command[0]} exited {code}")
 
     def settings_work(self, request: _settings_model.Request) -> _state.Event:
         try:
@@ -427,6 +495,9 @@ class Live:
                 self.tool_due.pop(name, None)
                 self.tool_fetched[name] = now
                 loader.request(name, name)
+        for _, answer, _ in self.acting.take():
+            if answer is not None:
+                self.send(answer)
         for _, answer, _ in self.settings.take():
             if answer is not None:
                 self.send(answer)

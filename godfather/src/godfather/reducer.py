@@ -7,7 +7,7 @@ import dataclasses
 
 from . import modes as _modes
 from . import settings_model as _settings
-from .state import (QUIT, AppState, DetailsLoaded, Drawn, Effect, Event, Key, Loaded, ModelFailed, ModelLoaded, Mouse,
+from .state import (QUIT, ActionDone, AppState, DetailsLoaded, Drawn, Effect, Event, Key, Loaded, ModelFailed, ModelLoaded, Mouse,
                     NewsLoaded, Notice, Refresh, Result, SettingsChecked, SettingsFailed, SettingsOpened,
                     SettingsOverlay, SettingsRead, SettingsSections, SettingsWritten, ToolLoaded, closed_news,
                     PAGE_TABLES, model_loaded,
@@ -42,6 +42,10 @@ def reduce(state: AppState, event: Event, now: float) -> Result:
                                          requests)
     elif isinstance(event, (SettingsSections, SettingsRead, SettingsChecked, SettingsWritten)):
         state, effects = settings_event(state, event, now)
+    elif isinstance(event, ActionDone):  # its line in the footer, the source polled at once (SPEC 24)
+        line = dashboard_text(event.line) or ("done" if event.ok else "failed")
+        state = dataclasses.replace(state, notice=Notice(line, now, "ok" if event.ok else "bad"))
+        effects = [Effect("poll", key=event.tool)] if event.tool else []
     elif isinstance(event, ToolLoaded):
         state = dataclasses.replace(state, tools={**state.tools, event.tool.name: event.tool})
     elif isinstance(event, NewsLoaded):

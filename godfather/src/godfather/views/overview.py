@@ -58,7 +58,7 @@ WHATS_NEW = "what's new?"
 
 
 def draw_footer(canvas: Canvas, model: Optional[Model], error: Optional[str], message: Optional[str],
-                moment: Optional[datetime.datetime] = None, pages: str = "") -> None:
+                moment: Optional[datetime.datetime] = None, pages: str = "", message_style: str = "bad") -> None:
     """`Godfather what's new?` (fathers#102: the name in the title style; what's new? always muted like the key
     hints, unread or not, which only the overlay marks (owner, 2026-11-13); ↻ after it
     while a newer install waits for a restart; a click opens what's new), the hints, then the refresh failure or a
@@ -68,7 +68,7 @@ def draw_footer(canvas: Canvas, model: Optional[Model], error: Optional[str], me
     Footer(canvas).draw([(_version.NAME, "title"), (" " + WHATS_NEW + (" ↻" if installed else ""), "dim")],
                         footer_hints(canvas.focus, pages), ("● stale", "bad") if error else ("● live", "ok"),
                         clock(model["updated"], moment) if model else "",
-                        (message, "bad") if message else (f"refresh failed: {error}", "bad") if error else ("", ""))
+                        (message, message_style) if message else (f"refresh failed: {error}", "bad") if error else ("", ""))
 
 
 def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, overlay: Any = None,
@@ -77,7 +77,7 @@ def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, ov
                    failure: Optional[str] = None, news: Any = None, read: Optional[dict[str, str]] = None,
                    moment: Optional[datetime.datetime] = None, events_filter: Optional[_events.Filter] = None,
                    settings: Any = None, event: Optional[int] = None, tools: Optional[dict[str, Any]] = None,
-                   page: str = "overview", page_row: Optional[int] = None) -> None:
+                   page: str = "overview", page_row: Optional[int] = None, message_style: str = "bad") -> None:
     """The whole screen at `moment` (where None, the model's own update time: the screen never reads the clock).
     `overlay` is the one open (state.Help, Changelog or SettingsOverlay); `error` the refresh's
     failure, `message` a passing notice; `notice` stands in for the panels when Slotfather is absent or unsupported;
@@ -90,7 +90,7 @@ def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, ov
     canvas.scroll = scroll if scroll is not None else {}
     if moment is None and model is not None:
         moment = cast(Optional[datetime.datetime], model.get("updated"))
-    draw_footer(canvas, model, error, message, moment, page_keys(tools))
+    draw_footer(canvas, model, error, message, moment, page_keys(tools), message_style)
     if notice:
         draw_notice(canvas, notice)
         model = None
@@ -165,7 +165,9 @@ def draw_page(canvas: Canvas, page: str, tools: dict[str, Any], row: Optional[in
 def draw_overlay(canvas: Canvas, overlay: Any, model: Optional[Model], news: Any = None,
                  read: Optional[dict[str, str]] = None, settings: Any = None) -> None:
     kind = str(overlay.kind)
-    if kind == "settings":
+    if kind in ("actions", "reason", "confirm"):  # fathers#88
+        _overlays.draw_actions(canvas, overlay)
+    elif kind == "settings":
         from .. import settings_model as _model
 
         context = settings if settings is not None else _model.Context()
@@ -214,4 +216,5 @@ def render(canvas: Canvas, state: AppState, now: float, notice: Optional[list[st
                    state.notice.text if state.notice else None, failure, state.news, state.read, state.moment,
                    state.events_filter, _settings_view.context_of(state, canvas.width, canvas.height), event,
                    state.tools, state.page,
-                   _state.page_index(state, state.page) if state.page != "overview" else None)
+                   _state.page_index(state, state.page) if state.page != "overview" else None,
+                   state.notice.style if state.notice else "bad")
