@@ -12,6 +12,7 @@ import time
 from typing import Any, Callable, Mapping, cast
 
 from . import config as _config
+from . import lineage as _lineage
 from . import platform as _platform
 from . import process as _process
 from .sweep_plan import LINUX, Cwd, Item, Proc, Snapshot, removed_dir, restart_loops
@@ -196,7 +197,7 @@ def snapshot() -> Snapshot:
         cwds, notes, foreign = proc_cwds(procs, uid)
     else:
         cwds, notes = working_dirs(procs, uid)
-    me = {os.getpid(), *_process.ancestors({pid: proc.ppid for pid, proc in procs.items()}, os.getpid())}
+    me = {os.getpid(), *_lineage.ancestors({pid: proc.ppid for pid, proc in procs.items()}, os.getpid())}
     return Snapshot(procs, cwds, managed_jobs(procs, uid), uid=uid, me=me, notes=notes, foreign=foreign)
 
 

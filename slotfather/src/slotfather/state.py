@@ -155,12 +155,12 @@ def unreadable(directory: Path) -> list[Path]:
 
 def record(directory: Path, entry: dict[str, Any], outcome: str, status: int | None = None,
            usage: dict[str, Any] | None = None, path: Path | None = None,
-           expected: dict[str, Any] | None = None, capacity: Callable[[], int] | None = None,
-           above: Callable[[float, Any], bool] | None = None) -> dict[str, Any]:
+           expected: dict[str, Any] | None = None, *, capacity: Callable[[], int],
+           above: Callable[[float, Any], bool]) -> dict[str, Any]:
     """Add a request that left the queue to history.jsonl: released (it ran), left (it gave up waiting) or reaped
     (its holder died), with what its process tree used where the holder measured it. `capacity()` gives the queue's
-    slots for the line (settings.total(); without it the line has neither cores nor capacity), `above(ran, p90)` the
-    run's verdict against its series `expected` (runtype.above()). Callers hold the queue lock. Returns the line's
+    slots for the line (settings.total()), `above(ran, p90)` whether a run is past its series `expected`
+    (runtype.above()): the caller's, so that persistence imports neither. Callers hold the queue lock. Returns the line's
     fields (the events of events.py read them)."""
     ended = time.time()
     queued, granted = _config.seconds(entry.get("since")), _config.seconds(entry.get("granted"))
@@ -173,9 +173,8 @@ def record(directory: Path, entry: dict[str, Any], outcome: str, status: int | N
     ticket = _entry.ticket_of(entry)
     if ticket is not None:
         item["ticket"] = ticket
-    if capacity is not None:
-        with contextlib.suppress(_config.SlotError, OSError):
-            item.update(cores=_config.cores(), capacity=capacity())
+    with contextlib.suppress(_config.SlotError, OSError):
+        item.update(cores=_config.cores(), capacity=capacity())
     item.update(usage or {})
     if entry.get("yields"):
         yielded = _entry.yielded_of(entry)
@@ -198,8 +197,7 @@ def record(directory: Path, entry: dict[str, Any], outcome: str, status: int | N
             and not entry.get("session"):
         # the run type it is judged by and its verdict against that series (runtype.py, fathers#106)
         item["run_key"] = expected["key"]
-        item["verdict"] = "pending" if above is not None and above(float(item["ran"]), expected.get("p90")) \
-            else "normal"
+        item["verdict"] = "pending" if above(float(item["ran"]), expected.get("p90")) else "normal"
     elif expected is None and outcome == "released" and entry.get("run_key"):
         item["run_key"] = entry["run_key"]
     for key in ("label_given", "label_derived", "project"):

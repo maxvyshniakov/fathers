@@ -4,6 +4,7 @@ older clients read, and the persistence layer imports no admission code."""
 from __future__ import annotations
 
 import ast
+import inspect
 import json
 import os
 from pathlib import Path
@@ -112,6 +113,23 @@ class SavedBytesTests(unittest.TestCase):
         sf_settings.configure({"order.json": None, "sweep.json": None, "capacity.json": None})
         self.assertEqual([], sorted(p.name for p in self.dir.iterdir() if p.suffix == ".json" and p.name != "schema.json"))
 
+    def test_an_unreadable_sweep_file_stops_no_other_change_and_is_replaced(self) -> None:
+        if os.geteuid() == 0:
+            self.skipTest("root reads every file")
+        broken = self.dir / "sweep.json"
+        broken.write_text("{}")
+        broken.chmod(0o200)
+        self.addCleanup(lambda: broken.exists() and broken.chmod(0o600))
+        sf_settings.configure({"capacity.json": {"slots": 6}})
+        sf_settings.configure({"order.json": {"safety": 4}})
+        self.assertEqual('{"slots": 6}\n', self.saved("capacity.json"))
+        self.assertIn("sweep.json ignored", sf_settings.sweep_settings(self.dir)["error"])
+        sf_settings.configure({"sweep.json": {"grace": 5.0}})
+        self.assertEqual(5.0, json.loads(self.saved("sweep.json"))["grace"], "replaced by the defaults and the change")
+        broken.chmod(0o200)
+        sf_settings.configure({"sweep.json": None})
+        self.assertFalse(broken.exists(), "reset removes a file it cannot read")
+
     def test_a_refused_change_saves_nothing(self) -> None:
         for change in ({"order.json": {"safety": 0.1}}, {"sweep.json": {"grace": -1}}):
             with self.subTest(change=change), self.assertRaises(sf_config.SlotError):
@@ -128,6 +146,22 @@ def imports(path: Path) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and (node.module or "").startswith("slotfather"):
             found.update(alias.name for alias in node.names)
     return found
+
+
+class OneWriterTests(unittest.TestCase):
+    def test_configure_is_the_only_writer_of_the_settings_files(self) -> None:
+        tree = ast.parse((SOURCE / "slotfather" / "settings.py").read_text())
+        writers = {function.name for function in ast.walk(tree) if isinstance(function, ast.FunctionDef)
+                   for call in ast.walk(function) if isinstance(call, ast.Call)
+                   and isinstance(call.func, ast.Attribute) and call.func.attr in ("write", "unlink", "write_bytes")}
+        self.assertEqual({"configure"}, writers)
+
+    def test_history_lines_always_get_capacity_and_verdict(self) -> None:
+        from slotfather import state as sf_state
+        parameters = inspect.signature(sf_state.record).parameters
+        for name in ("capacity", "above"):
+            with self.subTest(name):
+                self.assertIs(inspect.Parameter.empty, parameters[name].default, "a caller cannot leave it out")
 
 
 class ImportTests(unittest.TestCase):

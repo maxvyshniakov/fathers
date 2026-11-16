@@ -291,7 +291,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual((600, 0, 300), (found["interactive"], found["batch"], found["yield_after"]))
         with mock.patch.dict(os.environ, {"SLOTFATHER_YIELD_AFTER": "0"}):
             self.assertEqual(0, sf_settings.order_settings()["yield_after"])
-        sf_settings.save_order({**sf_config.ORDER_DEFAULTS, "yield_after": 0})
+        sf_settings.configure({"order.json": {**sf_config.ORDER_DEFAULTS, "yield_after": 0}})
         with mock.patch.dict(os.environ, {"SLOTFATHER_YIELD_AFTER": "60"}):
             self.assertEqual(0, sf_settings.order_settings()["yield_after"], "nothing asks earlier than never")
 
@@ -302,9 +302,9 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual((120, "backfill"), (saved["yield_after"], saved["order"]))
 
     def test_class_knobs_are_saved_only_when_they_differ_from_their_defaults(self):
-        sf_settings.save_order(dict(sf_config.ORDER_DEFAULTS))
+        sf_settings.configure({"order.json": dict(sf_config.ORDER_DEFAULTS)})
         self.assertEqual(set(sf_config.ORDER_BASE), set(json.loads((self.dir / "order.json").read_text())))
-        sf_settings.save_order({**sf_config.ORDER_DEFAULTS, "batch": 600})
+        sf_settings.configure({"order.json": {**sf_config.ORDER_DEFAULTS, "batch": 600}})
         self.assertEqual(600, json.loads((self.dir / "order.json").read_text())["batch"])
         self.assertEqual(600, sf_settings.order_settings()["batch"])
 

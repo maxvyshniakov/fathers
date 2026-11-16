@@ -3,7 +3,7 @@ validated, tightened by a client's environment and saved in one place.
 
 - Capacity: capacity_basis() (the slots and how they were found), capacity_text(), capacity_change() (what
   `slotfather slots` saves for a mode, the one computation `slots` and `settings` share) and total().
-- Order: order_settings() (shared, or tightened by this client's environment), checked_order(), save_order().
+- Order: order_settings() (shared, or tightened by this client's environment), checked_order(), order_bytes().
 - Sweep: sweep_settings() and checked_sweep().
 - configure(): the only write path for the three files, under the queue lock, with the ownership check, the
   per-file conflict check and rollback. What a change starts (a grant) is the caller's callback; the change events
@@ -214,17 +214,6 @@ def order_bytes(values: Mapping[str, Any]) -> dict[str, Any]:
             for k in defaults if k in _config.ORDER_BASE or values.get(k, defaults[k]) != defaults[k]}
 
 
-def save_order(values: Mapping[str, Any] | None, directory: Path | None = None) -> None:
-    """Publishes order settings for every client (None: back to the defaults); callers hold the queue lock."""
-    path = (directory or _config.state_dir()) / "order.json"
-    if values is None:
-        path.unlink(missing_ok=True)
-        return
-    checked = checked_order({k: v for k, v in values.items() if k in _config.ORDER_DEFAULTS})
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _state.write(path, order_bytes(checked))
-
-
 # Sweep
 
 SWEEP_DEFAULTS: dict[str, Any] = {
@@ -327,7 +316,17 @@ def configure(changes: Mapping[str, Mapping[str, Any] | None], *,
         return
     _state.require_own(directory, what)
     with _state.locked(directory):
-        before = configuration_bytes(directory, FILES)
+        # Only the files this change touches or names: a broken sweep.json must not stop a capacity change. A file
+        # that cannot be read (its mode, a directory in its place) is replaced as a broken one is.
+        before: dict[str, bytes | None] = {}
+        unreadable: set[str] = set()
+        names: list[str] = sorted({*changes, *(expected or {}), *(revisions or {})})
+        for name in names:
+            try:
+                before.update(configuration_bytes(directory, (name,)))
+            except OSError:
+                before[name] = None
+                unreadable.add(name)
         changed_since = [name for name, value in (expected or {}).items() if before.get(name) != value]
         changed_since += [name for name, token in (revisions or {}).items()
                           if name not in changed_since and revision(before.get(name)) != token]
@@ -341,7 +340,7 @@ def configure(changes: Mapping[str, Mapping[str, Any] | None], *,
                     saved.update(checked_order(json.loads(before["order.json"] or b"{}")))
                 values["order.json"] = order_bytes(checked_order({**saved, **values["order.json"]}))
             if values.get("sweep.json") is not None:
-                current = sweep_from(before["sweep.json"])
+                current = sweep_defaults() if "sweep.json" in unreadable else sweep_from(before["sweep.json"])
                 if "error" in current:  # a broken file is replaced by the defaults and these changes
                     current = sweep_defaults()
                 kept = {k: v for k, v in current.items() if k in SWEEP_DEFAULTS}
@@ -359,7 +358,7 @@ def configure(changes: Mapping[str, Mapping[str, Any] | None], *,
                     _state.write(directory / name, value)
                 changed.append(name)
         except OSError as error:
-            for name in reversed(changed):
+            for name in reversed([name for name in changed if name not in unreadable]):
                 path, original = directory / name, before[name]
                 if original is None:
                     path.unlink(missing_ok=True)
@@ -368,8 +367,11 @@ def configure(changes: Mapping[str, Mapping[str, Any] | None], *,
                     pending.write_bytes(original)
                     pending.replace(path)
             raise _config.SlotError(f"cannot save settings: {error}") from None
-        after = configuration_bytes(directory, FILES)
-        for name in [name for name in changed if after.get(name) != before.get(name)]:  # a no-op save is no event
+        after: dict[str, bytes | None] = {}
+        for name in changed:
+            with contextlib.suppress(OSError):
+                after.update(configuration_bytes(directory, (name,)))
+        for name in [name for name in changed if name in unreadable or after.get(name) != before.get(name)]:  # a no-op save is no event
             if name == "capacity.json":
                 with contextlib.suppress(_config.SlotError, OSError):
                     basis = capacity_basis()

@@ -315,15 +315,38 @@ def environment(pid: int) -> list[bytes] | None:
             return None
     except (OSError, AttributeError, TypeError, ValueError):
         return None
-    raw = buffer.raw[:size.value]
-    argc = struct.unpack("=i", raw[:4])[0]
-    _, _, rest = raw[4:].partition(b"\0")  # the executable's path, then NUL padding before the arguments
-    strings = rest.lstrip(b"\0").split(b"\0")
-    if argc < 0 or len(strings) < argc:
+    return procargs_environment(buffer.raw[:size.value])
+
+
+def procargs_environment(raw: bytes) -> list[bytes] | None:
+    """The environment in a KERN_PROCARGS2 buffer, or None where it is empty (hidden) or the buffer does not parse.
+    Layout: argc (a native int), the executable's path and its NUL, NUL padding to the next multiple of 8 bytes from
+    the path's start (the kernel's pointer alignment), argc argument strings, the environment's strings, an empty
+    string, then the kernel's own strings. An argument may be empty, so NULs after the padding are arguments, not
+    padding. Where the padding cannot be told from empty arguments (NULs past the 8-byte boundary, as a kernel that
+    aligned further would leave), both readings are taken: a marker either shows counts, so the doubt never reads
+    as "not carrying"."""
+    if len(raw) < 4:
         return None
+    argc = struct.unpack("=i", raw[:4])[0]
+    end = raw.find(b"\0", 4)
+    if argc < 0 or end < 0:
+        return None
+    aligned = 4 + -(-(end - 4 + 1) // 8) * 8
+    if aligned > len(raw) or raw[end:aligned].strip(b"\0"):
+        return None
+    starts = [aligned]
+    stripped = len(raw) - len(raw[end:].lstrip(b"\0"))
+    if stripped != aligned:
+        starts.append(stripped)
     found: list[bytes] = []
-    for item in strings[argc:]:
-        if not item:
-            break
-        found.append(item)
+    for start in starts:
+        strings = raw[start:].split(b"\0")
+        if len(strings) < argc:
+            return None
+        for item in strings[argc:]:
+            if not item:
+                break
+            if item not in found:
+                found.append(item)
     return found or None

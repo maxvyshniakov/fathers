@@ -12,6 +12,7 @@ from . import config as _config
 from . import entry as _entry
 from . import idle as _idle
 from . import leases as _leases
+from . import lineage as _lineage
 from . import platform as _platform
 from . import process as _process
 from . import schedule as _schedule
@@ -204,7 +205,7 @@ def entry_item(path: Path, entry: dict[str, Any], table: dict[int, tuple[int, st
             "state": entry.get("state"), "count": entry.get("count"), "label": entry.get("label"),
             "pid": entry.get("pid"), "pgid": _platform.process_group(pid), "start": entry.get("start"),
             "since": entry.get("since"), "granted": entry.get("granted"), "cmd": entry.get("cmd"),
-            "cwd": entry.get("cwd"), "meta": _entry.meta_of(entry), "tree": _process.descendants(table, pid),
+            "cwd": entry.get("cwd"), "meta": _entry.meta_of(entry), "tree": _lineage.descendants(table, pid),
             "priority": _entry.priority_of(entry), "ticket": _entry.ticket_of(entry),
             "yieldable": bool(entry.get("yieldable")), "yields": int(entry.get("yields") or 0)}
 
@@ -397,7 +398,7 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
     for path, entry, count in earlier:
         legacy.append({"id": path.stem, "lease": str(path), "state": "held", "count": count,
                        "label": entry.get("label"), "pid": entry.get("pid"), "pgid": _platform.process_group(entry.get("pid")),
-                       "tree": _process.descendants(table, entry.get("pid"))})
+                       "tree": _lineage.descendants(table, entry.get("pid"))})
     held = held_slots([entry for _, entry in live], [*earlier, *kept], slots)
     # Entries this client does not know, after the others: left alone; a live one's slots count as held (`holds`).
     entries_found += [unknown_item(path, entry, table) for path, entry in strange]
@@ -405,8 +406,9 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
     if pid is not None:
         # The one membership rule (process.lease_membership(), fathers#38): `procs` and the sweep decide the same way.
         both: list[dict[str, Any]] = [*entries_found, *cast(list[dict[str, Any]], legacy)]
-        membership = _process.lease_membership(_process.parents_of(table),
-                                               [_process.Lease(str(item["lease"]), item["pid"]) for item in both], [pid])
+        membership = _process.lease_membership(_lineage.parents_of(table),
+                                               [_process.Lease(str(item["lease"]), item["pid"], n < len(entries_found))
+                                                for n, item in enumerate(both)], [pid])
         via = dict(membership.leases.get(pid, []))
         mine = [(n < len(entries_found), {**item, "via": via[n]}) for n, item in enumerate(both) if n in via]
         entries_found = [item for current, item in mine if current]

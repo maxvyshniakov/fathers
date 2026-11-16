@@ -19,6 +19,7 @@ from . import entry as _entry
 from . import events as _events
 from . import facts as _facts
 from . import idle as _idle
+from . import lineage as _lineage
 from . import platform as _platform
 from . import process as _process
 from . import query as _query
@@ -77,7 +78,7 @@ def reap(directory: Path, table: Table) -> list[tuple[Path, dict[str, Any]]]:
             _state.log(directory, f"reaped {entry.get('state')} lease of {entry.get('count')} for "
                            f"{entry.get('label')} (pid {entry.get('pid')} exited)")
             item = _state.record(directory, entry, _entry.outcome(entry, reaped=True), path=path,
-                                 capacity=_settings.total)
+                                 capacity=_settings.total, above=run_above)
             _events.emit(directory, "lease.reaped" if _entry.is_held(entry) else "request.reaped",
                          _events.request(entry, path),
                          {"count": entry.get("count"), "ran": item.get("ran"), "waited": item.get("waited"),
@@ -364,6 +365,12 @@ def held_again(path: Path) -> None:
         time.sleep(min(poll, max(0.0, look - time.monotonic())))
 
 
+def run_above(ran: float, p90: Any) -> bool:
+    """runtype.above(), for state.record(): loaded only when a run is judged, never on admission."""
+    from . import runtype as _runtype
+    return _runtype.above(ran, p90)
+
+
 def grant_now(directory: Path) -> None:
     """Grant what a settings change lets start, as a release does (settings.configure()'s `granted`); callers hold
     the queue lock."""
@@ -465,11 +472,10 @@ class Lease:
     def release(self) -> None:
         if self.path is not None and not self.inherited:
             directory = self.path.parent.parent
-            expected, above = None, None
+            expected = None
             with contextlib.suppress(Exception):  # before the lock: the series may need reading (runtype.py)
                 from . import runtype as _runtype
                 expected = _runtype.expected_of(json.loads(self.path.read_text()), _runtype.cached(directory))
-                above = _runtype.above
             item = None
             with _state.locked(directory):
                 try:
@@ -485,7 +491,7 @@ class Lease:
                     outcome = _entry.outcome(entry)  # a yielded lease ran
                     item = _state.record(directory, entry, outcome, self.status, self.usage,
                                          path=self.path, expected=expected, capacity=_settings.total,
-                                         above=above)
+                                         above=run_above)
                     if outcome == "released":
                         _events.emit(directory, "lease.released", _events.request(entry, self.path),
                                      {"count": self.count, "exit": item.get("status"), "ran": item.get("ran"),
@@ -514,7 +520,7 @@ class Lease:
 
 def inherited_lease(table: Table) -> tuple[Path, dict[str, Any], int] | None:
     """The held lease this process runs under, here or in an earlier queue: (path, entry, slots here)."""
-    mine = {os.getpid(), *_process.ancestors(_process.parents_of(table), os.getpid())}
+    mine = {os.getpid(), *_lineage.ancestors(_lineage.parents_of(table), os.getpid())}
     own = _config.setting("LEASE")
     for path, entry in _state.entries(_config.state_dir()):
         mine_now = _entry.phase(entry).name in (_entry.HELD, _entry.YIELDED)  # a yielded lease is still this tree's

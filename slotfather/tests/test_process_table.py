@@ -109,7 +109,7 @@ class ProcessTableTests(unittest.TestCase):
             "status --json": lambda: sf_query.status_json(self.dir),
         }
         changing: dict[str, Callable[[], Any]] = {
-            "sweep": lambda: sf_sweep.leases(self.dir, mock.Mock()),
+            "sweep": lambda: sf_sweep.leases(self.dir),
             "grant": lambda: sf_leases.grant(self.dir, sf_leases.process_table(self.dir)),
         }
         for name, run in FAILURES.items():

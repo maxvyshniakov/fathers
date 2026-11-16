@@ -48,13 +48,14 @@ from . import config as _config
 from . import events as _events
 from . import leases as _leases
 from . import durations as _durations
+from . import lineage as _lineage
 from . import process as _process
 from . import settings as _settings
 from . import state as _state
 from . import sweep_os, sweep_plan
 from .sweep_os import SweepError, stop
 from .config import SWEEP_CLASSES as CLASSES
-from .sweep_plan import Carriers, Snapshot
+from .sweep_plan import Carriers
 
 
 VERSION = 1
@@ -72,10 +73,11 @@ USAGE = ("usage: slotfather sweep [--live [--dev-servers]] [--json] [--quiet] [-
 Labelled = list[tuple[_process.Lease, str]]
 
 
-def leases(directory: Path, snap: Snapshot | None = None) -> tuple[dict[int, int], Labelled]:
+def leases(directory: Path) -> tuple[dict[int, int], Labelled]:
     """The live leases, each with its label, of the queue (reaped as `status` does) and the earlier queues, and the
-    process table they were judged on (pid -> ppid). A table ps could not give raises (fathers#121): this sweep
-    stops nothing."""
+    process table they were judged on (pid -> ppid). That table is read under the queue lock, where the reap needs it,
+    not the snapshot's, which is read without it. A table ps could not give raises (fathers#121): this sweep stops
+    nothing."""
     with _state.locked(directory):
         processes = _leases.process_table(directory)
         live = _leases.reap(directory, processes)
@@ -83,7 +85,7 @@ def leases(directory: Path, snap: Snapshot | None = None) -> tuple[dict[int, int
                        for path, entry in live]
     found += [(_process.Lease(str(path), entry.get("pid")), str(entry.get("label") or path.stem))
               for path, entry, _ in _leases.legacy_holders(processes)]
-    return _process.parents_of(processes), found
+    return _lineage.parents_of(processes), found
 
 
 def protection(parents: dict[int, int], found: Labelled) -> tuple[dict[int, str], Carriers | None]:
@@ -97,7 +99,7 @@ def protection(parents: dict[int, int], found: Labelled) -> tuple[dict[int, str]
     protected = {pid: labels[member[-1][0]] for pid, member in trees.leases.items() if member}
 
     def carriers(pids: list[int]) -> dict[int, str | None]:
-        membership = _process.lease_membership(parents, held, pids)
+        membership = _process.lease_membership(parents, held, pids, detached_only=True)
         marked: dict[int, str | None] = {}
         for pid, member in membership.leases.items():
             env = [index for index, via in member if via == "env"]
@@ -161,7 +163,7 @@ def sweep(directory: Path, live: bool = False, dev_servers: bool = False, only: 
     if refused:
         live = False  # settings that cannot be read stop nothing: the sweep reports what it would do
     snap = sweep_os.snapshot()
-    protected, carriers = protection(*leases(directory, snap))
+    protected, carriers = protection(*leases(directory))
     before = read_state(directory).get("gone_since", {})
     items = sweep_plan.plan(snap, found_settings, protected, carriers, only, live, dev_servers, before)
     if live:

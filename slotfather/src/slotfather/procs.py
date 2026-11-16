@@ -14,6 +14,7 @@ import sys
 from typing import Any, NamedTuple, cast
 
 from . import config, platform, state
+from . import lineage as _lineage
 from . import process as _process
 from . import entry as _entry
 
@@ -62,11 +63,11 @@ def read_processes(pid: int | None = None, required: set[int] | None = None) -> 
 
 def ancestors(processes: dict[int, Process], pid: int) -> list[int]:
     """Nearest parent first; cycles and PID 1 end the chain."""
-    return _process.ancestors({number: process.ppid for number, process in processes.items()}, pid)
+    return _lineage.ancestors({number: process.ppid for number, process in processes.items()}, pid)
 
 
 def session(process: Process) -> bool:
-    return _process.session_command(process.cmd, process.tty)
+    return _lineage.session_command(process.cmd, process.tty)
 
 
 def lease_entries(directory: Path | None = None,
@@ -192,11 +193,11 @@ def query(pid: int | None = None, cwd: str | None = None, directory: Path | None
                     and number in cwds and (cwds[number] == cwd or cwds[number].startswith(cwd.rstrip("/") + "/"))]
     parents = {number: process.ppid for number, process in processes.items()}
     membership = _process.lease_membership(parents, [_process.Lease(str(lease["lease"]), lease["pid"])
-                                                     for lease in leases], selected)
+                                                     for lease in leases], selected, detached_only=True)
     records: list[dict[str, Any]] = []
     for number in selected:
         process = processes[number]
-        chain = _process.ancestors(parents, number)
+        chain = _lineage.ancestors(parents, number)
         records.append({**process._asdict(), "cwd": cwds.get(number), "ancestors": chain,
                         "sessions": [{"pid": item, "start": processes[item].start, "cmd": processes[item].cmd}
                                      for item in [number, *chain] if session(processes[item])],

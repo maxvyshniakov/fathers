@@ -204,8 +204,7 @@ class SequenceTests(unittest.TestCase):
         done: list[str] = []
         pids = iter(range(91000, 92000))
         with queue.running(), mock.patch.object(sf_leases, "held_again", unknown):
-            with sf_state.locked(queue.directory):
-                sf_settings.save_order(dict(sf_config.ORDER_DEFAULTS, **AGES_OFF), queue.directory)
+            sf_settings.configure({"order.json": dict(sf_config.ORDER_DEFAULTS, **AGES_OFF)}, directory=queue.directory)
             # Half the sequences carry a newer client's entry (a state this one does not know), alive or not: it
             # must stay as it is through every step (fathers#19).
             strange = queue.entry(next(pids), "strange", rng.randint(1, 4), "paused", since=-60,

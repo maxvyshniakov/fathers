@@ -1,6 +1,6 @@
 """Process observation: the one module that runs `ps` (fathers#38).
 
-It holds the process-table readers with their named column sets, the tree helpers, the session pattern, the reader
+It holds the process-table readers with their named column sets, the reader
 of SLOTFATHER_LEASE markers in other processes' environments, and lease_membership(), the one rule for which live
 lease a process belongs to (`status --json --pid`, `procs --json` and the sweep's protection).
 
@@ -15,12 +15,12 @@ from __future__ import annotations
 
 import contextlib
 import os
-import re
 import subprocess
 import sys
-from typing import Callable, Iterable, Mapping, NamedTuple, Sequence, cast
+from typing import Callable, Iterable, Mapping, NamedTuple, Sequence
 
 from . import config as _config
+from . import lineage as _lineage
 from . import platform as _platform
 
 # The column sets each reader asks ps for; every one starts with the pid.
@@ -33,10 +33,6 @@ STARTS = "pid=,stat=,lstart="  # the sweep's check before a signal
 OWNER = "uid="  # process_uid()
 ENVIRONMENT = "pid=,command="  # with -wwE: the command and, where shown, the environment
 ARGUMENTS = "pid=,command="  # the full arguments, without the environment
-
-# Agent and terminal sessions: an executable that is one, or a process with a terminal (session_command()).
-SESSION = re.compile(r"(^|/)(claude|codex|CodexCLI|tmux|screen|zellij|mosh-server|sshd|sshd-session|login|"
-                     r"Runner\.Listener|Runner\.Worker)$|/claude/versions/[^/]+$")
 
 MARKER = "SLOTFATHER_LEASE="
 
@@ -96,13 +92,10 @@ def processes() -> dict[int, tuple[int, str]]:
     PS_TIMEOUT, or gives a table without this process in it: such a table is no table, and reaping by it would
     take every lease from commands that still run."""
     found: dict[int, tuple[int, str]] = {}
-    for line in table(["-axo", IDENTITY], env=ps_environment()):
+    for line in table(["-axo", IDENTITY], env=ps_environment()):  # it lists the caller (table(): fathers#121)
         parts = line.split(None, 3)
         if len(parts) == 4 and parts[1].isdigit() and not parts[2].startswith("Z"):
             found[int(parts[0])] = (int(parts[1]), parts[3].strip())
-    if os.getpid() not in found:
-        raise PsError(f"ps listed {len(found)} processes and not this one ({os.getpid()})",
-                      f"ps listed {len(found)} processes and not this one")
     return found
 
 
@@ -131,15 +124,12 @@ def cpu_table() -> tuple[dict[int, tuple[float, int, str]], dict[int, list[int]]
     for a ps that fails or times out and for a table without this process (fathers#121)."""
     own: dict[int, tuple[float, int, str]] = {}
     children: dict[int, list[int]] = {}
-    for line in table(["-axo", CPU], caller=False):
+    for line in table(["-axo", CPU]):  # it lists the caller (table(): fathers#121)
         parts = line.split(None, 4)
         if len(parts) == 5 and parts[1].isdigit():
             with contextlib.suppress(ValueError):
                 own[int(parts[0])] = (float(parts[2].replace(",", ".")), int(parts[3]), os.path.basename(parts[4]))
                 children.setdefault(int(parts[1]), []).append(int(parts[0]))
-    if os.getpid() not in own:  # an empty or cut table is no sample
-        raise PsError(f"ps listed {len(own)} processes and not this one",
-                      f"ps listed {len(own)} processes and not this one")
     return own, children
 
 
@@ -177,62 +167,6 @@ def arguments(pids: Iterable[int], timeout: float = 5) -> subprocess.CompletedPr
     """One targeted /bin/ps of the full arguments of `pids`, without any environment (macos_process.snapshot())."""
     return run(["-ww", "-p", ",".join(map(str, sorted(pids))), "-o", ARGUMENTS], env=_platform.c_locale(),
                timeout=timeout, executable="/bin/ps")
-
-
-# Trees
-
-def children_of(parents: Mapping[int, int]) -> dict[int, list[int]]:
-    """ppid -> its child pids, from pid -> ppid."""
-    found: dict[int, list[int]] = {}
-    for child, parent in parents.items():
-        found.setdefault(parent, []).append(child)
-    return found
-
-
-def ancestors(parents: Mapping[int, int], pid: int) -> list[int]:
-    """The live ancestors of `pid`, nearest parent first; cycles and PID 1 end the chain."""
-    found: list[int] = []
-    seen = {pid}
-    parent = parents.get(pid, 0)
-    while parent > 1 and parent in parents and parent not in seen:
-        seen.add(parent)
-        found.append(parent)
-        parent = parents[parent]
-    return found
-
-
-def tree(children: Mapping[int, Sequence[int]], roots: Iterable[object], present: Callable[[int], bool]) -> list[int]:
-    """The live processes of the trees under `roots` (each root and its descendants), depth first from the last
-    root; `present` says which pids are live."""
-    found: list[int] = []
-    seen: set[int] = set()
-    stack: list[object] = list(roots)
-    while stack:
-        here = stack.pop()
-        if type(here) is not int or here in seen or not present(here):
-            continue
-        seen.add(here)
-        found.append(here)
-        stack.extend(children.get(here, ()))
-    return found
-
-
-def parents_of(table: Mapping[int, Sequence[object]]) -> dict[int, int]:
-    """pid -> ppid of a table of pid -> (ppid, ...), such as processes()."""
-    return {pid: cast(int, row[0]) for pid, row in table.items()}
-
-
-def descendants(table: Mapping[int, Sequence[object]], pid: object) -> list[int]:
-    """`pid` and its live descendants, from a table of pid -> (ppid, ...); [] when `pid` is not live."""
-    if type(pid) is not int or pid not in table:
-        return []
-    return sorted(tree(children_of(parents_of(table)), [pid], table.__contains__))
-
-
-def session_command(cmd: str, tty: str = "") -> bool:
-    """Whether a process is a session: it has a terminal, or its executable (the command's first word) is an agent
-    or a terminal multiplexer, sshd or login."""
-    return bool(tty or SESSION.search((cmd.split() or [""])[0]))
 
 
 # Lease markers in environments
@@ -292,9 +226,12 @@ def carrying(pids: list[int], lease: str) -> set[int]:
 # Lease membership
 
 class Lease(NamedTuple):
-    """A live lease as membership needs it: the path its SLOTFATHER_LEASE holds and its holder's pid."""
+    """A live lease as membership needs it: the path its SLOTFATHER_LEASE holds, its holder's pid, and whether a
+    process outside its tree can belong to it by that marker (`status --json --pid` counts an earlier queue's
+    lease by its tree alone)."""
     path: str
     pid: object
+    by_environment: bool = True
 
 
 class Membership(NamedTuple):
@@ -308,21 +245,23 @@ Markers = Callable[[Sequence[int], Iterable[str]], "tuple[dict[int, set[str]], l
 
 
 def lease_membership(parents: Mapping[int, int], leases: Sequence[Lease], pids: Iterable[int],
-                     markers: Markers | None = lease_markers) -> Membership:
+                     markers: Markers | None = lease_markers, detached_only: bool = False) -> Membership:
     """The one rule for which live leases each of `pids` belongs to (fathers#38): a lease's holder or one of its
     descendants is in it ("tree"); a process outside a lease's tree is in it when its environment carries the
     lease's SLOTFATHER_LEASE ("env": it left the tree by a double fork or setsid). A pid that is not live (not in
     `parents`) belongs to none. A pid outside some lease's tree whose environment cannot be read is unknown.
-    `markers` reads the environments of all the pids that need it at once; None reads none (the tree alone)."""
+    `markers` reads the environments of all the pids that need it at once; None reads none (the tree alone). With
+    `detached_only` only a pid in no lease's tree is looked for by its environment (`procs` and the sweep); without
+    it, a pid in one lease's tree may carry another's marker (`status --json --pid`)."""
     found: dict[int, list[tuple[int, str]]] = {}
     outside: dict[int, list[int]] = {}
     for pid in pids:
         if pid not in parents:
             continue
-        chain = {pid, *ancestors(parents, pid)}
+        chain = {pid, *_lineage.ancestors(parents, pid)}
         found[pid] = [(index, "tree") for index, lease in enumerate(leases) if lease.pid in chain]
-        rest = [index for index, lease in enumerate(leases) if lease.pid not in chain]
-        if rest:
+        rest = [index for index, lease in enumerate(leases) if lease.pid not in chain and lease.by_environment]
+        if rest and not (detached_only and found[pid]):
             outside[pid] = rest
     unknown: list[int] = []
     if markers is not None and outside:

@@ -1,6 +1,9 @@
 """The sweep's classifier and planner (fathers#38): what a process is, which ones are candidates, and what the
 sweep does with each, decided on a Snapshot and the facts given to it. Nothing here runs a command or sends a
-signal; the machine's facts come from sweep_os, and `slotfather sweep` (sweep.py) puts them together."""
+signal, and it does not import the ps module: the machine's facts come from sweep_os, lease membership arrives as
+`protected` and `carriers`, and `slotfather sweep` (sweep.py) puts them together. What it still reads itself:
+whether a directory is there (dir_state(), the default `isdir`, replaceable per Snapshot), the checkout a directory
+belongs to (project_root()) and where temporary directories are (roots())."""
 from __future__ import annotations
 
 import datetime
@@ -11,7 +14,8 @@ import sys
 import time
 from typing import Any, Callable, Iterable, Mapping, NamedTuple
 
-from . import process as _process
+from . import lineage as _lineage
+from .lineage import program
 
 LINUX = sys.platform.startswith("linux")
 STOPPING = ("removed", "orphan")  # what --live stops; dev-server only with --dev-servers
@@ -64,13 +68,6 @@ BROWSERS = ("agent-browser", "chromium", "playwright", "puppeteer")  # daemons a
 AGENT_APPS = re.compile(r"/(Claude|ChatGPT|Codex)\.app/")
 SYSTEM = ("/System/", "/usr/libexec/", "/usr/sbin/", "/sbin/", "/Library/Apple/", "/usr/lib/systemd/",
           "/lib/systemd/")
-
-
-def program(cmd: str) -> str:
-    """The command's executable as ps shows it: its first word, or for an app bundle the path through its
-    .app/Contents/ part, spaces and all."""
-    found = re.match(r"(/(?:[^ ]| (?![-/]))*?\.app/Contents/\S*)", cmd)
-    return found[1] if found else (cmd.split() or [""])[0]
 
 
 def words(cmd: str) -> list[str]:
@@ -145,7 +142,7 @@ def dev_server_kind(cmd: str) -> str | None:
 
 
 def is_session(proc: Proc) -> bool:
-    return bool(proc.tty) or bool(_process.SESSION.search(program(proc.cmd)))
+    return _lineage.session_command(proc.cmd, proc.tty)
 
 
 def is_app(proc: Proc) -> bool:
@@ -204,16 +201,16 @@ class Snapshot:
         self.isdir: IsDir = isdir or dir_state  # True, False (gone) or None (unknown)
         self.notes = list(notes)
         self.parents = {proc.pid: proc.ppid for proc in procs.values()}
-        self.children = _process.children_of(self.parents)
+        self.children = _lineage.children_of(self.parents)
 
     def age(self, proc: Proc) -> float | None:
         return None if proc.started is None else max(0.0, self.moment - proc.started)
 
     def ancestors(self, pid: int) -> list[int]:
-        return _process.ancestors(self.parents, pid)
+        return _lineage.ancestors(self.parents, pid)
 
     def tree(self, pid: int) -> list[int]:
-        return _process.tree(self.children, [pid], self.procs.__contains__)
+        return _lineage.tree(self.children, [pid], self.procs.__contains__)
 
     def adopted(self, proc: Proc) -> bool:
         """Whether launchd or init (or, on Linux, a user's systemd manager) adopted it: an orphan."""

@@ -12,7 +12,8 @@ Definitions: [glossary](../GLOSSARY.md). Naming and wire aliases: [terminology](
 | --- | --- |
 | `config` | Environment settings, installation defaults, constants, shared errors and the clock helpers. |
 | `platform` | macOS/Linux inspection: process identity (`same_holder()`), memory, swap, PSI and cgroups. |
-| `process` | The one module that runs `ps`: the process tables with their column sets and failure policy (fathers#121), the tree helpers, the session pattern, lease markers in environments, and `lease_membership()`, the one rule for which lease a process is in (fathers#38). |
+| `process` | The one module that runs `ps`: the process tables with their column sets and failure policy (fathers#121), lease markers in environments, and `lease_membership()`, the one rule for which lease a process is in (fathers#38). |
+| `lineage` | Process trees and sessions on a table already read: parents, ancestors, descendants and the one session rule; it runs nothing. |
 | `state` | Queue locking, atomic files, bounded journals and persisted schema contracts; it imports no admission code (no `leases`, `schedule`, `runtype`, `events` or `platform`). |
 | `entry` | A queue entry: its persisted fields, the accessors that read them whoever wrote the file, its phase, and the one definition of each transition (new request, grant and resume, yield, priority change, outcome). Pure: callers read and write the files and log. |
 | `schedule` | Queue ranking, backfill, runtime estimates and cooperative-yield decisions. |

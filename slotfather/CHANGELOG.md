@@ -123,10 +123,12 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 - A process whose environment cannot be read (another user's, an Apple platform binary on macOS, a `/proc` with
   `hidepid`) is unknown, never "not in a lease": while leases are live the sweep spares and reports it (`lease
   unknown` in its reason, `lease_unknown` in `--json`) instead of stopping it, and `status --json --pid` adds
-  `lease_unknown` for it. `status --json --pid`, `procs --json` and the sweep now decide membership by one rule: a
-  process in one lease's tree is also checked for another lease's `SLOTFATHER_LEASE`, and the earlier queues' leases
-  count by environment as well as by tree. On macOS the kernel's copy of an environment now proves that a process
-  without the marker does not carry it, so `procs --json` lists fewer pids in `lease_unknown`.
+  `lease_unknown` for it. On macOS the kernel's copy of an environment tells a hidden one from one without the
+  marker, so `procs --json` lists fewer pids in `lease_unknown`. Apple's own binaries (`/bin/sleep`, `/bin/zsh`,
+  `/usr/bin/tail`) always show an empty environment there: while any lease is live the sweep never stops such an
+  orphan (a `tail -f` among them), and reports it instead.
+- `procs --json` takes an agent run from an app bundle whose path has spaces (`/Applications/Claude Code.app/...`)
+  for a session, as the sweep always has: both follow one session rule.
 - A queue entry this Slotfather does not know (a state other than waiting or held, no state, or no pid, start,
   since or count) is left alone, since it may be a newer client's lease: it is no longer granted as a waiter, reaped
   or deleted, and no longer stops every client's look with a `KeyError`. `status`, `status --json` and the dashboard

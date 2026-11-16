@@ -18,6 +18,7 @@ from typing import Any, cast
 
 from . import config as _config
 from . import entry as _entry
+from . import lineage as _lineage
 from . import platform as _platform
 from . import process as _process
 from . import query as _query
@@ -78,7 +79,7 @@ def process_usage() -> tuple[dict[int, tuple[float, int, str]], dict[int, list[i
 def process_tree(pid: object, own: dict[int, tuple[float, int, str]],
                  children: dict[int, list[int]]) -> list[tuple[int, float, int, str]]:
     """(pid, CPU percent, resident KB, name) for pid and all its descendants: a lease's whole command."""
-    return [(member, *own[member]) for member in _process.tree(children, [pid], own.__contains__)]
+    return [(member, *own[member]) for member in _lineage.tree(children, [pid], own.__contains__)]
 
 
 def macos_used_memory(text: str) -> float | None:

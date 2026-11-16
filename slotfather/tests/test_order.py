@@ -313,12 +313,12 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual({**sf_config.ORDER_DEFAULTS, "saved": False}, sf_settings.order_settings())
 
     def test_saved_settings_are_every_clients(self):
-        sf_settings.save_order({"order": "backfill", "safety": 4, "limit": 1800, "fallback": 7200, "overrun": 0.25})
+        sf_settings.configure({"order.json": {"order": "backfill", "safety": 4, "limit": 1800, "fallback": 7200, "overrun": 0.25}})
         self.assertEqual({**sf_config.ORDER_DEFAULTS, "order": "backfill", "safety": 4, "limit": 1800, "fallback": 7200,
                           "overrun": 0.25, "saved": True}, sf_settings.order_settings())
 
     def test_the_environment_can_only_tighten_them(self):
-        sf_settings.save_order(dict(sf_config.ORDER_DEFAULTS))
+        sf_settings.configure({"order.json": dict(sf_config.ORDER_DEFAULTS)})
         loose = {"SLOTFATHER_BACKFILL_SAFETY": "1", "SLOTFATHER_BACKFILL_LIMIT": "0",
                  "SLOTFATHER_BACKFILL_FALLBACK": "60", "SLOTFATHER_BACKFILL_OVERRUN": "5",
                  "SLOTFATHER_QUEUE": "backfill"}
@@ -334,12 +334,12 @@ class SettingsTests(unittest.TestCase):
     def test_the_environment_may_fall_back_to_the_window_order_but_not_leave_it(self):
         with mock.patch.dict(os.environ, {"SLOTFATHER_QUEUE": "window"}):
             self.assertEqual("window", sf_settings.order_settings()["order"])
-        sf_settings.save_order({**sf_config.ORDER_DEFAULTS, "order": "window"})
+        sf_settings.configure({"order.json": {**sf_config.ORDER_DEFAULTS, "order": "window"}})
         with mock.patch.dict(os.environ, {"SLOTFATHER_QUEUE": "backfill"}):
             self.assertEqual("window", sf_settings.order_settings()["order"])
 
     def test_a_limit_from_the_environment_counts_where_none_is_saved(self):
-        sf_settings.save_order({**sf_config.ORDER_DEFAULTS, "limit": 0})
+        sf_settings.configure({"order.json": {**sf_config.ORDER_DEFAULTS, "limit": 0}})
         with mock.patch.dict(os.environ, {"SLOTFATHER_BACKFILL_LIMIT": "900"}):
             self.assertEqual(900, sf_settings.order_settings()["limit"])
 
