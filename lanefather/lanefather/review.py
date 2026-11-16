@@ -272,7 +272,8 @@ def review_lines(receipt: dict[str, Any]) -> list[str]:
             f"{len(entry.get('numbers') or [])} findings" if entry.get("status") == "finished"
             else f"failed: {entry.get('error')}" if entry.get("status") == "failed"
             else f"skipped: {entry.get('reason')}")
-            + (f" ({entry['reason']})" if entry.get("status") == "finished" and entry.get("reason") else ""))
+            + (f" ({entry['reason']})" if entry.get("status") == "finished" and entry.get("reason") else "")
+            + (f"; note: {entry['note']}" if entry.get("note") else ""))
     for f in findings:
         where = f"{f['file']}:{f['line']}" if f.get("file") and f.get("line") else f.get("file") or "-"
         mark = f.get("mark")
@@ -452,7 +453,8 @@ def compare(args: Any) -> int:
             continue
         lines += ["", f"{view.get('reviewer')} ({view.get('model')} {view.get('effort')}, "
                       f"{view.get('seconds') or 0:.0f} s)" + (f", for {view['member']}: {view['reason']}"
-                                                              if view.get("member") != view.get("reviewer") else "")]
+                                                              if view.get("member") != view.get("reviewer") else "")
+                  + (f"; note: {view['note']}" if view.get("note") else "")]
         if not view["findings"]:
             lines.append("  no findings")
         for f in view["findings"]:
