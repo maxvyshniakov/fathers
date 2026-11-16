@@ -4,37 +4,37 @@
 ││  Godfather · unreleased · installed 9f600e1                           ┃││
 ╰│                                                                       ┃│╯
 ┍│  ADDED                                                                ┃│┑
-││                                                                       ┃││
-┃│  • The footer says Godfather what's new?; a click or v opens what's   ┃│┃
-││    new: one timeline of every tool's changelog, newest first,         ╹││
-││    filtered by tool with ← → or a click on a tool's name. An install   ││
-││    from main shows its Unreleased entries, which are what it runs,     ││
-││    under Slotfather · unreleased · installed 81abd86. Closing it       ││
-││    marks everything read (~/.local/state/godfather/news.json). Each    ││
-││    tool is asked through its changelog --json; one without it adds     ││
-┕│    nothing.  fathers#102                                               │┙
-╭│                                                                        │╮
-││  • Expected durations from Slotfather's run types (fathers#108): a     ││
-││    running QUEUE row shows 12m / ~18m, its time against the expected   ││
-││    run, in yellow once it is past the p90; a waiting row shows the     ││
-││    run it expects (waiting #1 · ~18m); DETAILS says expected 18m ·     ││
-││    p90 31m · 23 runs. In EVENTS a finished run that was an outlier     ││
-││    ends in ▲ (^ in ASCII) and the run that turned its run type's       ││
-││    trend slower in ↗ (/); each trend change is a row of its own,       ││
-││    Straylight gate · slower +32% · same plan, read from Slotfather's   ││
-││    event log.                                                          ││
 ││                                                                        ││
-││  CHANGED                                                               ││
+┃│  • EVENTS rows are selectable (fathers#152): with EVENTS focused, ↑    │┃
+││    ↓ or a click move a row cursor (the ┃ bar QUEUE's selection has)    ││
+││    and DETAILS shows that run or event instead of QUEUE's entry: a     ││
+││    run's label, slots, wait, priority, run time, outcome and pid       ││
+││    with each mark explained (▲ outlier · ran 1m13s · its run type's    ││
+││    p90 52s, ↗ slower +38% than its run type's p50 and why), another    ││
+││    event's tool, kind, subject and fields. The cursor on the newest    ││
+┕│    row follows new rows; on an older one it stays put and ↑ N new      │┙
+╭│    counts what arrived; Home goes back.                                │╮
 ││                                                                        ││
-││  • Screenshots and the README media come from tools/raster.py,         ││
-││    Godfather's own cell rasterizer, with no browser, terminal or       ││
-││    machine slot: box drawing and blocks are geometry snapped to each   ││
-╰│    cell, so rounded corners and joins meet their lines and bars have   │╯
-╭│    no seams at fractional cell widths; emoji such as 🆗 are drawn in   │╮
-││    colour across their two cells; the same cells give the same         ││
-││    pixels. tools/screens.mjs and screen-kit are no longer used.        ││
-││    fathers#114                                                         ││
+││  • Settings has a section per present tool (fathers#87): this          ││
+││    dashboard's own (Refresh every, Colour theme) first, then           ││
+││    Slotfather's, Lanefather's and Junkfather's, each its read-only     ││
+││    status rows and its settings, read with <tool> settings --json      ││
+││    (Slotfather's every second, the others' every two) and changed      ││
+││    with settings set and reset, each carrying its row's revision.      ││
+││    One cursor moves through every section; rows a tool marks           ││
+││    read-only show their source and are skipped; a tool without a       ││
+││    settings contract says why in one dimmed row. A pending or typed    ││
+││    value is checked with settings check: its preview or its error      ││
+││    shows under the row. A conflict, an invalid value or a refusal      ││
+││    shows once, in red under its row, and nothing is saved. D twice     ││
+││    resets the selected row's section only. Junkfather's read-only      ││
+││    exit 5 is taken like 4.                                             ││
+╰│                                                                        │╯
+╭│  • EVENTS is one feed of every tool's event log, newest first          │╮
+││    (fathers#84): Lanefather's and junkfather's rows come between       ││
+││    Slotfather's in time order, each with its tool's tag (slot, lane,   ││
+││    junk) in a colour of its own and the event (checked, owned,         ││
 ││                                                                        ││
-││                    ←→ tool   ↑↓ scroll   esc close                 16% ││
+││                    ←→ tool   ↑↓ scroll   esc close                 10% ││
 ╰╰────────────────────────────────────────────────────────────────────────╯╯
  Godfather what's new?     ↑↓ select   ? help   q quit     11:59:39  ● live

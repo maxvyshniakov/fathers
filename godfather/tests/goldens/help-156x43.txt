@@ -31,7 +31,7 @@
 ││    ↩️  yielded, back in the queue                    Estimates, not promises.                          enter    edit · save                            ││
 ││    ❓  asked to yield its slots                                                                        d · D D  reset one · reset its section          ││
 ││    💤  idle: under 0.1 core for 5 min              EVENTS                                              esc      close                                  ││
-││    🔥  above 1.5× its CPU share                      One tool's log at a time, one row per run.        A section per tool; status rows are             ││
+││    🔥  above 1.5× its CPU share                      One log at a time; ↑↓ pick a run or event         A section per tool; status rows are             ││
 ││    👨‍🦳  lease of an older client                      ▪ · ▫           slots held · handed back, or      read-only.                                      │╯
 ││                                                                      never held                        A lower capacity drains: running work keeps     │╮
 ││  PRIORITY                                            wait · no wait  how long it waited for them       its slots.                                      ││

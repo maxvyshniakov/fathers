@@ -6,6 +6,35 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Added
 
+- EVENTS rows are selectable (fathers#152): with EVENTS focused, ↑ ↓ or a click move a row cursor (the `┃` bar
+  QUEUE's selection has) and DETAILS shows that run or event instead of QUEUE's entry: a run's label, slots, wait,
+  priority, run time, outcome and pid with each mark explained (`▲ outlier · ran 1m13s · its run type's p90 52s`,
+  `↗ slower +38% than its run type's p50` and why), another event's tool, kind, subject and fields. The cursor on
+  the newest row follows new rows; on an older one it stays put and `↑ N new` counts what arrived; Home goes back.
+
+- Settings has a section per present tool (fathers#87): this dashboard's own (Refresh every, Colour theme) first,
+  then Slotfather's, Lanefather's and Junkfather's, each its read-only status rows and its settings, read with
+  `<tool> settings --json` (Slotfather's every second, the others' every two) and changed with `settings set` and
+  `reset`, each carrying its row's revision. One cursor moves through every section; rows a tool marks read-only
+  show their source and are skipped; a tool without a settings contract says why in one dimmed row. A pending or
+  typed value is checked with `settings check`: its preview or its error shows under the row. A conflict, an
+  invalid value or a refusal shows once, in red under its row, and nothing is saved. `D` twice resets the
+  selected row's section only. Junkfather's read-only exit 5 is taken like 4.
+
+- EVENTS is one feed of every tool's event log, newest first (fathers#84): Lanefather's and junkfather's rows come
+  between Slotfather's in time order, each with its tool's tag (`slot`, `lane`, `junk`) in a colour of its own and the
+  event (`checked`, `owned`, `reaped`); with Slotfather alone those two columns are not drawn. `f` cycles the source
+  filter (all, then each tool), `/` types a text filter into EVENTS' bottom border (Enter keeps it, Esc clears it,
+  also once kept), the top border names the filter (`all sources`, `lanefather`, `"710"`; cut with `…` where it is
+  long, never left out), `↑ N new` counts only rows it lets through, and the bottom border counts lines the reader
+  skipped and why (`3 lines skipped: other host`). A narrow panel shortens the label first, then drops the pid, then the slots, then shows the tag as a
+  one-cell mark. Help lists `f` and `/`.
+- `godfather events [--source NAME]... [--follow] [--json]` prints the tools' event logs merged, newest last: time,
+  source tag (`slot`, `lane`, `junk`), kind, subject and the detail EVENTS shows; `--json` prints the lines as read,
+  `--follow` keeps printing what the logs gain (checked every 250 ms). It follows each log by inode through a rotation
+  to `events.jsonl.1`, waits on a torn last line, and skips, counting them, lines that fail the shared validator,
+  name another schema version or another host; an escape sequence in a line never reaches the terminal. An absent
+  tool is left out; one whose capabilities name no event log is named on stderr (fathers#83).
 - The footer says `Godfather what's new?`; a click or `v` opens what's new: one timeline of every
   tool's changelog, newest first, filtered by tool with ← → or a click on a tool's name. An install from main
   shows its Unreleased entries, which are what it runs, under `Slotfather · unreleased · installed 81abd86`. Closing it marks
@@ -19,6 +48,50 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Changed
 
+- A command line Godfather does not take prints one line with the reason and one pointing to the help (`Try
+  'godfather events --help'.`), no longer the whole usage text, as the tools' CLI convention says (docs/cli.md,
+  fathers#154); so does the live view without a terminal. Every option that takes a value takes `--opt=value` too
+  (`--interval=2`, `events --source=lanefather`), and a `--version` without its install record still names the tool.
+- MACHINE says why nothing is admitted instead of a red `no admission` (fathers#156): `full · 8 of 8 held`,
+  `whole machine: <label>` when one request holds every slot, `queue ahead · 2 waiting`, `draining · 6 of 4 held`
+  (yellow), `memory short` (red: the one machine problem among them, first when there is another reason too:
+  `memory short · full · 8 of 8 held`). A full or queued machine is the queue working and reads in the normal
+  colour.
+- Help fits the standard screen (fathers#145): at 156x43 its legend is laid out in columns, read down then across,
+  a section going on in the next column between two rows, and shows whole with nothing to scroll; a smaller
+  screen gets the one scrolling column as before.
+- EVENTS shows one tool's log at a time (fathers#152): its title is the switch, `◂ SLOTS LOG ▸` (default where
+  Slotfather is present), `LANES LOG`, `PROCS LOG`, then `ALL LOG`, cycled with ← → while EVENTS has the focus, `f`
+  or a click on the title. Each log has its own columns, so labels keep their width: SLOTS LOG time, slots, label,
+  waited, outcome and pid; LANES LOG event, lane, result and ticket; PROCS LOG event, label, detail and pid; ALL LOG
+  a type (`slot run`, `lane checked`, `proc reaped`, in the tool's colour) and one sentence (`sid-kit build · ok 1s
+  · 1 slot`). A Slotfather run is one row, `running 3m` while it holds its slots and how it ended once done; `r`
+  shows every event as logged. A run's trend is a mark on its row (↗ slower, ↘ faster, ▲ outlier), no longer a row
+  that ran across the columns. `/` filters within the log shown; the footer says `←→ log` while EVENTS has the
+  focus, and help lists the keys.
+- Settings: every rule is one length, the list sits two cells in from the frame, durations read `1h`, `30m`,
+  `1h30m` (typed still in seconds), and a refused value is said once, under its row, not again in the notes
+  (fathers#87).
+- EVENTS reads Slotfather's event log instead of the events its snapshot describes, and its result column, now
+  `detail`, is filled from each event's fields: `wait 32s` or `no wait` for every grant, `ok 3m25s` or
+  `exit 1 · 26s` for every release, `gave up 5m`, `owner died · 12m`, `batch → interactive`, `waiting 45m`; it no
+  longer reads durations out of Slotfather's prose. Wide panels also show the pid. A Slotfather whose capabilities
+  name no event log shows EVENTS empty with `slotfather too old for events` in its border, one whose log is of a
+  newer schema only with `slotfather's events need a newer godfather` (fathers#84).
+- EVENTS' run marks and trend rows (fathers#108) are read through the same reader, so a rotated Slotfather log no
+  longer drops them, and an outlier marks the release of its own lease id rather than the one that ended nearest
+  (fathers#83, fathers#84).
+- The panel Tab focuses shows without colour too: its top and bottom borders are heavy rules (`┍━ QUEUE ━━┑`, `=`
+  in ASCII) as well as blue, and its sides stay light, so the heavy `┃` still marks only the selected row
+  (fathers#139).
+- A wide terminal too short for EVENTS under QUEUE (156×20 with six queue rows) keeps QUEUE at its rows (less at
+  most two that MACHINE's three-row form needs), puts MACHINE's one-line form under it and gives DETAILS the whole
+  right column, instead of padding QUEUE with empty rows while DETAILS was cut short. EVENTS comes in from the height
+  that gives it its least rows, and as the terminal grows taller panels only ever arrive (fathers#140).
+- MACHINE's history chart says it shows `slots held`. Beside the gauges the title and its figures
+  (`slots held  avg 4.4/6 · peak 6 · full 10%`) sit in the blank row above it and its axis line keeps only the window
+  and `now`, so neither its rows nor its figures line up with load, mem and swap; stacked under the gauges, the
+  bottom border names it and the axis line keeps every figure (fathers#140).
 - Screenshots and the README media come from `tools/raster.py`, Godfather's own cell rasterizer, with no browser,
   terminal or machine slot: box drawing and blocks are geometry snapped to each cell, so rounded corners and joins
   meet their lines and bars have no seams at fractional cell widths; emoji such as 🆗 are drawn in colour across

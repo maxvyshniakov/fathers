@@ -13,6 +13,7 @@ from .. import layout as _layout
 from .. import version as _version
 from ..tui import Canvas
 from ..text import clock
+from ..events import Filter, newest_first
 from ..widgets import Footer, Panel, Part
 from . import common as _common
 from . import details as _details
@@ -33,7 +34,7 @@ FOOTER_HINTS: tuple[Part, ...] = (("↑↓", "select"), ("tab", "panel"), ("s", 
 
 def footer_hints(focus: str) -> list[Part]:
     """The footer's hints; with EVENTS focused, ← → switch its log (fathers#152)."""
-    found: list[Part] = [("↑↓", "select" if focus == "requests" else "scroll")]
+    found: list[Part] = [("↑↓", "select" if focus in ("requests", "events") else "scroll")]
     if focus == "events":
         found.append(("←→", "log"))
     return [*found, *FOOTER_HINTS[1:]]
@@ -61,14 +62,15 @@ def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, ov
                    notice: Optional[list[str]] = None, message: Optional[str] = None,
                    failure: Optional[str] = None, news: Any = None, read: Optional[dict[str, str]] = None,
                    moment: Optional[datetime.datetime] = None, events_filter: Optional[_events.Filter] = None,
-                   settings: Any = None) -> None:
+                   settings: Any = None, event: Optional[int] = None) -> None:
     """The whole screen at `moment` (where None, the model's own update time: the screen never reads the clock).
     `overlay` is the one open (state.Help, Changelog or SettingsOverlay); `error` the refresh's
     failure, `message` a passing notice; `notice` stands in for the panels when Slotfather is absent or unsupported;
     `failure` is why the selected request's details did not load. A stale model (`stale_since`) is drawn dimmed, with
     the time it went stale in SLOTS' border. `news` and `read` are what's new and its read versions; `events_filter`
     EVENTS' source and text filters (fathers#84); `settings` what Settings reads beside its panel
-    (settings_model.Context: this dashboard's own settings, the refresh error)."""
+    (settings_model.Context: this dashboard's own settings, the refresh error); `event` EVENTS' selected row (newest
+    first) while DETAILS shows it instead of the selected request (fathers#152)."""
     canvas.scroll = scroll if scroll is not None else {}
     if moment is None and model is not None:
         moment = cast(Optional[datetime.datetime], model.get("updated"))
@@ -80,13 +82,14 @@ def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, ov
         canvas.put(2, 3, f"Queue unavailable: {error}" if error else "Reading the queue…",
                    "bad" if error else "dim", canvas.width - 6)
     if model is not None:
-        draw_panels(canvas, model, selected, cwd, failure, cast(datetime.datetime, moment), events_filter)
+        draw_panels(canvas, model, selected, cwd, failure, cast(datetime.datetime, moment), events_filter, event)
     if overlay is not None:
         draw_overlay(canvas, overlay, model, news, read, settings)
 
 
 def draw_panels(canvas: Canvas, model: Model, selected: int, cwd: Optional[str], failure: Optional[str],
-                moment: datetime.datetime, events_filter: Optional[_events.Filter] = None) -> None:
+                moment: datetime.datetime, events_filter: Optional[_events.Filter] = None,
+                event: Optional[int] = None) -> None:
     screen = _layout.overview(canvas.width, canvas.height, _queue.queue_rows(model), _layout.machine_height)
     panels = screen.panels
     canvas.order = screen.order
@@ -96,11 +99,16 @@ def draw_panels(canvas: Canvas, model: Model, selected: int, cwd: Optional[str],
     if screen.note_row is not None:
         canvas.put(screen.note_row, screen.slots.x, "Enlarge the terminal for leases and the queue", "dim",
                    screen.slots.width)
+    if "events" not in panels:  # one column without EVENTS: DETAILS has only QUEUE's entry to show
+        event = None
     for name, rect in panels.items():
         if name == "requests":
             _queue.draw_requests(canvas, rect, model, selected, moment)
         elif name == "events":
-            _events.draw_events(canvas, rect, model, moment, events_filter)
+            _events.draw_events(canvas, rect, model, moment, events_filter, event)
+        elif name == "details" and event is not None:
+            rows = newest_first(model, events_filter or Filter())
+            _details.draw_event_detail(canvas, rect, rows[event] if 0 <= event < len(rows) else None, moment)
         elif name == "details":
             _details.draw_detail(canvas, rect, model, selected, cwd, moment, failure)
         elif name == "machine":
@@ -149,7 +157,8 @@ def render(canvas: Canvas, state: AppState, now: float, notice: Optional[list[st
     found = _state.items(state)
     index, cwd, failure = state.selection.index, None, None
     canvas.focus, canvas.fresh_events, canvas.glow = state.focus, state.fresh_events, _state.glowing(state, now)
-    if found:
+    event = _state.event_index(state) if state.shows == "events" else None
+    if found and event is None:
         item = found[index]
         known = state.details.get(_state.details_key(item, cast(_state.EntryId, state.selection.key)))
         if known is None:
@@ -158,4 +167,4 @@ def render(canvas: Canvas, state: AppState, now: float, notice: Optional[list[st
             cwd, failure = known.cwd, known.error
     dashboard_draw(canvas, state.model, index, state.overlay, state.refresh.error, cwd, state.scroll, notice,
                    state.notice.text if state.notice else None, failure, state.news, state.read, state.moment,
-                   state.events_filter, _settings_view.context_of(state, canvas.width, canvas.height))
+                   state.events_filter, _settings_view.context_of(state, canvas.width, canvas.height), event)

@@ -88,7 +88,7 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
         ("", "Estimates, not promises."),
     ]),
     ("EVENTS", [
-        ("", "One tool's log at a time, one row per run."),
+        ("", "One log at a time; ↑↓ pick a run or event"),
         ("▪ · ▫", "slots held · handed back, or never held"),
         ("wait · no wait", "how long it waited for them"),
         ("ok · exit N", "how a lease ended, and how long it ran"),

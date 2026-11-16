@@ -462,8 +462,8 @@ class LiveFilterTests(unittest.TestCase):
             at = screen.mark()
             screen.write("fff")  # PROCS LOG, ALL LOG, back to SLOTS LOG
             screen.receive("◂ SLOTS LOG ▸", since=at)
-            screen.write("\t")  # EVENTS focused, scrolled down one row
-            screen.write("j")
+            screen.write("\t")  # EVENTS focused, scrolled down by the wheel (↑↓ move its cursor, fathers#152)
+            screen.write("\x1b[<65;20;30M")
             at = screen.mark()
             append("lanefather", "lane.checked", 1, "710-speech-paste-phase")
             append("slotfather", "lease.granted", 2, "0000000999-4242", count=1, waited=0)

@@ -6,6 +6,12 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Added
 
+- EVENTS rows are selectable (fathers#152): with EVENTS focused, ↑ ↓ or a click move a row cursor (the `┃` bar
+  QUEUE's selection has) and DETAILS shows that run or event instead of QUEUE's entry: a run's label, slots, wait,
+  priority, run time, outcome and pid with each mark explained (`▲ outlier · ran 1m13s · its run type's p90 52s`,
+  `↗ slower +38% than its run type's p50` and why), another event's tool, kind, subject and fields. The cursor on
+  the newest row follows new rows; on an older one it stays put and `↑ N new` counts what arrived; Home goes back.
+
 - Settings has a section per present tool (fathers#87): this dashboard's own (Refresh every, Colour theme) first,
   then Slotfather's, Lanefather's and Junkfather's, each its read-only status rows and its settings, read with
   `<tool> settings --json` (Slotfather's every second, the others' every two) and changed with `settings set` and

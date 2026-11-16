@@ -50,6 +50,11 @@ SCREENS = {  # name: (width, height, overlay); what's new's filter after a colon
     "expected-100x40": (100, 40, "expected:0"), "expected-waiting-100x40": (100, 40, "expected:3"),
     # fathers#139: Tab's focus on EVENTS, and at 76 columns (no EVENTS there) on DETAILS
     "focus-events-156x43": (156, 43, "focus:events"), "focus-details-76x40": (76, 40, "focus:details"),
+    # fathers#152: EVENTS focused, its cursor on a row and DETAILS showing it: the newest run, a run with an outlier
+    # and a slower trend, and (mixed) a Lanefather event
+    "focus-events-100x40": (100, 40, "focus:events"), "focus-run-156x43": (156, 43, "focus:events:expected:1"),
+    "focus-run-100x40": (100, 40, "focus:events:expected:0"),
+    "focus-lane-156x43": (156, 43, "focus:events:mixed-all:2"),
     # fathers#84: EVENTS with every source, wide, at 100 and at 76 columns; filtered to Lanefather while "710" is typed
     "mixed-156x43": (156, 43, "mixed"), "mixed-100x40": (100, 40, "mixed"), "mixed-76x40": (76, 40, "mixed"),
     "mixed-filter-156x43": (156, 43, "mixed:lanefather:710"),
@@ -267,11 +272,20 @@ def render(name: str, theme: str | None) -> str:
 
     width, height, overlay = SCREENS[name]
     selected, focus = 0, "requests"
+    event = None
     if overlay and overlay.startswith("focus:"):
-        focus, overlay = overlay.partition(":")[2], None
+        focus, _, rest = overlay.partition(":")[2].partition(":")
+        overlay = None
+        if focus == "events":  # DETAILS follows EVENTS' cursor (fathers#152): on the newest row, or the one named
+            folder_name, _, row = rest.partition(":")
+            event = int(row or 0)
+            if folder_name:
+                overlay = folder_name
+    if overlay == "expected" or overlay == "mixed-all":
+        overlay = {"expected": "expected:0", "mixed-all": "mixed:all"}[overlay]
     folder, found_filter = SCENE, None
     if overlay and overlay.startswith("expected"):
-        folder, selected, overlay = EXPECTED, int(overlay.partition(":")[2]), None
+        folder, selected, overlay = EXPECTED, int(overlay.partition(":")[2]) if event is None else 0, None
     if overlay == "settings:mixed":
         folder, overlay = MIXED, "settings"
     if overlay and overlay.startswith("mixed"):
@@ -308,7 +322,7 @@ def render(name: str, theme: str | None) -> str:
         canvas = tui.Canvas(width, height, palette, common.marks_for(False))
         canvas.focus = focus
         overview.dashboard_draw(canvas, model, selected, shown, cwd="~/straylight", news=found, read=read,
-                                moment=moment, events_filter=found_filter)
+                                moment=moment, events_filter=found_filter, event=event)
         return canvas.render(theme is not None)
 
 

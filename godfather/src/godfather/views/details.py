@@ -258,3 +258,168 @@ def enrich_details(item: Item) -> None:
     context: dict[str, str] = item.get("context") or {}
     if context.get("lane"):
         item["lane"] = _lanefather.fetch(context, item.get("workdir") or "")
+
+
+# An event or run (fathers#152): DETAILS while EVENTS was focused last
+
+TOOLS = {"slotfather": "Slotfather", "lanefather": "Lanefather", "junkfather": "Junkfather"}
+SUBJECT_SHOWN = ("project", "ticket", "lease_id", "state_dir")  # the subject's fields worth a row of their own
+
+
+def event_title(row: dict[str, Any]) -> str:
+    return "RUN DETAILS" if row.get("kind") == "run" else "EVENT DETAILS"
+
+
+def joined(parts: Any) -> str:
+    found = cast(list[Part], parts or [])
+    return "".join(str(part[0]) for part in found)
+
+
+def mark_facts(row: dict[str, Any], marks: Marks) -> list[Fact]:
+    """Each mark on a run, explained: ▲ an outlier against its run type's p90; ↗ ↘ its run type's recent median
+    against the one before, and whether its plan changed."""
+    facts: list[Fact] = []
+    outlier: dict[str, Any] = row.get("outlier") or {}
+    if row.get("run") == "outlier" or outlier:
+        words = ["outlier"]
+        if isinstance(outlier.get("ran"), (int, float)):
+            words.append(f"ran {span(float(outlier['ran']))}")
+        if isinstance(outlier.get("p90"), (int, float)):
+            words.append(f"its run type's p90 {span(float(outlier['p90']))}")
+        facts.append(("mark", [(marks.run["outlier"] + " ", "warn"), (" · ".join(words), "text")]))
+    trend: dict[str, Any] = row.get("trend") or {}
+    if trend:
+        verdict = str(trend.get("verdict") or "changed")
+        ratio = trend.get("ratio")
+        change = f" {round((float(ratio) - 1) * 100):+d}%" if isinstance(ratio, (int, float)) and ratio > 0 else ""
+        mark = marks.run.get(verdict, "")
+        text = f"{verdict}{change} than its run type's p50"
+        why = str(trend.get("why") or ("plan changed" if trend.get("plan_change") else ""))
+        facts.append(("trend" if facts else "mark", ([(mark + " ", "warn" if verdict == "slower" else "dim")]
+                                                     if mark else []) + [(text, "text")]))
+        if why:
+            facts.append(("", [(dashboard_text(why), "dim")]))
+    return facts
+
+
+def scalar_text(value: Any) -> Optional[str]:
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, float):
+        return f"{value:g}"
+    if isinstance(value, (int, str)):
+        return dashboard_text(value)
+    if isinstance(value, list) and all(isinstance(item, (int, str, float)) for item in cast(list[Any], value)):
+        return ", ".join(dashboard_text(item) for item in cast(list[Any], value))
+    return None
+
+
+def field_facts(details: dict[str, Any], skip: tuple[str, ...] = ()) -> list[Fact]:
+    """A kind's structured fields as rows, objects one level in (`meta.lane`), nulls and prose left out."""
+    facts: list[Fact] = []
+    for key, value in details.items():
+        if key in skip or key == "message" or value is None:
+            continue
+        if isinstance(value, dict):
+            for inner, item in cast(dict[str, Any], value).items():
+                text = scalar_text(item)
+                if text is not None:
+                    facts.append((f"{key}.{inner}", [(text, "text")]))
+            continue
+        text = scalar_text(value)
+        if text is not None:
+            facts.append((str(key), [(text, "text")]))
+    return facts
+
+
+def event_facts(row: dict[str, Any], moment: Optional[datetime.datetime], marks: Marks) -> list[Fact]:
+    """The facts of an EVENTS row: a run's label, slots, wait, run time, outcome, pid and its marks explained; any
+    other event's tool, kind, time, subject and structured fields."""
+    when = cast(Optional[datetime.datetime], row.get("when"))
+    tool = TOOLS.get(str(row.get("source")), str(row.get("source") or "?"))
+    if row.get("kind") == "run":
+        start = cast(Optional[datetime.datetime], row.get("start"))
+        count = int(row.get("count") or 0)
+        facts: list[Fact] = [("label", [(dashboard_text(row.get("label") or "?"), "bold")])]
+        if row.get("running"):
+            held = span((moment - start).total_seconds()) if moment and start else ""
+            facts.append(("status", [(f"running {held}".strip(), "text")]))
+        else:
+            facts.append(("outcome", [(joined(row.get("detail")) or str(row.get("ended") or "ended"), "text")]))
+        facts.append(("slots", [(f"{count} slot{'s' if count != 1 else ''}", "text")]))
+        wait = joined(row.get("wait"))
+        if wait:
+            facts.append(("waited", [(wait, "text")]))
+        granted: dict[str, Any] = row.get("granted") or {}
+        if granted.get("priority"):
+            facts.append(("priority", [(dashboard_text(granted["priority"]), "text")]))
+        if start is not None:
+            facts.append(("granted", [(clock(start, moment), "text")]))
+        details: dict[str, Any] = row.get("details") or {}
+        if not row.get("running"):
+            ran = details.get("ran")
+            if isinstance(ran, (int, float)) and not isinstance(ran, bool):
+                facts.append(("ran", [(span(float(ran)), "text")]))
+            elif start is not None and when is not None:
+                facts.append(("ran", [(span((when - start).total_seconds()), "text")]))
+            if when is not None:
+                facts.append(("ended", [(clock(when, moment), "text")]))
+        facts.extend(mark_facts(row, marks))
+        if row.get("pid"):
+            facts.append(("pid", [(str(row["pid"]), "text")]))
+        if row.get("lease"):
+            facts.append(("lease", [(dashboard_text(row["lease"]), "dim")]))
+        return facts
+    subject: dict[str, Any] = row.get("subject") or {}
+    level = str(row.get("level") or "info")
+    facts = [("event", [(dashboard_text(row.get("kind") or "?"), "bold")]),
+             ("tool", [(tool, "text")]),
+             ("time", [(clock(when, moment), "text")])]
+    if level != "info":
+        facts.append(("level", [(level, "bad" if level == "error" else "warn")]))
+    facts.append(("subject", [(dashboard_text(" ".join(str(part) for part in (subject.get("type"), subject.get("id"))
+                                                         if part)), "text")]))
+    if row.get("label") and row.get("label") != subject.get("id"):
+        facts.append(("label", [(dashboard_text(row["label"]), "text")]))
+    for key in SUBJECT_SHOWN:
+        if subject.get(key) is not None:
+            facts.append((key.replace("_", " "), [(dashboard_text(subject[key]), "text")]))
+    if row.get("pid"):
+        facts.append(("pid", [(str(row["pid"]), "text")]))
+    shown = joined(row.get("detail"))
+    if shown:
+        facts.append(("detail", [(shown, "text")]))
+    fields_of = cast(dict[str, Any], row.get("details") or {})
+    fields = field_facts(fields_of)
+    if fields:
+        facts += [("", []), *fields]
+    message = fields_of.get("message")
+    if isinstance(message, str) and message:
+        facts.append(("message", [(dashboard_text(message), "dim")]))
+    return facts
+
+
+def draw_event_detail(canvas: Canvas, rect: Rect, row: Optional[dict[str, Any]],
+                      moment: Optional[datetime.datetime]) -> None:
+    """DETAILS for EVENTS' selected row: its facts as a scrolling document, long values wrapped."""
+    panel = Panel(canvas, rect, "details").frame(event_title(row) if row else "EVENT DETAILS")
+    if row is None:
+        panel.viewport(0)
+        panel.put(0, "No events logged yet", "dim")
+        return
+    facts = event_facts(row, moment, marks_of(canvas))
+    inner = panel.inner.width
+    label_width, value_width = label_column([name for name, _ in facts] or [""], inner)
+    lines: list[Fact] = []
+    for name, parts in facts:
+        text = "".join(text for text, _ in parts)
+        if text_width(text) <= value_width or len(parts) != 1:
+            lines.append((name, parts))
+            continue
+        for index, line in enumerate(textwrap.wrap(text, value_width, break_on_hyphens=False) or [""]):
+            lines.append((name if index == 0 else "", [(line, parts[0][1])]))
+    document = Canvas(rect.width, len(lines))
+    for index, (name, parts) in enumerate(lines):
+        document.put(index, panel.left, name, "dim")
+        document.segments(index, panel.left + label_width, parts, value_width)
+    panel.document(document, len(lines))

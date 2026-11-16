@@ -91,9 +91,6 @@ class ModeTableTests(Case):
         def focus(name: str) -> Check:
             return lambda state: state.focus == name
 
-        def scrolled(offset: int) -> Check:
-            return lambda state: state.scroll.get("events") == offset
-
         def scrolled_far(state: Any) -> object:
             return state.overlay.scroll > 3
 
@@ -104,7 +101,8 @@ class ModeTableTests(Case):
         none: Row = (set[str](), [], nothing)
         main: dict[str, Row] = {
             "q": quit_, "Q": quit_,
-            "\t": ({"focus"}, [], focus("events")), "back_tab": ({"focus"}, [], focus("details")),
+            # fathers#152: DETAILS follows the focus to EVENTS; to DETAILS it keeps showing QUEUE's entry
+            "\t": ({"focus", "shows"}, [], focus("events")), "back_tab": ({"focus"}, [], focus("details")),
             "?": ({"overlay"}, [], overlay("help")), "v": ({"overlay"}, ["load-news"], overlay("changelog")),
             "s": (set[str](), ["open-settings"], nothing),
             "j": ({"selection"}, [], selected(3)), "down": ({"selection"}, [], selected(3)),
@@ -121,10 +119,20 @@ class ModeTableTests(Case):
         }
         events = self.start("panel").frame.tables["events"]
         page, last = events["visible"] - 1, events["count"] - events["visible"]
-        panel: dict[str, Row] = {**main, "\t": ({"focus"}, [], focus("details")), "back_tab": ({"focus"}, [], focus("requests")),
-                 **{key: ({"scroll", "glow"}, [], scrolled(offset)) for key, offset in (
-                     ("j", 4), ("down", 4), ("k", 2), ("up", 2), ("page_down", min(last, 3 + page)), ("page_up", 0),
-                     ("g", 0), ("home", 0), ("G", last), ("end", last))},
+        def cursor(index: int, offset: Optional[int]) -> Check:  # fathers#152: EVENTS' row cursor, the scroll after it
+            return lambda state: (self.tool.event_index(state), state.scroll.get("events")) == (index, offset)
+
+        panel: dict[str, Row] = {**main, "\t": ({"focus"}, [], focus("details")),
+                 "back_tab": ({"focus", "shows"}, [], focus("requests")),
+                 # fathers#152: ↑↓ move EVENTS' cursor (on its fourth row, scrolled to 3), the scroll follows it;
+                 # Home and the newest row pick nothing: the cursor stays on the newest
+                 **{key: ({"picked"}, [], cursor(4, 3)) for key in ("j", "down")},
+                 **{key: ({"picked", "scroll", "glow"}, [], cursor(2, 2)) for key in ("k", "up")},
+                 "page_down": ({"picked"}, [], cursor(3 + page, 3)),
+                 **{key: ({"picked", "scroll"}, [], cursor(0, None)) for key in ("page_up", "g", "home")},
+                 **{key: ({"picked", "scroll", "glow"}, [], cursor(39, last)) for key in ("G", "end")},
+                 # another list: the cursor goes back to its newest row
+                 "r": ({"events_filter", "picked"}, [], lambda state: state.events_filter.raw),
                  # fathers#152: ← → switch EVENTS' log (one source here: nothing to switch)
                  "left": none, "h": none, "right": none, "l": none}
         overlay_scroll: dict[str, Row] = {key: ({"overlay", "glow"}, [], overlay("help", scroll=offset))
@@ -165,7 +173,8 @@ class ModeTableTests(Case):
         state = dataclasses.replace(state, news=news.News((), (news.Item("slotfather", "1.0.0", "2026-11-01", "Added",
                                                                          "a"),)))
         if mode == "panel":
-            state = dataclasses.replace(state, focus="events", scroll={"events": 3})
+            state = dataclasses.replace(state, focus="events", shows="events", scroll={"events": 3})
+            state = dataclasses.replace(state, picked={"events": tool.event_id(tool.event_rows(state)[3])})
         elif mode == "help":  # at 100 columns: 156x43 shows the whole help in columns, with nothing to scroll
             state = dataclasses.replace(self.draw(state, 100, 43), overlay=tool.Help(scroll=3))
         elif mode == "changelog":

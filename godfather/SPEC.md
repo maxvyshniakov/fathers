@@ -114,6 +114,14 @@ full pages one key away.
       trend or an outlier is a mark on its run (▲ ↗ ↘), never a row. `/` filters within the log shown.
     - Newest first; it stays on the newest entry while scrolled to the top and counts new ones (`↑ 3 new`) while
       scrolled down, as today. Events with the same time keep their file order.
+    - From fathers#152 (owner, 2026-11-16) EVENTS' rows are selectable and DETAILS follows the focused panel: with
+      EVENTS focused, ↑ ↓ (and a click on a row) move a row cursor, the heavy `┃` bar QUEUE's selected row has, and
+      DETAILS shows that run (label, slots, waited, priority, granted, ran, outcome, pid, each mark explained:
+      `▲ outlier · ran 1m13s · its run type's p90 52s`, `↗ slower +38% than its run type's p50` and why) or that
+      event (tool, kind, time, subject, its structured fields); with QUEUE focused it shows QUEUE's entry. Focusing
+      DETAILS keeps what it shows, so it can be scrolled. The cursor on the newest row stays on the newest as rows
+      arrive; on an older row it stays on that row, the scroll follows it and `↑ N new` counts what arrived above;
+      Home goes back to the newest. A filter or log change goes back to the newest too.
     - On a narrow panel the pid goes first, then slots, then the source shrinks to a one-cell coloured mark; the
       label is shortened before any of them.
 

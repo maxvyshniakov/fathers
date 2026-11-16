@@ -29,8 +29,8 @@ from typing import Any, Callable, Union, cast
 from . import keys as _keys
 from . import layout as _layout
 from . import settings_model as _settings
-from .state import (LOAD_NEWS, OPEN_SETTINGS, QUIT, AppState, Changelog, Help, Key, Mouse, Result, SettingsOverlay, filtered,
-                    items, move, overlay_box, settings_context, settings_result)
+from .state import (LOAD_NEWS, OPEN_SETTINGS, QUIT, AppState, Changelog, Help, Key, Mouse, Result, SettingsOverlay,
+                    event_index, event_move, filtered, items, move, overlay_box, settings_context, settings_result)
 from . import events as _events_view
 from . import overlay_text as _overlays
 
@@ -82,11 +82,17 @@ def open_settings(state: AppState, _: str) -> Result:
 
 
 def scroll_panel(state: AppState, key: str) -> Result:
-    """A navigation key on the focused DETAILS or EVENTS: a line, a page, the top or the bottom (#15), from the
-    viewport the last frame drew; nothing to scroll (still loading, empty) takes the key all the same."""
+    """A navigation key on the focused DETAILS: a line, a page, the top or the bottom (#15), from the viewport the
+    last frame drew; nothing to scroll (still loading, empty) takes the key all the same. On EVENTS it moves the
+    row cursor (fathers#152), which the scroll follows; Home goes back to the newest."""
     view = state.frame.tables.get(state.focus)
     if not view:
         return state, []
+    if state.focus == "events":
+        index, page = event_index(state), max(1, int(view["visible"]) - 1)
+        moves = {"up": -1, "k": -1, "down": 1, "j": 1, "page_up": -page, "page_down": page}
+        target = 0 if key in ("home", "g") else int(view["count"]) - 1 if key in ("end", "G") else index + moves[key]
+        return event_move(state, target), []
     visible, count = int(view["visible"]), int(view["count"])
     last = _layout.last_offset(count, visible)
     offset = state.scroll.get(state.focus, int(view["offset"]))
@@ -455,6 +461,8 @@ def click(state: AppState, event: Mouse, now: float) -> Result:
                 return move(state, int(row_items[position])), []
             if row_items is None and view.get("base") is not None:
                 return move(state, int(view["base"]) + position), []
+            if name == "events":  # an event or run: the cursor on it, DETAILS shows it (fathers#152)
+                return event_move(state, position), []
         return state, []
     return state, []
 

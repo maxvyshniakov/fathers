@@ -17,6 +17,7 @@ from . import news as _news
 from . import settings_model as _settings
 from . import entries as _entries
 from . import events as _events_view
+from . import layout as _layout
 from . import overlay_text as _overlays
 from .overlay_text import OverlayView
 from .text import hint_at
@@ -130,6 +131,10 @@ class AppState:
     read: dict[str, str] = field(default_factory=lambda: cast(dict[str, str], {}))  # news.Read: newest read, by tool
     frame: Frame = Frame()
     moment: Optional[datetime.datetime] = None  # the wall-clock second the screen is drawn at (Tick; fathers#138)
+    # A table's selected row other than QUEUE's, by the row's identity (fathers#152: EVENTS' cursor); EVENTS without
+    # one is on its newest row, and stays there as new ones arrive
+    picked: dict[str, Any] = field(default_factory=lambda: cast(dict[str, Any], {}))
+    shows: str = "requests"  # what DETAILS shows: the panel focused last of QUEUE and EVENTS (fathers#152)
 
 
 # Events
@@ -407,7 +412,57 @@ def filtered(state: AppState, events_filter: _events_view.Filter) -> AppState:
         return state
     rows = _events_view.shown_rows(state.model, events_filter)
     newest = event_id(rows[-1]) if rows else None
-    return dataclasses.replace(state, events_filter=events_filter, newest=newest, fresh_events=0)
+    picked = {name: key for name, key in state.picked.items() if name != "events"}  # another list: its newest
+    return dataclasses.replace(state, events_filter=events_filter, newest=newest, fresh_events=0, picked=picked)
+
+
+def event_rows(state: AppState) -> list[dict[str, Any]]:
+    """EVENTS' rows as drawn, newest first."""
+    return _events_view.newest_first(state.model, state.events_filter)
+
+
+def event_index(state: AppState, rows: Optional[list[dict[str, Any]]] = None) -> int:
+    """EVENTS' cursor (fathers#152): the row picked while it is shown, else the newest."""
+    rows = event_rows(state) if rows is None else rows
+    picked = state.picked.get("events")
+    if picked is not None:
+        for index, row in enumerate(rows):
+            if event_id(row) == picked:
+                return index
+    return 0
+
+
+def selected_event(state: AppState) -> Optional[dict[str, Any]]:
+    """The event or run DETAILS shows while EVENTS was focused last, None while it shows QUEUE's entry."""
+    if state.shows != "events" or state.model is None:
+        return None
+    rows = event_rows(state)
+    return rows[event_index(state, rows)] if rows else None
+
+
+def event_move(state: AppState, target: int) -> AppState:
+    """EVENTS' cursor to the row at `target` (newest first), kept in range and in view: the scroll follows it, so a
+    scrolled list keeps counting what arrives above (`↑ N new`); the newest row picks nothing, so the cursor stays on
+    the newest as new rows arrive, as the list does at its top."""
+    rows = event_rows(state)
+    if not rows:
+        return state
+    index = min(max(target, 0), len(rows) - 1)
+    picked = {name: key for name, key in state.picked.items() if name != "events"}
+    if index:
+        picked["events"] = event_id(rows[index])
+    view = state.frame.tables.get("events")
+    scroll = dict(state.scroll)
+    if view:
+        visible = max(1, int(view["visible"]))
+        offset = scroll.get("events", int(view["offset"]))
+        offset = index if index < offset else index - visible + 1 if index >= offset + visible else offset
+        scroll["events"] = _layout.clamp_scroll(offset, len(rows), visible)
+    if index == 0:
+        scroll.pop("events", None)
+    if picked == state.picked and scroll == state.scroll:
+        return state
+    return dataclasses.replace(state, picked=picked, scroll=scroll)
 
 
 def event_id(event: dict[str, Any]) -> Any:
@@ -482,6 +537,13 @@ def settle(state: AppState, now: float) -> Result:
         state = dataclasses.replace(state, notice=None)
     if not state.scroll.get("events") and state.fresh_events:
         state = dataclasses.replace(state, fresh_events=0)
+    # DETAILS follows the focused panel (fathers#152): QUEUE's entry or EVENTS' row, whichever was focused last; with
+    # EVENTS not drawn (one column), QUEUE's
+    shows = state.focus if state.focus in ("requests", "events") else state.shows
+    if shows == "events" and state.frame.width and "events" not in state.frame.tables:
+        shows = "requests"
+    if shows != state.shows:
+        state = dataclasses.replace(state, shows=shows)
     known = entries(state)
     found = known[0]
     state = move(state, resolve(state, known), known=known)

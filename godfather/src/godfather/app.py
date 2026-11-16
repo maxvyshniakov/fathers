@@ -412,7 +412,7 @@ class Live:
     def loading(self) -> bool:
         """The selected request's details are loading: the spinner turns at ten frames a second."""
         found = _state.items(self.state)
-        if not found:
+        if not found or self.state.shows == "events":  # DETAILS shows an event (fathers#152): nothing loads
             return False
         item = found[self.state.selection.index]
         return _state.details_key(item, cast(Any, self.state.selection.key)) not in self.state.details
