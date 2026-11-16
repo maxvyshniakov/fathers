@@ -16,7 +16,7 @@ import unittest
 from typing import Any
 from unittest import mock
 
-from test_state import Case  # puts src/ on sys.path
+from test_state import Case, entry, model  # puts src/ on sys.path
 
 ROW = re.compile(rb"\x1b\[(\d+);1H")
 SYNC_ON, SYNC_OFF = b"\x1b[?2026h", b"\x1b[?2026l"
@@ -62,7 +62,13 @@ class FrameTests(Case):
         self.addCleanup(os.close, self.typist)
         self.live: Any = tool.Live(keys, self.out, Screen(), 1.0, "auto")
         self.addCleanup(self.live.close)
-        self.live.state = self.screen()
+        # The scene's times are the test's too: granted five minutes before its moment, so each idle second moves
+        # the running times on whatever the wall clock says (test_state's entries are stamped with the real now,
+        # which after 12:00 UTC on 2026-11-16 was later than this moment: nothing moved, no frame was written)
+        start = self.moment - datetime.timedelta(minutes=5)
+        holders = [dict(entry(n), since=start, granted=start) for n in range(3)]
+        waiters = [dict(entry(n, "waiting"), since=start) for n in range(3, 5)]
+        self.live.state = self.screen(model(holders, waiters, updated=start))
         size = mock.patch.object(tool, "terminal_size", self.terminal_size)
         size.start()
         self.addCleanup(size.stop)
