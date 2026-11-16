@@ -72,8 +72,11 @@ of its last unmarked finding. `[done] auto = false` turns that off; the lane the
 
 The free-disk floor (fathers#157) is `40 GB reserve + lane cap x lane peak`, in decimal GB (10^9); the lane peak is
 the largest lane `done` freed among the 20 last done in the state directory (3 GB before any). Refusals give the
-derivation, for example `the floor of 70 GB (10^9) = 40 reserve + 10 x 3.0 GB lane peak`. `LANEFATHER_MIN_DISK_GB`
-(or `<legacy_env_prefix>MIN_DISK_GB`) sets the floor instead.
+derivation, for example `the floor of 70 GB (10^9) = 40 reserve + 10 x 3.0 GB lane peak`. The [machine
+setting](#machine-settings) `host.min_disk_gb` sets the floor instead (fathers#163), and `LANEFATHER_MIN_DISK_GB` (or
+`<legacy_env_prefix>MIN_DISK_GB`) above it; either takes `auto` (or `0`) for the derived floor. An invalid variable
+warns and the setting or the derived floor applies. A refusal names what set the floor, for example `the floor of 150
+GB (10^9; lanefather settings host.min_disk_gb)`.
 
 None of these skips a refusal of `done`: an uncommitted change, an agent's lock, a process the source does not take
 for left behind or cannot see in the worktree, the build directories or the scratch, a branch or a worktree HEAD
@@ -471,10 +474,16 @@ writes them; Godfather's Settings section goes through it.
 | `review.start` | `auto` (default), `manual` | land: start the lane's review in the background, or leave it for `review ID` | `LANEFATHER_REVIEW_START` |
 | `rerun.wait` | seconds, `90`, `15m`, `1h` (default 3300, at most 86400) | a red check's rerun: how long it waits for its lease | `LANEFATHER_RERUN_WAIT` |
 | `slots.priority.<phase>` | `project` (default), `interactive`, `normal`, `batch` | each phase's [slot priority](#slot-priorities), above the project's `[slots.priority]` | `LANEFATHER_PRIORITY_<PHASE>`, `LANEFATHER_PRIORITY` |
+| `host.min_disk_gb` | `auto` (default; shown and saved as `0`), or decimal GB up to 100000 | start, `capabilities` and a project hook: the [free-disk floor](#finishing-lanes) | `LANEFATHER_MIN_DISK_GB` (and its other names) |
 
 With a slot priority saved, the order of [slot priorities](#slot-priorities) becomes: `LANEFATHER_PRIORITY_<PHASE>`,
 `LANEFATHER_PRIORITY`, the machine's `slots.priority.<phase>`, the project's `[slots.priority]` phase and default,
 the built-in; its source reads `lanefather settings slots.priority.<phase>`.
+
+The `host.min_disk_gb` row is a `number` in GB with `min` 0, `step` 5 and `zero: "auto"`; its `effective` is the floor
+start applies in the project the command runs in, and its description gives the derived floor `auto` stands for, for
+example `auto: 58 GB (10^9) = 40 reserve + 6 x 3.0 GB lane peak`, so Godfather's Settings shows it as `auto  effective
+here: 58 GB`. Admission, `capabilities --json` (`host.min_disk_gb`) and the refusal resolve the same value.
 
 ```text
 lanefather settings [--json]                                  the schema and the current values
@@ -509,11 +518,12 @@ Free disk (fathers#46). Two values, not to be confused:
 
 | Value | Meaning | Where a project reads it |
 | --- | --- | --- |
-| `host.min_disk_gb` | the free disk, in decimal GB, under which `start` refuses a lane in the project the command runs in: the derived floor of [Finishing lanes](#finishing-lanes), or `LANEFATHER_MIN_DISK_GB` | `capabilities --json` (`"host": {"min_disk_gb": 150}`, capability `host.min_disk_gb`); in a project hook, `LANEFATHER_MIN_DISK_GB` and each other name of the setting (`<legacy_env_prefix>MIN_DISK_GB`) |
+| `host.min_disk_gb` | the free disk, in decimal GB, under which `start` refuses a lane in the project the command runs in: `LANEFATHER_MIN_DISK_GB`, the machine setting `host.min_disk_gb`, or the derived floor of [Finishing lanes](#finishing-lanes) | `capabilities --json` (`"host": {"min_disk_gb": 150}`, capability `host.min_disk_gb`); in a project hook, `LANEFATHER_MIN_DISK_GB` and each other name of the setting (`<legacy_env_prefix>MIN_DISK_GB`) |
 | `DISK_FREE_GB` | a stand-in for the measured free space of the home volume: tests and hooks set it, admission reads it instead of measuring | `LANEFATHER_DISK_FREE_GB` or `<legacy_env_prefix>DISK_FREE_GB`, as the caller set it |
 
 Lanefather sets the minimum's variables for the hook's run to the project's floor and restores the caller's
-environment after it. Admission reads `LANEFATHER_MIN_DISK_GB` (fathers#157): a caller that sets it sets the floor.
+environment after it. Admission reads `LANEFATHER_MIN_DISK_GB` (fathers#157): a caller that sets it sets the floor,
+above the machine setting `host.min_disk_gb`.
 
 `lanefather --config /path/to/.lanefather.toml project-hook NAME -- ARGS` runs only
 a named script from `[hooks.project]`, with the project's directory as its working

@@ -10,7 +10,7 @@ seconds.
 from __future__ import annotations
 
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import os
 from pathlib import Path
 import shutil
@@ -18,7 +18,7 @@ import sys
 import time
 from typing import Any
 
-from . import config, journal, slots
+from . import config, journal, settings, slots
 
 # A lane per CORES_PER_LANE cores and per LANE_MEMORY_GB of the memory left after MEMORY_RESERVE_GB for the system
 # and the owner's apps. 12 cores and 32 GB give 6.
@@ -26,7 +26,8 @@ CORES_PER_LANE = 2
 LANE_MEMORY_GB = 4
 MEMORY_RESERVE_GB = 8
 # The free-disk floor under which start refuses a lane (fathers#157): a reserve for the system (swap, APFS
-# snapshots) and the lane cap times the largest lane of recent ones, in decimal GB; LANEFATHER_MIN_DISK_GB sets it.
+# snapshots) and the lane cap times the largest lane of recent ones, in decimal GB. The machine setting
+# host.min_disk_gb sets it, and LANEFATHER_MIN_DISK_GB above that (fathers#163).
 DISK_RESERVE_GB = 40.0
 DEFAULT_LANE_PEAK_GB = 3.0
 RECENT_LANES = 20
@@ -136,18 +137,21 @@ def disk_free_gb(project: config.Config | None = None) -> float:
 
 @dataclass(frozen=True)
 class Floor:
-    """The free disk start needs, in decimal GB, and how it was reached."""
+    """The free disk start needs, in decimal GB, how it was reached, and the derived floor beside it."""
     gb: float
     reserve: float = DISK_RESERVE_GB
     cap: int = 0
     peak: float = DEFAULT_LANE_PEAK_GB
     source: str = "derived"
 
+    def derivation(self) -> str:
+        """The derived floor and its terms, whatever sets the floor: 49 GB (10^9) = 40 reserve + 3 x 3.0 GB lane
+        peak."""
+        return (f"{self.reserve + self.cap * self.peak:.0f} GB (10^9) = {self.reserve:.0f} reserve + {self.cap} x "
+                f"{self.peak:.1f} GB lane peak")
+
     def words(self) -> str:
-        if self.source != "derived":
-            return f"{self.gb:.0f} GB (10^9; {self.source})"
-        return (f"{self.gb:.0f} GB (10^9) = {self.reserve:.0f} reserve + {self.cap} x {self.peak:.1f} GB "
-                "lane peak")
+        return self.derivation() if self.source == "derived" else f"{self.gb:g} GB (10^9; {self.source})"
 
 
 def lane_peak_gb(records: list[dict[str, Any]]) -> float:
@@ -160,20 +164,24 @@ def lane_peak_gb(records: list[dict[str, Any]]) -> float:
 
 
 def disk_floor(project: config.Config, cap: int, records: list[dict[str, Any]]) -> Floor:
-    """The free-disk floor for a repository whose lane cap is `cap`: reserve + cap x lane peak (fathers#157), or
-    LANEFATHER_MIN_DISK_GB; an invalid setting warns and the derived floor applies."""
+    """The free-disk floor for a repository whose lane cap is `cap`, first set wins (fathers#163):
+    LANEFATHER_MIN_DISK_GB, the machine setting host.min_disk_gb, the derived reserve + cap x lane peak
+    (fathers#157). Either setting takes auto (or 0) for the derived floor; an invalid variable warns and the next
+    applies."""
+    peak = lane_peak_gb(records)
+    derived = Floor(DISK_RESERVE_GB + cap * peak, DISK_RESERVE_GB, cap, peak)
+    knob = settings.BY_KEY[settings.MIN_DISK]
     found = project.lookup("MIN_DISK_GB")
     if found and found[1].strip():
         try:
-            value = float(found[1])
-        except ValueError:
-            value = -1.0
-        if value > 0 and value != float("inf"):
-            return Floor(value, cap=cap, source=found[0])
-        print(f"lane: warning: {found[0]}={found[1]!r} is not a positive number of GB; the floor is derived",
-              file=sys.stderr)
-    peak = lane_peak_gb(records)
-    return Floor(DISK_RESERVE_GB + cap * peak, DISK_RESERVE_GB, cap, peak)
+            value = settings.parse(knob, found[1])
+        except settings.SettingError:
+            print(f"lane: warning: {found[0]}={found[1]!r} is not auto or a positive number of GB; the floor is "
+                  f"{settings.MIN_DISK} or derived", file=sys.stderr)
+        else:
+            return replace(derived, gb=value, source=found[0]) if value else derived
+    saved = settings.value(settings.MIN_DISK)
+    return replace(derived, gb=saved, source=f"lanefather settings {settings.MIN_DISK}") if saved else derived
 
 
 def host(project: config.Config | None = None) -> dict[str, Any]:

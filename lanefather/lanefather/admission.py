@@ -226,13 +226,23 @@ def grouped(records: list[state.Record]) -> str:
 
 
 def current_floor(project: config.Config) -> host.Floor:
-    """The free-disk floor start applies to `project` now (fathers#157): its cap times the lane peak of its state
-    directory, plus the reserve, or LANEFATHER_MIN_DISK_GB. An unreadable state directory counts no lanes."""
+    """The free-disk floor start applies to `project` now (fathers#157, #163): LANEFATHER_MIN_DISK_GB, the machine
+    setting host.min_disk_gb, or its cap times the lane peak of its state directory plus the reserve. An unreadable
+    state directory counts no lanes."""
     try:
         records = state.Store(project).lanes()
     except (LaneError, OSError):
         records = []
     return host.disk_floor(project, host.lane_cap(project)[0], records)
+
+
+def floor_here() -> host.Floor:
+    """The floor start applies in the project the command runs in, else to a project without lanes on this machine:
+    what capabilities, a project hook and the settings row report."""
+    try:
+        return current_floor(config.current())
+    except LaneError:
+        return current_floor(config.Config())
 
 
 def evaluate(project: config.Config, records: list[state.Record], common: str | None = None, *,
