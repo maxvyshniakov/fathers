@@ -89,6 +89,17 @@ def review_state(label: str) -> tuple[bool, str]:
     return True, f"reviewed by {receipt.get('reviewer')}: {len(findings)} findings, all marked"
 
 
+def asked_reviewers(args: Any) -> tuple[str, ...]:
+    """`--reviewer ALIAS|both` (fathers#155): the reviewers this one review runs whatever the Codex limit; `both`
+    is the configured panel, else Sol and Opus. () lets the panel or the models file choose."""
+    asked: str | None = getattr(args, "reviewer", None)
+    if not asked:
+        return ()
+    if asked == "both":
+        return config.current().review_panel or ("sol", "opus")
+    return (asked,)
+
+
 def missing_members(receipt: dict[str, Any]) -> list[str]:
     """The panel members of a finished review that gave no answer: failed, or skipped with no stand-in."""
     panel: list[dict[str, Any]] = receipt.get("panel") or []
@@ -175,7 +186,7 @@ def review_about(label: str, fields: dict[str, Any]) -> dict[str, Any]:
 
 def perform_review(label: str, fields: dict[str, Any], main: str, base: str, tip: str, subject: str,
                    finalize: Callable[[dict[str, Any]], None] | None = None,
-                   family: str | None = None) -> dict[str, Any]:
+                   family: str | None = None, reviewers: tuple[str, ...] = ()) -> dict[str, Any]:
     """Review base...tip with Sol, or Opus when Sol may not or cannot run; write and return the receipt.
     `finalize` completes a finished receipt before anyone can read it as finished."""
     runner = reviewer.Reviewer(config.current())
@@ -194,8 +205,8 @@ def perform_review(label: str, fields: dict[str, Any], main: str, base: str, tip
     try:
         with terminable(), worktrees.review_checkout(main, label, tip) as checkout:
             standards = coding_standards(main, tip)
-            answer = runner.run(label, checkout, reviewer.Request(standards, subject, base, tip, family), output,
-                                log)
+            answer = runner.run(label, checkout, reviewer.Request(standards, subject, base, tip, family,
+                                                                     reviewers), output, log)
             receipt.update(answer.evidence)
             if answer.error is not None:
                 raise LaneError(answer.error)
@@ -238,10 +249,12 @@ def review_lines(receipt: dict[str, Any]) -> list[str]:
         return [f"Review of {label}: running since {receipt.get('started')} (pid {receipt.get('pid')}, log "
                 f"{receipt.get('log')})"]
     left = receipt.get("codex_left")
+    forced: dict[str, Any] = receipt.get("forced") or {}
     head = (f"Review of {label} ({receipt.get('base', '')[:10]}...{receipt.get('tip', '')[:10]}) by "
             f"{receipt.get('model')} {receipt.get('effort')}"
             + (f", {left}% of the weekly Codex limit left" if left is not None else "")
             + (f"; fallback: {receipt['fallback']}" if receipt.get("fallback") else "")
+            + (f"; forced by --reviewer {', '.join(forced['reviewers'])}" if forced.get("by") == "flag" else "")
             + f", {receipt.get('seconds', 0):.0f} s")
     if receipt["status"] != "finished":
         return [head, f"review failed: {receipt.get('error')}"]
@@ -381,7 +394,7 @@ def review_lane(args: Any) -> int:
     tip, base = review_range(record)
     receipt = perform_review(args.id, {"kind": "lane", "lane": args.id, "ticket": record["ticket"]},
                              main_checkout(record["common_dir"]), base, tip, ticket_text(record),
-                             family=implementer_family(args.id))
+                             family=implementer_family(args.id), reviewers=asked_reviewers(args))
     print("\n".join(review_lines(receipt)))
     if receipt["status"] != "finished":
         return 1
@@ -695,7 +708,7 @@ def overall_review(args: Any) -> int:
     subject = (f"The overall review before main ({prog} promote --ship): every change from {base[:10]} to "
                f"{sha[:10]}, many lanes at once. Look for seams between them as well as bugs in each.")
     receipt = perform_review(label, {"kind": "overall", "sha": sha}, main_checkout(common), base, sha, subject,
-                             finalize=lambda finished: file_ticket(finished, common))
+                             finalize=lambda finished: file_ticket(finished, common), reviewers=asked_reviewers(args))
     print("\n".join(review_lines(receipt)))
     return 0 if receipt["status"] == "finished" and not receipt.get("issue_error") else 1
 

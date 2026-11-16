@@ -220,3 +220,70 @@ class DesignQuestionTests(ReviewCase):
             self.assertIn(text, " ".join(prompt.split()).lower())
         self.assertEqual(self.review("a")["findings"][0]["category"], "design")
         self.assertIn("P2 [design] lib/api.txt:2 baz copies foo", output)
+
+
+class ChosenReviewerTests(ReviewCase):
+    """fathers#155: `review --reviewer sol|opus|both` per call, and the review role's choices as a priority list."""
+
+    def test_a_forced_reviewer_runs_whatever_the_codex_limit_and_the_receipt_says_so(self):
+        self.landed("opus", "lib/opus.txt", "baz\n")
+        output = self.lane("review", "opus", "--reviewer", "opus")
+        self.assertEqual(self.codex_calls(), [], "neither Sol nor a limit read")
+        receipt = self.review("opus")
+        self.assertEqual((receipt["reviewer"], receipt["forced"]), ("opus", {"by": "flag", "reviewers": ["opus"]}))
+        self.assertIn("forced by --reviewer opus", output)
+        self.env["FIXTURE_CODEX_USED"] = "100"
+        self.landed("sol", "lib/sol.txt", "baz\n")
+        self.lane("review", "sol", "--reviewer", "sol")
+        self.assertEqual([c[2] for c in self.codex_calls()], ["exec"], "Sol runs on a used-up week when asked")
+        self.assertEqual(self.review("sol")["reviewer"], "sol")
+
+    def test_both_runs_sol_and_opus_into_one_list_that_marks_and_holds_until_every_finding_is_marked(self):
+        self.review_text.write_text(TWO_FINDINGS)
+        claude_text = self.tmp / "claude-review.md"
+        claude_text.write_text(OPUS_FINDINGS)
+        self.env["FIXTURE_CLAUDE_TEXT"] = str(claude_text)
+        self.landed()
+        self.lane("review", "a", "--reviewer", "both")
+        receipt = self.review("a")
+        self.assertEqual(receipt["forced"], {"by": "flag", "reviewers": ["sol", "opus"]})
+        self.assertEqual([(f["n"], f["reviewer"]) for f in receipt["findings"]],
+                         [(1, "sol"), (2, "sol"), (3, "opus"), (4, "opus")])
+        for number in ("1", "2", "3"):
+            self.assertIn("unmarked", self.lane("review", "a", "--mark", number, "rejected:not here"))
+        done = self.lane("review", "a", "--mark", "4", "rejected:not here")
+        self.assertNotIn("unmarked", done)
+
+    def test_the_forced_reviewer_also_runs_an_overall_review(self):
+        self.landed()
+        sha = self.tip()
+        self.lane("review", "--overall", sha, "--since", f"{sha}~1", "--reviewer", "opus")
+        receipt = self.review(f"ship-{sha[:12]}")
+        self.assertEqual((receipt["reviewer"], receipt["forced"]["by"]), ("opus", "flag"))
+        self.assertEqual(self.codex_calls(), [])
+
+    def test_reversing_the_review_choices_reverses_the_preference_without_role(self):
+        table = self.tmp / "table" / "models.toml"
+        self.write(table.parent, "models.toml", textwrap.dedent("""\
+            schema = 1
+            [models.opus]
+            id = "claude-opus-5-5"
+            family = "anthropic"
+            cli = "claude"
+            [models.sol]
+            id = "gpt-6.1-sol"
+            family = "openai"
+            cli = "codex"
+            [roles.review]
+            choices = [
+              { model = "opus", effort = "high" },
+              { model = "sol", effort = "medium", when = { limit = { codex_weekly = 15 } } },
+            ]
+            """))
+        self.env["LANEFATHER_MODELS"] = str(table)
+        self.landed()
+        self.lane("review", "a")
+        receipt = self.review("a")
+        self.assertEqual((receipt["reviewer"], receipt["effort"], receipt["fallback"]),
+                         ("opus", "high", "the review role lists opus first"))
+        self.assertEqual(self.codex_calls(), [], "Sol is only the fallback now: no limit read, no run")

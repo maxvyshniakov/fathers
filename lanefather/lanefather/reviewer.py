@@ -47,6 +47,8 @@ class Request:
     tip: str
     # The implementer's model family (anthropic, openai) for the role's `not_family`; None when not known.
     family: str | None = None
+    # `review --reviewer` (fathers#155): the reviewers this review must run, whatever the Codex limit; () chooses.
+    reviewers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,9 @@ class Model:
     cli: str
     effort: str
     min_left: int | None = None
+    family: str | None = None
+    # `when.not_family`: the choice holds only for an implementer of another family (fathers#155).
+    not_family: bool = False
 
 
 class Reviewer:
@@ -74,8 +79,10 @@ class Reviewer:
         self.models = _review_models(project)
 
     def run(self, label: str, checkout: str, request: Request, output: Path, log: Path) -> Answer:
+        if request.reviewers:
+            return self._panel(label, checkout, request, output, log, request.reviewers, "flag")
         if self.project.review_panel:
-            return self._panel(label, checkout, request, output, log)
+            return self._panel(label, checkout, request, output, log, self.project.review_panel, "panel")
         models = self.models
         evidence: dict[str, Any] = {"effort": models["sol_effort"]}
         try:
@@ -141,29 +148,52 @@ class Reviewer:
             if chosen.cli == "claude":
                 return None, "; ".join(skipped) or f"role review chose {chosen.alias}", chosen
             return None, f"role review chose {chosen.id} on the unknown CLI {chosen.cli}", claude_model
-        limit = _codex_limit(codex) if codex else {"left": None, "blocked": None}
-        evidence.update(codex_left=limit["left"])
-        sol = Model("sol", models["sol"], "codex", models["sol_effort"], models["sol_min_left"])
-        if not codex:
-            return None, f"no Codex CLI ({self.project.env_names('CODEX')}, CODEX_CLI_PATH, codex on PATH)", \
-                claude_model
-        fallback = limit["blocked"] or (f"Codex has {limit['left']}% of the weekly limit left, under "
-                                        f"{models['sol_min_left']}%" if limit["left"] < models["sol_min_left"]
-                                        else None)
-        return (None if fallback else sol), fallback, claude_model
+        # Without role: the review role's choices in order, the first whose conditions hold runs (fathers#155).
+        _, choices = _models(self.project)
+        skipped: list[str] = []
+        limit: dict[str, Any] | None = None
+        for index, model in enumerate(choices):
+            if model.not_family and family and model.family == family:
+                skipped.append(f"{model.alias}: same family as the implementer ({family})")
+                continue
+            if model.cli == "claude":
+                return None, "; ".join(skipped) or f"the review role lists {model.alias} first", model
+            if model.cli != "codex":
+                skipped.append(f"{model.alias} runs on {model.cli}, which Lanefather cannot start")
+                continue
+            if not codex:
+                skipped.append(f"no Codex CLI ({self.project.env_names('CODEX')}, CODEX_CLI_PATH, codex on PATH)")
+                continue
+            if model.min_left is not None:
+                if limit is None:
+                    limit = _codex_limit(codex)
+                    evidence.update(codex_left=limit["left"])
+                why = limit["blocked"] or (f"Codex has {limit['left']}% of the weekly limit left, under "
+                                           f"{model.min_left}%" if limit["left"] < model.min_left else None)
+                if why:
+                    skipped.append(why)
+                    continue
+            after = next((m for m in choices[index + 1:] if m.cli == "claude"), claude_model)
+            return model, None, after
+        evidence.setdefault("codex_left", None)
+        return None, "; ".join(skipped), claude_model
 
-    def _panel(self, label: str, checkout: str, request: Request, output: Path, log: Path) -> Answer:
-        """Every reviewer of `[review] panel` at once on the same checkout with the same prompt, each in its own
-        process that never sees another's answer (fathers#151). A member whose condition fails (a used-up Codex
-        week) is replaced by the role's fallback, or skipped when that fallback is already on the panel."""
+    def _panel(self, label: str, checkout: str, request: Request, output: Path, log: Path, panel: tuple[str, ...],
+               by: str) -> Answer:
+        """Every reviewer of the panel at once on the same checkout with the same prompt, each in its own process
+        that never sees another's answer (fathers#151). The panel is `[review] panel` (by "panel"): a member whose
+        condition fails (a used-up Codex week) is replaced by the role's fallback, or skipped when that fallback is
+        already on the panel. Or `review --reviewer` (by "flag", fathers#155): each runs whatever the limit."""
         project = self.project
-        panel = project.review_panel
-        evidence: dict[str, Any] = {"effort": self.models["sol_effort"]}
+        forced = by == "flag"
+        evidence: dict[str, Any] = {"effort": self.models["sol_effort"],
+                                    "forced": {"by": by, "reviewers": list(panel)}}
         try:
-            models, fallback_alias = _models(project)
+            models, choices = _models(project)
+            fallback_alias = next((m.alias for m in choices if m.cli == "claude"), None)
             codex, claude = _codex_cli(project), _claude_cli(project)
             evidence["codex"] = codex
-            answer = _role_answer(project, codex, request.family, evidence)
+            answer = None if forced else _role_answer(project, codex, request.family, evidence)
             if answer is not None:
                 fallback_alias = str(answer["model"])
             quota: dict[str, Any] = {}
@@ -185,7 +215,7 @@ class Reviewer:
                     return f"no claude CLI on PATH ({project.env_names('CLAUDE')})"
                 if model.cli not in ("codex", "claude"):
                     return f"{alias} runs on {model.cli}, which Lanefather cannot start"
-                if model.min_left is not None:
+                if model.min_left is not None and not forced:
                     if not quota:
                         quota.update(_codex_limit(codex) if codex else {"left": None, "blocked": None})
                     if quota.get("blocked"):
@@ -204,6 +234,8 @@ class Reviewer:
                     entry = {"member": alias, "reviewer": alias, "status": "running", "reason": None}
                     runs.append((entry, model))
                 else:
+                    if forced:  # the asked-for reviewer or none: never a stand-in
+                        fallback_alias = None
                     stand_in = models.get(fallback_alias) if fallback_alias else None
                     taken = set(panel) | {e["reviewer"] for e in entries}
                     if (fallback_alias and fallback_alias not in taken and stand_in is not None
@@ -310,42 +342,31 @@ def _models_path(project: Config) -> Path | None:
 
 
 def _review_models(project: Config) -> dict[str, Any]:
-    """The review role's two choices: the Codex one with its weekly-limit condition, and the Claude one."""
+    """The review role's first Codex choice with its weekly-limit condition and its first Claude choice: the
+    efforts a running receipt names before the reviewer is chosen."""
     chosen = dict(DEFAULT_MODELS)
-    path = _models_path(project)
-    if path is None:
-        return chosen
-    try:
-        data = tomllib.loads(path.read_text())
-        models: dict[str, Any] = data["models"]
-        for choice in data["roles"]["review"]["choices"]:
-            model = models[choice["model"]]
-            if model.get("cli") == "codex" and "sol_from" not in chosen:
-                when: dict[str, Any] = choice.get("when") or {}
-                limits: dict[str, Any] = when.get("limit") or {}
-                limit = limits.get("codex_weekly")
-                chosen.update(sol=model["id"], sol_effort=choice.get("effort", "medium"), sol_from=str(path),
-                              **({"sol_min_left": int(limit)} if isinstance(limit, (int, float)) else {}))
-            elif model.get("cli") == "claude" and "opus_from" not in chosen:
-                chosen.update(opus=model["id"], opus_effort=choice.get("effort", "medium"), opus_from=str(path))
-    except (OSError, KeyError, TypeError, ValueError, tomllib.TOMLDecodeError) as error:
-        print(f"lane: warning: {path}: no review role ({error}); reviewing with the defaults", file=sys.stderr)
-        return dict(DEFAULT_MODELS)
+    _, choices = _models(project)
+    sol = next((m for m in choices if m.cli == "codex"), None)
+    opus = next((m for m in choices if m.cli == "claude"), None)
+    if sol is not None:
+        chosen.update(sol=sol.id, sol_effort=sol.effort,
+                      **({"sol_min_left": sol.min_left} if sol.min_left is not None else {}))
+    if opus is not None:
+        chosen.update(opus=opus.id, opus_effort=opus.effort)
     return chosen
 
 
 
-def _models(project: Config) -> tuple[dict[str, Model], str | None]:
-    """Every codex and claude model of the models file by alias, with the effort and limit of its first review
-    choice, and the alias of the review role's first Claude choice (the panel's fallback without `role`); the
-    defaults when no file is found or it cannot be read."""
+def _models(project: Config) -> tuple[dict[str, Model], list[Model]]:
+    """The models file: every model by alias (with the effort and limit of its first review choice), and the review
+    role's choices in their order, a priority list (fathers#155); the defaults, Sol then Opus, when no file is
+    found or it has no readable review role."""
     models: dict[str, Any] = dict(DEFAULT_MODELS)
-    defaults = {"sol": Model("sol", str(models["sol"]), "codex", str(models["sol_effort"]),
-                             int(models["sol_min_left"])),
-                "opus": Model("opus", str(models["opus"]), "claude", str(models["opus_effort"]))}
+    sol = Model("sol", str(models["sol"]), "codex", str(models["sol_effort"]), int(models["sol_min_left"]), "openai")
+    opus = Model("opus", str(models["opus"]), "claude", str(models["opus_effort"]), None, "anthropic")
     path = _models_path(project)
     if path is None:
-        return defaults, "opus"
+        return {"sol": sol, "opus": opus}, [sol, opus]
     try:
         data = tomllib.loads(path.read_text())
         table: dict[str, Any] = data["models"]
@@ -353,25 +374,26 @@ def _models(project: Config) -> tuple[dict[str, Model], str | None]:
         for alias, model in table.items():
             entry = cast(dict[str, Any], model) if isinstance(model, dict) else {}
             if isinstance(entry.get("id"), str) and isinstance(entry.get("cli"), str):
-                found[alias] = Model(alias, entry["id"], entry["cli"], "medium")
-        seen: set[str] = set()
-        fallback: str | None = None
+                family = entry.get("family")
+                found[alias] = Model(alias, entry["id"], entry["cli"], "medium",
+                                     family=family if isinstance(family, str) else None)
+        choices: list[Model] = []
         for choice in data["roles"]["review"]["choices"]:
-            alias = choice["model"]
-            if alias in seen or alias not in found:
-                continue
-            seen.add(alias)
+            base = found[choice["model"]]
             when: dict[str, Any] = choice.get("when") or {}
             limits: dict[str, Any] = when.get("limit") or {}
             limit = limits.get("codex_weekly")
-            found[alias] = Model(alias, found[alias].id, found[alias].cli, str(choice.get("effort", "medium")),
-                                 int(limit) if isinstance(limit, (int, float)) else None)
-            if fallback is None and found[alias].cli == "claude":
-                fallback = alias
-        return found, fallback
+            choices.append(Model(base.alias, base.id, base.cli, str(choice.get("effort", "medium")),
+                                 int(limit) if isinstance(limit, (int, float)) else None, base.family,
+                                 bool(when.get("not_family"))))
+        if not choices:
+            raise ValueError("the review role lists no choices")
+        for model in reversed(choices):
+            found[model.alias] = model
+        return found, choices
     except (OSError, KeyError, TypeError, ValueError, tomllib.TOMLDecodeError) as error:
         print(f"lane: warning: {path}: no review role ({error}); reviewing with the defaults", file=sys.stderr)
-        return defaults, "opus"
+        return {"sol": sol, "opus": opus}, [sol, opus]
 
 
 

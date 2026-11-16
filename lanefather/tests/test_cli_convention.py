@@ -27,7 +27,7 @@ TOOL = cliconvention.Tool("lanefather", (sys.executable, "-m", "lanefather"), (
     Command("done"), Command("gc"), Command("show"), Command("status", json=()), Command("settings"),
     Command("results"), Command("stats"), Command("list"),
 ))
-EXPECTED = dict.fromkeys((
+EXPECTED: dict[str, str] = dict.fromkeys((
     "unknown command", "unknown option", "capabilities unknown option", "changelog unknown option",
     "project-hook unknown option", "start unknown option", "next unknown option", "adopt unknown option",
     "check unknown option", "land unknown option", "promote unknown option", "sync unknown option",

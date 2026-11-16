@@ -182,9 +182,9 @@ lease id, also allowed at the report's top level). Lanefather hands each run its
 
 ## Reviewer configuration
 
-Authenticate the reviewer CLIs you intend to use according to their own documentation. The current source
-prefers Codex (`gpt-6.1-sol`, medium effort) when it can determine at least 15% weekly quota remains; otherwise it
-tries Claude (`claude-opus-5-5`, medium effort). A failed or empty Codex run can also fall back to Claude. Quota,
+Authenticate the reviewer CLIs you intend to use according to their own documentation. Without a models file
+Lanefather prefers Codex (`gpt-6.1-sol`, medium effort) when it can determine at least 15% weekly quota remains;
+otherwise it tries Claude (`claude-opus-5-5`, medium effort). A models file's review role sets the order. A failed or empty Codex run can also fall back to Claude. Quota,
 provider availability and account charges remain outside Lanefather.
 
 Set `LANEFATHER_CODEX` and `LANEFATHER_CLAUDE` to explicit executable paths if PATH discovery is unsuitable.
@@ -233,6 +233,16 @@ fails or answers empty is kept as `failed` and the others' answers stand. The re
 `seconds`, `output`, `log` and `numbers`, its findings in the one `findings` list, which numbers them across the panel
 and names each one's `reviewer`; `review --mark N` and the gate read that list as before. `review ID --compare`
 prints each reviewer's findings with their marks, and `stats --json` gives per-reviewer totals.
+
+`roles.review.choices` is a priority list (fathers#155): without `role`, the first choice whose conditions hold
+runs (its `when.limit` share of the weekly Codex limit, a Codex CLI, and `not_family` when the implementer's family
+is known), and the next Claude choice after it is the fallback for a failed run. Listing Opus first makes Opus the
+reviewer and Sol nothing but a later choice.
+
+`lanefather review ID --reviewer sol|opus|both` (also with `--overall`) chooses the reviewer of that one review:
+an alias of the models file runs whatever the Codex limit says and with no stand-in, and `both` runs the configured
+panel (Sol and Opus without one) the same way. The receipt's `forced` names the request (`{"by": "flag",
+"reviewers": [...]}`; a configured panel records `"by": "panel"`), and `review` shows it.
 
 Use model IDs available to your accounts. Without an explicit file, the loader searches
 `~/.config/mastack/models.toml` and `~/mastack/models.toml`; Mastack is optional, and compiled defaults apply when

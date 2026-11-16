@@ -10,8 +10,8 @@
   land <id> [--into WORKTREE] [--keep]
                                      merge after a current green receipt, start the review, run the post-merge
                                      smoke, finish the lane (lanefather.land)
-  review <id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane] [--compare]
-  review --overall <sha> --since <base>
+  review <id> [--reviewer sol|opus|both] [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane] [--compare]
+  review --overall <sha> --since <base> [--reviewer sol|opus|both]
                                      the independent review (lanefather.review)
   findings <sha> [--since REF]       whether a review holds the SHA (unmarked P1/P2 findings), for a publish
   done <id>                          after landing: stop what the lane left running, remove its worktree,
@@ -179,6 +179,9 @@ def parser() -> argparse.ArgumentParser:
                    help="mark finding N fixed by a follow-up merge (or the fix lane's id) or rejected with a reason")
     p.add_argument("--fix-lane", action="store_true",
                    help="register <id>-review-fixes on the landed lane's worktree for the fix round")
+    p.add_argument("--reviewer", metavar="ALIAS|both",
+                   help="run this reviewer (a model alias of the models file, such as sol or opus) whatever the "
+                        "Codex limit, or both: the configured panel, else sol and opus")
     p.add_argument("--compare", action="store_true",
                    help="each reviewer's findings side by side with their marks (fixed or rejected)")
     p.add_argument("--overall", metavar="SHA",

@@ -20,6 +20,10 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   (fathers#150): its model, effort and skip reasons, printed and kept in the receipt's `role`; the implementer's
   family comes from the agent that ran the lane's check (the check receipt's new `agent`). Without `role`, the
   models file decides as before.
+- `lanefather review ID --reviewer sol|opus|both`, also with `--overall` (fathers#155): this review runs the named
+  reviewer whatever the Codex limit says, or `both` (the configured panel, else Sol and Opus) into one findings list
+  that `--mark` marks; the receipt's `forced` says it was asked for. The review role's `choices` are a priority list:
+  without Mastack's `role`, the first whose conditions hold runs, so listing Opus first makes Opus the reviewer.
 - The reviewer is asked two design questions besides bugs and the standards (does the change fit the structure it
   lands in or is it bolted on beside it, and does it copy behaviour the repository already has), answered as findings
   of the new category `design`.
