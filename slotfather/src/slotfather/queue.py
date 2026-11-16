@@ -60,6 +60,8 @@ def reap(directory: Path, table: Table) -> list[tuple[Path, dict[str, Any]]]:
         if _entry.unknown(entry) is not None:
             continue  # perhaps a newer client's live lease: `status` shows it (state.unknown())
         if _platform.alive(entry, table):
+            if not readonly and stale_lock(entry, table):
+                clear_lock(directory, path, entry)
             live.append((path, entry))
         elif not readonly:
             path.unlink(missing_ok=True)
@@ -76,6 +78,29 @@ def reap(directory: Path, table: Table) -> list[tuple[Path, dict[str, Any]]]:
                            {"count": entry.get("count"), "ran": item.get("ran"), "waited": item.get("waited"),
                             "reason": "owner exited"}, _events.actor(kind="tool"), level="warn")
     return live
+
+
+def stale_lock(entry: dict[str, Any], table: Table) -> bool:
+    """Whether a lease's lock mark (`slotfather lock`, fathers#159) has no live waiter: its `lock_owner` is not the
+    process running at that pid (killed, even by SIGKILL, before it cleared the mark), or it names none."""
+    if _entry.lock_of(entry) is None:
+        return False
+    owner = _entry.lock_owner(entry)
+    return owner is None or not _platform.alive({"pid": owner[0], "start": owner[1]}, table)
+
+
+def clear_lock(directory: Path, path: Path, entry: dict[str, Any]) -> None:
+    """Clears a stale lock mark under the queue lock (reap()): a yielded lease is grantable again at this look's
+    grant, a held one no longer says it waits (fathers#159 review)."""
+    lock, owner = _entry.lock_of(entry), _entry.lock_owner(entry)
+    _entry.lock_taken(entry)
+    _state.write(path, entry)
+    who = f"pid {owner[0]}" if owner else "no recorded waiter"
+    _events.record(directory, f"the waiter for lock {lock} is gone ({who}) for {entry.get('label')} "
+                              f"(pid {entry.get('pid')})",
+                   "lease.lock_ended", _events.request(entry, path),
+                   {"lock": lock, "why": "gone", "yielded": not _entry.is_held(entry), "waited": None},
+                   _events.actor(kind="tool"), level="warn")
 
 
 def legacy_holders(table: Table) -> list[tuple[Path, dict[str, Any], int]]:

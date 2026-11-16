@@ -7,7 +7,8 @@ Each line is one write on a file opened with O_APPEND and mode 0600; past EVENTS
 events.jsonl.1, replacing the previous one, under an flock on events.lock beside it.
 
 Kinds: lease.granted, lease.released, request.left, lease.reaped, request.reaped, request.reprioritized,
-request.waiting_long, request.head_dropped, lease.yield_asked, lease.yield_withdrawn, lease.yielded, capacity.changed, order.changed,
+request.waiting_long, request.head_dropped, lease.yield_asked, lease.yield_withdrawn, lease.yielded, lease.lock_ended,
+capacity.changed, order.changed,
 process.swept, session.run_started, session.run_ended, session.ended, run.outlier, run.trend, reap.skipped,
 reap.resumed.
 """
@@ -121,6 +122,15 @@ class HeadDropped(TypedDict):
     blocked_by: list[Blocker]
 
 
+class LockEnded(TypedDict):
+    """lease.lock_ended (fathers#159): a lease's wait for a lock is over: "took", "stopped", "resumed" (work went on
+    under the lease) or "gone" (its waiter died); `yielded`: it had given up its slots; `waited`: seconds, if so."""
+    lock: str
+    why: str
+    yielded: bool
+    waited: Optional[int]
+
+
 class Empty(TypedDict):
     """An event whose subject says it all (lease.yield_withdrawn)."""
 
@@ -181,13 +191,14 @@ class ReapResumed(TypedDict):
 
 Details = Union[Granted, Released, Left, Reaped, Reprioritized, WaitingLong, YieldAsked, Yielded, Empty,
                 CapacityChanged, OrderChanged, Swept, SessionRun, SessionEnded, Outlier, Trend, ReapSkipped,
-                ReapResumed, HeadDropped]
+                ReapResumed, HeadDropped, LockEnded]
 
 # The event-kind table: each kind this writer emits, with the shape of its details (godfather/docs/events.md).
 KINDS: dict[str, type] = {
     "lease.granted": Granted, "lease.released": Released, "request.left": Left, "lease.reaped": Reaped,
     "request.reaped": Reaped, "request.reprioritized": Reprioritized, "request.waiting_long": WaitingLong,
     "lease.yield_asked": YieldAsked, "lease.yield_withdrawn": Empty, "lease.yielded": Yielded,
+    "lease.lock_ended": LockEnded,
     "capacity.changed": CapacityChanged, "order.changed": OrderChanged, "process.swept": Swept,
     "session.run_started": SessionRun, "session.run_ended": SessionRun, "session.ended": SessionEnded,
     "request.head_dropped": HeadDropped, "run.outlier": Outlier, "run.trend": Trend, "reap.skipped": ReapSkipped, "reap.resumed": ReapResumed,

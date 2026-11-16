@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any, Mapping, cast
 
@@ -21,19 +22,27 @@ STALE_LOOKS = 3  # a record older than this many of the holder's longest interva
 STALE_LEAST = 30.0  # seconds, whatever the interval
 
 
-# Programs whose running process means work goes on elsewhere (a container or a virtual machine), at no CPU of the
-# host's own (fathers#159): a tree with one in it is never idle.
-CONTAINERS = ("docker", "podman", "nerdctl", "buildah", "colima", "lima", "limactl", "qemu-system", "vfkit",
-              "container", "orb", "orbctl", "multipass", "krunvm", "firecracker", "virtualbox", "vboxmanage",
-              "vboxheadless", "prlctl", "vmrun", "utmctl", "tart", "kubectl")
+# What runs a container or a virtual machine, whose work goes on elsewhere at no CPU of the host's own (fathers#159):
+# a tree with one running is never idle. Only a process that runs one counts, not every tool of that family (a
+# `kubectl port-forward` or `docker ps` left running is no work) (fathers#159 review).
+CONTAINER_CLIENTS = ("docker", "podman", "nerdctl", "container")  # with one of RUNS: a container's own client
+RUNS = ("run", "exec", "start", "attach", "up", "build", "buildx")  # what makes a client run one (compose: up/run)
+VMS = ("qemu-system", "vfkit", "firecracker", "krunvm", "vboxheadless", "com.apple.virtualization.virtualmachine",
+       "lima-guestagent", "hyperkit")  # a virtual machine's own process
 
 
-def container(name: str) -> bool:
-    """Whether a program name (ps `comm`) is a container or VM client or runtime (CONTAINERS): `docker`,
-    `docker-compose`, `qemu-system-aarch64`, `limactl` and the like."""
-    found = name.lower()
-    return any(found == known or found.startswith(known + "-") or (known == "qemu-system" and found.startswith(known))
-               for known in CONTAINERS)
+def container(command: str) -> bool:
+    """Whether a process's command line (ps `command`) runs a container or a virtual machine: a VM's own process
+    (VMS: `qemu-system-aarch64 ...`, `vfkit ...`), or a container client (CONTAINER_CLIENTS, `docker-compose`) with
+    a command that runs one (RUNS: `docker run ...`, `docker compose up`, `podman exec ...`)."""
+    words = command.split()
+    if not words:
+        return False
+    program = os.path.basename(words[0]).lower()
+    if any(program == vm or program.startswith(vm) for vm in VMS):
+        return True
+    client = program in CONTAINER_CLIENTS or program in ("docker-compose", "podman-compose")
+    return client and any(word in RUNS for word in words[1:])
 
 
 def path(entry: Path) -> Path:

@@ -265,7 +265,8 @@ def waiting_since(entry: Mapping[str, Any]) -> float | None:
 def ageing_since(entry: Mapping[str, Any]) -> float | None:
     """When a waiter's ageing began: when its class was last set (`slotfather reprioritize`: `reprioritized_at`),
     or it yielded, if later than when it queued."""
-    found = [epoch(entry.get("reprioritized_at")), epoch(entry.get("yielded_at")), _config.seconds(entry.get("since"))]
+    yielded = None if entry.get(LOCK_YIELD) else epoch(entry.get("yielded_at"))  # a lock wait keeps its place
+    found = [epoch(entry.get("reprioritized_at")), yielded, _config.seconds(entry.get("since"))]
     return max((moment for moment in found if moment is not None), default=None)
 
 
@@ -355,7 +356,7 @@ def resume(entry: Record, moment: float | None = None) -> None:
     back = moment if moment is not None else _config.seconds(again) or time.time()
     entry["yielded"] = round(yielded_of(entry) + max(0.0, back - away), 2)
     entry.update(resumed=again, granted=entry.get("first_granted") or again)
-    for key in ("yielded_at", "first_granted", "rank"):
+    for key in ("yielded_at", "first_granted", "rank", LOCK_YIELD):
         entry.pop(key, None)
 
 
@@ -363,6 +364,7 @@ def to_held(entry: Record, granted: str, moment: float, pressed: bool = False, s
     """A waiter granted at `granted` (a now() stamp of `moment`): `pressed` while memory is not normal, `aged` when
     it is served in class `served` (ageing) rather than its own, and resumed if it had yielded."""
     entry.update(state=HELD, granted=granted)
+    lock_taken(entry)  # a lease an older client granted while it waited for a lock: the mark is stale
     if pressed:
         entry[PRESSED] = True  # under warning, the one lease at a time until it releases
     else:
@@ -381,35 +383,58 @@ def to_yielded(entry: Record, moment: float, rank: float | None) -> None:
 
 
 HEAD_DROPPED = "head_dropped"  # when a head gave way to leases with no end estimate (fathers#160; epoch seconds)
+LOCK_OWNER = "lock_owner"  # {"pid", "start"} of the process that waits for the lock (fathers#159 review)
+LOCK_YIELD = "lock_yield"  # a lease that yielded for a lock: its ageing counts on from before (fathers#159 review)
 LOCK = "lock"  # the path a yielded lease's command waits to lock (fathers#159); granted again once it has it
 
 
 def lock_of(entry: Mapping[str, Any]) -> str | None:
-    """The lock a lease gave up its slots to wait for (`slotfather lock`, fathers#159), or None. While it is set the
-    lease waits without a place a grant can give: nothing grants it (schedule.plan()), and once the lock is taken
-    the mark goes and it is granted again as any waiter in its place. An older client reads past the field: it
-    sees a yielded lease and may grant it early, which only holds the slots as before."""
+    """The lock a lease's command waits for (`slotfather lock`, fathers#159), or None. On a yielded lease the
+    mark keeps it from a grant (schedule.plan()) until the lock is taken; on a held one (other work runs under
+    the lease, so it keeps its slots) it only says so. An older client reads past the field: it sees a yielded
+    lease and may grant it early, which only holds the slots as before (to_held() clears the mark)."""
     value: object = entry.get(LOCK)
     return value if isinstance(value, str) and value else None
 
 
-def to_lock_waiting(entry: Record, moment: float, lock: str) -> None:
-    """A held lease back among the waiters at `moment` while its command waits to lock `lock`: yielded as
-    to_yielded() writes it (an older client reads it as a lease that yielded), in its own place (no pinned rank)
-    and without counting a polite yield (`yields`, which YIELDS_MAX caps)."""
-    yields = entry.get("yields")
-    to_yielded(entry, moment, None)
-    entry.pop("rank", None)
+def lock_owner(entry: Mapping[str, Any]) -> tuple[int, str] | None:
+    """The process that waits for the lock (`lock_owner`: its pid and start), whose death clears the mark
+    (queue.reap()); None for a mark without one, which nothing can keep."""
+    owner: object = entry.get(LOCK_OWNER)
+    if isinstance(owner, dict):
+        pid, start = cast(dict[str, Any], owner).get("pid"), cast(dict[str, Any], owner).get("start")
+        if type(pid) is int and pid > 0 and isinstance(start, str):
+            return pid, start
+    return None
+
+
+def to_lock_waiting(entry: Record, moment: float, lock: str, owner: tuple[int, str]) -> None:
+    """A held lease back among the waiters at `moment` while its command (the process `owner`) waits to lock
+    `lock`: yielded as to_yielded() writes it (an older client reads it as a lease that yielded), keeping its place
+    (its rank, pinned or not, and its ageing, which counts on from before: LOCK_YIELD) and without counting a polite
+    yield (`yields`, which YIELDS_MAX caps)."""
+    yields, rank = entry.get("yields"), entry.get("rank")
+    to_yielded(entry, moment, rank)
+    if rank is None:
+        entry.pop("rank", None)
     if yields is None:
         entry.pop("yields", None)
     else:
         entry["yields"] = yields
-    entry[LOCK] = lock
+    entry.update({LOCK: lock, LOCK_OWNER: {"pid": owner[0], "start": owner[1]}, LOCK_YIELD: True})
+
+
+def to_lock_noted(entry: Record, lock: str, owner: tuple[int, str]) -> None:
+    """A held lease whose command waits to lock `lock` while other work runs under it: it keeps its slots and only
+    says what it waits for (fathers#159 review)."""
+    entry.update({LOCK: lock, LOCK_OWNER: {"pid": owner[0], "start": owner[1]}})
 
 
 def lock_taken(entry: Record) -> None:
-    """The lock a yielded lease waited for is taken: it waits to be granted again as any yielded lease."""
+    """The lock wait is over (taken, given up, or its waiter gone): the mark goes; a yielded lease then waits to be
+    granted again as any yielded lease, in its place."""
     entry.pop(LOCK, None)
+    entry.pop(LOCK_OWNER, None)
 
 
 def trial_yielded(entry: Mapping[str, Any], rank: float | None) -> Record:

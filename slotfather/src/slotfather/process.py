@@ -31,7 +31,7 @@ SWEEP = "pid=,ppid=,uid=,rss=,tty=,lstart=,command="  # the sweep's snapshot
 CPU = "pid=,ppid=,%cpu=,rss=,comm="  # the dashboard block's CPU sample
 STARTS = "pid=,stat=,lstart="  # the sweep's check before a signal; running()
 OWNER = "uid="  # process_uid()
-NAMES = "pid=,comm="  # names(): the idle check's container rule
+NAMES = "pid=,comm="  # names(): the program of a process (the lock wait's helpers)
 ENVIRONMENT = "pid=,command="  # with -wwE: the command and, where shown, the environment
 ARGUMENTS = "pid=,command="  # the full arguments, without the environment
 
@@ -194,6 +194,24 @@ def names(pids: Iterable[int], timeout: float = 5) -> dict[int, str]:
         number, _, name = line.strip().partition(" ")
         if number.isdigit() and name.strip():
             found[int(number)] = os.path.basename(name.strip())
+    return found
+
+
+def commands(pids: Iterable[int], timeout: float = 5) -> dict[int, str]:
+    """pid -> the command line (arguments, never the environment) of those of `pids` still running, from one
+    targeted ps (arguments()); {} when ps gives no answer (a caller reads that as "not known")."""
+    wanted = set(pids)
+    if not wanted:
+        return {}
+    try:
+        answer = arguments(wanted, timeout)
+    except PsError:
+        return {}
+    found: dict[int, str] = {}
+    for line in answer.stdout.splitlines():
+        number, _, command = line.strip().partition(" ")
+        if number.isdigit() and command.strip():
+            found[int(number)] = command.strip()
     return found
 
 

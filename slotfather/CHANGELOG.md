@@ -11,10 +11,14 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   and past `reservation_timeout` (`order --reservation-timeout S`, default 30 minutes, 0: never) the head gives
   way, naming the leases (its waiting line, queue.log, `request.head_dropped`). `status` says `head LABEL blocked
   by leases ...; N slots idle`; `status --json` adds `blocked_by`, `idle_slots` and `gave_way` where they apply.
-- `slotfather lock PATH -- COMMAND` runs COMMAND holding a `flock` on PATH; while it waits for the lock, the lease
-  it runs under gives up its slots (in its own place, never granted meanwhile) and takes them back before
-  COMMAND runs. `status` shows `waiting-for-lock=PATH`, `status --json` and the dashboard block `lock`
-  (fathers#159).
+  A `reservation_timeout` other than 30 minutes saved in order.json makes a slotfather before it refuse the file
+  and fall back to the window order, as for the earlier knobs (`slotfather order` says so).
+- `slotfather lock PATH -- COMMAND` runs COMMAND holding a `flock` on PATH. While it waits for the lock, the lease
+  it runs under gives up its slots if nothing else runs under it (in its own place and ageing, never granted
+  meanwhile) and keeps them otherwise; once the lock is taken, or a signal ends the wait, it waits until the lease
+  is held again. A waiter killed outright leaves a mark the next look clears, and work starting under such a lease
+  takes its slots back. `status` shows `waiting-for-lock=PATH`, `status --json` and the dashboard block `lock`;
+  EVENTS gets `lease.lock_ended` (fathers#159).
 - `status --json` gives every entry its `phase` (`waiting`, `yielded`, `held`, `asked` or `unknown`).
 - `run` without `--label` names the request after its project (the git repository of its directory, never a temporary
   one), the part of the command that names the work and its lane, ticket and phase: `godfather · measure_cpu`,
@@ -132,10 +136,10 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 ### Fixed
 
 - A request run outside any git repository (a temporary directory, a clean worktree there) no longer gets a
-  run type named after its command (`true · check`, `echo · check`): its run type keys by its label's family,
-  so its runs form one series whatever their command (fathers#106).
-- A lease whose tree runs a container or VM program (`docker`, `podman`, `qemu-system-*`, `limactl`, ...) is
-  never idle, though the work it waits on uses no host CPU (fathers#159).
+  run type named after its command (`true · check`, `echo · check`): its run type keys by its label's family, or
+  without a label of its own by its phase alone, so its runs form one series whatever their command (fathers#106).
+- A lease whose tree runs a container or a virtual machine (`docker run`, `docker compose up`, `podman exec`,
+  `qemu-system-*`, `vfkit`, ...) is never idle, though that work uses no host CPU (fathers#159).
 - `procs --json --cwd` no longer lists in `cwd_unknown` or `lease_unknown` a process that exited between the scan
   and the read of its directory or environment (a short-lived `lsof`, git or shell helper), which made
   `lanefather done` refuse nearly every lane on a busy machine; only one still running with the same start

@@ -5,19 +5,30 @@ import sys as _path_sys
 from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 
+import contextlib
+import io
 import json
+import os
+from pathlib import Path
+import signal
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Any
 import unittest
+from unittest import mock
 
+from test_entry_pins import Queue
 from test_live_cutover import CutoverCase
 from test_slotfather import TOOL, WORK, SlotCase
 
+from slotfather import client as sf_client
 from slotfather import entry as sf_entry
 from slotfather import idle as sf_idle
+from slotfather import process as sf_process
 from slotfather import schedule as sf_schedule
+from slotfather import usage as sf_usage
 
 
 class LockTests(SlotCase):
@@ -30,6 +41,17 @@ class LockTests(SlotCase):
     def entries(self, *options: str) -> dict[str, dict[str, Any]]:
         found = json.loads(self.tool("status", "--json", *options).stdout)
         return {e["label"]: e for e in found["entries"]}
+
+    def raw(self, label: str) -> dict[str, Any]:
+        """The queue entry of `label` as written (its lock owner is in no output)."""
+        for path in (self.state / "queue").glob("*.json"):
+            entry = json.loads(path.read_text())
+            if entry.get("label") == label:
+                return entry
+        raise AssertionError(f"no entry {label}")
+
+    def queue_log(self) -> str:
+        return (self.state / "queue.log").read_text()
 
     def locked(self, label: str, then: str = "") -> subprocess.Popen[str]:
         """`slotfather run -n 1 --label LABEL -- slotfather lock LOCK -- <work LABEL>`, then `<work THEN>` under
@@ -70,12 +92,71 @@ class LockTests(SlotCase):
         yielded = [e for e in events if e["kind"] == "lease.yielded"]
         self.assertEqual([(str(self.lock), f"lock {self.lock}")],
                          [(e["details"]["lock"], e["details"]["to"]["label"]) for e in yielded])
+        ended = [e["details"] for e in events if e["kind"] == "lease.lock_ended"]
+        self.assertEqual([(str(self.lock), "took", True)], [(d["lock"], d["why"], d["yielded"]) for d in ended])
         for label in ("a2", "b"):
             self.release(label)
         for process in (first, second, third):
             self.finish(process)
         history = [json.loads(line) for line in (self.state / "history.jsonl").read_text().splitlines()]
         self.assertEqual("released", next(h for h in history if h["label"] == "b")["outcome"])
+
+    def waiting_b(self, then: str = "b2") -> subprocess.Popen[str]:
+        """a holds the lock (then runs a2); b waits for it, yielded: the queue entry names its waiter."""
+        self.processes_a = self.locked("a", then="a2")
+        self.started("a")
+        second = self.locked("b", then=then)
+        self.wait_for(lambda: self.entries().get("b", {}).get("state") == "waiting", "b to give up its slot")
+        return second
+
+    def test_a_waiter_killed_outright_leaves_no_mark_the_next_look_keeps(self) -> None:
+        second = self.waiting_b()
+        owner = self.raw("b")["lock_owner"]["pid"]
+        os.kill(owner, signal.SIGKILL)
+        self.assertEqual(0, self.tool("slots", "2").returncode)  # a look that grants, as any client's next one
+        self.wait_for(lambda: self.entries()["b"]["state"] == "held", "b to be granted again")
+        self.assertNotIn("lock", self.raw("b"))
+        self.assertIn(f"the waiter for lock {self.lock} is gone (pid {owner})", self.queue_log())
+        for label in ("a", "a2", "b2"):
+            self.release(label)
+        for process in (self.processes_a, second):
+            process.communicate(timeout=20)
+
+    def test_a_signal_ends_the_wait_only_once_the_lease_holds_its_slots_again(self) -> None:
+        second = self.waiting_b()
+        third = self.request("c", 1)
+        self.started("c")  # b's slot is taken: after the signal b must wait for one before anything runs on
+        os.kill(self.raw("b")["lock_owner"]["pid"], signal.SIGTERM)
+        self.wait_for(lambda: f"stopped waiting for lock {self.lock}" in self.queue_log(), "the wait to end")
+        self.assertNotIn("lock", self.raw("b"))
+        self.assertEqual("waiting", self.entries()["b"]["state"])
+        self.assertNotIn("start b2", self.events(), "nothing runs on under b before it holds its slot")
+        self.release("c")
+        self.started("b2")
+        self.assertEqual("held", self.entries()["b"]["state"])
+        for label in ("a", "a2", "b2"):
+            self.release(label)
+        for process in (self.processes_a, second, third):
+            process.communicate(timeout=20)
+
+    def test_a_lease_with_other_work_running_keeps_its_slots_and_says_what_it_waits_for(self) -> None:
+        first = self.locked("a", then="a2")
+        self.started("a")
+        busy = ('sh -c \'while [ ! -e "$RELEASE/bg" ]; do sleep 0.05; done\' & '
+                '"$TOOL" lock "$LOCK" -- sh -c "$WORK" work b; wait')
+        second = self.request("b", 1, "sh", "-c", busy)
+        self.wait_for(lambda: self.entries().get("b", {}).get("lock") == str(self.lock), "b to wait for the lock")
+        self.assertEqual(("held", "held"), (self.entries()["b"]["state"], self.entries()["b"]["phase"]))
+        self.assertIn("2 of 2 slots held", self.status())
+        self.assertIn(f"waiting-for-lock={self.lock}", self.status())
+        self.assertNotIn("while waiting for lock", self.queue_log(), "it yields nothing")
+        self.release("a")
+        self.started("b")
+        self.assertNotIn("lock", self.raw("b"))
+        for label in ("a2", "b", "bg"):
+            self.release(label)
+        for process in (first, second):
+            self.finish(process)
 
     def test_a_free_lock_runs_at_once_and_outside_a_lease_it_is_a_plain_lock(self) -> None:
         result = subprocess.run([TOOL, "lock", str(self.lock), "--", "sh", "-c", "exit 3"], env=self.env,
@@ -95,7 +176,7 @@ class OlderClientTests(CutoverCase):
         pid, start = self.sleeper()
         entry: dict[str, Any] = {"pid": pid, "start": start, "count": 1, "label": "b", "cmd": "make b",
                                  "since": "2026-11-11T00:00:00Z", "state": "held", "granted": "2026-11-11T00:01:00Z"}
-        sf_entry.to_lock_waiting(entry, time.time(), "/tmp/cache.lock")
+        sf_entry.to_lock_waiting(entry, time.time(), "/tmp/cache.lock", (pid, start))
         (state / "queue" / f"0000000001-{pid}.json").write_text(json.dumps(entry))
         old = self.drive(self.old_root, state, "look")
         self.assertEqual([["b", "waiting", "normal", None, 1]], old["status"])
@@ -113,13 +194,77 @@ class RuleTests(unittest.TestCase):
         sf_entry.lock_taken(waiting)
         self.assertEqual([waiting], sf_schedule.plan([waiting], [], 2, 1_800_000_000.0).grants)
 
-    def test_a_container_or_vm_program_counts_as_work(self) -> None:
-        for name in ("docker", "docker-compose", "podman", "qemu-system-aarch64", "limactl", "vfkit", "colima"):
-            with self.subTest(name=name):
-                self.assertTrue(sf_idle.container(name))
-        for name in ("python3", "cargo", "dockerize", "sh"):
-            with self.subTest(name=name):
-                self.assertFalse(sf_idle.container(name))
+    def test_a_lock_wait_keeps_the_leases_place_and_ageing_and_a_grant_clears_its_mark(self) -> None:
+        entry: dict[str, Any] = {"label": "b", "count": 1, "since": "2026-11-11T00:00:00Z", "state": "held",
+                                 "priority": "batch", "granted": "2026-11-11T02:00:00Z", "rank": 1762819000.0}
+        sf_entry.to_lock_waiting(entry, 1762830000.0, "/tmp/x.lock", (4242, "Wed Nov 11 00:00:00 2026"))
+        self.assertEqual((1762819000.0, sf_entry.epoch("2026-11-11T00:00:00Z") or sf_entry.ageing_since(entry)),
+                         (entry["rank"], sf_entry.ageing_since(entry)), "its rank and its ageing as before")
+        self.assertEqual((4242, "Wed Nov 11 00:00:00 2026"), sf_entry.lock_owner(entry))
+        sf_entry.to_held(entry, "2026-11-11T03:00:00Z", 1762830100.0)  # an older client grants it while it waits
+        self.assertEqual((None, None, None), (sf_entry.lock_of(entry), sf_entry.lock_owner(entry), entry.get("lock_yield")))
+
+    def test_only_what_runs_a_container_or_vm_counts_as_work(self) -> None:
+        for command in ("docker run --rm alpine true", "/usr/local/bin/docker compose up", "podman exec -it x sh",
+                        "docker-compose run web", "qemu-system-aarch64 -m 2048", "/opt/homebrew/bin/vfkit --cpus 2"):
+            with self.subTest(command=command):
+                self.assertTrue(sf_idle.container(command))
+        for command in ("kubectl port-forward svc/x 8080", "docker ps", "limactl list", "colima status", "python3 x",
+                        "dockerize -wait tcp://db", ""):
+            with self.subTest(command=command):
+                self.assertFalse(sf_idle.container(command))
+
+
+class ResumeTests(unittest.TestCase):
+    """Work that starts under a lease that gave up its slots for a lock takes them back (fathers#159 review): a
+    nested run there must not wait for a grant the lock mark forbids."""
+
+    def test_a_nested_run_clears_the_mark_before_it_waits_for_the_grant(self) -> None:
+        root = Path(tempfile.mkdtemp(prefix="slotfather-lock-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(root, ignore_errors=True))
+        queue = Queue(root)
+        path = queue.entry(90001, "lane", 1, "held", since=-600)
+        queue.table[90002] = (90001, "Wed Nov 12 11:00:00 2025")  # the waiter, alive
+        seen: list[Any] = []
+        with queue.running(), mock.patch.dict(os.environ, {"SLOTFATHER_LEASE": str(path)}), \
+                contextlib.redirect_stderr(io.StringIO()):
+            entry = json.loads(path.read_text())
+            sf_entry.to_lock_waiting(entry, time.time(), "/tmp/x.lock", (90002, "Wed Nov 12 11:00:00 2025"))
+            path.write_text(json.dumps(entry))
+            def held_again(lease: Path) -> None:
+                seen.append(json.loads(lease.read_text()))
+
+            with mock.patch.object(sf_client, "held_again", held_again):
+                lease = sf_client.inherited(dict(queue.table))
+        self.assertIsNotNone(lease)
+        self.assertEqual([None], [sf_entry.lock_of(e) for e in seen], "the mark is gone before it waits")
+        self.assertIn("work resumed while waiting for lock /tmp/x.lock", (queue.directory / "queue.log").read_text())
+
+
+class ContainerIdleTests(unittest.TestCase):
+    """The holder's sampler (usage.Watch) never records a tree that runs a container as idle (fathers#159)."""
+
+    def since(self, argv0: str) -> Any:
+        root = Path(tempfile.mkdtemp(prefix="slotfather-idle-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(root, ignore_errors=True))
+        entry = root / "state" / "queue" / "0000000001-1.json"
+        entry.parent.mkdir(parents=True)
+        entry.write_text("{}")
+        child = subprocess.Popen([argv0, "-c", "sleep 30; :", "run", "alpine"], executable="/bin/sh")
+        self.addCleanup(lambda: (child.kill(), child.wait()))
+        deadline = time.monotonic() + 10
+        while not any(ppid == child.pid for ppid, _ in sf_process.processes().values()):
+            self.assertLess(time.monotonic(), deadline, "the sleep to start")
+        with mock.patch.dict(os.environ, {"SLOTFATHER_DIR": str(root / "state"), "SLOTFATHER_LEGACY_DIRS": ""}):
+            watch = sf_usage.Watch(sf_usage.TreeUsage(child.pid, time.time() - 1), root / "state", entry=entry)
+            for _ in range(2):
+                watch.observe()
+                watch.record_idle()
+        return json.loads(sf_idle.path(entry).read_text())["since"]
+
+    def test_a_tree_running_a_container_is_never_idle(self) -> None:
+        self.assertIsNotNone(self.since("sh"), "the same tree as a plain shell is low")
+        self.assertIsNone(self.since("docker"))
 
 
 if __name__ == "__main__":

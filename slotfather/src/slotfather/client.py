@@ -148,10 +148,20 @@ def inherited(table: _queue.Table) -> Lease | None:
     if found is None:
         return None
     path, entry, count = found
+    resume_lock_yield(path, entry)
     if "yielded_at" in entry:
         held_again(path)  # it yielded: what runs under it waits until it is granted again
     # A lease in an earlier queue is honoured but not handed on: nested runs find its holder among their ancestors.
     return Lease(count, path if path.parent.parent == _config.state_dir() else None, inherited=True)
+
+
+def resume_lock_yield(path: Path, entry: dict[str, Any]) -> None:
+    """New work under a lease that gave up its slots while its command waits on a lock (fathers#159 review): the
+    lease takes the yield back (its lock mark goes, `why` "resumed") so that it is granted again in its place; the
+    work then waits for that grant as under any yielded lease (held_again()). Without this a nested run in the
+    lease's tree would wait for a grant the mark forbids, while the lock it waits behind may be its own tree's."""
+    if path.parent.parent == _config.state_dir() and _entry.lock_of(entry) is not None and not _entry.is_held(entry):
+        _leases.lock_taken(path, "resumed")
 
 
 def policy() -> str:

@@ -164,7 +164,9 @@ Godfather. The tests validate every line with the shared `common/eventcheck.py`.
 | `request.waiting_long` | a waiter says it has waited the warn time (level warn) | `waited`, `est_start`, `behind` (`earlier`, `running`), `priority`, `aged` |
 | `lease.yield_asked` | a waiter, or `ask-yield` (`by_hand`), asks a lease to yield | `count`, `for` (`id`, `label`, `priority`) |
 | `lease.yield_withdrawn` | that request is withdrawn | — |
-| `lease.yielded` | the lease yields | `count`, `to` (`id`, `label`), `yields` |
+| `lease.yielded` | the lease yields; for a lock (fathers#159), `to` is `{"id": null, "label": "lock PATH"}` | `count`, `to` (`id`, `label`), `yields`, `lock` (for a lock) |
+| `lease.lock_ended` | a lease's wait for a lock ends (fathers#159; level warn when its waiter is gone) | `lock`, `why` (`took`, `stopped`, `resumed`, `gone`), `yielded`, `waited` |
+| `request.head_dropped` | a head blocked by leases with no end estimate gives way, `late` seconds past its reserved start (fathers#160; actor `tool`, level warn) | `count`, `late`, `blocked_by` (`id`, `label`, `pid`) |
 | `capacity.changed` | a capacity is saved or reset (a save that changes nothing is no event, as for order) (subject `capacity`) | `saved` (capacity.json, `null` for reset), `mode`, `slots` |
 | `order.changed` | order settings are saved or reset (subject `order`) | `saved` (the keys the change named) or `reset: true` |
 | `process.swept` | `sweep --live` stops a leftover process (subject `process`, level warn) | `action`, `class`, `kind`, `age`, `processes`, `cmd` |
@@ -213,20 +215,36 @@ with the start time the caller saw (`status --json`'s `start`):
 ## Waiting on a lock
 
 `slotfather lock PATH -- COMMAND...` (fathers#159) runs COMMAND holding an exclusive `flock` on PATH (created if
-missing), released when it exits; it exits with COMMAND's status. When another process holds the lock, the lease the
-caller runs under (`SLOTFATHER_LEASE`, or a holder among its ancestors) gives up its slots while it waits: the entry
-goes back among the waiters in its own place, as a yielded lease (`yielded_at`, `first_granted`) with `lock: PATH`,
-and nothing grants it while that mark stands. Once the lock is taken the mark goes and COMMAND runs only after the
-lease is granted again. A lock wait spends none of the lease's polite yields (`yields`, `YIELDS_MAX`). Outside a
-lease it is a plain lock. A signal that ends the wait leaves the lease an ordinary yielded waiter, granted again at
-the next look. `status` tags such a waiter `waiting-for-lock=PATH`, `status --json` gives it `lock` (only on such an
-entry), the dashboard block's items carry `lock` (empty when none), queue.log says `yielded N (ENTRY) while waiting
-for lock PATH` and `took lock PATH`, and EVENTS gets a `lease.yielded` with `details.lock` and `to.label` `lock PATH`.
-An older client reads the entry as a yielded waiter and may grant it during the wait, which only holds the slots as
+missing), released when it exits; it exits with COMMAND's status and runs it as `slotfather run` runs its command
+(SIGTERM and SIGHUP passed on, 128 + the signal that ended it). Outside a lease it is a plain lock. When another
+process holds the lock, the lease the caller runs under (`SLOTFATHER_LEASE`, or a holder among its ancestors):
+
+- **gives up its slots** while it waits, when nothing else runs under it (no process in its holder's tree but the
+  waiter and its ancestors; Slotfather's own `ps` and `lsof` aside): the entry goes back among the waiters in its
+  own place, keeping its rank and its ageing (`lock_yield`), as a yielded lease (`yielded_at`, `first_granted`)
+  with `lock: PATH` and `lock_owner: {"pid", "start"}`, the waiting process; nothing grants it while the mark
+  stands, and a lock wait spends none of the lease's polite yields (`yields`, `YIELDS_MAX`);
+- **keeps its slots** otherwise, since other work (a parallel step, a container) runs on them, and only says what it
+  waits for: `lock` and `lock_owner` on the held entry.
+
+Once the lock is taken the mark goes and COMMAND runs only after the lease is held again. A signal that ends the wait
+clears the mark too, and the waiter still waits until the lease is held before it exits, so whatever runs next under
+the lease runs on its slots. A waiter that dies without clearing its mark (SIGKILL) leaves a mark the next look
+clears (its `lock_owner` is not running), and the lease is granted again at the next look that grants. Work that
+starts under a lease that gave up its slots for a lock (a nested `slotfather run`, or `slotfather lock` on a free
+lock) takes them back: the mark goes and the work waits for the grant, as under any yielded lease; so a lease's own
+tree never waits on its own mark. `status` tags such an entry `waiting-for-lock=PATH`, `status --json` gives it
+`lock` (only on such an entry), the dashboard block's items carry `lock` (empty when none), queue.log says
+`yielded N (ENTRY) while waiting for lock PATH` and how the wait ended, and EVENTS gets a `lease.yielded` with
+`details.lock` and `to: {"id": null, "label": "lock PATH"}`, and `lease.lock_ended` with `lock`, `why` (`took`,
+`stopped`, `resumed`, `gone`), `yielded` and `waited` (seconds, where it yielded). A grant clears a stale mark. An
+older client reads the entry as a yielded waiter and may grant it during the wait, which only holds the slots as
 before. Slotfather never yields a lease by itself for a lock it sees: a guess would free slots under running work.
 
-While a container or virtual machine program runs in a lease's tree (`docker`, `podman`, `qemu-system-*`,
-`limactl`, `vfkit` and the like: `idle.CONTAINERS`), the lease is never idle, though its work uses no host CPU.
+While a process in a lease's tree runs a container or a virtual machine (`docker`/`podman`/`nerdctl`/`container`
+with `run`, `exec`, `start`, `attach`, `up`, `build`; `docker-compose up`; `qemu-system-*`, `vfkit`, `firecracker`
+and the like: `idle.container()`, by its command line), the lease is never idle, though its work uses no host CPU.
+A tool of that family that runs none (`docker ps`, `kubectl port-forward`, `limactl list`) is no such work.
 
 ## Process queries
 

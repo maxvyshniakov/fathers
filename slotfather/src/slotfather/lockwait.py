@@ -1,18 +1,24 @@
 """`slotfather lock PATH -- COMMAND` (fathers#159): run COMMAND holding an exclusive flock on PATH, without keeping a
-slot while it waits for it.
+slot while it waits for it, when nothing else needs that slot.
 
-When the lock is free it is taken at once and COMMAND runs. When another process holds it, the lease this process
-runs under (SLOTFATHER_LEASE, or a holder among its ancestors; queue.inherited_lease()) gives up its slots while
-this waits (leases.yield_for_lock(): yielded, in its own place, and never granted while it waits); once the lock is
-taken it waits to be granted again (leases.lock_taken()) and only then runs COMMAND. Outside a lease it is a plain
-lock. The lock is held by this process, not inherited by COMMAND, and released when this exits."""
+When the lock is free it is taken at once and COMMAND runs (under a lease that had given up its slots for a lock,
+this is new work: the lease takes them back first, client.resume_lock_yield()). When another process holds it, the
+lease this process runs under (SLOTFATHER_LEASE, or a holder among its ancestors; queue.inherited_lease()):
+- gives up its slots while this waits if nothing else runs under it (no process in the holder's tree but this one
+  and its ancestors): leases.yield_for_lock(), yielded in its own place and never granted while it waits;
+- otherwise keeps them, since other work (a parallel step, a container) runs on them, and only says what it waits
+  for (`lock` on the held entry).
+Either way the mark names this process (`lock_owner`), so a waiter that dies, even by SIGKILL, leaves a mark the
+next look clears (queue.reap()). Once the lock is taken, or a signal ends the wait, the mark goes and this waits until
+the lease is held again before it runs COMMAND or exits: whatever runs next under the lease runs on its slots.
+Outside a lease it is a plain lock. The lock is held by this process, not inherited by COMMAND, and released when
+this exits. COMMAND runs as `slotfather run` runs its command (runner.execute())."""
 from __future__ import annotations
 
 import fcntl
 import os
 from pathlib import Path
 import signal
-import subprocess
 import sys
 from types import FrameType
 
@@ -20,6 +26,8 @@ from . import config as _config
 from . import entry as _entry
 
 USAGE = "usage: slotfather lock PATH -- COMMAND..."
+SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+HELPERS = ("ps", "lsof")  # what Slotfather itself runs for a moment in a lease's tree: no work of the lease's
 
 
 class Stopped(Exception):
@@ -36,15 +44,8 @@ def parse(argv: list[str]) -> tuple[Path, list[str]]:
     return Path(os.path.expanduser(argv[0])), argv[2:]
 
 
-def enclosing() -> Path | None:
-    """The held lease of this queue this process runs under, or None (none, an earlier queue's, or one already
-    waiting)."""
-    from . import process as _process
-    from . import queue as _queue
-    found = _queue.inherited_lease(_process.processes())
-    if found is None or found[0].parent.parent != _config.state_dir() or not _entry.is_held(found[1]):
-        return None
-    return found[0]
+def stop(number: int, _frame: FrameType | None) -> None:
+    raise Stopped(number)
 
 
 def command(argv: list[str]) -> int:
@@ -53,59 +54,87 @@ def command(argv: list[str]) -> int:
         handle = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0), 0o666)
     except OSError as error:
         raise _config.SlotError(f"cannot open lock {path}: {error.strerror}") from None
+    # The handlers come first: a signal at any moment from here leaves no mark behind (fathers#159 review)
+    before = {number: signal.signal(number, stop) for number in SIGNALS}
     try:
-        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        wait(handle, path)
-    return execute(run)
-
-
-def wait(handle: int, path: Path) -> None:
-    """Waits for the lock with the enclosing lease's slots given up, then for the slots again."""
-    from . import leases as _leases
-    lease = enclosing()
-    if lease is not None and not _leases.yield_for_lock(lease, str(path)):
-        lease = None
-    print(f"slot: waiting for lock {path}" + ("; this lease's slots are free meanwhile" if lease else ""),
-          file=sys.stderr, flush=True)
-
-    def stop(number: int, _frame: FrameType | None) -> None:
-        raise Stopped(number)
-
-    before = {number: signal.signal(number, stop) for number in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
-    try:
-        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            free = True
+        except BlockingIOError:
+            free = False
+        if free:
+            resume()
+        else:
+            wait(handle, path)
     except Stopped as stopped:
-        if lease is not None:  # what runs on under the lease waits as an ordinary yielded lease, never stuck
-            _leases.lock_taken(lease, wait=False)
         raise SystemExit(128 + stopped.number) from None
     finally:
         for number, handler in before.items():
             signal.signal(number, handler)
-    if lease is not None:
-        print(f"slot: took lock {path}; waiting for this lease's slots again", file=sys.stderr, flush=True)
-        from . import client as _client
-        _leases.lock_taken(lease)
-        _client.held_again(lease)
-        print("slot: holding the slots again", file=sys.stderr, flush=True)
+    from . import runner as _runner
+    status, _ = _runner.execute(run, {})
+    return status
 
 
-def execute(run: list[str]) -> int:
-    """Runs the command with the lock held; its exit status, or 128 + the signal that ended it. SIGTERM and SIGHUP
-    are passed on to it; SIGINT, which a terminal sends the whole group, is left to it."""
+def resume() -> None:
+    """The lock was free: under a lease that gave up its slots for a lock, COMMAND is new work, so the lease takes
+    them back and this waits for its grant before COMMAND runs."""
+    from . import client as _client
+    from . import process as _process
+    from . import queue as _queue
+    found = _queue.inherited_lease(_process.processes())
+    if found is not None and _entry.lock_of(found[1]) is not None and not _entry.is_held(found[1]):
+        _client.resume_lock_yield(found[0], found[1])
+        _client.held_again(found[0])
+
+
+def enclosing() -> tuple[Path, tuple[int, str], bool] | None:
+    """The held lease of this queue this process runs under, with this process's identity and whether nothing else
+    runs under it (no process in its holder's tree but this one and its ancestors); None when there is none (none,
+    an earlier queue's, or one that waits already)."""
+    from . import lineage as _lineage
+    from . import process as _process
+    from . import queue as _queue
+    table = _process.processes()
+    found = _queue.inherited_lease(table)
+    if found is None or found[0].parent.parent != _config.state_dir() or not _entry.is_held(found[1]):
+        return None
+    me = os.getpid()
+    parents = _lineage.parents_of(table)
+    mine = {*_lineage.ancestors(parents, me), *_lineage.descendants(table, me)}  # this one, its ps, its ancestors
+    others = [pid for pid in _lineage.descendants(table, found[1].get("pid")) if pid not in mine]
+    if others:  # the holder's own sampler runs ps now and then: no work of the lease's
+        names = _process.names(others)
+        others = [pid for pid in others if names.get(pid, "?") not in HELPERS]
+    return found[0], (me, table[me][1] if me in table else ""), not others
+
+
+def wait(handle: int, path: Path) -> None:
+    """Waits for the lock: the enclosing lease marked (yielded when idle, noted otherwise), then held again."""
+    from . import client as _client
+    from . import leases as _leases
+    found = enclosing()
+    lease = found[0] if found is not None else None
     try:
-        child = subprocess.Popen(run)
-    except OSError as error:
-        raise _config.SlotError(f"cannot run {run[0]}: {error.strerror}") from None
-
-    def forward(number: int, _frame: FrameType | None) -> None:
-        child.send_signal(number)
-
-    before = {number: signal.signal(number, forward) for number in (signal.SIGTERM, signal.SIGHUP)}
-    before[signal.SIGINT] = signal.signal(signal.SIGINT, signal.SIG_IGN)  # the terminal sends it to the command
-    try:
-        status = child.wait()
-    finally:
-        for number, handler in before.items():
-            signal.signal(number, handler)
-    return 128 - status if status < 0 else status
+        outcome = None
+        if found is not None:
+            outcome = _leases.yield_for_lock(found[0], str(path), found[1], found[2])
+        note = {"yielded": "; this lease's slots are free meanwhile",
+                "noted": "; this lease keeps its slots: other work runs under it"}.get(outcome or "", "")
+        print(f"slot: waiting for lock {path}{note}", file=sys.stderr, flush=True)
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        if lease is not None:
+            if outcome == "yielded":
+                print(f"slot: took lock {path}; waiting for this lease's slots again", file=sys.stderr, flush=True)
+            _leases.lock_taken(lease, "took")
+            _client.held_again(lease)
+            if outcome == "yielded":
+                print("slot: holding the slots again", file=sys.stderr, flush=True)
+    except Stopped:
+        # A second signal ends this at once (the default handlers); a mark it leaves is cleared by the next look
+        for number in SIGNALS:
+            signal.signal(number, signal.SIG_DFL if number != signal.SIGINT else signal.default_int_handler)
+        if lease is not None:  # whatever runs next under the lease runs on its slots: wait until they are held
+            _leases.lock_taken(lease, "stopped")
+            _client.held_again(lease)
+        raise

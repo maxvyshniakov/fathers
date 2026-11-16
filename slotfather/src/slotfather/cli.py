@@ -392,7 +392,8 @@ def order_command(argv: list[str]) -> int:
     if (changes or reset) and moved:
         print(f"slotfather: note: order.json now holds {', '.join(moved)}, which an older slotfather may not know "
               f"(3e3a621 and older know no classes, those before ageing no aging or warn settings, those before "
-              f"the memory warning allowance no warning_admits): their looks fall "
+              f"the memory warning allowance no warning_admits, those before fathers#160 no "
+              f"reservation_timeout): their looks fall "
               f"back to the window order until they are updated", file=sys.stderr)
     print(order_line(_settings.order_settings(directory)))
     return 0

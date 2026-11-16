@@ -232,48 +232,71 @@ def reprioritize(target: str, priority: str, directory: Path | None = None,
     return changed
 
 
-def yield_for_lock(path: Path, lock: str) -> bool:
-    """Gives up the slots of the held lease at `path` while its command waits to lock `lock` (fathers#159): the
-    lease goes back among the waiters in its own place, marked with the lock (entry.to_lock_waiting()), so that
-    nothing grants it while it waits, and the queue grants at once. Returns False, changing nothing, when the lease
-    is not held (it waits already, or is gone)."""
+def yield_for_lock(path: Path, lock: str, owner: tuple[int, str], idle: bool) -> str | None:
+    """The held lease at `path` while its command (the process `owner`) waits to lock `lock` (fathers#159). With
+    `idle` (nothing else runs under the lease) it gives up its slots: back among the waiters in its own place,
+    marked with the lock and its waiter (entry.to_lock_waiting()), so that nothing grants it while it waits, and the
+    queue grants at once: "yielded". Otherwise other work runs on its slots: it keeps them and only says what it
+    waits for (entry.to_lock_noted()): "noted". None, changing nothing, when the lease is not held."""
     directory = path.parent.parent
     with _state.locked(directory):
         try:
             entry = json.loads(path.read_text())
         except (OSError, ValueError):
-            return False
+            return None
         if not _entry.is_held(entry):
-            return False
-        _entry.to_lock_waiting(entry, time.time(), lock)
+            return None
+        if not idle:
+            _entry.to_lock_noted(entry, lock, owner)
+            _state.write(path, entry)
+            return "noted"
+        _entry.to_lock_waiting(entry, time.time(), lock, owner)
         _state.write(path, entry)
         _state.marker(path).unlink(missing_ok=True)  # a yield request is moot: its slots are free now
-        _events.record(directory, f"yielded {entry['count']} ({path.name}) while waiting for lock {lock}", "lease.yielded", _events.request(entry, path),
-                     {"count": entry["count"], "to": {"id": None, "label": f"lock {lock}"}, "lock": lock,
-                      "yields": int(entry.get("yields") or 0)}, _events.holder(entry))
+        _events.record(directory, f"yielded {entry['count']} ({path.name}) while waiting for lock {lock}",
+                       "lease.yielded", _events.request(entry, path),
+                       {"count": entry["count"], "to": {"id": None, "label": f"lock {lock}"}, "lock": lock,
+                        "yields": int(entry.get("yields") or 0)}, _events.holder(entry))
         with contextlib.suppress(_config.SlotError):  # the next look grants the freed slots otherwise
             grant(directory, _queue.process_table(directory))
-    return True
+    return "yielded"
 
 
-def lock_taken(path: Path, wait: bool = True) -> None:
-    """The lock the yielded lease at `path` waited for is taken (`wait`: its client waits to be granted again,
-    client.held_again()) or its wait ended: it becomes an ordinary yielded lease in its own place."""
+def lock_taken(path: Path, why: str = "took") -> None:
+    """The lock wait of the lease at `path` is over (`why`: "took" the lock, "stopped" waiting, work "resumed"
+    under the lease): the mark goes, recorded in queue.log and EVENTS (`lease.lock_ended`); a yielded lease is then
+    an ordinary yielded lease in its place, which its client waits to be granted again (client.held_again())."""
     directory = path.parent.parent
     with _state.locked(directory):
         try:
             entry = json.loads(path.read_text())
         except (OSError, ValueError):
             raise _config.SlotError("the lease vanished from the queue") from None
-        if _entry.lock_of(entry) is not None:
-            lock = _entry.lock_of(entry)
-            _entry.lock_taken(entry)
-            _state.write(path, entry)
-            _events.record(directory, f"took lock {lock} for {entry.get('label')} (pid {entry.get('pid')}); waiting for "
-                                  f"{entry['count']} slot(s) again" if wait else
-                       f"stopped waiting for lock {lock} for {entry.get('label')} (pid {entry.get('pid')})")
-            with contextlib.suppress(_config.SlotError):
-                grant(directory, _queue.process_table(directory))
+        ended(directory, path, entry, why)
+
+
+def ended(directory: Path, path: Path, entry: dict[str, Any], why: str) -> None:
+    """lock_taken() under the queue lock: clears the lock mark of `entry` at `path` if it has one, records the end
+    of the wait, and grants (a yielded lease may start again now). A waiter that is gone: queue.clear_lock()."""
+    lock = _entry.lock_of(entry)
+    if lock is None:
+        return
+    yielded = not _entry.is_held(entry)
+    waited = None
+    began = _entry.epoch(entry.get("yielded_at")) if yielded else None
+    if began is not None:
+        waited = round(max(0.0, time.time() - began))
+    _entry.lock_taken(entry)
+    _state.write(path, entry)
+    words = {"took": "took lock", "stopped": "stopped waiting for lock",
+             "resumed": "work resumed while waiting for lock"}[why]
+    again = f"; waiting for {entry['count']} slot(s) again" if yielded else ""
+    _events.record(directory, f"{words} {lock} for {entry.get('label')} (pid {entry.get('pid')}){again}",
+                   "lease.lock_ended", _events.request(entry, path),
+                   {"lock": lock, "why": why, "yielded": yielded, "waited": waited}, _events.holder(entry))
+    if yielded:
+        with contextlib.suppress(_config.SlotError):
+            grant(directory, _queue.process_table(directory))
 
 
 def grant_now(directory: Path) -> None:
