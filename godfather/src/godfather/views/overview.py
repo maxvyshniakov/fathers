@@ -109,9 +109,8 @@ def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, ov
 def draw_panels(canvas: Canvas, model: Model, selected: int, cwd: Optional[str], failure: Optional[str],
                 moment: datetime.datetime, events_filter: Optional[_events.Filter] = None,
                 event: Optional[int] = None, tools: Optional[dict[str, Any]] = None) -> None:
-    shown = model["holders"] or model["waiters"] or event is not None  # DETAILS has something to show
     screen = _layout.overview(canvas.width, canvas.height, _queue.queue_rows(model), _layout.machine_height,
-                              _layout.DETAILS_FLOOR if shown else _layout.DETAILS_MIN)
+                              details_wanted(canvas, model, moment, events_filter, event))
     panels = screen.panels
     canvas.order = screen.order
     if "slots" in panels:
@@ -138,6 +137,18 @@ def draw_panels(canvas: Canvas, model: Model, selected: int, cwd: Optional[str],
             _machine.draw_machine(canvas, rect, model)
     if model.get("stale_since"):  # the last good picture, dimmed, until a snapshot arrives again
         dim_panels(canvas)
+
+
+def details_wanted(canvas: Canvas, model: Model, moment: datetime.datetime, events_filter: Optional[_events.Filter],
+                   event: Optional[int]) -> int:
+    """The rows DETAILS asks the layout for: its key fields in its frame, the most any QUEUE entry has; with the
+    queue empty, the shown event's facts, else its least."""
+    rows = _details.key_rows(model, moment, _common.marks_of(canvas), canvas.theme.track)
+    if not rows and event is not None:
+        found = newest_first(model, events_filter or Filter())
+        if 0 <= event < len(found):
+            rows = len(_details.event_facts(found[event], moment, _common.marks_of(canvas)))
+    return _layout.framed(rows) if rows else _layout.DETAILS_MIN
 
 
 SUMMARIES = {"lanes": _pages.lanes_summary, "processes": _pages.procs_summary}  # SLOTS' bottom border, by page

@@ -93,11 +93,11 @@ full pages one key away.
     - From 83 to 109 columns: QUEUE, EVENTS the full width under it, then one bottom row with MACHINE on the left and
       DETAILS on the right. Tab goes by columns, left to right and each top to bottom: QUEUE, EVENTS, DETAILS.
     - Heights by floors and priorities: first every panel's comfortable least (QUEUE up to 6 rows, EVENTS 3 rows, the
-      bottom row DETAILS' 9 key fields or MACHINE's natural height, whichever is more; only 5 DETAILS rows with
-      nothing to show). Short of rows the bottom row gives way first (MACHINE's natural height, then MACHINE without
-      its chart, then its least), then EVENTS (one row). Rows left over go to QUEUE up to all its rows, then to the
-      bottom row up to its height, and EVENTS takes the rest. A stacked MACHINE in a taller row gives its chart the
-      extra rows.
+      bottom row DETAILS' key fields, label to owner pid, as many as any QUEUE entry has, or MACHINE's natural
+      height, whichever is more; only 5 DETAILS rows with nothing to show). Short of rows the bottom row gives way
+      first (MACHINE's natural height, then MACHINE without its chart, then its least), then EVENTS (one row). Rows
+      left over go to QUEUE up to all its rows, then to the bottom row up to its height, and EVENTS takes the rest. A
+      stacked MACHINE in a taller row gives its chart the extra rows.
     - Under 83 columns DETAILS has the full-width band and MACHINE the bottom row alone, and EVENTS is not shown, as
       in Slotfather's one-column layout. Too short for the bottom row (under 27 rows with six queue rows), QUEUE and
       DETAILS only.

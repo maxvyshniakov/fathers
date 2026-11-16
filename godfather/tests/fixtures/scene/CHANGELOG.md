@@ -90,9 +90,10 @@ Versions and release rules: [README.md](README.md#versions).
 
 - One column from 83 to 109 columns (fathers#169): EVENTS takes the full-width band under QUEUE and the bottom row
   holds MACHINE on the left and DETAILS on the right; Tab goes QUEUE, EVENTS, DETAILS. Heights come from floors and
-  priorities: QUEUE up to 6 rows, EVENTS 3 rows and a bottom row that shows DETAILS' key fields (label to owner pid)
-  without scrolling come first; short of rows the bottom row gives way first, MACHINE's chart then its blank rows,
-  then EVENTS; rows left over go to QUEUE's rows, then EVENTS. MACHINE in that taller row draws a taller chart.
+  priorities: QUEUE up to 6 rows, EVENTS 3 rows and a bottom row that shows DETAILS' key fields (label to owner
+  pid, as many as any QUEUE entry has) without scrolling come first; short of rows the bottom row gives way first,
+  MACHINE's chart then its blank rows, then EVENTS; rows left over go to QUEUE's rows, then EVENTS. MACHINE in that
+  taller row draws a taller chart.
   Under 83 columns, or where the bottom row gets no rows, DETAILS keeps the band as before.
 - EVENTS' log switch and the focus frame (fathers#165): the title's arrows are `❮ SLOTS LOG ❯`, a size up from
   `◂ ▸` and one cell wide in every terminal, in the frame's colour (the accent while EVENTS has the focus); the key

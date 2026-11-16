@@ -110,9 +110,14 @@ class Overview(NamedTuple):
     note_row: Optional[int] = None  # the small screen's note
 
 
-def queue_height(rows: int) -> int:
-    """QUEUE's natural height for its table rows: a frame and a blank padding row above and below them."""
+def framed(rows: int) -> int:
+    """A panel's height for its content rows: a frame and a blank padding row above and below them (widgets.Panel)."""
     return rows + 4
+
+
+def queue_height(rows: int) -> int:
+    """QUEUE's natural height for its table rows."""
+    return framed(rows)
 
 
 class Band(NamedTuple):
@@ -149,7 +154,8 @@ def overview(width: int, height: int, rows: int, machine_natural: Callable[[int]
              details: int = DETAILS_FLOOR) -> Overview:
     """The overview at this size; `rows` is QUEUE's table rows (its entries, at least one, and the gap between
     running and waiting), `machine_natural` MACHINE's natural height at a width, `details` the rows DETAILS wants
-    (its key fields, or its least with nothing to show)."""
+    (the views ask for its key fields in their frame, the most any QUEUE entry has, or its least with nothing to
+    show)."""
     if width < SMALL_WIDTH or height < SMALL_HEIGHT:
         return Overview("small", {}, ("requests",), Rect(min(2, height - 4), 3, 2, width - 6),
                         SMALL_NOTE_ROW if SMALL_NOTE_ROW < height - 1 else None)
