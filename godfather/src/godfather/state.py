@@ -184,7 +184,7 @@ class AppState:
     overlay: Optional[Overlay] = None
     selection: Selection = Selection()
     scroll: dict[str, int] = field(default_factory=lambda: cast(dict[str, int], {}))  # QUEUE, DETAILS, EVENTS
-    glow: dict[str, float] = field(default_factory=lambda: cast(dict[str, float], {}))  # when each last scrolled
+    glow: dict[str, float] = field(default_factory=lambda: cast(dict[str, float], {}))  # when each last scrolled or flashed
     details: dict[DetailsKey, Loaded] = field(default_factory=lambda: cast(dict[DetailsKey, Loaded], {}))
     colours: dict[EntryId, int] = field(default_factory=lambda: cast(dict[EntryId, int], {}))
     fresh_events: int = 0  # events the filter lets through that arrived while EVENTS was scrolled down
@@ -347,7 +347,8 @@ Event = Union[Key, Mouse, ModelLoaded, ModelFailed, DetailsLoaded, SettingsOpene
 class Effect:
     """quit · load-model · load-details (key, item) · open-settings · settings (item: a settings_model.Request to
     read, check, set or reset) · apply-theme · remember · repaint (every row) · load-news (what's new, from every
-    tool) · save-read (the read versions, state.read)."""
+    tool) · save-read (the read versions, state.read) · flash (key: what lights up as a scrolled thumb does; the
+    reducer takes it into `glow`, the app never sees it)."""
     kind: str
     key: Any = None
     item: Any = None

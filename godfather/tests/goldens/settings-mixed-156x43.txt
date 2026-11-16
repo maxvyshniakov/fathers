@@ -3,17 +3,17 @@
 │  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅│                                                                              │uild-once                            │
 │  lane-644-bui…  lane-465-sta…  deskt│  GODFATHER · this dashboard only                                            ┃│1 slot                               │
 ╰─────────────────────────────────────│    Refresh every             1s                                             ┃│                                     │
-┍━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    Colour theme              Auto                                           ┃│                                     │
-│                                     │  ────────────────────────────────────────────────────────────────────────── ┃│                                     │
-┃  ▶️    lane-644-build-once          │  SLOTFATHER · status read-only, live                                        ┃│ 0.9 of 2 cores                      │
-│  ▶️    lane-465-state-definitions-re│    queue        ~/.local/state/slotfather                                   ┃│ waited 19m34s · running 35m10s      │
-│  ▶️    desktop                      │    slots        6 total · 2 free · 4 held · 2 waiting                       ┃│ processes                           │
-│                                     │    capacity     6 slots · saved, fixed count                                ┃│                                     │
-│  ⏸️    prof51                       │    budgets      CPU 4 (12 cores) · memory 16 (64 GiB)                       ┃│ht/.claude/worktrees/agent-afa3816b  │
-│  ⏸️    lane-555-host-rename-names   │    draining     none                                                        ┃│                                     │
-│                                     │    environment  SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB                     ┃│ht/.claude/worktrees/agent-afa3816b  │
-┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┃  ▶ Capacity                  ‹ Fixed ›                                      ┃┃verify.sh --checks desktop-tests     │
-╭─ ◂ SLOTS LOG ▸ ─── label ───────────│    Slots                     6                                              ┃│ng --jobs 1                          │
+┏━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    Colour theme              Auto                                           ┃│                                     │
+┃                                     │  ────────────────────────────────────────────────────────────────────────── ┃│                                     │
+▕  ▶️    lane-644-build-once          │  SLOTFATHER · status read-only, live                                        ┃│ 0.9 of 2 cores                      │
+┃  ▶️    lane-465-state-definitions-re│    queue        ~/.local/state/slotfather                                   ┃│ waited 19m34s · running 35m10s      │
+┃  ▶️    desktop                      │    slots        6 total · 2 free · 4 held · 2 waiting                       ┃│ processes                           │
+┃                                     │    capacity     6 slots · saved, fixed count                                ┃│                                     │
+┃  ⏸️    prof51                       │    budgets      CPU 4 (12 cores) · memory 16 (64 GiB)                       ┃│ht/.claude/worktrees/agent-afa3816b  │
+┃  ⏸️    lane-555-host-rename-names   │    draining     none                                                        ┃│                                     │
+┃                                     │    environment  SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB                     ┃│ht/.claude/worktrees/agent-afa3816b  │
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━▕  ▶ Capacity                  ‹ Fixed ›                                      ┃▏verify.sh --checks desktop-tests     │
+╭─ ❮ SLOTS LOG ❯ ─── label ───────────│    Slots                     6                                              ┃│ng --jobs 1                          │
 │                                     │    Queue order               Backfill                                       ┃│ht                                   │
 │  11:59:35  ▫       agent-ae72d94beb6│    Backfill margin           3×                                             ┃│                                     │
 │  11:58:33  ▫       agent-a1c75285bdf│    Unknown job runtime       1h                                             ┃│once                                 │

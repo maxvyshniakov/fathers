@@ -3,16 +3,16 @@
 ││                                                                        ││
 ││  Godfather · unreleased · installed 9f600e1                           ┃││
 ╰│                                                                       ┃│╯
-┍│  ADDED                                                                ╹│┑
-││                                                                        ││
-┃│  • Row actions (fathers#88): Enter, a or a right-click on a QUEUE      │┃
-││    row or a page's row opens its action menu, only the actions its     ││
-││    tool advertises and that apply to the row now (no actions in the    ││
-││    footer otherwise): reprioritize a request to another class and      ││
-││    ask a yieldable lease of a lower class than a waiter to yield       ││
-││    (slotfather reprioritize|ask-yield PID … --start START); reap an    ││
-││    orphan or expired entry, or an unowned process the sweep reported   ││
-┕│    (junkfather reap --id … / --pid … --force), and extend a running    │┙
+┏│  ADDED                                                                ╹│┓
+┃│                                                                        │┃
+▕│  • Row actions (fathers#88): Enter, a or a right-click on a QUEUE      │▏
+┃│    row or a page's row opens its action menu, only the actions its     │┃
+┃│    tool advertises and that apply to the row now (no actions in the    │┃
+┃│    footer otherwise): reprioritize a request to another class and      │┃
+┃│    ask a yieldable lease of a lower class than a waiter to yield       │┃
+┃│    (slotfather reprioritize|ask-yield PID … --start START); reap an    │┃
+┃│    orphan or expired entry, or an unowned process the sweep reported   │┃
+┗│    (junkfather reap --id … / --pid … --force), and extend a running    │┛
 ╭│    entry's TTL by 1 h, 4 h or 1 d; open a lane's ticket or worktree    │╮
 ││    with the platform opener, its latest log in $PAGER (less -R +G;     ││
 ││    the screen, kitty keyboard mode included, comes back after), and    ││
@@ -35,6 +35,6 @@
 ││    never offered. Under GODFATHER_FIXTURES actions are recorded,       ││
 ││    never run.                                                          ││
 ││                                                                        ││
-││                    ←→ tool   ↑↓ scroll   esc close                  8% ││
+││                    ←→ tool   ↑↓ scroll   esc close                  7% ││
 ╰╰────────────────────────────────────────────────────────────────────────╯╯
  Godfather what's new?     ↑↓ select   ? help   q quit     11:59:39  ● live

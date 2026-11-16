@@ -80,7 +80,7 @@ class FocusTests(CursorCase):
         self.assertEqual(1, state_module.event_index(state))
         self.assertRegex(self.details_text(), r"label\s+run1")
         row = self.canvas.tables["events"]["top"] + 1
-        self.assertEqual("┃", self.canvas.cells[row][self.canvas.tables["events"]["x"]][0], "the selection bar")
+        self.assertEqual("▕", self.canvas.cells[row][self.canvas.tables["events"]["x"]][0], "the selection bar")
         state = self.keys(state, "down", "down", "down")
         self.assertEqual(2, state_module.event_index(state), "kept in range")
         state = self.keys(state, "home")

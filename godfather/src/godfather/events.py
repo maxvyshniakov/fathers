@@ -795,6 +795,11 @@ def view_of(model: Optional[Model], found: Filter) -> str:
     return shown[0]
 
 
+# The title's arrows as the scrollbar's flash knows them (fathers#165): a switch lights the arrow on its side for
+# SCROLL_GLOW seconds, as a scroll lights the thumb (state.glow)
+SWITCH_FLASH = {-1: "events:previous", 1: "events:next"}
+
+
 def cycled(model: Optional[Model], found: Filter, step: int) -> Optional[str]:
     """The log `step` along the cycle from the one shown; None where there is nothing to switch to."""
     shown = views(model)

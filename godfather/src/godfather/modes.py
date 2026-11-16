@@ -119,14 +119,16 @@ def events_shown(state: AppState) -> bool:
 
 def switch_log(step: int) -> Handler:
     """EVENTS' log (fathers#152): the next one the title names, SLOTS LOG, LANES LOG, PROCS LOG, then ALL LOG, of
-    the tools present. `f` anywhere EVENTS is drawn, ← → while it has the focus."""
+    the tools present. `f` anywhere EVENTS is drawn, ← → while it has the focus. The arrow on that side flashes
+    (fathers#165): the reducer lights it as it lights a scrolled thumb."""
     def handler(state: AppState, _: str) -> Result:
         if not events_shown(state):
             return state, []
         after = _events_view.cycled(state.model, state.events_filter, step)
         if after is None:
             return state, []
-        return filtered(state, dataclasses.replace(state.events_filter, source=after)), []
+        flash = Effect("flash", key=_events_view.SWITCH_FLASH[1 if step > 0 else -1])
+        return filtered(state, dataclasses.replace(state.events_filter, source=after)), [flash]
     return handler
 
 

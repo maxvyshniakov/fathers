@@ -13,7 +13,7 @@ actor, capabilities, action, host, owner, reap, orphan) is in the [fathers gloss
 | Join | A read-only link the dashboard computes between a request, a lane and an entry. |
 | Border summary | A tool's one-line count set into the SLOTS border. |
 | Page | A full-screen view of one tool (Overview, Lanes, Processes), one key away (`1 2 3`). |
-| Log switch | EVENTS' title (`◂ SLOTS LOG ▸`), which picks the one tool's log it shows. |
+| Log switch | EVENTS' title (`❮ SLOTS LOG ❯`), which picks the one tool's log it shows. |
 | Run row | One row per Slotfather run in the SLOTS log, from its grant to its release. |
 | Run mark | A trend or outlier set on a run row (▲ ↗ ↘), never a row of its own. |
 | Row action | A tool's command offered for the selected row, re-checked against a fresh snapshot before it runs. |

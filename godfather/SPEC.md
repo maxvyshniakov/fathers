@@ -112,7 +112,7 @@ full pages one key away.
       subject, label and detail; Esc in the field clears it. The active filter shows in EVENTS' top border.
     - From fathers#152 (owner, 2026-11-16) EVENTS shows one log at a time and its title is the switch: `SLOTS LOG`,
       `LANES LOG`, `PROCS LOG` for each present tool, then `ALL LOG` (never the default) where there are several;
-      ← → while EVENTS has the focus, `f`, or a click on the title cycle it, `◂ SLOTS LOG ▸` where there is room.
+      ← → while EVENTS has the focus, `f`, or a click on the title cycle it, `❮ SLOTS LOG ❯` where there is room.
       Each log has its own columns (SLOTS: time, slots, label, waited, outcome, pid; LANES: time, event, lane,
       result, ticket; PROCS: time, event, label, detail, pid; ALL: time, type such as `slot run` in the tool's colour,
       and one sentence). A Slotfather run is one row, `running 3m` until it ends; `r` shows every event as logged. A
@@ -120,9 +120,9 @@ full pages one key away.
     - Newest first; it stays on the newest entry while scrolled to the top and counts new ones (`↑ 3 new`) while
       scrolled down, as today. Events with the same time keep their file order.
     - From fathers#152 (owner, 2026-11-16) EVENTS' rows are selectable and DETAILS follows the focused panel: with
-      EVENTS focused, ↑ ↓ (and a click on a row) move a row cursor, the heavy `┃` bar QUEUE's selected row has, and
-      DETAILS shows that run (label, slots, waited, priority, granted, ran, outcome, pid, each mark explained:
-      `▲ outlier · ran 1m13s · its run type's p90 52s`, `↗ slower +38% than its run type's p50` and why) or that
+      EVENTS focused, ↑ ↓ (and a click on a row) move a row cursor, the `▕ ▏` bars QUEUE's selected row has
+      (fathers#165), and DETAILS shows that run (label, slots, waited, priority, granted, ran, outcome, pid, each
+      mark explained: `▲ outlier · ran 1m13s · its run type's p90 52s`, `↗ slower +38% than its run type's p50` and why) or that
       event (tool, kind, time, subject, its structured fields); with QUEUE focused it shows QUEUE's entry. Focusing
       DETAILS keeps what it shows, so it can be scrolled. The cursor on the newest row stays on the newest as rows
       arrive; on an older row it stays on that row, the scroll follows it and `↑ N new` counts what arrived above;
