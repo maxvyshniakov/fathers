@@ -39,7 +39,7 @@ class SelectionTests(unittest.TestCase):
 
     def test_common_selects_every_package(self) -> None:
         every = set().union(*(package(name) for name in checks.PACKAGES))
-        self.assertEqual(every | {"common"} | ALWAYS, self.selected("common/eventcheck.py"))
+        self.assertEqual(every | package("common") | ALWAYS, self.selected("common/eventcheck.py"))
 
     def test_shared_rules_select_every_lint_gate(self) -> None:
         lint = {f"{name} lint" for name in checks.PACKAGES}
@@ -47,7 +47,8 @@ class SelectionTests(unittest.TestCase):
 
     def test_a_workflow_selects_its_package(self) -> None:
         self.assertEqual(package("slotfather") | ALWAYS, self.selected(".github/workflows/slotfather.yml"))
-        self.assertEqual({"common"} | ALWAYS, self.selected(".github/workflows/common.yml", "install.py"))
+        self.assertEqual(package("common") | ALWAYS, self.selected(".github/workflows/common.yml", "install.py"))
+        self.assertEqual(ALWAYS, self.selected(".github/workflows/package.yml"))
 
     def test_documentation_selects_only_the_cheap_root_checks(self) -> None:
         plan = checks.select(["AGENTS.md", "docs/agents/checks.md", "notes/sha-map.md", "LICENSE"])
@@ -144,6 +145,69 @@ class StepTests(unittest.TestCase):
         self.assertIn("FATHERS_CHECKS", result.stderr)
 
 
+WORKFLOWS = ROOT / ".github/workflows"
+CALLERS = (*checks.PACKAGES, "common")
+
+
+def floor(text: str) -> str:
+    found = re.search(r"^\s+floor: '(3\.\d+)'$", text, re.M)
+    assert found, "no floor"
+    return found[1]
+
+
+class WorkflowTests(unittest.TestCase):
+    """One reusable workflow (package.yml) the five call with their name, paths and floor (fathers#120)."""
+
+    def test_the_five_workflows_differ_only_in_package_name_paths_and_floor(self) -> None:
+        def shape(name: str) -> str:
+            text = (WORKFLOWS / f"{name}.yml").read_text().replace(name, "PACKAGE")
+            text = re.sub(r"^\s+- '[^']+'\n", "", text, flags=re.M)  # the paths that trigger it
+            return re.sub(r"^(\s+floor: )'3\.\d+'$", r"\1FLOOR", text, flags=re.M)
+        reference = shape("slotfather")
+        self.assertIn("uses: ./.github/workflows/package.yml", reference)
+        for name in CALLERS:
+            with self.subTest(workflow=name):
+                self.assertEqual(reference, shape(name))
+
+    def test_each_floor_is_the_installers_and_the_pyprojects(self) -> None:
+        for name in checks.PACKAGES:
+            with self.subTest(package=name):
+                wanted = floor((WORKFLOWS / f"{name}.yml").read_text())
+                installer = re.search(r"^MIN_PYTHON = \((\d+), (\d+)\)$", (ROOT / name / "install.py").read_text(),
+                                      re.M)
+                assert installer, f"{name}/install.py has no MIN_PYTHON"
+                self.assertEqual(wanted, f"{installer[1]}.{installer[2]}")
+                declared = re.search(r'^requires-python = ">=(3\.\d+)"(?:\s|$)',
+                                     (ROOT / name / "pyproject.toml").read_text(), re.M)
+                if declared:
+                    self.assertEqual(wanted, declared[1])
+        self.assertEqual("3.9", floor((WORKFLOWS / "common.yml").read_text()))  # common/ and install.py: 3.9
+
+    @unittest.expectedFailure  # slotfather/pyproject.toml gains it in Slotfather's lane (fathers#120)
+    def test_every_package_declares_requires_python(self) -> None:
+        for name in checks.PACKAGES:
+            text = (ROOT / name / "pyproject.toml").read_text()
+            self.assertRegex(text, r'(?m)^requires-python = ">=3\.\d+"(?:\s|$)', name)
+
+    def test_the_reusable_workflow_runs_the_named_checks(self) -> None:
+        text = (WORKFLOWS / "package.yml").read_text()
+        self.assertIn('python tools/checks.py run "$PACKAGE lint"', text)
+        self.assertIn('python tools/checks.py run "$PACKAGE tests"', text)
+        for name in CALLERS:
+            self.assertIn(f"{name} lint", checks.NAMES)
+            self.assertIn(f"{name} tests", checks.NAMES)
+
+
+class CommandTests(unittest.TestCase):
+    def test_common_has_a_lint_and_a_test_check_like_the_packages(self) -> None:
+        directory, argvs = checks.commands("common tests")
+        self.assertEqual(ROOT, directory)
+        self.assertEqual([[sys.executable, "-m", "unittest", "discover", "-s", "common/tests"]], argvs)
+        ruff, pyright = checks.commands("common lint")[1]
+        self.assertIn("ruff", ruff)
+        self.assertIn("pyright", pyright)
+
+
 class RepositoryRuleTests(unittest.TestCase):
     """One lint gate for the four packages: the same file, the same pinned tools, the shared Ruff rules."""
 
@@ -155,7 +219,7 @@ class RepositoryRuleTests(unittest.TestCase):
 
     def test_the_packages_pin_the_same_ruff_and_pyright(self) -> None:
         pins: dict[str, set[str]] = {"ruff": set(), "pyright": set()}
-        for name in checks.PACKAGES:
+        for name in (*checks.PACKAGES, "common"):
             text = (ROOT / name / "requirements-dev.txt").read_text()
             for tool, versions in pins.items():
                 found = re.search(rf"^{tool}==(\S+)", text, re.M)

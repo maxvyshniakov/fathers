@@ -19,6 +19,8 @@ the prose word differs; each entry says so. Tool names are capitalised as names 
 | What's new | Godfather's combined timeline of every tool's changelog entries, read through each tool's `changelog --json` ([godfather/docs/contracts/changelog.md](godfather/docs/contracts/changelog.md)). |
 | Action | A mutation a tool advertises for a row, run by that tool's own CLI. |
 | Adapter | A project-supplied command at a fixed seam (Lanefather ADR-0001, Repo-Kit). Godfather's internal per-tool modules are not adapters in this sense. |
+| CLI convention | The rules every tool's command line follows: the error line, `--help`, `--version`, `--opt=value`, `--json` and one exit-code table ([docs/cli.md](docs/cli.md)), checked by [common/cliconvention.py](common/cliconvention.py). |
+| Exit code | A command's status, from the one table of [docs/cli.md](docs/cli.md#exit-codes): 4 is another user's queue, 5 read-only. |
 
 ## Events
 

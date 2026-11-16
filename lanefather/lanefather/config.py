@@ -131,6 +131,8 @@ class Config:
                                       ".turbo", ".next", "storybook-static", "coverage", ".pytest_cache",
                                       ".ruff_cache", ".DS_Store")
     admission_provider: str = "legacy"
+    # [admission] cap: this repository's lane cap (fathers#149), below LANEFATHER_CAP; None derives it.
+    lane_cap: int | None = None
     tickets: Tickets = Tickets()
 
     def names(self, name: str) -> list[str]:
@@ -239,7 +241,7 @@ TOP_KEYS = ("project", "command", "state_dir", "legacy_env_prefix", "shared_env"
             "coding_standards", "rules_dir", "steering", "unclaimed", "merge_config", "checks", "lane", "gate",
             "promote", "hooks", "env", "gc", "admission", "tickets", "slots", "review")
 TABLE_KEYS = {
-    "admission": ("provider",),
+    "admission": ("provider", "cap"),
     "checks": ("verify", "plan_module", "triage", "toolchain", "toolchain_pin", "slot_env", "gate_only"),
     "lane": ("cache_name", "targets", "cache_partitions"),
     "gate": ("stamp_tool", "stamp_file", "pre_push_hook"),
@@ -335,6 +337,9 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
     provider = _string(admission, "provider", default.admission_provider)
     if provider not in ("legacy", "slotfather"):
         raise LaneError(".lanefather.toml: admission provider must be legacy or slotfather")
+    lane_cap = admission.get("cap")
+    if lane_cap is not None and (type(lane_cap) is not int or lane_cap < 1):
+        raise LaneError(f"{CONFIG_NAME}: [admission] cap must be a positive whole number")
     return Config(
         path=path,
         project=_string(data, "project", default.project),
@@ -380,6 +385,7 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         gc_collect_uncommitted_sessions=uncommitted,
         gc_disposable=_patterns(gc, "disposable", default.gc_disposable),
         admission_provider=provider,
+        lane_cap=lane_cap,
         tickets=_tickets(tickets),
     )
 

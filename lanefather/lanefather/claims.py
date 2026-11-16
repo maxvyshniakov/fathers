@@ -149,7 +149,8 @@ def widen_claims(lane_id: str, paths: list[str]) -> tuple[list[str], list[dict[s
         added = [p for p in dict.fromkeys(paths) if not any(matches(c, p) for c in record["claims"])]
         if not added:
             return [], []
-        others = [r for r in state.occupying() if r["id"] != lane_id and r["id"] not in record["after"]
+        others = [r for r in state.occupying(state.of_project(state.lanes(), record.get("common_dir")))
+                  if r["id"] != lane_id and r["id"] not in record["after"]
                   and lane_id not in r.get("after", [])]
         prefetch_kinds([*record["claims"], *(claim for other in others for claim in other["claims"])])
         overlaps = [{"path": path, "lane": other["id"], "ticket": other["ticket"], "claim": claim}
