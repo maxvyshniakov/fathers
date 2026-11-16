@@ -340,14 +340,20 @@ class ExecutorTests(FixtureCase):
         self.assertTrue(done.ok)
 
     def test_an_opener_is_started_not_waited_for(self) -> None:
-        import time
+        started: list[dict[str, Any]] = []
+
+        def popen(argv: list[str], **kwargs: Any) -> None:
+            started.append(dict(kwargs, argv=argv))
 
         with mock.patch.dict(os.environ, {"GODFATHER_FIXTURES": ""}):
             os.environ.pop("GODFATHER_FIXTURES")
-            started = time.monotonic()
-            reply = sources.act("", ["sleep", "5"], "godfather/test", detach=True)
+            with mock.patch("subprocess.run", side_effect=AssertionError("waited for")), \
+                    mock.patch("subprocess.Popen", side_effect=popen):
+                reply = sources.act("", ["xdg-open", "https://example.org"], "godfather/test", detach=True)
         self.assertEqual(0, reply.code)
-        self.assertLess(time.monotonic() - started, 4, "not waited for")
+        self.assertEqual(["xdg-open", "https://example.org"], started[0]["argv"])
+        self.assertTrue(started[0]["start_new_session"], "in a session of its own")
+        self.assertEqual("godfather/test", started[0]["env"]["GODFATHER_ACTOR"])
 
     def test_the_same_action_in_flight_is_not_started_twice(self) -> None:
         from godfather import modes
