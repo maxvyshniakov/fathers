@@ -73,6 +73,21 @@
        "max": 604800,
        "step": 300,
        "unit": "s"
+      },
+      {
+       "key": "own.background_ttl",
+       "label": "Background command TTL",
+       "type": "duration",
+       "value": 7200,
+       "default": 7200,
+       "source": "default",
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "How long an agent's background Bash command may run before it is stopped, unless its agent stops first.",
+       "min": 60,
+       "max": 604800,
+       "step": 300,
+       "unit": "s"
       }
      ]
     },
