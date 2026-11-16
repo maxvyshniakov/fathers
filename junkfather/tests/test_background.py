@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from support import ROOT, Case, plain
 
-from junkfather import background, hook, procs
+from junkfather import background, defaults, hook, procs
 
 
 def call(command: str, background_: Optional[bool] = True, agent: Optional[str] = "agent-a",
@@ -186,7 +186,8 @@ class BackgroundTests(Case):
         shell = self.run_as_claude(self.rewritten(call("sleep 600", agent=None)))
         entry = self.adopted()
         self.assertEqual(("s1", None, True), (entry["owner"]["session"], entry["owner"]["agent"], entry["no_ttl"]))
-        self.assertGreater(entry["expires"], time.time() + 50 * 365 * 86400, "older readers see it far from expiry")
+        self.assertEqual((defaults.NO_TTL, entry["created"] + defaults.NO_TTL), (entry["ttl"], entry["expires"]),
+                         "a hundred years on: older readers see it far from expiry")
         self.store.update(entry["id"], lambda e: e.update(created=time.time() - 3 * 86400))  # three days on
         self.hook("Stop", "s1", env=self.session_env)
         self.assertEqual([], json.loads(self.cli("sweep", "--json").stdout)["reaped"], "no TTL to expire")
