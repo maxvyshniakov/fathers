@@ -56,7 +56,10 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   exits 2 (it was 1), and `sweep` while another sweep runs exits 75 (it was 0). The prefixes `junkfather adopt:`,
   `junkfather reap:`, `junkfather hand:`, `junkfather extend:`, `junkfather sweep:`, `junkfather own-resource:` and
   `junkfather settings:` are now `junkfather:`. Running `junkfather` without a command is a usage error on stderr
-  rather than the help on stdout.
+  rather than the help on stdout. Options are exact (`--dry` no longer means `--dry-run`). `own-resource` refusals
+  of an id say why with the same codes: 2 for an id its kind cannot name, 6 when none runs, 3 for a stopped
+  container or a main worktree. `reap` puts a failure's or a missing entry's line on stderr. A blank `--alive` or
+  `--stop` is refused (2) again rather than registered.
 - A reap no longer signals a leader it refused for a changed command: `known` lists the leader too, and the reap
   found it there again. Its recorded children are still stopped; `reap --force` still takes the leader.
 - The command is now the second factor after pid and start time everywhere a process is signalled. A start time

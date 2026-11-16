@@ -298,9 +298,10 @@ class OwnedTests(WorktreeCase):
         self.assertTrue([e for e in self.events() if e["kind"] == "resource.owned"])
 
     def test_own_resource_refuses_the_main_worktree_and_a_plain_folder(self):
-        for given, why in ((self.repo, "is a repository's main worktree"), (self.tmp, "is not a git worktree")):
+        for given, why, code in ((self.repo, "is a repository's main worktree", 3),
+                                 (self.tmp, "is not a git worktree", 6)):
             result = self.cli("own-resource", "--kind", "worktree", "--id", str(given))
-            self.assertEqual(1, result.returncode)
+            self.assertEqual(code, result.returncode, result.stderr)
             self.assertIn(why, result.stderr)
 
     def test_the_session_end_removes_a_clean_owned_worktree_and_keeps_a_dirty_one(self):

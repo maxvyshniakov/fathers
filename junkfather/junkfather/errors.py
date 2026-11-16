@@ -2,7 +2,8 @@
 an exit code from the table every tool shares. A usage error adds the one line that points to the help.
 
 A command raises Refused (or Usage) and cli.main formats it; nothing else prints a refusal's first line itself.
-Standard library and no other Junkfather module."""
+Standard library and no other Junkfather module. Godfather has the same formatter in app.py; both move to
+common/ first once installed commands can import it (fathers#117)."""
 from __future__ import annotations
 
 import sys

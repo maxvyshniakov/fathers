@@ -140,7 +140,10 @@ class SimulatorTests(ResourceCase):
 
     def test_own_resource_refuses_what_does_not_run_or_is_owned(self):
         refused = self.cli("own-resource", "--kind", "simulator", "--id", SIM, env=self.env)
-        self.assertEqual(1, refused.returncode)
+        self.assertEqual(6, refused.returncode, "not found: " + refused.stderr)
+        malformed = self.cli("own-resource", "--kind", "simulator", "--id", "not-a-udid", env=self.env)
+        self.assertEqual((2, "Try 'junkfather own-resource --help'."),
+                         (malformed.returncode, malformed.stderr.splitlines()[-1]), malformed.stderr)
         self.assertIn("no running simulator", refused.stderr)
         self.change_fake(sims={SIM: {"name": "iPhone 18 Pro", "state": "Booted"}})
         self.assertEqual(0, self.cli("own-resource", "--kind", "simulator", "--id", SIM.lower(), "--ttl", "1h",
@@ -199,7 +202,8 @@ class DockerTests(ResourceCase):
         result = self.cli("own-resource", "--kind", "docker", "--id", "box0", env=self.env)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(ident, plain(self.store.entries()[-1])["resource"]["id"])
-        self.assertEqual(1, self.cli("own-resource", "--kind", "docker", "--id", "nope", env=self.env).returncode)
+        self.assertEqual(6, self.cli("own-resource", "--kind", "docker", "--id", "nope", env=self.env).returncode,
+                         "docker inspect answered: no such container")
 
     def test_a_failed_rm_after_a_stop_is_a_warning_not_a_silent_success(self):
         entry = self.own("--kind", "docker", "--remove", "--", "docker", "run", "-d", "nginx")

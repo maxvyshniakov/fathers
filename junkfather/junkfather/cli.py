@@ -60,46 +60,43 @@ from .text import duration, seconds
 
 
 class Parser(argparse.ArgumentParser):
-    """argparse with docs/cli.md's errors: a usage error is raised, and main prints its one line and the pointer to
-    the help of the command whose parser refused it. It also keeps its option names, so that an unknown option is
-    named before argparse would complain of a missing required argument."""
+    """argparse with docs/cli.md's errors: error() raises a usage error, and main prints its one line and the pointer
+    to the help of the command whose parser refused it. Options are exact (no abbreviations), and a word that names
+    no option of the parser is reported before a missing required argument."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        self.valued: Dict[str, bool] = {}  # each option name: whether it takes a value
-        self.commands: Dict[str, Parser] = {}
+        kwargs.setdefault("allow_abbrev", False)
+        self.given: List[str] = []
         super().__init__(*args, **kwargs)
 
-    def add_argument(self, *args: Any, **kwargs: Any) -> argparse.Action:
-        action = super().add_argument(*args, **kwargs)
-        self.valued.update(dict.fromkeys(action.option_strings, action.nargs != 0))
-        return action
-
-    def command(self, sub: Any, name: str, **kwargs: Any) -> Parser:
-        made: Parser = sub.add_parser(name, **kwargs)
-        self.commands[name] = made
-        return made
+    def parse_known_args(self, args: Any = None, namespace: Any = None) -> Any:
+        self.given = list(sys.argv[1:] if args is None else args)
+        return super().parse_known_args(args, namespace)
 
     def error(self, message: str) -> NoReturn:
-        words = self.prog.split()
-        raise Usage(message[len("argument "):] if message.startswith("argument ") else message,
-                    " ".join(words[1:]) or None)
+        command = " ".join(self.prog.split()[1:]) or None
+        unknown = self.unknown_option()
+        if unknown is not None:
+            raise Usage(f"unknown option {unknown}", command)
+        raise Usage(message[len("argument "):] if message.startswith("argument ") else message, command)
 
-    def unknown_option(self, words: List[str]) -> Optional[str]:
-        """The first option in `words` this parser does not know, up to `--` or the first operand (its command, or
-        the command line `own` runs); a long option may be shortened to a unique prefix, as argparse allows."""
-        wants_value = False
-        for word in words:
-            if wants_value:
-                wants_value = False
+    def unknown_option(self) -> Optional[str]:
+        """The first word this parser was given that looks like an option and names none in argparse's own table,
+        up to `--`; the value of an option that takes one is skipped."""
+        table: Dict[str, argparse.Action] = self._option_string_actions  # pyright: ignore[reportPrivateUsage]
+        skip = False
+        for word in self.given:
+            if skip:
+                skip = False
                 continue
-            if word == "--" or not word.startswith("-") or word == "-" or word[1:2].isdigit():
+            if word == "--":
                 return None
-            name = word.split("=", 1)[0]
-            known = [name] if name in self.valued else [o for o in self.valued if name.startswith("--")
-                                                         and o.startswith(name)]
-            if len(known) != 1:
-                return name
-            wants_value = "=" not in word and self.valued[known[0]]
+            if not word.startswith("-") or word == "-" or word[1:2].isdigit():
+                continue
+            action = table.get(word.split("=", 1)[0])
+            if action is None:
+                return word.split("=", 1)[0]
+            skip = "=" not in word and action.nargs != 0
         return None
 
 
@@ -119,7 +116,7 @@ def parser() -> Parser:
         p.add_argument("--lane", help="the lane it belongs to (default LANEFATHER_LANE or the lane records)")
         p.add_argument("--agent", help=argparse.SUPPRESS)
 
-    p = top.command(sub, "own", help="start a command as an owned process group")
+    p = sub.add_parser("own", help="start a command as an owned process group")
     ownership(p)
     p.add_argument("--kind", choices=_resources.WRAPPABLE,
                    help="the command makes a resource that outlives it (simctl boot, docker run -d, tailscale serve "
@@ -130,7 +127,7 @@ def parser() -> Parser:
     p.add_argument("--quiet", action="store_true", help="no line on start")
     p.add_argument("argv", nargs=argparse.REMAINDER)
 
-    p = top.command(sub, "own-resource", help="own a resource that runs now (a simulator, container, serve route)")
+    p = sub.add_parser("own-resource", help="own a resource that runs now (a simulator, container, serve route)")
     ownership(p)
     p.add_argument("--kind", choices=tuple(_resources.KINDS), required=True)
     p.add_argument("--id", required=True, dest="resource_id",
@@ -140,23 +137,23 @@ def parser() -> Parser:
     p.add_argument("--stop", help="--kind command: ends it (split as argv, never through a shell)")
     p.add_argument("--remove", action="store_true", help="with --kind docker: docker rm the container after its stop")
 
-    p = top.command(sub, "adopt", help="own a process that already runs")
+    p = sub.add_parser("adopt", help="own a process that already runs")
     ownership(p)
     p.add_argument("pid", type=int)
 
-    p = top.command(sub, "list", help="what runs, whose it is, its age and TTL")
+    p = sub.add_parser("list", help="what runs, whose it is, its age and TTL")
     p.add_argument("--all", action="store_true", help="also finished entries")
     p.add_argument("--json", action="store_true")
 
-    p = top.command(sub, "status", help="the dashboard snapshot: running entries, unowned processes, the last sweep")
+    p = sub.add_parser("status", help="the dashboard snapshot: running entries, unowned processes, the last sweep")
     p.add_argument("--json", action="store_true")
 
-    p = top.command(sub, "capabilities", help="what this junkfather offers a dashboard")
+    p = sub.add_parser("capabilities", help="what this junkfather offers a dashboard")
     p.add_argument("--json", action="store_true")
-    p = top.command(sub, "changelog", help="the installed release's changelog entries, newest first")
+    p = sub.add_parser("changelog", help="the installed release's changelog entries, newest first")
     p.add_argument("--json", action="store_true")
     p.add_argument("--since", help="only releases newer than this version")
-    p = top.command(sub, "reap", help="end owned entries")
+    p = sub.add_parser("reap", help="end owned entries")
     p.add_argument("--id", action="append", default=[])
     p.add_argument("--owner", help="a session id (everything not handed away) or a subagent id")
     p.add_argument("--agent", help="with --owner SESSION: only this subagent's entries not kept for the session")
@@ -174,22 +171,22 @@ def parser() -> Parser:
     p.add_argument("--quiet", action="store_true")
     p.add_argument("--via", help=argparse.SUPPRESS)
 
-    p = top.command(sub, "hand", help="hand an entry over to another session")
+    p = sub.add_parser("hand", help="hand an entry over to another session")
     p.add_argument("id")
     p.add_argument("--to", required=True, help="a Claude Code or Codex session id, or self")
 
-    p = top.command(sub, "extend", help="give an entry a new TTL from now")
+    p = sub.add_parser("extend", help="give an entry a new TTL from now")
     p.add_argument("id")
     p.add_argument("--ttl", type=seconds, required=True)
 
-    p = top.command(sub, "sweep", help="reap expired and orphaned entries; report unowned agent processes")
+    p = sub.add_parser("sweep", help="reap expired and orphaned entries; report unowned agent processes")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--json", action="store_true")
     p.add_argument("--quiet", action="store_true", help="print only reaps and errors")
     p.add_argument("--plist", action="store_true", help="print the hourly launchd agent")
     p.add_argument("--interval", type=int, help="seconds (default: the sweep.interval setting)")
 
-    p = top.command(sub, "settings", help="the settings a dashboard shows and changes (own.default_ttl, "
+    p = sub.add_parser("settings", help="the settings a dashboard shows and changes (own.default_ttl, "
                                         "sweep.interval, reap.grace)")
     p.add_argument("action", nargs="?", choices=("check", "set", "reset"))
     p.add_argument("key", nargs="?")
@@ -198,10 +195,10 @@ def parser() -> Parser:
     p.add_argument("--revision", help="refuse the change when the settings no longer have this revision")
     p.add_argument("--json", action="store_true")
 
-    top.command(sub, "hook", help="the agent lifecycle hook (JSON on stdin)")
-    p = top.command(sub, "supervise")  # internal (launch.py runs it): no help, so the help does not list it
+    sub.add_parser("hook", help="the agent lifecycle hook (JSON on stdin)")
+    p = sub.add_parser("supervise")  # internal (launch.py runs it): no help, so the help does not list it
     p.add_argument("id")
-    top.command(sub, "version", help="print junkfather's version")
+    sub.add_parser("version", help="print junkfather's version")
     return top
 
 
@@ -212,14 +209,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         if words and not words[0].startswith("-") and words[0] not in COMMANDS:
             raise Usage(f"unknown command {words[0]!r}")
-        top = parser()
-        found = top.unknown_option(words)
-        if found is None and words and words[0] in top.commands:
-            command = words[0]
-            found = top.commands[command].unknown_option(words[1:])
-        if found is not None:
-            raise Usage(f"unknown option {found}", command)
-        args, extra = top.parse_known_args(words)
+        args, extra = parser().parse_known_args(words)
         command = args.command
         if extra:
             raise Usage(f"unknown option {extra[0]}" if extra[0].startswith("-") else
@@ -286,8 +276,6 @@ def own_resource_command(store: Store, args: argparse.Namespace) -> int:
         raise Usage("--remove goes with --kind docker")
     if (args.alive or args.stop) and args.kind != "command":
         raise Usage("--alive and --stop go with --kind command")
-    if args.kind == "command" and not (args.alive and args.stop):
-        raise Usage("--kind command needs --alive CMD and --stop CMD")
     if args.kind == "safari-tp":
         raise Usage("own-resource refuses safari-tp: an instance that runs cannot be told from a person's own "
                     "browser; launch it through junkfather own --kind safari-tp -- open -g -a 'Safari Technology "
@@ -297,6 +285,8 @@ def own_resource_command(store: Store, args: argparse.Namespace) -> int:
         stop = shlex.split(args.stop) if args.stop else None
     except ValueError as error:
         raise Usage(f"--alive/--stop: {error}") from None
+    if args.kind == "command" and not (alive and stop):  # after the split: --stop ' ' is no command either
+        raise Usage("--kind command needs --alive CMD and --stop CMD, each naming a command")
     ttl = ttl_of(store, args)
     who = _owner.resolve(os.environ, _procs.read_or_none(), os.getcwd(), store, ["own-resource", args.resource_id],
                          args.lane, args.agent)
@@ -386,13 +376,21 @@ def reap_command(store: Store, args: argparse.Namespace) -> int:
 
 def report(results: List[Dict[str, Any]], args: argparse.Namespace) -> int:
     """The results; exit 1 when a reap failed, else 6 when an --id named no entry."""
+    failed = [r for r in results if r["result"] == "failed"]
+    missing = [r for r in results if r["result"] == "unknown"]
+    bad = failed or missing
     if args.json:
         show({"v": 1, "results": results})
     elif not args.quiet:
-        print(_reap.results_text(results))
-    if any(r["result"] == "failed" for r in results):
+        rest = [r for r in results if r not in bad]
+        if rest or not bad:  # "nothing to reap" when there were no results at all
+            print(_reap.results_text(rest))
+    if bad:  # why on stderr, in one line (docs/cli.md); the rest of the results stay on stdout
+        more = f" (and {len(bad) - 1} more)" if len(bad) > 1 else ""
+        errors.say(_reap.results_text(bad[:1]) + more)
+    if failed:
         return errors.FAILED
-    return NOT_FOUND if any(r["result"] == "unknown" for r in results) else 0
+    return NOT_FOUND if missing else 0
 
 
 def open_entry(store: Store, entry_id: str) -> None:

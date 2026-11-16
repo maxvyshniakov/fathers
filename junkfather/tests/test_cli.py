@@ -123,10 +123,21 @@ class ConventionTests(Case):
             self.assertEqual((3, f"junkfather: {entry['id']} is not running (exited)\n"),
                              (result.returncode, result.stderr), argv)
 
+    def test_a_blank_stop_or_alive_command_is_refused_at_registration(self):
+        for alive, stop in (("true", " "), (" ", "true")):
+            result = self.cli("own-resource", "--kind", "command", "--id", "x", "--alive", alive, "--stop", stop)
+            self.assertEqual((2, "junkfather: --kind command needs --alive CMD and --stop CMD, each naming a command\n"
+                                 "Try 'junkfather own-resource --help'.\n"), (result.returncode, result.stderr))
+        self.assertEqual([], self.store.entries())
+
     def test_reap_of_a_missing_entry_is_not_found(self):
         result = self.cli("reap", "--id", "jnosuch")
-        self.assertEqual(6, result.returncode, result.stderr)
-        self.assertIn("jnosuch: unknown (no such entry", result.stdout)
+        self.assertEqual((6, "", "junkfather: jnosuch: unknown (no such entry; pids -)\n"),
+                         (result.returncode, result.stdout, result.stderr))
+        both = self.cli("reap", "--id", "jnosuch", "--id", "jother", "--json")
+        self.assertEqual((6, "junkfather: jnosuch: unknown (no such entry; pids -) (and 1 more)\n"),
+                         (both.returncode, both.stderr))
+        self.assertEqual(["jnosuch", "jother"], [r["id"] for r in json.loads(both.stdout)["results"]])
 
     def test_an_unexpected_exception_is_one_line_and_its_traceback_goes_to_the_log(self):
         def broken(store: Store, args: argparse.Namespace) -> int:

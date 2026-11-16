@@ -256,7 +256,7 @@
    "x"
   ],
   "code": 2,
-  "err": "junkfather: --kind command needs --alive CMD and --stop CMD\nTry 'junkfather own-resource --help'.\n",
+  "err": "junkfather: --kind command needs --alive CMD and --stop CMD, each naming a command\nTry 'junkfather own-resource --help'.\n",
   "out": ""
  },
  {
