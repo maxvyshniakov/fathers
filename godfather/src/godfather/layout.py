@@ -162,7 +162,38 @@ def column(panels: dict[str, Rect], names: tuple[str, ...], heights: dict[str, i
             y += heights[name]
 
 
-FOCUSABLE = ("requests", "details", "events")  # the panels Tab and a click focus
+FOCUSABLE = ("requests", "details", "events", "lanes", "procs")  # the panels Tab and a click focus
+
+
+def page(width: int, height: int, rows: int, table: str) -> Overview:
+    """A page (fathers#85): the overview's frames for one tool's table (`table`, its rows `rows`), its details and an
+    EVENTS strip. Wide, the table over the strip on the left and the details the whole right column; the strip shows
+    from the height that gives it its least rows under the table's least, so panels only ever arrive as the terminal
+    grows. One column: the table, the details, then the strip. Small: only a note."""
+    if width < SMALL_WIDTH or height < SMALL_HEIGHT:
+        return Overview("small", {}, (table,), Rect(0, 3, 0, width - 6), 1 if height > 2 else None)
+    natural = queue_height(rows)
+    available = height - 1  # the footer row
+    panels: dict[str, Rect] = {}
+    if width >= WIDE:
+        right = max(RIGHT_MIN, width * 2 // 5)
+        left = width - right - 1
+        heights = stack(available, (Tier(((table, min(natural, QUEUE_MIN)), ("events", EVENTS_MIN)), grow=(table,),
+                                         rest=("events", table), whole=True),
+                                    Tier(((table, min(natural, QUEUE_MIN)),), grow=(), rest=(table,))),
+                        {table: natural})
+        column(panels, (table, "events"), heights, 0, 0, left)
+        panels["details"] = Rect(0, left + 1, available, right)
+        order = (table, *(name for name in ("events",) if name in panels), "details")
+        return Overview("wide", panels, order, Rect(0, 0, 0, left))
+    heights = stack(available, (
+        Tier(((table, min(natural, QUEUE_FLOOR)), ("details", DETAILS_FLOOR), ("events", EVENTS_MIN)),
+             grow=(table, "events"), rest=("details", table), whole=True),
+        Tier(((table, min(natural, QUEUE_MIN)), ("details", DETAILS_MIN)), grow=(table,), rest=("details", table))),
+        {table: natural, "events": EVENTS_MIN + 4})
+    column(panels, (table, "details", "events"), heights, 0, 0, width)
+    order = tuple(name for name in (table, "details", "events") if name in panels)
+    return Overview("column", panels, order if table in order else (table, *order), Rect(0, 0, 0, width))
 
 
 def tab_order(panels: dict[str, Rect]) -> tuple[str, ...]:

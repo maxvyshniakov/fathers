@@ -2,10 +2,11 @@
 filters, from the layout overlay_text.py gives (fathers#141: the reducer reads that geometry without a view)."""
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from .. import layout as _layout
 from .. import news as _news
+from .. import overlay_text
 from ..overlay_text import overlay_view
 from ..tui import Canvas
 from ..text import text_width
@@ -61,3 +62,15 @@ def draw_help(canvas: Canvas, offset: int = 0) -> None:
 def draw_changelog(canvas: Canvas, tab: int = 0, offset: int = 0, news: Optional[_news.News] = None,
                    read: Optional[_news.Read] = None) -> None:
     draw_overlay(canvas, "changelog", offset, tab, news, read)
+
+
+def draw_actions(canvas: Canvas, overlay: Any) -> None:
+    """A row's action menu, a park's reason or a confirmation (fathers#88), centred over the screen; the menu's
+    cursor row is marked."""
+    rect = overlay_text.action_box(overlay, canvas.width, canvas.height)
+    panel = Panel(canvas, rect, "", left=3, right=3, footer=True).overlay(overlay_text.action_title(overlay))
+    for row, line in enumerate(overlay_text.action_lines(overlay)[:panel.inner.height]):
+        canvas.segments(panel.inner.y + row, panel.inner.x, line, panel.inner.width)
+        if getattr(overlay, "kind", "") == "actions" and row == overlay.cursor:
+            panel.mark(panel.inner.y + row, "accent")
+    panel.footer(overlay_text.action_hints(overlay))

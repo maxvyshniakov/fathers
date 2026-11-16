@@ -27,6 +27,10 @@ PRIORITY_MARKS = {"interactive": ("⚡", "!"), "batch": ("🐌", "~")}
 HEALTH_MARKS = {"ok": ("🆗", "+"), "hot": ("🔥", "!")}
 # A finished run in EVENTS (fathers#108): an outlier above its run type's p90, or one of a run type turning slower
 RUN_MARKS = {"outlier": ("▲", "^"), "slower": ("↗", "/"), "faster": ("↘", "\\")}
+# A lane's status on the Lanes page (fathers#85) and an owned entry's state on the Processes page (fathers#86)
+ROW_MARKS = {"active": ("▶️", ">"), "planned": ("🗓️", "."), "landed": ("✅", "+"), "parked": ("💤", "z"),
+             "conflict": ("💥", "x"), "running": ("▶️", ">"), "orphan": ("👻", "o"), "expired": ("⌛", "x"),
+             "unowned": ("❔", "?"), "resource": ("📦", "#")}
 
 
 class Marks(NamedTuple):
@@ -36,6 +40,7 @@ class Marks(NamedTuple):
     priority: dict[str, str]
     health: dict[str, str]
     run: dict[str, str]
+    rows: dict[str, str]  # a page's row state (ROW_MARKS)
 
 
 def marks_for(ascii_only: bool = False, joined: bool = True) -> Marks:
@@ -46,7 +51,7 @@ def marks_for(ascii_only: bool = False, joined: bool = True) -> Marks:
     state = pick(MARKS)
     if not ascii_only and not joined:
         state["legacy"] = OLD_FALLBACK
-    return Marks(state, pick(PRIORITY_MARKS), pick(HEALTH_MARKS), pick(RUN_MARKS))
+    return Marks(state, pick(PRIORITY_MARKS), pick(HEALTH_MARKS), pick(RUN_MARKS), pick(ROW_MARKS))
 
 
 EMOJI = marks_for()

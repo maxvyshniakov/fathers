@@ -3,38 +3,38 @@
 ││                                                                        ││
 ││  Godfather · unreleased · installed 9f600e1                           ┃││
 ╰│                                                                       ┃│╯
-┍│  ADDED                                                                ┃│┑
-││                                                                       ┃││
-┃│  • The footer says Godfather what's new?; a click or v opens what's   ┃│┃
-││    new: one timeline of every tool's changelog, newest first,         ╹││
-││    filtered by tool with ← → or a click on a tool's name. An install   ││
-││    from main shows its Unreleased entries, which are what it runs,     ││
-││    under Slotfather · unreleased · installed 81abd86. Closing it       ││
-││    marks everything read (~/.local/state/godfather/news.json). Each    ││
-││    tool is asked through its changelog --json; one without it adds     ││
-┕│    nothing.  fathers#102                                               │┙
-╭│                                                                        │╮
-││  • Expected durations from Slotfather's run types (fathers#108): a     ││
-││    running QUEUE row shows 12m / ~18m, its time against the expected   ││
-││    run, in yellow once it is past the p90; a waiting row shows the     ││
-││    run it expects (waiting #1 · ~18m); DETAILS says expected 18m ·     ││
-││    p90 31m · 23 runs. In EVENTS a finished run that was an outlier     ││
-││    ends in ▲ (^ in ASCII) and the run that turned its run type's       ││
-││    trend slower in ↗ (/); each trend change is a row of its own,       ││
-││    Straylight gate · slower +32% · same plan, read from Slotfather's   ││
-││    event log.                                                          ││
+┍│  ADDED                                                                ╹│┑
 ││                                                                        ││
-││  CHANGED                                                               ││
+┃│  • Row actions (fathers#88): Enter, a or a right-click on a QUEUE      │┃
+││    row or a page's row opens its action menu, only the actions its     ││
+││    tool advertises and that apply to the row now (no actions in the    ││
+││    footer otherwise): reprioritize a request to another class and      ││
+││    ask a yieldable lease of a lower class than a waiter to yield       ││
+││    (slotfather reprioritize|ask-yield PID … --start START); reap an    ││
+││    orphan or expired entry, or an unowned process the sweep reported   ││
+┕│    (junkfather reap --id … / --pid … --force), and extend a running    │┙
+╭│    entry's TTL by 1 h, 4 h or 1 d; open a lane's ticket or worktree    │╮
+││    with the platform opener, its latest log in $PAGER (less -R +G;     ││
+││    the screen, kitty keyboard mode included, comes back after), and    ││
+││    park an active lane with a reason where Lanefather advertises       ││
+││    park. Reaps and park ask first, naming the target and the exact     ││
+││    command; y runs it, n, Esc or a click outside cancel. The row is    ││
+││    looked for again in a fresh snapshot first and the action dropped   ││
+││    if it changed; the command runs in the background with no shell,    ││
+││    a 30 s timeout and GODFATHER_ACTOR=godfather/<version>; the         ││
+││    footer shows its first stdout line, or its first stderr line in     ││
+││    red, and the source is polled at once. Land, promote, done, sync,   ││
+││    review and sweep are never offered. Under GODFATHER_FIXTURES        ││
+││    actions are recorded, never run.                                    ││
 ││                                                                        ││
-││  • Screenshots and the README media come from tools/raster.py,         ││
-││    Godfather's own cell rasterizer, with no browser, terminal or       ││
-││    machine slot: box drawing and blocks are geometry snapped to each   ││
-╰│    cell, so rounded corners and joins meet their lines and bars have   │╯
-╭│    no seams at fractional cell widths; emoji such as 🆗 are drawn in   │╮
-││    colour across their two cells; the same cells give the same         ││
-││    pixels. tools/screens.mjs and screen-kit are no longer used.        ││
-││    fathers#114                                                         ││
+││  • Junkfather is a source (fathers#86): its junkfather status --json   ││
+││    (versions 1 and 2) is polled like Lanefather's. SLOTS' bottom       ││
+╰│    border sums it up on the right, 3 procs 7 · 1 orphan · 1 expired    │╯
+╭│    · 2 unowned (a narrow border drops unowned, then expired), and 3    │╮
+││    or a click on it opens the Processes page: owned entries            ││
+││    (running, then orphan, then expired), then the last sweep's         ││
+││    unowned processes and resources, each with its state, label, id,    ││
 ││                                                                        ││
-││                    ←→ tool   ↑↓ scroll   esc close                 16% ││
+││                    ←→ tool   ↑↓ scroll   esc close                  8% ││
 ╰╰────────────────────────────────────────────────────────────────────────╯╯
  Godfather what's new?     ↑↓ select   ? help   q quit     11:59:39  ● live

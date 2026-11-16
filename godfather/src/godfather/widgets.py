@@ -158,6 +158,10 @@ class Panel:
         within the panel: the rows the viewport shows, links and all."""
         start, visible = self.viewport(height, offset=offset)
         canvas, x = self.canvas, self.rect.x
+        for row, begin, end, target in document.targets:  # links to a page's row, on the rows shown
+            if start <= row < start + visible:
+                canvas.target(self.inner.y + row - start, x + max(begin, self.left),
+                              x + min(end, self.left + self.inner.width), target)
         for row in range(min(visible, height - start)):
             for column in range(self.left, self.left + self.inner.width):
                 target_y, target_x = self.inner.y + row, x + column
@@ -280,7 +284,7 @@ FOOTER_STEPS: tuple[tuple[tuple[str, ...], str], ...] = (
     ((), "updated"), (("←→",), "updated"), (("←→", "tab"), "updated"), (("←→", "tab", "s"), "updated"),
     (("←→", "tab", "s"), "time"),
     (("←→", "tab", "s", "↑↓"), "time"), (("←→", "tab", "s", "↑↓"), ""), (("←→", "tab", "s", "↑↓", "?"), ""),
-    (("←→", "tab", "s", "↑↓", "?", "q"), ""))
+    (("←→", "tab", "s", "↑↓", "?", "pages"), ""), (("←→", "tab", "s", "↑↓", "?", "pages", "q"), ""))
 FOOTER_PAD = 2  # the least blank cells between the hints and what is left and right of them
 
 
@@ -301,7 +305,8 @@ class Footer:
         end = canvas.width - 1
         shown, right, tail = [], end, ""
         for dropped, form in FOOTER_STEPS:
-            shown = [hint for hint in hints if hint[0] not in dropped]
+            # `1 2 3 pages` (fathers#85) goes by its label: its keys are the pages of the tools present
+            shown = [hint for hint in hints if hint[0] not in dropped and not (hint[1] == "pages" and "pages" in dropped)]
             tail = ("updated " + stamp if form == "updated" else stamp) if stamp and form else ""
             right = end - text_width(status[0]) - (text_width(tail) + 2 if tail else 0)
             if right - left >= hints_width(shown) + 2 * FOOTER_PAD and right >= left + 2:

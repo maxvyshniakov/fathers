@@ -229,17 +229,24 @@ class FocusTests(unittest.TestCase):
         canvas = draw()
         top = thumb(canvas)
         self.assertEqual(2, top[0], "the first content row, under the padding row")
-        for key, expected in (("down", 1), ("j", 2), ("page_down", 11), ("up", 10), ("end", 30), ("home", 0)):
-            state, _ = view.reduce(drawn_state(canvas, focus="events", scroll=dict(scroll)), view.Key(key), 0.0)
+        # fathers#152: the keys move EVENTS' row cursor and the scroll follows it (ten rows show): the cursor, then
+        # the offset; Home goes back to the newest, unscrolled
+        picked: dict[str, Any] = {}
+        for key, index, expected in (("down", 1, 0), ("j", 2, 0), ("page_down", 11, 2), ("up", 10, 2),
+                                     ("end", 39, 30), ("home", 0, None)):
+            state, _ = view.reduce(drawn_state(canvas, dict(model, holders=[], waiters=[]), focus="events",
+                                               scroll=dict(scroll), picked=dict(picked)), view.Key(key), 0.0)
+            scroll.clear()
             scroll.update(state.scroll)
-            self.assertEqual(expected, scroll["events"], key)
+            picked = dict(state.picked)
+            self.assertEqual((index, expected), (view.event_index(state), scroll.get("events")), key)
             canvas = draw()
         scroll["events"] = 30
         last = draw()
         self.assertEqual(11, thumb(last)[-1], "the last page puts the thumb at the bottom of the rows")
         for padding in (1, 12):  # nothing draws on the padding rows, scrolled or not
             self.assertEqual(" " * 77, "".join(cell[0] for cell in last.cells[padding][1:78]), padding)
-        state = drawn_state(canvas, focus="events", scroll=dict(scroll))
+        state = drawn_state(canvas, focus="events", shows="events", scroll=dict(scroll))
         self.assertIs(state, view.reduce(state, view.Key("x"), 0.0)[0], "x is no scroll key")
 
     def test_events_follow_the_newest_at_the_top_and_stay_put_when_scrolled(self) -> None:
@@ -366,9 +373,10 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
         state = drawn_state(canvas, focus="events")
         self.assertEqual((set(), None), (view.glowing(state, 100.0), view.fade(state, 100.0)),
                          "nothing scrolled: no wake")
-        state, _ = view.reduce(state, view.Key("j"), 100.0)
+        wheel = view.Mouse(65, 5, 5, True)  # the wheel scrolls EVENTS; its keys move the cursor (fathers#152)
+        state, _ = view.reduce(state, wheel, 100.0)
         self.assertEqual({"events"}, view.glowing(state, 100.0))
-        state, _ = view.reduce(state, view.Key("j"), 100.2)  # still scrolling: the flash runs on from the last scroll
+        state, _ = view.reduce(state, wheel, 100.2)  # still scrolling: the flash runs on from the last scroll
         self.assertEqual({"events"}, view.glowing(state, 100.4))
         self.assertAlmostEqual(0.08, cast(float, view.fade(state, 100.4)), places=6, msg="one wake, at the fade")
         self.assertEqual(set(), view.glowing(state, 100.48), "0.28 s after the last scroll: back to muted")

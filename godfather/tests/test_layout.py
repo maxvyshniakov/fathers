@@ -227,3 +227,25 @@ class SlotsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PageLayoutTests(unittest.TestCase):
+    """fathers#85: a page's table, details and EVENTS strip; as the terminal grows taller panels only arrive, and the
+    table never has more rows than its own."""
+
+    def test_panels_only_arrive_as_the_height_grows(self) -> None:
+        for width in (60, 100, 156):
+            for rows in (1, 4, 12, 40):
+                seen: set[str] = set()
+                for height in range(layout.SMALL_HEIGHT, 70):
+                    with self.subTest(width=width, rows=rows, height=height):
+                        page = layout.page(width, height, rows, "lanes")
+                        self.assertLessEqual(seen, set(page.panels), "a panel went again")
+                        seen = set(page.panels)
+                        self.assertIn("lanes", page.panels)
+                        self.assertEqual("lanes", page.order[0], "Tab starts at the table")
+                        if "events" in page.panels:
+                            self.assertLessEqual(page.panels["lanes"].height, layout.queue_height(rows))
+
+    def test_small_is_a_note(self) -> None:
+        self.assertEqual("small", layout.page(40, 30, 3, "lanes").arrangement)

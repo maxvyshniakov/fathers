@@ -56,7 +56,7 @@ class LiveTests(LiveCase):
         screen = self.start(rows=20, columns=140)
         screen.until(lambda text: re.search(r"label\s+scroller", text), 10, "the details")
         mark = screen.mark()
-        screen.write(b"\t\t")  # by columns: QUEUE, EVENTS, then DETAILS
+        screen.write(b"\x1b[Z")  # Shift-Tab: by columns back from QUEUE to DETAILS, which still shows QUEUE's entry
         screen.receive("↑↓ scroll", seconds=3, since=mark)
         screen.write(b"\x1b[B\x1b[B")
 
@@ -77,18 +77,21 @@ class LiveTests(LiveCase):
         screen.receive("job39")
         mark = screen.mark()
         screen.write(b"\t")  # EVENTS
-        screen.receive("↑↓ scroll", seconds=3, since=mark)
+        screen.receive("←→ log", seconds=3, since=mark)
         mark = screen.mark()
-        screen.write(b"\x1b[B\x1b[B")
-        screen.until(lambda _: not any("job39" in line for line in screen.rows().values()), 3,
-                     "EVENTS scrolled past the newest")
+        screen.write(b"\x1b[<65;20;25M")  # the wheel scrolls it (its arrows move its cursor, fathers#152)
+
+        def listed(name: str) -> bool:  # a row of EVENTS (DETAILS shows the cursor's row, the newest, by label)
+            return any(re.search(rf"\d\d:\d\d:\d\d\s+\S+\s+{name}\s", line) for line in screen.rows().values())
+
+        screen.until(lambda _: not listed("job39"), 3, "EVENTS scrolled past the newest")
         self.queue(holders=[item("busy", 300)], events=events + [event(n) for n in range(40, 43)])
         mark = screen.mark()
         screen.receive("↑ 3 new", since=mark)
-        self.assertFalse(any("job42" in line for line in screen.rows().values()), "it stays where it was scrolled")
+        self.assertFalse(listed("job42"), "it stays where it was scrolled")
         mark = screen.mark()
         screen.write(b"\x1b[H")  # Home: back to the newest
-        screen.until(lambda _: any("job42" in line for line in screen.rows().values()), 3, "the newest again")
+        screen.until(lambda _: listed("job42"), 3, "the newest again")
         self.assertEqual(0, screen.quit())
 
     def test_a_resize_redraws_the_whole_screen_in_the_new_layout(self) -> None:

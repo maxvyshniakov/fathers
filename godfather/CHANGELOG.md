@@ -6,6 +6,47 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Added
 
+- Row actions (fathers#88): Enter, `a` or a right-click on a QUEUE row or a page's row opens its action menu, only
+  the actions its tool advertises and that apply to the row now (`no actions` in the footer otherwise): reprioritize
+  a request to another class and ask a yieldable lease of a lower class than a waiter to yield (`slotfather
+  reprioritize|ask-yield PID … --start START`); reap an orphan or expired entry, or an unowned process the sweep
+  reported (`junkfather reap --id …` / `--pid … --force`), and extend a running entry's TTL by 1 h, 4 h or 1 d;
+  open a lane's ticket or worktree with the platform opener, its latest log in `$PAGER` (`less -R +G`; the screen,
+  kitty keyboard mode included, comes back after), and park an active lane with a reason where Lanefather
+  advertises park. Reaps and park ask first, naming the target and the exact command; `y` runs it, `n`, Esc or a
+  click outside cancel. The row is looked for again in a fresh snapshot first and the action dropped if it changed;
+  the command runs in the background with no shell, a 30 s timeout and `GODFATHER_ACTOR=godfather/<version>`; the
+  footer shows its first stdout line, or its first stderr line in red, and the source is polled at once. Land,
+  promote, done, sync, review and sweep are never offered. Under `GODFATHER_FIXTURES` actions are recorded, never run.
+
+- Junkfather is a source (fathers#86): its `junkfather status --json` (versions 1 and 2) is polled like
+  Lanefather's. SLOTS' bottom border sums it up on the right, `3 procs 7 · 1 orphan · 1 expired · 2 unowned` (a
+  narrow border drops unowned, then expired), and `3` or a click on it opens the Processes page: owned entries
+  (running, then orphan, then expired), then the last sweep's unowned processes and resources, each with its state,
+  label, id, owner, lane, age, TTL left and pid, a resource with its kind and id; PROCESS DETAILS with its command,
+  directory, log, owner and whether it lives, keep, mode, resource, and its lease and lane as links; and its
+  Junkfather events under the table. DETAILS lists a request's owned processes (`storybook · running · 1h46m`, or
+  `none owned`), each a link to the page, and LANE DETAILS a lane's. EVENTS words `sweep.finished` from its result.
+  `godfather --once --page processes` prints the page.
+
+- Lanefather is a source (fathers#85): its machine-wide `lanefather status --json` is polled every 5 s (its hint, up
+  to 10 s) and soon after one of its events. SLOTS' bottom border sums it up, `2 lanes 3 active · 1 planned ·
+  2 reviews · 🔥 gate red` (a narrow border drops planned, then reviews; dimmed while stale), and `2` or a click on it
+  opens the Lanes page: LANES by project (`Straylight · 3 of 4 lanes`, an unreadable project's error dimmed) with each
+  lane's state, ticket, stage, receipt, review, claims and age; LANE DETAILS with its ticket and worktree links, the
+  latest log and the leases running for it, each a link back to the request; and its Lanefather events under the
+  table. DETAILS shows a request's lane as a link (`710-speech-paste-phase · Straylight`) when it joins: by its lane
+  and Lanefather state directory, or by its lane and a directory inside that lane's worktree, never by the id alone.
+  `1` shows the overview again, Esc goes back where a link came from; `1 2 pages` in the footer names the keys of the
+  tools present. `godfather --once --page lanes` prints the page. `lanefather show` is asked only where Lanefather's
+  capabilities advertise it; otherwise a request with no joined lane says `lanefather too old`.
+
+- EVENTS rows are selectable (fathers#152): with EVENTS focused, ↑ ↓ or a click move a row cursor (the `┃` bar
+  QUEUE's selection has) and DETAILS shows that run or event instead of QUEUE's entry: a run's label, slots, wait,
+  priority, run time, outcome and pid with each mark explained (`▲ outlier · ran 1m13s · its run type's p90 52s`,
+  `↗ slower +38% than its run type's p50` and why), another event's tool, kind, subject and fields. The cursor on
+  the newest row follows new rows; on an older one it stays put and `↑ N new` counts what arrived; Home goes back.
+
 - Settings has a section per present tool (fathers#87): this dashboard's own (Refresh every, Colour theme) first,
   then Slotfather's, Lanefather's and Junkfather's, each its read-only status rows and its settings, read with
   `<tool> settings --json` (Slotfather's every second, the others' every two) and changed with `settings set` and

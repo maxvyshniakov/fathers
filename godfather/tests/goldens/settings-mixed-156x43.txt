@@ -40,4 +40,4 @@
 │  11:45:09  ▫       agent-a1c75285bdf│                                                                              │4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                                     │           ↑↓ select   ←→ change   enter edit   d reset   esc close           │        −80s                    now  │
 ╰─────────────────────────────────────╰──────────────────────────────────────────────────────────────────────────────╯─────────────────────────────────────╯
- Godfather what's new?                            ↑↓ select   tab panel   s settings   ? help   q quit                             updated 11:59:39  ● live
+ Godfather what's new?                     ↑↓ select   tab panel   1 2 3 pages   s settings   ? help   q quit                      updated 11:59:39  ● live
