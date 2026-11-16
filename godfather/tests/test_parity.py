@@ -6,7 +6,7 @@ it drew, its help, and the same model as a `status --json --full` reply (tools/s
 stand-in). Godfather reads that reply in fixture mode, its adapter decodes it, and Godfather renders it at the same
 moment. Every cell, character and style, must be identical, emoji and ASCII, wide, one-column and narrow, but the
 footer (its name and version) and the EVENTS panel, whose columns Godfather changed on purpose after the move (time ·
-slots · label · result, owner 2026-11-12), and the focused panel's frame, heavy since fathers#139 (all four sides since fathers#165), and what says the history chart shows slots held
+slots · label · result, owner 2026-11-12), and the focused panel's frame, heavy since fathers#139 (all four sides since fathers#165) with a selected row's markers leaning toward it, and what says the history chart shows slots held
 (fathers#140; chart_title());
 help likewise in every section but EVENTS. A missing or unreadable fixture
 fails the test; it never skips.
@@ -80,6 +80,7 @@ def chart_title(canvas: tui.Canvas) -> set[tuple[int, int]]:
 
 
 RESTED = {"┏": "╭", "┓": "╮", "┗": "╰", "┛": "╯", "━": "─", "┃": "│"}  # a focused frame as a resting one
+MARKED = {"▕": "┃", "▏": "┃"}  # a selected row's markers, leaning toward the row since fathers#165, as Slotfather's
 
 
 class ParityTests(unittest.TestCase):
@@ -160,6 +161,8 @@ class ParityTests(unittest.TestCase):
                                 and cell[1] == "accent")
                             if framed:
                                 cell = [RESTED.get(str(cell[0]), cell[0]), *cell[1:]]
+                            elif column in sides:
+                                cell = [MARKED.get(str(cell[0]), cell[0]), *cell[1:]]
                             self.assertEqual(expected[row][column], cell, f"{name}: row {row}, column {column}")
                 if events:  # the same frame and place, other columns
                     for row, column in ((events["y"], events["x"]), (events["y"] + events["height"] - 1,

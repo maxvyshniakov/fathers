@@ -35,5 +35,38 @@ class FocusTests(unittest.TestCase):
         self.assertTrue(self.frame("", name="").render(False).startswith("╭"))
 
 
+class HeaderTickTests(unittest.TestCase):
+    """fathers#165 (owner, question 3): column labels set into a top border always have a tick of rule between them.
+    Two cells apart, half segments meet in the middle of the gap (`waited╶╴outcome`, heavy `╺╸` on a focused
+    frame); one cell apart, one rule cell; three or more, a space each side of the rule as before; `-` on ASCII."""
+
+    def setUp(self) -> None:
+        self.tool: Any = _view.fresh()
+        self.addCleanup(_view.fresh)
+
+    def header(self, gap: int, focus: str) -> Any:
+        canvas = self.tool.Canvas(40, 4)
+        canvas.focus = focus
+        # waited right-aligned in 7..13 of the table, outcome left-aligned `gap` cells after it
+        table = self.tool.Table([("time", "time", 0, 4, False), ("waited", "waited", 7, 6, True),
+                                 ("outcome", "outcome", 13 + gap, 7, False)])
+        table.header(self.tool.Panel(canvas, Rect(0, 0, 4, 40), "events"), "")
+        return canvas
+
+    def test_two_and_one_cell_gaps_keep_a_tick_light_and_heavy(self) -> None:
+        cases = [(2, "requests", "waited╶╴outcome", "frame"), (2, "events", "waited╺╸outcome", "accent"),
+                 (1, "requests", "waited─outcome", "frame"), (1, "events", "waited━outcome", "accent"),
+                 (3, "requests", "waited ─ outcome", "frame"), (4, "events", "waited ━━ outcome", "accent")]
+        for gap, focus, text, style in cases:
+            with self.subTest(gap=gap, focus=focus):
+                canvas = self.header(gap, focus)
+                line = canvas.render(False).splitlines()[0]
+                self.assertIn(text, line)
+                ticks = range(line.index("waited") + 6, line.index("outcome"))
+                self.assertEqual({style}, {canvas.cells[0][x][1] for x in ticks if canvas.cells[0][x][0] != " "})
+                self.assertIn(text.replace("╶╴", "--").replace("╺╸", "--").replace("─", "-").replace("━", "="),
+                              canvas.lines(False, ascii_only=True)[0])
+
+
 if __name__ == "__main__":
     unittest.main()

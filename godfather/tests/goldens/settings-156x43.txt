@@ -5,7 +5,7 @@
 ╰─────────────────────────────────────╭─ SETTINGS ────────────────────── a change saves after a second, or on Enter ─╮                                     │
 ┏━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│                                                                              │                                     │
 ┃                                     │  GODFATHER · this dashboard only                                             │                                     │
-┃  ▶️    lane-644-build-once          │    Refresh every             1s                                              │ 0.9 of 2 cores                      │
+▕  ▶️    lane-644-build-once          │    Refresh every             1s                                              │ 0.9 of 2 cores                      │
 ┃  ▶️    lane-465-state-definitions-re│    Colour theme              Auto                                            │ waited 19m34s · running 35m10s      │
 ┃  ▶️    desktop                      │  ──────────────────────────────────────────────────────────────────────────  │ processes                           │
 ┃                                     │  SLOTFATHER · status read-only, live                                         │                                     │
@@ -15,7 +15,7 @@
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    budgets      CPU 4 (12 cores) · memory 16 (64 GiB)                        │verify.sh --checks desktop-tests     │
 ╭─ SLOTS LOG ─────── label ───────────│    draining     none                                                         │ng --jobs 1                          │
 │                                     │    environment  SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB                      │ht                                   │
-│  11:59:35  ▫       agent-ae72d94beb6┃  ▶ Capacity                  ‹ Fixed ›                                       ┃                                     │
+│  11:59:35  ▫       agent-ae72d94beb6▕  ▶ Capacity                  ‹ Fixed ›                                       ▏                                     │
 │  11:58:33  ▫       agent-a1c75285bdf│    Slots                     6                                               │once                                 │
 │  11:57:15  ▫       agent-a1c75285bdf│    Queue order               Backfill                                        │                                     │
 │  11:55:44  ▪▪      desktop          │    Backfill margin           3×                                              │                                     │

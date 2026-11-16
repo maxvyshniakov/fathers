@@ -1,7 +1,7 @@
-┏━ LANES ━━━━━━━━━━━━━ ticket  stage ━━━━━━━ receipt ━━━━━━ review ━━━━━━━━ claims ━━━ age ━┓ ╭─ LANE DETAILS ─────────────────────────────────────────────╮
+┏━ LANES ━━━━━━━━━━━━━ ticket╺╸stage ━━━━━━━ receipt ━━━━━━ review ━━━━━━━━ claims ━━━ age ━┓ ╭─ LANE DETAILS ─────────────────────────────────────────────╮
 ┃                                                                                           ┃ │                                                            │
 ┃  Straylight · 3 of 4 lanes                                                                ┃ │  lane       644-build-once                                 │
-┃  ▶️  644-build-once    #644  active        in progress    not started         11     55m  ┃ │  project    Straylight                                     │
+▕  ▶️  644-build-once    #644  active        in progress    not started         11     55m  ▏ │  project    Straylight                                     │
 ┃  ▶️  710-speech-pa…    #710  active · po…  green · curr…  running · 2 o…       2   1h47m  ┃ │  stage      active                                         │
 ┃  ▶️  612-overlay-k…    #612  active        red · stale    finished             4  17h19m  ┃ │  ticket     #644                                           │
 ┃  🗓️  555-host-rena…    #555  planned       not run        not started          1      9m  ┃ │  branch     lane/644-build-once                            │

@@ -293,12 +293,15 @@ def draw_title(panel: Panel, table: Table, title: list[Part], switch: bool) -> i
     labels = [x + 3 + column + (max(0, label_size - text_width(label)) if right else 0)
               for _, label, column, label_size, right in table.placed[1:] if label]
     end = start + size
-    resume = next((label - 1 for label in labels if label - 1 > end), x + width - 1)
+    stop = next((label for label in labels if label - 1 > end), None)
+    resume = stop - 1 if stop is not None else x + width - 1
     rule = (FOCUS_FRAME if panel.focused else REST_FRAME)[1]
     canvas.put(y, start - 1, rule * (resume - start + 1), "accent" if panel.focused else "frame")
     canvas.put(y, start - 1, " ", "text")
     canvas.segments(y, start, title, size)
     canvas.put(y, start + size, " ", "text")
+    if stop is not None:  # a tick of rule before the label it stops at (Panel.gap)
+        panel.gap(end, stop)
     if switch:
         canvas.switch_at = (y, start, start + size)
     return start + size - x - 3
@@ -324,7 +327,8 @@ def border_note(panel: Panel, table: Table, note: list[Part], after: int = 0) ->
     end = start + 3 + size + 1
     labels = [x + 3 + column + (max(0, label_size - text_width(title)) if right else 0)
               for _, title, column, label_size, right in table.placed[1:] if title]
-    resume = next((label - 1 for label in labels if label - 1 > end), x + width - 1)
+    stop = next((label for label in labels if label - 1 > end), None)
+    resume = stop - 1 if stop is not None else x + width - 1
     rule = (FOCUS_FRAME if panel.focused else REST_FRAME)[1]
     canvas.put(y, start, rule * (resume - start), "accent" if panel.focused else "frame")
     canvas.put(y, start + 2, " ", "text")
@@ -333,3 +337,5 @@ def border_note(panel: Panel, table: Table, note: list[Part], after: int = 0) ->
     else:
         canvas.segments(y, start + 3, note, size)
     canvas.put(y, start + 3 + size, " ", "text")
+    if stop is not None:  # a tick of rule before the label it stops at (Panel.gap)
+        panel.gap(start + 3 + size, stop)

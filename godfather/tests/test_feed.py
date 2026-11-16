@@ -249,7 +249,7 @@ class LogViewTests(unittest.TestCase):
             with self.subTest(view=view):
                 _, lines = self.draw(120, self.tool.Filter(view))
                 row = next(line for line in self.body(lines) if needle in line)
-                self.assertEqual(lines[0].index(f" {title} ") + 1, row.index(needle))
+                self.assertEqual(lines[0].index(title), row.index(needle))
 
     def test_a_run_reads_running_while_it_holds_its_slots(self) -> None:
         rows = rows_of(mixed()[:1], TAGS)

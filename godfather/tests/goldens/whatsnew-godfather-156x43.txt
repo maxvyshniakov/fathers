@@ -5,7 +5,7 @@
 ╰───────────────────────────────────────│                                                                         ┃│                                       │
 ┏━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│  ADDED                                                                  ┃│                                       │
 ┃                                       │                                                                         ╹│                                       │
-┃  ▶️    lane-644-build-once            │  • Row actions (fathers#88): Enter, a or a right-click on a QUEUE row    │░░ 0.9 of 2 cores                      │
+▕  ▶️    lane-644-build-once            │  • Row actions (fathers#88): Enter, a or a right-click on a QUEUE row    │░░ 0.9 of 2 cores                      │
 ┃  ▶️    lane-465-state-definitions-revi│    or a page's row opens its action menu, only the actions its tool      │ · waited 19m34s · running 35m10s      │
 ┃  ▶️    desktop                        │    advertises and that apply to the row now (no actions in the footer    │ 1 processes                           │
 ┃                                       │    otherwise): reprioritize a request to another class and ask a         │                                       │
