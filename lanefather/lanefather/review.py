@@ -410,7 +410,7 @@ def mark_review(args: Any) -> int:
     return 0
 
 
-def fix_claims(receipt: dict[str, Any], fix_id: str) -> tuple[list[str], list[str]]:
+def fix_claims(receipt: dict[str, Any], fix_id: str, common: str | None = None) -> tuple[list[str], list[str]]:
     """The fix lane's claims (#586): the repository files the review's findings name, never the landed lane's
     claims, which hold every path its check widened to and so overlap lanes started since. A named file another
     planned or active lane claims stays out, with a line saying so; check widens the claims from the fix's own
@@ -418,7 +418,7 @@ def fix_claims(receipt: dict[str, Any], fix_id: str) -> tuple[list[str], list[st
     found: list[str] = []
     held: list[str] = []
     lines: list[str] = []
-    others = [r for r in state.occupying() if r["id"] != fix_id]
+    others = [r for r in state.occupying(state.of_project(state.lanes(), common)) if r["id"] != fix_id]
     for finding in receipt.get("findings", []):
         path = posixpath.normpath(finding.get("file") or ".")
         if path in (".", "..") or path.startswith(("/", "../")) or path in found or path in held:
@@ -477,7 +477,7 @@ def hand_over(args: Any) -> int:
         raise LaneError(f"hand-over refused: lane {args.id} is {record['status']} and has no worktree to hand over")
     fix_id = f"{args.id}-review-fixes"
     main = main_checkout(record["common_dir"])
-    fix_paths, held = fix_claims(receipt, fix_id)
+    fix_paths, held = fix_claims(receipt, fix_id, record["common_dir"])
     fix, rules = lanes.prepare(main, fix_id, record["ticket"], fix_paths, fix_base(record, main), [])
     fix.update(review_fix_of=args.id, worktree=record["worktree"])
     lanes.register(fix, rules, args.force_reason, False)

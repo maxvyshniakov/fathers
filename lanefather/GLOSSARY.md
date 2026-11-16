@@ -13,7 +13,7 @@ admission, slot, lease) are in the [fathers glossary](../GLOSSARY.md).
 | Dependency | Another lane that must land before this lane may land. |
 | Stage | A lane's position in its workflow lifecycle: planned, active, landed, released or done. |
 | Phase | The kind of execution performed for work, such as check, post-merge or rerun. |
-| Lane cap | The maximum number of lanes in the planned or active states at once. |
+| Lane cap | The maximum number of one repository's lanes in the planned or active states at once. |
 | Planned lane | A registered lane without an adopted worktree. |
 | Active lane | A registered lane with a worktree, before landing. |
 | Landed lane | A lane whose changes have been merged into its integration branch. |
