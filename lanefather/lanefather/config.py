@@ -131,7 +131,8 @@ class Config:
                                       ".turbo", ".next", "storybook-static", "coverage", ".pytest_cache",
                                       ".ruff_cache", ".DS_Store")
     admission_provider: str = "legacy"
-    # [admission] cap: this repository's lane cap (fathers#149), below LANEFATHER_CAP; None derives it.
+    # [admission] cap: this repository's lane cap (fathers#149); LANEFATHER_CAP, when valid, wins over it, and
+    # without either the cap is derived.
     lane_cap: int | None = None
     tickets: Tickets = Tickets()
 
