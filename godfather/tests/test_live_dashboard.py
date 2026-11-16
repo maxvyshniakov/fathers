@@ -93,11 +93,20 @@ class OptionTests(LiveCase):
             self.assertEqual(2, result.returncode, args)
             self.assertTrue(result.stderr.startswith("godfather: "), (args, result.stderr))
 
-    def test_without_a_terminal_it_prints_usage_and_exits_2(self) -> None:
+    def test_without_a_terminal_it_says_why_in_one_line_and_exits_2(self) -> None:
         result = self.run_godfather()
         self.assertEqual(2, result.returncode)
-        self.assertIn("usage: godfather", result.stderr)
-        self.assertIn("--once prints one frame", result.stderr)
+        self.assertEqual(["godfather: the live view needs an interactive terminal; --once prints one frame",
+                          "Try 'godfather --help'."], result.stderr.splitlines(), "no usage text (docs/cli.md)")
+
+    def test_an_option_takes_its_value_after_an_equals_sign_too(self) -> None:
+        for args in (["--once", "--width=80", "--height=20"], ["--once", "--interval=2", "--width", "80"]):
+            result = self.run_godfather(*args)
+            self.assertNotEqual(2, result.returncode, (args, result.stderr))
+            self.assertNotIn("unknown argument", result.stderr)
+        result = self.run_godfather("--width=4")
+        self.assertEqual(2, result.returncode)
+        self.assertIn("--width takes a whole number", result.stderr)
 
 
 class ClickTests(LiveCase):

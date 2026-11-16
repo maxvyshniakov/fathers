@@ -510,10 +510,22 @@ def event_text(event: _events.Event, tag: str) -> str:
     return _events.CONTROL.sub(" ", "  ".join(field for field in fields if field).rstrip())
 
 
+def split_options(argv: list[str]) -> list[str]:
+    """`--opt=value` as `--opt value` (docs/cli.md): every long option that takes a value takes both forms."""
+    found: list[str] = []
+    for arg in argv:
+        if arg.startswith("--") and "=" in arg:
+            found += arg.split("=", 1)
+        else:
+            found.append(arg)
+    return found
+
+
 def events_command(argv: list[str]) -> int:
     """`godfather events [--source NAME]... [--follow] [--json]`: every present source's events merged, newest last;
     --follow keeps printing what the logs gain (checked every 250 ms), --json prints the lines as read. An absent
     source is left out; a present one that is unsupported is named on stderr. Never in colour."""
+    argv = split_options(argv)
     names: list[str] = []
     follow = as_json = False
     while argv:
@@ -568,6 +580,7 @@ def events_command(argv: list[str]) -> int:
 def command(argv: list[str]) -> int:
     if argv[:1] == ["events"]:
         return events_command(argv[1:])
+    argv = split_options(argv)
     interval, run_once, colour, width, height = None, False, None, None, None
     while argv:
         if argv[0] == "--once":
@@ -575,7 +588,7 @@ def command(argv: list[str]) -> int:
         elif argv[0] == "--color":
             colour, argv = True, argv[1:]
         elif argv[0] in ("--version", "-V") and len(argv) == 1:
-            print(_version.text(_version.running_identity()) if _version.running_source() else _version.VERSION)
+            print(_version.text(_version.running_identity()) if _version.running_source() else f"godfather {_version.VERSION}")
             return 0
         elif argv[0] in ("--help", "-h"):
             print(USAGE)
@@ -610,8 +623,8 @@ def command(argv: list[str]) -> int:
     if run_once:
         return once(width, height, colour, interval, resolved)
     if not sys.stdin.isatty() or not sys.stdout.isatty():
-        print(USAGE, file=sys.stderr)
         print("godfather: the live view needs an interactive terminal; --once prints one frame", file=sys.stderr)
+        print("Try 'godfather --help'.", file=sys.stderr)
         return 2
     try:
         dashboard_live(interval, theme)
