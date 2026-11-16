@@ -109,7 +109,9 @@ def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, ov
 def draw_panels(canvas: Canvas, model: Model, selected: int, cwd: Optional[str], failure: Optional[str],
                 moment: datetime.datetime, events_filter: Optional[_events.Filter] = None,
                 event: Optional[int] = None, tools: Optional[dict[str, Any]] = None) -> None:
-    screen = _layout.overview(canvas.width, canvas.height, _queue.queue_rows(model), _layout.machine_height)
+    shown = model["holders"] or model["waiters"] or event is not None  # DETAILS has something to show
+    screen = _layout.overview(canvas.width, canvas.height, _queue.queue_rows(model), _layout.machine_height,
+                              _layout.DETAILS_FLOOR if shown else _layout.DETAILS_MIN)
     panels = screen.panels
     canvas.order = screen.order
     if "slots" in panels:

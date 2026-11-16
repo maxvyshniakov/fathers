@@ -51,27 +51,27 @@ class OverviewTests(unittest.TestCase):
         ((110, 14, 8), {"slots": (0, 0, 5, 57), "requests": (5, 0, 5, 57), "machine": (10, 0, 3, 57),
                         "details": (0, 58, 13, 52)}, ("requests", "details")),
         # one column from 83 columns (fathers#169): QUEUE, EVENTS the whole width, then MACHINE on the left and
-        # DETAILS on the right; below 83 QUEUE, DETAILS and MACHINE alone
-        ((109, 40, 1), {"slots": (0, 0, 5, 109), "requests": (5, 0, 5, 109), "events": (10, 0, 18, 109),
-                        "machine": (28, 0, 11, 54), "details": (28, 55, 11, 54)}, ("requests", "events", "details")),
-        ((100, 40, 1), {"slots": (0, 0, 5, 100), "requests": (5, 0, 5, 100), "events": (10, 0, 18, 100),
-                        "machine": (28, 0, 11, 49), "details": (28, 50, 11, 50)}, ("requests", "events", "details")),
-        ((83, 40, 1), {"slots": (0, 0, 5, 83), "requests": (5, 0, 5, 83), "events": (10, 0, 18, 83),
-                       "machine": (28, 0, 11, 44), "details": (28, 45, 11, 38)}, ("requests", "events", "details")),
+        # DETAILS on the right, the row as tall as DETAILS' key fields (13); below 83 QUEUE, DETAILS and MACHINE alone
+        ((109, 40, 1), {"slots": (0, 0, 5, 109), "requests": (5, 0, 5, 109), "events": (10, 0, 16, 109),
+                        "machine": (26, 0, 13, 54), "details": (26, 55, 13, 54)}, ("requests", "events", "details")),
+        ((100, 40, 1), {"slots": (0, 0, 5, 100), "requests": (5, 0, 5, 100), "events": (10, 0, 16, 100),
+                        "machine": (26, 0, 13, 49), "details": (26, 50, 13, 50)}, ("requests", "events", "details")),
+        ((83, 40, 1), {"slots": (0, 0, 5, 83), "requests": (5, 0, 5, 83), "events": (10, 0, 16, 83),
+                       "machine": (26, 0, 13, 44), "details": (26, 45, 13, 38)}, ("requests", "events", "details")),
         ((82, 40, 1), {"slots": (0, 0, 5, 82), "requests": (5, 0, 5, 82), "details": (10, 0, 22, 82),
                        "machine": (32, 0, 7, 82)}, ("requests", "details")),
         ((76, 40, 1), {"slots": (0, 0, 5, 76), "requests": (5, 0, 5, 76), "details": (10, 0, 22, 76),
                        "machine": (32, 0, 7, 76)}, ("requests", "details")),
         ((60, 40, 1), {"slots": (0, 0, 5, 60), "requests": (5, 0, 5, 60), "details": (10, 0, 18, 60),
                        "machine": (28, 0, 11, 60)}, ("requests", "details")),
-        # one column, short: the floors (QUEUE 10, the full-width band 13, the bottom row 6) give way to the
-        # minimums; without a bottom row the band is DETAILS'
-        ((100, 34, 3), {"slots": (0, 0, 5, 100), "requests": (5, 0, 7, 100), "events": (12, 0, 13, 100),
-                        "machine": (25, 0, 8, 49), "details": (25, 50, 8, 50)}, ("requests", "events", "details")),
-        ((100, 33, 3), {"slots": (0, 0, 5, 100), "requests": (5, 0, 7, 100), "events": (12, 0, 13, 100),
-                        "machine": (25, 0, 7, 49), "details": (25, 50, 7, 50)}, ("requests", "events", "details")),
-        ((100, 30, 12), {"slots": (0, 0, 5, 100), "requests": (5, 0, 13, 100), "events": (18, 0, 5, 100),
-                         "machine": (23, 0, 6, 49), "details": (23, 50, 6, 50)}, ("requests", "events", "details")),
+        # one column, short (fathers#169): the bottom row gives way first (DETAILS' 13, MACHINE's 11, its 7 without
+        # the chart, its 6), then EVENTS (7, then 5); QUEUE keeps its least; without a bottom row the band is DETAILS'
+        ((100, 34, 3), {"slots": (0, 0, 5, 100), "requests": (5, 0, 7, 100), "events": (12, 0, 8, 100),
+                        "machine": (20, 0, 13, 49), "details": (20, 50, 13, 50)}, ("requests", "events", "details")),
+        ((100, 33, 3), {"slots": (0, 0, 5, 100), "requests": (5, 0, 7, 100), "events": (12, 0, 7, 100),
+                        "machine": (19, 0, 13, 49), "details": (19, 50, 13, 50)}, ("requests", "events", "details")),
+        ((100, 30, 12), {"slots": (0, 0, 5, 100), "requests": (5, 0, 10, 100), "events": (15, 0, 7, 100),
+                         "machine": (22, 0, 7, 49), "details": (22, 50, 7, 50)}, ("requests", "events", "details")),
         ((100, 25, 12), {"slots": (0, 0, 5, 100), "requests": (5, 0, 14, 100), "details": (19, 0, 5, 100)},
          ("requests", "details")),
         ((100, 20, 3), {"slots": (0, 0, 5, 100), "requests": (5, 0, 7, 100), "details": (12, 0, 7, 100)},
@@ -148,6 +148,61 @@ class OneColumnTests(unittest.TestCase):
                         self.assertEqual((0, machine.width + 1), (machine.x, details.x), "MACHINE left, DETAILS right")
                         self.assertEqual(width, machine.width + 1 + details.width)
                         self.assertEqual(height - 1, details.y + details.height, "down to the footer")
+
+
+class AllocateTests(unittest.TestCase):
+    """fathers#169: one column's rows by floors and priorities. Each case: (width, height, queue rows, DETAILS'
+    wanted rows) and the heights of QUEUE, the band and the bottom row (MACHINE's, and DETAILS' beside it)."""
+
+    CASES: list[tuple[tuple[int, int, int, int], dict[str, int]]] = [
+        # tall, few queue rows: QUEUE its rows, the bottom row DETAILS' key fields, EVENTS the rest
+        ((100, 50, 6, 13), {"requests": 10, "events": 21, "machine": 13}),
+        ((100, 40, 6, 13), {"requests": 10, "events": 11, "machine": 13}),
+        # nothing to show in DETAILS: the bottom row is MACHINE's natural height, EVENTS gets the rows
+        ((100, 40, 6, 5), {"requests": 10, "events": 13, "machine": 11}),
+        # many queue rows: the floors first (QUEUE 10, EVENTS 7, the row 13), then QUEUE takes what is left
+        ((100, 40, 17, 13), {"requests": 14, "events": 7, "machine": 13}),
+        ((100, 60, 30, 13), {"requests": 34, "events": 7, "machine": 13}),
+        # short: the row gives way before EVENTS' three rows, EVENTS before QUEUE's least
+        ((100, 30, 6, 13), {"requests": 10, "events": 7, "machine": 7}),
+        ((100, 29, 6, 13), {"requests": 10, "events": 7, "machine": 6}),
+        ((100, 28, 6, 13), {"requests": 10, "events": 5, "machine": 7}),
+        ((100, 27, 6, 13), {"requests": 10, "events": 5, "machine": 6}),
+        ((100, 26, 6, 13), {"requests": 10, "details": 10}),  # no bottom row: DETAILS has the band
+        # 83 columns, the narrowest with the bottom row; 82, DETAILS' band over MACHINE alone, as before
+        ((83, 40, 6, 13), {"requests": 10, "events": 11, "machine": 13}),
+        ((82, 40, 6, 13), {"requests": 10, "details": 17, "machine": 7}),
+        ((60, 40, 6, 13), {"requests": 10, "details": 13, "machine": 11}),
+        # wide: unchanged, QUEUE over EVENTS beside DETAILS over MACHINE at its natural height
+        ((156, 43, 6, 13), {"requests": 10, "events": 27, "details": 35, "machine": 7}),
+        ((156, 43, 6, 5), {"requests": 10, "events": 27, "details": 35, "machine": 7}),
+    ]
+
+    def test_floors_then_priorities(self) -> None:
+        for (width, height, rows, details), heights in self.CASES:
+            with self.subTest(width=width, height=height, rows=rows, details=details):
+                panels = layout.overview(width, height, rows, natural, details).panels
+                self.assertEqual(heights, {name: panels[name].height for name in heights})
+                if "events" in panels and width < layout.WIDE:
+                    self.assertEqual(panels["machine"].height, panels["details"].height, "one bottom row")
+                self.assertEqual(height - 1, max(rect.y + rect.height for rect in panels.values()), "every row")
+
+    def test_allocate_steps_down_floors_in_order_then_grows_by_priority(self) -> None:
+        bands = (layout.Band("a", (4,), 9), layout.Band("b", (6, 3)), layout.Band("c", (8, 5, 2), 10))
+        def heights(available: int) -> dict[str, int]:
+            return layout.allocate(available, bands, give_way=("c", "b"), grow=("a", "c"), rest=("b", "a"))
+        self.assertEqual({"a": 9, "b": 8, "c": 10}, heights(27), "a, then c to their naturals; b the rest")
+        self.assertEqual({"a": 6, "b": 6, "c": 8}, heights(20), "every first floor; a grows first")
+        self.assertEqual({"a": 4, "b": 6, "c": 5}, heights(15), "c gives way a floor")
+        self.assertEqual({"a": 4, "b": 6, "c": 2}, heights(12))
+        self.assertEqual({"a": 4, "b": 3, "c": 2}, heights(9), "then b")
+        self.assertEqual({"a": 5, "b": 3}, heights(8), "at the last floors those that fit, from the top")
+        self.assertEqual({"a": 4}, heights(4))
+
+    def test_a_taller_stacked_machine_gives_its_chart_the_rows(self) -> None:
+        self.assertEqual(4, layout.machine(Rect(0, 0, 11, 49), 9).chart.height)  # type: ignore[union-attr]
+        self.assertEqual(6, layout.machine(Rect(0, 0, 13, 49), 9).chart.height)  # type: ignore[union-attr]
+        self.assertEqual(4, layout.machine(Rect(0, 0, 11, 62), 9).chart.height, "beside the rows: CHART_ROWS")  # type: ignore[union-attr]
 
 
 class TabOrderTests(unittest.TestCase):

@@ -8,8 +8,14 @@ in two columns (QUEUE over EVENTS on the left, DETAILS over MACHINE on the right
 and at least 52); below that one column: QUEUE, a full-width band, then a bottom row. From 83 columns the band is
 EVENTS' and the bottom row holds MACHINE on the left and DETAILS on the right (fathers#169); below 83, where DETAILS
 would get under 38 columns beside MACHINE, or where the bottom row gets no rows, the band is DETAILS' and MACHINE has
-the bottom row alone (EVENTS is not shown). Under SMALL_WIDTH or SMALL_HEIGHT only the slots and a note. MACHINE sits
-at its natural height (7 with its chart beside the rows, from 62 columns; 11 stacked); the band takes the rest.
+the bottom row alone (EVENTS is not shown). Under SMALL_WIDTH or SMALL_HEIGHT only the slots and a note.
+One column's rows (fathers#169, `allocate`): each band has floors, its least rows from the most comfortable down, and
+first every band has its most comfortable floor; short of rows the bottom row gives way a floor at a time (DETAILS'
+wanted rows beside MACHINE, then MACHINE's natural height, its chart-less rows, its least), then the band (EVENTS'
+three rows, then one; DETAILS' key fields, then its least), and last QUEUE keeps fewer of its rows. Rows left over go
+to QUEUE up to all its rows, then to the bottom row up to MACHINE's natural height or DETAILS' wanted rows, whichever
+is more; the band takes the rest. MACHINE's natural height is 7 with its chart beside the rows, from 62 columns, and
+11 stacked; a stacked MACHINE in a taller bottom row gives its chart the extra rows.
 Wide, EVENTS shows from the height that gives it its least rows under QUEUE's least, and below that height QUEUE keeps
 its rows (less what MACHINE's three-row compact form needs), MACHINE goes under it and DETAILS takes the whole right
 column (fathers#140), so as a terminal grows taller panels only ever arrive.
@@ -40,6 +46,8 @@ QUEUE_MIN, QUEUE_FLOOR, DETAILS_FLOOR = 10, 6 + 4, 9 + 4  # rows: QUEUE's least,
 # band's, whichever panel has it)
 EVENTS_MIN, DETAILS_MIN, DETAILS_WIDE_MIN, MACHINE_MIN = 5, 5, 10, 6
 MACHINE_SHORT = 3  # MACHINE's least rows as one compact line in its frame: the short wide arrangement (fathers#140)
+MACHINE_BARE = 7  # MACHINE without its chart: the frame, a blank row over and under the three rows
+EVENTS_LEAST = 4 + 3  # EVENTS' comfortable least in one column: its frame and padding, and three rows (fathers#169)
 
 # MACHINE inside: a frame, a blank row, three resource rows and the history chart with its axis line under it
 CHART_ROWS, MIN_CHART_ROWS = 4, 2  # the chart's rows when there is room; fewer than two, it goes (owner)
@@ -107,9 +115,41 @@ def queue_height(rows: int) -> int:
     return rows + 4
 
 
-def overview(width: int, height: int, rows: int, machine_natural: Callable[[int], int]) -> Overview:
+class Band(NamedTuple):
+    """One band of a column for `allocate`: its floors, the least rows it takes from the most comfortable down (each
+    tier gives way to the next), and its natural height, which leftover rows grow it to (0: none)."""
+    name: str
+    floors: tuple[int, ...]
+    natural: int = 0
+
+
+def allocate(available: int, bands: tuple[Band, ...], give_way: tuple[str, ...], grow: tuple[str, ...],
+             rest: tuple[str, ...]) -> dict[str, int]:
+    """A column's rows (fathers#169): every band at its first floor if all fit, else the bands in `give_way` order step
+    down their floors one at a time until all fit; at the last floors, those that fit, from the top. Then rows left
+    over grow the bands in `grow` order to their natural heights, and the first placed of `rest` takes what is left."""
+    at = {band.name: band.floors[0] for band in bands}
+    steps = [dict(at)]
+    for name in give_way:
+        for floor in next(band for band in bands if band.name == name).floors[1:]:
+            at[name] = floor
+            steps.append(dict(at))
+    naturals = {band.name: band.natural for band in bands}
+    tiers = tuple(Tier(tuple((band.name, step[band.name]) for band in bands), grow, rest, whole=True)
+                  for step in steps)
+    return stack(available, (*tiers, tiers[-1]._replace(whole=False)), naturals)
+
+
+def floors(*heights: int) -> tuple[int, ...]:
+    """Floors from the most comfortable down, each once."""
+    return tuple(sorted(set(heights), reverse=True))
+
+
+def overview(width: int, height: int, rows: int, machine_natural: Callable[[int], int],
+             details: int = DETAILS_FLOOR) -> Overview:
     """The overview at this size; `rows` is QUEUE's table rows (its entries, at least one, and the gap between
-    running and waiting), `machine_natural` MACHINE's natural height at a width."""
+    running and waiting), `machine_natural` MACHINE's natural height at a width, `details` the rows DETAILS wants
+    (its key fields, or its least with nothing to show)."""
     if width < SMALL_WIDTH or height < SMALL_HEIGHT:
         return Overview("small", {}, ("requests",), Rect(min(2, height - 4), 3, 2, width - 6),
                         SMALL_NOTE_ROW if SMALL_NOTE_ROW < height - 1 else None)
@@ -137,13 +177,13 @@ def overview(width: int, height: int, rows: int, machine_natural: Callable[[int]
         slots_width = left
     else:
         machine_width, details_width = split(width, (width - 1) // 2, NARROW_MACHINE, NARROW_DETAILS)
-        bottom = machine_natural(machine_width)
-        heights = stack(available, (
-            Tier((("requests", min(queue, QUEUE_FLOOR)), ("band", DETAILS_FLOOR), ("bottom", MACHINE_MIN)),
-                 grow=("bottom", "requests"), rest=("band", "requests"), whole=True),
-            Tier((("requests", min(queue, QUEUE_MIN)), ("band", DETAILS_MIN), ("bottom", MACHINE_MIN)),
-                 grow=("requests", "band", "bottom"), rest=("band", "requests"))),
-            {"requests": queue, "band": DETAILS_MIN, "bottom": bottom})
+        machine_rows = machine_natural(machine_width)
+        bottom = max(machine_rows, details) if details_width else machine_rows  # DETAILS beside MACHINE, or not
+        heights = allocate(available, (
+            Band("requests", (min(queue, QUEUE_MIN),), queue),
+            Band("band", floors(EVENTS_LEAST, EVENTS_MIN) if details_width else floors(DETAILS_FLOOR, DETAILS_MIN)),
+            Band("bottom", floors(bottom, machine_rows, MACHINE_BARE, MACHINE_MIN), bottom)),
+            give_way=("bottom", "band"), grow=("requests", "bottom"), rest=("band", "requests"))
         column(panels, ("requests", "band", "bottom"), heights, SLOTS_HEIGHT, 0, width)
         band, row = panels.pop("band", None), panels.pop("bottom", None)
         if band is not None and row is not None and details_width:
@@ -232,7 +272,8 @@ def machine_height(width: int) -> int:
 def machine(panel: Rect, values: int) -> Machine:
     """MACHINE's inside; `values` is the widest resource value. Wide (owner, 2026-11-12): the chart beside the rows,
     its rows level with theirs, its axis under it alone. Stacked: a blank row, the rows, the chart and its axis line,
-    which the bottom frame follows directly. Short of rows the chart gives up height first, 4 → 3 → 2 rows and then
+    which the bottom frame follows directly; the chart has CHART_ROWS at MACHINE's natural height and every row a
+    taller panel gives it (one column's bottom row beside a taller DETAILS, fathers#169). Short of rows the chart gives up height first, 4 → 3 → 2 rows and then
     entirely (never one row); then the blank rows; then the rows become one compact line. Without the chart a blank
     row stays under the rows as well as over them (owner); with room for one only, it is the lower one."""
     y, x, height, width = panel
@@ -242,7 +283,7 @@ def machine(panel: Rect, values: int) -> Machine:
         return Machine(True, Rect(y + 2, x + 3, rows, metrics), None,
                        Rect(y + 2, x + 3 + metrics + MACHINE_GAP, min(CHART_ROWS, interior - 2),
                             inner - metrics - MACHINE_GAP))
-    chart_rows = min(CHART_ROWS, interior - 1 - rows - 1)
+    chart_rows = interior - 1 - rows - 1  # all the rows it has: more than CHART_ROWS only in a taller bottom row
     chart_rows = chart_rows if chart_rows >= MIN_CHART_ROWS else 0
     row = y + 2 if interior >= rows + (1 if chart_rows else 2) else y + 1
     lines: Optional[Rect] = None

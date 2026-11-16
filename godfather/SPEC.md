@@ -86,9 +86,21 @@ full pages one key away.
 
 ### Overview (the main screen)
 
-12. The overview is today's Slotfather layout and polish, unchanged: SLOTS, QUEUE, DETAILS, EVENTS and MACHINE, the
-    wide and one-column layouts, focus, Tab order, scrollbars, emoji and ASCII fallbacks, colours and theme modes,
-    the footer, help, changelog and Settings overlays, any keyboard layout, mouse and Shift+drag selection.
+12. The overview is Slotfather's layout and polish: SLOTS, QUEUE, DETAILS, EVENTS and MACHINE, the wide layout
+    (from 110 columns), focus, scrollbars, emoji and ASCII fallbacks, colours and theme modes, the footer, help,
+    changelog and Settings overlays, any keyboard layout, mouse and Shift+drag selection. One column differs
+    (fathers#169):
+    - From 83 to 109 columns: QUEUE, EVENTS the full width under it, then one bottom row with MACHINE on the left and
+      DETAILS on the right. Tab goes by columns, left to right and each top to bottom: QUEUE, EVENTS, DETAILS.
+    - Heights by floors and priorities: first every panel's comfortable least (QUEUE up to 6 rows, EVENTS 3 rows, the
+      bottom row DETAILS' 9 key fields or MACHINE's natural height, whichever is more; only 5 DETAILS rows with
+      nothing to show). Short of rows the bottom row gives way first (MACHINE's natural height, then MACHINE without
+      its chart, then its least), then EVENTS (one row). Rows left over go to QUEUE up to all its rows, then to the
+      bottom row up to its height, and EVENTS takes the rest. A stacked MACHINE in a taller row gives its chart the
+      extra rows.
+    - Under 83 columns DETAILS has the full-width band and MACHINE the bottom row alone, and EVENTS is not shown, as
+      in Slotfather's one-column layout. Too short for the bottom row (under 27 rows with six queue rows), QUEUE and
+      DETAILS only.
 13. SLOTS' bottom border carries the summaries of the other tools, each led by its page key:
     `2 lanes 3 active · 2 reviews · 🔥 gate red` on the left and `3 procs 7 · 1 orphan` on the right.
     - lanes: `N active` (lanes in status active), `N planned` when any, `N reviews` (lanes whose review runs or has
