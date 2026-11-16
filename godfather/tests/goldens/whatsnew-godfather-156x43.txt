@@ -3,16 +3,16 @@
 │  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅│                                                                          │-build-once                            │
 │  lane-644-bui…  lane-465-sta…  desktop│  Godfather · unreleased · installed 9f600e1                             ┃│· 1 slot                               │
 ╰───────────────────────────────────────│                                                                         ┃│                                       │
-┍━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│  ADDED                                                                  ┃│                                       │
-│                                       │                                                                         ┃│                                       │
-┃  ▶️    lane-644-build-once            │  • Row actions (fathers#88): Enter, a or a right-click on a QUEUE row    │░░ 0.9 of 2 cores                      │
-│  ▶️    lane-465-state-definitions-revi│    or a page's row opens its action menu, only the actions its tool      │ · waited 19m34s · running 35m10s      │
-│  ▶️    desktop                        │    advertises and that apply to the row now (no actions in the footer    │ 1 processes                           │
-│                                       │    otherwise): reprioritize a request to another class and ask a         │                                       │
-│  ⏸️    prof51                         │    yieldable lease of a lower class than a waiter to yield (slotfather   │ight/.claude/worktrees/agent-afa3816b  │
-│  ⏸️    lane-555-host-rename-names     │    reprioritize|ask-yield PID … --start START); reap an orphan or        │2                                      │
-│                                       │    expired entry, or an unowned process the sweep reported (junkfather   │ight/.claude/worktrees/agent-afa3816b  │
-┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    reap --id … / --pid … --force), and extend a running entry's TTL by   │2/verify.sh --checks desktop-tests     │
+┏━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│  ADDED                                                                  ┃│                                       │
+┃                                       │                                                                         ╹│                                       │
+▕  ▶️    lane-644-build-once            │  • Row actions (fathers#88): Enter, a or a right-click on a QUEUE row    │░░ 0.9 of 2 cores                      │
+┃  ▶️    lane-465-state-definitions-revi│    or a page's row opens its action menu, only the actions its tool      │ · waited 19m34s · running 35m10s      │
+┃  ▶️    desktop                        │    advertises and that apply to the row now (no actions in the footer    │ 1 processes                           │
+┃                                       │    otherwise): reprioritize a request to another class and ask a         │                                       │
+┃  ⏸️    prof51                         │    yieldable lease of a lower class than a waiter to yield (slotfather   │ight/.claude/worktrees/agent-afa3816b  │
+┃  ⏸️    lane-555-host-rename-names     │    reprioritize|ask-yield PID … --start START); reap an orphan or        │2                                      │
+┃                                       │    expired entry, or an unowned process the sweep reported (junkfather   │ight/.claude/worktrees/agent-afa3816b  │
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    reap --id … / --pid … --force), and extend a running entry's TTL by   │2/verify.sh --checks desktop-tests     │
 ╭─ SLOTS LOG ─────── label ─────────────│    1 h, 4 h or 1 d; open a lane's ticket or worktree with the platform   │oing --jobs 1                          │
 │                                       │    opener, its latest log in $PAGER (less -R +G; the screen, kitty       │ight                                   │
 │  11:59:35  ▫       agent-ae72d94beb6f0│    keyboard mode included, comes back after), and park an active lane    │                                       │
@@ -38,6 +38,6 @@
 │  11:46:08  ▫       post-merge-491-elec│    (versions 1 and 2) is polled like Lanefather's. SLOTS' bottom         │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
 │  11:45:53  ▫       agent-a1c75285bdf2c│    border sums it up on the right, 3 procs 7 · 1 orphan · 1 expired ·    │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
 │  11:45:09  ▫       agent-a1c75285bdf2c│                                                                          │░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
-│                                       │                     ←→ tool   ↑↓ scroll   esc close                  11% │          −80s                    now  │
+│                                       │                     ←→ tool   ↑↓ scroll   esc close                  10% │          −80s                    now  │
 ╰───────────────────────────────────────╰──────────────────────────────────────────────────────────────────────────╯───────────────────────────────────────╯
  Godfather what's new?                            ↑↓ select   tab panel   s settings   ? help   q quit                             updated 11:59:39  ● live

@@ -27,6 +27,8 @@ def reduce(state: AppState, event: Event, now: float) -> Result:
         effects = marked + effects  # saved before the app quits
         same = overlay_identity(state) == overlay_identity(old)  # an overlay opened or switched is not scrolled
         moved = scrolled(before if same else panels, offsets(state, same))
+        moved |= {effect.key for effect in effects if effect.kind == "flash"}  # a log switch's arrow (fathers#165)
+        effects = [effect for effect in effects if effect.kind != "flash"]
         if moved:
             state = dataclasses.replace(state, glow={**state.glow, **{name: now for name in moved}})
     elif isinstance(event, ModelLoaded):

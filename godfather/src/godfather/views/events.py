@@ -2,7 +2,8 @@
 
 The panel's title is the switch: `SLOTS LOG`, `LANES LOG`, `PROCS LOG` for each present tool, then `ALL LOG` where
 there are several; ← → while EVENTS has focus, `f` anywhere, or a click on the title, cycle it; SLOTS LOG is the
-default where Slotfather is present. `◂ SLOTS LOG ▸` says it cycles where there is room, the bare title where not.
+default where Slotfather is present. `❮ SLOTS LOG ❯` says it cycles where there is room, the bare title where not; its
+arrows are in the frame's colour, and the one on the side a key switched to flashes as a scrolled thumb does.
 
 Each log has its own columns:
 
@@ -23,7 +24,7 @@ from ..layout import Rect
 from ..tui import Canvas
 from ..text import clock, span, text_width
 from ..widgets import FLEXIBLE_MIN, FOCUS_FRAME, REST_FRAME, Panel, Part, Spec, Table
-from ..events import ALL, Filter, Model, shown_rows, view_of, views
+from ..events import ALL, SWITCH_FLASH, Filter, Model, shown_rows, view_of, views
 from . import common as _common
 from .common import cell_run, cells_width
 
@@ -37,7 +38,9 @@ TOO_OLD = "slotfather too old for events"  # its capabilities name no event log
 TOO_NEW = "slotfather's events need a newer godfather"  # they name one of no schema version this one reads
 TITLES = {"slotfather": "SLOTS LOG", "lanefather": "LANES LOG", "junkfather": "PROCS LOG", ALL: "ALL LOG"}
 TYPES = {"slotfather": "slot", "lanefather": "lane", "junkfather": "proc"}  # ALL LOG's type: the tool in a word
-ARROWS = ("◂ ", " ▸")
+# The switch's arrows (fathers#165): heavy angle ornaments, a size up from ◂ ▸ and one cell wide wherever the
+# width tables agree (East Asian width neutral, no emoji form); ◀ ▶ are ambiguous-width and have an emoji form (▶️)
+ARROWS = ("❮ ", " ❯")
 SWITCH_ROOM = 40  # the least panel width the arrows are drawn at
 
 
@@ -181,17 +184,17 @@ def columns(view: str, width: int, rows: list[dict[str, Any]], values: list[dict
         cells = cells_width([int(row.get("count") or 0) for row in rows])
         return [time, ("slots", "slots", cells, False, 2), ("label", "label", 0, False, 0),
                 ("waited", "waited", widest(parts("waited"), 6, WAIT_MAX), True, 1),
-                ("outcome", "outcome", widest(parts("outcome"), 7, OUTCOME_MAX), True, 0), *pid]
+                ("outcome", "outcome", widest(parts("outcome"), 7, OUTCOME_MAX), False, 0), *pid]
     if view == "lanefather":
         tickets = [len(f"#{row['ticket']}") for row in rows if row.get("ticket")]
         ticket: list[Spec] = [("ticket", "ticket", max([6] + tickets), True, 2)] if any(tickets) else []
         return [time, ("event", "event", widest(parts("event"), 5, EVENT_MAX), False, 0),
                 ("label", "lane", 0, False, 0), ("detail", "result", widest(parts("detail"), DETAIL_MIN, DETAIL_MAX),
-                                                   True, 0), *ticket]
+                                                   False, 0), *ticket]
     if view == "junkfather":
         return [time, ("event", "event", widest(parts("event"), 5, EVENT_MAX), False, 0),
                 ("label", "label", 0, False, 0), ("detail", "detail", widest(parts("detail"), DETAIL_MIN, DETAIL_MAX),
-                                                  True, 0), *pid]
+                                                  False, 0), *pid]
     return [time, ("type", "type", widest(parts("type"), 4, TYPE_MAX), False, 0),
             ("description", "description", 0, False, 0)]
 
@@ -245,7 +248,7 @@ def draw_events(canvas: Canvas, rect: Rect, model: Model, moment: Optional[datet
     spec = narrowed(columns(view, panel.inner.width, rows, sizing), panel.inner.width)
     table = clipped(Table.fit(panel.inner.width, spec), panel.inner.width)
     size = table.width("slots", 0)
-    title = switch_title(model, view, rect.width)
+    title = switch_title(model, view, rect.width, "accent" if panel.focused else "frame", canvas.glow)
     table.header(panel, "")
     after = draw_title(panel, table, title, len(views(model)) > 1)
     note = filter_note(model, found)
@@ -268,14 +271,17 @@ def draw_events(canvas: Canvas, rect: Rect, model: Model, moment: Optional[datet
             panel.mark(line, "text")
 
 
-def switch_title(model: Model, view: str, width: int) -> list[Part]:
-    """The title: `◂ SLOTS LOG ▸` where it cycles and there is room, else the bare title."""
+def switch_title(model: Model, view: str, width: int, frame: str = "frame", lit: Optional[set[str]] = None) -> list[Part]:
+    """The title: `❮ SLOTS LOG ❯` where it cycles and there is room, else the bare title. The arrows are in the
+    frame's colour (`frame`), each in the foreground while its switch flashes (`lit`, the scrollbar's Canvas.glow)."""
     name = TITLES.get(view, "EVENTS")
     if len(views(model)) < 2:
         return [(name, "title")]
     if width < SWITCH_ROOM:
         return [(name, "key")]
-    return [(ARROWS[0], "dim"), (name, "key"), (ARROWS[1], "dim")]
+    lit = lit or set()
+    left, right = ("text" if SWITCH_FLASH[side] in lit else frame for side in (-1, 1))
+    return [(ARROWS[0], left), (name, "key"), (ARROWS[1], right)]
 
 
 def draw_title(panel: Panel, table: Table, title: list[Part], switch: bool) -> int:
@@ -287,12 +293,15 @@ def draw_title(panel: Panel, table: Table, title: list[Part], switch: bool) -> i
     labels = [x + 3 + column + (max(0, label_size - text_width(label)) if right else 0)
               for _, label, column, label_size, right in table.placed[1:] if label]
     end = start + size
-    resume = next((label - 1 for label in labels if label - 1 > end), x + width - 1)
+    stop = next((label for label in labels if label - 1 > end), None)
+    resume = stop - 1 if stop is not None else x + width - 1
     rule = (FOCUS_FRAME if panel.focused else REST_FRAME)[1]
     canvas.put(y, start - 1, rule * (resume - start + 1), "accent" if panel.focused else "frame")
     canvas.put(y, start - 1, " ", "text")
     canvas.segments(y, start, title, size)
     canvas.put(y, start + size, " ", "text")
+    if stop is not None:  # a tick of rule before the label it stops at (Panel.gap)
+        panel.gap(end, stop)
     if switch:
         canvas.switch_at = (y, start, start + size)
     return start + size - x - 3
@@ -318,7 +327,8 @@ def border_note(panel: Panel, table: Table, note: list[Part], after: int = 0) ->
     end = start + 3 + size + 1
     labels = [x + 3 + column + (max(0, label_size - text_width(title)) if right else 0)
               for _, title, column, label_size, right in table.placed[1:] if title]
-    resume = next((label - 1 for label in labels if label - 1 > end), x + width - 1)
+    stop = next((label for label in labels if label - 1 > end), None)
+    resume = stop - 1 if stop is not None else x + width - 1
     rule = (FOCUS_FRAME if panel.focused else REST_FRAME)[1]
     canvas.put(y, start, rule * (resume - start), "accent" if panel.focused else "frame")
     canvas.put(y, start + 2, " ", "text")
@@ -327,3 +337,5 @@ def border_note(panel: Panel, table: Table, note: list[Part], after: int = 0) ->
     else:
         canvas.segments(y, start + 3, note, size)
     canvas.put(y, start + 3 + size, " ", "text")
+    if stop is not None:  # a tick of rule before the label it stops at (Panel.gap)
+        panel.gap(start + 3 + size, stop)

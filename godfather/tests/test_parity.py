@@ -6,7 +6,7 @@ it drew, its help, and the same model as a `status --json --full` reply (tools/s
 stand-in). Godfather reads that reply in fixture mode, its adapter decodes it, and Godfather renders it at the same
 moment. Every cell, character and style, must be identical, emoji and ASCII, wide, one-column and narrow, but the
 footer (its name and version) and the EVENTS panel, whose columns Godfather changed on purpose after the move (time ·
-slots · label · result, owner 2026-11-12), and the focused panel's top and bottom rules, heavy since fathers#139, and what says the history chart shows slots held
+slots · label · result, owner 2026-11-12), and the focused panel's frame, heavy since fathers#139 (all four sides since fathers#165) with a selected row's markers leaning toward it, and what says the history chart shows slots held
 (fathers#140; chart_title());
 help likewise in every section but EVENTS. A missing or unreadable fixture
 fails the test; it never skips.
@@ -79,7 +79,8 @@ def chart_title(canvas: tui.Canvas) -> set[tuple[int, int]]:
     return {(top + height - 1, column) for column in range(chart.x - 1, chart.x + 11)}
 
 
-RESTED = {"┍": "╭", "┑": "╮", "┕": "╰", "┙": "╯", "━": "─"}  # a focused frame's rules as a resting one's
+RESTED = {"┏": "╭", "┓": "╮", "┗": "╰", "┛": "╯", "━": "─", "┃": "│"}  # a focused frame as a resting one
+MARKED = {"▕": "┃", "▏": "┃"}  # a selected row's markers, leaning toward the row since fathers#165, as Slotfather's
 
 
 class ParityTests(unittest.TestCase):
@@ -145,16 +146,23 @@ class ParityTests(unittest.TestCase):
                     masked = {(row, column) for row in range(events["y"], events["y"] + events["height"])
                               for column in range(events["x"], events["x"] + events["width"])}
                 self.assertEqual(len(expected), canvas.height)
-                # QUEUE holds the focus where it is drawn: its rules are heavy (fathers#139)
+                # QUEUE holds the focus where it is drawn: its frame is heavy (fathers#139, fathers#165); a selected
+                # row's heavy sides are in the row's colour, the frame's in the accent
                 focused = canvas.tables.get("requests", dict(x=0, y=-1, width=0, height=0))
                 rules = {focused["y"], focused["y"] + focused["height"] - 1}
+                sides = {focused["x"], focused["x"] + focused["width"] - 1}
                 masked |= chart_title(canvas) | admission_note(canvas)
                 for row in range(height - 1):
                     for column in range(width):
                         if (row, column) not in masked:
                             cell = canvas.cells[row][column]
-                            if row in rules and focused["x"] <= column < focused["x"] + focused["width"]:
+                            framed = row in rules and focused["x"] <= column < focused["x"] + focused["width"] or (
+                                column in sides and focused["y"] < row < focused["y"] + focused["height"] - 1
+                                and cell[1] == "accent")
+                            if framed:
                                 cell = [RESTED.get(str(cell[0]), cell[0]), *cell[1:]]
+                            elif column in sides:
+                                cell = [MARKED.get(str(cell[0]), cell[0]), *cell[1:]]
                             self.assertEqual(expected[row][column], cell, f"{name}: row {row}, column {column}")
                 if events:  # the same frame and place, other columns
                     for row, column in ((events["y"], events["x"]), (events["y"] + events["height"] - 1,

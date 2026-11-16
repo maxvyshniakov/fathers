@@ -213,7 +213,7 @@ class LogViewTests(unittest.TestCase):
 
     def test_slots_log_is_the_default_one_row_per_run_its_title_the_switch(self) -> None:
         canvas, lines = self.draw(120)
-        self.assertTrue(lines[0].startswith("╭─ ◂ SLOTS LOG ▸ ─"), lines[0])
+        self.assertTrue(lines[0].startswith("╭─ ❮ SLOTS LOG ❯ ─"), lines[0])
         places = [lines[0].index(title) for title in ("label", "waited", "outcome", "pid")]
         self.assertEqual(sorted(places), places)
         body = self.body(lines)
@@ -221,6 +221,35 @@ class LogViewTests(unittest.TestCase):
         self.assertRegex(body[0], r"▫ +build +no wait +ok 30s +101")
         self.assertEqual("key", canvas.cells[0][lines[0].index("SLOTS")][1], "the switchable title stands out")
         self.assertEqual((0, 3, 16), canvas.switch_at, "a click target")
+
+    def test_the_arrows_are_in_the_frames_colour_and_the_flash_lights_one(self) -> None:
+        """fathers#165: ❮ ❯, a glyph one cell wide everywhere, in the frame token at rest and the accent focused,
+        like the frame; the foreground while its switch flashes, as the scrollbar's thumb does."""
+        flash = self.tool.SWITCH_FLASH
+        cases: list[tuple[str, set[str], str, str]] = [
+            ("requests", set(), "frame", "frame"), ("events", set(), "accent", "accent"),
+            ("events", {flash[-1]}, "text", "accent"), ("requests", {flash[1]}, "frame", "text")]
+        for focus, lit, left, right in cases:
+            with self.subTest(focus=focus, lit=lit):
+                canvas = self.tool.Canvas(120, 12)
+                canvas.focus, canvas.glow = focus, lit
+                self.tool.draw_events(canvas, Rect(0, 0, 12, 120), {"events": rows_of(mixed(), TAGS),
+                                                                   "sources": SOURCES}, NOW)
+                line = canvas.render(False).splitlines()[0]
+                self.assertIn(" ❮ SLOTS LOG ❯ ", line)
+                self.assertEqual((left, right), (canvas.cells[0][line.index("❮")][1],
+                                                 canvas.cells[0][line.index("❯")][1]))
+        self.assertEqual("<>", "❮❯".translate(self.tool.ASCII))
+
+    def test_outcome_result_and_detail_are_left_aligned(self) -> None:
+        """fathers#165: the outcome (SLOTS LOG), the result (LANES LOG) and the detail (PROCS LOG) start under their
+        label, header and cells alike."""
+        for view, title, needle in (("slotfather", "outcome", "ok 30s"), ("lanefather", "result", "green · 2 suites"),
+                                    ("junkfather", "detail", "ttl 2h00m")):
+            with self.subTest(view=view):
+                _, lines = self.draw(120, self.tool.Filter(view))
+                row = next(line for line in self.body(lines) if needle in line)
+                self.assertEqual(lines[0].index(title), row.index(needle))
 
     def test_a_run_reads_running_while_it_holds_its_slots(self) -> None:
         rows = rows_of(mixed()[:1], TAGS)
@@ -232,7 +261,7 @@ class LogViewTests(unittest.TestCase):
 
     def test_lanes_and_procs_logs_have_their_own_columns(self) -> None:
         _, lines = self.draw(120, self.tool.Filter("lanefather"))
-        self.assertIn("◂ LANES LOG ▸", lines[0])
+        self.assertIn("❮ LANES LOG ❯", lines[0])
         for title in ("lane", "result"):  # `event` gives way to the title over it
             self.assertIn(title, lines[0])
         body = self.body(lines)
@@ -240,12 +269,12 @@ class LogViewTests(unittest.TestCase):
         self.assertRegex(body[1], r"gate +Straylight cedf8b972d +red · 19m")
         self.assertRegex(body[0], r"queue\.upd… +Straylight +reason=policy moved=2", "an unknown kind")
         _, lines = self.draw(120, self.tool.Filter("junkfather"))
-        self.assertIn("◂ PROCS LOG ▸", lines[0])
+        self.assertIn("❮ PROCS LOG ❯", lines[0])
         self.assertRegex(self.body(lines)[0], r"owned +vite dev +ttl 2h00m +90412")
 
     def test_all_log_is_time_type_and_one_sentence(self) -> None:
         canvas, lines = self.draw(120, self.tool.Filter("all"))
-        self.assertIn("◂ ALL LOG ▸", lines[0])
+        self.assertIn("❮ ALL LOG ❯", lines[0])
         self.assertIn("description", lines[0])
         body = self.body(lines)
         self.assertEqual(["lane", "lane", "slot", "proc", "lane"], [line.split()[2] for line in body])
@@ -286,7 +315,7 @@ class LogViewTests(unittest.TestCase):
     def test_the_text_filter_filters_within_the_log(self) -> None:
         Filter = self.tool.Filter
         _, lines = self.draw(120, Filter("all", "VITE"))
-        self.assertIn('ALL LOG ▸ ── "VITE" ──', lines[0])
+        self.assertIn('ALL LOG ❯ ── "VITE" ──', lines[0])
         self.assertEqual(["proc"], [line.split()[2] for line in self.body(lines)], "label, any case")
         _, lines = self.draw(120, Filter(None, "vite"))
         self.assertIn("No events match the filter", lines[2], "SLOTS LOG has no vite")
@@ -314,7 +343,7 @@ class LogViewTests(unittest.TestCase):
     def test_a_filter_is_named_even_when_its_note_does_not_fit(self) -> None:
         """fathers#84 review: a filter that hides rows is always visible."""
         _, lines = self.draw(60, self.tool.Filter("lanefather", "x" * 40))
-        self.assertIn('LANES LOG ▸ ── "xxx', lines[0])
+        self.assertIn('LANES LOG ❯ ── "xxx', lines[0])
         self.assertRegex(lines[0], r"x… ─*╮$", "cut with an ellipsis, the corner kept")
 
     def test_skipped_lines_are_counted_in_the_bottom_border(self) -> None:
@@ -369,6 +398,25 @@ class FilterReducerTests(unittest.TestCase):
         self.assertEqual("all", self.keys(focused, "left").events_filter.source, "← back, around")
         self.assertEqual("lanefather", self.keys(focused, "right").events_filter.source)
         self.assertIsNone(self.keys(self.state(), "right").events_filter.source, "→ with QUEUE focused: nothing")
+
+    def test_a_log_switch_flashes_the_arrow_on_its_side_as_a_scroll_flashes_the_thumb(self) -> None:
+        """fathers#165: the scrollbar's flash (state.glow, SCROLL_GLOW), one per arrow, lit by the key that switched."""
+        tool, sides = self.tool, self.tool.SWITCH_FLASH
+        focused = self.state(focus="events")
+        for keys, side in ((("right",), 1), (("left",), -1), (("f",), 1)):
+            with self.subTest(keys=keys):
+                state = focused
+                for key in keys:
+                    state, effects = tool.reduce(state, tool.Key(key), 50.0)
+                    self.assertFalse([effect for effect in effects if effect.kind == "flash"], "taken by the reducer")
+                self.assertEqual({sides[side]}, tool.glowing(state, 50.0) - {"events"})
+                self.assertEqual(set(), tool.glowing(state, 50.0 + tool.SCROLL_GLOW), "back after the same time")
+                self.assertAlmostEqual(tool.SCROLL_GLOW, tool.fade(state, 50.0), msg="one wake, at the fade")
+        unfocused, _ = tool.reduce(self.state(), tool.Key("right"), 50.0)
+        self.assertEqual(set(), tool.glowing(unfocused, 50.0), "→ with QUEUE focused switches nothing: no flash")
+        single = dataclasses.replace(focused, model={**focused.model, "sources": SOURCES[:1]})
+        self.assertEqual(set(), tool.glowing(tool.reduce(single, tool.Key("left"), 50.0)[0], 50.0),
+                         "one log: nothing to switch, nothing flashes")
 
     def test_a_click_on_the_title_switches_the_log_and_focuses_events(self) -> None:
         state = self.state()
@@ -450,19 +498,19 @@ class LiveFilterTests(unittest.TestCase):
         with tool.environment(None, root):
             screen = terminal.Terminal(self, dict(__import__("os").environ), 43, 156,
                                        [sys.executable, str(terminal.ENTRY), "--interval", "0.2"])
-            screen.receive("◂ SLOTS LOG ▸", "running")
+            screen.receive("❮ SLOTS LOG ❯", "running")
             at = screen.mark()
             screen.write("f")
-            screen.receive("◂ LANES LOG ▸", "710-speech-paste-phase", since=at)
+            screen.receive("❮ LANES LOG ❯", "710-speech-paste-phase", since=at)
             at = screen.mark()
             screen.write("/zzz")
-            screen.receive("╰─ / zzz_ ", 'LANES LOG ▸ ── "zzz"', "No events match the filter", since=at)
+            screen.receive("╰─ / zzz_ ", 'LANES LOG ❯ ── "zzz"', "No events match the filter", since=at)
             at = screen.mark()
             screen.write("\x1b")
-            screen.receive("◂ LANES LOG ▸ ─", since=at)
+            screen.receive("❮ LANES LOG ❯ ─", since=at)
             at = screen.mark()
             screen.write("fff")  # PROCS LOG, ALL LOG, back to SLOTS LOG
-            screen.receive("◂ SLOTS LOG ▸", since=at)
+            screen.receive("❮ SLOTS LOG ❯", since=at)
             screen.write("\t")  # EVENTS focused, scrolled down by the wheel (↑↓ move its cursor, fathers#152)
             screen.write("\x1b[<65;20;30M")
             at = screen.mark()
@@ -477,7 +525,7 @@ class LiveFilterTests(unittest.TestCase):
                          what="the count gone at the top")
             at = screen.mark()
             screen.write("\x1b[C")  # → while EVENTS has the focus: LANES LOG
-            screen.receive("◂ LANES LOG ▸", since=at)
+            screen.receive("❮ LANES LOG ❯", since=at)
             self.assertEqual(0, screen.quit())
 
 
