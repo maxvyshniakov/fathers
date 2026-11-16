@@ -174,6 +174,10 @@ class Supervisor:
             # While our child runs unwaited its pid cannot be reused: it is the leader whatever command it shows now
             # (a launcher such as /usr/bin/python3 execs another program), and known_seen records that command.
             members, _ = _reap.members(e, table, ours=code is None and self.child.poll() is None)
+            daemons = _reap.daemons_started(e, table, members)
+            if daemons:  # agent-browser daemons its processes started join the entry, saved with `known`
+                _entry.add_daemons(e, daemons)
+                members, _ = _reap.members(e, table, ours=code is None and self.child.poll() is None)
             return [p for p in members if p.pid != os.getpid()]
 
         entry, done, left = _entry.refreshed(self.store, self.id, members_of, code)

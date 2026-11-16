@@ -30,6 +30,12 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   `slotfather status --json`, left out with a note when Slotfather is missing), an agent session, or nobody, with
   the 10 busiest unattributed process trees. It stops nothing; the report is `cpu` in `sweep.json` and in
   `status --json`, whose version is now 2 (`capabilities --json` lists `versions: [2]`).
+- The sweep removes agent-browser's session leftovers in `~/.agent-browser`: a session's files once its daemon and
+  the pid in its name are gone and nothing changed for a day (downloaded browsers and saved sessions stay).
+  `sweep --dry-run` lists them, and the report gives files and bytes.
+- An agent-browser daemon that launchd adopted now belongs to the entry whose process started its session: it joins
+  the entry's new `daemons` field and is reaped with it. One a Slotfather lease started counts for that lease in the
+  CPU report, and one nobody owns that idled for an hour is reported, never stopped.
 
 ### Changed
 

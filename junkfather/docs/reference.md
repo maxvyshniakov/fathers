@@ -13,6 +13,7 @@ An entry is one owned process group, `entries/<id>.json` under `$JUNKFATHER_STAT
 | `pid`, `pgid`, `start`, `seen` | the leader: its pid, group, start time (`ps lstart`, C locale) and command as `ps` showed it at launch |
 | `group` | whether the leader leads its own group (true for `own`; for `adopt`, only when pid = pgid) |
 | `known` | `[pid, start]` of every member seen while it ran: what a reap may signal once the leader is gone |
+| `daemons` | `[pid, start, command]` of each detached agent-browser daemon its processes started (Sweep); a reap takes them with their trees |
 | `known_seen` | `[pid, start, command]` for the same members: the command each showed when last seen (absent in entries written before it: those members are checked by pid and start only) |
 | `ttl`, `expires` | seconds, and the epoch at which the entry is reaped whatever its owner |
 | `keep` | `owner`: ends with the agent that started it; `session`: survives a subagent's stop, ends with the session |
@@ -124,7 +125,8 @@ Slotfather's "another user's queue" (fathers#118) and is not used here.
   or the same program, as `seen` or as `known_seen` last recorded it; `--force` skips the command check, never the
   start time); with a verified leader of its own group, the whole group, which the live leader pins; without one,
   only the `known` members whose start time and command (`known_seen`) still match, never the group id alone, since
-  a group id can be taken again once its last member ends; then the descendants of all of these. A leader refused
+  a group id can be taken again once its last member ends; the agent-browser daemons its processes started
+  (`daemons`, by pid, start time and command, Sweep); then the descendants of all of these. A leader refused
   for its start time or its command is not taken through `known` either, though `known` lists it: its recorded
   members still are. The supervisor records its own child's current command (a launcher such as
   `/usr/bin/python3` execs another program), since a child it has not waited for cannot have had its pid reused. Only
@@ -245,6 +247,24 @@ is unattributed: `{v: 1, at, cores, attributed: {entry, lease, session: cores}, 
 label, cores, processes}] (20 busiest), top: [{pid, start, cmd (120 characters), cwd, uid, cpu, processes}] (the 10
 busiest unattributed trees, each under its topmost ancestor below launchd), notes}`. `%cpu` is ps's own average,
 not a measurement between two sweeps.
+
+**agent-browser** (`agent_browser` in the report and `sweep.json`). agent-browser keeps one set of files per session
+at the top of `~/.agent-browser` (`$JUNKFATHER_AGENT_BROWSER`): `NAME.config`, `.target`, `.engine` and, while its
+daemon runs, `.pid`, `.sock`, `.stream`, `.version`; NAME often ends in the pid of the process that started it.
+- Leftovers: a session's files are removed when no agent-browser program runs as the pid its `.pid` names or holds
+  its socket, the pid in its name runs no more, and none of its files changed for a day. Subdirectories (the
+  downloaded browsers, saved sessions and auth), dotfiles and symbolic links are never touched; an unreadable
+  process table, or a daemon whose session cannot be told (no `.pid` names it and lsof fails), removes nothing.
+  `leftovers: {dir, sessions, removed, files, bytes, names (the first 50), notes}`; `sweep --dry-run` lists the same
+  and removes nothing.
+- Daemons: a daemon detaches and launchd adopts it. It is matched to its session by the `.pid` file that names it,
+  else by the session socket it holds, and so to the process that started the session (the pid in the name, started
+  no later than the daemon). When that process is an entry's member, the daemon joins the entry's `daemons` (`[pid,
+  start, command]`; the sweep, the supervisor's refresh and a reap add it) and is reaped with it (Ending an
+  entry). When it is in a Slotfather lease's tree, the CPU report gives the daemon's tree to that lease;
+  junkfather never stops anything for a lease. A daemon no entry or lease owns, under 1% CPU with its session
+  unchanged for an hour, is listed in `idle: [{pid, start, cmd, session, matched, starter, age, idle, cpu,
+  processes}]`, never stopped.
 
 ## Boundaries
 

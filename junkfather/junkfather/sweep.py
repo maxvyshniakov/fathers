@@ -29,6 +29,7 @@ import sys
 import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
+from . import browser as _browser
 from . import cpu as _cpu
 from . import entry as _entry
 from . import events as _events
@@ -137,6 +138,7 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
         sessions = _owner.registry()
     owned: Set[int] = set()
     snapshot = _resources.Snapshot(table)
+    survey = _browser.Survey(table)
     for entry in store.entries():
         state = entry.get("state")
         reaping = entry.get("reaping") or {}
@@ -159,6 +161,10 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
             sweep_resource(store, entry, snapshot, report, now, sessions, grace, dry_run)
             continue
         members, how = _reap.members(entry, table)
+        daemons = survey.daemons_below(members)
+        if daemons:  # agent-browser daemons its processes started: they join it, and are reaped with it
+            joined = None if dry_run else _entry.daemons(store, entry["id"], daemons)
+            members, how = _reap.members(joined or _entry.with_daemons(entry, daemons), table)
         supervisor = entry.get("supervisor") or {}
         supervised = table.alive(supervisor.get("pid"), supervisor.get("start"))
         if not members:
@@ -193,7 +199,9 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
         if not cwds:
             report["errors"].append("lsof listed no working directory; paths in commands only")
     report["unowned"] = unowned(table, cwds, owned, scratch_roots(), agent_sessions(table))
-    report["cpu"] = cpu_report(table, cwds, members_of, sessions, leases or _cpu.leases)
+    report["cpu"], lease_rule = cpu_report(table, cwds, members_of, sessions, leases or _cpu.leases, survey)
+    report["agent_browser"] = {"leftovers": _browser.clean(survey, now, dry_run),
+                               "idle": survey.idle(owned, lease_rule, now)}
     found, unknown = _resources.unowned(snapshot, _resources.owned_keys(store))
     report["unowned_resources"] = found
     report["unlisted"] = unknown
@@ -205,17 +213,21 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
 
 def cpu_report(table: _procs.Table, cwds: Dict[int, str],
                members_of: Dict[str, Tuple[Optional[str], Sequence[_procs.Proc]]],
-               sessions: Optional[List[Dict[str, Any]]], leases: Leases) -> Dict[str, Any]:
-    """Whose processes the busy cores belong to (cpu.py): entries, Slotfather leases, agent sessions."""
+               sessions: Optional[List[Dict[str, Any]]], leases: Leases, survey: "_browser.Survey"
+               ) -> Tuple[Dict[str, Any], "_cpu.Rule"]:
+    """Whose processes the busy cores belong to (cpu.py): entries, Slotfather leases (and the agent-browser daemons
+    their processes started), agent sessions. Also the lease rule, empty without Slotfather."""
     notes: List[str] = []
     rules = [_cpu.entry_rule(members_of)]
     queue, why = leases()
+    lease_rule = _cpu.Rule("lease", {})
     if queue is None:
         notes.append(f"Slotfather leases are left out: {why}")
     else:
-        rules.append(_cpu.lease_rule(queue, table))
+        lease_rule = _cpu.lease_rule(queue, table)
+        rules += [lease_rule, survey.rule(lease_rule)]
     rules.append(_cpu.session_rule(table, sessions))
-    return _cpu.report(table, rules, cwds, notes)
+    return _cpu.report(table, rules, cwds, notes), lease_rule
 
 
 def sweep_resource(store: Store, entry: Entry, snapshot: "_resources.Snapshot", report: Dict[str, Any],
@@ -274,7 +286,7 @@ def record(store: Store, report: Dict[str, Any]) -> None:
                           {k: v for k, v in item.items() if k != "key"}, "warn")
     summary = result_of(report)
     write_atomic(store.root / "sweep.json", {"v": VERSION, "at": report["at"], "result": summary,
-                                              "cpu": report.get("cpu")})
+                                              "cpu": report.get("cpu"), "agent_browser": report.get("agent_browser")})
     _events.write(store.root, "sweep.finished", {"type": "sweep", "id": _events.now()}, actor, summary,
                   "error" if report["errors"] else None)
 
@@ -322,6 +334,7 @@ def text(report: Dict[str, Any], quiet: bool = False) -> str:
         lines.append(f"  own it: junkfather own-resource --kind {item['kind']} --id {item['id']} --ttl 1h")
     for note in as_list(report.get("notes")):
         lines.append(f"note: {note}")
+    lines += _browser.text(as_dict(report.get("agent_browser")), bool(report.get("dry_run")))
     lines += _cpu.text(as_dict(report.get("cpu")))
     lines.append(f"{report['running']} running, {len([r for r in report['reaped'] if r['result'] in _reap.STOPPED])} "
                  f"reaped, {len(report['gone'])} gone, {len(report['unowned'])} unowned reported, "

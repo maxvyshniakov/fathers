@@ -1,6 +1,18 @@
 [
  {
   "report": {
+   "agent_browser": {
+    "idle": [],
+    "leftovers": {
+     "bytes": 0,
+     "dir": "<tmp>/no-agent-browser",
+     "files": 0,
+     "names": [],
+     "notes": [],
+     "removed": 0,
+     "sessions": 0
+    }
+   },
    "at": "<v>",
    "cpu": {
     "at": "<v>",
@@ -46,6 +58,18 @@
  },
  {
   "report": {
+   "agent_browser": {
+    "idle": [],
+    "leftovers": {
+     "bytes": 0,
+     "dir": "<tmp>/no-agent-browser",
+     "files": 0,
+     "names": [],
+     "notes": [],
+     "removed": 0,
+     "sessions": 0
+    }
+   },
    "at": "<v>",
    "cpu": {
     "at": "<v>",

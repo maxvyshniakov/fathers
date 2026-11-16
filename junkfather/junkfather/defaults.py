@@ -34,6 +34,9 @@ KEEP_FINISHED = 7 * 86400.0  # finished entries and their logs are pruned after 
 REAPING_STUCK = 300.0  # an entry in `reaping` this long, whose reaper is gone, runs again
 CPU_TOP = 10  # the CPU report lists this many unattributed process trees
 CPU_OWNERS = 20  # and this many owners, busiest first
+BROWSER_LEFTOVER_AGE = 86400.0  # an agent-browser session's files unchanged this long, its daemon gone: removed
+BROWSER_DAEMON_IDLE = 3600.0  # an agent-browser daemon no one owns, idle this long, is reported
+BROWSER_IDLE_CPU = 1.0  # under this %cpu (its whole tree) a daemon is idle
 
 # Claims (owner.py)
 CLAIM_WINDOW = 1800.0  # a claim may wait this long for its command (a permission prompt can take a while)
