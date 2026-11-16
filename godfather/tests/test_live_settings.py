@@ -14,7 +14,7 @@ class TerminalTests(LiveCase):
         screen.receive(" QUEUE ")
         mark = screen.mark()
         screen.write(b"s")
-        screen.receive("STATUS", since=mark)
+        screen.receive("SLOTFATHER", since=mark)
         mark = screen.mark()
         screen.write(b"\x1b[C")  # Capacity mode: Automatic -> Fixed, shown at once
         screen.receive("saves in 1 s", since=mark)

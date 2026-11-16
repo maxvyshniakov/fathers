@@ -22,7 +22,7 @@ docs win and this page and the adapter follow.
 its border says `slotfather too old for events`: there is no fallback to the snapshot's `dashboard.events`.
 
 Godfather needs `dashboard.v == 1`, a snapshot whose `versions` include 2 and whose dashboard block `v` is 1.
-Missing `settings` hides Settings' Slotfather rows (the panel then shows only Refresh every and Colour theme).
+Missing `settings` leaves Settings' Slotfather section one dimmed row saying why (fathers#87).
 
 ## `slotfather status --json --full`
 
@@ -172,7 +172,11 @@ for Fixed).
   `Enter a number of at least 1.`.
 - `set` and `reset` reply, on success (exit 0), with the whole `settings --json` object; on a stale revision
   (exit 3) with the whole current object and `"conflict": true`; on invalid input (exit 2) or a read-only queue
-  (exit 4) with `{"ok": false, "error": "…"}`.
+  (exit 4) with `{"ok": false, "error": "…"}`. Godfather's client (`adapters/settings.py`) serves every tool:
+  it also takes Junkfather's read-only exit 5 (fathers#118).
+- Godfather passes each row's `revision` with `set` and `reset KEY` (capacity.json's for the capacity keys,
+  order.json's for the order knobs), never with `reset --all`; it draws the rows from `label`, `type`, `unit`,
+  `step`, `min`, `max`, `zero`, `choices`, `when` and `description`, durations as `1h30m`.
 - `reset --all` resets capacity.json and order.json together.
 
 Refresh every and Colour theme are Godfather's own and never go to Slotfather.

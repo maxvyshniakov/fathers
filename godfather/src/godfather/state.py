@@ -3,8 +3,9 @@ but the tools' own data is here: the focus, the one overlay open (fathers#17), t
 (fathers#21), each panel's scroll and its thumb's flash, the details' load states (fathers#23), and a notice kept
 apart from the refresh state (fathers#24). Keys and the mouse go through the mode table in modes.py; the loaders'
 results, the clock and each drawn frame come in as events too. reduce() returns the new state and the effects for
-the app to carry out (quit, load, apply a theme, save choices); it does no I/O of its own but through the Settings
-panel, which owns its own state and its calls to `slotfather settings`."""
+the app to carry out (quit, load, apply a theme, save choices, a tool's settings call); it does no I/O of its own:
+app. Settings is a value too (settings_model.Panel): its reads, checks and writes are effects, and their answers
+events."""
 from __future__ import annotations
 
 import dataclasses
@@ -13,10 +14,11 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Union, cast
 
 from . import news as _news
-from .tui import dashboard_text
-from .views import common as _common
-from .views import events as _events_view
-from .views import overlays as _overlays
+from . import settings_model as _settings
+from . import entries as _entries
+from . import events as _events_view
+from . import overlay_text as _overlays
+from .tui import dashboard_text, hint_at
 from .widgets import OverlayView
 
 Model = dict[str, Any]
@@ -47,10 +49,7 @@ class Changelog:
     kind: str = "changelog"
 
 
-@dataclass(frozen=True)
-class SettingsOverlay:
-    panel: Any  # views.settings.Settings: its own state machine, with its own tests
-    kind: str = "settings"
+SettingsOverlay = _settings.Panel  # Settings (fathers#87): its sections, cursor, pending change and answers
 
 
 Overlay = Union[Help, Changelog, SettingsOverlay]
@@ -100,9 +99,10 @@ class Frame:
     hints: tuple[tuple[int, int, int, str], ...] = ()
     order: tuple[str, ...] = ("requests",)  # Tab's order, as layout.overview() placed the panels
     filters: tuple[tuple[int, int, int, int], ...] = ()  # what's new's tool filters: (row, from, to, tab)
+    switch: Optional[tuple[int, int, int]] = None  # EVENTS' title, which cycles its log (fathers#152): (row, from, to)
 
     def hint_at(self, x: int, y: int) -> Optional[str]:
-        return next((press for row, start, end, press in reversed(self.hints) if row == y and start <= x < end), None)
+        return hint_at(self.hints, x, y)
 
     def filter_at(self, x: int, y: int) -> Optional[int]:
         """The tool filter a click in what's new's top border lands on, None between them."""
@@ -170,7 +170,38 @@ class DetailsLoaded:
 
 @dataclass(frozen=True)
 class SettingsOpened:
-    panel: Any
+    """Settings opened: each present tool's section as first read (settings_model.Section), in any order."""
+    sections: tuple[_settings.Section, ...]
+
+
+@dataclass(frozen=True)
+class SettingsRead:
+    """A tool's `settings --json` answered: its reply, or why it could not be read; `generation` is the section's
+    when the read began."""
+    tool: str
+    generation: int
+    reply: Optional[dict[str, Any]] = None
+    problem: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class SettingsChecked:
+    """`settings check` answered for a value under a row's revision."""
+    tool: str
+    key: str
+    value: str
+    revision: Optional[str]
+    reply: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class SettingsWritten:
+    """`settings set` or `reset` answered: ok, conflict, read-only, invalid or failed; the settings when the tool
+    printed them, and its message."""
+    request: _settings.Request
+    outcome: str
+    reply: Optional[dict[str, Any]] = None
+    message: str = ""
 
 
 @dataclass(frozen=True)
@@ -195,16 +226,17 @@ class Tick:
     moment: Optional[datetime.datetime] = None
 
 
-Event = Union[Key, Mouse, ModelLoaded, ModelFailed, DetailsLoaded, SettingsOpened, SettingsFailed, NewsLoaded, Drawn,
-              Tick]
+Event = Union[Key, Mouse, ModelLoaded, ModelFailed, DetailsLoaded, SettingsOpened, SettingsRead, SettingsChecked,
+              SettingsWritten, SettingsFailed, NewsLoaded, Drawn, Tick]
 
 
 # Effects, for the app to carry out
 
 @dataclass(frozen=True)
 class Effect:
-    """quit · load-model · load-details (key, item) · open-settings · apply-theme · remember · repaint (every row) ·
-    load-news (what's new, from every tool) · save-read (the read versions, state.read)."""
+    """quit · load-model · load-details (key, item) · open-settings · settings (item: a settings_model.Request to
+    read, check, set or reset) · apply-theme · remember · repaint (every row) · load-news (what's new, from every
+    tool) · save-read (the read versions, state.read)."""
     kind: str
     key: Any = None
     item: Any = None
@@ -287,7 +319,7 @@ def move(state: AppState, index: int, by_key: bool = False,
 
 def entries(state: AppState) -> tuple[list[dict[str, Any]], list[EntryId]]:
     found = items(state)
-    return found, _common.entry_ids(found)
+    return found, _entries.entry_ids(found)
 
 
 def resolve(state: AppState, known: Optional[tuple[list[dict[str, Any]], list[EntryId]]] = None) -> int:
@@ -320,7 +352,7 @@ def offsets(state: AppState, overlay: bool = True) -> dict[str, int]:
     if overlay and isinstance(shown, (Help, Changelog)):
         found[shown.kind] = shown.scroll
     elif overlay and isinstance(shown, SettingsOverlay):
-        found["settings"] = int(shown.panel.offset)
+        found["settings"] = shown.offset
     return found
 
 
@@ -330,7 +362,7 @@ def overlay_identity(state: AppState) -> tuple[Any, ...]:
     if shown is None:
         return ()
     if isinstance(shown, SettingsOverlay):
-        return shown.kind, id(shown.panel)
+        return shown.kind, 0
     return shown.kind, shown.tab if isinstance(shown, Changelog) else 0
 
 
@@ -349,7 +381,8 @@ def follow_events(state: AppState, events: list[dict[str, Any]]) -> AppState:
     """EVENTS (newest first) after a refresh (#15): at the top it shows the newest; scrolled down, it keeps showing
     the same events as new ones arrive above them and counts those. Only the rows the filter lets through count
     (fathers#84)."""
-    ids = [event_id(event) for event in _events_view.shown_rows({"events": events}, state.events_filter)[::-1]]
+    model = {"events": events, "sources": (state.model or {}).get("sources") or []}
+    ids = [event_id(event) for event in _events_view.shown_rows(model, state.events_filter)[::-1]]
     arrived = ids.index(state.newest) if state.newest in ids else 0
     scroll, fresh = dict(state.scroll), 0
     if scroll.get("events"):
@@ -373,28 +406,58 @@ def event_id(event: dict[str, Any]) -> Any:
     return event.get("key") or (event.get("when"), event.get("kind"), event.get("pid"), event.get("count"))
 
 
-def settings_effects(state: AppState, action: str) -> Result:
-    """What a Settings action does to the app, one function for keys, clicks and a change that settled: Refresh every
-    and Colour theme apply at once and are remembered; a closed panel repaints; a saved setting reloads the model so
-    its effect shows now."""
-    if action == "quit":
-        return state, [QUIT]
-    overlay = state.overlay
-    if not isinstance(overlay, SettingsOverlay):
-        return state, []
-    panel = overlay.panel
+def settings_context(state: AppState) -> _settings.Context:
+    return _settings.Context(state.interval, state.theme, state.model, state.refresh.error, state.frame.width,
+                             state.frame.height)
+
+
+def settings_result(state: AppState, panel: _settings.Panel, context: _settings.Context,
+                    requests: list[_settings.Request]) -> Result:
+    """A Settings transition carried into the app: the panel kept (its checks asked for, its scroll placed), this
+    dashboard's own settings applied at once and remembered, each tool call an effect, a save reloading the model
+    so its effect shows now, close and quit."""
     effects: list[Effect] = []
-    theme = str(panel.theme)
-    if theme != state.theme:
+    if context.theme != state.theme:
         effects += [APPLY_THEME, REPAINT]
-    state = dataclasses.replace(state, interval=float(panel.interval), theme=theme)
-    effects.append(REMEMBER)
-    if action == "close":
-        state = dataclasses.replace(state, overlay=None)
-        effects.append(REPAINT)
-    if action == "changed":
-        effects.append(LOAD_MODEL)
-    return state, effects
+    if (context.interval, context.theme) != (state.interval, state.theme):
+        state = dataclasses.replace(state, interval=context.interval, theme=context.theme)
+        effects.append(REMEMBER)
+    context = settings_context(state)
+    overlay: Optional[Overlay] = panel
+    for request in requests:
+        if request.kind in ("read", "check", "set", "reset"):
+            effects.append(Effect("settings", item=request))
+        elif request.kind == "changed" and LOAD_MODEL not in effects:
+            effects.append(LOAD_MODEL)
+        elif request.kind == "close":
+            overlay = None
+            effects.append(REPAINT)
+        elif request.kind == "quit":
+            effects.append(QUIT)
+    if overlay is not None:
+        panel, checks = _settings.wanted_checks(_settings.settle_focus(panel, context), context)
+        overlay = _settings.place(panel, context)
+        effects += [Effect("settings", item=request) for request in checks]
+    return dataclasses.replace(state, overlay=overlay), effects
+
+
+def settings_event(state: AppState, event: Event, now: float) -> Result:
+    """An answer from a tool's settings CLI, or the loop's tick, while Settings is open."""
+    panel = state.overlay
+    if not isinstance(panel, SettingsOverlay):
+        return state, []
+    context = settings_context(state)
+    requests: list[_settings.Request] = []
+    if isinstance(event, SettingsRead):
+        panel = _settings.read_done(panel, context, event.tool, event.generation, event.reply, event.problem, now)
+    elif isinstance(event, SettingsChecked):
+        panel = _settings.check_done(panel, event.tool, event.key, event.value, event.revision, event.reply)
+    elif isinstance(event, SettingsWritten):
+        panel, requests = _settings.write_done(panel, context, event.request, event.outcome, event.reply,
+                                               event.message, now)
+    else:
+        panel, context, requests = _settings.tick(panel, context, now)
+    return settings_result(state, panel, context, requests)
 
 
 def settle(state: AppState, now: float) -> Result:
@@ -434,10 +497,10 @@ def model_loaded(state: AppState, event: ModelLoaded) -> AppState:
     fresh = event.model
     if fresh is not None and fresh is not state.model:
         colours = dict(state.colours)
-        _common.dashboard_colours(fresh, colours, event.colours)
+        _entries.dashboard_colours(fresh, colours, event.colours)
         state = dataclasses.replace(state, colours=colours, model=fresh)
         state = follow_events(state, cast(list[dict[str, Any]], fresh["events"]))
-        ids = _common.entry_ids(items(state))
+        ids = _entries.entry_ids(items(state))
         keep = {(identity, kind) for identity in ids for kind in ("lease", "request")}
         state = dataclasses.replace(state, details={key: value for key, value in state.details.items() if key in keep})
     refresh = Refresh("live") if event.problem is None else Refresh("stale", event.problem)
@@ -451,7 +514,7 @@ def reduce(state: AppState, event: Event, now: float) -> Result:
     effects: list[Effect] = []
     if isinstance(event, (Key, Mouse)):  # only these scroll: a refresh that moves EVENTS down is no flash
         old, before, panels = state, offsets(state), offsets(state, False)  # Settings' offset before it moves
-        state, effects = _modes.dispatch(state, event)
+        state, effects = _modes.dispatch(state, event, now)
         state, marked = closed_news(old, state, QUIT in effects)
         effects = marked + effects  # saved before the app quits
         same = overlay_identity(state) == overlay_identity(old)  # an overlay opened or switched is not scrolled
@@ -466,7 +529,10 @@ def reduce(state: AppState, event: Event, now: float) -> Result:
         state = dataclasses.replace(state, details={**state.details, event.key: Loaded(
             now, event.lane, event.cwd, None if event.error is None else dashboard_text(event.error))})
     elif isinstance(event, SettingsOpened):
-        state = dataclasses.replace(state, overlay=SettingsOverlay(event.panel))
+        context = settings_context(state)
+        state, effects = settings_result(state, _settings.opened(event.sections, context, now), context, [])
+    elif isinstance(event, (SettingsRead, SettingsChecked, SettingsWritten)):
+        state, effects = settings_event(state, event, now)
     elif isinstance(event, NewsLoaded):
         state = news_loaded(state, event.news)
     elif isinstance(event, SettingsFailed):
@@ -474,15 +540,13 @@ def reduce(state: AppState, event: Event, now: float) -> Result:
     elif isinstance(event, Drawn):
         focus = state.focus if state.focus == "requests" or state.focus in event.frame.tables else "requests"
         state = dataclasses.replace(state, frame=event.frame, focus=focus)
+        if isinstance(state.overlay, SettingsOverlay):  # another size: the focused row kept in view
+            state = dataclasses.replace(state, overlay=_settings.place(state.overlay, settings_context(state)))
     else:
         second = event.moment.replace(microsecond=0) if event.moment is not None else state.moment
         if second != state.moment:
             state = dataclasses.replace(state, moment=second)
-        if isinstance(state.overlay, SettingsOverlay):  # a change that settled is saved, and applies at once
-            panel = state.overlay.panel
-            if panel.tick():
-                state, effects = settings_effects(state, "changed")
-            elif str(panel.theme) != state.theme:
-                state, effects = settings_effects(state, "handled")
+        if isinstance(state.overlay, SettingsOverlay):  # a change that settled is saved, reads come due
+            state, effects = settings_event(state, event, now)
     state, more = settle(state, now)
     return state, effects + more

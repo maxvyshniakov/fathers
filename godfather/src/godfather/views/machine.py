@@ -89,11 +89,34 @@ def machine_memory_status(memory: dict[str, Any]) -> Part:
 
 def machine_note(model: Model) -> list[Part]:
     """MACHINE's top border, on the right (owner, 2026-11-12): the load outside leases and whether the queue admits
-    work, the admission red when it blocks."""
+    work, and, where it does not, why (fathers#156)."""
+    return [(f"unleased {model['advice']['unleased_load']:.1f}", "status-normal"), (" · ", "dim"), admission_note(model)]
+
+
+def admission_note(model: Model) -> Part:
+    """What a new request could get now, or why nothing (fathers#156), from the fields Slotfather's model carries:
+    memory short (red: a machine problem), draining after a lowered capacity, one request holding the whole
+    machine (named), the slots all held, or requests waiting ahead. A full or queued machine is the queue working:
+    it reads in the normal colour, never as a fault."""
     admission = model.get("admission")
-    permit = (("admission: ?", "dim") if admission is None else ("no admission", "bad") if not admission
-              else (f"admission: {admission} slots", "status-normal"))
-    return [(f"unleased {model['advice']['unleased_load']:.1f}", "status-normal"), (" · ", "dim"), permit]
+    if admission is None:
+        return "admission: ?", "dim"
+    if admission:
+        return f"admission: {admission} slots", "status-normal"
+    slots, used = int(model.get("slots") or 0), int(model.get("used") or 0)
+    if model.get("memory_block"):
+        return "memory short", "bad"
+    if int(model.get("draining") or 0):
+        return f"draining · {used} of {slots} held", "warn"
+    holders = cast(list[dict[str, Any]], model.get("holders") or [])
+    whole = next((holder for holder in holders if holder.get("kind") == "held" and slots
+                  and (holder.get("all") or int(holder.get("count") or 0) >= slots)), None)
+    if whole is not None:
+        return f"whole machine: {whole.get('label') or whole.get('pid') or '?'}", "status-normal"
+    if used >= slots:
+        return f"full · {used} of {slots} held", "status-normal"
+    waiting = len(cast(list[Any], model.get("waiters") or []))
+    return (f"queue ahead · {waiting} waiting" if waiting else "no admission"), "status-normal"
 
 
 class Resource(NamedTuple):

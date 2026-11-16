@@ -6,6 +6,15 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Added
 
+- Settings has a section per present tool (fathers#87): this dashboard's own (Refresh every, Colour theme) first,
+  then Slotfather's, Lanefather's and Junkfather's, each its read-only status rows and its settings, read with
+  `<tool> settings --json` (Slotfather's every second, the others' every two) and changed with `settings set` and
+  `reset`, each carrying its row's revision. One cursor moves through every section; rows a tool marks read-only
+  show their source and are skipped; a tool without a settings contract says why in one dimmed row. A pending or
+  typed value is checked with `settings check`: its preview or its error shows under the row. A conflict, an
+  invalid value or a refusal shows once, in red under its row, and nothing is saved. `D` twice resets the
+  selected row's section only. Junkfather's read-only exit 5 is taken like 4.
+
 - EVENTS is one feed of every tool's event log, newest first (fathers#84): Lanefather's and junkfather's rows come
   between Slotfather's in time order, each with its tool's tag (`slot`, `lane`, `junk`) in a colour of its own and the
   event (`checked`, `owned`, `reaped`); with Slotfather alone those two columns are not drawn. `f` cycles the source
@@ -33,6 +42,28 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Changed
 
+- A command line Godfather does not take prints one line with the reason and one pointing to the help (`Try
+  'godfather events --help'.`), no longer the whole usage text, as the tools' CLI convention says (docs/cli.md,
+  fathers#154).
+- MACHINE says why nothing is admitted instead of a red `no admission` (fathers#156): `full · 8 of 8 held`,
+  `whole machine: <label>` when one request holds every slot, `queue ahead · 2 waiting`, `draining · 6 of 4 held`
+  (yellow), `memory short` (red: the one machine problem among them). A full or queued machine is the queue
+  working and reads in the normal colour.
+- Help fits the standard screen (fathers#145): at 156x43 its legend is laid out in columns, read down then across,
+  a section going on in the next column between two rows, and shows whole with nothing to scroll; a smaller
+  screen gets the one scrolling column as before.
+- EVENTS shows one tool's log at a time (fathers#152): its title is the switch, `◂ SLOTS LOG ▸` (default where
+  Slotfather is present), `LANES LOG`, `PROCS LOG`, then `ALL LOG`, cycled with ← → while EVENTS has the focus, `f`
+  or a click on the title. Each log has its own columns, so labels keep their width: SLOTS LOG time, slots, label,
+  waited, outcome and pid; LANES LOG event, lane, result and ticket; PROCS LOG event, label, detail and pid; ALL LOG
+  a type (`slot run`, `lane checked`, `proc reaped`, in the tool's colour) and one sentence (`sid-kit build · ok 1s
+  · 1 slot`). A Slotfather run is one row, `running 3m` while it holds its slots and how it ended once done; `r`
+  shows every event as logged. A run's trend is a mark on its row (↗ slower, ↘ faster, ▲ outlier), no longer a row
+  that ran across the columns. `/` filters within the log shown; the footer says `←→ log` while EVENTS has the
+  focus, and help lists the keys.
+- Settings: every rule is one length, the list sits two cells in from the frame, durations read `1h`, `30m`,
+  `1h30m` (typed still in seconds), and a refused value is said once, under its row, not again in the notes
+  (fathers#87).
 - EVENTS reads Slotfather's event log instead of the events its snapshot describes, and its result column, now
   `detail`, is filled from each event's fields: `wait 32s` or `no wait` for every grant, `ok 3m25s` or
   `exit 1 · 26s` for every release, `gave up 5m`, `owner died · 12m`, `batch → interactive`, `waiting 45m`; it no

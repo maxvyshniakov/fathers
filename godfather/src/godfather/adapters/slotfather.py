@@ -10,11 +10,12 @@ from __future__ import annotations
 import datetime
 from typing import Any, Optional, cast
 
+from . import settings as _settings
+
 TAG = "slot"
 CAPABILITIES_VERSIONS = (1,)  # the capabilities object's `v`
 DASHBOARD_VERSIONS = (1,)  # capabilities' `dashboard.v`, and the snapshot's `dashboard.v`
 SNAPSHOT_VERSIONS = (2,)  # `status --json` versions whose dashboard block this reads
-SETTINGS_VERSIONS = (1,)
 TIMES = ("since", "granted", "asked_at", "idle_since", "est_start")
 
 
@@ -38,9 +39,7 @@ def unsupported(capabilities: dict[str, Any]) -> Optional[str]:
 
 
 def settings_supported(capabilities: Optional[dict[str, Any]]) -> bool:
-    block = (capabilities or {}).get("dashboard") or {}
-    versions = (block.get("settings") or {}).get("versions") if isinstance(block, dict) else None
-    return isinstance(versions, list) and any(v in SETTINGS_VERSIONS for v in versions)
+    return _settings.supported(capabilities)
 
 
 def changelog(capabilities: Optional[dict[str, Any]]) -> Optional[str]:
@@ -195,70 +194,6 @@ def decode(snapshot: Any) -> dict[str, Any]:
     return model
 
 
-class SettingsError(Exception):
-    """A settings call that failed or was refused: the message is the tool's own, shown in red."""
-
-
-class Conflict(SettingsError):
-    """`settings set` with a revision that no longer matches (exit 3); `reply` is the current settings."""
-
-    def __init__(self, reply: Optional[dict[str, Any]]) -> None:
-        super().__init__("changed elsewhere")
-        self.reply = reply
-
-
-class SettingsClient:
-    """`slotfather settings` (SF-2): read, check, set and reset, each a short CLI call with the tool's exit codes:
-    0 done, 2 invalid, 3 conflict, 4 read-only."""
-
-    TIMEOUT = 5.0
-
-    def __init__(self, executable: Optional[str] = None) -> None:
-        self.executable = executable
-
-    def call(self, argv: list[str]) -> tuple[int, Any]:
-        from .. import sources  # here, so the adapter stays importable without the I/O module's state
-
-        code, value, problem = sources.run_json("slotfather", ["settings", *argv, "--json"], self.TIMEOUT,
-                                                self.executable)
-        if value is None and code in (0, 3):
-            raise SettingsError(problem or f"slotfather settings {' '.join(argv)} printed no JSON")
-        if code not in (0, 2, 3, 4):
-            raise SettingsError(problem or self.error(value, f"slotfather settings exited {code}"))
-        return code, value
-
-    def read(self) -> dict[str, Any]:
-        code, value = self.call([])
-        if code != 0 or not isinstance(value, dict):
-            raise SettingsError(self.error(value, "slotfather settings cannot be read"))
-        if value.get("v") not in SETTINGS_VERSIONS:
-            raise SettingsError(f"slotfather settings version {value.get('v')!r}; needs a newer godfather")
-        return value
-
-    def check(self, key: str, value: str) -> dict[str, Any]:
-        """{"ok", "error", "preview", "slots"?}; a refusal (exit 2) is an answer, not an error."""
-        code, reply = self.call(["check", key, value])
-        if not isinstance(reply, dict):
-            return {"ok": False, "error": f"slotfather settings check exited {code}", "preview": None}
-        return reply
-
-    def changed(self, code: int, value: Any) -> dict[str, Any]:
-        if code == 3:
-            raise Conflict(value if isinstance(value, dict) and value.get("sections") else None)
-        if code != 0 or not isinstance(value, dict):
-            raise SettingsError(self.error(value, "not saved"))
-        return value
-
-    def set(self, key: str, value: str, revision: Optional[str] = None) -> dict[str, Any]:
-        """Saves one value; the settings as they are now. Raises Conflict or SettingsError."""
-        return self.changed(*self.call(["set", key, value, *(["--revision", revision] if revision else [])]))
-
-    def reset(self, key: Optional[str], revision: Optional[str] = None) -> dict[str, Any]:
-        """Resets one key, or every setting (None)."""
-        target = [key] if key else ["--all"]
-        return self.changed(*self.call(["reset", *target, *(["--revision", revision] if revision else [])]))
-
-    @staticmethod
-    def error(value: Any, fallback: str) -> str:
-        found = value.get("error") if isinstance(value, dict) else None
-        return str(found) if found else fallback
+# Settings go through the tools' shared contract (adapters/settings.py); these names stay importable from here
+SettingsError, Conflict, ReadOnly, SettingsClient = (_settings.SettingsError, _settings.Conflict, _settings.ReadOnly,
+                                                     _settings.SettingsClient)

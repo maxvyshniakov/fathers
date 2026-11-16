@@ -608,7 +608,8 @@ def row(event: Event, tag: str) -> dict[str, Any]:
             "kind": event.kind, "event": found.event, "count": found.count, "filled": found.filled,
             "label": found.label or subject_label(event), "id": str(event.subject.get("id") or ""),
             "pid": pid if isinstance(pid, int) and not isinstance(pid, bool) else None,
-            "detail": list(found.detail), "lease": event.subject.get("lease_id"), "details": event.details}
+            "detail": list(found.detail), "lease": event.subject.get("lease_id"), "details": event.details,
+            "ticket": event.subject.get("ticket")}
 
 
 def identity(event: Event) -> tuple[str, str, int]:
@@ -652,10 +653,12 @@ def rows(events: list[Event], tags: dict[str, str]) -> list[dict[str, Any]]:
             if since is None or item["when"] < since:
                 continue
             item["trend"] = item["details"]
-            if item["details"].get("verdict") == "slower":
+            verdict = item["details"].get("verdict")
+            if verdict in ("slower", "faster"):  # fathers#152: the run's mark, the trend no row of its own
                 target = nearest(item["when"], before=True)
                 if target is not None and target.get("run") != "outlier":
-                    target["run"] = "slower"
+                    target["run"] = verdict
+                    target["trend"] = item["details"]
         kept.append(item)
     return kept
 
@@ -669,6 +672,132 @@ def _parse_any_time(value: Any) -> Optional[datetime.datetime]:
 
 def text_of(item: dict[str, Any]) -> str:
     """What the text filter matches in a row: its kind, subject id, label and detail."""
-    detail = cast(list[Part], item.get("detail") or [])
-    return " ".join([str(item.get("kind") or ""), str(item.get("id") or ""), str(item.get("label") or ""),
-                     *(text for text, _ in detail)]).lower()
+    detail = cast(list[Part], item.get("detail") or []) + cast(list[Part], item.get("wait") or [])
+    return " ".join([str(item.get("kind") or ""), str(item.get("event") or ""), str(item.get("id") or ""),
+                     str(item.get("label") or ""), *(text for text, _ in detail)]).lower()
+
+
+# One row per run (fathers#152): a Slotfather grant and what ended it are one row
+
+ENDS = ("lease.released", "lease.reaped", "lease.yielded")  # what ends a granted lease
+WAITER_ENDS = ("request.left", "request.reaped")  # a request that never got its slots
+
+
+def same_run(grant: dict[str, Any], end: dict[str, Any]) -> bool:
+    """A grant and a later end of the same lease: by lease id where both have one, else the request's id, else
+    (an older log, a replayed scene) its pid."""
+    if grant.get("lease") and end.get("lease"):
+        return bool(grant["lease"] == end["lease"])
+    if grant.get("id") and grant.get("id") == end.get("id"):
+        return True
+    return grant.get("pid") is not None and grant.get("pid") == end.get("pid")
+
+
+def run_row(grant: Optional[dict[str, Any]], end: Optional[dict[str, Any]]) -> dict[str, Any]:
+    """One run: `granted` its grant (when, its wait), `end` what ended it (None while it runs), `when` the newest of
+    the two, its identity the grant's (it keeps its place as a filter counts what is new), the run's marks."""
+    first = cast(dict[str, Any], grant or end)
+    last = end or first
+    found = dict(last, kind="run", event="run", key=first["key"], when=last["when"], start=first["when"],
+                 count=int(first.get("count") or last.get("count") or 0), filled=end is None,
+                 wait=list(grant.get("detail") or []) if grant else [],
+                 detail=list(end.get("detail") or []) if end else [], running=end is None,
+                 label=first.get("label") or last.get("label"))
+    if end is not None and end.get("run"):
+        found["run"] = end["run"]
+    return found
+
+
+def runs(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """EVENTS' rows, oldest first, with each Slotfather run one row (fathers#152): a grant joined to the release,
+    reap or yield that ended it, a waiter that left or was reaped a run that never started; trends are only marks
+    (rows() put them on the run they describe), never rows. Ordered by each row's newest event."""
+    found: list[dict[str, Any]] = []
+    open_grants: list[dict[str, Any]] = []
+    joined: dict[int, dict[str, Any]] = {}
+    for item in rows:
+        kind = item.get("kind")
+        if item.get("source") != "slotfather":
+            found.append(item)
+        elif kind == "run.trend":
+            continue
+        elif kind == "lease.granted":
+            open_grants.append(item)
+            found.append(item)
+        elif kind in ENDS:
+            grant = next((candidate for candidate in reversed(open_grants) if same_run(candidate, item)), None)
+            if grant is None:
+                found.append(run_row(None, item))
+                continue
+            open_grants.remove(grant)
+            joined[id(grant)] = run_row(grant, item)
+        elif kind in WAITER_ENDS:
+            found.append(run_row(None, item))
+        else:
+            found.append(item)
+    merged = [joined.get(id(item), run_row(item, None) if item.get("kind") == "lease.granted" else item)
+              for item in found]
+    return sorted(merged, key=lambda item: item["when"])  # stable: equal times keep the log's order
+
+
+# What EVENTS shows (fathers#84, fathers#152): data the reducer filters and counts by, kept here so it reads no view
+
+VIEWS = ("slotfather", "lanefather", "junkfather")
+ALL = "all"
+Model = dict[str, Any]
+
+
+@dataclass(frozen=True)
+class Filter:
+    """What EVENTS shows (fathers#84, fathers#152): the log (a tool's name or ALL; None: the default), the text
+    matched against kind, subject id, label and detail, whether the text field is open, and `raw`: every event as
+    logged instead of one row per run. They last until Godfather restarts."""
+    source: Optional[str] = None
+    text: str = ""
+    editing: bool = False
+    raw: bool = False
+
+    def active(self) -> bool:
+        return bool(self.text)
+
+
+def present(model: Optional[Model]) -> list[tuple[str, str]]:
+    """The sources EVENTS reads, (name, tag) in the order slotfather, lanefather, junkfather."""
+    pairs = cast(list[Any], (model or {}).get("sources") or [])
+    return [(str(pair[0]), str(pair[1])) for pair in pairs]
+
+
+def views(model: Optional[Model]) -> list[str]:
+    """The logs the title cycles through: each present tool's, then ALL where there are several."""
+    names = [name for name, _ in present(model)]
+    return names + [ALL] if len(names) > 1 else names
+
+
+def view_of(model: Optional[Model], found: Filter) -> str:
+    """The log shown: the one chosen while it is there, else Slotfather's, else the first present one."""
+    shown = views(model)
+    if found.source in shown:
+        return found.source
+    if "slotfather" in shown or not shown:
+        return "slotfather"
+    return shown[0]
+
+
+def cycled(model: Optional[Model], found: Filter, step: int) -> Optional[str]:
+    """The log `step` along the cycle from the one shown; None where there is nothing to switch to."""
+    shown = views(model)
+    if len(shown) < 2:
+        return None
+    return shown[(shown.index(view_of(model, found)) + step) % len(shown)]
+
+
+def shown_rows(model: Optional[Model], found: Filter) -> list[dict[str, Any]]:
+    """The rows the log and the filter let through, oldest first: one row per run unless `raw`."""
+    rows = cast(list[dict[str, Any]], (model or {}).get("events") or [])
+    view = view_of(model, found)
+    if view != ALL and present(model):
+        rows = [row for row in rows if row.get("source") == view]
+    if not found.raw:
+        rows = runs(rows)
+    needle = found.text.lower()
+    return [row for row in rows if not needle or needle in text_of(row)]

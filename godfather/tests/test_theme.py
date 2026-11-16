@@ -13,7 +13,7 @@ import unittest
 from typing import Any
 from unittest import mock
 
-from godfather.views import settings as sf_settings
+from godfather import settings_model
 from godfather import theme
 
 
@@ -571,49 +571,39 @@ class SettingTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.now = 0.0
 
-    def clock(self) -> float:
-        return self.now
-
     def test_the_theme_is_a_choice_of_this_dashboard_saved_once_settled(self) -> None:
-        dialog = sf_settings.Settings(1.0, "auto", clock=self.clock)
-        self.assertIn("theme", dialog.fields())
-        self.assertEqual("Colour theme", dialog.label("theme"))
-        dialog.select("theme")
-        for direction, expected in ((1, "terminal"), (1, "builtin"), (1, "auto"), (-1, "builtin")):
-            dialog.step(direction)
-            self.assertEqual(expected, dialog.shown_value("theme"))
-        self.assertEqual("auto", dialog.theme, "nothing saved while the keys move")
-        self.now += sf_settings.SETTLE_SECONDS
-        self.assertTrue(dialog.tick())
-        self.assertEqual("builtin", dialog.theme)
-        self.assertIn("this dashboard only", (dialog.flash or ("",))[0])
+        from test_settings import THEME, Clock, Settings
+
+        settings = Settings(Clock())
+        settings.select(THEME)
+        row = settings_model.focused(settings.panel, settings.context())
+        self.assertEqual("Colour theme", row.label if row else None)
+        for name, expected in (("right", "terminal"), ("right", "builtin"), ("right", None), ("left", "builtin")):
+            settings.key(name)
+            self.assertEqual(expected, settings.panel.pending.value if settings.panel.pending else None)
+        self.assertEqual("auto", settings.state.theme, "nothing saved while the keys move")
+        kinds = settings.tick(settings_model.SETTLE_SECONDS)
+        self.assertEqual("builtin", settings.state.theme)
+        self.assertEqual(["apply-theme", "repaint", "remember"], [kind for kind in kinds if kind != "settings"])
+        self.assertIn("this dashboard only", settings.panel.flash.text if settings.panel.flash else "")
         self.assertFalse([argv for argv in self.fake.argv() if argv[1:2] in (["set"], ["reset"])],
                          "never written to the shared queue")
-        self.assertEqual("handled", dialog.key("5"), "a choice takes no typed value")
-        self.assertFalse(dialog.editing)
-        self.assertEqual((None, "This setting takes no typed value."), dialog.check("theme", "auto"))
-        self.assertEqual("changed", dialog.key("d"))
-        self.assertEqual("auto", dialog.theme, "d: back to the default")
-        dialog.theme = "terminal"
-        dialog.key("D")
-        dialog.key("D")
-        self.assertEqual("auto", dialog.theme, "D twice: every setting at its default")
-        self.assertIn(["settings", "reset", "--all", "--json"], self.fake.argv(), "Slotfather's too")
-        with self.assertRaises(ValueError):
-            sf_settings.Settings(1.0, "solarized")
+        settings.key("5")
+        self.assertFalse(settings.panel.editing, "a choice takes no typed value")
+        settings.key("d")
+        self.assertEqual("auto", settings.state.theme, "d: back to the default")
+        settings.key("right", "\r")
+        self.assertEqual("terminal", settings.state.theme)
+        settings.key("D", "D")
+        self.assertEqual("auto", settings.state.theme, "D twice: this dashboard's settings at their defaults")
+        self.assertNotIn(["settings", "reset", "--all", "--json"], self.fake.argv(), "not Slotfather's")
 
-    def test_the_panel_shows_the_theme_last_after_the_refresh(self) -> None:
-        tool = _view.current()
-        dialog = sf_settings.Settings(1.0, "builtin", clock=self.clock)
-        canvas = tool.Canvas(100, 44)
-        dialog.draw(canvas, None)
-        text = canvas.render(False)
+    def test_the_panel_shows_the_theme_after_the_refresh(self) -> None:
+        from test_settings import Clock, Settings
+
+        text = Settings(Clock(), theme="builtin", width=100, height=44).text()
         self.assertRegex(text, r"Colour theme +Built-in")
         self.assertLess(text.index("Refresh every"), text.index("Colour theme"))
-
-
-
-
 
 
 if __name__ == "__main__":

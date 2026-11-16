@@ -42,6 +42,7 @@ THEMES = {"seti": ("#111213", "#cacecd"), "prolight": ("#ffffff", "#191919")}  #
 SCREENS = {  # name: (width, height, overlay); what's new's filter after a colon
     "overview-156x43": (156, 43, None), "overview-100x40": (100, 40, None), "overview-76x40": (76, 40, None),
     "overview-156x20": (156, 20, None), "help-156x43": (156, 43, "help"), "settings-156x43": (156, 43, "settings"),
+    "settings-mixed-156x43": (156, 43, "settings:mixed"),  # fathers#87: every tool's section
     "unread-156x43": (156, 43, None), "unread-100x40": (100, 40, None), "unread-76x40": (76, 40, None),
     "whatsnew-156x43": (156, 43, "changelog"), "whatsnew-76x40": (76, 40, "changelog"),
     "whatsnew-godfather-156x43": (156, 43, "changelog:godfather"),
@@ -52,6 +53,10 @@ SCREENS = {  # name: (width, height, overlay); what's new's filter after a colon
     # fathers#84: EVENTS with every source, wide, at 100 and at 76 columns; filtered to Lanefather while "710" is typed
     "mixed-156x43": (156, 43, "mixed"), "mixed-100x40": (100, 40, "mixed"), "mixed-76x40": (76, 40, "mixed"),
     "mixed-filter-156x43": (156, 43, "mixed:lanefather:710"),
+    # fathers#152: each log the title switches to, wide and at 100 columns (76 draws no EVENTS)
+    **{f"mixed-{name}-{width}x{height}": (width, height, f"mixed:{tool}")
+       for name, tool in (("lanes", "lanefather"), ("procs", "junkfather"), ("all", "all"))
+       for width, height in ((156, 43), (100, 40))},
 }
 
 
@@ -216,12 +221,16 @@ def write_mixed() -> None:
         line("junkfather", "entry.reaped", "09:57:00", {"type": "entry", "id": "j1c2d3e", "label": "simulator",
                                                          "pid": 87001}, {"reason": "ttl expired", "result": "stopped"}),
         line("junkfather", "entry.extended", "09:59:20", entry, {"ttl": 14400})]
+    tools = load(ROOT / "tests" / "fake_tool.py", "fake_tool")  # each tool's settings as the real one prints them
+    environments = {"lanefather": {"LANEFATHER_PRIORITY_CHECK": "batch"}, "junkfather": {}}
     for tool, tag, log in (("lanefather", "lane", lanes), ("junkfather", "junk", junk)):
         (MIXED / tool).mkdir()
         capabilities = {"v": 1, "tool": tool, "version": "0.9.0", "dashboard": {
             "v": 1, "tag": tag, "snapshot": {"argv": ["status", "--json"], "versions": [1], "poll": 5},
-            "events": {"path": f"/fixture/{tool}/events.jsonl", "versions": [1]}}}
-        (MIXED / tool / "replies.json").write_text(json.dumps({"capabilities --json": {"code": 0, "json": capabilities}},
+            "events": {"path": f"/fixture/{tool}/events.jsonl", "versions": [1]}, "settings": {"versions": [1]}}}
+        settings = tools.document({"tool": tool, "values": {}, "environment": environments[tool], "writable": True})
+        (MIXED / tool / "replies.json").write_text(json.dumps({"capabilities --json": {"code": 0, "json": capabilities},
+                                                               "settings --json": {"code": 0, "json": settings}},
                                                               indent=1) + "\n")
         (MIXED / tool / "events.jsonl").write_text("\n".join(log) + "\n")
 
@@ -252,9 +261,9 @@ def render(name: str, theme: str | None) -> str:
     the lanes and the chart's window go in as data, the theme and marks with the canvas, the commit what's new shows as
     an argument. No module is patched (fathers#138); the only thing set from outside is the process environment
     (environment(): the fixture folder, the time zone and the terminal's colours), which is what the tools read."""
-    from godfather import app, state, theme as themes, tui
+    from godfather import app, entries, events, overlay_text, state, theme as themes, tui
     from godfather.adapters import slotfather as adapter
-    from godfather.views import common, overlays, overview
+    from godfather.views import common, overview
 
     width, height, overlay = SCREENS[name]
     selected, focus = 0, "requests"
@@ -263,11 +272,11 @@ def render(name: str, theme: str | None) -> str:
     folder, found_filter = SCENE, None
     if overlay and overlay.startswith("expected"):
         folder, selected, overlay = EXPECTED, int(overlay.partition(":")[2]), None
+    if overlay == "settings:mixed":
+        folder, overlay = MIXED, "settings"
     if overlay and overlay.startswith("mixed"):
-        from godfather.views import events as events_view
-
         _, source, text = (overlay.split(":") + ["", ""])[:3]
-        found_filter = events_view.Filter(source or None, text, editing=bool(text))
+        found_filter = events.Filter(source or None, text, editing=bool(text))
         folder, overlay = MIXED, None
     found, everything, unread = scene_news()
     read = everything if name.startswith(("overview-", "help-", "settings-", "expected", "focus-")) else unread
@@ -277,7 +286,7 @@ def render(name: str, theme: str | None) -> str:
         screen = app.Screen()
         model, error = screen.load()
         assert model is not None and error is None, error
-        common.dashboard_colours(model, {}, palette.holders())
+        entries.dashboard_colours(model, {}, palette.holders())
         for item in model["holders"] + model["waiters"]:
             lane = scene["lanes"].get(lane_key(item["key"]))
             if lane:
@@ -287,12 +296,13 @@ def render(name: str, theme: str | None) -> str:
         assert moment is not None
         shown: object = None
         if overlay == "settings":
-            settings = screen.settings(1.0, "auto")
-            settings.location = lambda: "~/.local/state/slotfather"  # type: ignore[method-assign]
-            shown = state.SettingsOverlay(settings)
+            from godfather import settings_model
+
+            shown = settings_model.opened(screen.settings_sections(), settings_model.Context(width=width,
+                                                                                             height=height), 0.0)
         elif overlay and overlay.startswith("changelog"):
             tool = overlay.partition(":")[2] or "all"
-            shown = state.Changelog(tab=overlays.filters(found).index(tool))
+            shown = state.Changelog(tab=overlay_text.filters(found).index(tool))
         elif overlay:
             shown = state.Help()
         canvas = tui.Canvas(width, height, palette, common.marks_for(False))

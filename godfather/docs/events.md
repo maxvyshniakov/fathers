@@ -72,7 +72,12 @@ it reads in `versions`):
 `godfather events [--source NAME]... [--follow] [--json]` prints that feed, newest last; `--json` prints the lines
 as read.
 
-The overview's EVENTS (fathers#84) is the same feed, newest first: time, source (the tag from the tool's
+The overview's EVENTS shows one tool's log at a time (fathers#152): its title, `SLOTS LOG`, `LANES LOG`, `PROCS
+LOG` or `ALL LOG`, is the switch (← → with EVENTS focused, `f`, a click on it), each log has its own columns, a
+Slotfather run is one row from its grant to what ended it (`r` shows the events as logged), and a run's trend is a
+mark on its row. What follows is how fathers#84 drew the merged feed; its formatters are the ones each log uses.
+
+The overview's EVENTS (fathers#84) was the same feed, newest first: time, source (the tag from the tool's
 capabilities, in its own colour), event, slots (Slotfather's only), label, detail and pid. Each source has a
 formatter from a kind and its details to the event word and the detail; a kind it does not know shows the kind
 itself and `key=value` pairs. Nothing is parsed out of prose: Lanefather's `details.message` is shown only for a kind

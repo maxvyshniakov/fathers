@@ -106,8 +106,9 @@ class FooterTests(unittest.TestCase):
             self.assertNotIn(gone, line)
         keys = dict(self.tool.HELP)["KEYS"]
         terms = [entry[0] for entry in keys if entry[0]]
-        for gone in ("p", "r", "m", "space"):
+        for gone in ("p", "m", "space"):
             self.assertNotIn(gone, terms)
+        self.assertNotIn("refresh", " ".join(entry[1] for entry in keys if len(entry) > 1), "r is EVENTS' raw now")
         self.assertIn("shift+drag", terms, "text is selected with Shift+drag")
 
 
@@ -152,14 +153,13 @@ class HintClickTests(unittest.TestCase):
         from unittest import mock
 
         from helpers import FakeSlotfather
-        from godfather.views import settings as dashboard_settings
+        from test_settings import Clock, Settings
         fake = FakeSlotfather()
         self.addCleanup(fake.close)
         with mock.patch.dict(os.environ, fake.environ()):
-            dialog = dashboard_settings.Settings(1.0)
-            canvas = self.tool.Canvas(100, 44)
-            dialog.draw(canvas, None)
-        _, y, _, height = dialog.bounds
+            settings = Settings(Clock(), width=100, height=44)
+            canvas = settings.canvas()
+        y, _, height, _ = settings.geometry().rect
         found = self.targets(canvas, y + height - 2, ["↑↓ select", "←→ change", "enter edit", "d reset", "esc close"])
         self.assertEqual(["up", "down"], found["↑↓ select"][:2])
         self.assertEqual(["left", "right"], found["←→ change"][:2])

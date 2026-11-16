@@ -4,40 +4,40 @@
 │  lane-644-bui…  lane-465-sta…  desktop                                              free  │ │  status     running · 1 slot                               │
 ╰─────────────────────────────────────╭─ SETTINGS ─────────────────────── saved at once · applies at the next grant ─╮                                     │
 ┍━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│                                                                              │                                     │
-│                                     │ STATUS · read-only, live                                                     │                                     │
-┃  ▶️    lane-644-build-once          │   queue        ~/.local/state/slotfather                                     │ 0.9 of 2 cores                      │
-│  ▶️    lane-465-state-definitions-re│   slots        6 total · 2 free · 4 held · 2 waiting                         │ waited 19m34s · running 35m10s      │
-│  ▶️    desktop                      │   capacity     6 slots · saved, fixed count                                  │ processes                           │
-│                                     │   budgets      CPU 4 (12 cores) · memory 16 (64 GiB)                         │                                     │
-│  ⏸️    prof51                       │   draining     none                                                          │ht/.claude/worktrees/agent-afa3816b  │
-│  ⏸️    lane-555-host-rename-names   │   environment  SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB                       │                                     │
-│                                     │ ──────────────────────────────────────────────────────────────────────────   │ht/.claude/worktrees/agent-afa3816b  │
-┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┃ ▶ Capacity                  ‹ Fixed ›                                        ┃verify.sh --checks desktop-tests     │
-╭─ EVENTS ──── slots ─ label ─────────│   Slots                     6                                                │ng --jobs 1                          │
-│                                     │   Queue order               Backfill                                         │ht                                   │
-│  11:59:35    ▫       agent-ae72d94be│   Backfill margin           3×                                               │                                     │
-│  11:58:33    ▫       agent-a1c75285b│   Unknown job runtime       3600 s                                           │once                                 │
-│  11:57:20    ▪       agent-a1c75285b│   Overrun estimate          0.5×                                             │                                     │
-│  11:57:15    ▫       agent-a1c75285b│   Overtaking stops after    never                                            │                                     │
-│  11:55:44    ▪▪      desktop        │   Interactive head start    1800 s                                           │uild-once                            │
-│  11:55:41    ▪       agent-a1c75285b│   Batch held back           1800 s                                           │queue-347                            │
-│  11:55:31    ▫       desktop        │   Batch promoted after      1800 s                                           │s                                    │
-│  11:55:26    ▫       agent-a1c75285b│   Normal promoted after     3600 s                                           │d                                    │
-│  11:55:24    ▪       desktop        │   Warn after waiting        1800 s                                           │fication_plan.py, tools/verify.py,   │
-│  11:55:00    ▫       desktop        │   Idle when below           0.1 cores                                        │in-module.sh, tools/test-build-      │
-│  11:54:54    ▪       desktop        │   Idle for                  300 s                                            │ule.py, tools/app-build.py,          │
-│  11:54:06    ▪       agent-a1c75285b│   Ask to yield after        120 s                                            │-app-build.py, tools/cargo-test.py,  │
-│  11:54:02    ▫       agent-a1c75285b│   Refresh every             1 s                                              │opment.md, tools/test-cargo-build-   │
-│  11:53:54    ▪       agent-ae72d94be│   Colour theme              Auto                                             │tools/test-heavy.py,                 │
-│  11:53:08    ▪       agent-a1c75285b│                                                                              │o_build_cache.py                     │
-│  11:52:53    ▫       agent-a1c75285b│ ──────────────────────────────────────────────────────────────────────────── │                                     │
-│  11:52:30    ▫       desktop        │ Shared by every client. Automatic: the lower of the CPU and memory budgets.  │                                     │
-│  11:52:25    ▪       desktop        │                                                                              │─────────────────────────────────────╯
-│  11:51:40    ▪       agent-a1c75285b│                                                                              │─────── unleased 0.4 · no admission ─╮
-│  11:51:40    ▫       post-merge-456-│           ↑↓ select   ←→ change   enter edit   d reset   esc close           │        slots held  avg 4.4/6        │
-│  11:51:24    ▫       agent-a1c75285b╰──────────────────────────────────────────────────────────────────────────────╯9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
-│  11:49:34    ▫▫      data-grid                                           ok 1m03s  21191  │ │  🆗 mem  ■■■■░░░░░░░░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
-│  11:48:31    ▪▪      data-grid                                            no wait  21191  │ │  🆗 swap ■■■■■■■■■░░░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
+│                                     │  GODFATHER · this dashboard only                                             │                                     │
+┃  ▶️    lane-644-build-once          │    Refresh every             1s                                              │ 0.9 of 2 cores                      │
+│  ▶️    lane-465-state-definitions-re│    Colour theme              Auto                                            │ waited 19m34s · running 35m10s      │
+│  ▶️    desktop                      │  ──────────────────────────────────────────────────────────────────────────  │ processes                           │
+│                                     │  SLOTFATHER · status read-only, live                                         │                                     │
+│  ⏸️    prof51                       │    queue        ~/.local/state/slotfather                                    │ht/.claude/worktrees/agent-afa3816b  │
+│  ⏸️    lane-555-host-rename-names   │    slots        6 total · 2 free · 4 held · 2 waiting                        │                                     │
+│                                     │    capacity     6 slots · saved, fixed count                                 │ht/.claude/worktrees/agent-afa3816b  │
+┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    budgets      CPU 4 (12 cores) · memory 16 (64 GiB)                        │verify.sh --checks desktop-tests     │
+╭─ SLOTS LOG ─────── label ───────────│    draining     none                                                         │ng --jobs 1                          │
+│                                     │    environment  SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB                      │ht                                   │
+│  11:59:35  ▫       agent-ae72d94beb6┃  ▶ Capacity                  ‹ Fixed ›                                       ┃                                     │
+│  11:58:33  ▫       agent-a1c75285bdf│    Slots                     6                                               │once                                 │
+│  11:57:15  ▫       agent-a1c75285bdf│    Queue order               Backfill                                        │                                     │
+│  11:55:44  ▪▪      desktop          │    Backfill margin           3×                                              │                                     │
+│  11:55:31  ▫       desktop          │    Unknown job runtime       1h                                              │uild-once                            │
+│  11:55:26  ▫       agent-a1c75285bdf│    Overrun estimate          0.5×                                            │queue-347                            │
+│  11:55:00  ▫       desktop          │    Overtaking stops after    never                                           │s                                    │
+│  11:54:02  ▫       agent-a1c75285bdf│    Interactive head start    30m                                             │d                                    │
+│  11:52:53  ▫       agent-a1c75285bdf│    Batch held back           30m                                             │fication_plan.py, tools/verify.py,   │
+│  11:52:30  ▫       desktop          │    Batch promoted after      30m                                             │in-module.sh, tools/test-build-      │
+│  11:51:40  ▫       post-merge-456-re│    Normal promoted after     1h                                              │ule.py, tools/app-build.py,          │
+│  11:51:24  ▫       agent-a1c75285bdf│    Warn after waiting        30m                                             │-app-build.py, tools/cargo-test.py,  │
+│  11:49:34  ▫▫      data-grid        │    Idle when below           0.1 cores                                       │opment.md, tools/test-cargo-build-   │
+│  11:48:30  ▫       agent-ae72d94beb6│    Idle for                  5m                                              │tools/test-heavy.py,                 │
+│  11:47:21  ▫       agent-a0f998f4c57│    Ask to yield after        2m                                              │o_build_cache.py                     │
+│  11:47:17  ▫       agent-a0f998f4c57│                                                                              │                                     │
+│  11:47:13  ▫       agent-a0f998f4c57│  ──────────────────────────────────────────────────────────────────────────  │                                     │
+│  11:47:10  ▫       agent-a0f998f4c57│  Shared by every client. Automatic: the lower of the CPU and memory          │─────────────────────────────────────╯
+│  11:47:07  ▫       agent-a0f998f4c57│  budgets.                                                                    │eased 0.4 · queue ahead · 2 waiting ─╮
+│  11:47:04  ▫       agent-a0f998f4c57│                                                                              │        slots held  avg 4.4/6        │
+│  11:46:08  ▫       post-merge-491-el│           ↑↓ select   ←→ change   enter edit   d reset   esc close           │9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
+│  11:45:53  ▫       agent-a1c75285bdf╰──────────────────────────────────────────────────────────────────────────────╯normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
+│  11:45:09  ▫       agent-a1c75285bdf2cd615             wait 2m43s          ok 10s  21181  │ │  🆗 swap ■■■■■■■■■░░░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                                                                                           │ │                               −80s                    now  │
 ╰───────────────────────────────────────────────────────────────────────────────────────────╯ ╰────────────────────────────────────────────────────────────╯
  Godfather what's new?                            ↑↓ select   tab panel   s settings   ? help   q quit                             updated 11:59:39  ● live

@@ -1,5 +1,6 @@
 """A fake `slotfather` for Godfather's tests: SF-1 (capabilities, status --json --full) and SF-2 (settings) over a
-JSON state file, with Slotfather's capacity rules and messages as the panel showed them (docs/contracts/slotfather.md).
+JSON state file, with Slotfather's capacity rules and messages as the panel showed them (docs/contracts/slotfather.md),
+and `settings --json` field for field as the real one prints it (test_contract.py compares the two).
 
 FAKE_SLOTFATHER_STATE names the state file; every call's argv is appended to FAKE_SLOTFATHER_CALLS. State keys:
 cores, memory_gib (null: unknown), capacity (null, {"slots": N} or {"mode", "gib_per_slot", "slots"}), order (the
@@ -16,7 +17,7 @@ import sys
 import time
 from typing import Any
 
-CORES_PER_SLOT, AUTO_GIB_PER_SLOT, CAPACITY_PER_CORE = 3, 4, 4
+CORES_PER_SLOT, AUTO_GIB_PER_SLOT, CAPACITY_PER_CORE = 3, 4.0, 4
 ORDER_DEFAULTS = {"order": "backfill", "safety": 3.0, "limit": 0.0, "fallback": 3600.0, "overrun": 0.5,
                   "interactive": 1800.0, "batch": 1800.0, "yield_after": 120.0, "idle_cpu": 0.1, "idle_after": 300.0,
                   "aging_batch": 1800.0, "aging_normal": 3600.0, "warn_wait": 1800.0}
@@ -63,7 +64,7 @@ def basis(state: dict[str, Any]) -> dict[str, Any]:
     mode = data.get("mode", "fixed")
     if mode == "fixed":
         return {**found, "slots": data["slots"], "mode": "fixed"}
-    by_memory = memory_slots(gib, data["gib_per_slot"])
+    by_memory = memory_slots(gib, float(data["gib_per_slot"]))
     slots = (data.get("slots") or cpu) if by_memory is None else by_memory if mode == "memory" else min(cpu, by_memory)
     return {**found, "mode": mode, "gib_per_slot": data["gib_per_slot"], "memory_slots": by_memory, "slots": slots}
 
@@ -133,34 +134,99 @@ def validate(state: dict[str, Any], key: str, text: str) -> tuple[Any, dict[str,
     return value, None
 
 
+# What `slotfather settings --json` prints (slotfather/src/slotfather/settings.py), field for field
+MODE_LABELS = {"automatic": "Automatic", "fixed": "Fixed", "memory": "Memory", "lower": "CPU + memory"}
+KNOBS = {"safety": ("Backfill margin", 0.5, "number", "×"), "fallback": ("Unknown job runtime", 60, "duration", "s"),
+         "overrun": ("Overrun estimate", 0.1, "number", "×"), "limit": ("Overtaking stops after", 60, "duration", "s"),
+         "interactive": ("Interactive head start", 60, "duration", "s"),
+         "batch": ("Batch held back", 60, "duration", "s"),
+         "aging_batch": ("Batch promoted after", 300, "duration", "s"),
+         "aging_normal": ("Normal promoted after", 300, "duration", "s"),
+         "warn_wait": ("Warn after waiting", 300, "duration", "s"), "idle_cpu": ("Idle when below", 0.05, "number", "cores"),
+         "idle_after": ("Idle for", 60, "duration", "s"), "yield_after": ("Ask to yield after", 30, "duration", "s")}
+NEVER = ("limit", "aging_batch", "aging_normal", "warn_wait")
+ORDER_FIELDS = ("order", "safety", "fallback", "overrun", "limit", "interactive", "batch", "aging_batch",
+                "aging_normal", "warn_wait", "idle_cpu", "idle_after", "yield_after")  # the panel's order
+DESCRIPTIONS = {
+    "mode": "Shared by every client. Automatic: the lower of the CPU and memory budgets.",
+    "amount.fixed": "Total slots for every client. Applies at the next grant; a shrink drains.",
+    "amount.memory": "One slot per this many GiB of memory. Applies at the next grant.",
+    "order": "Backfill lets short work pass; Arrival serves in arrival order.",
+    "safety": "Multiplier on expected runtimes for backfill; at least 1.",
+    "limit": "After this a waiting head lets nothing pass; 0: its reserved start alone.",
+    "fallback": "Assumed runtime of work with no history.",
+    "overrun": "Remaining runtime as a share of elapsed time once a run overruns.",
+    "interactive": "How far interactive requests move ahead; 0: not at all.",
+    "batch": "How far batch requests move back; 0: not at all.",
+    "aging_batch": "A waiting batch request is served as normal after this; 0: never.",
+    "aging_normal": "A waiting normal request is served as interactive after this; 0: never.",
+    "warn_wait": "A request waiting this long says so and is flagged; 0: never.",
+    "yield_after": "Before a yieldable holder is asked to yield; 0: nobody is asked.",
+    "idle_cpu": "A lease below this for the idle time is idle (💤); 0: never.",
+    "idle_after": "Below the idle cores this long: idle, and asked if it can yield.",
+}
+FOREIGN = "the queue /fake/state belongs to uid 502 (other); only that user can change its settings"
+
+
+def order_revision(state: dict[str, Any]) -> str:
+    return "sha256:" + hashlib.sha256(json.dumps(state["order"], sort_keys=True).encode()).hexdigest()
+
+
 def settings(state: dict[str, Any]) -> dict[str, Any]:
     found = basis(state)
-    rev = revision(state)
+    rev, order_rev = revision(state), order_revision(state)
+    writable = bool(state["writable"])
     effective_order = os.environ.get("SLOTFATHER_QUEUE") or None
     knobs = []
-    for name, default in ORDER_DEFAULTS.items():
+    for name in ORDER_FIELDS:
+        default = ORDER_DEFAULTS[name]
         value = state["order"].get(name, default)
-        row: dict[str, Any] = {"key": "order." + name, "value": value, "default": default, "source": "saved",
-                               "writable": True, "revision": "sha256:order"}
+        row: dict[str, Any] = {"key": "order." + name, "value": value, "default": default,
+                               "writable": writable, "revision": order_rev, "description": DESCRIPTIONS[name],
+                               "source": "saved" if name in state["order"] else "default"}
         if name == "order":
-            row.update(type="choice", choices=[{"value": "backfill"}, {"value": "window"}])
-            if effective_order in ("backfill", "window"):
-                row["effective"] = effective_order
+            row.update(label="Queue order", type="choice",
+                       choices=[{"value": "backfill", "label": "Backfill"}, {"value": "window", "label": "Arrival"}])
+            if effective_order in ("backfill", "window") and effective_order != value:
+                row.update(effective=effective_order, source="env SLOTFATHER_QUEUE")
         else:
-            row.update(type="number", min=MINIMUMS[name])
+            label, step, kind, unit = KNOBS[name]
+            row.update(label=label, type=kind, min=MINIMUMS[name], max=None, step=step, unit=unit)
+            if name in NEVER:
+                row["zero"] = "never"
         knobs.append(row)
+    source = "saved" if found["saved"] else "default"
     capacity = [
-        {"key": "capacity.mode", "type": "choice", "value": found["mode"], "default": "automatic",
-         "choices": [{"value": mode} for mode in MODES], "revision": rev, "writable": True, "source": "saved"},
-        {"key": "capacity.slots", "type": "integer", "value": found["slots"], "min": 1,
-         "max": CAPACITY_PER_CORE * int(state["cores"]), "revision": rev, "writable": True},
-        {"key": "capacity.gib_per_slot", "type": "number", "value": found["gib_per_slot"] or AUTO_GIB_PER_SLOT,
-         "revision": rev, "writable": True}]
-    return {"v": 1, "tool": "slotfather", "writable": state["writable"], "reason": None,
-            "status": [{"label": "queue", "value": state.get("directory", "~/.local/state/slotfather")},
-                       {"label": "environment", "value": ", ".join(state["environment"])}],
-            "basis": found,
-            "sections": [{"id": "capacity", "settings": capacity}, {"id": "order", "settings": knobs}]}
+        {"key": "capacity.mode", "label": "Capacity", "type": "choice", "value": found["mode"], "default": "automatic",
+         "choices": [{"value": mode, "label": MODE_LABELS[mode]} for mode in MODES], "source": source,
+         "writable": writable, "revision": rev, "description": DESCRIPTIONS["mode"]},
+        {"key": "capacity.slots", "label": "Slots", "type": "integer", "value": found["slots"], "default": None,
+         "min": 1, "max": CAPACITY_PER_CORE * int(state["cores"]), "step": 1, "unit": "slots", "source": source,
+         "writable": writable, "revision": rev, "when": {"capacity.mode": ["fixed"]},
+         "description": DESCRIPTIONS["amount.fixed"]},
+        {"key": "capacity.gib_per_slot", "label": "GiB per slot", "type": "number",
+         "value": found["gib_per_slot"] or AUTO_GIB_PER_SLOT, "default": AUTO_GIB_PER_SLOT, "min": 0,
+         "min_exclusive": True, "max": None, "step": 0.5, "unit": "GiB", "source": source, "writable": writable,
+         "revision": rev, "when": {"capacity.mode": ["memory", "lower"]}, "description": DESCRIPTIONS["amount.memory"]}]
+    per = f"{found['gib_per_slot'] or 0:g}"
+    how = {"fixed": "saved, fixed count", "memory": f"saved, one per {per} GiB of memory",
+           "lower": f"saved, lower of CPU and one per {per} GiB",
+           "automatic": "automatic, lower of the two budgets"}[found["mode"]]
+    memory = (f"{found['memory_slots']}" if found["memory_slots"] is not None else "unknown") + \
+        (f" ({found['memory_gib']:g} GiB)" if found["memory_gib"] is not None else "")
+    status = [{"label": "queue", "value": state.get("directory", "~/.local/state/slotfather"), "style": "text"},
+              {"label": "slots", "value": f"{found['slots']} total · {found['slots']} free · 0 held · 0 waiting",
+               "style": "text"},
+              {"label": "capacity", "value": f"{found['slots']} slots · {how}", "style": "text"},
+              {"label": "budgets", "value": f"CPU {found['cpu_slots']} ({found['cores']} cores) · memory {memory}",
+               "style": "text"},
+              {"label": "draining", "value": "none", "style": "dim"}]
+    if state["environment"]:
+        status.append({"label": "environment", "value": ", ".join(state["environment"]), "style": "dim"})
+    return {"v": 1, "tool": "slotfather", "writable": writable, "reason": None if writable else FOREIGN,
+            "status": status, "basis": dict(found, cgroup=None),
+            "sections": [{"id": "capacity", "title": "Capacity", "settings": capacity},
+                         {"id": "order", "title": "Queue order", "settings": knobs}]}
 
 
 def idle_snapshot(state: dict[str, Any]) -> dict[str, Any]:
@@ -220,15 +286,18 @@ def main(argv: list[str]) -> int:
         if args[1].startswith("capacity."):
             answer["slots"] = basis(dict(state, capacity=capacity))["slots"] if capacity else \
                 basis(dict(state, capacity=None))["slots"]
+            answer["preview"] = f"→ {answer['slots']} slot{'' if answer['slots'] == 1 else 's'}"
         return reply(answer)
     expected = args[args.index("--revision") + 1] if "--revision" in args else None
     args = [arg for index, arg in enumerate(args) if arg != "--revision" and (index == 0 or args[index - 1] != "--revision")]
     if not state["writable"]:
-        return reply({"ok": False, "error": "this queue belongs to another user; settings are read-only"}, 4)
+        return reply({"ok": False, "error": FOREIGN}, 4)
     if args[0] == "set" and len(args) == 3:
         key = args[1]
-        if key.startswith("capacity.") and expected is not None and expected != revision(state):
-            return reply(dict(settings(state), conflict=True), 3)
+        current = revision(state) if key.startswith("capacity.") else order_revision(state)
+        if expected is not None and expected != current:
+            return reply(dict(settings(state), ok=False, conflict=True,
+                              error=f"settings changed since they were read; now {basis(state)['slots']} slots"), 3)
         try:
             value, capacity = validate(state, key, args[2])
         except (ValueError, KeyError) as error:
@@ -238,16 +307,18 @@ def main(argv: list[str]) -> int:
         else:
             state["order"][key[len("order."):]] = value
         save(state)
-        return reply(settings(state))
+        return reply(dict(settings(state), ok=True))
     if args[0] == "reset" and len(args) == 2:
         if args[1] == "--all":
             state["capacity"], state["order"] = None, {}
         elif args[1].startswith("capacity."):
             if expected is not None and expected != revision(state):
-                return reply(dict(settings(state), conflict=True), 3)
+                return reply(dict(settings(state), ok=False, conflict=True), 3)
             state["capacity"] = None
         else:
-            state["order"].pop(args[1][len("order."):], None)
+            if expected is not None and expected != order_revision(state):
+                return reply(dict(settings(state), ok=False, conflict=True), 3)
+            state["order"][args[1][len("order."):]] = ORDER_DEFAULTS[args[1][len("order."):]]
         save(state)
         return reply(settings(state))
     print("fake slotfather: unknown settings command " + " ".join(argv), file=sys.stderr)

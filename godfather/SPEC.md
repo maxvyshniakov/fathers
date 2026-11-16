@@ -105,6 +105,13 @@ full pages one key away.
     - The detail comes from the event itself; Godfather no longer joins `history.jsonl`.
     - `f` cycles the source filter (all, then each present source); `/` edits a text filter matched against kind,
       subject, label and detail; Esc in the field clears it. The active filter shows in EVENTS' top border.
+    - From fathers#152 (owner, 2026-11-16) EVENTS shows one log at a time and its title is the switch: `SLOTS LOG`,
+      `LANES LOG`, `PROCS LOG` for each present tool, then `ALL LOG` (never the default) where there are several;
+      ← → while EVENTS has the focus, `f`, or a click on the title cycle it, `◂ SLOTS LOG ▸` where there is room.
+      Each log has its own columns (SLOTS: time, slots, label, waited, outcome, pid; LANES: time, event, lane,
+      result, ticket; PROCS: time, event, label, detail, pid; ALL: time, type such as `slot run` in the tool's colour,
+      and one sentence). A Slotfather run is one row, `running 3m` until it ends; `r` shows every event as logged. A
+      trend or an outlier is a mark on its run (▲ ↗ ↘), never a row. `/` filters within the log shown.
     - Newest first; it stays on the newest entry while scrolled to the top and counts new ones (`↑ 3 new`) while
       scrolled down, as today. Events with the same time keep their file order.
     - On a narrow panel the pid goes first, then slots, then the source shrinks to a one-cell coloured mark; the
@@ -181,6 +188,12 @@ Godfather is one Python package, standard library only, Python 3.9+, installed b
   column sharing, scrollbars, overlays (help, changelog, Settings, confirmation, action menu, text field), the footer
   and hint dropping, key reading with the kitty keyboard protocol and layout table, mouse (SGR 1000/1006), full-screen
   setup and restore, the background loader. It knows nothing about any tool.
+- **Layers** (fathers#141): data (keys, theme, version, eventcheck, sources, events, news, entries, adapters, tui)
+  → layout (layout, widgets, overlay_text, settings_model, state, modes) → views → app. A module imports only its
+  own layer or one below, so the reducer reads no view: what EVENTS shows (`events.Filter`), the entries' identity
+  (`entries`), the overlays' text and geometry (`overlay_text`) and Settings (`settings_model`) are below the views
+  that draw them. One scroll clamp (`layout.clamp_scroll`), one hint lookup (`tui.hint_at`); tests/test_imports.py
+  pins the layers.
 - **theme**: Slotfather's theme module moved whole: tokens, terminal colour queries (OSC 10/11/4, mode 2031), muted
   and surface mixing, holder fills and inks, the chart ramp, the three modes. Source colours for the EVENTS tag are
   new tokens chosen by the same rules as holder fills.
@@ -402,7 +415,10 @@ last sweep (pid, start, command, directory, root, age) and the sweep's last time
   merges, as Slotfather's order settings do today.
 - `check` returns `{"ok": bool, "error": str|null, "preview": str|null}`; the preview carries texts such as
   `will drain 2` or `will start 1 waiting`. Godfather calls it for each pending or typed value.
-- Exit codes: 0 done, 2 invalid (the reply says why), 3 conflict, 4 read-only.
+- Exit codes: 0 done, 2 invalid (the reply says why), 3 conflict, 4 or 5 read-only. Slotfather's 4 is another
+  user's queue and Lanefather's 4 a value it cannot save here; Junkfather says read-only with 5, keeping 4 for
+  Slotfather's meaning (fathers#118, owner 2026-11-13). Godfather takes 4 and 5 alike: nothing saved, the row read
+  again. Any other code is a failure with the tool's message (Junkfather's 1: not saved, a full disk).
 - Lanefather exposes only machine-local settings; values from a project's `.lanefather.toml` or the environment are
   read-only rows with their source.
 

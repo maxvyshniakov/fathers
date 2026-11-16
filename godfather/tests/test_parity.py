@@ -24,10 +24,10 @@ from unittest import mock
 
 from helpers import ROOT, timezone
 
-from godfather import app, layout, sources, state, tui
+from godfather import app, entries, layout, overlay_text, sources, state, tui
 from godfather.adapters import slotfather as adapter
 from godfather.layout import Rect
-from godfather.views import common, overlays, overview
+from godfather.views import common, overview
 
 
 FIXTURE = ROOT / "tests" / "fixtures" / "parity"
@@ -43,6 +43,19 @@ def read(name: str) -> Any:
     except (OSError, ValueError, EOFError, zlib.error) as error:
         raise AssertionError(f"parity fixture {path} unreadable ({error}); it is frozen from Slotfather 37c4df7, "
                              f"see {FIXTURE / 'README.md'}") from error
+
+
+def admission_note(canvas: Any) -> set[tuple[int, int]]:
+    """MACHINE's top border after its title: it says why admission is closed (fathers#156), where Slotfather's said
+    `no admission` alone."""
+    found: set[tuple[int, int]] = set()
+    for row in range(canvas.height):
+        text = "".join(str(cell[0]) or "\0" for cell in canvas.cells[row])
+        at = text.find(" MACHINE ")
+        if at >= 0:
+            end = text.find("╮", at)
+            found |= {(row, column) for column in range(at + len(" MACHINE "), end if end > 0 else canvas.width)}
+    return found
 
 
 def chart_title(canvas: tui.Canvas) -> set[tuple[int, int]]:
@@ -94,7 +107,7 @@ class ParityTests(unittest.TestCase):
         model, error = app.Screen().load()
         self.assertIsNone(error)
         assert model is not None
-        common.dashboard_colours(model, {}, self.theme.holders())
+        entries.dashboard_colours(model, {}, self.theme.holders())
         for item in model["holders"] + model["waiters"]:
             item["lane"] = self.scene["lanes"][json.dumps(list(item["key"]))]
             if item["lane"] is None:
@@ -134,7 +147,7 @@ class ParityTests(unittest.TestCase):
                 # QUEUE holds the focus where it is drawn: its rules are heavy (fathers#139)
                 focused = canvas.tables.get("requests", dict(x=0, y=-1, width=0, height=0))
                 rules = {focused["y"], focused["y"] + focused["height"] - 1}
-                masked |= chart_title(canvas)
+                masked |= chart_title(canvas) | admission_note(canvas)
                 for row in range(height - 1):
                     for column in range(width):
                         if (row, column) not in masked:
@@ -150,21 +163,22 @@ class ParityTests(unittest.TestCase):
         self.assertGreaterEqual(compared, 25)
 
     def test_help_is_slotfathers_in_every_section_but_events(self) -> None:
-        ours = {title: [list(entry) for entry in entries] for title, entries in overlays.HELP}
+        ours = {title: [list(entry) for entry in entries] for title, entries in overlay_text.HELP}
         theirs = {title: entries for title, entries in self.help}
         self.assertEqual(list(theirs), list(ours), "the same sections in the same order")
         what = ["v", "what's new (or click Godfather what's new?)"]  # fathers#102: the changelog became what's new
         self.assertIn(what, ours["KEYS"])
         ours["KEYS"][ours["KEYS"].index(what)] = ["v", "changelog (or click the version)"]
-        for key in ("f", "/"):  # fathers#84: EVENTS' source and text filters
+        for key in ("← → · f", "r", "/"):  # fathers#84, fathers#152: EVENTS' log, raw and text filter
             ours["KEYS"] = [entry for entry in ours["KEYS"] if entry[0] != key]
         snail = ["🐌", "batch: unattended work, after the rest"]  # owner, 2026-11-12: batch is a snail, not a turtle
         self.assertIn(snail, ours["PRIORITY"])
         ours["PRIORITY"][ours["PRIORITY"].index(snail)] = ["🐢", snail[1]]
         for title in theirs:
-            if title != "EVENTS":
+            if title not in ("EVENTS", "SETTINGS"):  # fathers#87: Settings has a section per tool
                 self.assertEqual(theirs[title], ours[title], title)
         self.assertNotEqual(theirs["EVENTS"], ours["EVENTS"])
+        self.assertIn(["d · D D", "reset one · reset its section"], ours["SETTINGS"])
 
     def test_plain_text_outside_events_is_slotfathers_too(self) -> None:
         old = self.frames["156x43 0 0 0"].split("\n")

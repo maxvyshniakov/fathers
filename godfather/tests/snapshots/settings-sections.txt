@@ -1,0 +1,51 @@
+╭─ SETTINGS ─────────────────────── saved at once · applies at the next grant ─╮
+│                                                                              │
+│  GODFATHER · this dashboard only                                             │
+│    Refresh every             1s                                              │
+│    Colour theme              Auto                                            │
+│  ──────────────────────────────────────────────────────────────────────────  │
+│  SLOTFATHER · status read-only, live                                         │
+│    queue        ~/.local/state/slotfather                                    │
+│    slots        4 total · 4 free · 0 held · 0 waiting                        │
+│    capacity     4 slots · automatic, lower of the two budgets                │
+│    budgets      CPU 4 (12 cores) · memory 16 (64 GiB)                        │
+│    draining     none                                                         │
+│    environment  SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB                      │
+┃  ▶ Capacity                  ‹ Automatic ›                                   ┃
+│    Queue order               Backfill                                        │
+│    Backfill margin           3×                                              │
+│    Unknown job runtime       1h                                              │
+│    Overrun estimate          0.5×                                            │
+│    Overtaking stops after    never                                           │
+│    Interactive head start    30m                                             │
+│    Batch held back           30m                                             │
+│    Batch promoted after      30m                                             │
+│    Normal promoted after     1h                                              │
+│    Warn after waiting        30m                                             │
+│    Idle when below           0.1 cores                                       │
+│    Idle for                  5m                                              │
+│    Ask to yield after        2m                                              │
+│  ──────────────────────────────────────────────────────────────────────────  │
+│  LANEFATHER · status read-only, live                                         │
+│    settings     /fake/config/lanefather/settings.json                        │
+│    events       /fake/state/lanefather/events.jsonl                          │
+│    projects     2 registered in /fake/state/lanefather/projects.json         │
+│    Review start              Automatic                                       │
+│    Rerun waits               55m                                             │
+│    check priority            Batch  env LANEFATHER_PRIORITY_CHECK            │
+│  ──────────────────────────────────────────────────────────────────────────  │
+│  JUNKFATHER · status read-only, live                                         │
+│    settings     /fake/state/junkfather/settings.json                         │
+│    state        /fake/state/junkfather                                       │
+│    last sweep   never                                                        │
+│    Default TTL               2h                                              │
+│    Sweep every               1h                                              │
+│    Grace before SIGKILL      10s                                             │
+│    State directory           /fake/state/junkfather  read-only               │
+│                                                                              │
+│  ──────────────────────────────────────────────────────────────────────────  │
+│  Shared by every client. Automatic: the lower of the CPU and memory          │
+│  budgets.                                                                    │
+│                                                                              │
+│           ↑↓ select   ←→ change   enter edit   d reset   esc close           │
+╰──────────────────────────────────────────────────────────────────────────────╯

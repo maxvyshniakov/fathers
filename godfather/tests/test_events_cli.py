@@ -7,12 +7,11 @@ import os
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from typing import Any
 
-from helpers import ROOT
+from helpers import ROOT, lines_within
 
 HOST = "mbp"
 
@@ -107,9 +106,7 @@ class EventsCommandTests(unittest.TestCase):
         log = self.root / "slotfather" / "events.jsonl"
         log.replace(log.with_name("events.jsonl.1"))
         self.log("slotfather", event("slotfather", "lease.granted", 50, "r3", waited=4))
-        started = time.monotonic()
-        later = [process.stdout.readline(), process.stdout.readline()]
-        self.assertLess(time.monotonic() - started, 5)
+        later = lines_within(process.stdout, 2)
         self.assertIn("request.left", later[0])
         self.assertIn("r3", later[1])
 

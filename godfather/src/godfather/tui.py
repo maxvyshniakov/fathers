@@ -168,6 +168,7 @@ class Canvas:
         self.version_at: tuple[int, int, int] | None = None  # the footer version's row and columns: the changelog
         self.hint_hits: list[tuple[int, int, int, str]] = []  # (row, from, to, key) of every footer hint drawn
         self.filter_hits: list[tuple[int, int, int, int]] = []  # (row, from, to, tab) of what's new's tool filters
+        self.switch_at: tuple[int, int, int] | None = None  # (row, from, to) of EVENTS' title, which cycles its log
         self.order: tuple[str, ...] = ("requests",)  # Tab's order among the panels drawn (layout.tab_order())
         self.glow: set[str] = set()  # panels scrolled within SCROLL_GLOW seconds: their thumb in the foreground
         self.width, self.height = max(0, width), max(0, height)
@@ -248,8 +249,7 @@ class Canvas:
 
     def hint_at(self, mx: int, my: int) -> str | None:
         """The key a click on a footer hint presses, None between hints."""
-        return next((press for y, start, end, press in reversed(self.hint_hits) if y == my and start <= mx < end),
-                    None)
+        return hint_at(self.hint_hits, mx, my)
 
     def select(self, y: int, start: int, end: int, tint: bool | str = True) -> None:
         """Marks cells start..end of row y selected: True for the neutral background, a holder style for its tint."""
@@ -298,6 +298,12 @@ class Canvas:
 
     def render(self, colour: bool, ascii_only: bool = False) -> str:
         return "\n".join(line if colour else line.rstrip() for line in self.lines(colour, ascii_only))
+
+
+def hint_at(hints: Any, x: int, y: int) -> str | None:
+    """The key a click at (x, y) on a hint presses, None between hints: the one lookup a drawn canvas and the
+    reducer's last frame share (fathers#141). `hints` are (row, from, to, key), the later drawn first."""
+    return next((press for row, start, end, press in reversed(list(hints)) if row == y and start <= x < end), None)
 
 
 def safe_link(url: str) -> bool:
@@ -483,3 +489,43 @@ class Loader:
         with self.lock:
             found, self.results = self.results, []
             return found
+
+
+class Jobs(Loader):
+    """A Loader that runs every request, in the order made (Settings' reads, checks and writes, fathers#87): none
+    replaces another, so a save is never dropped and its answer follows the reads asked before it."""
+
+    def __init__(self, work: Any, wake: int) -> None:
+        super().__init__(work, wake)
+        self.queue: list[tuple[Any, Any]] = []
+
+    def request(self, key: Any, argument: Any = None) -> None:
+        with self.lock:
+            self.queue.append((key, argument))
+            if self.busy:
+                return
+            self.busy = True
+        threading.Thread(target=self.run, daemon=True).start()
+
+    def wants(self, key: Any) -> bool:
+        with self.lock:
+            return self.current == key or any(waiting == key for waiting, _ in self.queue)
+
+    def run(self) -> None:
+        while True:
+            with self.lock:
+                if not self.queue:
+                    self.busy, self.current = False, None
+                    return
+                key, argument = self.queue.pop(0)
+                self.current = key
+            value: Any = None
+            failure: BaseException | None = None
+            try:
+                value = self.work(argument)
+            except Exception as error:  # noqa: BLE001 - a failed call is shown, never the end of the view
+                failure = error
+            with self.lock:
+                self.results.append((key, value, failure))
+            with contextlib.suppress(OSError):
+                os.write(self.wake, b".")

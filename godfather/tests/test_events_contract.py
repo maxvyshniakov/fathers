@@ -12,12 +12,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from typing import Any, Optional, cast
 
-from helpers import ROOT
+from helpers import ROOT, lines_within
 
 REPOSITORY = ROOT.parent
 
@@ -73,7 +72,7 @@ class EventsContractTests(unittest.TestCase):
                                 cwd=self.tmp)
         self.assertEqual(0, result.returncode, result.stderr)
 
-    def test_the_tools_events_reach_follow_within_a_second_in_time_order(self) -> None:
+    def test_the_tools_events_reach_follow_in_time_order(self) -> None:
         self.assertEqual(str(self.tmp / "lane" / "events.jsonl"), self.log("lanefather"))
         follow = subprocess.Popen([sys.executable, "-m", "godfather", "events", "--follow"], stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, text=True, env=self.environ, cwd=self.tmp)
@@ -82,13 +81,11 @@ class EventsContractTests(unittest.TestCase):
         self.addCleanup(follow.stdout.close)
         self.addCleanup(follow.wait)
         self.addCleanup(follow.kill)
-        time.sleep(1.0)  # its first read is done: what follows is what it follows
+        # Whether its first read comes before or after a tool writes, it prints the line: it reads what a log holds
         self.run_tool("slotfather", "run", "-n", "1", "--label", "contract", "--", "true")
-        done = time.monotonic()
-        lines = [follow.stdout.readline(), follow.stdout.readline()]
-        self.assertLess(time.monotonic() - done, 1.0 + 0.5, "within a second (and the poll's quarter)")
+        lines = lines_within(follow.stdout, 2)
         self.run_tool("junkfather", "own", "--ttl", "60", "--label", "contract", "--", "true")
-        lines.append(follow.stdout.readline())
+        lines += lines_within(follow.stdout, 1)
         self.assertEqual([("slot", "lease.granted"), ("slot", "lease.released"), ("junk", "entry.owned")],
                          [tuple(line.split()[2:4]) for line in lines], lines)
         self.assertTrue(all("contract" in line for line in lines), lines)

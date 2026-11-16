@@ -12,8 +12,8 @@ processes agents start).
 
 **Status: 0.1.0.** The main screen is Slotfather's dashboard, moved here with no visible change but the footer:
 `Godfather what's new?` (`v` or a click) opens one timeline of every tool's changelog, an install from main's
-unreleased entries included, and EVENTS is one feed of every tool's event log, with a source column where there is
-more than one tool and filters (`f` for the source, `/` for text). Lanes, processes and row actions come in the next
+unreleased entries included, and EVENTS shows each tool's event log in its own columns, its title the switch
+(`◂ SLOTS LOG ▸`: ← →, `f` or a click), one row per Slotfather run, `/` to filter by text. Lanes, processes and row actions come in the next
 slices of [SPEC.md](SPEC.md), each as its tool supports the contract.
 
 ## Install and run
@@ -45,7 +45,7 @@ runs their CLIs. A tool that is not installed simply has no panels; one without 
 | --- | --- |
 | Discovery | `<tool> capabilities --json` |
 | Snapshot | `slotfather status --json --full`, polled every Refresh every |
-| Settings | `slotfather settings --json`, `settings check`, `settings set`, `settings reset` |
+| Settings | `<tool> settings --json`, `settings check`, `settings set`, `settings reset`, for each present tool |
 | Events | `events.jsonl` in the tool's state directory, one shared versioned schema |
 
 [docs/contracts/slotfather.md](docs/contracts/slotfather.md) is the exact shape read from Slotfather;

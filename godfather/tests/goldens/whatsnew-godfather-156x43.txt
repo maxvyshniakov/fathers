@@ -13,31 +13,31 @@
 │  ⏸️    lane-555-host-rename-names     │    everything read (~/.local/state/godfather/news.json). Each tool is   ┃│2                                      │
 │                                       │    asked through its changelog --json; one without it adds nothing.     ╹│ight/.claude/worktrees/agent-afa3816b  │
 ┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    fathers#102                                                           │2/verify.sh --checks desktop-tests     │
-╭─ EVENTS ──── slots ─ label ───────────│                                                                          │oing --jobs 1                          │
+╭─ SLOTS LOG ─────── label ─────────────│                                                                          │oing --jobs 1                          │
 │                                       │  • Expected durations from Slotfather's run types (fathers#108): a       │ight                                   │
-│  11:59:35    ▫       agent-ae72d94beb6│    running QUEUE row shows 12m / ~18m, its time against the expected     │                                       │
-│  11:58:33    ▫       agent-a1c75285bdf│    run, in yellow once it is past the p90; a waiting row shows the run   │d-once                                 │
-│  11:57:20    ▪       agent-a1c75285bdf│    it expects (waiting #1 · ~18m); DETAILS says expected 18m · p90 31m   │ht                                     │
-│  11:57:15    ▫       agent-a1c75285bdf│    · 23 runs. In EVENTS a finished run that was an outlier ends in ▲     │                                       │
-│  11:55:44    ▪▪      desktop          │    (^ in ASCII) and the run that turned its run type's trend slower in   │-build-once                            │
-│  11:55:41    ▪       agent-a1c75285bdf│    ↗ (/); each trend change is a row of its own, Straylight gate ·       │e/queue-347                            │
-│  11:55:31    ▫       desktop          │    slower +32% · same plan, read from Slotfather's event log.            │ess                                    │
-│  11:55:26    ▫       agent-a1c75285bdf│                                                                          │ted                                    │
-│  11:55:24    ▪       desktop          │  CHANGED                                                                 │rification_plan.py, tools/verify.py,   │
-│  11:55:00    ▫       desktop          │                                                                          │main-module.sh, tools/test-build-      │
-│  11:54:54    ▪       desktop          │  • Screenshots and the README media come from tools/raster.py,           │odule.py, tools/app-build.py,          │
-│  11:54:06    ▪       agent-a1c75285bdf│    Godfather's own cell rasterizer, with no browser, terminal or         │st-app-build.py, tools/cargo-test.py,  │
-│  11:54:02    ▫       agent-a1c75285bdf│    machine slot: box drawing and blocks are geometry snapped to each     │elopment.md, tools/test-cargo-build-   │
-│  11:53:54    ▪       agent-ae72d94beb6│    cell, so rounded corners and joins meet their lines and bars have     │, tools/test-heavy.py,                 │
-│  11:53:08    ▪       agent-a1c75285bdf│    no seams at fractional cell widths; emoji such as 🆗 are drawn in     │rgo_build_cache.py                     │
-│  11:52:53    ▫       agent-a1c75285bdf│    colour across their two cells; the same cells give the same pixels.   │                                       │
-│  11:52:30    ▫       desktop          │    tools/screens.mjs and screen-kit are no longer used.  fathers#114     │                                       │
-│  11:52:25    ▪       desktop          │                                                                          │───────────────────────────────────────╯
-│  11:51:40    ▪       agent-a1c75285bdf│  • what's new? in the footer has one muted style, the key hints',        │───────── unleased 0.4 · no admission ─╮
-│  11:51:40    ▫       post-merge-456-re│    whether or not anything is unread, and one space after Godfather;     │          slots held  avg 4.4/6        │
-│  11:51:24    ▫       agent-a1c75285bdf│    what's new itself still marks unread entries (owner, 2026-11-13).     │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
-│  11:49:34    ▫▫      data-grid        │                                                                          │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
-│  11:48:31    ▪▪      data-grid        │                                                                          │░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
+│  11:59:35  ▫       agent-ae72d94beb6f0│    running QUEUE row shows 12m / ~18m, its time against the expected     │                                       │
+│  11:58:33  ▫       agent-a1c75285bdf2c│    run, in yellow once it is past the p90; a waiting row shows the run   │d-once                                 │
+│  11:57:15  ▫       agent-a1c75285bdf2c│    it expects (waiting #1 · ~18m); DETAILS says expected 18m · p90 31m   │ht                                     │
+│  11:55:44  ▪▪      desktop            │    · 23 runs. In EVENTS a finished run that was an outlier ends in ▲     │                                       │
+│  11:55:31  ▫       desktop            │    (^ in ASCII) and the run that turned its run type's trend slower in   │-build-once                            │
+│  11:55:26  ▫       agent-a1c75285bdf2c│    ↗ (/); each trend change is a row of its own, Straylight gate ·       │e/queue-347                            │
+│  11:55:00  ▫       desktop            │    slower +32% · same plan, read from Slotfather's event log.            │ess                                    │
+│  11:54:02  ▫       agent-a1c75285bdf2c│                                                                          │ted                                    │
+│  11:52:53  ▫       agent-a1c75285bdf2c│  CHANGED                                                                 │rification_plan.py, tools/verify.py,   │
+│  11:52:30  ▫       desktop            │                                                                          │main-module.sh, tools/test-build-      │
+│  11:51:40  ▫       post-merge-456-rena│  • Screenshots and the README media come from tools/raster.py,           │odule.py, tools/app-build.py,          │
+│  11:51:24  ▫       agent-a1c75285bdf2c│    Godfather's own cell rasterizer, with no browser, terminal or         │st-app-build.py, tools/cargo-test.py,  │
+│  11:49:34  ▫▫      data-grid          │    machine slot: box drawing and blocks are geometry snapped to each     │elopment.md, tools/test-cargo-build-   │
+│  11:48:30  ▫       agent-ae72d94beb6f0│    cell, so rounded corners and joins meet their lines and bars have     │, tools/test-heavy.py,                 │
+│  11:47:21  ▫       agent-a0f998f4c57cd│    no seams at fractional cell widths; emoji such as 🆗 are drawn in     │rgo_build_cache.py                     │
+│  11:47:17  ▫       agent-a0f998f4c57cd│    colour across their two cells; the same cells give the same pixels.   │                                       │
+│  11:47:13  ▫       agent-a0f998f4c57cd│    tools/screens.mjs and screen-kit are no longer used.  fathers#114     │                                       │
+│  11:47:10  ▫       agent-a0f998f4c57cd│                                                                          │───────────────────────────────────────╯
+│  11:47:07  ▫       agent-a0f998f4c57cd│  • what's new? in the footer has one muted style, the key hints',        │nleased 0.4 · queue ahead · 2 waiting ─╮
+│  11:47:04  ▫       agent-a0f998f4c57cd│    whether or not anything is unread, and one space after Godfather;     │          slots held  avg 4.4/6        │
+│  11:46:08  ▫       post-merge-491-elec│    what's new itself still marks unread entries (owner, 2026-11-13).     │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
+│  11:45:53  ▫       agent-a1c75285bdf2c│                                                                          │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
+│  11:45:09  ▫       agent-a1c75285bdf2c│                                                                          │░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                                       │                     ←→ tool   ↑↓ scroll   esc close                  29% │          −80s                    now  │
 ╰───────────────────────────────────────╰──────────────────────────────────────────────────────────────────────────╯───────────────────────────────────────╯
  Godfather what's new?                            ↑↓ select   tab panel   s settings   ? help   q quit                             updated 11:59:39  ● live

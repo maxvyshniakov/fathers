@@ -213,9 +213,9 @@ class ViewTests(unittest.TestCase):
         y, x = self.find(canvas, "18m · p90 31m")
         self.assertEqual("warn", canvas.cells[y][x][1])
 
-    def events(self, found: list[dict[str, Any]], width: int = 80, marks: Any = None) -> Any:
+    def events(self, found: list[dict[str, Any]], width: int = 80, marks: Any = None, raw: bool = False) -> Any:
         canvas = self.tool.Canvas(width, 8, marks=marks)
-        self.tool.draw_events(canvas, Rect(0, 0, 8, width), {"events": found})
+        self.tool.draw_events(canvas, Rect(0, 0, 8, width), {"events": found}, NOW, self.tool.Filter(raw=raw))
         return canvas
 
     def test_events_mark_an_outlier_and_a_run_of_a_slowdown(self) -> None:
@@ -232,22 +232,29 @@ class ViewTests(unittest.TestCase):
     def trend(self, label: str = "straylight · gate", **changes: Any) -> dict[str, Any]:
         return run_event("run.trend", NOW, label, dict(TREND, **changes))
 
-    def test_a_trend_is_its_own_row_with_the_key_and_the_reason(self) -> None:
-        found = rows_of([released(NOW - dt.timedelta(minutes=1), 9), self.trend(),
-                         self.trend("fathers · check · plan 3f2a", ratio=1.4, why="plan grew: +2 checks"),
+    def test_a_trend_is_a_mark_on_its_run_and_a_row_only_as_logged(self) -> None:
+        """fathers#152: a trend is no row of its own, which broke the columns; it marks the run it came with (↗
+        slower, ↘ faster) and shows as a row, in the columns, only with `r`."""
+        found = rows_of([released(NOW - dt.timedelta(seconds=1), 9, 1860, "slow run"), self.trend()])
+        canvas = self.events(found, 100)
+        text = canvas.render(False)
+        self.assertNotIn("Straylight gate", text)
+        self.find(canvas, "ok 31m00s ↗")
+        found = rows_of([released(NOW - dt.timedelta(seconds=1), 9, 1860, "fast run"),
                          self.trend("sid-kit · gate", verdict="faster", ratio=0.62)])
         canvas = self.events(found, 100)
-        y, x = self.find(canvas, "Straylight gate · slower +31% · same plan")
-        self.assertEqual("warn", canvas.cells[y][x + len("Straylight gate · ")][1])
-        self.find(canvas, "Fathers check plan 3f2a · slower +40% · plan grew +2 checks")
-        y, x = self.find(canvas, "Sid-kit gate · faster -38% · same plan")
-        self.assertEqual("dim", canvas.cells[y][x + len("Sid-kit gate · ")][1])
+        y, x = self.find(canvas, "ok 31m00s ↘")
+        self.assertEqual("dim", canvas.cells[y][x + len("ok 31m00s ")][1])
+        raw = self.events(found, 100, raw=True)
+        y, x = self.find(raw, "Sid-kit gate")
+        self.find(raw, "faster -38%")
+        self.assertLess(x, raw.render(False).splitlines()[y].index("faster"), "the run type in the label column")
 
-    def test_a_trend_row_in_a_narrow_events_panel_that_has_dropped_its_slots(self) -> None:
+    def test_a_trend_row_as_logged_in_a_narrow_events_panel(self) -> None:
         found = rows_of([released(NOW - dt.timedelta(seconds=1), 1), self.trend()])
         for width in (40, 30, 24):
             with self.subTest(width=width):
-                self.assertIn("Stray", self.events(found, width).render(False))
+                self.assertIn("Str", self.events(found, width, raw=True).render(False))
 
     def test_ascii_terminals_get_ascii_run_marks(self) -> None:
         found = rows_of([released(NOW, 1), released(NOW, 2)])

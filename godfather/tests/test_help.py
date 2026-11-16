@@ -168,5 +168,41 @@ class HelpTests(unittest.TestCase):
                          "help writes nothing to Slotfather")
 
 
+
+class ColumnTests(unittest.TestCase):
+    """fathers#145: the help fits the standard screen in columns, read down then across, and scrolls only below
+    it. No unread mark for what's new (owner, 2026-11-13)."""
+
+    def test_the_whole_legend_shows_at_156x43_without_scrolling(self) -> None:
+        from godfather import overlay_text, tui
+        from godfather.views import overlays
+
+        canvas = tui.Canvas(156, 43)
+        overlays.draw_help(canvas, 0)
+        text = canvas.render(False)
+        view = canvas.help_view
+        self.assertEqual(view.total, view.visible, "nothing to scroll")
+        self.assertNotRegex(text, r"\d+%", "no position")
+        self.assertNotRegex(text, r"[┃╻╹]│", "no scrollbar")
+        for title, entries in overlay_text.HELP:
+            self.assertIn(f"  {title} ", text.replace("│", " "))
+            for entry in entries:
+                if entry[0]:
+                    self.assertIn(entry[0], text, f"{title}: {entry[0]}")
+        rows = text.splitlines()
+        self.assertGreater(rows[3].index("Normal") if "Normal" in rows[3] else 99, 40, "a second column")
+
+    def test_below_it_one_column_scrolls(self) -> None:
+        from godfather import overlay_text, tui
+        from godfather.views import overlays
+
+        for width, height in ((100, 43), (156, 30)):
+            with self.subTest(size=(width, height)):
+                canvas = tui.Canvas(width, height)
+                overlays.draw_help(canvas, 0)
+                view = canvas.help_view
+                self.assertGreater(view.total, view.visible)
+                self.assertLessEqual(view.width, overlay_text.OVERLAY_WIDTH)
+
 if __name__ == "__main__":
     unittest.main()
