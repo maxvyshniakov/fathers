@@ -3,14 +3,13 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
-import hashlib
 import json
 import os
 from pathlib import Path
 import pwd
 import stat
 import time
-from typing import Any, Iterable, Iterator, cast
+from typing import Any, Callable, Iterable, Iterator, cast
 
 from . import config as _config
 from . import entry as _entry
@@ -156,10 +155,13 @@ def unreadable(directory: Path) -> list[Path]:
 
 def record(directory: Path, entry: dict[str, Any], outcome: str, status: int | None = None,
            usage: dict[str, Any] | None = None, path: Path | None = None,
-           expected: dict[str, Any] | None = None) -> dict[str, Any]:
+           expected: dict[str, Any] | None = None, capacity: Callable[[], int] | None = None,
+           above: Callable[[float, Any], bool] | None = None) -> dict[str, Any]:
     """Add a request that left the queue to history.jsonl: released (it ran), left (it gave up waiting) or reaped
-    (its holder died), with what its process tree used where the holder measured it. Callers hold the queue lock.
-    Returns the line's fields (the events of events.py read them)."""
+    (its holder died), with what its process tree used where the holder measured it. `capacity()` gives the queue's
+    slots for the line (settings.total(); without it the line has neither cores nor capacity), `above(ran, p90)` the
+    run's verdict against its series `expected` (runtype.above()). Callers hold the queue lock. Returns the line's
+    fields (the events of events.py read them)."""
     ended = time.time()
     queued, granted = _config.seconds(entry.get("since")), _config.seconds(entry.get("granted"))
     item: dict[str, Any] = {"v": _config.HISTORY_VERSION, "label": entry.get("label"), "cmd": entry.get("cmd"), "cwd": entry.get("cwd"),
@@ -171,8 +173,9 @@ def record(directory: Path, entry: dict[str, Any], outcome: str, status: int | N
     ticket = _entry.ticket_of(entry)
     if ticket is not None:
         item["ticket"] = ticket
-    with contextlib.suppress(_config.SlotError, OSError):
-        item.update(cores=_config.cores(), capacity=_config.total())
+    if capacity is not None:
+        with contextlib.suppress(_config.SlotError, OSError):
+            item.update(cores=_config.cores(), capacity=capacity())
     item.update(usage or {})
     if entry.get("yields"):
         yielded = _entry.yielded_of(entry)
@@ -195,8 +198,8 @@ def record(directory: Path, entry: dict[str, Any], outcome: str, status: int | N
             and not entry.get("session"):
         # the run type it is judged by and its verdict against that series (runtype.py, fathers#106)
         item["run_key"] = expected["key"]
-        from .runtype import above
-        item["verdict"] = "pending" if above(float(item["ran"]), expected.get("p90")) else "normal"
+        item["verdict"] = "pending" if above is not None and above(float(item["ran"]), expected.get("p90")) \
+            else "normal"
     elif expected is None and outcome == "released" and entry.get("run_key"):
         item["run_key"] = entry["run_key"]
     for key in ("label_given", "label_derived", "project"):
@@ -339,105 +342,3 @@ def log(directory: Path, message: str) -> None:
     """Appends a line to queue.log, bounded as history.jsonl is (append_bounded()); callers hold the queue lock."""
     with contextlib.suppress(OSError):
         append_bounded(directory / "queue.log", f"{_config.now()} {message}\n", QUEUE_LOG_MAX)
-
-
-def save_order(values: dict[str, Any] | None, directory: Path | None = None) -> None:
-    """Publishes order settings for every client (None: back to the defaults); callers hold the queue lock."""
-    from .schedule import checked_order
-    path = (directory or _config.state_dir()) / "order.json"
-    if values is None:
-        path.unlink(missing_ok=True)
-        return
-    values = checked_order({k: v for k, v in values.items() if k in _config.ORDER_DEFAULTS})
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # The keys before classes always; a class knob only when it differs from its default, since a slotfather before
-    # them refuses a file with keys it does not know (and falls back to the window order).
-    write(path, {k: values.get(k, _config.ORDER_DEFAULTS[k]) if k == "order" else float(values.get(k, _config.ORDER_DEFAULTS[k]))
-                 for k in _config.ORDER_DEFAULTS if k in _config.ORDER_BASE or values.get(k, _config.ORDER_DEFAULTS[k]) != _config.ORDER_DEFAULTS[k]})
-
-
-def configuration_bytes(directory: Path) -> dict[str, bytes | None]:
-    """Read shared settings without creating a queue or lock; bytes are an optimistic edit token."""
-    result: dict[str, bytes | None] = {}
-    for name in ("capacity.json", "order.json"):
-        try:
-            result[name] = (directory / name).read_bytes()
-        except FileNotFoundError:
-            result[name] = None
-    return result
-
-
-def revision(data: bytes | None) -> str:
-    """An opaque token for a settings file as read (configuration_bytes()): its SHA-256, or "absent"."""
-    return "absent" if data is None else "sha256:" + hashlib.sha256(data).hexdigest()
-
-
-class Conflict(_config.SlotError):
-    """A settings file changed since the caller read it (configure()'s `expected`): nothing was saved."""
-
-
-def configure(changes: dict[str, dict[str, Any] | None], *,
-              expected: dict[str, bytes | None] | None = None, revisions: dict[str, str] | None = None) -> None:
-    """CLI and dashboard share validation, ownership, conflict checking and queue admission locking. A change
-    applies at once, also while requests run or wait; the waiters it lets start are granted before this returns.
-    `expected` names files as their bytes were read, `revisions` as settings.revision() tokens (`settings set
-    --revision`); a file changed since is a Conflict and nothing is saved."""
-    from . import leases, schedule
-    directory = _config.state_dir()
-    if set(changes) - {"capacity.json", "order.json"}:
-        raise _config.SlotError("unknown configuration file")
-    if not changes:
-        return
-    require_own(directory, "a settings change")
-    with locked(directory):
-        before = configuration_bytes(directory)
-        changed_since = [name for name, value in (expected or {}).items() if before.get(name) != value]
-        changed_since += [name for name, token in (revisions or {}).items()
-                          if name not in changed_since and revision(before.get(name)) != token]
-        if changed_since:  # per file: a caller expects only the files it read and means to replace
-            raise Conflict(f"{', '.join(changed_since)} changed in another process; nothing was saved")
-        values = dict(changes)
-        if values.get("order.json") is not None:
-            saved = dict(_config.ORDER_DEFAULTS)
-            with contextlib.suppress(OSError, ValueError, TypeError, AttributeError):
-                saved.update(schedule.checked_order(json.loads(before["order.json"] or b"{}")))
-            try:
-                values["order.json"] = schedule.checked_order({**saved, **(values["order.json"] or {})})
-            except ValueError as error:
-                raise _config.SlotError(str(error)) from None
-        # A capacity change applies at the next grant, whatever the queue holds (#7): every client's plan reads it
-        # under this lock. Running leases keep their slots; a shrink below them drains, a growth grants below.
-        changed: list[str] = []
-        try:
-            for name, value in values.items():
-                if name == "order.json":
-                    save_order(value, directory)
-                elif value is None:
-                    (directory / name).unlink(missing_ok=True)
-                else:
-                    write(directory / name, value)
-                changed.append(name)
-        except OSError as error:
-            for name in reversed(changed):
-                path, original = directory / name, before[name]
-                if original is None:
-                    path.unlink(missing_ok=True)
-                else:
-                    pending = path.with_name(path.name + ".pending")
-                    pending.write_bytes(original)
-                    pending.replace(path)
-            raise _config.SlotError(f"cannot save settings: {error}") from None
-        from . import events
-        after = configuration_bytes(directory)
-        for name in [name for name in changed if after.get(name) != before.get(name)]:  # a no-op save is no event
-            if name == "capacity.json":
-                with contextlib.suppress(_config.SlotError, OSError):
-                    basis = _config.capacity_basis()
-                    events.emit(directory, "capacity.changed", {"type": "capacity", "id": "capacity"},
-                                {"saved": values[name], "mode": basis["mode"], "slots": basis["slots"]})
-            else:
-                events.emit(directory, "order.changed", {"type": "order", "id": "order"},
-                            {"reset": True} if changes[name] is None else {"saved": changes[name]})
-        # Grant now what the new settings start, as a release does: waiters look less often the longer they wait.
-        with contextlib.suppress(_config.SlotError, OSError):
-            cast(Any, leases).grant(directory, cast(Any, leases).process_table(directory))

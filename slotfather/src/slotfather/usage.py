@@ -17,6 +17,7 @@ from . import entry as _entry
 from . import idle as _idle
 from . import platform as _platform
 from . import process as _process
+from . import settings as _settings
 from . import state as _state
 
 
@@ -160,8 +161,7 @@ class Watch(threading.Thread):
         usage = cast(Any, self.usage)
         if self.entry is None or usage.last is None:
             return
-        from . import schedule as _schedule
-        threshold = float(_schedule.order_settings(self.directory, environment=False)["idle_cpu"])
+        threshold = float(_settings.order_settings(self.directory, environment=False)["idle_cpu"])
         with self.lock:
             moment = float(usage.last[0])
             known = cast(dict[tuple[int, str], list[Any]], usage.members)
@@ -232,7 +232,7 @@ def machine_facts(directory: Path) -> dict:
                         cgroup_available_mb=None if linux_facts["cgroup_available"] is None
                         else round(linux_facts["cgroup_available"]))
     with contextlib.suppress(_config.SlotError):
-        item["capacity"] = _config.total()
+        item["capacity"] = _settings.total()
     return item
 
 

@@ -15,6 +15,7 @@ from . import leases as _leases
 from . import platform as _platform
 from . import process as _process
 from . import schedule as _schedule
+from . import settings as _settings
 from . import state as _state
 
 
@@ -56,7 +57,7 @@ def look(directory: Path | None = None) -> Look:
     with _state.locked(directory):
         table = _leases.process_table(directory, log=False)
         found = _leases.reap(directory, table)
-        basis: dict[str, Any] = _config.capacity_basis()
+        basis: dict[str, Any] = _settings.capacity_basis()
         requests = [_state.asked(path) for path, _ in found]
         strange = tuple(_state.unknown(directory))
         kept = tuple(_leases.reserved(directory, table))
@@ -78,7 +79,7 @@ def locked_snapshot(directory: Path | None = None) -> tuple[list[dict[str, Any]]
 def idle_of(directory: Path, live: list[tuple[Path, dict[str, Any]]]) -> dict[int, float | None]:
     """id(entry) -> since when each held lease has been idle (#12; idle.idle_since(), by the queue's saved
     settings), None where it is not."""
-    settings = _schedule.order_settings(directory, environment=False)
+    settings = _settings.order_settings(directory, environment=False)
     moment = time.time()
     return {id(entry): _idle.idle_since(path, settings, moment) for path, entry in live if _entry.is_held(entry)}
 
@@ -106,7 +107,7 @@ def expected(directory: Path, entries: list[dict[str, Any]], slots: int, other: 
     "memory_wait" (why memory holds back a request the order would start now, else None)}. Read only: the forecast
     works on copies (schedule.forecast())."""
     moment = time.time() if moment is None else moment
-    settings = _schedule.order_settings(directory)
+    settings = _settings.order_settings(directory)
     held, waiting = _entry.split(entries)
     waiters = [dict(e) for e in waiting]
     originals = {id(copy): e for copy, e in zip(waiters, waiting)}
@@ -121,7 +122,7 @@ def expected(directory: Path, entries: list[dict[str, Any]], slots: int, other: 
     # The order would start these now; memory may hold them back (grant()'s gate), with no start a forecast can tell.
     memory = _platform.memory_level() if found.grants else ("normal", None)
     used = sum(_entry.holds(e, slots) for e in held) + other
-    shared = _schedule.order_settings(directory, environment=False)  # the queue's rule, not this reader's
+    shared = _settings.order_settings(directory, environment=False)  # the queue's rule, not this reader's
     held_back = {id(e): why for e, why in _schedule.memory_gate(found.grants, held, used, memory, shared) if why}
     warn = float(settings.get("warn_wait") or 0)
     result: dict[int, dict[str, Any]] = {}
@@ -145,7 +146,7 @@ def status_lines(directory: Path | None = None) -> list[str]:
     with _state.locked(directory):  # the processes and capacity the plans of this moment read
         table = _leases.process_table(directory, log=False)
         live = _leases.reap(directory, table)
-        slots = _config.total()
+        slots = _settings.total()
         strange = _state.unknown(directory)
         kept = _leases.reserved(directory, table)
     legacy = _leases.legacy_holders(table)
@@ -259,7 +260,7 @@ def long_wait_report(directory: Path, path: Path) -> tuple[str, dict[str, Any]] 
     with _state.locked(directory):
         table = _leases.process_table(directory, log=False)
         live = _leases.reap(directory, table)
-        slots = _config.total()
+        slots = _settings.total()
         other = _leases.used_elsewhere(directory, table)
     mine = next((e for p, e in live if p == path), None)
     if mine is None or _entry.is_held(mine):
@@ -267,7 +268,7 @@ def long_wait_report(directory: Path, path: Path) -> tuple[str, dict[str, Any]] 
     expect = outlook(directory, [e for _, e in live], slots, other).get(id(mine))
     if expect is None:
         return None
-    settings = _schedule.order_settings(directory)
+    settings = _settings.order_settings(directory)
     held, waiting = _entry.split(e for _, e in live)
     serving = _schedule.ranked(waiting, settings, time.time()) if settings["order"] == "backfill" else waiting
     ahead = next((n for n, e in enumerate(serving) if e is mine), 0)
@@ -348,7 +349,7 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
         with _state.locked(directory):
             table = status_processes(directory, pid)
             live = _leases.reap(directory, table)
-            slots = _config.total()
+            slots = _settings.total()
             strange = _state.unknown(directory)
             kept = _leases.reserved(directory, table)
         marked = idle_of(directory, live)
@@ -362,7 +363,7 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
             from .session import view
             item["session"] = view(path, entry)
         entries_found.append(item)
-    settings = _schedule.order_settings(directory)
+    settings = _settings.order_settings(directory)
     moment = time.time()
     waiting = [e for _, e in live if _entry.is_waiting(e)]
     serving = _schedule.ranked(waiting, settings, moment) if settings["order"] == "backfill" else waiting

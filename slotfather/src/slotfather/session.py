@@ -29,6 +29,7 @@ from types import FrameType
 from typing import Any, cast
 
 from . import config as _config
+from . import durations as _durations
 from . import entry as _entry
 from . import events as _events
 from . import facts as _facts
@@ -107,7 +108,7 @@ def parse_start(argv: list[str]) -> dict[str, Any]:
             spec["name"] = option_value(argv, at)
         elif word in ("--idle", "--expect", "--wait"):
             try:
-                value = _config.parse_duration(option_value(argv, at))
+                value = _durations.clock(option_value(argv, at))
             except ValueError:
                 raise _config.SlotError(f"{word} takes seconds or a duration such as 30m") from None
             if value <= 0:

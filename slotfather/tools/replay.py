@@ -28,6 +28,7 @@ _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from slotfather import config as sf_config
 from slotfather import entry as sf_entry
 from slotfather import schedule as sf_schedule
+from slotfather import settings as sf_settings
 from slotfather import state as sf_state
 
 
@@ -705,7 +706,7 @@ def main(argv: list[str] | None = None) -> int:
     directory = Path(options.dir).expanduser()
     moment = sf_config.seconds(options.now) if options.now else time.time()
     os.environ["SLOTFATHER_DIR"] = str(directory)
-    slots = options.slots or sf_config.total()
+    slots = options.slots or sf_settings.total()
     summary = compare(directory, moment, slots, since=sf_config.seconds(options.since) if options.since else None,
                       until=sf_config.seconds(options.until) if options.until else None, families=options.families)
     print(json.dumps(summary, indent=1) if options.json else report(summary))

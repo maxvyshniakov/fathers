@@ -22,6 +22,7 @@ from . import platform as _platform
 from . import process as _process
 from . import query as _query
 from . import schedule as _schedule
+from . import settings as _settings
 from . import state as _state
 
 BLOCK_VERSION = 1  # the `dashboard` block of `status --json --full`
@@ -354,7 +355,7 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
     held, live_waiters = _entry.split(live)
     holders = [item(e, "held", _entry.holds(e, slots)) for e in held]
     holders += [item(e, "legacy", count, str(path.parent.parent)) for path, e, count in legacy]
-    settings = _schedule.order_settings(directory)
+    settings = _settings.order_settings(directory)
     start: datetime.datetime | None = None
     reserved: datetime.datetime | None = None
     order = settings["order"]

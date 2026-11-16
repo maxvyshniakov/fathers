@@ -22,6 +22,7 @@ from slotfather import config as sf_config
 from slotfather import entry as sf_entry
 from slotfather import leases as sf_leases
 from slotfather import schedule as sf_schedule
+from slotfather import settings as sf_settings
 from slotfather import state as sf_state
 from test_entry_pins import T0, Queue, stamp, unknown
 from test_slotfather import ROOT
@@ -204,7 +205,7 @@ class SequenceTests(unittest.TestCase):
         pids = iter(range(91000, 92000))
         with queue.running(), mock.patch.object(sf_leases, "held_again", unknown):
             with sf_state.locked(queue.directory):
-                sf_state.save_order(dict(sf_config.ORDER_DEFAULTS, **AGES_OFF), queue.directory)
+                sf_settings.save_order(dict(sf_config.ORDER_DEFAULTS, **AGES_OFF), queue.directory)
             # Half the sequences carry a newer client's entry (a state this one does not know), alive or not: it
             # must stay as it is through every step (fathers#19).
             strange = queue.entry(next(pids), "strange", rng.randint(1, 4), "paused", since=-60,
@@ -229,7 +230,7 @@ class SequenceTests(unittest.TestCase):
                 elif op == "yield" and held and waiting:
                     name, asker = rng.choice(held), rng.choice(waiting)
                     path = queue.directory / "queue" / name
-                    settings = sf_schedule.order_settings(queue.directory, environment=False)
+                    settings = sf_settings.order_settings(queue.directory, environment=False)
                     rank = sf_schedule.rank_time(live[asker], settings, queue.clock) + sf_config.YIELD_BEHIND
                     sf_state.write(sf_state.marker(path), {"by": asker[:-5], "label": live[asker]["label"],
                                                           "priority": "interactive", "count": 1, "at": "now"})

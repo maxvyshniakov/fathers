@@ -14,7 +14,6 @@ from typing import Any, Callable, Iterable, Mapping, NamedTuple
 from . import process as _process
 
 LINUX = sys.platform.startswith("linux")
-CLASSES = ("removed", "orphan", "dev-server", "container", "memory")
 STOPPING = ("removed", "orphan")  # what --live stops; dev-server only with --dev-servers
 
 Item = dict[str, Any]  # one process (or container) the sweep found, with its class and action

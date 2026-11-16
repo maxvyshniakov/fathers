@@ -10,10 +10,10 @@ Definitions: [glossary](../GLOSSARY.md). Naming and wire aliases: [terminology](
 
 | Module | Owns |
 | --- | --- |
-| `config` | Environment settings, installation defaults, constants and shared errors. |
+| `config` | Environment settings, installation defaults, constants, shared errors and the clock helpers. |
 | `platform` | macOS/Linux inspection: process identity (`same_holder()`), memory, swap, PSI and cgroups. |
 | `process` | The one module that runs `ps`: the process tables with their column sets and failure policy (fathers#121), the tree helpers, the session pattern, lease markers in environments, and `lease_membership()`, the one rule for which lease a process is in (fathers#38). |
-| `state` | Queue locking, atomic files, bounded journals and persisted schema contracts. |
+| `state` | Queue locking, atomic files, bounded journals and persisted schema contracts; it imports no admission code (no `leases`, `schedule`, `runtype`, `events` or `platform`). |
 | `entry` | A queue entry: its persisted fields, the accessors that read them whoever wrote the file, its phase, and the one definition of each transition (new request, grant and resume, yield, priority change, outcome). Pure: callers read and write the files and log. |
 | `schedule` | Queue ranking, backfill, runtime estimates and cooperative-yield decisions. |
 | `leases` | Taking, granting, releasing, reaping and inheriting leases; command execution. |
@@ -21,7 +21,9 @@ Definitions: [glossary](../GLOSSARY.md). Naming and wire aliases: [terminology](
 | `lane_admission` | Stateless versioned lifetime lane policy and JSON validation; no execution state. |
 | `query` | Compatible queue snapshots and status output; `look()`, one look under the queue lock that `status --json --full` and the dashboard share (#20). |
 | `board` | The dashboard's model from one look, the `dashboard` block of `status --json --full` that Godfather draws. |
-| `settings` | `settings --json/check/set/reset`: the shared settings as data; labels, checks and previews the Settings panel shares. |
+| `settings` | The shared settings (fathers#34): capacity (`capacity_basis()`, `total()`, what a `slots` mode gives), order (`order_settings()`, `checked_order()`) and sweep settings, and `configure()`, the only write path of capacity.json, order.json and sweep.json (lock, ownership, conflicts, rollback; the caller passes the grant to run after a change). |
+| `settings_cli` | `settings --json/check/set/reset`: the shared settings as data; labels, checks and previews the Settings panel shares. |
+| `durations` | The three duration grammars: `clock()` (`1h30m`: order, settings, sessions), `span()` (`1d`: sweep config), `since()` (ages and dates: stats). |
 | `events` | events.jsonl in Godfather's shared event schema, appended beside each queue.log line; never fails an operation. |
 | `capabilities` | `capabilities --json`: the dashboard contracts this release supports. |
 | `procs` | Read-only process queries for guards and other tools. |

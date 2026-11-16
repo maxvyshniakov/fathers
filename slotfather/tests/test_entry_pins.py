@@ -30,6 +30,7 @@ from slotfather import leases as sf_leases
 from slotfather import platform as sf_platform
 from slotfather import process as sf_process
 from slotfather import query as sf_query
+from slotfather import settings as sf_settings
 from slotfather import state as sf_state
 
 FIXTURE = _Path(__file__).resolve().parent / "fixtures" / "entry-pins.json"
@@ -105,7 +106,7 @@ class Queue:
             stack.callback(time.tzset)
             stack.enter_context(mock.patch("time.time", lambda: self.clock))
             stack.enter_context(mock.patch.object(sf_config, "now", lambda: stamp(self.clock)))
-            stack.enter_context(mock.patch.object(sf_config, "capacity_basis", lambda: dict(BASIS)))
+            stack.enter_context(mock.patch.object(sf_settings, "capacity_basis", lambda: dict(BASIS)))
             stack.enter_context(mock.patch.object(sf_process, "processes", lambda: dict(self.table)))
             stack.enter_context(mock.patch.object(sf_query, "status_processes", self.processes))
             stack.enter_context(mock.patch.object(sf_platform, "start_epoch", unknown))

@@ -457,6 +457,9 @@ def children_cpu(pid: int) -> float | None:
     return macos_process.children_cpu_seconds(pid)
 
 
+_host_port: int | None = None  # the Mach host port cpu_ticks() asks, looked up once
+
+
 def cpu_ticks() -> list[int] | None:
     """Cumulative CPU ticks of the whole machine: [user, system, idle, nice], or None where unavailable."""
     global _host_port
@@ -464,11 +467,11 @@ def cpu_ticks() -> list[int] | None:
         try:
             import ctypes
             libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
-            if _config._host_port is None:
+            if _host_port is None:
                 libc.mach_host_self.restype = ctypes.c_uint
-                _config._host_port = libc.mach_host_self()
+                _host_port = libc.mach_host_self()
             counts, size = (ctypes.c_uint * 4)(), ctypes.c_uint(4)
-            if libc.host_statistics(_config._host_port, 3, counts, ctypes.byref(size)) == 0:  # HOST_CPU_LOAD_INFO
+            if libc.host_statistics(_host_port, 3, counts, ctypes.byref(size)) == 0:  # HOST_CPU_LOAD_INFO
                 return list(counts)
         except (OSError, AttributeError):
             return None

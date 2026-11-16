@@ -10,7 +10,7 @@ from typing import Any
 from . import config as _config
 from . import events as _events
 from . import version as _version
-from .settings import VERSION as SETTINGS_VERSION
+from .settings_cli import VERSION as SETTINGS_VERSION
 
 VERSION = 1  # this reply's own version
 DASHBOARD_VERSION = 1  # the `dashboard` block below

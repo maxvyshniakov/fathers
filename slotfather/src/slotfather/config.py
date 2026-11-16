@@ -2,13 +2,11 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 from pathlib import Path
 from typing import Any
 import re
 
-from . import platform as _platform
 
 
 MIN_PYTHON = (3, 9)
@@ -178,6 +176,7 @@ META_VALUE_MAX = 200
 
 
 META_KEYS_MAX = 16
+SWEEP_CLASSES = ("removed", "orphan", "dev-server", "container", "memory")  # the sweep's classes (sweep_plan)
 CACHE_VALUES = ("hit", "miss", "partial")  # --meta cache=: whether the work reused a cache (fathers#97)
 
 
@@ -207,89 +206,6 @@ def state_dir() -> Path:
 def cores() -> int:
     value = setting("CORES") or ""
     return int(value) if value.isdigit() and int(value) > 0 else os.cpu_count() or 1
-
-
-def memory_slots(gib: float | None, per_slot: float) -> int | None:
-    """One slot per `per_slot` GiB of `gib`, at least one; None when the memory is unknown. The memory counts in whole
-    GiB, rounded: Linux's MemTotal is a little under the size a VM was given (11.7 for 12)."""
-    if gib is None:
-        return None
-    return max(1, math.floor(round(gib) / per_slot + 1e-9))
-
-
-def capacity_basis() -> dict[str, Any]:
-    """The capacity and how it was found: {"slots", "saved", "mode", "cores", "cpu_slots", "memory_gib",
-    "gib_per_slot", "memory_slots"}. Mode "fixed" is a saved count, "memory" one slot per gib_per_slot GiB, "lower"
-    the lower of the CPU and memory budgets, "automatic" the lower at AUTO_GIB_PER_SLOT; atomic publication keeps
-    readers consistent."""
-    path = state_dir() / "capacity.json"
-    machine = cores()
-    cpu = max(1, machine // CORES_PER_SLOT)
-    found = {"saved": True, "cores": machine, "cpu_slots": cpu, "memory_gib": None, "gib_per_slot": None,
-             "memory_slots": None, "cgroup": None}
-    try:
-        data = json.loads(path.read_text())
-        value = data["slots"]
-    except FileNotFoundError:
-        data, value = {"mode": "automatic", "gib_per_slot": AUTO_GIB_PER_SLOT}, None
-        found["saved"] = False
-    except (OSError, ValueError, KeyError, TypeError) as error:
-        raise SlotError(f"cannot read capacity from {path}: {error}") from None
-    invalid = SlotError(f"invalid saved capacity in {path}; use slotfather slots reset")
-    if value is not None and (type(value) is not int or value < 1):
-        raise invalid
-    mode = data.get("mode", "fixed")
-    if mode == "fixed":
-        return {**found, "slots": value, "mode": mode}
-    per_slot = data.get("gib_per_slot")
-    if mode not in CAPACITY_MODES + ("automatic",) or type(per_slot) not in (int, float) or not per_slot > 0:
-        raise invalid
-    group = data.get("cgroup") if isinstance(data.get("cgroup"), str) else None
-    gib = _platform.memory_gib(group)
-    by_memory = memory_slots(gib, per_slot)
-    found.update(mode=mode, gib_per_slot=per_slot, memory_slots=by_memory,
-                 memory_gib=None if gib is None else round(gib, 1), cgroup=group or _platform.memory_cgroup())
-    if by_memory is None:  # memory unknown: the count saved with the mode, or the CPU budget
-        slots = value or cpu
-    else:
-        slots = by_memory if mode == "memory" else min(cpu, by_memory)
-    return {**found, "slots": slots}
-
-
-def automatic_capacity() -> int:
-    """The capacity with nothing saved: the lower of the CPU budget and one slot per AUTO_GIB_PER_SLOT GiB."""
-    by_memory = memory_slots(_platform.memory_gib(), AUTO_GIB_PER_SLOT)
-    cpu = max(1, cores() // CORES_PER_SLOT)
-    return cpu if by_memory is None else min(cpu, by_memory)
-
-
-def capacity() -> tuple[int, bool]:
-    """The shared saved capacity, or the automatic default: (slots, saved)."""
-    found = capacity_basis()
-    return found["slots"], found["saved"]
-
-
-def capacity_text(found: dict) -> str:
-    """`slotfather slots`' line: "N slots (saved)", "N slots (automatic)", with the budgets where memory counts."""
-    slots, mode = found["slots"], found["mode"]
-    if mode == "fixed":
-        return f"{slots} slots (saved)"
-    memory = f"{found['memory_gib']:g} GiB" if found["memory_gib"] is not None else "unknown memory"
-    if found.get("cgroup") and found["memory_gib"] is not None and not setting("MEMORY_GIB"):
-        memory += f" in {found['cgroup']}"
-    per = f"one per {found['gib_per_slot']:g} GiB of {memory}"
-    cpu = f"{found['cpu_slots']} by {found['cores']} cores"
-    if mode == "automatic":
-        if found["memory_slots"] is None or found["memory_slots"] >= found["cpu_slots"]:
-            return f"{slots} slots (automatic)"
-        return f"{slots} slots (automatic, by memory: {per}; {cpu})"
-    if mode == "memory":
-        return f"{slots} slots (saved: {per})"
-    return f"{slots} slots (saved: the lower of {cpu} and {found['memory_slots'] or '?'} by memory, {per})"
-
-
-def total() -> int:
-    return capacity()[0]
 
 
 def overtake_window() -> float:
@@ -334,23 +250,12 @@ def duration(value: float) -> str:
     return f"{value // 60}m{value % 60:02d}s" if value >= 60 else f"{value}s"
 
 
-def parse_duration(text: str) -> float:
-    """Seconds from `90`, `90s`, `30m`, `1.5h` or `1h30m`; raises ValueError for anything else."""
-    words = re.fullmatch(r"\s*(?:(\d+(?:\.\d+)?)h)?\s*(?:(\d+(?:\.\d+)?)m)?\s*(?:(\d+(?:\.\d+)?)s?)?\s*", text or "")
-    if not words or not any(words.groups()):
-        raise ValueError(f"not a duration: {text!r}")
-    hours, minutes, rest = (float(part) if part else 0.0 for part in words.groups())
-    return hours * 3600 + minutes * 60 + rest
-
-
 def number_setting(name: str, default: float) -> float:
     try:
         return float(setting(name) or default)
     except ValueError:
         return default
 
-
-_host_port = None
 
 
 def meta_text(meta: dict[str, str]) -> str:

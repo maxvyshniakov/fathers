@@ -40,7 +40,6 @@ import json
 import os
 from pathlib import Path
 import plistlib
-import re
 import sys
 import time
 from typing import Any, cast
@@ -48,19 +47,19 @@ from typing import Any, cast
 from . import config as _config
 from . import events as _events
 from . import leases as _leases
+from . import durations as _durations
 from . import process as _process
+from . import settings as _settings
 from . import state as _state
 from . import sweep_os, sweep_plan
 from .sweep_os import SweepError, stop
-from .sweep_plan import CLASSES, Carriers, Snapshot
+from .config import SWEEP_CLASSES as CLASSES
+from .sweep_plan import Carriers, Snapshot
 
 
 VERSION = 1
-DEFAULTS: dict[str, Any] = {
-    "classes": list(CLASSES), "removed_age": 600.0, "orphan_age": 7200.0, "dev_server_age": 28800.0,
-    "session_removed_age": 21600.0, "grace": 10.0, "container_minutes": 30.0, "container_restarts": 3.0,
-    "swap_free_mb": 1024.0, "swap_free_pct": 20.0, "memory_top": 8.0}
-DURATIONS = ("removed_age", "orphan_age", "dev_server_age", "session_removed_age", "grace", "container_minutes")
+DEFAULTS = _settings.SWEEP_DEFAULTS  # sweep.json's settings and their defaults (settings.py, fathers#34)
+PROCESS_CLASSES = CLASSES[:3]  # removed, orphan, dev-server: the classes of processes; the others are reports
 LOG_MAX = 4 << 20  # bytes of sweep.jsonl before it becomes sweep.jsonl.1
 LABEL = "com.slotfather.sweep"
 USAGE = ("usage: slotfather sweep [--live [--dev-servers]] [--json] [--quiet] [--pid PID]... [--no-log]\n"
@@ -111,58 +110,13 @@ def protection(parents: dict[int, int], found: Labelled) -> tuple[dict[int, str]
 
 # Settings
 
-def settings(directory: Path | None = None) -> dict[str, Any]:
-    """sweep.json beside the queue over DEFAULTS. Unknown keys are ignored with a "warnings" entry (a newer
-    slotfather may have written them); a file that cannot be read or holds a bad value gives the defaults with
-    "error", and a live sweep then stops nothing."""
-    found = dict(DEFAULTS, classes=list(DEFAULTS["classes"]), saved=False, warnings=[])
-    try:
-        data = json.loads(((directory or _config.state_dir()) / "sweep.json").read_text())
-        if not isinstance(data, dict):
-            raise ValueError(f"not sweep settings: {data!r}")
-        unknown = sorted(set(data) - set(DEFAULTS))
-        if unknown:
-            found["warnings"].append(f"sweep.json: unknown setting(s) {', '.join(unknown)} ignored")
-        found.update(checked({k: v for k, v in data.items() if k in DEFAULTS}), saved=True)
-    except FileNotFoundError:
-        pass
-    except (OSError, ValueError, TypeError) as error:
-        found["error"] = f"sweep.json ignored: {error}"
-    return found
-
-
-def seconds_of(text: str) -> float:
-    found = re.fullmatch(r"(\d+(?:\.\d+)?)([smhd]?)", text.strip())
-    if not found:
-        raise ValueError(f"not a duration: {text!r} (seconds, or 90s, 30m, 2h, 1d)")
-    return float(found[1]) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[found[2]]
-
-
-def checked(data) -> dict:
-    if not isinstance(data, dict) or set(data) - set(DEFAULTS):
-        raise ValueError(f"not sweep settings: {data!r}")
-    found = {}
-    for key, value in data.items():
-        if key == "classes":
-            if not isinstance(value, list) or set(value) - set(CLASSES):
-                raise ValueError(f"classes are some of {', '.join(CLASSES)}, not {value!r}")
-            found[key] = [c for c in CLASSES if c in value]
-        elif type(value) not in (int, float) or value < 0 or (key == "memory_top" and value < 1):
-            raise ValueError(f"{key} must be a number of at least {1 if key == 'memory_top' else 0}, not {value!r}")
-        else:
-            found[key] = float(value)
-    return found
-
-
 def config_command(argv: list[str], directory: Path) -> int:
     if argv == ["reset"]:
-        _state.require_own(directory, "a sweep settings change")
-        with _state.locked(directory):
-            (directory / "sweep.json").unlink(missing_ok=True)
+        _settings.configure({"sweep.json": None}, what="a sweep settings change", directory=directory)
     elif argv:
         if len(argv) % 2:
             raise SweepError("config takes KEY VALUE pairs, or reset")
-        changes = {}
+        changes: dict[str, Any] = {}
         for key, value in zip(argv[::2], argv[1::2]):
             key = key.replace("-", "_")
             if key not in DEFAULTS:
@@ -171,28 +125,19 @@ def config_command(argv: list[str], directory: Path) -> int:
                 if key == "classes":
                     changes[key] = [] if value in ("none", "") else [c.strip() for c in value.split(",") if c.strip()]
                 else:
-                    changes[key] = seconds_of(value) if key in DURATIONS else float(value)
+                    changes[key] = _durations.span(value) if key in _settings.SWEEP_DURATIONS else float(value)
             except ValueError as error:
                 raise SweepError(str(error)) from None
-        _state.require_own(directory, "a sweep settings change")
-        with _state.locked(directory):
-            current = settings(directory)
-            if "error" in current:  # a broken file is replaced by the defaults and these changes
-                current = dict(DEFAULTS, classes=list(DEFAULTS["classes"]))
-            saved = {k: v for k, v in current.items() if k in DEFAULTS}
-            try:
-                values = checked({**saved, **changes})
-            except ValueError as error:
-                raise SweepError(str(error)) from None
-            _state.write(directory / "sweep.json", values)
-    found = settings(directory)
+        _settings.configure({"sweep.json": changes}, what="a sweep settings change", directory=directory)
+    found = _settings.sweep_settings(directory)
     for problem in found["warnings"] + ([found["error"]] if "error" in found else []):
         print(f"slotfather sweep: {problem}", file=sys.stderr)
     print(f"sweep settings ({'saved in ' + str(directory / 'sweep.json') if found['saved'] else 'defaults'}):")
     for key in DEFAULTS:
         value = found[key]
         text = ",".join(value) or "none" if key == "classes" else (
-            _config.duration(value) if key in DURATIONS and key != "container_minutes" else f"{value:g}")
+            _config.duration(value) if key in _settings.SWEEP_DURATIONS and key != "container_minutes"
+            else f"{value:g}")
         print(f"  {key:<18} {text}")
     return 0
 
@@ -211,7 +156,7 @@ def read_state(directory: Path) -> dict[str, Any]:
 
 def sweep(directory: Path, live: bool = False, dev_servers: bool = False, only: set[int] | None = None,
           logged: bool = True) -> dict[str, Any]:
-    found_settings = settings(directory)
+    found_settings = _settings.sweep_settings(directory)
     refused = live and "error" in found_settings
     if refused:
         live = False  # settings that cannot be read stop nothing: the sweep reports what it would do
@@ -238,7 +183,7 @@ def sweep(directory: Path, live: bool = False, dev_servers: bool = False, only: 
         {"available": None, "items": []}
     memory = sweep_os.memory_report(sweep_os.memory_facts(), snap, found_settings, items, protected) if "memory" in enabled else {}
     waits = sweep_plan.self_matching_waits(snap, only)
-    counts = {c: sum(i["class"] == c for i in items) for c in ("removed", "orphan", "dev-server")}
+    counts = {c: sum(i["class"] == c for i in items) for c in PROCESS_CLASSES}
     counts["container"] = len(docker["items"])
     report: dict[str, Any] = {"v": VERSION, "at": round(snap.moment, 3), "live": live, "dev_servers": dev_servers,
               "only": sorted(only) if only is not None else None,
@@ -249,7 +194,7 @@ def sweep(directory: Path, live: bool = False, dev_servers: bool = False, only: 
                   if "error" in found_settings else []),
               "items": items, "containers": docker, "memory": memory, "found": counts,
               "stopped": {c: sum(i["class"] == c and i["action"] in ("stopped", "killed") for i in items)
-                          for c in ("removed", "orphan", "dev-server")},
+                          for c in PROCESS_CLASSES},
               "would_stop": sum(i["action"] == "would-stop" for i in items),
               "spared": sum(i["action"] == "spared" for i in items),
               "under_session": sum(bool(i.get("under_session")) for i in items),

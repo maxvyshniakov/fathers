@@ -98,7 +98,7 @@ class MembershipTests(unittest.TestCase):
         procs = {pid: sweep_plan.Proc(pid, PARENTS[pid], UID, 1024, "", BORN, now - 36000, COMMANDS[pid])
                  for pid in (CARRIER, PLAIN, HIDDEN)}
         snap = sweep_plan.Snapshot(procs, moment=now, uid=UID, me=(999,))
-        settings: dict[str, Any] = {**sf_sweep.DEFAULTS, "classes": list(sweep_plan.CLASSES)}
+        settings: dict[str, Any] = {**sf_sweep.DEFAULTS, "classes": list(sf_sweep.CLASSES)}
         protected, carriers = sf_sweep.protection(*sf_sweep.leases(self.state))
         found = {item["pid"]: item for item in sweep_plan.plan(snap, settings, protected, carriers, live=True)}
         self.assertEqual({CARRIER: "spared", PLAIN: "stop", HIDDEN: "spared"},

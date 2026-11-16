@@ -44,6 +44,12 @@ try:
     from slotfather import process as tables  # the process tables (fathers#38)
 except ImportError:
     tables = platform  # an older client's
+try:
+    from slotfather import settings as shared  # the shared settings (fathers#34)
+except ImportError:
+    shared = None
+# an older client's: schedule and config hold them (its settings module, if any, is the `settings` command)
+orders, capacities = (shared, shared) if hasattr(shared, "order_settings") else (schedule, config)
 assert pathlib.Path(config.__file__).resolve().parent.parent == root, config.__file__
 directory, action = pathlib.Path(sys.argv[2]), sys.argv[3]
 if action == "look":
@@ -51,8 +57,8 @@ if action == "look":
         live = leases.reap(directory, tables.processes())
     held = [e for _, e in live if e["state"] == "held"]
     waiters = [e for _, e in live if e["state"] != "held"]
-    settings = schedule.order_settings(directory)
-    slots = config.total()
+    settings = orders.order_settings(directory)
+    slots = capacities.total()
     ranks = {e["label"]: schedule.rank_time(e, settings) for e in waiters}
     found = schedule.plan(schedule.fit(waiters, slots), held, slots, float(sys.argv[4]),
                           estimate=schedule.estimator(directory), other=0, settings=settings)
