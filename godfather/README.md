@@ -14,7 +14,7 @@ processes agents start).
 [CHANGELOG.md](CHANGELOG.md) in full). The overview is Slotfather's dashboard as it moved here: SLOTS, QUEUE,
 DETAILS, EVENTS and MACHINE. SLOTS' bottom border sums up the other tools, `2 lanes 3 active · 2 reviews` and
 `3 procs 7 · 1 orphan`; `2` and `3` (or a click on a summary) open the Lanes and Processes pages, each a table, its
-details and its tool's events. EVENTS shows one tool's log at a time, its title the switch (`◂ SLOTS LOG ▸`: ← →, `f`
+details and its tool's events. EVENTS shows one tool's log at a time, its title the switch (`❮ SLOTS LOG ❯`: ← →, `f`
 or a click), one row per Slotfather run with trends as marks, its rows selectable into DETAILS, `/` to filter.
 Enter, `a` or a right-click on a row offers the actions its tool advertises (reprioritize, ask to yield, reap,
 extend, open, park), each checked against a fresh snapshot first. Settings (`s`) has a section per tool. MACHINE says
@@ -85,7 +85,7 @@ colour emoji font, the same pixels for the same cells. A live screen:
 `GODFATHER_FIXTURES=DIR` replaces every tool call with recorded replies (`tests/fixtures/scene/` is the README
 scene) and records writes instead of making them. `tests/test_parity.py` compares Godfather, cell by cell, with
 Slotfather's in-tree dashboard on Slotfather's own demo scene, from the same model, but for what Godfather changed on
-purpose: the footer, EVENTS, the focused panel's heavy rules (fathers#139) and where MACHINE says its chart shows
+purpose: the footer, EVENTS, the focused panel's heavy frame (fathers#139, fathers#165) and where MACHINE says its chart shows
 slots held (fathers#140: beside the gauges its title row and axis line, stacked the label in its bottom border).
 That dashboard is gone upstream, so its output is a frozen fixture from Slotfather 37c4df7
 ([tests/fixtures/parity/](tests/fixtures/parity)).

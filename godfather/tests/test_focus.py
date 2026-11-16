@@ -1,6 +1,5 @@
-"""The focused panel shows by shape as well as colour (fathers#139): its top and bottom borders are heavy rules
-(`━`, `=` on ASCII), its sides stay light, so the heavy `┃` of a selected row keeps its own meaning, and Tab changes
-what a terminal without colour shows. The glyphs on a live screen are tests/test_live.py's frame test; these are the
+"""The focused panel shows by shape as well as colour (fathers#139): its frame is heavy on all four sides
+(fathers#165: `┏━┓ ┃ ┗━┛`, `+=+ # +=+` on ASCII), so Tab changes what a terminal without colour shows. The glyphs on a live screen are tests/test_live.py's frame test; these are the
 ASCII fallback and a panel without a name."""
 from __future__ import annotations
 
@@ -27,8 +26,10 @@ class FocusTests(unittest.TestCase):
         focused = self.frame("events").lines(False, ascii_only=True)
         self.assertEqual("+= EVENTS " + "=" * 19 + "+", focused[0])
         self.assertEqual("+" + "=" * 28 + "+", focused[-1])
+        self.assertEqual(["#", "#"], [focused[2][0], focused[2][-1]], "and its sides")
         rested = self.frame("requests").lines(False, ascii_only=True)
         self.assertEqual("+- EVENTS " + "-" * 19 + "+", rested[0])
+        self.assertEqual(["|", "|"], [rested[2][0], rested[2][-1]])
 
     def test_an_unnamed_panel_never_looks_focused(self) -> None:
         self.assertTrue(self.frame("", name="").render(False).startswith("╭"))

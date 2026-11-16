@@ -1,16 +1,16 @@
-┍━ PROCESSES ━━━━━━━━ id ━━━━━━ owner ━━━━━━━━━━━ lane ━━━━━━━━━━━━━ age  ttl left ━━━ pid ━┑ ╭─ PROCESS DETAILS ──────────────────────────────────────────╮
-│                                                                                           │ │                                                            │
-│  ▶️  vite dev       j3f9a1c   claude 4bceaaaf…  710-speech-pa…     30m     1h06m   90412  │ │  label      storybook                                      │
+┏━ PROCESSES ━━━━━━━━ id ━━━━━━ owner ━━━━━━━━━━━ lane ━━━━━━━━━━━━━ age  ttl left ━━━ pid ━┓ ╭─ PROCESS DETAILS ──────────────────────────────────────────╮
+┃                                                                                           ┃ │                                                            │
+┃  ▶️  vite dev       j3f9a1c   claude 4bceaaaf…  710-speech-pa…     30m     1h06m   90412  ┃ │  label      storybook                                      │
 ┃  ▶️  storybook      j5e6f7a   claude 4bceaaaf…                     30m     1h46m   55001  ┃ │  id         j5e6f7a                                        │
-│  ▶️  iPhone 17 Pro  j8d9e0f   claude 4bceaaaf…                     30m     1h23m          │ │  state      running                                        │
-│  👻  playwright s…  j7a8b9c   claude 4bceaaaf…                   1h30m       50m   61200  │ │  ttl left   1h46m                                          │
-│  ⌛  pg-test        j2b3c4d   claude 4bceaaaf…                   2h05m   expired          │ │  command    bun run storybook                              │
-│  unowned · the last sweep's                                                               │ │  directory  /fixture/straylight                            │
-│  ❔  node storybo…            orphan                             1h30m             88123  │ │  log        /fixture/junkfather/logs/j5e6f7a.log           │
-│  📦  old-spike                merged, idle 9d                       9d                    │ │  owner      claude 4bceaaaf/a71c · lives                   │
-│  📦  iPad Air                 booted, no owner                       —                    │ │  keep       owner                                          │
-│                                                                                           │ │  mode       detached                                       │
-┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┙ │  pid        55001 · 3 processes                            │
+┃  ▶️  iPhone 17 Pro  j8d9e0f   claude 4bceaaaf…                     30m     1h23m          ┃ │  state      running                                        │
+┃  👻  playwright s…  j7a8b9c   claude 4bceaaaf…                   1h30m       50m   61200  ┃ │  ttl left   1h46m                                          │
+┃  ⌛  pg-test        j2b3c4d   claude 4bceaaaf…                   2h05m   expired          ┃ │  command    bun run storybook                              │
+┃  unowned · the last sweep's                                                               ┃ │  directory  /fixture/straylight                            │
+┃  ❔  node storybo…            orphan                             1h30m             88123  ┃ │  log        /fixture/junkfather/logs/j5e6f7a.log           │
+┃  📦  old-spike                merged, idle 9d                       9d                    ┃ │  owner      claude 4bceaaaf/a71c · lives                   │
+┃  📦  iPad Air                 booted, no owner                       —                    ┃ │  keep       owner                                          │
+┃                                                                                           ┃ │  mode       detached                                       │
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ │  pid        55001 · 3 processes                            │
 ╭─ PROCS LOG ────── label ───────────────────────────────────────────────────────── detail ─╮ │                                                            │
 │                                                                                           │ │  lease      lane-644-build-once                            │
 │  No events logged yet                                                                     │ │                                                            │

@@ -1,15 +1,15 @@
-┍━ LANES ━━━━━━━━━━━━━━━━━━━━ ticket  stage ━━━━━━━ receipt ━━━━━━ review ━━━━━━━━ claims ━━━ age ━┑
-│                                                                                                  │
-│  Straylight · 3 of 4 lanes                                                                       │
+┏━ LANES ━━━━━━━━━━━━━━━━━━━━ ticket  stage ━━━━━━━ receipt ━━━━━━ review ━━━━━━━━ claims ━━━ age ━┓
+┃                                                                                                  ┃
+┃  Straylight · 3 of 4 lanes                                                                       ┃
 ┃  ▶️  644-build-once           #644  active        in progress    not started         11     55m  ┃
-│  ▶️  710-speech-paste-pha…    #710  active · po…  green · curr…  running · 2 o…       2   1h47m  │
-│  ▶️  612-overlay-keys         #612  active        red · stale    finished             4  17h19m  │
-│  🗓️  555-host-rename-names    #555  planned       not run        not started          1      9m  │
-│  data-grid · 1 of 2 lanes                                                                        │
-│  ▶️  644-build-once            #88  active        red · stale    not started          3     29m  │
-│  sid-kit · config not found at /fixture/sid-kit/.lanefather.toml                                 │
-│                                                                                                  │
-┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┙
+┃  ▶️  710-speech-paste-pha…    #710  active · po…  green · curr…  running · 2 o…       2   1h47m  ┃
+┃  ▶️  612-overlay-keys         #612  active        red · stale    finished             4  17h19m  ┃
+┃  🗓️  555-host-rename-names    #555  planned       not run        not started          1      9m  ┃
+┃  data-grid · 1 of 2 lanes                                                                        ┃
+┃  ▶️  644-build-once            #88  active        red · stale    not started          3     29m  ┃
+┃  sid-kit · config not found at /fixture/sid-kit/.lanefather.toml                                 ┃
+┃                                                                                                  ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 ╭─ LANE DETAILS ───────────────────────────────────────────────────────────────────────────────────╮
 │                                                                                                  │
 │  lane      644-build-once                                                                       ┃│
@@ -28,7 +28,7 @@
 │                                                                                                  │
 │                                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
-╭─ LANES LOG ───────── lane ────────────────────────────────────────────────────── result  ticket ─╮
+╭─ LANES LOG ───────── lane ───────────────────────────────────────────── result ───────── ticket ─╮
 │                                                                                                  │
 │  11:59:02  reviewed  644-build-once                                     2 findings · 9m    #644  │
 │                                                                                                  │

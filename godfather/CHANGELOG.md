@@ -88,6 +88,13 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Changed
 
+- EVENTS' log switch and the focus frame (fathers#165): the title's arrows are `❮ SLOTS LOG ❯`, a size up from
+  `◂ ▸` and one cell wide in every terminal, in the frame's colour (the accent while EVENTS has the focus); the key
+  that switches the log (← →, `f`, a click on the title) flashes the arrow on its side as a scroll flashes the
+  scrollbar's thumb. SLOTS LOG's outcome, LANES LOG's result and PROCS LOG's detail are left-aligned, header and
+  cells. The focused panel's frame is heavy on all four sides, corners and sides too (`┏━┓ ┃ ┗━┛`, `#` sides on
+  ASCII), no longer only its top and bottom rules.
+
 - The live view writes each frame as one synchronized update (`CSI ? 2026 h` … `l`, fathers#143), so a terminal
   that supports it never paints half a frame and one that does not ignores it; a resize is taken from SIGWINCH and
   drawn at once instead of within a quarter second; the whole screen is no longer rewritten every five seconds, only
