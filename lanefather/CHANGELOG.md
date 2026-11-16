@@ -8,6 +8,19 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- `lanefather wait ID --for registered|landed|done [--timeout S] [--json]` (fathers#175) blocks until the lane is in
+  that state instead of a loop over `list`: it reads the lane's record with a growing pause, exits 0 on the state, 75
+  with the current state at the timeout (default 3600 s; 0 answers at once) and 3 for a state that cannot come (a
+  dropped lane never lands). `start` and `adopt` end with the lane's next commands (its check, the hand-back with
+  the receipt path, the wait for its land). Capabilities `lane.wait` and `review.fix_of`.
+
+- A batch fix lane is exempt from review (fathers#174): `lanefather start ID --fix-of A,B,C` names the landed lanes
+  whose review findings it fixes, and its land records `review.exempted` instead of starting a review, as for a
+  `review --fix-lane` lane; `review A --mark N fixed:ID` marks the parents' findings with its merge as before.
+  `start` warns when an id that reads `review-fixes` names no parent. The record keeps `review_fix_of` a string for
+  one parent and makes it a list for several; an older Lanefather's land exempts such a lane too.
+  `review --fix-lane` stays one lane: it hands over that lane's worktree.
+
 - Two routine cleanups without `--force-reason` (fathers#167). `lanefather drop ID` removes a planned or active lane
   that adds nothing to its base (no commits beyond it, its tree already the base's, or commits that change nothing)
   and whose worktree has no uncommitted or untracked changes, with `done`'s cleanup; it refuses a lane with work and
@@ -105,6 +118,11 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   shows the category, and receipts without it read as before.
 
 ### Changed
+
+- `lanefather --help` fits one screen (fathers#175): one line per command, the details and an example in
+  `lanefather <command> --help`. A usage error is two lines, as docs/cli.md asks: `lanefather: <reason>`, then
+  the command's usage, one example and `Try 'lanefather <command> --help'.`; an unknown option is named before a
+  missing argument. The CLI convention's conformance test has no expected failures left.
 
 - The free-disk floor under which `start` refuses a lane is derived (fathers#157): 40 GB plus the lane cap times the
   largest of the 20 last done lanes (3 GB before any), in decimal GB, instead of a fixed 150 GB.

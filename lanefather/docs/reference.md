@@ -5,10 +5,11 @@
 ## Commands
 
 ```
-lanefather start <id> --ticket N --claims GLOB... [--base REF] [--after ID...] [--create]
+lanefather start <id> --ticket N --claims GLOB... [--base REF] [--after ID...] [--fix-of ID,ID] [--create]
 lanefather next [--start]                 the first ready entry of the ranked queue
 lanefather adopt <id> <worktree> <branch> register the worktree an agent created
 lanefather check <id>                     the checks the plan selects for the lane's diff -> receipt
+lanefather wait <id> --for registered|landed|done [--timeout S] [--json]   block until the lane is there
 lanefather land <id> [--into WORKTREE] [--keep]
 lanefather review <id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane]
 lanefather review --overall <sha> --since <base>
@@ -27,6 +28,18 @@ lanefather show <id> [--state-dir DIR] [--project-dir DIR] [--json]   read-only 
 lanefather status [--json]                every registered project's lanes on this machine, read-only
 lanefather settings [check KEY VALUE | set KEY VALUE [--revision R] | reset KEY|--all] [--json]
 ```
+
+`lanefather --help` lists each command in one line; `lanefather <command> --help` gives its options and an
+example, and a misused command prints its usage and that example in the line after the error (fathers#175). `start`
+and `adopt` end with the lane's next commands: its check, the hand-back with the receipt path, and the wait for its
+land.
+
+`wait` replaces a loop over `list` for an agent that waits for its coordinator: it reads the lane's record with a
+growing pause (0.2 s up to 5 s) and exits 0 once the lane is registered (planned or later), landed (landed, released,
+or done after landing) or done; 75 with the current state on stderr when `--timeout` seconds (default 3600; 0 answers
+at once) pass first; 3 when the state cannot come (a lane done without landing never lands). A lane already done when
+the wait begins is an earlier lane of that id, so `--for registered` waits for a new one. `--json` prints
+`{"v": 1, "lane", "for", "status", "reached", "waited", "merge"}`.
 
 A claim is a glob relative to the repository: `*` and `?` stay within a path segment and `**` spans segments. A
 claim without wildcards names a directory, and everything under it, when it ends in `/`, when HEAD has a directory
@@ -48,6 +61,13 @@ slots) at the rerun's [slot priority](#slot-priorities) (interactive by default)
 
 `review <id> --fix-lane` starts the fix lane from the branch the lane landed on, which holds its merge, and refuses
 when no branch does; the landed lane keeps its own registration.
+
+A fix lane is exempt from review at land (`review.exempted`): the one `review <id> --fix-lane` registers for one
+lane, and a batch fix lane started with `start <id> --fix-of A,B,C` for the findings of several landed lanes
+(fathers#174). The record names its parents in `review_fix_of`: one id as a string, as before, several as a list.
+Mark each parent's findings with the fix lane's merge (`review A --mark N fixed:<fix lane id>`). A batch fix lane has
+its own worktree, counts toward the cap like any lane, and runs its own check plan; `start` warns when an id that
+reads `review-fixes` names no parent.
 
 ### Finishing lanes
 

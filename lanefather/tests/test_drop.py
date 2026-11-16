@@ -66,7 +66,7 @@ class DropTests(LaneCase):
         self.assertIn("lane/u", self.git(self.repo, "branch", "--list"))
         self.assertEqual(self.record("u")["status"], "active")
         # No flag overrides it.
-        self.assertIn("unrecognized arguments", self.lane("drop", "u", "--force-reason", "r", ok=False))
+        self.assertIn("unknown option '--force-reason'", self.lane("drop", "u", "--force-reason", "r", ok=False))
 
     def test_drop_refuses_a_worktree_head_with_commits_the_branch_lacks(self):
         worktree = self.created("u", "lib/**")

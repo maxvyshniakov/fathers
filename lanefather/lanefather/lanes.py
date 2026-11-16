@@ -35,11 +35,24 @@ def header(record: Record, rules: list[dict[str, Any]] | tuple[()] = ()) -> str:
         + ("" if record["worktree"] else f', then {prog} adopt {record["id"]} "$PWD" {record["branch"]}'),
         f"Scratch: {record['scratch'][0]} (evidence logs and probes; {prog} done removes it)",
         *([f"Cargo target, when the lane needs its own: {targets[0]}"] if targets else []),
-        f"Before reporting: {prog} check {record['id']} in your worktree, on a clean committed tree.",
-        f"Report: the block in {config.current().report_doc}, with "
-        f"Receipt: {state.receipt_path(record['id'])}",
         *claims.rules_block(list(rules)),
+        *next_lines(record),
     ])
+
+
+def next_lines(record: Record) -> list[str]:
+    """The lane's next commands, as start and adopt print them (fathers#175): the agent goes on without a complete
+    brief or a --help turn."""
+    prog, lane_id = config.prog(), record["id"]
+    return [
+        "Next, in the worktree:",
+        *([f'  git checkout -B {record["branch"]} {record["base"]} && {prog} adopt {lane_id} "$PWD" '
+           f'{record["branch"]}'] if not record["worktree"] else []),
+        f"  {prog} check {lane_id}    (on a clean committed tree; its receipt is the evidence)",
+        f"  Hand back: the block in {config.current().report_doc}, with Receipt: {state.receipt_path(lane_id)}",
+        f"  Then the coordinator lands it ({prog} land {lane_id}); {prog} wait {lane_id} --for landed blocks until "
+        "it does, no loop over list.",
+    ]
 
 
 def prepare(cwd: Any, lane_id: str, ticket: str, lane_claims: list[str], base: str | None, after: list[str],
@@ -154,11 +167,32 @@ def register_admitted(record: Record, decision: admission.Decision, refusals: li
                             "worktree": record["worktree"], "cap": cap, "cap_source": source})
 
 
+def fix_of(given: list[str] | None) -> list[str]:
+    """start --fix-of: the landed lanes whose review findings a batch fix lane fixes (fathers#174), each once."""
+    parents = list(dict.fromkeys(name for value in given or () for name in value.replace(",", " ").split()))
+    for parent in parents:
+        record = state.read_json(state.record_path(parent))
+        if record is None:
+            raise LaneError(f"--fix-of {parent}: no lane by that name")
+        if record.get("status") not in state.LANDED:
+            raise LaneError(f"--fix-of {parent}: lane {parent} is {record.get('status')}, not landed; a fix lane "
+                            "fixes the review findings of landed lanes")
+    return parents
+
+
 def start(args: Any) -> int:
     lane_claims = [c for claim in args.claims for c in claim.split()]
+    parents = fix_of(getattr(args, "fix_of", None))
     record, rules = prepare(os.getcwd(), args.id, args.ticket, lane_claims, args.base, args.after, args.branch,
                             args.scratch)
+    if parents:
+        # One parent keeps the string every Lanefather reads; several are a list (fathers#174).
+        record["review_fix_of"] = parents[0] if len(parents) == 1 else parents
     register(record, rules, args.force_reason, args.create)
+    if not parents and "review-fixes" in args.id:
+        print(f"{config.prog()}: warning: {args.id} looks like a fix lane but names no parent, so its land starts "
+              f"a review of the fix; to exempt it, {config.prog()} drop {args.id} and start it again with "
+              "--fix-of <lane>,<lane>", file=sys.stderr)
     return 0
 
 
@@ -206,6 +240,7 @@ def adopt(args: Any) -> int:
             raise LaneError(f"adopt refused: lane {args.id} is {record['status']}")
         adopt_worktree(record, args.worktree, args.branch)
     print(f"Lane {args.id} adopted {record['worktree']} on {args.branch}")
+    print("\n".join(next_lines(record)))
     return 0
 
 

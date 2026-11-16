@@ -614,8 +614,9 @@ def integration_refs(record: Record, worktree: str) -> list[str]:
 
     places: list[Any] = [record.get("integration"), landed_into(record)]
     literal = not git_ok(worktree, "show-ref", "--verify", "--quiet", f"refs/heads/{record['base']}")
-    if literal and record.get("review_fix_of"):
-        places.append(landed_into(state.read_json(state.record_path(record["review_fix_of"])) or {}))
+    if literal:
+        places += [landed_into(state.read_json(state.record_path(parent)) or {})
+                   for parent in state.fix_parents(record) if state.ID.match(parent)]
     refs = [branch for path in places if isinstance(path, str) and os.path.isdir(path)
             for branch in [current_branch(path)] if branch]
     if literal:
@@ -630,10 +631,12 @@ def integration_refs(record: Record, worktree: str) -> list[str]:
 
 
 def fix_parent(record: Record) -> dict[str, Any] | None:
-    """The receipt of the lane a review-fix lane fixes, when it has per-check results; None otherwise."""
-    parent = record.get("review_fix_of")
-    if not parent:
+    """The receipt of the lane a review-fix lane fixes, when it has per-check results; None otherwise. A batch fix
+    lane of several lanes (start --fix-of A,B) runs its own plan, as any lane."""
+    parents = state.fix_parents(record)
+    if len(parents) != 1 or not state.ID.match(parents[0]):
         return None
+    parent = parents[0]
     receipt = state.read_json(state.receipt_path(parent))
     if not receipt or receipt.get("selection") is None or receipt.get("check_results") is None:
         return None

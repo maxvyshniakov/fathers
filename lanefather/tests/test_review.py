@@ -205,7 +205,7 @@ class ReviewGateCase(LaneCase):
         super().setUp()
         self.git(self.repo, "branch", "dev")
 
-    def landed(self, lane_id, path, text):
+    def landed(self, lane_id: str, path: str, text: str) -> str:
         worktree = self.created(lane_id, path)
         self.commit(worktree, {path: text})
         self.lane("check", lane_id)
@@ -299,6 +299,47 @@ class ReviewGateTests(ReviewGateCase):
         self.assertEqual(self.review("a")["findings"][0]["mark"]["merge"], merge)
         self.assertEqual(self.record("a")["status"], "done")
         self.lane("promote", self.tip(), "--no-push", "--wait", "0")
+
+    def test_a_batch_fix_lane_for_several_parents_lands_exempt_and_its_merge_marks_their_findings(self):
+        # fathers#174: one fix lane, started with --fix-of, fixes the findings of several landed lanes.
+        self.review_text.write_text(TWO_FINDINGS)
+        self.landed("a", "lib/api.txt", "foo\nbaz\n")
+        self.lane("review", "a")
+        self.landed("b", "lib/b.txt", "b\n")
+        self.lane("review", "b")
+        output = self.start("review-fixes-r3", "calls/**", extra=("--fix-of", "a,b", "--create"))
+        self.assertNotIn("names no parent", output)
+        fix = self.record("review-fixes-r3")
+        self.assertEqual(fix["review_fix_of"], ["a", "b"])
+        self.commit(fix["worktree"], {"calls/main.txt": "foo\nbaz\n"}, "fix(review): call baz")
+        self.lane("check", "review-fixes-r3", cwd=fix["worktree"])
+        output = self.lane("land", "review-fixes-r3")
+        receipt = self.review("review-fixes-r3")
+        self.assertEqual(receipt["status"], "exempt")
+        self.assertIn("the fix round of the reviews of a and b", receipt["exempt"])
+        self.assertEqual(sum(1 for c in self.codex_calls() if c[2] == "exec"), 2, "nobody reviews the fix")
+        self.assertIn("Lane review-fixes-r3 done", output)
+        kinds = [json.loads(line)["kind"] for line in self.events.read_text().splitlines()]
+        self.assertIn("review.exempted", kinds)
+        merge = self.record("review-fixes-r3")["landed"]["merge"]
+        for parent in ("a", "b"):
+            self.lane("review", parent, "--mark", "1", "fixed:review-fixes-r3", "--mark", "2", "rejected:out of scope")
+            self.assertEqual(self.review(parent)["findings"][0]["mark"]["merge"], merge)
+            self.assertEqual(self.record(parent)["status"], "done")
+        self.lane("promote", self.tip(), "--no-push", "--wait", "0")
+
+    def test_start_names_fix_parents_and_warns_a_fix_lane_that_names_none(self):
+        self.landed("a", "lib/api.txt", "foo\nbaz\n")
+        self.start("a-fixes", "calls/**", extra=("--fix-of", "a"))
+        # One parent keeps the string an older Lanefather reads.
+        self.assertEqual(self.record("a-fixes")["review_fix_of"], "a")
+        output = self.start("review-fixes-r4", "docs/**")
+        self.assertIn("lanefather: warning: review-fixes-r4 looks like a fix lane but names no parent", output)
+        self.assertIn("--fix-of", output)
+        self.assertIn("--fix-of nosuch: no lane by that name",
+                      self.start("x-fix", "native/**", extra=("--fix-of", "a,nosuch"), ok=False))
+        self.assertIn("--fix-of review-fixes-r4: lane review-fixes-r4 is planned, not landed",
+                      self.start("y-fix", "native/**", extra=("--fix-of", "review-fixes-r4"), ok=False))
 
     def test_a_literal_base_lane_landed_with_into_gets_a_fix_lane_on_the_integration_branch(self):
         # Replay (lanefather#1): voice-p2-provider-benchmark registered at a commit, landed with --into, and its fix

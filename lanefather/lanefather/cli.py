@@ -1,43 +1,5 @@
-"""The lanefather command line.
-
-  changelog [--json] [--since V]     the installed release's changelog entries (Godfather's what's new)
-  start <id> --ticket N --claims GLOB... [--base REF] [--after ID...] [--create]
-  next [--start] [--base REF]        the first ready entry of the ranked queue: its brief header;
-                                     --start registers it as start would
-  adopt <id> <worktree> <branch>     register the worktree an Agent created
-  check <id>                         in the lane: the checks the tree's plan selects for the lane's diff ->
-                                     receipt for the tree (lanefather.checks)
-  land <id> [--into WORKTREE] [--keep]
-                                     merge after a current green receipt, start the review, run the post-merge
-                                     smoke, finish the lane (lanefather.land)
-  review <id> [--reviewer sol|opus|both] [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane] [--compare]
-  review --overall <sha> --since <base> [--reviewer sol|opus|both]
-                                     the independent review (lanefather.review)
-  findings <sha> [--since REF]       whether a review holds the SHA (unmarked P1/P2 findings), for a publish
-  done <id>                          after landing: stop what the lane left running, remove its worktree,
-                                     branches, build directories and scratch; a red post-merge smoke that a
-                                     later green gate or smoke on the integration branch cleared does not refuse
-  done --finished [--dry-run]        done on every finished lane of the registered projects; --dry-run lists
-                                     them with their sizes
-  drop <id>                          an active lane that adds nothing to its base: done's cleanup, no force
-  recheck <id> [--slots N]           a landed lane's red post-merge smoke again, on the integration tip that
-                                     holds its merge; green replaces the red result (lanefather.land)
-  keep <id> [--off]                  auto-done, done --finished and start's disk repair leave the lane
-  promote <sha> [--ship] [--no-push] [--install [--deploy HOST]]
-  sync [--drop-local]
-  perf <sha>                         the batch gate, promotion, sync and the perf suite (lanefather.promote)
-  shipped <version> --since REF      after a release publish: comment the version on each issue a Fixes #N line
-                                     in REF..HEAD names (lanefather.tickets, [tickets] release_comment)
-  results key|lookup|record REV (--full | --checks A,B)
-                                     check results by tree and plan (lanefather.results, docs/results.md)
-  stats [--days N] [--lane ID] [--json]
-                                     per-check p50/p90, red runs and flakes from the run history
-                                     (lanefather.history), which done leaves alone
-  list [--all] [--json]
-  status [--json]                    every registered project's lanes on this machine (lanefather.status)
-  settings [check|set|reset KEY [VALUE]] [--json]
-                                     this machine's settings: review start, rerun wait, slot priorities, free-disk floor
-                                     (lanefather.settings)
+"""The lanefather command line: one table of commands (COMMANDS) gives the one-screen top-level help, each command's
+usage and example for its own --help, and the two lines a misused command prints (fathers#175, docs/cli.md).
 
 --config PATH (or LANEFATHER_CONFIG) names the project's .lanefather.toml; by default it is read from the top of the
 repository the command runs in. State: one JSON file per lane in the configured state directory (LANEFATHER_STATE
@@ -47,8 +9,12 @@ replaces it), receipts beside it, and every action and override in ledger.log. R
 from __future__ import annotations
 
 import argparse
+from collections.abc import Sequence
 from pathlib import Path
+import re
 import sys
+import textwrap
+from typing import Any, NoReturn
 
 from . import (
     __version__,
@@ -69,6 +35,7 @@ from . import (
     show,
     status,
     tickets,
+    wait,
 )
 from .errors import LaneError
 from .host import CHECK_MAX_JOBS
@@ -83,25 +50,143 @@ def version() -> str:
     return f"lanefather {__version__} ({built})"
 
 
-def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(prog=config.prog(), description=__doc__,
-                                   formatter_class=argparse.RawDescriptionHelpFormatter)
-    root.add_argument("--config", metavar="PATH", help="the project's .lanefather.toml")
+class Command:
+    """One row of the command table: the one-line summary the top-level help lists, the usage after the command's
+    name, and one example of it."""
+
+    def __init__(self, summary: str, usage: str, example: str):
+        self.summary, self.usage, self.example = summary, usage, example
+
+
+COMMANDS: dict[str, Command] = {
+    "start": Command("register a lane: claims, ticket and agent brief",
+                     "<id> --ticket N --claims GLOB... [--base REF] [--after ID...] [--fix-of ID,ID] [--create]",
+                     "fix-login --ticket 12 --claims 'app/**' --create"),
+    "next": Command("the first ready queue entry; --start registers it", "[--start] [--base REF] [--create]",
+                    "--start --create"),
+    "adopt": Command("register the worktree an agent created", "<id> <worktree> <branch>",
+                     'fix-login "$PWD" lane/fix-login'),
+    "check": Command("run the lane's checks; the receipt is the evidence", "<id> [--rerun] [--slots N]",
+                     "fix-login"),
+    "wait": Command("block until a lane is registered, landed or done",
+                    "<id> --for registered|landed|done [--timeout S] [--json]",
+                    "fix-login --for landed --timeout 3600"),
+    "land": Command("merge a green lane, smoke it, start its review",
+                    "<id> [--into WORKTREE] [--keep] [--slots N] [-m MESSAGE]",
+                    "fix-login --into .claude/worktrees/integrate"),
+    "review": Command("a lane's review, its marks and its fix lane",
+                      "<id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane] [--compare] "
+                      "[--reviewer ALIAS|both] | --overall <sha> --since <base>",
+                      "fix-login --mark 1 fixed:fix-login-review-fixes"),
+    "findings": Command("whether a review holds a SHA, for a publish", "<sha> [--since REF] [--json]",
+                        "HEAD --json"),
+    "done": Command("clean up a landed lane: worktree, branches, scratch", "<id> | --finished [--dry-run]",
+                    "fix-login"),
+    "drop": Command("remove a lane that adds nothing to its base", "<id>", "fix-login"),
+    "recheck": Command("rerun a landed lane's red post-merge smoke", "<id> [--slots N]", "fix-login"),
+    "keep": Command("keep a lane from auto-done; --off releases it", "<id> [--off]", "fix-login"),
+    "list": Command("lanes that are not done: claims, receipts, load", "[--all] [--json]", "--json"),
+    "show": Command("one lane's details, read-only",
+                    "<id> [--json] [--state-dir DIR] [--project-dir DIR]", "fix-login --json"),
+    "status": Command("every registered project's lanes, read-only", "[--json]", "--json"),
+    "gc": Command("remove merged idle worktrees and unused branches", "[--dry-run] [--json]", "--dry-run"),
+    "promote": Command("the batch gate on a SHA, then move dev (and main)",
+                       "<sha> [--ship] [--no-push] [--jobs N] [--install [--deploy HOST]]", "1a2b3c4 --no-push"),
+    "sync": Command("fast-forward local dev and main to the remote", "[--drop-local] [--remote NAME]", ""),
+    "perf": Command("the perf suite on a SHA, alone on the machine", "<sha> [--remote NAME]", "1a2b3c4"),
+    "shipped": Command("comment a published version on the issues it fixes",
+                       "<version> --since REF [--head REF]", "v1.4.0 --since v1.3.0"),
+    "results": Command("check results by tree and plan",
+                       "key|lookup|record <rev> (--full | --checks A,B) [--status S] [--json]",
+                       "lookup HEAD --full"),
+    "stats": Command("per-check durations, red runs and flakes", "[--days N] [--lane ID] [--json]",
+                     "--days 3 --json"),
+    "settings": Command("this machine's settings: show, check, set, reset",
+                        "[check|set|reset KEY [VALUE]] [--all] [--revision R] [--json]",
+                        "set host.min_disk_gb 150"),
+    "changelog": Command("the installed release's changes, Unreleased first", "[--json] [--since VERSION]",
+                         "--since 0.1.0"),
+    "capabilities": Command("versioned capabilities and installed identity", "[--json]", "--json"),
+    "project-hook": Command("run one configured project policy", "<name> [-- ARGS...]", "readiness -- --json"),
+}
+
+WIDTH = 78
+
+
+class Parser(argparse.ArgumentParser):
+    """An argparse parser whose usage errors follow docs/cli.md: `<tool>: <reason>` and one more line; for a command,
+    that line gives its usage, one example and the pointer to its --help, so an agent recovers without a help turn
+    (fathers#175)."""
+
+    def __init__(self, *args: Any, row: Command | None = None, tool: str = "lanefather", **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        self.row, self.tool = row, tool
+        self.children: dict[str, Parser] = {}
+
+    def error(self, message: str) -> NoReturn:
+        unknown = re.match(r"argument <command>: invalid choice: '?([^' ]+)'?", message)
+        if unknown:
+            message = f"unknown command '{unknown.group(1)}'"
+        if self.row is None:
+            pointer = f"Try '{self.tool} --help'."
+        else:
+            example = f" Example: {self.prog} {self.row.example}".rstrip() + "." if self.row.example else ""
+            pointer = f"Usage: {self.prog} {self.row.usage}.{example} Try '{self.prog} --help'."
+        self.exit(2, f"{self.tool}: {message}\n{pointer}\n")
+
+    def unknown_option(self, words: Sequence[str], *, until_command: bool = False) -> str | None:
+        """The first option among `words` this parser does not take (argparse would name it only after a missing
+        argument); `until_command` stops at the first word that is not an option, the command."""
+        expects_value = False
+        for word in words:
+            if word == "--":
+                return None
+            if expects_value:
+                expects_value = False
+                continue
+            if not word.startswith("-") or word == "-" or re.fullmatch(r"-\d+(\.\d+)?", word):
+                if until_command:
+                    return None
+                continue
+            name = word.split("=", 1)[0]
+            if not word.startswith("--") and len(word) > 2:
+                name = word[:2]  # -mMESSAGE: a short option and its value
+            action = self._option_string_actions.get(name)
+            if action is None and name.startswith("--"):
+                matches = [o for o in self._option_string_actions if o.startswith(name)]
+                action = self._option_string_actions[matches[0]] if len(matches) == 1 else None
+            if action is None:
+                return name
+            expects_value = until_command and "=" not in word and action.nargs != 0
+        return None
+
+
+def add(root: Parser, commands: Any, name: str, details: str = "") -> Parser:
+    """A command's parser from its row: its usage line, its summary and details, and its example."""
+    row = COMMANDS[name]
+    prog = config.prog()
+    text = row.summary[0].upper() + row.summary[1:] + "." + (" " + details if details else "")
+    child: Parser = commands.add_parser(name, help=row.summary, row=row, tool=prog, prog=f"{prog} {name}",
+                                        usage=f"%(prog)s {row.usage}", description=textwrap.fill(text, WIDTH),
+                                        epilog=f"example: {prog} {name} {row.example}".rstrip(),
+                                        formatter_class=argparse.RawDescriptionHelpFormatter)
+    root.children[name] = child
+    return child
+
+
+def parser() -> Parser:
+    prog = config.prog()
+    root = Parser(prog=prog, tool=prog, usage="%(prog)s [--config PATH] <command> ...",
+                  description="Parallel changes in one repository: lanes registered, checked, landed, reviewed\n"
+                              "and cleaned up.",
+                  epilog=f"'{prog} <command> --help' gives a command's options and an example.\nRefusals name the "
+                         "rule; --force-reason overrides one, logged.",
+                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    root.add_argument("--config", metavar="PATH", help="the project's .lanefather.toml (or LANEFATHER_CONFIG)")
     root.add_argument("--version", action="version", version=version())
-    commands = root.add_subparsers(dest="command", required=True)
-    p = commands.add_parser("capabilities", help="versioned capabilities and verified installed source identity")
-    p.add_argument("--json", action="store_true")
-    p.set_defaults(run=runtime.capabilities)
-    p = commands.add_parser("changelog", help="the installed release's changelog entries, Unreleased first "
-                                              "(docs/api.md)")
-    p.add_argument("--json", action="store_true")
-    p.add_argument("--since", metavar="VERSION", help="only releases newer than VERSION, and Unreleased")
-    p.set_defaults(run=changelog.command)
-    p = commands.add_parser("project-hook", help="run one configured project policy in the installed runtime")
-    p.add_argument("name")
-    p.add_argument("arguments", nargs=argparse.REMAINDER)
-    p.set_defaults(run=runtime.project_hook)
-    p = commands.add_parser("start", help="register a lane: lane cap, path claims and agent brief")
+    commands = root.add_subparsers(dest="command", required=True, metavar="<command>", title="commands")
+    p = add(root, commands, "start", "Prints the brief header for the lane's prompt and the lane's next commands. "
+            "A fix lane named with --fix-of lands without a review of its own (fathers#174).")
     p.add_argument("id")
     p.add_argument("--ticket", required=True, help="issue number, or none")
     p.add_argument("--claims", nargs="+", required=True, metavar="GLOB")
@@ -111,20 +196,23 @@ def parser() -> argparse.ArgumentParser:
                    help="land after these lanes; their claims may overlap")
     p.add_argument("--scratch", nargs="+", default=[], metavar="DIR", help="extra scratch dirs done removes")
     p.add_argument("--create", action="store_true", help="create the worktree now instead of adopting one")
+    p.add_argument("--fix-of", action="append", metavar="ID,ID",
+                   help="a fix lane for the review findings of these landed lanes: its land is exempt from review")
     p.add_argument("--force-reason", help="start despite the lane cap, disk or load; logged")
     p.set_defaults(run=lanes.start)
-    p = commands.add_parser("next", help="the first ready entry of the queue: its brief header; --start registers it")
+    p = add(root, commands, "next", "Prints the first ready entry of the ranked queue as a brief header.")
     p.add_argument("--start", action="store_true", help="register the lane, as start would")
     p.add_argument("--base", help="integration branch (default: the queue's base, else this worktree's branch)")
     p.add_argument("--create", action="store_true", help="with --start: create the worktree now")
     p.add_argument("--force-reason", help="with --start: start despite the lane cap, disk or load; logged")
     p.set_defaults(run=lanes.next_lane)
-    p = commands.add_parser("adopt", help="register the worktree an Agent created")
+    p = add(root, commands, "adopt", "Prints the lane's next commands.")
     p.add_argument("id")
     p.add_argument("worktree")
     p.add_argument("branch")
     p.set_defaults(run=lanes.adopt)
-    p = commands.add_parser("check", help="run the lane's affected checks and write its receipt")
+    p = add(root, commands, "check", "In the lane's worktree, on a clean committed tree: the checks the tree's plan "
+            "selects for the lane's diff, and the receipt for the tree (lanefather.checks).")
     p.add_argument("id")
     p.add_argument("--rerun", action="store_true", help="run every suite even if a receipt covers the tree")
     p.add_argument("--agent", choices=("claude-code", "codex"),
@@ -134,7 +222,18 @@ def parser() -> argparse.ArgumentParser:
                    help="verification worker budget passed as verify --jobs (default: slotfather advise, at most "
                         f"{CHECK_MAX_JOBS})")
     p.set_defaults(run=checks.check)
-    p = commands.add_parser("land", help="merge a lane with a current green receipt, run the smoke, then finish it")
+    p = add(root, commands, "wait", "Instead of a loop over list: sleeps with a growing pause and reads the lane's "
+            "record. Exits 0 once the lane is in the state, 75 with the current state when the timeout passes "
+            f"first (default {wait.DEFAULT_TIMEOUT:g} s; 0 answers at once), 3 when it cannot come (a dropped lane "
+            "never lands). A lane done before the wait began is not taken for a new registration.")
+    p.add_argument("id")
+    p.add_argument("--for", dest="target", required=True, choices=wait.TARGETS)
+    p.add_argument("--timeout", type=seconds, default=wait.DEFAULT_TIMEOUT, metavar="S",
+                   help=f"give up after S seconds (default {wait.DEFAULT_TIMEOUT:g})")
+    p.add_argument("--json", action="store_true", help="the version-1 reply: lane, for, status, reached, waited")
+    p.set_defaults(run=wait.command)
+    p = add(root, commands, "land", "After a current green receipt: merge, start the review, run the post-merge smoke, "
+            "finish the lane (lanefather.land).")
     p.add_argument("id")
     p.add_argument("--into", help="integration worktree (default: the worktree on the lane's base branch)")
     p.add_argument("-m", "--message")
@@ -146,44 +245,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--force-reason", help="land without a current green receipt; logged")
     p.add_argument("--wait", type=float, default=120, metavar="SECONDS", help="wait this long for the landing lock")
     p.set_defaults(run=land.land)
-    p = commands.add_parser("promote", help="the batch gate on a SHA, then fast-forward local dev (and main) to it "
-                                            "and push it")
-    p.add_argument("sha")
-    p.add_argument("--ship", action="store_true", help="also main: pushes <sha>:dev and <sha>:main together")
-    p.add_argument("--no-push", action="store_true",
-                   help="move the local branches only, and only to a SHA the remote already has (#666)")
-    p.add_argument("--jobs", type=int, choices=range(1, 9), metavar="{1..8}",
-                   help="worker budget passed as verify --jobs for the batch gate "
-                        "(default: slotfather advise --max 2, sized after any load wait)")
-    p.add_argument("--remote", default="origin")
-    p.add_argument("--wait", type=float, default=120, metavar="SECONDS", help="wait this long for the landing lock")
-    p.add_argument("--install", action="store_true",
-                   help="then run the project's install steps from the gate worktree")
-    p.add_argument("--deploy", metavar="HOST", help="with --install: then run the project's deploy steps for HOST")
-    p.add_argument("--force-reason", help="move dev although a lane landed since dev lacks a finished, fully marked "
-                                          "review; logged")
-    p.set_defaults(run=promote.promote)
-    p = commands.add_parser("sync", help="fetch, then fast-forward local dev and main to the remote under the landing "
-                                         "lock; --drop-local resets them to it, keeping a backup branch")
-    p.add_argument("--drop-local", action="store_true",
-                   help="reset local dev and main to the remote; the commits it lacks go to backup/<branch>-<date>")
-    p.add_argument("--remote", default="origin")
-    p.add_argument("--wait", type=float, default=120, metavar="SECONDS", help="wait this long for the landing lock")
-    p.set_defaults(run=promote.sync)
-    p = commands.add_parser("perf", help="the perf suite (#579) on a SHA in the gate worktree, alone on the machine; "
-                                         "moves nothing")
-    p.add_argument("sha")
-    p.add_argument("--remote", default="origin", help="whose main a red run bisects from (default: origin)")
-    p.set_defaults(run=promote.perf)
-    p = commands.add_parser("shipped", help="after a release publish: comment the version on each issue its "
-                                            "Fixes #N lines close ([tickets] release_comment)")
-    p.add_argument("version", help="the published version, for example v1.4.0")
-    p.add_argument("--since", required=True, metavar="REF", help="the previous release (tag or commit)")
-    p.add_argument("--head", default="HEAD", metavar="REF", help="the released commit (default: HEAD)")
-    p.set_defaults(run=tickets.shipped)
-    p = commands.add_parser("review", help="the lane's one independent review (Sol, or Opus when Codex is low; or "
-                                           "the [review] panel), its marks and its fix lane; --overall for "
-                                           "promote --ship")
+    p = add(root, commands, "review", "The lane's one independent review (Sol, or Opus when Codex is low; or the "
+            "[review] panel), its marks and its fix lane; --overall for promote --ship (lanefather.review).")
     p.add_argument("id", nargs="?")
     p.add_argument("--mark", nargs=2, action="append", metavar=("N", "fixed:MERGE|rejected:REASON"),
                    help="mark finding N fixed by a follow-up merge (or the fix lane's id) or rejected with a reason")
@@ -200,14 +263,17 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--force-reason", help="review again although the lane has a review, or register the fix lane "
                                           "over the lane cap; logged")
     p.set_defaults(run=review.review)
-    p = commands.add_parser("findings", help="whether a review holds a SHA: unfinished reviews and unmarked blocking "
-                                             "findings, as promote applies them, for a publish (fathers#109)")
+    p = add(root, commands, "findings", "Unfinished reviews and unmarked blocking findings, as promote applies them "
+            "(fathers#109).")
     p.add_argument("sha")
     p.add_argument("--since", metavar="REF", help="lanes landed after REF (default: local dev)")
     p.add_argument("--json", action="store_true", help="the version-1 report")
     p.add_argument("--force-reason", help="answer 0 although a review holds the SHA; logged")
     p.set_defaults(run=review.findings)
-    p = commands.add_parser("done", help="remove a landed lane's worktree, branches, targets and scratch")
+    p = add(root, commands, "done", "After landing: stops what the lane left running, removes its worktree, branches, "
+            "build directories and scratch. A red post-merge smoke that a later green gate or smoke on the "
+            "integration branch cleared does not refuse. --finished: done on every finished lane of the registered "
+            "projects.")
     p.add_argument("id", nargs="?")
     p.add_argument("--finished", action="store_true",
                    help="every finished lane of the registered projects: landed, smoke green, review finished or "
@@ -215,44 +281,76 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="with --finished: list the lanes and sizes, remove nothing")
     p.add_argument("--force-reason", help="clean up a lane that is not landed or lacks a ticket comment; logged")
     p.set_defaults(run=done.done)
-    p = commands.add_parser("drop", help="remove a planned or active lane that adds nothing to its base: no commits "
-                                         "beyond it, or commits that change nothing; refuses otherwise")
+    p = add(root, commands, "drop", "A planned or active lane with no commits beyond its base, or commits that change "
+            "nothing: done's cleanup, with no override; refuses otherwise.")
     p.add_argument("id")
     p.set_defaults(run=done.drop)
-    p = commands.add_parser("recheck", help="rerun a landed lane's red post-merge smoke on the integration tip that "
-                                            "holds its merge; green replaces the red result")
+    p = add(root, commands, "recheck", "On the integration tip that holds its merge; green replaces the red result "
+            "(lanefather.land).")
     p.add_argument("id")
     p.add_argument("--slots", type=int, choices=range(1, 5),
                    help="worker budget passed as verify --jobs (default: slotfather advise --max 3)")
     p.set_defaults(run=land.recheck)
-    p = commands.add_parser("keep", help="keep a lane from auto-done and done --finished (its scratch is in use)")
+    p = add(root, commands, "keep", "Auto-done, done --finished and start's disk repair leave a kept lane (its scratch "
+            "is in use).")
     p.add_argument("id")
     p.add_argument("--off", action="store_true", help="release the lane to auto-done again")
     p.set_defaults(run=done.keep)
-    p = commands.add_parser("gc", help="remove merged idle agent worktrees and unused branches")
-    p.add_argument("--dry-run", action="store_true", help="report removals without changing anything")
-    p.add_argument("--json", action="store_true", help="machine-readable removals, retained paths and errors")
-    p.set_defaults(run=gc.collect)
-    p = commands.add_parser("show", help="read-only lane details for people and dashboards")
+    p = add(root, commands, "list")
+    p.add_argument("--all", action="store_true", help="include done lanes")
+    p.add_argument("--json", action="store_true", help="the lane records with their worktree and receipt state, the "
+                                                        "cap and the host, as JSON")
+    p.set_defaults(run=lanes.list_lanes)
+    p = add(root, commands, "show", "For people and dashboards.")
     p.add_argument("id")
     p.add_argument("--json", action="store_true", help="version-1 lane summary")
     p.add_argument("--state-dir", metavar="DIR", help="explicit lane-state directory, without creating it")
     p.add_argument("--project-dir", metavar="DIR", help="resolve project config and verify lane repository identity")
     p.set_defaults(run=show.show)
-    p = commands.add_parser("status", help="every registered project's lanes on this machine, read-only, for "
-                                           "dashboards")
+    p = add(root, commands, "status", "Every registered project's lanes on this machine, for dashboards "
+            "(lanefather.status).")
     p.add_argument("--json", action="store_true", help="the version-1 snapshot")
     p.set_defaults(run=status.status)
-    p = commands.add_parser("settings", help="this machine's Lanefather settings: show, check, set or reset")
-    p.add_argument("action", nargs="?", choices=("check", "set", "reset"))
-    p.add_argument("key", nargs="?")
-    p.add_argument("value", nargs="?")
-    p.add_argument("--all", action="store_true", help="with reset: every setting")
-    p.add_argument("--revision", help="with set or reset: refuse when the settings changed since this revision")
-    p.add_argument("--json", action="store_true")
-    p.set_defaults(run=settings.settings)
-    p = commands.add_parser("results", help="check results by tree and plan (docs/results.md): the key, whether a "
-                                            "plan is verified on a tree, or a result produced outside Lanefather")
+    p = add(root, commands, "gc")
+    p.add_argument("--dry-run", action="store_true", help="report removals without changing anything")
+    p.add_argument("--json", action="store_true", help="machine-readable removals, retained paths and errors")
+    p.set_defaults(run=gc.collect)
+    p = add(root, commands, "promote", "Fast-forwards local dev (and main) to the SHA and pushes it "
+            "(lanefather.promote).")
+    p.add_argument("sha")
+    p.add_argument("--ship", action="store_true", help="also main: pushes <sha>:dev and <sha>:main together")
+    p.add_argument("--no-push", action="store_true",
+                   help="move the local branches only, and only to a SHA the remote already has (#666)")
+    p.add_argument("--jobs", type=int, choices=range(1, 9), metavar="{1..8}",
+                   help="worker budget passed as verify --jobs for the batch gate "
+                        "(default: slotfather advise --max 2, sized after any load wait)")
+    p.add_argument("--remote", default="origin")
+    p.add_argument("--wait", type=float, default=120, metavar="SECONDS", help="wait this long for the landing lock")
+    p.add_argument("--install", action="store_true",
+                   help="then run the project's install steps from the gate worktree")
+    p.add_argument("--deploy", metavar="HOST", help="with --install: then run the project's deploy steps for HOST")
+    p.add_argument("--force-reason", help="move dev although a lane landed since dev lacks a finished, fully marked "
+                                          "review; logged")
+    p.set_defaults(run=promote.promote)
+    p = add(root, commands, "sync", "Fetches, then moves them under the landing lock; --drop-local resets them to the "
+            "remote, keeping a backup branch.")
+    p.add_argument("--drop-local", action="store_true",
+                   help="reset local dev and main to the remote; the commits it lacks go to backup/<branch>-<date>")
+    p.add_argument("--remote", default="origin")
+    p.add_argument("--wait", type=float, default=120, metavar="SECONDS", help="wait this long for the landing lock")
+    p.set_defaults(run=promote.sync)
+    p = add(root, commands, "perf", "The perf suite (#579) in the gate worktree; moves nothing.")
+    p.add_argument("sha")
+    p.add_argument("--remote", default="origin", help="whose main a red run bisects from (default: origin)")
+    p.set_defaults(run=promote.perf)
+    p = add(root, commands, "shipped", "After a release publish: comments the version on each issue a Fixes #N line in "
+            "REF..HEAD names (lanefather.tickets, [tickets] release_comment).")
+    p.add_argument("version", help="the published version, for example v1.4.0")
+    p.add_argument("--since", required=True, metavar="REF", help="the previous release (tag or commit)")
+    p.add_argument("--head", default="HEAD", metavar="REF", help="the released commit (default: HEAD)")
+    p.set_defaults(run=tickets.shipped)
+    p = add(root, commands, "results", "The key, whether a plan is verified on a tree, or a result produced outside "
+            "Lanefather (lanefather.results, docs/results.md).")
     p.add_argument("action", choices=("key", "lookup", "record"))
     p.add_argument("rev", help="a commit, branch or tree")
     p.add_argument("--full", action="store_true", help="the full gate")
@@ -264,17 +362,42 @@ def parser() -> argparse.ArgumentParser:
                                       "host's); a result stands only for its own platform")
     p.add_argument("--json", action="store_true")
     p.set_defaults(run=results.command)
-    p = commands.add_parser("stats", help="per-check durations (p50, p90), red runs and flakes from the run history")
+    p = add(root, commands, "stats", "p50 and p90 from the run history (lanefather.history), which done leaves alone.")
     p.add_argument("--days", type=float, default=7, help="the window in days (default 7; 0: everything kept)")
     p.add_argument("--lane", help="only this lane's runs")
     p.add_argument("--json", action="store_true", help="the version-1 report")
     p.set_defaults(run=history.command)
-    p = commands.add_parser("list", help="lanes that are not done, with claims, receipts, disk and load")
-    p.add_argument("--all", action="store_true", help="include done lanes")
-    p.add_argument("--json", action="store_true", help="the lane records with their worktree and receipt state, the "
-                                                        "cap and the host, as JSON")
-    p.set_defaults(run=lanes.list_lanes)
+    p = add(root, commands, "settings", "Review start, rerun wait, slot priorities, free-disk floor "
+            "(lanefather.settings).")
+    p.add_argument("action", nargs="?", choices=("check", "set", "reset"))
+    p.add_argument("key", nargs="?")
+    p.add_argument("value", nargs="?")
+    p.add_argument("--all", action="store_true", help="with reset: every setting")
+    p.add_argument("--revision", help="with set or reset: refuse when the settings changed since this revision")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(run=settings.settings)
+    p = add(root, commands, "changelog", "Godfather's what's new (docs/api.md).")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--since", metavar="VERSION", help="only releases newer than VERSION, and Unreleased")
+    p.set_defaults(run=changelog.command)
+    p = add(root, commands, "capabilities", "And the verified installed source identity, for project launchers.")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(run=runtime.capabilities)
+    p = add(root, commands, "project-hook", "In the installed runtime ([hooks.project]).")
+    p.add_argument("name")
+    p.add_argument("arguments", nargs=argparse.REMAINDER)
+    p.set_defaults(run=runtime.project_hook)
     return root
+
+
+def seconds(value: str) -> float:
+    try:
+        number = float(value)
+    except ValueError:
+        number = -1.0
+    if not number >= 0:
+        raise argparse.ArgumentTypeError(f"takes a number of seconds, not {value!r}")
+    return number
 
 
 def config_option(argv: list[str]) -> str | None:
@@ -290,12 +413,36 @@ def config_option(argv: list[str]) -> str | None:
     return None
 
 
+def parse(argv: list[str]) -> argparse.Namespace:
+    """The arguments, or a usage error (exit 2) that names the word it refuses, before any missing argument."""
+    root = parser()
+    unknown = root.unknown_option(argv, until_command=True)
+    if unknown:
+        root.error(f"unknown option '{unknown}'")
+    position = next((i for i, word in enumerate(argv) if word in COMMANDS
+                     and (i == 0 or argv[i - 1] != "--config")), None)
+    if position is not None:
+        chosen = command_parser(root, argv[position])
+        # project-hook passes what follows the hook's name to the hook.
+        unknown = chosen.unknown_option(argv[position + 1:], until_command=argv[position] == "project-hook")
+        if unknown:
+            chosen.error(f"unknown option '{unknown}'")
+    args, extra = root.parse_known_args(argv)
+    if extra:
+        command_parser(root, args.command).error(f"unrecognized arguments: {' '.join(extra)}")
+    return args
+
+
+def command_parser(root: Parser, name: str) -> Parser:
+    return root.children.get(name, root)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
         given = config_option(argv)
         config.use(config.load(Path(given)) if given else None)
-        args = parser().parse_args(argv)
+        args = parse(argv)
         if args.command not in registry.READ_ONLY:
             registry.note(config.current())
         return args.run(args)

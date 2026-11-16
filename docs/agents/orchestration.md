@@ -7,7 +7,12 @@
 - Once per machine, before the first lane: `bun install` in the main checkout (the lane checks use its Repo-Kit).
   It, and every lane check's own frozen install, also activates the pre-push gate (`core.hooksPath`).
 - Start: `lanefather start <id> --ticket <N> --base integrate/<batch> --claims '<package>/**' --create`; the lane's
-  worktree is `.claude/worktrees/lane-<id>` of the main checkout.
+  worktree is `.claude/worktrees/lane-<id>` of the main checkout. Start (and `adopt`) print the lane's next commands:
+  its check and the hand-back.
+- Wait: `lanefather wait <id> --for registered|landed|done [--timeout S]` blocks until the lane is in that state
+  (exit 0), or exits 75 with its current state when the timeout (default 3600 s) passes; never a loop over
+  `lanefather list`. `lanefather --help` lists each command in one line; `lanefather <command> --help` has its
+  options and an example.
 - Check: `lanefather check <id>` plans the lane's diff with `tools/lane-check` (each changed package's checks, and
   the root checks) and runs them through Repo-Kit's lane adapter; the receipt is the evidence.
 - Land: `lanefather land <id> --into <integration worktree>`, which merges, runs the post-merge smoke and starts the
@@ -27,6 +32,9 @@
 - Every landed lane is reviewed once, blind: Lanefather's land starts it with the `review` role of `models.toml`
   (another family than the implementer). Mark each finding `lanefather review <id> --mark N fixed:<merge>` or
   `rejected:<reason>` after the one fix round. A batch is pushed only with every finding marked.
+- One fix lane for the findings of several landed lanes names them: `lanefather start review-fixes-<n> --fix-of A,B,C
+  --ticket <N> --claims '<paths>' --create`. Its land is exempt from review like a `review <id> --fix-lane` lane's;
+  mark each parent's findings `fixed:review-fixes-<n>`.
 
 ## Owner queue
 
