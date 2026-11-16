@@ -208,6 +208,64 @@ class PanelTests(ReviewCase):
         self.assertEqual(self.members("role"), [("sol", "finished"), ("opus", "finished")])
         self.assertEqual(len([c for c in self.codex_calls() if c[2] == "exec"]), 2)
 
+    def models_table(self, models: str, choices: str) -> None:
+        """A models file with these [models.*] aliases (codex: openai, claude: anthropic) and review choices."""
+        found = {"sol": ("gpt-6.1-sol", "codex", "openai"), "sol2": ("gpt-6.1-sol-2", "codex", "openai"),
+                 "opus": ("claude-opus-5-5", "claude", "anthropic"),
+                 "sonnet": ("claude-sonnet-5-5", "claude", "anthropic")}
+        text = "schema = 1\n" + "".join(
+            f'[models.{name}]\nid = "{found[name][0]}"\ncli = "{found[name][1]}"\nfamily = "{found[name][2]}"\n'
+            for name in models.split()) + "[roles.review]\nchoices = [\n" + choices + "]\n"
+        self.table(text)
+
+    def test_a_same_family_member_takes_its_first_choice_that_holds_in_order(self):
+        """fathers#151 review of lf-panelfam, finding 1: each choice's remaining conditions count, in order."""
+        self.models_table("sol opus", textwrap.dedent("""\
+              { model = "sol", effort = "low", when = { not_family = true, limit = { codex_weekly = 15 } } },
+              { model = "sol", effort = "high", when = { limit = { codex_weekly = 50 } } },
+              { model = "sol", effort = "medium", when = { limit = { codex_weekly = 15 } } },
+              { model = "opus", effort = "medium" },
+            """))
+        self.env["FIXTURE_CODEX_USED"] = "80"
+        self.panel()
+        self.landed(agent="codex")
+        self.lane("review", "a")
+        self.assertEqual(self.members("a"), [("sol", "finished"), ("opus", "finished")])
+        sol = self.review("a")["panel"][0]
+        self.assertEqual((sol["effort"], sol["note"]), ("medium", "same family as the implementer (openai)"))
+
+    def test_a_replacement_comes_from_the_panels_own_family_policy(self):
+        """Finding 2: with both Codex members out of their week, Opus, whose only choice asks for another family,
+        still stands in for an Anthropic implementer's panel."""
+        self.models_table("sol sol2 opus", textwrap.dedent("""\
+              { model = "sol", effort = "medium", when = { limit = { codex_weekly = 15 } } },
+              { model = "sol2", effort = "medium", when = { limit = { codex_weekly = 15 } } },
+              { model = "opus", effort = "medium", when = { not_family = true } },
+            """))
+        self.configure('panel = ["sol", "sol2"]\n')
+        self.env["FIXTURE_CODEX_USED"] = "95"
+        self.landed(agent="claude-code")
+        self.lane("review", "a")
+        panel = self.review("a")["panel"]
+        self.assertEqual([(e["member"], e["reviewer"], e["status"]) for e in panel],
+                         [("sol", "opus", "finished"), ("sol2", "sol2", "skipped")])
+        self.assertEqual(panel[0]["note"], "same family as the implementer (anthropic)")
+
+    def test_a_replacement_of_another_family_carries_no_family_note(self):
+        """Finding 3: the note is the reviewer's that actually reviews."""
+        self.models_table("sol opus sonnet", textwrap.dedent("""\
+              { model = "sol", effort = "medium", when = { not_family = true, limit = { codex_weekly = 15 } } },
+              { model = "opus", effort = "medium" },
+            """))
+        self.configure('panel = ["sol", "sonnet"]\n')
+        self.env["FIXTURE_CODEX_USED"] = "95"
+        self.landed(agent="codex")
+        self.lane("review", "a")
+        panel = self.review("a")["panel"]
+        self.assertEqual([(e["member"], e["reviewer"], e["status"]) for e in panel],
+                         [("sol", "opus", "finished"), ("sonnet", "sonnet", "finished")])
+        self.assertNotIn("note", panel[0])
+
     def test_the_single_reviewer_still_skips_its_own_familys_choice(self):
         self.table(MODELS_TABLE)
         self.env["FIXTURE_CODEX_USED"] = "95"

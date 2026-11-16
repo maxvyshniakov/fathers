@@ -167,7 +167,7 @@ class Reviewer:
                 models[role.chosen.alias] = role.chosen
             evidence["codex"] = conditions.codex
             # A forced panel takes no stand-in, so it needs no choice evaluated (and no limit read).
-            ordered, skipped = ([], []) if forced else _candidates(self.choices, conditions, role)
+            ordered, skipped = ([], []) if forced else _candidates(self.choices, conditions, role, bool(panel))
             slots = (self._panel(panel, models, ordered, conditions, forced) if panel
                      else [Slot({"member": None, "reason": "; ".join(skipped) or None}, ordered[:2])])
             for slot in slots:
@@ -188,46 +188,45 @@ class Reviewer:
 
     def _panel(self, panel: tuple[str, ...], models: dict[str, Model], ordered: list[Model],
                conditions: Conditions, forced: bool) -> list[Slot]:
-        """Each member, or what reviews in its place. A configured member whose condition fails (a used-up Codex
-        week, no CLI) is replaced by the first choice that holds, or skipped when that is on the panel already
-        (fathers#151); a forced member (`--reviewer`) runs whatever the limit, or fails. A member of the
-        implementer's family stays and runs the table's choice for that case, with its note."""
+        """Each member, or what reviews in its place. A configured member reviews on its first choice whose
+        conditions hold under the panel's family policy (_pick: a member of the implementer's family stays, on the
+        table's choice for that case); one with none (a used-up Codex week, no CLI) is replaced by the first
+        candidate (role's choice when role answered), or skipped when that is on the panel already (fathers#151). A
+        forced member (`--reviewer`) runs whatever the limit, or fails. Each entry's note is its actual reviewer's."""
         slots: list[Slot] = []
         stand_in = ordered[0] if ordered else None
+        role_choice = ordered[0] if ordered and conditions.role is not None else None
         for alias in panel:
-            model, note = self._same_family(models.get(alias), conditions.family)
-            why = (conditions.reason(model, forced, panel=True) if model is not None
-                   else f"{alias} is not a model of the models file ({_models_path(self.project) or 'the defaults'})")
-            entry: dict[str, Any] = {"member": alias, "reviewer": alias, "status": "pending", "reason": None,
-                                     **({"note": note} if note else {})}
+            known = models.get(alias)
+            if known is None:
+                model: Model | None = None
+                why: str | None = (f"{alias} is not a model of the models file "
+                                   f"({_models_path(self.project) or 'the defaults'})")
+            elif forced:
+                model, why = known, conditions.reason(known, forced=True)
+            elif role_choice is not None and role_choice.alias == alias:
+                model, why = role_choice, None
+            else:
+                model, why = _pick(self.choices, known, conditions, panel=True)
+            entry: dict[str, Any] = {"member": alias, "reviewer": alias, "status": "pending", "reason": None}
             if why is None and model is not None:
-                slots.append(Slot(entry, [model]))
+                slots.append(Slot(_noted(entry, model, conditions.family), [model]))
                 continue
             taken = set(panel) | {s.entry["reviewer"] for s in slots}
             if forced:
                 entry.update(status="failed", error=why, numbers=[])
             elif stand_in is not None and stand_in.alias not in taken:
                 entry.update(reviewer=stand_in.alias, reason=f"{why}: {stand_in.alias} reviews in its place")
-                slots.append(Slot(entry, [stand_in]))
+                slots.append(Slot(_noted(entry, stand_in, conditions.family), [stand_in]))
                 continue
             else:
                 entry.update(status="skipped", numbers=[],
                              reason=(f"{why}; its fallback {stand_in.alias} is already on the panel" if stand_in
                                      else f"{why}; no other choice can review"))
-            if model is not None:
-                entry.update(model=model.id, effort=model.effort)
+            if known is not None:
+                entry.update(model=known.id, effort=known.effort)
             slots.append(Slot(entry, []))
         return slots
-
-    def _same_family(self, model: Model | None, family: str | None) -> tuple[Model | None, str | None]:
-        """A panel member of the implementer's family: the review role's choice for that model that does not ask
-        for another family (Mastack's same-family Opus), and the note it gives, else this note: the person reading
-        the review learns the answer is from the implementer's family."""
-        if model is None or not family or model.family != family:
-            return model, None
-        own = next((c for c in self.choices if c.alias == model.alias and not c.not_family), None)
-        chosen = own if model.not_family and own is not None else model
-        return chosen, chosen.note or (own.note if own else None) or f"same family as the implementer ({family})"
 
     def _execute(self, label: str, checkout: str, request: Request, slots: list[Slot], output: Path, log: Path,
                  evidence: dict[str, Any]) -> Answer:
@@ -338,9 +337,39 @@ class Reviewer:
         return _claude_cli(self.project) or "claude"
 
 
-def _candidates(choices: list[Model], conditions: Conditions, role: Role | None) -> tuple[list[Model], list[str]]:
+def _pick(choices: list[Model], model: Model, conditions: Conditions, panel: bool) -> tuple[Model | None, str | None]:
+    """The model's first review choice whose conditions hold, in the review role's order (the model itself when the
+    role lists it nowhere), and else why its choices do not hold. Under the panel's family policy (owner decision
+    2026-11-16, fathers#151) a second pass drops `not_family`: a member of the implementer's family still reviews,
+    on the first of its choices that holds without that condition, preferring one that asks for nothing about the
+    family (Mastack's same-family Opus) because the first pass takes those."""
+    own = [c for c in choices if c.alias == model.alias] or [model]
+    why: str | None = None
+    for lenient in (False, True) if panel else (False,):
+        why = None
+        for choice in own:
+            reason = conditions.reason(choice, panel=lenient)
+            if reason is None:
+                return choice, None
+            why = why or reason
+    return None, why
+
+
+def _noted(entry: dict[str, Any], model: Model, family: str | None) -> dict[str, Any]:
+    """The entry with the note of the reviewer that actually reviews: a reviewer of the implementer's family gives
+    its choice's note, else "same family as the implementer (F)"; any other reviewer gives none."""
+    entry.pop("note", None)
+    if family and model.family == family:
+        entry["note"] = model.note or f"same family as the implementer ({family})"
+    return entry
+
+
+def _candidates(choices: list[Model], conditions: Conditions, role: Role | None,
+                panel: bool = False) -> tuple[list[Model], list[str]]:
     """The review role's choices whose conditions hold, in order and one per model: role's choice first when role
-    answered, then the choices after it; and why each choice before the first was skipped (fathers#155)."""
+    answered (it stays authoritative), then the choices after it; and why each choice before the first was skipped
+    (fathers#155). Under the panel's family policy (`panel`), a model no choice admits on the strict conditions may
+    still stand in on its own family's choice (_pick), after every model the strict conditions admit."""
     ordered: list[Model] = []
     skipped: list[str] = []
     start = 0
@@ -356,6 +385,12 @@ def _candidates(choices: list[Model], conditions: Conditions, role: Role | None)
             ordered.append(choice)
         elif not ordered:
             skipped.append(why)
+    if panel:
+        for choice in choices[start:]:
+            if not any(c.alias == choice.alias for c in ordered):
+                found, _ = _pick(choices, choice, conditions, panel=True)
+                if found is not None:
+                    ordered.append(found)
     return ordered, skipped
 
 
