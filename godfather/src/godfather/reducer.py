@@ -8,7 +8,7 @@ import dataclasses
 from . import modes as _modes
 from . import pages as _pages
 from . import settings_model as _settings
-from .state import (QUIT, ActionDone, AppState, DetailsLoaded, Drawn, Effect, Event, Key, Loaded, ModelFailed, ModelLoaded, Mouse,
+from .state import (QUIT, ActionDone, AppState, HandOff, DetailsLoaded, Drawn, Effect, Event, Key, Loaded, ModelFailed, ModelLoaded, Mouse,
                     NewsLoaded, Notice, Refresh, Result, SettingsChecked, SettingsFailed, SettingsOpened,
                     SettingsOverlay, SettingsRead, SettingsSections, SettingsWritten, ToolLoaded, closed_news,
                     PAGE_TABLES, model_loaded,
@@ -45,8 +45,11 @@ def reduce(state: AppState, event: Event, now: float) -> Result:
         state, effects = settings_event(state, event, now)
     elif isinstance(event, ActionDone):  # its line in the footer, the source polled at once (SPEC 24)
         line = dashboard_text(event.line) or ("done" if event.ok else "failed")
-        state = dataclasses.replace(state, notice=Notice(line, now, "ok" if event.ok else "bad"))
+        state = dataclasses.replace(state, notice=Notice(line, now, "ok" if event.ok else "bad"),
+                                    acting=state.acting - {event.key})
         effects = [Effect("poll", key=event.tool)] if event.tool else []
+    elif isinstance(event, HandOff):  # the pager runs on the screen's thread, which owns the terminal
+        effects = [Effect("hand-off", item=(event.action, event.key))]
     elif isinstance(event, ToolLoaded):
         state = dataclasses.replace(state, tools={**state.tools, event.tool.name: event.tool})
     elif isinstance(event, NewsLoaded):

@@ -24,7 +24,9 @@ Lanefather's win and this page and the adapter follow.
 - `show` advertises `lanefather show ID --json` (below). Without it Godfather never runs `show`: a request whose
   lane the status snapshot does not join says `lanefather too old` in DETAILS.
 - `actions` lists the row actions Lanefather offers (fathers#88); Godfather offers only those it knows, and never
-  land, promote, done, sync, review or sweep.
+  land, promote, done, sync, review or sweep. Park (fathers#57, not advertised yet) runs as
+  `lanefather park ID --state-dir DIR --reason=R` with the lane's own state directory, never the project Godfather
+  runs in; it is offered for an `active` lane and checked again in a fresh `status --json` before it runs.
 
 ## `lanefather status --json`
 

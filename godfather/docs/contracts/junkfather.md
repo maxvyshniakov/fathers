@@ -48,4 +48,15 @@ snapshot on screen, dimmed, with `stale since` in the page's border.
 - request ↔ entry: the entry's `pid` or `pgid` is the request's holder or in its process tree, or the entry belongs to
   the lane the request joins to.
 - lane ↔ entry: the entry's `lane` equals the lane's id and its `cwd` is inside the lane's worktree.
-- entry ↔ lease: the request whose process tree holds the entry's `pid` or `pgid`.
+- entry ↔ lease: the request whose process tree holds the entry's `pid` or `pgid`. The snapshot names no member pids
+  beyond the leader and its group (`processes` is a count), so those are what a join can use.
+
+### Row actions (fathers#88)
+
+`reap` and `extend` from `actions`: `junkfather reap --id ID --reason=godfather: orphan` for an orphan,
+`junkfather reap --id ID --expired --reason=godfather: expired` for an expired entry (Junkfather refuses it once the
+entry was extended), `junkfather reap --pid PID --force --reason=godfather: unowned` for an unowned process the last
+sweep reported that still ran then (`alive` not false), and `junkfather extend ID --ttl 1h|4h|1d`. Before one runs,
+Godfather reads `status --json` again and needs the row still offering the same action; an unowned pid that an owned
+entry holds now is refused, since `reap --pid` resolves an owned entry first. `reap --pid` takes no start time today,
+so the check is Godfather's and the sweep's (its `--force` path checks the start it recorded).

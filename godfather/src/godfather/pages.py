@@ -22,8 +22,9 @@ def applicable(state: AppState) -> list[_actions.Action]:
         item = selected_item(state)
         if item is None or state.model is None:
             return []
+        uid = state.model.get("uid")
         return _actions.for_request(item, cast(list[dict[str, Any]], state.model["waiters"]),
-                                    state.model.get("actions") or ())
+                                    state.model.get("actions") or (), uid if isinstance(uid, int) else None)
     rows = page_rows(state, state.page)
     index = page_index(state, state.page, rows)
     if index is None:

@@ -61,9 +61,9 @@ SettingsOverlay = _settings.Panel  # Settings (fathers#87): its sections, cursor
 @dataclass(frozen=True)
 class ActionMenu:
     """A row's actions (fathers#88): only those its tool advertises and that apply to it now; `cursor` the one Enter
-    picks."""
+    picks, none until one is chosen, so a second Enter never runs the first."""
     actions: tuple[_actions.Action, ...]
-    cursor: int = 0
+    cursor: Optional[int] = None
     kind: str = "actions"
 
 
@@ -203,6 +203,7 @@ class AppState:
     tools: dict[str, Tool] = field(default_factory=lambda: cast(dict[str, Tool], {}))  # Lanefather, Junkfather
     page: str = "overview"  # the page shown (PAGES)
     came_from: tuple[str, ...] = ()  # the pages a link left, Esc goes back through them
+    acting: frozenset[tuple[Any, ...]] = frozenset()  # the actions in flight (action_key()), each started once
 
 
 # Events
@@ -298,10 +299,24 @@ class NewsLoaded:
 
 @dataclass(frozen=True)
 class ActionDone:
-    """An action ran (or was dropped): the tool's first stdout line on success, its first stderr line on failure."""
+    """An action ran (or was dropped): the tool's first stdout line on success, its first stderr line on failure;
+    `key` the action's (action_key()), no longer in flight."""
     tool: str
     ok: bool
     line: str
+    key: tuple[Any, ...] = ()
+
+
+@dataclass(frozen=True)
+class HandOff:
+    """The latest log, checked: the screen is to hand the terminal to the pager (fathers#88)."""
+    action: _actions.Action
+    key: tuple[Any, ...] = ()
+
+
+def action_key(action: _actions.Action) -> tuple[Any, ...]:
+    """What makes an action the same one: its row and its command; one in flight is not started again."""
+    return (*action.identity, action.tool, *action.argv)
 
 
 @dataclass(frozen=True)
@@ -323,7 +338,7 @@ class Tick:
 
 
 Event = Union[Key, Mouse, ModelLoaded, ModelFailed, DetailsLoaded, SettingsOpened, SettingsSections, SettingsRead,
-              SettingsChecked, SettingsWritten, SettingsFailed, NewsLoaded, ToolLoaded, ActionDone, Drawn, Tick]
+              SettingsChecked, SettingsWritten, SettingsFailed, NewsLoaded, ToolLoaded, ActionDone, HandOff, Drawn, Tick]
 
 
 # Effects, for the app to carry out
@@ -495,7 +510,9 @@ def filtered(state: AppState, events_filter: _events_view.Filter) -> AppState:
     rows = _events_view.shown_rows(state.model, events_filter)
     newest = event_id(rows[-1]) if rows else None
     picked = {name: key for name, key in state.picked.items() if name != "events"}  # another list: its newest
-    return dataclasses.replace(state, events_filter=events_filter, newest=newest, fresh_events=0, picked=picked)
+    scroll = {name: offset for name, offset in state.scroll.items() if name != "events"}  # and the view with it
+    return dataclasses.replace(state, events_filter=events_filter, newest=newest, fresh_events=0, picked=picked,
+                               scroll=scroll)
 
 
 def event_rows(state: AppState) -> list[dict[str, Any]]:

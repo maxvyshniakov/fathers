@@ -39,7 +39,8 @@ from . import layout as _layout
 from . import settings_model as _settings
 from .pages import follow_link, go_back, open_actions, open_page, page_move, page_select
 from .state import (LOAD_NEWS, OPEN_SETTINGS, PAGE_TABLES, QUIT, ActionMenu, AppState, Changelog, Confirm, Effect, Help,
-                    Key, Mouse, Notice, Reason, Result, SettingsOverlay, event_index, event_move, filtered, items, move,
+                    Key, Mouse, Notice, Reason, Result, SettingsOverlay, action_key, event_index, event_move, filtered,
+                    items, move,
                     overlay_box, settings_context, settings_result)
 from . import events as _events_view
 from . import overlay_text as _overlays
@@ -448,7 +449,10 @@ REASON_MAX = 120  # characters a park reason takes
 
 
 def pick(state: AppState, menu: ActionMenu, now: float) -> Result:
-    """The menu's action picked: a park asks its reason first, a confirmed one asks, any other runs now."""
+    """The menu's action picked: a park asks its reason first, a confirmed one asks, any other runs now; with none
+    chosen yet, nothing."""
+    if menu.cursor is None:
+        return state, []
     action = menu.actions[menu.cursor]
     if action.reason:
         return dataclasses.replace(state, overlay=Reason(action)), []
@@ -458,9 +462,14 @@ def pick(state: AppState, menu: ActionMenu, now: float) -> Result:
 
 
 def run_action(state: AppState, action: Any, reason: str, now: float) -> Result:
-    """The action handed to the app, which checks the row in a fresh snapshot and runs it in the background."""
-    return dataclasses.replace(state, overlay=None, notice=Notice(f"{action.name}…", now, "dim")), [
-        Effect("action", item=(action, reason))]
+    """The action handed to the app, which checks the row in a fresh snapshot and runs it in the background; the
+    same one already in flight is not started twice."""
+    key = action_key(action)
+    if key in state.acting:
+        return dataclasses.replace(state, overlay=None, notice=Notice(f"{action.name}: already running", now,
+                                                                      "dim")), []
+    return dataclasses.replace(state, overlay=None, notice=Notice(f"{action.name}…", now, "dim"),
+                               acting=state.acting | {key}), [Effect("action", item=(action, reason))]
 
 
 def cancelled(state: AppState, now: float, why: str = "nothing run") -> Result:
@@ -478,8 +487,10 @@ def action_press(state: AppState, key: str, now: float) -> Result:
             return cancelled(state, now)
         if hot in ("up", "k", "down", "j", "home", "g", "end", "G"):
             last = len(overlay.actions) - 1
-            cursor = {"up": overlay.cursor - 1, "k": overlay.cursor - 1, "down": overlay.cursor + 1,
-                      "j": overlay.cursor + 1, "home": 0, "g": 0, "end": last, "G": last}[hot]
+            at = overlay.cursor
+            cursor = {"up": last if at is None else at - 1, "k": last if at is None else at - 1,
+                      "down": 0 if at is None else at + 1, "j": 0 if at is None else at + 1,
+                      "home": 0, "g": 0, "end": last, "G": last}[hot]
             return dataclasses.replace(state, overlay=dataclasses.replace(overlay, cursor=min(max(cursor, 0), last))), []
         if hot in ("\r", "\n", " "):
             return pick(state, overlay, now)

@@ -394,9 +394,9 @@ def action_lines(overlay: Any) -> list[Line]:
     if kind == "reason":
         return [[("Why park it? An empty reason cancels.", "dim")], [], *target, [],
                 [("reason   ", "dim"), (overlay.text, "text"), ("_", "key")]]
-    command = action.shown(overlay.reason)
+    command = wrap(action.shown(overlay.reason), ACTION_WIDTH - TEXT_INSET - 9)  # the whole command, never cut
     return [*target, *([[("reason   ", "dim"), (overlay.reason, "text")]] if overlay.reason else []), [],
-            [("runs     ", "dim"), (command, "accent")]]
+            *[[("runs     " if index == 0 else " " * 9, "dim"), (line, "accent")] for index, line in enumerate(command)]]
 
 
 def action_box(overlay: Any, width: int, height: int) -> _layout.Rect:
@@ -413,7 +413,7 @@ def action_title(overlay: Any) -> str:
 def action_hints(overlay: Any) -> list[Part]:
     kind = getattr(overlay, "kind", "")
     if kind == "actions":
-        return [("↑↓", "choose"), ("enter", "run"), ("esc", "close")]
+        return [("↑↓", "choose"), ("enter", "run the chosen"), ("esc", "close")]
     if kind == "reason":
         return [("enter", "next"), ("esc", "cancel")]
     return [("y", "run it"), ("n", "cancel"), ("esc", "cancel")]
