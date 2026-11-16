@@ -123,6 +123,9 @@ def parser() -> argparse.ArgumentParser:
     p = commands.add_parser("check", help="run the lane's affected checks and write its receipt")
     p.add_argument("id")
     p.add_argument("--rerun", action="store_true", help="run every suite even if a receipt covers the tree")
+    p.add_argument("--agent", choices=("claude-code", "codex"),
+                   help="the agent that built the lane, for the review's implementer family (default: the agent "
+                        "session this check runs in)")
     p.add_argument("--slots", type=int, choices=range(1, 5),
                    help="verification worker budget passed as verify --jobs (default: slotfather advise, at most "
                         f"{CHECK_MAX_JOBS})")
