@@ -1,4 +1,4 @@
-╭─ SETTINGS ─────────────────────── saved at once · applies at the next grant ─╮
+╭─ SETTINGS ────────────────────── a change saves after a second, or on Enter ─╮
 │                                                                              │
 │  GODFATHER · this dashboard only                                             │
 │    Refresh every             1s                                              │

@@ -258,7 +258,7 @@ def settings_digit(panel: _settings.Panel, context: _settings.Context, key: str,
 
 def settings_reset_all(panel: _settings.Panel, context: _settings.Context, _: str, now: float) -> _settings.Result:
     """D: once, it asks; again within the flash, the selected row's section is reset."""
-    if panel.armed is not None and now - panel.armed < _settings.FLASH_SECONDS:
+    if panel.armed is not None and panel.armed_tool == panel.focus[0] and now - panel.armed < _settings.FLASH_SECONDS:
         return _settings.reset_section(panel, context, now)
     return _settings.arm(panel, now), context, []
 
@@ -339,7 +339,7 @@ def settings_press(state: AppState, key: str, now: float) -> Result:
     panel = cast(SettingsOverlay, state.overlay)
     which = mode(state)
     if which == "settings" and panel.armed is not None and key != "D":
-        state = dataclasses.replace(state, overlay=_settings.replace(panel, armed=None, flash=None))
+        state = dataclasses.replace(state, overlay=_settings.replace(panel, armed=None, armed_tool="", flash=None))
     handler = SETTINGS_TABLE[which].get(key)
     return handler(state, key, now) if handler else (state, [])
 

@@ -17,7 +17,7 @@ def draw(canvas: Canvas, panel: _settings.Panel, context: _settings.Context) -> 
     view = _settings.geometry(panel, context)
     rect, inside = view.rect, view.inside
     frame = Panel(canvas, rect, "settings", left=3, right=3, footer=True)
-    frame.overlay("SETTINGS", "saved at once · applies at the next grant" if inside.notes.width >= 60 else "")
+    frame.overlay("SETTINGS", "a change saves after a second, or on Enter" if inside.notes.width >= 60 else "")
     if inside.small:
         frame.note("Enlarge terminal · Esc closes")
         return

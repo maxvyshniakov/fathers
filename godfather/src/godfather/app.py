@@ -112,6 +112,9 @@ class Screen:
         self.others = others if others is not None else [Source(name, _events.EventsContract(name))
                                                          for name in _sources.TOOLS if name != "slotfather"]
         self.feed = _events.Feed()
+        # Settings' own view of the tools (fathers#87 review): discovered and read on Settings' worker alone, never on
+        # the screen's thread nor on the Source objects the model loader uses
+        self.settings_found = [Source(name, _settings_adapter.Contract(name)) for name in _sources.TOOLS]
         self.rows: list[dict[str, Any]] = []
         self.followed: tuple[tuple[str, str], ...] = ()
 
@@ -179,14 +182,14 @@ class Screen:
         return [self.source, *self.others]
 
     def settings_client(self, tool: str) -> SettingsClient:
-        source = next((found for found in self.sources() if found.name == tool), None)
+        source = next((found for found in self.settings_found if found.name == tool), None)
         return SettingsClient(source.executable if source else None, tool)
 
     def settings_sections(self) -> list[_settings_model.Section]:
         """Settings as it opens (fathers#87): a section for each present tool, read once now; one without a settings
         contract this Godfather reads says why in its section, an absent one has none."""
         found: list[_settings_model.Section] = []
-        for source in self.sources():
+        for source in self.settings_found:
             if source.due():
                 source.discover()
             name = source.name
@@ -205,6 +208,8 @@ class Screen:
 
     def settings_call(self, request: _settings_model.Request) -> _state.Event:
         """One settings call for the panel, answered as the event the reducer takes."""
+        if request.kind == "open":
+            return _state.SettingsSections(tuple(self.settings_sections()))
         client = self.settings_client(request.tool)
         if request.kind == "read":
             try:
@@ -234,6 +239,8 @@ class Screen:
 def settings_failed(request: _settings_model.Request, failure: BaseException) -> _state.Event:
     """A settings call that raised what settings_call() does not expect: its answer, a failure."""
     why = str(failure) or type(failure).__name__
+    if request.kind == "open":
+        return _state.SettingsSections((), why)
     if request.kind == "read":
         return _state.SettingsRead(request.tool, request.generation, None, why)
     if request.kind == "check":
@@ -334,13 +341,8 @@ class Live:
         elif kind == "settings":
             self.asked += 1
             self.settings.request(self.asked, effect.item)
-        elif kind == "open-settings":
-            try:
-                sections = self.screen.settings_sections()
-            except (SettingsError, OSError) as failure:
-                self.send(_state.SettingsFailed(str(failure)))
-                return
-            self.send(_state.SettingsOpened(tuple(sections)))
+        elif kind == "open-settings":  # at once; the tools' sections come from Settings' worker (fathers#87 review)
+            self.send(_state.SettingsOpened((), loading=True))
 
     def settings_work(self, request: _settings_model.Request) -> _state.Event:
         try:

@@ -68,6 +68,7 @@ class Pending:
     at: float
     revision: Optional[str] = None
     sent: bool = False
+    confirmed: bool = False  # to be saved as soon as its check answers ok (Enter, the settle or moving on came first)
 
 
 @dataclass(frozen=True)
@@ -99,9 +100,13 @@ class Panel:
     replace: bool = True
     pending: Optional[Pending] = None
     saving: tuple[Pending, ...] = ()  # saves sent, oldest first
+    queued: tuple[Pending, ...] = ()  # saves made while one of the same tool is under way: sent after its answer
     flash: Optional[Flash] = None
     refusal: Optional[Refusal] = None
     armed: Optional[float] = None  # when D was pressed once
+    armed_tool: str = ""  # the section that D was pressed in: only it is reset
+    typed_waiting: bool = False  # Enter pressed on a typed value whose check has not answered: saved when it does
+    loading: bool = False  # the tools' sections are being read: the cursor goes to the first tool's when they come
     offset: int = 0
     reveal: bool = True  # the next placement scrolls the focused row into view
     checked: Mapping[CheckKey, dict[str, Any]] = field(default_factory=lambda: cast(dict[CheckKey, Any], {}))
@@ -277,7 +282,7 @@ def tool_row(tool: str, item: dict[str, Any], reply: dict[str, Any]) -> Row:
 
 def shown(panel: Panel, tool: str, key: str, saved: Any) -> Any:
     """A row's value as shown: pending, else being saved, else saved."""
-    for change in (panel.pending, *reversed(panel.saving)):
+    for change in (panel.pending, *reversed(panel.queued), *reversed(panel.saving)):
         if change is not None and (change.tool, change.key) == (tool, key):
             return change.value
     return saved
@@ -349,42 +354,13 @@ def check_reply(panel: Panel, row: Row, text: str) -> Optional[dict[str, Any]]:
     return panel.checked.get(check_key(row, text))
 
 
-def held_and_waiting(context: Context) -> tuple[int, list[int]]:
-    model = context.model or {}
-    return int(model.get("used", 0)), [int(waiter.get("count", 1)) for waiter in model.get("waiters", [])]
-
-
-def drain_note(slots: int, context: Context) -> str:
-    drain = max(0, held_and_waiting(context)[0] - slots)
-    return f"will drain {drain}: running work keeps its slots" if drain else ""
-
-
-def starts(slots: int, context: Context) -> int:
-    """How many waiting requests a capacity of `slots` lets start now by slot counts alone, in queue order."""
-    held, waiting = held_and_waiting(context)
-    free, started = slots - held, 0
-    for count in waiting:
-        if 0 < count <= free:
-            free, started = free - count, started + 1
-    return started
-
-
-def capacity_effect(slots: int, context: Context) -> tuple[str, str]:
-    drain, start = drain_note(slots, context), starts(slots, context)
-    if drain:
-        return f"→ {plural(slots, 'slot')} · {drain}", "warn"
-    return f"→ {plural(slots, 'slot')}" + (f" · will start {start} waiting" if start else ""), "dim"
-
-
 def answer_note(row: Row, reply: Optional[dict[str, Any]], context: Context, typed: bool) -> tuple[str, str]:
     """Under a pending or typed row: why the tool refuses the value, or what it would do; "" for nothing to say."""
     if reply is None:
         return "checking…", "dim"
     if not reply.get("ok"):
         return "✗ " + str(reply.get("error") or "Not accepted."), "bad"
-    if row.tool == "slotfather" and row.key in CAPACITY and isinstance(reply.get("slots"), int):
-        return capacity_effect(int(reply["slots"]), context)
-    if reply.get("preview"):
+    if reply.get("preview"):  # what the tool says the value would do: the tools own their rules
         return str(reply["preview"]), "dim"
     return ("Enter saves", "dim") if typed else ("", "dim")
 
@@ -492,10 +468,6 @@ def row_lines(panel: Panel, context: Context, row: Row, value_column: int) -> li
             if row.writable and row.type not in EDITABLE:
                 why = "read-only here: needs a newer godfather"
             parts.append((after, why, "dim"))
-        elif row.tool == "slotfather" and row.key == "capacity.slots":
-            note = drain_note(int(value or 0), context)
-            if note:
-                parts.append((after, note.replace("will drain", "draining"), "warn"))
         elif "effective" in row.schema and row.schema["effective"] != row.value:
             parts.append((after, f"effective here: {value_text(row, row.schema['effective'])}", "dim"))
     refusal = panel.refusal
@@ -544,6 +516,8 @@ def lines(panel: Panel, context: Context, inner: int = 0) -> list[Line]:
                 found.append(Line("problem", None, ((2, "reading…", "dim"),)))
         for row in rows(panel, context, tool):
             found.extend(row_lines(panel, context, row, value_column))
+    if panel.loading:
+        found += [Line("rule", None, ()), Line("problem", None, ((0, "Reading the tools' settings…", "dim"),))]
     return found
 
 
@@ -615,13 +589,25 @@ def update_section(panel: Panel, tool: str, **changes: Any) -> Panel:
                                          for found in panel.sections))
 
 
-def opened(sections: Sequence[Section], context: Context, now: float) -> Panel:
-    """Settings as it opens: the cursor on the first tool's first setting, else this dashboard's first."""
+def opened(sections: Sequence[Section], context: Context, now: float, loading: bool = False) -> Panel:
+    """Settings as it opens: the cursor on the first tool's first setting, else this dashboard's first. `loading`:
+    it opens at once, the tools' sections still being read (sections_read() brings them)."""
+    if loading:
+        return Panel(loading=True, focus=(GODFATHER, "interval"))
     panel = Panel(tuple(found for found in sections if found.tool in ORDER and found.tool != GODFATHER))
     panel = replace(panel, sections=tuple(dataclasses.replace(found, read_at=now) for found in panel.sections))
     rows_now = selectable(panel, context)
     first = next((row for row in rows_now if row.tool != GODFATHER), rows_now[0] if rows_now else None)
     return replace(panel, focus=first.focus if first else (GODFATHER, "interval"))
+
+
+def sections_read(panel: Panel, context: Context, sections: Sequence[Section], now: float) -> Panel:
+    """The tools' sections, read off the screen's thread after Settings opened: the cursor goes to the first tool's
+    first row unless it was moved meanwhile."""
+    found = opened(sections, context, now)
+    untouched = panel.focus == (GODFATHER, "interval") and panel.pending is None and not panel.editing
+    return replace(panel, sections=found.sections, loading=False, focus=found.focus if untouched else panel.focus,
+                   reveal=True)
 
 
 def settle_focus(panel: Panel, context: Context) -> Panel:
@@ -688,16 +674,40 @@ def save(panel: Panel, context: Context, change: Pending, now: float) -> Result:
         text = value_text(row, change.value) if row else str(change.value)
         label = row.label if row else change.key
         return say(panel, f"{label} {text} · this dashboard only", "ok", now), context, requests
+    if any(sent.tool == change.tool for sent in panel.saving):
+        # The tool saves its settings under one revision: this change waits for the answer to the one under way
+        # and goes with the revision that answer gives, so the user's own two changes never conflict.
+        return replace(panel, queued=(*panel.queued, change)), context, []
+    return send(panel, context, change)
+
+
+def send(panel: Panel, context: Context, change: Pending) -> Result:
     found = section(panel, change.tool)
     panel = update_section(panel, change.tool, generation=(found.generation if found else 0) + 1, reading=False)
     panel = replace(panel, saving=(*panel.saving, dataclasses.replace(change, sent=True)))
     return panel, context, [Request("set", change.tool, change.key, argument(change.value), change.revision)]
 
 
-def commit_pending(panel: Panel, context: Context, now: float) -> Result:
-    if panel.pending is None:
+def commit_pending(panel: Panel, context: Context, now: float, leaving: bool = False) -> Result:
+    """Saves the pending change once its check said yes (fathers#87 review): a refused value is never sent (moving
+    on drops it, its reason under its row), and one whose check has not answered is saved when it answers."""
+    change = panel.pending
+    if change is None:
         return panel, context, []
-    return save(panel, context, panel.pending, now)
+    if change.tool == GODFATHER:
+        return save(panel, context, change, now)
+    row = row_of(panel, context, (change.tool, change.key))
+    if row is None:
+        return replace(panel, pending=None), context, []
+    reply = check_reply(panel, row, argument(change.value))
+    if reply is None:
+        return replace(panel, pending=dataclasses.replace(change, confirmed=True)), context, []
+    if not reply.get("ok"):
+        if leaving:
+            why = str(reply.get("error") or "Not accepted.") + " Nothing was saved."
+            return replace(panel, pending=None, refusal=Refusal(change.tool, change.key, why)), context, []
+        return panel, context, []
+    return save(panel, context, change, now)
 
 
 def step(panel: Panel, context: Context, direction: int, now: float) -> Result:
@@ -754,7 +764,8 @@ def move_to(panel: Panel, context: Context, target: Optional[Focus], now: float,
     """The cursor to `target`; a pending change is saved first, an edit cancelled (and said, for a click)."""
     if panel.flash and panel.flash.style == "bad":
         panel = replace(panel, flash=None)  # an earlier refusal belongs to the row it was about
-    panel, context, requests = commit_pending(panel, context, now)
+    panel = replace(panel, armed=None, armed_tool="")  # a reset question belongs to the row it was asked on
+    panel, context, requests = commit_pending(panel, context, now, leaving=True)
     if cancel_edit and panel.editing:
         panel = say(panel, "Edit cancelled · nothing was saved", "dim", now)
     if target is not None:
@@ -781,7 +792,7 @@ def begin(panel: Panel, context: Context, text: str = "") -> Panel:
         return panel
     saved = saved_value(panel, context, row.tool, row.key)
     refusal = None if panel.refusal and (panel.refusal.tool, panel.refusal.key) == row.focus else panel.refusal
-    return replace(panel, pending=None, editing=True, replace=not text, flash=None, refusal=refusal,
+    return replace(panel, pending=None, editing=True, replace=not text, flash=None, refusal=refusal, typed_waiting=False,
                    buffer=text or (number(saved) if saved is not None else ""))
 
 
@@ -795,9 +806,11 @@ def commit_typed(panel: Panel, context: Context, now: float) -> tuple[Panel, Con
         return panel, context, [], False
     if row.tool != GODFATHER:
         reply = check_reply(panel, row, panel.buffer)
-        if reply is not None and not reply.get("ok"):
-            return panel, context, [], False
-    panel = replace(panel, editing=False)
+        if reply is None:  # its check has not answered: saved when it says yes
+            return replace(panel, typed_waiting=True), context, [], False
+        if not reply.get("ok"):
+            return replace(panel, typed_waiting=False), context, [], False
+    panel = replace(panel, editing=False, typed_waiting=False)
     if row.tool != GODFATHER:  # what the tool gets is what was typed: 30 stays 30, not 30.0
         value = int(value) if isinstance(value, float) and value.is_integer() and "." not in panel.buffer else value
     panel, context, requests = save(panel, context, Pending(row.tool, row.key, value, now, row.revision), now)
@@ -821,7 +834,7 @@ def reset_row(panel: Panel, context: Context, now: float) -> Result:
 def reset_section(panel: Panel, context: Context, now: float) -> Result:
     """`D` twice: the selected row's section, every setting at its default."""
     tool = panel.focus[0]
-    panel = replace(panel, pending=None, armed=None, refusal=None)
+    panel = replace(panel, pending=None, armed=None, armed_tool="", refusal=None)
     if tool == GODFATHER:
         context = context._replace(interval=DEFAULT_INTERVAL, theme=_theme.DEFAULT_MODE)
         panel = say(panel, "Saved · this dashboard's settings at their defaults", "ok", now)
@@ -834,7 +847,7 @@ def reset_section(panel: Panel, context: Context, now: float) -> Result:
 def arm(panel: Panel, now: float) -> Panel:
     tool = panel.focus[0]
     scope = "this dashboard's settings" if tool == GODFATHER else f"every {NAMES.get(tool, tool)} setting"
-    return say(replace(panel, pending=None, armed=now), f"Press D again to reset {scope} to its default"
+    return say(replace(panel, pending=None, armed=now, armed_tool=tool), f"Press D again to reset {scope} to its default"
                if tool != GODFATHER else f"Press D again to reset {scope} to their defaults", "warn", now)
 
 
@@ -874,10 +887,24 @@ def conflict_text(panel: Panel, context: Context, tool: str, key: str, ending: s
     return f"Changed by another client: now {now_text} · {ending}"
 
 
-def take_reply(panel: Panel, context: Context, tool: str, reply: dict[str, Any]) -> Panel:
+def revision_now(panel: Panel, tool: str, key: str) -> Optional[str]:
+    found = section(panel, tool)
+    item = next((item for item in schema_rows(found) if item["key"] == key), None) if found else None
+    revision = item.get("revision") if item else None
+    return str(revision) if revision is not None else None
+
+
+def take_reply(panel: Panel, context: Context, tool: str, reply: dict[str, Any], own: bool = False) -> Panel:
     """A tool's current settings, from a read or from what set and reset print: a pending change chosen under an
-    older revision of its row is a conflict, dropped and said under the row."""
+    older revision of its row is a conflict, dropped and said under the row; but not after this panel's own save
+    (`own`): the changes made meanwhile move to the revision it gave."""
     panel = update_section(panel, tool, reply=reply, problem=None)
+    if own:
+        def rebased(change: Pending) -> Pending:
+            return dataclasses.replace(change, revision=revision_now(panel, change.tool, change.key)) \
+                if change.tool == tool else change
+        panel = replace(panel, pending=rebased(panel.pending) if panel.pending else None,
+                        queued=tuple(rebased(change) for change in panel.queued))
     change = panel.pending
     found = section(panel, tool)
     if change is not None and change.tool == tool and found is not None:
@@ -907,10 +934,22 @@ def read_done(panel: Panel, context: Context, tool: str, generation: int, reply:
     return take_reply(panel, context, tool, reply)
 
 
-def check_done(panel: Panel, tool: str, key: str, text: str, revision: Optional[str],
-               reply: dict[str, Any]) -> Panel:
+def check_done(panel: Panel, context: Context, tool: str, key: str, text: str, revision: Optional[str],
+               reply: dict[str, Any], now: float) -> Result:
+    """A check answered; a change waiting on it (Enter, the settle or moving on came first) is saved if it said
+    yes, and dropped with why if not."""
     ident = (tool, key, text, revision or "")
-    return replace(panel, checked={**panel.checked, ident: reply}, asked=panel.asked - {ident})
+    panel = replace(panel, checked={**panel.checked, ident: reply}, asked=panel.asked - {ident})
+    change = panel.pending
+    if change is not None and change.confirmed and (change.tool, change.key, argument(change.value)) == (
+            tool, key, text):
+        return commit_pending(panel, context, now, leaving=True)
+    row = focused(panel, context)
+    if panel.editing and panel.typed_waiting and row is not None and (row.tool, row.key, panel.buffer) == (
+            tool, key, text):
+        panel, context, requests, _ = commit_typed(panel, context, now)
+        return panel, context, requests
+    return panel, context, []
 
 
 def write_done(panel: Panel, context: Context, request: Request, outcome: str, reply: Optional[dict[str, Any]],
@@ -923,10 +962,17 @@ def write_done(panel: Panel, context: Context, request: Request, outcome: str, r
     saving = panel.saving if first is None else panel.saving[:first] + panel.saving[first + 1:]
     panel = replace(panel, saving=saving)
     if reply is not None:
-        panel = take_reply(panel, context, tool, reply)
+        panel = take_reply(panel, context, tool, reply, own=outcome == "ok")
     requests: list[Request] = []
+    waiting = [change for change in panel.queued if change.tool == tool]
+    if waiting and outcome == "ok" and not any(change.tool == tool for change in panel.saving):
+        panel = replace(panel, queued=tuple(change for change in panel.queued if change is not waiting[0]))
+        panel, context, sent = send(panel, context, waiting[0])
+        requests += sent
+    elif waiting and outcome != "ok":  # made on top of a change that was not saved: not saved either
+        panel = replace(panel, queued=tuple(change for change in panel.queued if change.tool != tool))
     found = section(panel, tool)
-    if reply is None and found is not None:
+    if reply is None and found is not None and not any(change.tool == tool for change in panel.saving):
         requests.append(Request("read", tool, generation=found.generation))
         panel = update_section(panel, tool, reading=True, read_at=now)
     if outcome == "ok":
@@ -951,12 +997,13 @@ def write_done(panel: Panel, context: Context, request: Request, outcome: str, r
 def due_reads(panel: Panel, now: float) -> tuple[Panel, list[Request]]:
     """While Settings is open each tool's settings are read again: Slotfather's every second, the others' every
     two; never under a value being typed, nor while a read or a save of that tool is under way."""
-    if panel.editing:
-        return panel, []
+    editing = panel.focus[0] if panel.editing else ""  # only the section being typed in waits
     requests: list[Request] = []
     for found in panel.sections:
+        if found.tool == editing:
+            continue
         every = READ_EVERY.get(found.tool, READ_OTHERS)
-        busy = found.reading or any(change.tool == found.tool for change in panel.saving)
+        busy = found.reading or any(change.tool == found.tool for change in (*panel.saving, *panel.queued))
         if found.readable and not busy and now - found.read_at >= every:
             panel = update_section(panel, found.tool, reading=True, read_at=now)
             requests.append(Request("read", found.tool, generation=found.generation))

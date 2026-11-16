@@ -1,5 +1,5 @@
 ╭─ SLOTS ───────────────────────────────────────────────────── 12 cores · 6 slots (manual) ─╮ ╭─ LEASE DETAILS ────────────────────────────────────────────╮
-│                                     ╭─ SETTINGS ─────────────────────── saved at once · applies at the next grant ─╮                                     │
+│                                     ╭─ SETTINGS ────────────────────── a change saves after a second, or on Enter ─╮                                     │
 │  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅│                                                                              │uild-once                            │
 │  lane-644-bui…  lane-465-sta…  deskt│  GODFATHER · this dashboard only                                            ┃│1 slot                               │
 ╰─────────────────────────────────────│    Refresh every             1s                                             ┃│                                     │

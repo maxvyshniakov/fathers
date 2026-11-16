@@ -170,8 +170,17 @@ class DetailsLoaded:
 
 @dataclass(frozen=True)
 class SettingsOpened:
-    """Settings opened: each present tool's section as first read (settings_model.Section), in any order."""
+    """Settings opened: each present tool's section as first read (settings_model.Section), in any order; or, with
+    `loading`, none yet: they are read on Settings' worker and come as SettingsSections."""
     sections: tuple[_settings.Section, ...]
+    loading: bool = False
+
+
+@dataclass(frozen=True)
+class SettingsSections:
+    """The tools' sections, read after Settings opened; `problem` why none could be."""
+    sections: tuple[_settings.Section, ...]
+    problem: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -226,8 +235,8 @@ class Tick:
     moment: Optional[datetime.datetime] = None
 
 
-Event = Union[Key, Mouse, ModelLoaded, ModelFailed, DetailsLoaded, SettingsOpened, SettingsRead, SettingsChecked,
-              SettingsWritten, SettingsFailed, NewsLoaded, Drawn, Tick]
+Event = Union[Key, Mouse, ModelLoaded, ModelFailed, DetailsLoaded, SettingsOpened, SettingsSections, SettingsRead,
+              SettingsChecked, SettingsWritten, SettingsFailed, NewsLoaded, Drawn, Tick]
 
 
 # Effects, for the app to carry out
@@ -425,7 +434,7 @@ def settings_result(state: AppState, panel: _settings.Panel, context: _settings.
     context = settings_context(state)
     overlay: Optional[Overlay] = panel
     for request in requests:
-        if request.kind in ("read", "check", "set", "reset"):
+        if request.kind in ("open", "read", "check", "set", "reset"):
             effects.append(Effect("settings", item=request))
         elif request.kind == "changed" and LOAD_MODEL not in effects:
             effects.append(LOAD_MODEL)
@@ -448,10 +457,15 @@ def settings_event(state: AppState, event: Event, now: float) -> Result:
         return state, []
     context = settings_context(state)
     requests: list[_settings.Request] = []
-    if isinstance(event, SettingsRead):
+    if isinstance(event, SettingsSections):
+        panel = _settings.sections_read(panel, context, event.sections, now)
+        if event.problem:
+            panel = _settings.say(panel, event.problem, "bad", now)
+    elif isinstance(event, SettingsRead):
         panel = _settings.read_done(panel, context, event.tool, event.generation, event.reply, event.problem, now)
     elif isinstance(event, SettingsChecked):
-        panel = _settings.check_done(panel, event.tool, event.key, event.value, event.revision, event.reply)
+        panel, context, requests = _settings.check_done(panel, context, event.tool, event.key, event.value,
+                                                        event.revision, event.reply, now)
     elif isinstance(event, SettingsWritten):
         panel, requests = _settings.write_done(panel, context, event.request, event.outcome, event.reply,
                                                event.message, now)
@@ -530,8 +544,10 @@ def reduce(state: AppState, event: Event, now: float) -> Result:
             now, event.lane, event.cwd, None if event.error is None else dashboard_text(event.error))})
     elif isinstance(event, SettingsOpened):
         context = settings_context(state)
-        state, effects = settings_result(state, _settings.opened(event.sections, context, now), context, [])
-    elif isinstance(event, (SettingsRead, SettingsChecked, SettingsWritten)):
+        requests = [_settings.Request("open")] if event.loading else []
+        state, effects = settings_result(state, _settings.opened(event.sections, context, now, event.loading), context,
+                                         requests)
+    elif isinstance(event, (SettingsSections, SettingsRead, SettingsChecked, SettingsWritten)):
         state, effects = settings_event(state, event, now)
     elif isinstance(event, NewsLoaded):
         state = news_loaded(state, event.news)
