@@ -587,13 +587,39 @@ class MachineStatusTests(unittest.TestCase):
                 self.assertNotIn("memory ok",canvas.render(False),"no status row")
                 coloured=canvas.lines(True)[0]
                 self.assertIn("\x1b[0munleased 4.5",coloured,"in the text colour")
-                self.assertIn(tool.sgr("bad" if not admission else "status-normal",False)+permit,coloured,
-                              "red when it blocks")
+                self.assertIn(tool.sgr("status-normal",False)+permit,coloured,
+                              "an empty queue that admits nothing is no machine fault (fathers#156)")
                 ascii_canvas=tool.Canvas(110,24,marks=tool.marks_for(True))
                 tool.draw_machine(ascii_canvas, Rect(0, 0, 24, 110),model)
                 plain=ascii_canvas.lines(False,ascii_only=True)
                 self.assertEqual("".join("!" if mark=="🔥" else "+" for mark in marks),
                                  "".join(plain[row][3] for row in (2,3,4)),"ASCII: + and !")
+
+    def test_admission_says_why_it_is_closed_red_only_for_the_machine(self):
+        """fathers#156: the reason from Slotfather's model, in the border, each a golden line; red only for memory."""
+        tool=load_dashboard()
+        base=dict(slots=8,cores=12,averages=(6.3,6,6),admission=0,advice=dict(unleased_load=0.2,jobs=1),
+                  memory_block=None,memory=judged(dict(level=1,used=768,total=1024,swap_total=1024,swap_free=800)),
+                  history=[],used=8,free=0,holders=[],waiters=[],draining=0)
+        perf=dict(kind="held",label="dg-striped perf JS parity vs CSS parity",count=8,pid=94502)
+        cases=[("full",dict(holders=[dict(kind="held",label="a",count=4),dict(kind="held",label="b",count=4)]),
+                "unleased 0.2 · full · 8 of 8 held","status-normal"),
+               ("whole machine",dict(holders=[perf]),"unleased 0.2 · whole machine: dg-striped perf JS parity vs CSS parity",
+                "status-normal"),
+               ("memory",dict(memory_block="memory pressure: critical",used=2,free=6),"unleased 0.2 · memory short","bad"),
+               ("draining",dict(slots=4,used=6,free=0,draining=2),"unleased 0.2 · draining · 6 of 4 held","warn"),
+               ("queue ahead",dict(used=6,free=2,waiters=[dict(kind="waiting",count=4)]),
+                "unleased 0.2 · queue ahead · 1 waiting","status-normal"),
+               ("open",dict(admission=2,used=6,free=2),"unleased 0.2 · admission: 2 slots","status-normal")]
+        for name,changes,border,style in cases:
+            with self.subTest(name):
+                model=dict(base,**changes)
+                canvas=tool.Canvas(120,13)
+                tool.draw_machine(canvas,Rect(0,0,13,120),model)
+                top=canvas.lines(False)[0]
+                self.assertTrue(top.endswith(f" {border} ─╮"),top)
+                reason=border.split(" · ",1)[1]
+                self.assertEqual(style,canvas.cells[0][top.index(reason)][1],f"{name}: {style}")
 
     def test_a_narrow_border_keeps_the_admission_and_drops_the_unleased_load(self):
         tool=load_dashboard()

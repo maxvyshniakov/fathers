@@ -26,7 +26,7 @@
 │  owner pid  10000                                                                                │
 │                                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
-╭─ ◂ ALL LOG ▸ ────────────── description ───────╮ ╭─ MACHINE ─────── unleased 0.4 · no admission ─╮
+╭─ ◂ ALL LOG ▸ ────────────── description ───────╮ ╭─ MACHINE ─────────── queue ahead · 2 waiting ─╮
 │                                                │ │                                               │
 │  11:59:35  slot run         agent-ae72d94beb… ╹│ │  🆗 load ■■■■■■■■■■■■■■■■■■■■■■░░░░░░ 9.3/12  │
 │  11:59:20  proc extended    vite dev · ttl 4…  │ │  🆗 mem  ■■■■■■■■■░░░░░░░░░░░░░░░░░░░ normal  │

@@ -42,6 +42,10 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Changed
 
+- MACHINE says why nothing is admitted instead of a red `no admission` (fathers#156): `full · 8 of 8 held`,
+  `whole machine: <label>` when one request holds every slot, `queue ahead · 2 waiting`, `draining · 6 of 4 held`
+  (yellow), `memory short` (red: the one machine problem among them). A full or queued machine is the queue
+  working and reads in the normal colour.
 - Help fits the standard screen (fathers#145): at 156x43 its legend is laid out in columns, read down then across,
   a section going on in the next column between two rows, and shows whole with nothing to scroll; a smaller
   screen gets the one scrolling column as before.

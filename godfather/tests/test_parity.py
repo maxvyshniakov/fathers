@@ -45,6 +45,19 @@ def read(name: str) -> Any:
                              f"see {FIXTURE / 'README.md'}") from error
 
 
+def admission_note(canvas: Any) -> set[tuple[int, int]]:
+    """MACHINE's top border after its title: it says why admission is closed (fathers#156), where Slotfather's said
+    `no admission` alone."""
+    found: set[tuple[int, int]] = set()
+    for row in range(canvas.height):
+        text = "".join(str(cell[0]) or "\0" for cell in canvas.cells[row])
+        at = text.find(" MACHINE ")
+        if at >= 0:
+            end = text.find("╮", at)
+            found |= {(row, column) for column in range(at + len(" MACHINE "), end if end > 0 else canvas.width)}
+    return found
+
+
 def chart_title(canvas: tui.Canvas) -> set[tuple[int, int]]:
     """What MACHINE's chart shows since fathers#140, which Slotfather's dashboard never drew: beside the gauges, the
     title row above the chart and the axis line between its window and `now`, whose figures moved up into that title;
@@ -134,7 +147,7 @@ class ParityTests(unittest.TestCase):
                 # QUEUE holds the focus where it is drawn: its rules are heavy (fathers#139)
                 focused = canvas.tables.get("requests", dict(x=0, y=-1, width=0, height=0))
                 rules = {focused["y"], focused["y"] + focused["height"] - 1}
-                masked |= chart_title(canvas)
+                masked |= chart_title(canvas) | admission_note(canvas)
                 for row in range(height - 1):
                     for column in range(width):
                         if (row, column) not in masked:

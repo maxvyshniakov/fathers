@@ -33,7 +33,7 @@
 │  11:53:40  lane checked     710-speech-paste-phase · green · 2 suites                     │ │  after      —                                              │
 │  11:52:53  slot run         agent-a1c75285bdf2cd615 · ok 1m13s · 1 slot                   │ │                                                            │
 │  11:52:30  slot run         desktop · ok 5s · 1 slot                                      │ ╰────────────────────────────────────────────────────────────╯
-│  11:51:40  slot run         post-merge-456-rename-compat-review-fixes · ok 14m38s · 1 s…  │ ╭─ MACHINE ──────────────────── unleased 0.4 · no admission ─╮
+│  11:51:40  slot run         post-merge-456-rename-compat-review-fixes · ok 14m38s · 1 s…  │ ╭─ MACHINE ───────── unleased 0.4 · queue ahead · 2 waiting ─╮
 │  11:51:30  proc owned       vite dev · ttl 2h00m                                          │ │                               slots held  avg 4.4/6        │
 │  11:51:24  slot run         agent-a1c75285bdf2cd615 · ok 4m46s · 1 slot                   │ │  🆗 load ■■■■■■■■■░░░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
 │  11:50:12  lane started     710-speech-paste-phase · on integrate/queue-347 · 2 claims    │ │  🆗 mem  ■■■■░░░░░░░░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │

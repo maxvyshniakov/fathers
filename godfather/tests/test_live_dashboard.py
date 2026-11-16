@@ -60,7 +60,7 @@ class OnceTests(LiveCase):
         state["snapshot"]["dashboard"]["admission"] = 0
         self.fake.write(state)
         text = self.snapshot()
-        self.assertIn("no admission", text)
+        self.assertIn("queue ahead · 2 waiting", text, "why nothing is admitted (fathers#156)")
         self.assertIn("━ QUEUE ", text)
         self.assertIn("┃  ▶️    holder", text, "the selected row on the frame, its state (#15), then the label")
         self.assertEqual(1, text.count("▶"), "only the selected row has a cursor")

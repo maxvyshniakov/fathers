@@ -33,7 +33,7 @@
 │  11:47:17  ▫       agent-a0f998f4c57cd4c0e                no wait           ok 3s  21188  │ │  after      —                                              │
 │  11:47:13  ▫       agent-a0f998f4c57cd4c0e                no wait           ok 2s  21187  │ │                                                            │
 │  11:47:10  ▫       agent-a0f998f4c57cd4c0e             wait 5m48s           ok 3s  21186  │ ╰────────────────────────────────────────────────────────────╯
-│  11:47:07  ▫       agent-a0f998f4c57cd4c0e             wait 5m11s           ok 3s  21185  │ ╭─ MACHINE ──────────────────── unleased 0.4 · no admission ─╮
+│  11:47:07  ▫       agent-a0f998f4c57cd4c0e             wait 5m11s           ok 3s  21185  │ ╭─ MACHINE ───────── unleased 0.4 · queue ahead · 2 waiting ─╮
 │  11:47:04  ▫       agent-a0f998f4c57cd4c0e             wait 4m34s        ok 4m56s  21184  │ │                               slots held  avg 4.4/6        │
 │  11:46:08  ▫       post-merge-491-electron-stop-flake  wait 3m57s       ok 22m39s  21183  │ │  🆗 load ■■■■■■■■■░░░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
 │  11:45:53  ▫       agent-a1c75285bdf2cd615                no wait          ok 36s  21182  │ │  🆗 mem  ■■■■░░░░░░░░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │

@@ -26,7 +26,7 @@
 │  owner pid  10000                                                                                │
 │                                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
-╭─ ◂ PROCS LOG ▸ ───── label ─────────── detail ─╮ ╭─ MACHINE ─────── unleased 0.4 · no admission ─╮
+╭─ ◂ PROCS LOG ▸ ───── label ─────────── detail ─╮ ╭─ MACHINE ─────────── queue ahead · 2 waiting ─╮
 │                                                │ │                                               │
 │  11:59:20  extended  vite dev       ttl 4h00m  │ │  🆗 load ■■■■■■■■■■■■■■■■■■■■■■░░░░░░ 9.3/12  │
 │  11:57:00  reaped    simulator    ttl expired  │ │  🆗 mem  ■■■■■■■■■░░░░░░░░░░░░░░░░░░░ normal  │

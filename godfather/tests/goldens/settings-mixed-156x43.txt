@@ -33,7 +33,7 @@
 │  11:47:17  ▫       agent-a0f998f4c57│    events       /fake/state/lanefather/events.jsonl                          │                                     │
 │  11:47:13  ▫       agent-a0f998f4c57│    projects     2 registered in /fake/state/lanefather/projects.json         │                                     │
 │  11:47:10  ▫       agent-a0f998f4c57│    Review start              Automatic                                       │─────────────────────────────────────╯
-│  11:47:07  ▫       agent-a0f998f4c57│                                                                              │─────── unleased 0.4 · no admission ─╮
+│  11:47:07  ▫       agent-a0f998f4c57│                                                                              │eased 0.4 · queue ahead · 2 waiting ─╮
 │  11:47:04  ▫       agent-a0f998f4c57│  ──────────────────────────────────────────────────────────────────────────  │        slots held  avg 4.4/6        │
 │  11:46:08  ▫       post-merge-491-el│  Shared by every client. Automatic: the lower of the CPU and memory          │9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
 │  11:45:53  ▫       agent-a1c75285bdf│  budgets.                                                                    │normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
