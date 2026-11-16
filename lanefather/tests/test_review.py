@@ -205,7 +205,7 @@ class ReviewGateCase(LaneCase):
         super().setUp()
         self.git(self.repo, "branch", "dev")
 
-    def landed(self, lane_id, path, text):
+    def landed(self, lane_id: str, path: str, text: str) -> str:
         worktree = self.created(lane_id, path)
         self.commit(worktree, {path: text})
         self.lane("check", lane_id)

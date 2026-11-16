@@ -1,6 +1,6 @@
 """Lanefather's command line against the CLI convention (docs/cli.md, common/cliconvention.py; fathers#118).
 
-The cases listed in EXPECTED fail today; fathers#130 makes them pass and empties the list.
+A case Lanefather fails would be listed in EXPECTED with its ticket; none is.
 """
 from __future__ import annotations
 
@@ -25,16 +25,11 @@ TOOL = cliconvention.Tool("lanefather", (sys.executable, "-m", "lanefather"), (
     Command("project-hook"), Command("start"), Command("next"), Command("adopt"), Command("check"), Command("land"),
     Command("promote"), Command("sync"), Command("perf"), Command("shipped"), Command("review"), Command("findings"),
     Command("done"), Command("gc"), Command("show"), Command("status", json=()), Command("settings"),
-    Command("results"), Command("stats"), Command("list"),
+    Command("results"), Command("stats"), Command("list"), Command("wait"), Command("drop"), Command("recheck"),
+    Command("keep"),
 ))
-EXPECTED: dict[str, str] = dict.fromkeys((
-    "unknown command", "unknown option", "capabilities unknown option", "changelog unknown option",
-    "project-hook unknown option", "start unknown option", "next unknown option", "adopt unknown option",
-    "check unknown option", "land unknown option", "promote unknown option", "sync unknown option",
-    "perf unknown option", "shipped unknown option", "review unknown option", "findings unknown option",
-    "done unknown option", "gc unknown option", "show unknown option", "status unknown option",
-    "settings unknown option", "results unknown option", "stats unknown option", "list unknown option",
-), "fathers#130")
+# fathers#175 gave the usage errors the convention's two lines; nothing is expected to fail.
+EXPECTED: dict[str, str] = {}
 
 
 class CLIConvention(cliconvention.conformance(TOOL, expected=EXPECTED)):

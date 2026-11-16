@@ -35,11 +35,24 @@ def header(record: Record, rules: list[dict[str, Any]] | tuple[()] = ()) -> str:
         + ("" if record["worktree"] else f', then {prog} adopt {record["id"]} "$PWD" {record["branch"]}'),
         f"Scratch: {record['scratch'][0]} (evidence logs and probes; {prog} done removes it)",
         *([f"Cargo target, when the lane needs its own: {targets[0]}"] if targets else []),
-        f"Before reporting: {prog} check {record['id']} in your worktree, on a clean committed tree.",
-        f"Report: the block in {config.current().report_doc}, with "
-        f"Receipt: {state.receipt_path(record['id'])}",
         *claims.rules_block(list(rules)),
+        *next_lines(record),
     ])
+
+
+def next_lines(record: Record) -> list[str]:
+    """The lane's next commands, as start and adopt print them (fathers#175): the agent goes on without a complete
+    brief or a --help turn."""
+    prog, lane_id = config.prog(), record["id"]
+    return [
+        "Next, in the worktree:",
+        *([f'  git checkout -B {record["branch"]} {record["base"]} && {prog} adopt {lane_id} "$PWD" '
+           f'{record["branch"]}'] if not record["worktree"] else []),
+        f"  {prog} check {lane_id}    (on a clean committed tree; its receipt is the evidence)",
+        f"  Hand back: the block in {config.current().report_doc}, with Receipt: {state.receipt_path(lane_id)}",
+        f"  Then the coordinator lands it ({prog} land {lane_id}); {prog} wait {lane_id} --for landed blocks until "
+        "it does, no loop over list.",
+    ]
 
 
 def prepare(cwd: Any, lane_id: str, ticket: str, lane_claims: list[str], base: str | None, after: list[str],
@@ -227,6 +240,7 @@ def adopt(args: Any) -> int:
             raise LaneError(f"adopt refused: lane {args.id} is {record['status']}")
         adopt_worktree(record, args.worktree, args.branch)
     print(f"Lane {args.id} adopted {record['worktree']} on {args.branch}")
+    print("\n".join(next_lines(record)))
     return 0
 
 

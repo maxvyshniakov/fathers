@@ -107,20 +107,11 @@
     "tests/test_promote.py|pyright|reportUnknownParameterType|Type of parameter \"changes\" is unknown": 3,
     "tests/test_promote.py|pyright|reportUnknownParameterType|Type of parameter \"lane_id\" is unknown": 3,
     "tests/test_promote.py|pyright|reportUnknownParameterType|Type of parameter \"sha\" is unknown": 1,
-    "tests/test_review.py|pyright|reportMissingParameterType|Type annotation is missing for parameter \"lane_id\"": 1,
     "tests/test_review.py|pyright|reportMissingParameterType|Type annotation is missing for parameter \"ok\"": 1,
-    "tests/test_review.py|pyright|reportMissingParameterType|Type annotation is missing for parameter \"path\"": 1,
-    "tests/test_review.py|pyright|reportMissingParameterType|Type annotation is missing for parameter \"text\"": 1,
     "tests/test_review.py|pyright|reportMissingParameterType|Type annotation is missing for parameter \"tip\"": 1,
-    "tests/test_review.py|pyright|reportUnknownArgumentType|Argument type is unknown\n  Argument corresponds to parameter \"args\" in function \"lane\"": 3,
-    "tests/test_review.py|pyright|reportUnknownArgumentType|Argument type is unknown\n  Argument corresponds to parameter \"claims\" in function \"created\"": 1,
-    "tests/test_review.py|pyright|reportUnknownArgumentType|Argument type is unknown\n  Argument corresponds to parameter \"lane_id\" in function \"created\"": 1,
-    "tests/test_review.py|pyright|reportUnknownMemberType|Type of \"landed\" is partially unknown\n  Type of \"landed\" is \"(lane_id: Unknown, path: Unknown, text: Unknown) -> str\"": 11,
+    "tests/test_review.py|pyright|reportUnknownArgumentType|Argument type is unknown\n  Argument corresponds to parameter \"args\" in function \"lane\"": 1,
     "tests/test_review.py|pyright|reportUnknownMemberType|Type of \"ship\" is partially unknown\n  Type of \"ship\" is \"(tip: Unknown, ok: bool = True) -> str\"": 4,
     "tests/test_review.py|pyright|reportUnknownMemberType|Type of \"wait_review\" is partially unknown\n  Type of \"wait_review\" is \"(label: Unknown, timeout: int = 60) -> Any\"": 5,
-    "tests/test_review.py|pyright|reportUnknownParameterType|Type of parameter \"lane_id\" is unknown": 1,
-    "tests/test_review.py|pyright|reportUnknownParameterType|Type of parameter \"path\" is unknown": 1,
-    "tests/test_review.py|pyright|reportUnknownParameterType|Type of parameter \"text\" is unknown": 1,
     "tests/test_review.py|pyright|reportUnknownParameterType|Type of parameter \"tip\" is unknown": 1
   }
 }
