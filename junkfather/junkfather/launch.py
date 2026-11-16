@@ -324,8 +324,10 @@ def adopt_process(store: Store, pid: int, table: _procs.Table, ttl: float, keep:
     made = new_entry(store, argv or [proc.cmd], ttl, keep, label, who, "adopted", os.getcwd(), now)
     made.update(cast(Entry, dict(extra or {})))
     mine = {os.getpid(), *(p.pid for p in table.descendants(os.getpid()))}  # this junkfather and its ps
+    theirs = _reap.claimed_elsewhere(store, made, table)  # what another entry holds directly stays its own
     entry = _entry.adopted(store, made, proc,
-                           [proc, *(p for p in table.descendants(pid, prune=_safety.unsafe) if p.pid not in mine)])
+                           [proc, *(p for p in table.descendants(pid, prune=_safety.unsafe) if p.pid not in mine
+                                    and (theirs.get(p.pid) or (0, False))[0] < _reap.DIRECT)])
     _events.write(store.root, "entry.adopted", _events.subject(entry), _events.actor_of(who),
                   {"cmd": proc.cmd, "ttl": ttl, "keep": keep, "pgid": proc.pgid, "group": entry["group"],
                    **(extra or {})})

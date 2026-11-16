@@ -15,8 +15,8 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   is still its own. Only a call that is one explicit `junkfather own`, `own-resource` or `adopt` is left alone;
   `junkfather list; until ...; done` is owned. `list` and `status` show the owning subagent, and their rows gain
   `agent_type`, `auto` and `no_ttl`. On macOS `--mastack` also loads the sweep agent, as `--launchd` does.
-- Reaping an adopted entry leaves out what another entry holds: an attached `junkfather own --keep-for session` run
-  in an adopted shell keeps running.
+- Reaping an adopted entry leaves out what another entry holds more firmly: an attached `junkfather own --keep-for
+  session` run in an adopted shell keeps running, and a process adopted inside it is reaped by its own entry.
 - junkfather owns resources that outlive the command that made them. `junkfather own --kind KIND -- CMD` runs CMD
   and owns the simulator, container, `tailscale serve` route or Safari Technology Preview instance it made (kinds
   `simulator`, `docker`, `tailscale-serve`, `safari-tp`); `junkfather own-resource --kind KIND --id ID` owns one that

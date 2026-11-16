@@ -13,7 +13,7 @@ Which processes belong to an entry:
 - the agent-browser daemons its processes started (`daemons`, pid, start time and command; browser.py), which
   launchd adopted and so left its tree;
 - the descendants (by parent pid in the same table) of all of these, for the children that left the group;
-- for an adopted entry, less what another active entry holds (`targets_of`).
+- for an adopted entry, less what another active entry holds more firmly (`targets_of`).
 
 Never a member: a process with a terminal or an agent session (Claude Code, Codex), nor anything below one (a
 tmux server's panes and the agents in them), another user's process, pid 1, junkfather itself or its ancestors.
@@ -54,6 +54,9 @@ def seen_commands(entry: Entry) -> Dict[Tuple[int, str], str]:
     return seen
 
 
+DIRECT, GROUP, BELOW = 3, 2, 1  # how an entry holds a process: by its own identity, through its leader's group, below
+
+
 def members(entry: Entry, table: _procs.Table, uid: Optional[int] = None, force: bool = False, ours: bool = False
             ) -> Tuple[List[_procs.Proc], str]:
     """The entry's processes that may be signalled, and how they were found: "leader", "known", or why there are
@@ -64,8 +67,16 @@ def members(entry: Entry, table: _procs.Table, uid: Optional[int] = None, force:
     has pid and start only). `force` skips the command checks, never the start time. `ours`: the caller is the
     leader's parent and has not waited for it, so its pid cannot have been reused; only its command check is
     skipped. A leader refused for its command or start is never found again through `known`."""
+    held, how = holds(entry, table, force, ours)
+    return sorted(_safety.signallable([proc for proc, _ in held.values()], table, uid), key=lambda p: p.pid), how
+
+
+def holds(entry: Entry, table: _procs.Table, force: bool = False, ours: bool = False
+          ) -> Tuple[Dict[int, Tuple[_procs.Proc, int]], str]:
+    """`members` before the signalling policy, each with how the entry holds it: DIRECT (its leader, a known
+    member, a daemon), GROUP (in its verified leader's group) or BELOW (a descendant of one of those)."""
     leader = table.get(entry.get("pid"))
-    found: Dict[int, _procs.Proc] = {}
+    found: Dict[int, Tuple[_procs.Proc, int]] = {}
     seen = seen_commands(entry)
     refused: Set[int] = set()
     how = "gone"
@@ -73,67 +84,82 @@ def members(entry: Entry, table: _procs.Table, uid: Optional[int] = None, force:
         last = seen.get((leader.pid, leader.start))
         if force or ours or command_matches(leader.cmd, entry.get("seen") or "") \
                 or (last is not None and command_matches(leader.cmd, last)):
-            found[leader.pid] = leader
+            found[leader.pid] = (leader, DIRECT)
             how = "leader"
             if entry.get("group") and leader.pgid == leader.pid == entry.get("pgid"):
                 for proc in table.group(leader.pgid):
-                    found[proc.pid] = proc
+                    found.setdefault(proc.pid, (proc, GROUP))
         else:
             how = "command changed"
             refused.add(leader.pid)
     elif leader is not None:
         how = "pid reused"
         refused.add(leader.pid)
-    if not found:
-        known = {(int(pid), _procs.norm(start)) for pid, start in entry.get("known") or []}
-        for proc in table.procs.values():
-            if (proc.pid, proc.start) not in known or proc.pid in refused:
-                continue
-            recorded = seen.get((proc.pid, proc.start))
-            if force or recorded is None or command_matches(proc.cmd, recorded):
-                found[proc.pid] = proc
-        if found:
-            how = "known"
+    known = {(int(pid), _procs.norm(start)) for pid, start in entry.get("known") or []}
+    for proc in table.procs.values():  # with a live leader too: a known member that left its group is held directly
+        if (proc.pid, proc.start) not in known or proc.pid in refused:
+            continue
+        recorded = seen.get((proc.pid, proc.start))
+        if force or recorded is None or command_matches(proc.cmd, recorded):
+            if how != "leader":
+                how = "known"
+            found[proc.pid] = (proc, DIRECT)
     for item in entry.get("daemons") or []:  # detached daemons its processes started (browser.py)
         with contextlib.suppress(TypeError, ValueError):
             pid, start, cmd = item
             proc = table.get(int(pid))
             if proc is not None and proc.start == _procs.norm(start) and (force or command_matches(proc.cmd, cmd)):
-                found.setdefault(proc.pid, proc)
+                found[proc.pid] = (proc, DIRECT)
                 how = how if how in ("leader", "known") else "daemons"
     for pid in list(found):
         for proc in table.descendants(pid, prune=_safety.unsafe):
-            found.setdefault(proc.pid, proc)
-    return sorted(_safety.signallable(found.values(), table, uid), key=lambda p: p.pid), how
+            found.setdefault(proc.pid, (proc, BELOW))
+    return found, how
 
 
 def targets_of(store: Store, entry: Entry, table: _procs.Table, force: bool = False
                ) -> Tuple[List[_procs.Proc], str]:
     """What a reap of the entry signals: its `members`, and for an adopted entry (`adopt`, a background call's
-    shell) less what another active entry holds: what runs in an adopted shell may be owned on its own (an attached
-    `junkfather own --keep-for session` runs in the shell's group)."""
+    shell) less what another active entry holds more firmly (`claimed_elsewhere`): what runs in an adopted shell
+    may be owned on its own (an attached `junkfather own --keep-for session` runs in the shell's group), and an
+    entry adopted inside another one's shell is still reaped by its own reap."""
     found, how = members(entry, table, force=force)
     if entry.get("mode") == "adopted" and found:
-        held = held_elsewhere(store, entry, table)
-        found = [p for p in found if p.pid not in held]
+        mine, _ = holds(entry, table, force)
+        theirs = claimed_elsewhere(store, entry, table)
+        found = [p for p in found if not outranked(mine.get(p.pid, (p, BELOW))[1], theirs.get(p.pid))]
     return found, how
 
 
-def held_elsewhere(store: Store, entry: Entry, table: _procs.Table) -> Set[int]:
-    """The pids another active process entry holds: its members, and its supervisor (pid and start time) with
-    that one's descendants."""
-    held: Set[int] = set()
+def outranked(level: int, other: Optional[Tuple[int, bool]]) -> bool:
+    """Whether another entry's hold (its level, and whether that entry is newer) beats this entry's `level`: a
+    firmer hold wins, and of two equal holds the newer entry's, the more explicit decision."""
+    return other is not None and (other[0] > level or (other[0] == level and other[1]))
+
+
+def claimed_elsewhere(store: Store, entry: Entry, table: _procs.Table) -> Dict[int, Tuple[int, bool]]:
+    """pid -> (the firmest hold another active process entry has on it, whether that entry is newer than `entry`):
+    its `holds`, and its live supervisor (pid and start time) held DIRECT with its descendants BELOW."""
+    claimed: Dict[int, Tuple[int, bool]] = {}
+    created = float(entry.get("created") or 0)
+
+    def claim(pid: int, level: int, newer: bool) -> None:
+        if pid not in claimed or (level, newer) > claimed[pid]:
+            claimed[pid] = (level, newer)
     for other in store.entries():
         if other.get("id") == entry.get("id") or other.get("state") not in _entry.ACTIVE \
                 or other.get("mode") == "resource":
             continue
-        held.update(p.pid for p in members(other, table)[0])
+        newer = float(other.get("created") or 0) > created
+        for pid, (_, level) in holds(other, table)[0].items():
+            claim(pid, level, newer)
         supervisor = other.get("supervisor") or {}
         pid = supervisor.get("pid")
         if isinstance(pid, int) and table.alive(pid, supervisor.get("start")):
-            held.add(pid)
-            held.update(p.pid for p in table.descendants(pid))
-    return held
+            claim(pid, DIRECT, newer)
+            for proc in table.descendants(pid):
+                claim(proc.pid, BELOW, newer)
+    return claimed
 
 
 def join_daemons(store: Store, entry: Entry, table: _procs.Table) -> Entry:

@@ -148,9 +148,12 @@ Slotfather's "another user's queue" (fathers#118) and is not used here.
   failure of a streak writes `entry.reap_failed`; each failure still updates `last_error`.
 - **Never** a process junkfather did not start or adopt, except `reap --pid PID --force` on a pid the last sweep
   listed as unowned, with the same start time and command and still unowned.
-- **Another entry's**: an adopted entry (`adopt`, a background call's shell) leaves out of its reap what another
-  active entry holds, its members and its supervisor with that one's descendants: an attached `junkfather own
-  --keep-for session` that a script ran in the shell keeps running in the shell's group after the subagent's stop.
+- **Another entry's**: an entry holds a process directly (its leader, a known member, a daemon, its supervisor),
+  through its leader's group, or below one of those. An adopted entry (`adopt`, a background call's shell) leaves
+  out of its reap what another active entry holds more firmly, or as firmly and is newer: an attached `junkfather
+  own --keep-for session` that a script ran in the shell keeps running in the shell's group after the subagent's
+  stop, and a process adopted inside the shell is still reaped by its own entry's reap. Adoption leaves out of its
+  known members what another entry holds directly.
 - **One policy**: `adopt`, a reap, `reap --pid --force`, the sweep's unowned report and its unowned resources
   decide what they may touch by the same rules (`junkfather/safety.py`).
 
@@ -272,13 +275,18 @@ the line prints nothing. It ends like any entry: `SubagentStop`, `SessionEnd`, t
 the sweep when the session is gone, `reap`. `list` and `status` show the owner with its subagent; rows carry
 `agent_type`, `auto` and `no_ttl`.
 
-- **The watcher**: the line also forks a watcher, the entry's `supervisor`, that follows the shell until it exits:
-  through kqueue (macOS), which names that very process, or by looking every 2 s (elsewhere), which needs its start
-  time to hold. When the agent's command `exec`s, the watcher records the shell's new command among the entry's
-  members, so a reap still recognizes it; when the shell exits, it records what is left in its group (`sleep 600 &`)
-  as known members (pid, start time and command), or marks the entry `gone`. It takes from the group only processes
-  that started after the shell, at the moment of the exit, while the group still exists and its id cannot have been
-  taken again.
+- **The watcher**: the line also forks a watcher, the entry's `supervisor`, and waits until it watches the shell
+  (the shell, its parent, waits for it, so the watched process is that shell). It watches the shell and then what
+  it leaves, each by pid and start time, with the kernel reporting exec and exit (kqueue on macOS, a pidfd on Linux;
+  elsewhere a look every 2 s), and wakes every 2 minutes. After each event the entry's known members are the watched
+  processes that run, with their commands as they are now, so a reap recognizes one that `exec`'d. A process joins
+  only through an identity that ties it to the shell: a descendant of a watched process in the same table, or a
+  member of the shell's group while a watched member of that group runs (the group still exists, so its id cannot
+  have been taken again); when the last such member exits under the kernel's eye, the group's processes that
+  started no later than that second join too (`sleep 600 &` after the shell's exit; a look every 2 s catches it
+  only while the shell runs). What another entry holds directly is left to it. With nothing left the entry is
+  `gone`; when the entry was reaped while some of it still runs (an `exec` the reap did not yet recognize), the
+  watcher stops what the reap policy allows of it and ends, and it ends too when its entry ended otherwise.
 - **Left alone**: a foreground call (no `run_in_background: true`); a call that is one explicit ownership command, a
   single simple command running junkfather (by name or path, after assignments and `env`, `exec`, `nohup`,
   `command`, `time`, or `python -m junkfather`) as `own`, `own-resource` or `adopt`, which owns what it starts and

@@ -28,7 +28,7 @@ agent session, nothing above junkfather but that one shell).
 """
 from __future__ import annotations
 
-import itertools
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -37,14 +37,15 @@ import select
 import shlex
 import sys
 import time
-from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional, Protocol, Tuple, cast
 
 from . import entry as _entry
 from . import owner as _owner
 from . import procs as _procs
+from . import reap as _reap
 from . import safety as _safety
 from . import settings as _settings
-from .defaults import CLAIM_WINDOW, NO_TTL, POLL_EVERY
+from .defaults import CLAIM_WINDOW, HANDSHAKE, NO_TTL, POLL_EVERY, WAKE
 from .errors import NOT_FOUND, REFUSED, Refused
 from .entry import Entry
 from .state import Store, as_dict, read_json, write_atomic
@@ -187,24 +188,37 @@ def adopt(store: Store, tool_use: str, env: Mapping[str, str], now: Optional[flo
 # The watcher
 
 def start_watcher(store: Store, entry: Dict[str, Any]) -> None:
-    """Fork a watcher on the entry's shell and return at once. The watcher leaves the shell's session and closes
-    every file the shell gave it, so it neither holds the call's output open nor dies with the shell's group."""
+    """Fork a watcher on the entry's shell and return once it watches (or after HANDSHAKE seconds). The shell is this
+    junkfather's parent and waits for it, so the watcher puts its eye on that very process before the agent's
+    command runs. The watcher leaves the shell's session and closes every file the shell gave it, so it neither
+    holds the call's output open nor dies with the shell's group."""
     if not watchable():
         return
+    ready_r, ready_w = os.pipe()
     try:
         child = os.fork()
     except OSError:
         return
     if child:
+        os.close(ready_w)
+        select.select([ready_r], [], [], HANDSHAKE)
+        os.close(ready_r)
         return
     try:
+        os.close(ready_r)
         os.setsid()
         os.chdir("/")
         null = os.open(os.devnull, os.O_RDWR)
         for fd in (0, 1, 2):
             os.dup2(null, fd)
-        os.closerange(3, 1024)
-        watch(store, str(entry["id"]), int(entry["pid"]), str(entry["start"]), str(entry["seen"]))
+        os.closerange(3, ready_w)
+        os.closerange(ready_w + 1, 1024)
+
+        def ready() -> None:
+            with contextlib.suppress(OSError):
+                os.write(ready_w, b"1")
+                os.close(ready_w)
+        watch(store, str(entry["id"]), int(entry["pid"]), str(entry["start"]), ready)
     except BaseException:  # noqa: BLE001 - a watcher that fails only stops watching
         pass
     os._exit(0)
@@ -215,60 +229,102 @@ def watchable() -> bool:
     return os.environ.get("JUNKFATHER_WATCH") != "off"
 
 
-def watch(store: Store, entry_id: str, pid: int, start: str, seen: str, mode: Optional[str] = None) -> None:
-    """Follow one shell until it exits. On exec (the agent's command ran `exec ...`) the entry's members are
-    recorded again with the leader's new command, so a reap still recognizes it; on exit the members left in its
-    group (`sleep 600 &`) are recorded as known members, or, with none, the entry is gone. Both observe the very
-    process the kernel names (kqueue) or one whose start time held between two looks a few seconds apart (poll),
-    never a pid alone. Ends when the shell exits or the entry stops running."""
-    mode = mode or os.environ.get("JUNKFATHER_WATCH") or ("kqueue" if hasattr(select, "kqueue") else "poll")
-    # kqueue (macOS, BSD) reports the shell's exit and exec; elsewhere (Linux) the watcher looks every POLL_EVERY s.
-    # The watch starts before the first look, so what happens after that look is reported and what happened before
-    # it (the shell ran `true`, or exec'd at once) shows in it.
-    events = _kqueue_events(pid) if mode == "kqueue" else _poll_events(pid, start, seen)
-    table = _procs.Table.read()
-    shell = table.get(pid)
-    me = table.get(os.getpid())
-    _entry_supervised(store, entry_id, {"pid": os.getpid(), "start": me.start if me else None})
-    if shell is None or shell.start != _procs.norm(start):
-        events = iter(["exit"])
-    elif shell.cmd != seen:
-        events = itertools.chain(["exec"], events)
-    for event in events:
-        entry = store.load(entry_id)
-        if entry is None or entry.get("state") != _entry.RUNNING:
-            return
+def watch(store: Store, entry_id: str, pid: int, start: str, ready: Callable[[], None] = lambda: None,
+          mode: Optional[str] = None, eyes: Optional[Events] = None) -> None:
+    """Follow the shell and what it leaves until none of it runs or the entry ends.
+
+    The watched processes are the shell and, as they are found, the processes of its group and their descendants:
+    each one by its pid and start time, with the kernel reporting its exec and exit (kqueue on macOS, a pidfd on
+    Linux; elsewhere a look every POLL_EVERY s). After every event, and every WAKE s, the entry's known members
+    become the watched processes that run, with their commands as they are now, so a reap recognizes an `exec`'d
+    one. A process joins only through an identity that ties it to the shell: a descendant (parent chain, in the
+    same table) of a watched process, or a member of the shell's group while a watched member of that group runs,
+    so the group still exists and its id cannot have been taken again. When the last watched member of the group
+    exits under the kernel's eye, the group's processes that started no later than that second join too (`sleep
+    600 &` after the shell's exit). What another entry holds directly is left to it.
+
+    When the entry was reaped (or failed) while some of it still runs (an `exec` the reap did not recognize yet),
+    the watcher stops those of its processes the reap policy allows (reap.targets_of: never what another entry
+    holds more firmly) and ends. With nothing left it marks the entry gone."""
+    eyes = eyes or Eyes(mode or os.environ.get("JUNKFATHER_WATCH") or "")
+    try:
         table = _procs.Table.read()
-        if event == "exec":
-            leader = table.get(pid)
-            if leader is not None and leader.start == _procs.norm(start):
-                _entry.known(store, entry_id, _members(entry, table, leader))
+        shell = table.get(pid)
+        if shell is None or shell.start != _procs.norm(start) or not eyes.add(pid):
+            return
+        me = table.get(os.getpid())
+        _entry_supervised(store, entry_id, {"pid": os.getpid(), "start": me.start if me else None})
+    finally:
+        ready()
+    watched: Dict[int, Tuple[str, int]] = {pid: (shell.start, shell.pgid)}  # pid -> (start, group id)
+    while True:
+        events = eyes.wait(WAKE)
+        seen_at = time.time()
+        entry = store.load(entry_id)
+        if entry is None:
+            return
+        while entry is not None and entry.get("state") == _entry.REAPING:  # a reap is at work: let it finish
+            time.sleep(0.5)
+            entry = store.load(entry_id)
+        if entry is None:
+            return
+        try:
+            table = _procs.Table.read()
+        except _procs.ProcError:
             continue
-        left = _members(entry, table, None)
-        if left:
-            _entry.known(store, entry_id, left)
+        if entry.get("state") != _entry.RUNNING:
+            if entry.get("state") in (_entry.REAPED, _entry.FAILED):
+                _stop_left(store, entry, table, watched)
+            return
+        group = int(entry.get("pgid") or 0) if entry.get("group") else 0
+        exited_group = eyes.precise and any(event == "exit" and which in watched and watched[which][1] == group
+                                            for event, which in events)
+        watched = {p: held for p, held in watched.items() if table.alive(p, held[0])}
+        for proc in _joining(store, entry, table, watched, exited_group, seen_at):
+            if eyes.add(proc.pid) and _procs.identities([proc.pid]).get(proc.pid) == proc.start:
+                watched[proc.pid] = (proc.start, proc.pgid)
+        running = [table.procs[p] for p in watched if p in table.procs]
+        if running:
+            _entry.known(store, entry_id, running)
         else:
             _entry.gone(store, entry_id)
-        return
+            return
 
 
-def _members(entry: Entry, table: _procs.Table, leader: Optional[_procs.Proc]) -> List[_procs.Proc]:
-    """The shell (when it runs), what is in its group, and their descendants, that a reap may signal; the shell's
-    group only by its id and only with a start no earlier than the shell's, the moment the kernel said the shell
-    exited or exec'd (the group still exists then, so its id cannot have been taken again)."""
+def _joining(store: Store, entry: Entry, table: _procs.Table, watched: Dict[int, Tuple[str, int]], exited_group: bool,
+             seen_at: float) -> List[_procs.Proc]:
+    """The processes that join the watched ones now (see `watch`)."""
     found: Dict[int, _procs.Proc] = {}
-    if leader is not None:
-        found[leader.pid] = leader
-    shell_start = _procs.started_at(str(entry.get("start") or ""))
-    if entry.get("group"):
-        for proc in table.group(int(entry.get("pgid") or 0)):
+    group = int(entry.get("pgid") or 0) if entry.get("group") else 0
+    if group:
+        witness = any(held[1] == group for held in watched.values())  # alive in this very table
+        last_second = int(seen_at)
+        for proc in table.group(group):
             began = proc.started
-            if proc.pid != entry.get("pid") and shell_start is not None and began is not None and began >= shell_start:
+            if proc.pid in watched or began is None:
+                continue
+            if witness or (exited_group and int(began) <= last_second and table.get(group) is None):
                 found[proc.pid] = proc
-    for pid in list(found):
+    for pid in [*watched, *found]:
         for proc in table.descendants(pid, prune=_safety.unsafe):
-            found.setdefault(proc.pid, proc)
-    return sorted(_safety.signallable(found.values(), table), key=lambda p: p.pid)
+            if proc.pid not in watched:
+                found.setdefault(proc.pid, proc)
+    claimed = _reap.claimed_elsewhere(store, entry, table)
+    return [p for p in _safety.signallable(found.values(), table)
+            if (claimed.get(p.pid) or (0, False))[0] < _reap.DIRECT]
+
+
+def _stop_left(store: Store, entry: Entry, table: _procs.Table, watched: Dict[int, Tuple[str, int]]) -> None:
+    """The entry ended while some of it runs: stop what the reap policy allows of the watched processes (pid and
+    start time as watched, the command as it is now, all read again just before each signal)."""
+    left = [table.procs[p] for p in watched if p in table.procs and table.alive(p, watched[p][0])]
+    if not left:
+        return
+    ended = cast(Entry, {**entry, "known": [[p.pid, p.start] for p in left],
+                         "known_seen": [[p.pid, p.start, p.cmd] for p in left], "pid": None})
+    targets, _ = _reap.targets_of(store, ended, table)
+    if targets:
+        _reap.stop(targets, _settings.value("reap.grace", store.root))
 
 
 def _entry_supervised(store: Store, entry_id: str, supervisor: Dict[str, Any]) -> None:
@@ -280,40 +336,93 @@ def _entry_supervised(store: Store, entry_id: str, supervisor: Dict[str, Any]) -
     store.update(entry_id, change)
 
 
-def _kqueue_events(pid: int) -> Iterator[str]:
-    """"exec" and "exit" of `pid` as the kernel reports them, watched from this call on."""
-    queue = select.kqueue()
-    try:
-        flags = select.KQ_EV_ADD | select.KQ_EV_ENABLE | select.KQ_EV_CLEAR
-        queue.control([select.kevent(pid, select.KQ_FILTER_PROC, flags, select.KQ_NOTE_EXIT | select.KQ_NOTE_EXEC)],
-                      0)
-    except OSError:  # it exited already
-        return iter(["exit"])
-    return _kqueue_wait(queue)
+_SELECT: Any = select  # kqueue and pidfd_open exist on some systems only: looked up where they do
+_OS: Any = os
 
 
-def _kqueue_wait(queue: Any) -> Iterator[str]:
-    while True:
-        for event in queue.control(None, 4, None):
-            if event.fflags & select.KQ_NOTE_EXIT:
-                yield "exit"
-                return
-            if event.fflags & select.KQ_NOTE_EXEC:
-                yield "exec"
+class Events(Protocol):
+    """What the watcher needs of its event source (Eyes; a test's script)."""
+    precise: bool
+
+    def add(self, pid: int) -> bool: ...
+
+    def wait(self, timeout: float) -> List[Tuple[str, int]]: ...
 
 
-def _poll_events(pid: int, start: str, command: str, every: float = POLL_EVERY) -> Iterator[str]:
-    """"exec" and "exit" of `pid` by looking every few seconds: gone or another start time is an exit, the same
-    start time with another command an exec."""
-    while True:
-        time.sleep(every)
+def _kq(name: str) -> int:
+    """A kqueue constant (select has them only where kqueue exists)."""
+    return int(getattr(_SELECT, name))
+
+
+class Eyes:
+    """Exec and exit events of the processes it watches: kqueue (macOS, BSD), pidfds (Linux; exit only, exec by a
+    look every POLL_EVERY s), or looks every POLL_EVERY s (`poll`, also the tests' way). `precise`: an exit is
+    reported as it happens."""
+
+    def __init__(self, mode: str = ""):
+        self.mode = mode or ("kqueue" if hasattr(select, "kqueue") else
+                             "pidfd" if hasattr(os, "pidfd_open") else "poll")
+        self.precise = self.mode in ("kqueue", "pidfd")
+        self.queue: Any = _SELECT.kqueue() if self.mode == "kqueue" else None
+        self.fds: Dict[int, int] = {}  # pidfd -> pid
+        self.commands: Dict[int, Tuple[str, str]] = {}  # pid -> (start, command) as last looked at
+
+    def add(self, pid: int) -> bool:
+        """Watch `pid` from now on; False when it no longer runs."""
         seen = _procs.identities([pid], command=True).get(pid)
-        if seen is None or seen[0] != _procs.norm(start):
-            yield "exit"
-            return
-        if seen[1] != command:
-            command = seen[1]
-            yield "exec"
+        if seen is None:
+            return False
+        self.commands[pid] = seen
+        try:
+            if self.mode == "kqueue":
+                flags = _kq("KQ_EV_ADD") | _kq("KQ_EV_ENABLE") | _kq("KQ_EV_CLEAR")
+                self.queue.control([_SELECT.kevent(pid, _kq("KQ_FILTER_PROC"), flags,
+                                                   _kq("KQ_NOTE_EXIT") | _kq("KQ_NOTE_EXEC"))], 0)
+            elif self.mode == "pidfd":
+                self.fds[_OS.pidfd_open(pid)] = pid
+        except OSError:
+            self.commands.pop(pid, None)
+            return False
+        return True
+
+    def wait(self, timeout: float) -> List[Tuple[str, int]]:
+        """The events that came within `timeout` seconds: ("exec" | "exit", pid); [] on a quiet wake."""
+        if self.mode == "kqueue":
+            found: List[Tuple[str, int]] = []
+            for event in self.queue.control(None, 64, timeout):
+                if event.fflags & _kq("KQ_NOTE_EXIT"):
+                    found.append(("exit", int(event.ident)))
+                    self.commands.pop(int(event.ident), None)
+                elif event.fflags & _kq("KQ_NOTE_EXEC"):
+                    found.append(("exec", int(event.ident)))
+            return found
+        deadline = time.monotonic() + timeout
+        while True:
+            found = self._looked(min(POLL_EVERY, max(0.0, deadline - time.monotonic())))
+            if found or time.monotonic() >= deadline:
+                return found
+
+    def _looked(self, pause: float) -> List[Tuple[str, int]]:
+        found: List[Tuple[str, int]] = []
+        if self.mode == "pidfd" and self.fds:
+            readable, _, _ = select.select(list(self.fds), [], [], pause)
+            for fd in readable:
+                found.append(("exit", self.fds.pop(fd)))
+                os.close(fd)
+        else:
+            time.sleep(pause)
+        gone = {pid for _, pid in found}
+        now = _procs.identities(list(self.commands), command=True)
+        for pid, (began, command) in list(self.commands.items()):
+            current = now.get(pid)
+            if pid in gone or current is None or current[0] != began:
+                if pid not in gone:
+                    found.append(("exit", pid))
+                self.commands.pop(pid, None)
+            elif current[1] != command:
+                self.commands[pid] = current
+                found.append(("exec", pid))
+        return found
 
 
 def answer(output: Dict[str, Any]) -> None:

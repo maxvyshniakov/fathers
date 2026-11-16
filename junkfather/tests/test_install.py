@@ -112,7 +112,9 @@ class InstallOptionTests(Case):
             self.assertEqual([hook], data["lifecycle"][event])
         self.assertEqual([{"command": hook, "contains": ["junkfather"]},
                           {"command": hook, "background": True, "rewrite": True,
-                           "allow": [f"Bash({self.command} background:*)"]}], data["lifecycle"]["PreToolUse"],
+                           "allow": [f"Bash({self.command} background:*)"],
+                           "replaces": [f"""sh -c '[ -x "$0" ] || exit 0; exec "$0" hook' {self.command}"""]}],
+                         data["lifecycle"]["PreToolUse"],
                          "the observer, and the rewriter for background calls with its permission rule")
         self.assertEqual(["mastack --only hooks"] * 2, self.calls.read_text().splitlines())
 

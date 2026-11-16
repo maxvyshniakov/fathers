@@ -11,9 +11,9 @@ import signal
 import subprocess
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from support import ROOT, Case, plain
+from support import ROOT, Case, as_entry, plain, proc, table
 
 from junkfather import background, defaults, hook, procs
 
@@ -122,17 +122,20 @@ class BackgroundTests(Case):
         for pipe in (shell.stdout, shell.stderr):
             if pipe is not None:
                 self.addCleanup(pipe.close)
-        self.addCleanup(self.end_group, shell)
+        here = procs.Table.read().get(shell.pid)
+        self.addCleanup(self.end_group, shell.pid, here.start if here else "")
         return shell
 
-    def end_group(self, shell: subprocess.Popen[Any]) -> None:
-        """The shell's whole group, what the agent's command left in it too; only while the shell is not waited for,
-        so its pid, the group's id, cannot have been taken again."""
-        if shell.returncode is None:
-            try:
-                os.killpg(shell.pid, signal.SIGKILL)
-            except OSError:
-                pass
+    def end_group(self, group: int, start: str) -> None:
+        """What the agent's command left in the shell's group: the processes of that group that started no earlier
+        than the shell (a group id cannot be taken again while any of its processes run)."""
+        began = procs.started_at(start)
+        for member in procs.Table.read().group(group):
+            if began is not None and member.started is not None and member.started >= began:
+                try:
+                    os.kill(member.pid, signal.SIGKILL)
+                except OSError:
+                    pass
 
     def adopted(self) -> Dict[str, Any]:
         self.wait_for(lambda: any(e.get("state") == "running" for e in self.store.entries()), what="the entry",
@@ -244,10 +247,31 @@ class BackgroundTests(Case):
     def test_what_the_command_leaves_or_execs_is_still_its_own(self):
         """`exec` turns the shell into another program; `&` leaves a child once the shell exits. The watcher records
         both, by the kernel's word (kqueue) or by looking every few seconds (poll), so the stop still ends them."""
-        for mode in ("kqueue", "poll") if hasattr(select, "kqueue") else ("poll",):
-            for n, command in enumerate(("exec sleep 600", "sleep 600 &")):
-                with self.subTest(mode=mode, command=command):
-                    self.stopped_with_its_agent(mode, f"agent-{mode}-{n}", command)
+        precise = [mode for mode, here in (("kqueue", hasattr(select, "kqueue")), ("pidfd", hasattr(os, "pidfd_open")))
+                   if here]
+        cases = [(mode, command) for mode in precise for command in ("exec sleep 600", "sleep 600 &")]
+        for n, (mode, command) in enumerate([*cases, ("poll", "exec sleep 600")]):  # poll sees no exit as it happens
+            with self.subTest(mode=mode, command=command):
+                self.stopped_with_its_agent(mode, f"agent-{mode}-{n}", command)
+
+    def test_a_child_left_behind_that_execs_later_is_still_its_own(self):
+        """The shell leaves `(sleep 1; exec sleep 600) &` and exits; a second later the child becomes `sleep 600`.
+        The watcher keeps watching what it recorded, so the stop still knows it."""
+        modes = [m for m, here in (("kqueue", hasattr(select, "kqueue")), ("pidfd", hasattr(os, "pidfd_open"))) if here]
+        for n, mode in enumerate(modes):
+            with self.subTest(mode=mode):
+                self.stopped_with_its_agent(mode, f"agent-late-{n}", "(sleep 1; exec sleep 600) &")
+
+    def test_an_entry_adopted_inside_the_shell_is_reaped_by_its_own_reap(self):
+        shell = self.run_as_claude(self.rewritten(call("sleep 600; :")))
+        outer = self.adopted()
+        child = self.runs_600(shell, below=True)
+        result = self.cli("adopt", str(child), "--ttl", "1h", env=self.session_env)
+        self.assertEqual(0, result.returncode, result.stderr)
+        (inner,) = [plain(e) for e in self.store.entries() if e["id"] != outer["id"]]
+        self.assertEqual(0, self.cli("reap", "--id", inner["id"], env=self.session_env).returncode)
+        self.wait_for(lambda: not self.runs(child), what="the inner entry's own reap to end its process")
+        self.assertEqual("reaped", self.state_of(inner["id"]))
 
     def stopped_with_its_agent(self, mode: str, agent: str, command: str) -> None:
         env = {**self.session_env, "JUNKFATHER_WATCH": mode}
@@ -268,3 +292,71 @@ class BackgroundTests(Case):
         self.wait_for(lambda: self.state_of(entry["id"]) == "reaped", what="the stop to reap it",
                       seen=lambda: str(self.loaded(entry["id"])))
         self.wait_for(lambda: not self.runs(sleeper), what="the sleep to end")
+
+
+class FakeEyes:
+    """The watcher's event source as a test scripts it: each wait answers the next list of events, then quiet."""
+
+    precise = True
+
+    def __init__(self, *rounds: List[Tuple[str, int]]):
+        self.rounds = list(rounds)
+
+    def add(self, pid: int) -> bool:
+        return pid in procs.identities([pid])
+
+    def wait(self, timeout: float) -> List[Tuple[str, int]]:
+        return self.rounds.pop(0) if self.rounds else []
+
+
+class WatcherTests(Case):
+    """The watcher's decisions, with a scripted event source and real processes."""
+
+    def entry(self, child: subprocess.Popen[Any], state: str = "running", seen: str = "sh -c ...", **extra: Any
+              ) -> Dict[str, Any]:
+        here = procs.Table.read().get(child.pid)
+        assert here is not None
+        self.store.save(as_entry({"id": "jw", "state": state, "mode": "adopted", "auto": "background", "keep": "owner",
+                                  "pid": child.pid, "pgid": here.pgid, "group": here.pgid == child.pid,
+                                  "start": here.start, "seen": seen, "known": [[child.pid, here.start]],
+                                  "known_seen": [[child.pid, here.start, seen]], "created": time.time(),
+                                  "expires": time.time() + 3600, "owner": {"kind": "claude", "session": "s1"},
+                                  **extra}))
+        return self.loaded("jw")
+
+    def test_an_exec_the_reap_missed_is_stopped_by_the_watcher(self):
+        """A reap ran between the shell's exec and the watcher's look: the entry is reaped, its leader runs as
+        another program. The watcher stops it, by the pid and start time it watched."""
+        child = self.spawn("sleep", "600", start_new_session=True)
+        entry = self.entry(child)
+        self.store.update("jw", lambda e: e.update(state="reaped"))
+        background.watch(self.store, "jw", child.pid, entry["start"], eyes=FakeEyes([("exec", child.pid)]))
+        self.assertIsNotNone(child.wait(15), "the exec'd leader was stopped")
+
+    def test_an_ended_entry_whose_shell_another_entry_holds_lets_its_watcher_go(self):
+        child = self.spawn("sleep", "600", start_new_session=True)
+        entry = self.entry(child)
+        self.store.save(as_entry({**entry, "id": "jx", "auto": None, "seen": "sleep 600", "created": time.time() + 1,
+                                  "known_seen": [[child.pid, entry["start"], "sleep 600"]]}))  # holds it too
+        self.store.update("jw", lambda e: e.update(state="reaped"))
+        background.watch(self.store, "jw", child.pid, entry["start"], eyes=FakeEyes([]))  # a quiet wake: it returns
+        self.assertTrue(self.runs(child.pid), "the other entry's process is left to it")
+
+    def test_only_what_is_tied_to_the_shell_joins(self):
+        shell = proc(500, pgid=500, start="Mon Nov 16 10:00:00 2026", cmd="sh -c x")
+        entry = as_entry({"id": "jw", "pid": 500, "pgid": 500, "group": True, "start": shell.start, "known": []})
+        child = proc(501, ppid=500, pgid=500, start="Mon Nov 16 10:00:01 2026")
+        orphan = proc(502, ppid=1, pgid=500, start="Mon Nov 16 10:00:02 2026")
+        late = proc(503, ppid=1, pgid=500, start="Mon Nov 16 10:00:09 2026")
+        exited_at = procs.started_at("Mon Nov 16 10:00:05 2026") or 0.0
+        with_shell = table(shell, child, orphan)
+        self.assertEqual([501, 502], sorted(p.pid for p in background._joining(  # pyright: ignore[reportPrivateUsage]
+            self.store, entry, with_shell, {500: (shell.start, 500)}, False, exited_at)), "the shell's group")
+        after = table(orphan, late)
+        self.assertEqual([502], [p.pid for p in background._joining(  # pyright: ignore[reportPrivateUsage]
+            self.store, entry, after, {}, True, exited_at)], "the group as the kernel saw it end: not what came later")
+        self.assertEqual([], background._joining(  # pyright: ignore[reportPrivateUsage]
+            self.store, entry, after, {}, False, exited_at), "no witness and no exit seen: nothing")
+        reused = table(proc(500, pgid=500, start="Mon Nov 16 11:00:00 2026", cmd="vim"), orphan)
+        self.assertEqual([], background._joining(  # pyright: ignore[reportPrivateUsage]
+            self.store, entry, reused, {}, True, exited_at), "the group's id leads another process: nothing")

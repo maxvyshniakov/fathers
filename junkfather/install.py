@@ -12,9 +12,10 @@ The command runs on one named interpreter (this one, or --python; 3.9 or newer).
 --mastack  adds junkfather's hook to Mastack's machine settings (`lifecycle` in ~/.config/mastack/hooks.json: the
            SubagentStop, SessionEnd and Stop events; the PreToolUse observer for Bash commands naming junkfather;
            and the PreToolUse rewriter for background Bash calls, with the permission rule its added line needs,
-           `Bash(<bin>/junkfather background:*)`), then runs Mastack's installer (`~/mastack/bin/install --only
-           hooks`, $MASTACK_ROOT moves it), which registers them in ~/.claude/settings.json. On macOS it implies
-           --launchd: the sweep is what ends an entry whose session vanished without a SessionEnd.
+           `Bash(<bin>/junkfather background:*)`, replacing the Bash hook an earlier build registered directly),
+           then runs Mastack's installer (`~/mastack/bin/install --only hooks`, $MASTACK_ROOT moves it), which
+           registers them in ~/.claude/settings.json. On macOS it implies --launchd: the sweep is what ends an entry
+           whose session vanished without a SessionEnd.
 """
 from __future__ import annotations
 
@@ -43,6 +44,8 @@ from junkfather.cli import main
 sys.exit(main())
 """
 HOOK = "{command} hook"
+# The Bash hook an earlier build of this lane registered in ~/.claude/settings.json itself; Mastack removes it.
+DIRECT_HOOK = """sh -c '[ -x "$0" ] || exit 0; exec "$0" hook' {command}"""
 EVENTS = ("SubagentStop", "SessionEnd", "Stop")
 # Runs the hook, and nothing once the command is gone (an uninstall leaves no failing hook behind).
 
@@ -154,7 +157,8 @@ def mastack(command: Path) -> None:
     observer = {"command": hook, "contains": ["junkfather"]}
     if observer not in observers:
         observers.append(observer)
-    rewriter = {"command": hook, "background": True, "rewrite": True, "allow": [allow_rule(command)]}
+    rewriter = {"command": hook, "background": True, "rewrite": True, "allow": [allow_rule(command)],
+                "replaces": [DIRECT_HOOK.format(command=shlex.quote(str(command)))]}
     if rewriter not in observers:
         observers[:] = [e for e in observers if not (isinstance(e, dict) and cast(Dict[str, Any], e).get("command")
                                                     == hook and cast(Dict[str, Any], e).get("rewrite"))] + [rewriter]
