@@ -274,7 +274,7 @@ class LogViewTests(unittest.TestCase):
 
     def test_all_log_is_time_type_and_one_sentence(self) -> None:
         canvas, lines = self.draw(120, self.tool.Filter("all"))
-        self.assertIn("❮ ALL LOG ❯", lines[0])
+        self.assertIn("❮ FULL LOG ❯", lines[0])
         self.assertIn("description", lines[0])
         body = self.body(lines)
         self.assertEqual(["lane", "lane", "slot", "proc", "lane"], [line.split()[2] for line in body])
@@ -315,7 +315,7 @@ class LogViewTests(unittest.TestCase):
     def test_the_text_filter_filters_within_the_log(self) -> None:
         Filter = self.tool.Filter
         _, lines = self.draw(120, Filter("all", "VITE"))
-        self.assertIn('ALL LOG ❯ ── "VITE" ──', lines[0])
+        self.assertIn('FULL LOG ❯ ── "VITE" ──', lines[0])
         self.assertEqual(["proc"], [line.split()[2] for line in self.body(lines)], "label, any case")
         _, lines = self.draw(120, Filter(None, "vite"))
         self.assertIn("No events match the filter", lines[2], "SLOTS LOG has no vite")
@@ -509,7 +509,7 @@ class LiveFilterTests(unittest.TestCase):
             screen.write("\x1b")
             screen.receive("❮ LANES LOG ❯ ─", since=at)
             at = screen.mark()
-            screen.write("fff")  # PROCS LOG, ALL LOG, back to SLOTS LOG
+            screen.write("fff")  # PROCS LOG, FULL LOG, back to SLOTS LOG
             screen.receive("❮ SLOTS LOG ❯", since=at)
             screen.write("\t")  # EVENTS focused, scrolled down by the wheel (↑↓ move its cursor, fathers#152)
             screen.write("\x1b[<65;20;30M")

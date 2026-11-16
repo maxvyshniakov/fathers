@@ -250,6 +250,29 @@
        ]
       }
      ]
+    },
+    {
+     "id": "host",
+     "title": "Host",
+     "settings": [
+      {
+       "key": "host.min_disk_gb",
+       "label": "Free disk floor",
+       "type": "number",
+       "value": 0,
+       "default": 0,
+       "source": "default",
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "The free disk, in decimal GB, under which start refuses a lane; auto is the derived floor, a reserve plus the lane cap times the largest recent lane. auto: 49 GB (10^9) = 40 reserve + 3 x 3.0 GB lane peak.",
+       "min": 0,
+       "max": 100000,
+       "step": 5,
+       "unit": "GB",
+       "zero": "auto",
+       "effective": 49
+      }
+     ]
     }
    ]
   }

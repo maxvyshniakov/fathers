@@ -21,7 +21,7 @@
 │  11:55:44  ▪▪      desktop          │    Overtaking stops after    never                                          ┃│                                     │
 │  11:55:31  ▫       desktop          │    Interactive head start    30m                                            ┃│uild-once                            │
 │  11:55:26  ▫       agent-a1c75285bdf│    Batch held back           30m                                            ┃│queue-347                            │
-│  11:55:00  ▫       desktop          │    Batch promoted after      30m                                            ╹│s                                    │
+│  11:55:00  ▫       desktop          │    Batch promoted after      30m                                             │s                                    │
 │  11:54:02  ▫       agent-a1c75285bdf│    Normal promoted after     1h                                              │d                                    │
 │  11:52:53  ▫       agent-a1c75285bdf│    Warn after waiting        30m                                             │fication_plan.py, tools/verify.py,   │
 │  11:52:30  ▫       desktop          │    Idle when below           0.1 cores                                       │in-module.sh, tools/test-build-      │
