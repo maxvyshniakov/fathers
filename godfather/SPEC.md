@@ -111,7 +111,7 @@ full pages one key away.
     - `f` cycles the source filter (all, then each present source); `/` edits a text filter matched against kind,
       subject, label and detail; Esc in the field clears it. The active filter shows in EVENTS' top border.
     - From fathers#152 (owner, 2026-11-16) EVENTS shows one log at a time and its title is the switch: `SLOTS LOG`,
-      `LANES LOG`, `PROCS LOG` for each present tool, then `ALL LOG` (never the default) where there are several;
+      `LANES LOG`, `PROCS LOG` for each present tool, then `FULL LOG` (never the default) where there are several;
       ← → while EVENTS has the focus, `f`, or a click on the title cycle it, `❮ SLOTS LOG ❯` where there is room.
       Each log has its own columns (SLOTS: time, slots, label, waited, outcome, pid; LANES: time, event, lane,
       result, ticket; PROCS: time, event, label, detail, pid; ALL: time, type such as `slot run` in the tool's colour,

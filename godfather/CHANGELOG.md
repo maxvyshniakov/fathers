@@ -119,9 +119,9 @@ Versions and release rules: [README.md](README.md#versions).
   a section going on in the next column between two rows, and shows whole with nothing to scroll; a smaller
   screen gets the one scrolling column as before.
 - EVENTS shows one tool's log at a time (fathers#152): its title is the switch, `◂ SLOTS LOG ▸` (default where
-  Slotfather is present), `LANES LOG`, `PROCS LOG`, then `ALL LOG`, cycled with ← → while EVENTS has the focus, `f`
+  Slotfather is present), `LANES LOG`, `PROCS LOG`, then `FULL LOG`, cycled with ← → while EVENTS has the focus, `f`
   or a click on the title. Each log has its own columns, so labels keep their width: SLOTS LOG time, slots, label,
-  waited, outcome and pid; LANES LOG event, lane, result and ticket; PROCS LOG event, label, detail and pid; ALL LOG
+  waited, outcome and pid; LANES LOG event, lane, result and ticket; PROCS LOG event, label, detail and pid; FULL LOG
   a type (`slot run`, `lane checked`, `proc reaped`, in the tool's colour) and one sentence (`sid-kit build · ok 1s
   · 1 slot`). A Slotfather run is one row, `running 3m` while it holds its slots and how it ended once done; `r`
   shows every event as logged. A run's trend is a mark on its row (↗ slower, ↘ faster, ▲ outlier), no longer a row

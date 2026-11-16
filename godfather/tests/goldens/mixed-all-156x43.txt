@@ -13,7 +13,7 @@
 ┃  ⏸️    lane-555-host-rename-names                ▪       waiting #2          10s   10004  ┃ │             08f8cf012                                      │
 ┃                                                                                           ┃ │  command    ~/straylight/.claude/worktrees/agent-afa3816b  │
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ │             08f8cf012/verify.sh --checks desktop-tests     │
-╭─ ❮ ALL LOG ❯ ────────────── description ──────────────────────────────────────────────────╮ │             --keep-going --jobs 1                          │
+╭─ ❮ FULL LOG ❯ ───────────── description ──────────────────────────────────────────────────╮ │             --keep-going --jobs 1                          │
 │                                                                                           │ │  cwd        ~/straylight                                   │
 │  11:59:35  slot run         agent-ae72d94beb6f08961 · ok 5m41s · 1 slot                  ┃│ │                                                            │
 │  11:59:20  proc extended    vite dev · ttl 4h00m                                         ┃│ │  lane       644-build-once                                 │
