@@ -186,7 +186,8 @@ class WorkflowTests(unittest.TestCase):
     @unittest.expectedFailure  # slotfather/pyproject.toml gains it in Slotfather's lane (fathers#120)
     def test_every_package_declares_requires_python(self) -> None:
         for name in checks.PACKAGES:
-            self.assertRegex((ROOT / name / "pyproject.toml").read_text(), r'(?m)^requires-python = ">=3\.\d+"(?:\s|$)', name)
+            text = (ROOT / name / "pyproject.toml").read_text()
+            self.assertRegex(text, r'(?m)^requires-python = ">=3\.\d+"(?:\s|$)', name)
 
     def test_the_reusable_workflow_runs_the_named_checks(self) -> None:
         text = (WORKFLOWS / "package.yml").read_text()
