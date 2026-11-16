@@ -71,6 +71,7 @@ self-contained configuration in the README for a Repo-Kit consumer.
 | `[gc]` `after_remove`, `after_remove_report` | project cache cleanup after removal (`{worktree}`, `{name}`, `{project}`). Stdout is ignored by default, preserving existing hooks. With `after_remove_report = true`, a successful hook must emit `{"v":1,"freed":123}` to add its actually removed bytes; diagnostics go to stderr. Invalid reports add zero bytes and a report error. |
 | `[slots.priority]` `check`, `post-merge`, `gate`, `rerun`, `perf`, `default` | each run's Slotfather priority; see [slot priorities](#slot-priorities) |
 | `[admission]` `provider` | `legacy` by default; explicit `slotfather` uses the versioned lifetime-admission query, separately from execution jobs. See [rollout contract](../docs/admission.md). |
+| `[admission]` `cap` | this repository's lane cap (fathers#149): a positive whole number, below `LANEFATHER_CAP`; without either the cap is derived from the machine. It counts the planned and active lanes of this repository only; `LANEFATHER_GLOBAL_CAP`, when set, is a ceiling over every project's lanes in the state directory together. A fix lane (`review --fix-lane`) registers outside both (fathers#45). |
 | `[tickets]` | the ticket lifecycle below; every rule is off without it |
 | `[hooks]` `process_scan` | legacy process adapter for live lanes; without it `procs` supplies read-only inspection |
 | `[hooks.project]` | named project policy scripts run by `project-hook NAME -- ARGS` in the installed interpreter |

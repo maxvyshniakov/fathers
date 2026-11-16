@@ -268,3 +268,28 @@ print(json.dumps(answer))
                 output = self.start(lane_id, "src/**", extra=("--force-reason", "owner decision"), ok=False)
                 self.assertIn("lifetime admission unavailable", output)
                 self.assertFalse((self.state / f"{lane_id}.json").exists())
+
+    def test_provider_counts_this_projects_lanes_and_reads_the_projects_cap(self):
+        """fathers#149: the query's occupied count is this repository's; the project's [admission] cap is its
+        override when the environment sets none."""
+        self.provider()
+        path = self.integration / ".lanefather.toml"
+        path.write_text(path.read_text() + "cap = 2\n")
+        self.state.mkdir(parents=True)
+        (self.state / "elsewhere.json").write_text(json.dumps({
+            "id": "elsewhere", "ticket": "1", "branch": "lane/elsewhere", "base": "main", "claims": ["src/**"],
+            "after": [], "common_dir": str(self.tmp / "other" / ".git"), "worktree": None, "status": "planned"}))
+        self.env["ADMISSION_REQUEST_LOG"] = str(self.tmp / "request.json")
+        self.env["ADMISSION_PATCH"] = json.dumps({"cap": 2, "cap_source": ".lanefather.toml [admission] cap"})
+        self.start("first", "src/**")
+        request = json.loads((self.tmp / "request.json").read_text())
+        self.assertEqual(request["occupied"], 0)
+        self.assertEqual(request["cap_override"], {"value": "2", "source": ".lanefather.toml [admission] cap"})
+        self.assertIn("cap=2 (slotfather .lanefather.toml [admission] cap; derived: 6)",
+                      (self.state / "ledger.log").read_text())
+        self.lane("list")
+        self.assertEqual(json.loads((self.tmp / "request.json").read_text())["occupied"], 1)
+        for raw in (0, -1, True, "2", 1.5):
+            with self.subTest(raw=raw), self.assertRaisesRegex(LaneError, r"\[admission\] cap"):
+                config.parse({"admission": {"cap": raw}})
+        self.assertEqual(config.parse({"admission": {"cap": 4}}).lane_cap, 4)

@@ -104,5 +104,43 @@ class FixLaneTests(LaneCase):
         self.assertEqual(self.verify_runs()[-1], "FULL structure,lib,native,host-journeys")
 
 
+class FixLaneCapTests(LaneCase):
+    """fathers#45 (a): a fix lane takes its landed, kept parent's place, so a full cap does not stall the fix round;
+    new queue work is still refused, and disk and load still apply."""
+
+    def landed_with_findings(self) -> None:
+        self.review_text.write_text(TWO_FINDINGS)
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.lane("land", "a")
+        self.lane("review", "a")
+        for index, claim in enumerate(("b/**", "c/**", "d/**")):
+            self.start(f"l{index}", claim)
+
+    def test_at_a_full_cap_the_fix_lane_registers_while_next_start_is_refused(self):
+        self.landed_with_findings()
+        self.write(self.state.parent, "queue/queue.toml", '[[lane]]\nid="next"\nticket=2\nclaims=["e/**"]\n')
+        self.assertIn("3 lanes are planned or active", self.lane("next", "--start", ok=False))
+        self.lane("review", "a", "--fix-lane")
+        fix = json.loads((self.state / "a-review-fixes.json").read_text())
+        self.assertEqual((fix["review_fix_of"], fix["cap_source"]), ("a", "fix-lane of a"))
+        self.assertIn("start a-review-fixes", ledger := (self.state / "ledger.log").read_text())
+        self.assertIn("(fix-lane of a)", ledger)
+        started = [json.loads(line) for line in self.events.read_text().splitlines()
+                   if '"lane.started"' in line and '"a-review-fixes"' in line]
+        self.assertEqual(started[-1]["details"]["cap_source"], "fix-lane of a")
+        # The fix lane now counts like any planned or active lane: new work stays refused.
+        self.assertIn("4 lanes are planned or active", self.lane("next", "--start", ok=False))
+
+    def test_disk_still_refuses_a_fix_lane(self):
+        self.landed_with_findings()
+        self.env["LANEFATHER_DISK_FREE_GB"] = "120"
+        output = self.lane("review", "a", "--fix-lane", ok=False)
+        self.assertIn("free disk is 120", output)
+        self.assertNotIn("lanes are planned or active", output)
+        self.assertFalse((self.state / "a-review-fixes.json").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

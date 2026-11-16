@@ -77,10 +77,12 @@ def parse_queue(text: str, path: Path) -> tuple[dict[str, Any], list[dict[str, A
     return data, checked
 
 
-def queue_states(entries: list[dict[str, Any]], records: list[Record]) -> list[tuple[dict[str, Any], str | None]]:
-    """Each entry with why it is not ready, or None when it is."""
+def queue_states(entries: list[dict[str, Any]], records: list[Record],
+                 common: str | None = None) -> list[tuple[dict[str, Any], str | None]]:
+    """Each entry with why it is not ready, or None when it is. Only the lanes of the repository whose Git common
+    directory is `common` hold claims against it (fathers#149)."""
     by_id = {r["id"]: r for r in records}
-    active = state.occupying(records)
+    active = state.occupying(state.of_project(records, common))
     states: list[tuple[dict[str, Any], str | None]] = []
     for entry in entries:
         reason = None
@@ -103,8 +105,9 @@ def queue_states(entries: list[dict[str, Any]], records: list[Record]) -> list[t
     return states
 
 
-def next_ready() -> tuple[dict[str, Any], dict[str, Any] | None, list[tuple[dict[str, Any], str | None]]]:
+def next_ready(common: str | None = None) -> tuple[dict[str, Any], dict[str, Any] | None,
+                                                   list[tuple[dict[str, Any], str | None]]]:
     """The queue's settings, its first ready entry (None when nothing is ready) and every entry's state."""
     data, entries = read_queue()
-    states = queue_states(entries, state.lanes())
+    states = queue_states(entries, state.lanes(), common)
     return data, next((entry for entry, reason in states if reason is None), None), states

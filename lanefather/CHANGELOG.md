@@ -51,6 +51,15 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Changed
 
+- The lane cap counts the planned and active lanes of one repository, not of every project sharing the state
+  directory (fathers#149): a lane is never refused, nor held by claims, because of another repository's lanes.
+  A project sets its cap with `[admission] cap = N` in `.lanefather.toml`, below `LANEFATHER_CAP`; without either
+  it is derived from the machine as before. `LANEFATHER_GLOBAL_CAP`, when set, is a ceiling over every project's
+  lanes together, and its refusal lists them by repository. `list` counts this repository's lanes and `list
+  --json` adds `global` (`active`, `cap`, `cap_source`); the Slotfather lifetime query gets this repository's count.
+- `review --fix-lane` registers the fix lane outside the lane cap, in its landed parent's place (fathers#45 (a)):
+  a full cap no longer stalls a finished fix round. Disk, load and claims still apply. The fix lane's record and
+  its `lane.started` event say why (`cap_source: fix-lane of <parent>`).
 - `gc` now also collects the worktrees Claude Code and Codex sessions leave under `.claude/worktrees`, not only
   `agent-*` and `lane-*` ones (fathers#44), with no configuration change: the patterns are `[gc] dirs` (default
   `agent-*`, `lane-*`, `.claude/worktrees/*`, which covers Codex's `codex-*`) and `[gc] branches` (default
