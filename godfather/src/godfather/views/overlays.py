@@ -120,31 +120,93 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
 ]
 
 
+HELP_COLUMN_MIN, HELP_COLUMN_MOST, HELP_COLUMNS, COLUMN_GAP = 40, 64, 3, 3  # a help column's text width; the gap
+
+
+def help_sections(width: int, after: int = HEADING_AFTER) -> list[list[list[Line]]]:
+    """Each help section laid out at `width` as blocks no column splits: its title, `after` blank lines and its
+    first row, then each further row (a wrapped one whole) or note."""
+    return [section_blocks(title, entries, width, after) for title, entries in HELP]
+
+
 def help_lines(width: int) -> list[Line]:
-    """The help laid out at `width` cells: a section title, then its rows with the terms in one column as wide as the
+    """The help laid out at `width`: a section title, then its rows with the terms in one column as wide as the
     section's longest term and each description wrapped under itself (a hanging indent), then its notes. Two blank
     lines before a section title but the first, one after it (owner). A row too narrow for both columns puts its
     description under its term."""
     lines: list[Line] = []
-    for title, entries in HELP:
-        add_heading(lines, [(title, "title")])
-        terms = max([text_width(entry[0]) for entry in entries if entry[0]] or [0])
-        column = HELP_INDENT + terms + HELP_GAP
-        for entry in entries:
-            term, text = entry[0], entry[1]
-            pad = " " * HELP_INDENT
-            if not term:
-                style = entry[2] if len(entry) > 2 else "dim"
-                lines.extend([[(pad + line, style)] for line in wrap(text, width - HELP_INDENT)])
-            elif width - column >= 12:
-                wrapped = wrap(text, width - column)
-                lines.append([(pad, "text"), (term, "bold"), (" " * (column - HELP_INDENT - text_width(term)), "text"),
-                              (wrapped[0], "text")])
-                lines.extend([[(" " * column + line, "text")] for line in wrapped[1:]])
-            else:
-                lines.append([(pad, "text"), (term, "bold")])
-                lines.extend([[(" " * (HELP_INDENT * 2) + line, "text")] for line in wrap(text, width - 2 * HELP_INDENT)])
+    for blocks in help_sections(width):
+        lines.extend(blank_lines(HEADING_BEFORE if lines else 0))
+        for block in blocks:
+            lines.extend(block)
     return lines
+
+
+def help_columns(screen_width: int, visible: int) -> tuple[int, list[Line]]:
+    """The help in as few columns as fit the screen without scrolling (fathers#145), read down then across like a
+    newspaper: a section goes on in the next column between two rows, never inside one, and never leaves its title
+    alone at a column's foot; one blank line between sections and none under a title, so 156x43 shows it whole. One
+    column, scrolled, where no layout fits. (text width, lines)."""
+    room = max(0, screen_width - 2) - TEXT_INSET
+    for count in range(2, HELP_COLUMNS + 1):
+        width = min(HELP_COLUMN_MOST, (room - (count - 1) * COLUMN_GAP) // count)
+        if width < HELP_COLUMN_MIN:
+            break
+        columns: list[list[Line]] = [[]]
+        for blocks in help_sections(width, after=0):
+            for index, block in enumerate(blocks):
+                gap = 1 if index == 0 and columns[-1] else 0
+                if columns[-1] and len(columns[-1]) + gap + len(block) > visible:
+                    columns.append([])
+                    gap = 0
+                columns[-1].extend(blank_lines(gap) + block)
+        if len(columns) <= count and max(len(column) for column in columns) <= visible:
+            return width * len(columns) + COLUMN_GAP * (len(columns) - 1), side_by_side(columns, width)
+    width = min(OVERLAY_WIDTH - TEXT_INSET, room)
+    return width, help_lines(width)
+
+
+def blank_lines(count: int) -> list[Line]:
+    return [[] for _ in range(count)]
+
+
+def side_by_side(columns: list[list[Line]], width: int) -> list[Line]:
+    """Columns of lines as one: each row's parts, every column padded to `width` and COLUMN_GAP after it."""
+    rows: list[Line] = []
+    for index in range(max(len(column) for column in columns)):
+        row: Line = []
+        for number, column in enumerate(columns):
+            parts = column[index] if index < len(column) else []
+            used = sum(text_width(text) for text, _ in parts)
+            row += parts
+            if number < len(columns) - 1:
+                row.append((" " * (width - used + COLUMN_GAP), "text"))
+        rows.append(row)
+    return rows
+
+
+def section_blocks(title: str, entries: list[tuple[str, ...]], width: int, after: int = HEADING_AFTER
+                   ) -> list[list[Line]]:
+    """One help section as blocks: the title, `after` blank lines and the first row; then each row or note."""
+    terms = max([text_width(entry[0]) for entry in entries if entry[0]] or [0])
+    column = HELP_INDENT + terms + HELP_GAP
+    pad = " " * HELP_INDENT
+    blocks: list[list[Line]] = []
+    for entry in entries:
+        term, text = entry[0], entry[1]
+        if not term:
+            style = entry[2] if len(entry) > 2 else "dim"
+            block: list[Line] = [[(pad + line, style)] for line in wrap(text, width - HELP_INDENT)]
+        elif width - column >= 12:
+            wrapped = wrap(text, width - column)
+            block = [[(pad, "text"), (term, "bold"), (" " * (column - HELP_INDENT - text_width(term)), "text"),
+                      (wrapped[0], "text")]] + [[(" " * column + line, "text")] for line in wrapped[1:]]
+        else:
+            block = [[(pad, "text"), (term, "bold")]] + \
+                [[(" " * (HELP_INDENT * 2) + line, "text")] for line in wrap(text, width - 2 * HELP_INDENT)]
+        blocks.append(block)
+    heading: list[Line] = [[(title, "title")]] + [[] for _ in range(after)]
+    return [heading + (blocks[0] if blocks else [])] + blocks[1:]
 
 
 # What's new (fathers#102): one timeline of every tool's entries, Unreleased ones included, newest first, or one
@@ -250,11 +312,11 @@ LAID_OUT: dict[tuple[Any, ...], list[Line]] = {}  # an overlay's text by what it
 
 
 def overlay_lines(kind: str, width: int, tab: int = 0, news: Optional[_news.News] = None,
-                  read: Optional[_news.Read] = None) -> tuple[str, list[Line], list[str]]:
+                  read: Optional[_news.Read] = None, height: int = 0) -> tuple[str, list[Line], list[str]]:
     """An overlay's title, its text at `width`, and what's new's filters: help, or what's new filtered by `tab`
     (0: all). Laid out once per text and width, so scrolling never wraps it again."""
     if kind == "help":
-        key: tuple[Any, ...] = (kind, width)
+        key: tuple[Any, ...] = (kind, width, height)
         shown: list[str] = []
     else:
         found = shown_news(news)
@@ -264,7 +326,7 @@ def overlay_lines(kind: str, width: int, tab: int = 0, news: Optional[_news.News
         if len(LAID_OUT) > 16:
             LAID_OUT.clear()
         if kind == "help":
-            LAID_OUT[key] = help_lines(width)
+            LAID_OUT[key] = help_columns(width, height)[1] if height else help_lines(width)
         else:
             LAID_OUT[key] = news_lines(width, shown_news(news), read, shown[tab % len(shown)])
     return ("HELP" if kind == "help" else "WHAT'S NEW"), LAID_OUT[key], shown
@@ -275,8 +337,16 @@ def overlay_view(kind: str, width: int, height: int, offset: int = 0, tab: int =
                  ) -> tuple[OverlayView, list[Line], str, list[str]]:
     """Where an overlay goes on a screen this size and what of it shows from `offset` (kept in range): the one
     geometry painting, the keys and the wheel share; its lines, title and what's new's filters too."""
-    title, lines, shown = overlay_lines(kind, _layout.overlay_text(width, OVERLAY_WIDTH, TEXT_INSET), tab, news, read)
-    box = _layout.centred(width, height, OVERLAY_WIDTH, len(lines), OVERLAY_CHROME)
+    if kind == "help":  # as many columns as the screen takes (fathers#145)
+        visible = max(0, min(height - 2, height) - OVERLAY_CHROME)
+        text, _ = help_columns(width, visible)
+        most = text + TEXT_INSET
+        title, lines, shown = overlay_lines(kind, width, tab, news, read, visible)
+    else:
+        most = OVERLAY_WIDTH
+        title, lines, shown = overlay_lines(kind, _layout.overlay_text(width, OVERLAY_WIDTH, TEXT_INSET), tab, news,
+                                            read)
+    box = _layout.centred(width, height, most, len(lines), OVERLAY_CHROME)
     visible = max(0, box.height - OVERLAY_CHROME)
     offset = max(0, min(offset, max(0, len(lines) - visible)))
     return OverlayView(box.x, box.y, box.width, box.height, offset, visible, len(lines), kind), lines, title, shown

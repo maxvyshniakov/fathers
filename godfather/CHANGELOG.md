@@ -42,6 +42,9 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Changed
 
+- Help fits the standard screen (fathers#145): at 156x43 its legend is laid out in columns, read down then across,
+  a section going on in the next column between two rows, and shows whole with nothing to scroll; a smaller
+  screen gets the one scrolling column as before.
 - EVENTS shows one tool's log at a time (fathers#152): its title is the switch, `◂ SLOTS LOG ▸` (default where
   Slotfather is present), `LANES LOG`, `PROCS LOG`, then `ALL LOG`, cycled with ← → while EVENTS has the focus, `f`
   or a click on the title. Each log has its own columns, so labels keep their width: SLOTS LOG time, slots, label,

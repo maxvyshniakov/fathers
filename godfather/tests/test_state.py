@@ -166,8 +166,8 @@ class ModeTableTests(Case):
                                                                          "a"),)))
         if mode == "panel":
             state = dataclasses.replace(state, focus="events", scroll={"events": 3})
-        elif mode == "help":
-            state = dataclasses.replace(state, overlay=tool.Help(scroll=3))
+        elif mode == "help":  # at 100 columns: 156x43 shows the whole help in columns, with nothing to scroll
+            state = dataclasses.replace(self.draw(state, 100, 43), overlay=tool.Help(scroll=3))
         elif mode == "changelog":
             state = dataclasses.replace(state, overlay=tool.Changelog(scroll=3))
         self.assertEqual(mode, tool.mode(state))
@@ -252,7 +252,7 @@ class MouseTableTests(Case):
         queue, details, evs = (base.frame.tables[name] for name in ("requests", "details", "events"))
         version = base.frame.version_at
         gap = queue["top"] + 3  # the row between running and waiting
-        help_ = dataclasses.replace(base, overlay=tool.Help(scroll=3))
+        help_ = dataclasses.replace(self.draw(base, 100, 43), overlay=tool.Help(scroll=3))  # one column: it scrolls
         box = tool.overlay_box(help_, help_.overlay)
         inside, outside = (box.x + 3, box.y + 3), (0, 0)
         cases: list[tuple[str, Any, tuple[int, int, int, bool], Callable[[Any], object]]] = [
@@ -303,7 +303,7 @@ class OverlayTests(Case):
     def test_keys_after_v_in_the_same_batch_scroll_the_changelog(self) -> None:
         for opener, kind in (("v", "changelog"), ("?", "help")):
             with self.subTest(opener=opener):
-                state, _ = self.keys(self.screen(), opener, "j", "j")  # never drawn between them
+                state, _ = self.keys(self.screen(width=100), opener, "j", "j")  # never drawn between them
                 self.assertEqual((kind, 2), (state.overlay.kind, state.overlay.scroll))
 
     def test_with_one_filter_the_tab_keys_go_back_to_its_top(self) -> None:
@@ -471,7 +471,7 @@ class WhatsNewTests(Case):
         self.assertIsNone(after.overlay, "a click on the version is a click outside: it closes Settings")
 
     def test_a_click_outside_help_closes_it_and_the_wheel_inside_scrolls_it(self) -> None:
-        state, _ = self.keys(self.screen(), "?")
+        state, _ = self.keys(self.screen(width=100), "?")  # one column: it scrolls
         view = self.tool.overlay_box(state, state.overlay)
         after, _ = self.send(state, self.tool.Mouse(65, view.x + 3, view.y + 3, True))
         self.assertEqual(3, after.overlay.scroll)
