@@ -15,24 +15,36 @@ or `advise.jobs`; lifetime registrations reserve no execution slots. The legacy
 provider alone retains the existing local arithmetic during rollout.
 
 Lanefather counts planned+active once within its configured Store, among the
-lanes of the registering repository (its Git common directory, fathers#149): a
-state directory several projects share does not let one fill another's cap. The
-optional `LANEFATHER_GLOBAL_CAP` ceiling counts every project's lanes, locally,
-for both providers. Landed, released and done do not occupy a place. A fix lane
-(`review --fix-lane`) for a landed, kept parent takes the parent's place and is
-admitted outside the cap and the ceiling; disk, load and claims still apply. Actual registration reads strict state
-and queries while holding the existing Store state lock, before persisting.
-Concurrent registrations cannot both use the final place. Readiness remains a
-read-only strict snapshot, without creating locks/state or changing ambient
-configuration; it is advice, not a reservation. A later registration samples again.
+lanes of one repository (its Git common directory, fathers#149): a state
+directory several projects share does not let one fill another's cap.
+Registration counts the registering lane's repository; readiness and `list`
+count the repository the command runs in, else the one the configuration's file
+is in, else every lane. A record that names no repository counts for every one.
+The optional `LANEFATHER_GLOBAL_CAP` ceiling counts every project's lanes,
+locally, for both providers. Landed, released and done do not occupy a place. A
+fix lane (`review --fix-lane`) for a landed, kept parent is admitted outside the
+cap and the ceiling, in its parent's place; disk, load and claims still apply.
+That holds at registration only: once registered the fix lane counts like any
+planned or active lane, while its landed parent did not (part (b) of fathers#45
+changes this). Actual registration reads strict state and queries while holding
+the existing Store state lock, before persisting. Concurrent registrations
+cannot both use the final place. Readiness remains a read-only strict snapshot,
+without creating locks/state or changing ambient configuration; it is advice,
+not a reservation. A later registration samples again.
 
-`Config.lookup` resolves existing aliases/conflicts and passes CAP raw text and
-source (else the project's `[admission] cap` with source `.lanefather.toml [admission] cap`), plus explicit CORES/MEMORY_GB/LOAD15 samples with provenance. Slotfather
-samples physical facts where no override applies. Invalid CPU or nonnumeric
-memory overrides retain the legacy sampling fallback; nonfinite/negative samples
-fail unavailable. Invalid nonempty CAP retains Slotfather's derived cap and emits
-a warning. A conflicting alias is an error. Execution `SLOTFATHER_*` settings and
-cgroup budgets are not lifetime overrides.
+`Config.lookup` resolves existing aliases/conflicts. The cap's setting, first
+set wins: `LANEFATHER_CAP`, then the project's `[admission] cap`, then the
+derived cap. An exported `LANEFATHER_CAP` overrides every project's cap.
+Lanefather passes the CAP raw text and source as the query's cap override, or
+the project's `[admission] cap` with source `.lanefather.toml [admission] cap`,
+plus explicit CORES/MEMORY_GB/LOAD15 samples with provenance. Slotfather samples
+physical facts where no override applies. Invalid CPU or nonnumeric memory
+overrides retain the legacy sampling fallback; nonfinite/negative samples fail
+unavailable. An invalid nonempty CAP falls back to the project's `[admission]
+cap` when it has one (Lanefather warns and sends that instead); without one,
+Slotfather keeps its derived cap and emits a warning. A conflicting alias is an
+error. Execution `SLOTFATHER_*` settings and cgroup budgets are not lifetime
+overrides.
 
 The installed `slotfather` is found on PATH; there is no production source path,
 argv-prefix or test-environment fallback. The bounded command is exactly

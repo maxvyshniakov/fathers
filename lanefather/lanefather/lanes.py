@@ -205,8 +205,7 @@ def receipt_state(record: Record) -> str:
 def list_lanes(args: Any) -> int:
     records = state.Store(config.current()).lanes(strict=True)
     shown = [r for r in records if args.all or r["status"] != "done"]
-    common = common_dir(os.getcwd()) if git_ok(os.getcwd(), "rev-parse", "--git-dir") else None
-    decision = admission.evaluate(config.current(), records, common)
+    decision = admission.evaluate(config.current(), records, admission.running_common(config.current()))
     cap, source, machine = decision.cap, decision.source, decision.machine
     ceiling = decision.ceiling
     # Each run's effective slot priority and its source (lanefather#24).

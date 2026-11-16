@@ -15,7 +15,7 @@ from typing import Any, cast
 
 from . import config, host, slots, state
 from .errors import LaneError
-from .gitops import common_dir, git_ok
+from .gitops import common_dir, git_ok, main_checkout
 
 TIMEOUT = 5.0
 MAX_OUTPUT = 65536
@@ -188,23 +188,35 @@ def response_for(raw: bytes, request: dict[str, Any]) -> dict[str, Any]:
     return response
 
 
-def project_common(project: config.Config) -> str | None:
-    """The Git common directory of the repository a configuration belongs to, when its file is in one; None (every
-    lane counts) when it is not, or Git cannot be run."""
-    if project.path is None:
-        return None
+def repository_of(path: str | os.PathLike[str]) -> str | None:
+    """The Git common directory of the repository `path` is in; None outside one, or when Git cannot be run."""
     try:
-        return common_dir(project.path.parent) if git_ok(project.path.parent, "rev-parse", "--git-dir") else None
+        return common_dir(path) if git_ok(path, "rev-parse", "--git-dir") else None
     except OSError:
         return None
 
 
+def running_common(project: config.Config) -> str | None:
+    """The repository whose lanes a read of the cap counts (review of fathers#149): the one the command runs in, as
+    start registers there; outside any repository, the one the configuration's file is in; else None (every lane
+    counts)."""
+    return repository_of(os.getcwd()) or (repository_of(project.path.parent) if project.path else None)
+
+
 def grouped(records: list[state.Record]) -> str:
-    """The lanes by repository: `data-grid: a, b; sid-kit: c`."""
-    groups: dict[str, list[str]] = {}
+    """The lanes by repository: `data-grid: a, b; sid-kit: c`. Two repositories of one name show their paths."""
+    groups: dict[str | None, list[str]] = {}
     for record in records:
-        groups.setdefault(state.project_name(record.get("common_dir")), []).append(record["id"])
-    return "; ".join(f"{name}: {', '.join(ids)}" for name, ids in sorted(groups.items()))
+        groups.setdefault(record.get("common_dir"), []).append(record["id"])
+    names = {common: state.project_name(common) for common in groups}
+    shared = {name for name in names.values() if list(names.values()).count(name) > 1}
+
+    def label(common: str | None) -> str:
+        name = names[common]
+        return f"{name} ({main_checkout(common)})" if common and name in shared else name
+
+    return "; ".join(f"{label(common)}: {', '.join(groups[common])}"
+                     for common in sorted(groups, key=lambda c: (names[c], c or "")))
 
 
 def evaluate(project: config.Config, records: list[state.Record], common: str | None = None, *,

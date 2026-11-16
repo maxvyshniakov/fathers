@@ -59,47 +59,62 @@ def derived_cap(cores: int, memory_gb: float) -> int:
     return max(1, min(cores // CORES_PER_LANE, int((memory_gb - MEMORY_RESERVE_GB) // LANE_MEMORY_GB)))
 
 
+def positive(raw: str) -> int | None:
+    """A cap setting's value: a positive whole number in decimal digits, spaces around it allowed; else None."""
+    text = raw.strip()
+    try:
+        value = int(text) if text.isdecimal() else 0
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def bad_setting(found: tuple[str, str], then: str) -> None:
+    """Warn of a cap setting that is set but not a positive whole number, and say what applies instead."""
+    print(f"lane: warning: {found[0]}={found[1]!r} is not a positive whole number; {then}", file=sys.stderr)
+
+
 def lane_cap(project: config.Config | None = None) -> tuple[int, str]:
-    """A repository's lane cap and where it comes from: LANEFATHER_CAP, which the owner may raise for a stretch and
-    every start logs, else the project's `[admission] cap`, else the machine's derived cap. It counts the planned
-    and active lanes of one repository (fathers#149). A bad value warns and is skipped, so a typo does not stop every
-    run (#454)."""
+    """A repository's lane cap and where it comes from, first set wins: LANEFATHER_CAP, which the owner may raise
+    for a stretch and every start logs (exported, it overrides every project's cap); the project's `[admission]
+    cap`; the machine's derived cap. It counts the planned and active lanes of one repository (fathers#149). An
+    invalid value warns and falls back to the next, so a typo does not stop every run (#454)."""
     project = project or config.current()
     cores, memory = machine_cores(project), machine_memory_gb(project)
     derived = derived_cap(cores, memory)
     found = project.lookup("CAP")
-    if found and found[1].strip().isdigit() and int(found[1]) > 0:
-        return int(found[1]), f"{found[0]} override; derived: {derived}"
+    explicit = positive(found[1]) if found else None
+    if found and explicit:
+        return explicit, f"{found[0]} override; derived: {derived}"
     cap, source = ((project.lane_cap, f"{config.CONFIG_NAME} [admission] cap; derived: {derived}")
                    if project.lane_cap else (derived, f"derived from {cores} cores and {memory:.0f} GB of memory"))
     if found and found[1]:
-        print(f"lane: warning: {found[0]}={found[1]!r} is not a positive whole number; the cap is {cap}",
-              file=sys.stderr)
+        bad_setting(found, f"the cap is {cap}")
     return cap, source
 
 
 def cap_override(project: config.Config) -> tuple[str, str] | None:
     """The variable and raw value of the cap's explicit setting, else the project's `[admission] cap`: what the
-    Slotfather lifetime query applies over its derived cap."""
+    Slotfather lifetime query applies over its derived cap. An invalid LANEFATHER_CAP falls back to the project's
+    cap when it has one, as lane_cap does; without one Slotfather gets the raw value and keeps its derived cap."""
     found = project.lookup("CAP")
-    if not project.lane_cap or (found and found[1].strip().isdigit() and int(found[1]) > 0):
+    if not project.lane_cap or (found and positive(found[1])):
         return found
     if found and found[1]:
-        print(f"lane: warning: {found[0]}={found[1]!r} is not a positive whole number; the cap is "
-              f"{project.lane_cap}", file=sys.stderr)
+        bad_setting(found, f"the cap is {project.lane_cap}")
     return f"{config.CONFIG_NAME} [admission] cap", str(project.lane_cap)
 
 
 def global_cap(project: config.Config | None = None) -> tuple[int, str] | None:
     """The global ceiling over every project's planned and active lanes in the state directory, and its variable:
-    only LANEFATHER_GLOBAL_CAP sets one (fathers#149). A bad value warns and sets none."""
+    only LANEFATHER_GLOBAL_CAP sets one (fathers#149). An invalid value warns and sets none."""
     found = (project or config.current()).lookup("GLOBAL_CAP")
     if not found or not found[1]:
         return None
-    if found[1].strip().isdigit() and int(found[1]) > 0:
-        return int(found[1]), found[0]
-    print(f"lane: warning: {found[0]}={found[1]!r} is not a positive whole number; no global ceiling",
-          file=sys.stderr)
+    ceiling = positive(found[1])
+    if ceiling:
+        return ceiling, found[0]
+    bad_setting(found, "no global ceiling")
     return None
 
 

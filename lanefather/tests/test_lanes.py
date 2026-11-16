@@ -163,6 +163,53 @@ class ProjectCapTests(LaneCase):
         self.lane("next", "--start")
         self.assertEqual(self.record("next")["status"], "planned")
 
+    def test_readiness_and_list_count_the_repository_they_run_in_not_the_configs(self):
+        """Review of fathers#149: a configuration outside the repository named no repository, so every project's
+        lanes counted toward this one's cap."""
+        import contextlib
+        from unittest.mock import patch
+
+        from lanefather import config
+        from lanefather.project import Project
+        self.foreign("dg-1", "dg-2", "dg-3", claims=("other/**",))
+        self.write(self.state.parent, "queue/queue.toml", '[[lane]]\nid="next"\nticket=2\nclaims=["src/**"]\n')
+        elsewhere = self.write(self.tmp / "elsewhere", ".lanefather.toml",
+                               (self.integration / ".lanefather.toml").read_text())
+        with patch.dict("os.environ", self.env, clear=True), contextlib.chdir(self.integration):
+            readiness = Project(config.load(elsewhere)).readiness()
+        self.assertTrue(readiness.can_start, readiness.blocked)
+        self.assertEqual(readiness.planned_or_active, ())
+        # list outside any repository counts the repository its configuration is in.
+        self.env["LANEFATHER_CONFIG"] = str(self.integration / ".lanefather.toml")
+        self.assertIn("0 of 3 lanes planned or active", self.lane("list", cwd=self.tmp))
+
+    def test_a_cap_in_other_digits_warns_instead_of_crashing(self):
+        for name in ("LANEFATHER_CAP", "LANEFATHER_GLOBAL_CAP"):
+            with self.subTest(name):
+                self.env[name] = "\u00b2"
+                output = self.lane("list")
+                self.assertIn(f"{name}='\u00b2' is not a positive whole number", output)
+                self.start(f"lane-{name[11:].lower()}", f"{name.lower()}/**")
+                del self.env[name]
+
+    def test_the_global_ceiling_tells_two_repositories_of_one_name_apart(self):
+        self.foreign("dg-1")
+        (self.state / "svc.json").write_text(json.dumps(dict(
+            json.loads((self.state / "dg-1.json").read_text()), id="svc",
+            common_dir=str(self.tmp / "other" / "data-grid" / ".git"))))
+        self.env["LANEFATHER_GLOBAL_CAP"] = "2"
+        output = self.start("l0", "b/**", ok=False)
+        self.assertIn(f"data-grid ({self.tmp / 'data-grid'}): dg-1; "
+                      f"data-grid ({self.tmp / 'other' / 'data-grid'}): svc", output)
+
+    def test_check_widens_claims_without_warning_of_another_repositorys_lane(self):
+        self.foreign("dg-1", claims=("lib/**",))
+        worktree = self.created("mine", "native/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nmine\n"})
+        output = self.lane("check", "mine")
+        self.assertIn("lib/api.txt", self.record("mine")["claims"])
+        self.assertNotIn("overlaps the claims of lane dg-1", output)
+
 
 class BriefRulesTests(LaneCase):
     """B4 start composes the brief from the rule snippets whose paths the claims touch."""
