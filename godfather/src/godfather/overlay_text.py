@@ -41,11 +41,11 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
         ("tab", "next panel, by columns (shift-tab: back)"),
         ("click", "a row, a panel, a footer hint (as its key)"),
         ("wheel", "scroll the panel under the pointer"),
-        ("← → · f", "events: the next log (or click its title)"),
+        ("← → · f", "events: next log (or its title)"),
         ("r", "events: every event as logged"),
-        ("/", "events: filter by text (esc clears)"),
-        ("1 2 3", "the overview, lanes, processes (tools present)"),
-        ("enter · a", "the selected row's actions (or right-click it)"),
+        ("/", "events: text filter (esc clears)"),
+        ("1 2 3", "overview · lanes · processes"),
+        ("enter · a", "the row's actions (right-click)"),
         ("s", "settings"),
         ("?", "help"),
         ("v", "what's new (or click Godfather what's new?)"),
@@ -91,22 +91,19 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
     ]),
     ("EVENTS", [
         ("", "One log at a time; ↑↓ pick a run or event"),
-        ("▪ · ▫", "slots held · handed back, or never held"),
+        ("▪ · ▫", "held · given back, never held"),
         ("wait · no wait", "how long it waited for them"),
-        ("ok · exit N", "how a lease ended, and how long it ran"),
-        ("gave up", "a waiter stopped waiting, after so long"),
-        ("owner died", "its process exited; Slotfather reaped the entry"),
-        ("▲ ↗ ↘", "an outlier run · its run type got slower · faster"),
+        ("ok · exit N", "how it ended, how long"),
+        ("gave up", "a waiter stopped waiting"),
+        ("owner died", "it exited; it was reaped"),
+        ("▲ ↗ ↘", "outlier · type slower/faster"),
     ]),
     ("PAGES", [
-        ("2 lanes", "by project: stage, receipt, review, claims, age"),
-        ("▶️ 🗓️ ✅ 💤", "active · planned · landed · parked"),
-        ("2 lanes N", "SLOTS' border: lanes active, planned, reviews, 🔥 a red gate"),
-        ("3 procs", "owned processes and resources, then the last sweep's unowned"),
-        ("▶️ 👻 ⌛", "running · its owner is gone · past its TTL"),
-        ("❔ 📦", "an unowned process · an unowned resource"),
-        ("3 procs N", "SLOTS' border: owned, orphan, expired, unowned"),
-        ("", "A lane, lease or process in DETAILS is a link; esc goes back."),
+        ("2 · 3", "lanes · processes (SLOTS' border)"),
+        ("▶️ 🗓️ ✅ 💤", "active planned landed parked"),
+        ("👻 ⌛", "owner gone · past its TTL"),
+        ("❔ 📦", "unowned process · resource"),
+        ("", "Links in DETAILS open a page."),
     ]),
     ("MACHINE", [
         ("load", "the 1-minute load average / cores (not CPU %)"),
@@ -125,9 +122,9 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
         ("enter", "edit · save"),
         ("d · D D", "reset one · reset its section"),
         ("esc", "close"),
-        ("", "A section per tool; status rows are read-only."),
-        ("", "A lower capacity drains: running work keeps its slots."),
-        ("", "Colours follow the terminal theme; Colour theme picks Auto, Terminal or Built-in."),
+        ("", "A section per tool; status is read-only."),
+        ("", "Lower capacity drains; work keeps slots."),
+        ("", "Colour theme: Auto, Terminal or Built-in."),
     ]),
 ]
 
@@ -394,9 +391,9 @@ def action_lines(overlay: Any) -> list[Line]:
     if kind == "reason":
         return [[("Why park it? An empty reason cancels.", "dim")], [], *target, [],
                 [("reason   ", "dim"), (overlay.text, "text"), ("_", "key")]]
-    command = action.shown(overlay.reason)
+    command = wrap(action.shown(overlay.reason), ACTION_WIDTH - TEXT_INSET - 9)  # the whole command, never cut
     return [*target, *([[("reason   ", "dim"), (overlay.reason, "text")]] if overlay.reason else []), [],
-            [("runs     ", "dim"), (command, "accent")]]
+            *[[("runs     " if index == 0 else " " * 9, "dim"), (line, "accent")] for index, line in enumerate(command)]]
 
 
 def action_box(overlay: Any, width: int, height: int) -> _layout.Rect:
@@ -413,7 +410,7 @@ def action_title(overlay: Any) -> str:
 def action_hints(overlay: Any) -> list[Part]:
     kind = getattr(overlay, "kind", "")
     if kind == "actions":
-        return [("↑↓", "choose"), ("enter", "run"), ("esc", "close")]
+        return [("↑↓", "choose"), ("enter", "run the chosen"), ("esc", "close")]
     if kind == "reason":
         return [("enter", "next"), ("esc", "cancel")]
     return [("y", "run it"), ("n", "cancel"), ("esc", "cancel")]

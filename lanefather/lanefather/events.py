@@ -114,15 +114,27 @@ def timestamp(moment: datetime.datetime) -> str:
     return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond // 1000:03d}Z"
 
 
+# The agent sessions a process can run for, the most specific first: a Codex thread started from a Claude Code
+# session inherits CLAUDE_CODE_SESSION_ID, never the other way round (fathers#150 review).
+AGENTS = (("CODEX_THREAD_ID", "codex"), ("CLAUDE_CODE_SESSION_ID", "claude-code"))
+
+
+def agent_session() -> tuple[str, str] | None:
+    """(agent name, session id) of the agent this process runs for, or None."""
+    for variable, name in AGENTS:
+        session = os.environ.get(variable, "").strip()
+        if session:
+            return name, session
+    return None
+
+
 def actor() -> dict[str, Any]:
     """Who causes the event: the agent session this process runs for, else the process. A command Godfather runs
     carries `via: godfather` (GODFATHER_ACTOR is godfather/<version>)."""
     found: dict[str, Any] = {"type": "process", "pid": os.getpid()}
-    for variable, name in (("CLAUDE_CODE_SESSION_ID", "claude-code"), ("CODEX_THREAD_ID", "codex")):
-        session = os.environ.get(variable, "").strip()
-        if session:
-            found.update(type="agent", session=clean(session, 1, 200), name=name)
-            break
+    agent = agent_session()
+    if agent:
+        found.update(type="agent", session=clean(agent[1], 1, 200), name=agent[0])
     via = os.environ.get("GODFATHER_ACTOR", "").split("/", 1)[0].strip()
     if re.fullmatch(r"[a-z][a-z0-9-]{0,31}", via):
         found["via"] = via

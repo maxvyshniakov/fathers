@@ -19,7 +19,7 @@ from helpers import ROOT
 from test_lanes import STRAYLIGHT, Case, decoded as lanes_decoded, request
 from test_state import entry
 
-from godfather import events, sources, state as state_module
+from godfather import pages, events, sources, state as state_module
 from godfather.adapters import junkfather, lanefather
 
 PROCS = ROOT / "tests" / "fixtures" / "procs"
@@ -83,16 +83,20 @@ class JoinTests(unittest.TestCase):
 
 class FormatterTests(unittest.TestCase):
     def test_every_kind_junkfather_logs_has_its_word(self) -> None:
-        kinds = ("entry.owned", "entry.adopted", "entry.exited", "entry.extended", "entry.handed", "entry.reaped",
-                 "entry.reap_failed", "resource.owned", "resource.stopped", "resource.stop_failed",
-                 "unowned.reported", "unowned.reaped", "sweep.finished", "hook.failed")
+        """The kinds come from Junkfather's own events.KINDS (the sibling checkout), not a list kept here
+        (fathers#88 review 10); a kind it adds without a word here fails."""
+        import ast
+
         package = ROOT.parent / "junkfather" / "junkfather" / "events.py"
-        if package.is_file():
-            text = package.read_text()
-            self.assertEqual(set(kinds), {kind for kind in kinds if f'"{kind}"' in text}, "the kinds it names")
+        if not package.is_file():
+            self.skipTest("no junkfather checkout beside godfather")
+        tree = ast.parse(package.read_text())
+        kinds = next(ast.literal_eval(node.value) for node in ast.walk(tree) if isinstance(node, ast.Assign)
+                     and any(isinstance(target, ast.Name) and target.id == "KINDS" for target in node.targets))
+        self.assertGreater(len(kinds), 10)
         for kind in kinds:
             with self.subTest(kind):
-                self.assertIsNotNone(events.junkfather_shown(kind, {}), f"{kind} falls back to the kind itself")
+                self.assertIsNotNone(events.junkfather_shown(kind, {}), f"{kind} has no word in EVENTS")
         swept = events.junkfather_shown("sweep.finished", {"reaped": ["a", "b"], "failed": []})
         assert swept is not None
         self.assertEqual("2 reaped", swept.detail[0][0])
@@ -108,8 +112,8 @@ class PageTests(Case):
         return request("644-build-once", STRAYLIGHT, pid=10000, label="the-lease")
 
     def picked_proc(self, state: Any) -> Any:
-        rows = state_module.page_rows(state, "processes")
-        index = state_module.page_index(state, "processes")
+        rows = pages.page_rows(state, "processes")
+        index = pages.page_index(state, "processes")
         return rows[index]["key"] if index is not None else None
 
     def test_details_list_the_requests_processes_as_links(self) -> None:
@@ -131,7 +135,7 @@ class PageTests(Case):
         self.assertEqual(("entry", "j5e6f7a"), self.picked_proc(state))
         self.assertIn("PROCESS DETAILS", self.text())
         state = self.keys(state, "G")
-        self.assertEqual("resource", state_module.page_rows(state, "processes")[state_module.page_index(state,
+        self.assertEqual("resource", pages.page_rows(state, "processes")[pages.page_index(state,
                                                                                                        "processes") or 0]["kind"])
         state = self.keys(state, "1")
         self.assertEqual("overview", state.page)
@@ -140,7 +144,7 @@ class PageTests(Case):
 
     def test_the_separator_is_skipped_and_unowned_rows_show_why(self) -> None:
         state = self.keys(self.screen([entry(1)]), "3")
-        rows = state_module.page_rows(state, "processes")
+        rows = pages.page_rows(state, "processes")
         keys = [row.get("key") for row in rows if row.get("key")]
         state = dataclasses.replace(state, picked={"processes": keys[4]})
         state = self.keys(state, "j")

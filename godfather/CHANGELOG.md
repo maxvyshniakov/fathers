@@ -14,7 +14,12 @@ Versions and release rules: [README.md](README.md#versions).
   open a lane's ticket or worktree with the platform opener, its latest log in `$PAGER` (`less -R +G`; the screen,
   kitty keyboard mode included, comes back after), and park an active lane with a reason where Lanefather
   advertises park. Reaps and park ask first, naming the target and the exact command; `y` runs it, `n`, Esc or a
-  click outside cancel. The row is looked for again in a fresh snapshot first and the action dropped if it changed;
+  click outside cancel. The menu runs nothing until an action is chosen. The row is looked for again in a fresh
+  snapshot first and the action dropped unless that row still offers the same action (an expired entry extended
+  meanwhile, an orphan whose owner came back, a lease no longer yieldable, a lane no longer active, an unowned pid an
+  owned entry holds now); an expired entry's reap also passes `--expired`, a park the lane's own `--state-dir`, a
+  reason goes as one `--reason=R` argument, an opener is started and not waited for, and the same action is not
+  started twice while it runs;
   the command runs in the background with no shell, a 30 s timeout and `GODFATHER_ACTOR=godfather/<version>`; the
   footer shows its first stdout line, or its first stderr line in red, and the source is polled at once. Land,
   promote, done, sync, review and sweep are never offered. Under `GODFATHER_FIXTURES` actions are recorded, never run.

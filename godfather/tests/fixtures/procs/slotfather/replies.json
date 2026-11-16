@@ -31,7 +31,8 @@
      ]
     },
     "actions": [
-     "reprioritize"
+     "reprioritize",
+     "ask-yield"
     ]
    }
   }
@@ -88,7 +89,8 @@
       "key": [
        10000,
        "2026-11-04T09:04:55+00:00"
-      ]
+      ],
+      "start": "Tue Nov  4 08:40:00 2026"
      },
      {
       "label": "lane-465-state-definitions-review-fixes",
@@ -106,9 +108,9 @@
       "kind": "held",
       "passable": false,
       "asked": "",
-      "yieldable": false,
+      "yieldable": true,
       "yields": 0,
-      "priority": "normal",
+      "priority": "batch",
       "ticket": "465",
       "context": {
        "lane": "471-missing-lane",
@@ -117,7 +119,8 @@
       "key": [
        10001,
        "2026-11-04T09:41:05+00:00"
-      ]
+      ],
+      "start": "Tue Nov  4 08:41:00 2026"
      },
      {
       "label": "desktop",
@@ -142,7 +145,8 @@
       "key": [
        10002,
        "2026-11-04T09:55:44+00:00"
-      ]
+      ],
+      "start": "Tue Nov  4 08:42:00 2026"
      }
     ],
     "waiters": [
@@ -164,12 +168,13 @@
       "asked": "",
       "yieldable": false,
       "yields": 0,
-      "priority": "normal",
+      "priority": "interactive",
       "context": {},
       "key": [
        10003,
        "2026-11-04T09:36:22+00:00"
-      ]
+      ],
+      "start": "Tue Nov  4 08:43:00 2026"
      },
      {
       "label": "lane-555-host-rename-names",
@@ -199,7 +204,8 @@
        10004,
        "2026-11-04T09:59:29+00:00"
       ],
-      "workdir": "/fixture/straylight/worktrees/555-host-rename-names/desktop"
+      "workdir": "/fixture/straylight/worktrees/555-host-rename-names/desktop",
+      "start": "Tue Nov  4 08:44:00 2026"
      }
     ],
     "used": 4,

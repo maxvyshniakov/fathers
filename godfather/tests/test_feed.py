@@ -408,8 +408,9 @@ class FilterReducerTests(unittest.TestCase):
 
     def test_new_rows_count_only_what_the_log_lets_through_and_a_switch_keeps_the_pin(self) -> None:
         rows = rows_of(mixed(), TAGS)
-        state = self.keys(self.state(rows[:2], scroll=1), "f")  # LANES LOG, scrolled down
-        self.assertEqual("lanefather", state.events_filter.source)
+        state = self.keys(self.state(rows[:2], scroll=1), "f")  # LANES LOG, from its top (fathers#88 review 8)
+        self.assertEqual(("lanefather", None), (state.events_filter.source, state.scroll.get("events")))
+        state = dataclasses.replace(state, scroll={**state.scroll, "events": 1})  # then scrolled down
         later = rows_of(mixed() + [logged("lane.landed", NOW + dt.timedelta(seconds=5), source="lanefather",
                                           ident="710", onto="main"),
                                    logged("entry.owned", NOW + dt.timedelta(seconds=6), "x", 9, source="junkfather")],

@@ -357,6 +357,21 @@ def write_procs() -> None:
     junk["capabilities --json"]["json"]["dashboard"]["snapshot"]["versions"] = [1, 2]
     junk["capabilities --json"]["json"]["dashboard"]["actions"] = ["reap", "extend"]
     (PROCS / "junkfather" / "replies.json").write_text(json.dumps(junk, indent=1) + "\n")
+    # fathers#88: every row's actions advertised; the requests carry their holders' start, the second lease yields
+    # for the interactive waiter
+    slot = json.loads((PROCS / "slotfather" / "replies.json").read_text())
+    slot["capabilities --json"]["json"]["dashboard"]["actions"] = ["reprioritize", "ask-yield"]
+    block = slot["status --json --full"]["json"]["dashboard"]
+    for item in block["holders"] + block["waiters"]:
+        item["start"] = f"Tue Nov  4 08:{item['pid'] % 60:02d}:00 2026"
+        if item["pid"] == 10001:
+            item.update(yieldable=True, priority="batch")
+        if item["pid"] == 10003:
+            item["priority"] = "interactive"
+    (PROCS / "slotfather" / "replies.json").write_text(json.dumps(slot, indent=1) + "\n")
+    lanes = json.loads((PROCS / "lanefather" / "replies.json").read_text())
+    lanes["capabilities --json"]["json"]["dashboard"]["actions"] = ["park"]
+    (PROCS / "lanefather" / "replies.json").write_text(json.dumps(lanes, indent=1) + "\n")
 
 
 def fake_state(state: dict[str, Any]) -> dict[str, Any]:
@@ -385,7 +400,7 @@ def render(name: str, theme: str | None) -> str:
     the lanes and the chart's window go in as data, the theme and marks with the canvas, the commit what's new shows as
     an argument. No module is patched (fathers#138); the only thing set from outside is the process environment
     (environment(): the fixture folder, the time zone and the terminal's colours), which is what the tools read."""
-    from godfather import app, entries, events, overlay_text, state, theme as themes, tui
+    from godfather import app, entries, events, overlay_text, pages, state, theme as themes, tui
     from godfather.adapters import slotfather as adapter
     from godfather.views import common, overview
 
@@ -444,13 +459,13 @@ def render(name: str, theme: str | None) -> str:
         elif overlay:
             shown = state.Help()
         tools = {name: screen.load_tool(name) for name in app.TOOL_ADAPTERS}  # the other tools as sources
-        opened = state.open_page(state.settle(state.AppState(model=model, tools=tools), 0.0)[0], page)
+        opened = pages.open_page(state.settle(state.AppState(model=model, tools=tools), 0.0)[0], page)
         canvas = tui.Canvas(width, height, palette, common.marks_for(False))
         canvas.focus = opened.focus if page != "overview" else focus
         overview.dashboard_draw(canvas, model, selected, shown, cwd="~/straylight", news=found, read=read,
                                 moment=moment, events_filter=found_filter, event=event, tools=tools,
                                 page=opened.page,
-                                page_row=state.page_index(opened, opened.page) if opened.page != "overview" else None)
+                                page_row=pages.page_index(opened, opened.page) if opened.page != "overview" else None)
         return canvas.render(theme is not None)
 
 

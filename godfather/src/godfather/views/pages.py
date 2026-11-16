@@ -10,7 +10,6 @@ Nothing here runs a command: every value comes from the snapshots the sources po
 from __future__ import annotations
 
 import datetime
-import textwrap
 from pathlib import Path
 from typing import Any, Callable, Optional, cast
 
@@ -22,8 +21,9 @@ from ..events import Filter
 from ..layout import Rect
 from ..text import clip, dashboard_text, minutes, span, text_width, tilde
 from ..tui import Canvas, safe_link
-from ..widgets import Panel, Part, Spec, Table, label_column
+from ..widgets import Panel, Part, Spec, Table
 from . import common as _common
+from . import details as _details
 from . import events as _events
 from .common import Model
 
@@ -114,40 +114,6 @@ def draw_notice(canvas: Canvas, page: str, lines: list[str]) -> None:
 
 PAGE_TABLE = {"lanes": "lanes", "processes": "procs"}
 MARK = 4  # a row's state mark and the gap after it
-
-
-def draw_document(canvas: Canvas, rect: Rect, title: str, facts: list[tuple[str, list[Part], Link]],
-                  note: str = "") -> None:
-    """A details panel: label and value rows, long values wrapped, each row's link a click target, and any URL a
-    part names as `link:` followed by it an OSC 8 link."""
-    panel = Panel(canvas, rect, "details").frame(title, note)
-    label_width, value_width = label_column([name for name, _, _ in facts] or [""], panel.inner.width)
-    lines: list[tuple[str, list[Part], Link]] = []
-    for name, parts, link in facts:
-        text = "".join(text for text, _ in parts)
-        if len(parts) != 1 or text_width(text) <= value_width or parts[0][1].startswith("url:"):
-            lines.append((name, parts, link))
-            continue
-        for index, line in enumerate(textwrap.wrap(text, value_width, break_on_hyphens=False) or [""]):
-            lines.append((name if index == 0 else "", [(line, parts[0][1])], link if index == 0 else None))
-    document = Canvas(rect.width, len(lines))
-    column, values = panel.left, panel.left + label_width
-    for row, (name, parts, link) in enumerate(lines):
-        document.put(row, column, name, "dim")
-        end = values
-        for text, style in parts:  # a part styled `url:…` is an OSC 8 link: a folder or file muted, a URL accent
-            room = values + value_width - end
-            if room <= 0:
-                break
-            if style.startswith("url:"):
-                url = style[4:]
-                document.hyperlink(row, end, text, url, room, "dim" if url.startswith("file:") else "accent")
-                end += min(room, text_width(text))
-            else:
-                end = document.put(row, end, text, style, room)
-        if link is not None:
-            document.target(row, values, end, link)
-    panel.document(document, len(lines))
 
 
 def draw_table(canvas: Canvas, rect: Rect, name: str, title: str, spec: list[Spec], rows: list[dict[str, Any]],
@@ -302,9 +268,9 @@ def draw_lanes(canvas: Canvas, tool: Any, selected: Optional[int], model: Option
                        lambda row: lane_values(row, marks, moment), project_heading, stale_note(tool))
         elif name == "details":
             if lane is None:
-                draw_document(canvas, rect, "LANE DETAILS", [("", [("No lanes", "dim")], None)])
+                _details.draw_facts(canvas, rect, "LANE DETAILS", [("", [("No lanes", "dim")], None)])
             else:
-                draw_document(canvas, rect, "LANE DETAILS", lane_facts(lane, model, extra(lane)))
+                _details.draw_facts(canvas, rect, "LANE DETAILS", lane_facts(lane, model, extra(lane)))
         elif name == "events":
             draw_strip(canvas, rect, model, "lanefather", "lane",
                        lambda row: lane is not None and lane_event_of(row, lane), moment)
@@ -484,7 +450,7 @@ def draw_processes(canvas: Canvas, tool: Any, selected: Optional[int], model: Op
         elif name == "details":
             nothing: list[tuple[str, list[Part], Link]] = [("", [("Nothing owned or reported", "dim")], None)]
             facts = process_facts(row, model, lanes, elapsed) if row else nothing
-            draw_document(canvas, rect, "PROCESS DETAILS", facts)
+            _details.draw_facts(canvas, rect, "PROCESS DETAILS", facts)
         elif name == "events":
             draw_strip(canvas, rect, model, "junkfather", "junk", lambda event: row is not None and
                        process_event_of(event, row), moment)

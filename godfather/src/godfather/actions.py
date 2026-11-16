@@ -48,8 +48,9 @@ class Action:
     identity: tuple[Any, ...] = ()
 
     def command(self, reason: str = "") -> tuple[str, ...]:
-        """The exact argument vector, its executable named as the user types it."""
-        argv = (*self.argv, reason) if self.reason else self.argv
+        """The exact argument vector, its executable named as the user types it; a reason goes as one `--reason=R`
+        argument, so one starting with `-` is never taken for an option."""
+        argv = (*self.argv, f"--reason={reason}") if self.reason else self.argv
         if self.kind == "open":
             return argv
         if self.kind == "pager":
@@ -69,6 +70,7 @@ def offered(advertised: Any) -> frozenset[str]:
 
 
 def pager() -> tuple[str, ...]:
+    """$PAGER split as a shell would (no shell runs it), `less -R +G` without one; ValueError for a malformed one."""
     return tuple(shlex.split(os.environ.get("PAGER") or PAGER)) or tuple(shlex.split(PAGER))
 
 
@@ -81,12 +83,17 @@ def class_of(item: dict[str, Any]) -> str:
     return found if found in RANK else "normal"
 
 
-def for_request(item: dict[str, Any], waiters: list[dict[str, Any]], advertised: Any) -> list[Action]:
-    """QUEUE: reprioritize a request to another class; ask a running yieldable lease of a lower class than a waiter
-    to yield. Both need the holder's process start (status --json `start`), which the tool checks again."""
+def for_request(item: dict[str, Any], waiters: list[dict[str, Any]], advertised: Any,
+                uid: Optional[int] = None) -> list[Action]:
+    """QUEUE: reprioritize one of your requests to another class; ask a running yieldable lease of a lower class than
+    a waiter to yield. Both need the holder's process start (status --json `start`), which the tool checks again. A
+    request whose holder runs as another user (its `uid`, where Slotfather gives one, against `uid`) offers none:
+    Slotfather refuses those."""
     start = item.get("start")
     pid = item.get("pid")
     if not isinstance(start, str) or not start or not isinstance(pid, int):
+        return []
+    if uid is not None and isinstance(item.get("uid"), int) and item["uid"] != uid:
         return []
     tools = offered(advertised)
     label = str(item.get("label") or pid)
@@ -111,11 +118,11 @@ def for_process(row: dict[str, Any], advertised: Any) -> list[Action]:
     tools = offered(advertised)
     label = _junkfather.label_of(row)
     if row.get("kind") == "unowned":
-        if "reap" not in tools:
+        if "reap" not in tools or row.get("alive") is False:  # gone since the sweep: its pid may be another's now
             return []
         target = (("process", label), ("pid", str(row["pid"])), ("why", str(row.get("why") or "")))
-        return [Action("junkfather", "Reap", ("reap", "--pid", str(row["pid"]), "--force", "--reason",
-                                              "godfather: unowned"), confirm=True, target=target,
+        return [Action("junkfather", "Reap", ("reap", "--pid", str(row["pid"]), "--force",
+                                              "--reason=godfather: unowned"), confirm=True, target=target,
                        identity=("processes", row["key"]))]
     if row.get("kind") != "entry":
         return []
@@ -123,9 +130,11 @@ def for_process(row: dict[str, Any], advertised: Any) -> list[Action]:
               ("owner", str(row.get("owner") or "?")))
     identity = ("processes", row["key"])
     if row["state"] in ("orphan", "expired"):
-        return [Action("junkfather", "Reap", ("reap", "--id", str(row["id"]), "--reason",
-                                              f"godfather: {row['state']}"), confirm=True, target=target,
-                       identity=identity)] if "reap" in tools else []
+        # an expired entry's reap says so, so Junkfather refuses it too once it was extended meanwhile
+        argv = ("reap", "--id", str(row["id"]), *(("--expired",) if row["state"] == "expired" else ()),
+                f"--reason=godfather: {row['state']}")
+        return [Action("junkfather", "Reap", argv, confirm=True, target=target, identity=identity)] \
+            if "reap" in tools else []
     if "extend" not in tools:
         return []
     return [Action("junkfather", f"Extend TTL by {words}", ("extend", str(row["id"]), "--ttl", ttl), target=target,
@@ -148,22 +157,42 @@ def for_lane(lane: dict[str, Any], advertised: Any) -> list[Action]:
         found.append(Action("", "Open the worktree", (opener(), str(lane["worktree"])), kind="open", target=target,
                             identity=identity))
     if "park" in offered(advertised) and lane.get("status") == "active":
-        found.append(Action("lanefather", "Park", ("park", str(lane["id"]), "--reason"), confirm=True, reason=True,
-                            target=target, identity=identity))
+        # the lane's own state directory, never the project Godfather runs in (a lane id is not unique)
+        found.append(Action("lanefather", "Park", ("park", str(lane["id"]), "--state-dir", str(lane["state_dir"])),
+                            confirm=True, reason=True, target=(*target, ("state", str(lane["state_dir"]))),
+                            identity=identity))
     return found
 
 
-def still(action: Action, snapshot: Optional[dict[str, Any]]) -> bool:
-    """Whether the row an action was offered for is still there with the same identity in a fresh snapshot: a request
-    by its pid and start, an entry by its id, an unowned process by its pid and start, a lane by its key."""
+EVERY = frozenset({"reprioritize", "ask-yield", "reap", "extend", "park"})  # a re-check rebuilds any of them
+
+
+def revalidate(action: Action, snapshot: Optional[dict[str, Any]], uid: Optional[int] = None) -> Optional[Action]:
+    """The action as the row offers it now, in a fresh snapshot of its source, or None (SPEC 23, step 3): the row is
+    found by its identity (a request by key, pid and start; an entry, unowned process or resource by key; a lane by
+    project and id), its actions are built again from the fresh row and one with the same name and arguments must be
+    among them, so a row that left the state the action needs (an expired entry extended, a lease no longer
+    yieldable, a lane no longer active) is not acted on. An unowned process is refused when an owned entry holds its
+    pid now, which Junkfather's `reap --pid` would take first. The latest log is the fresh one."""
     page = action.identity[0] if action.identity else ""
+    fresh: list[Action] = []
     if page == "overview":
-        items = list((snapshot or {}).get("holders") or []) + list((snapshot or {}).get("waiters") or [])
         _, key, pid, start = action.identity
-        return any(item.get("key") == key and item.get("pid") == pid and item.get("start") == start
-                   for item in items)
-    if page == "processes":
-        return _junkfather.find(snapshot, action.identity[1]) is not None
-    if page == "lanes":
-        return _lanefather.find(snapshot, action.identity[1]) is not None
-    return False
+        found = snapshot or {}
+        waiters = cast(list[dict[str, Any]], found.get("waiters") or [])
+        for item in [*cast(list[dict[str, Any]], found.get("holders") or []), *waiters]:
+            if item.get("key") == key and item.get("pid") == pid and item.get("start") == start:
+                fresh = for_request(item, waiters, EVERY, uid)
+    elif page == "processes":
+        row = _junkfather.find(snapshot, action.identity[1])
+        if row is not None and row.get("kind") == "unowned" and any(
+                row["pid"] in (entry.get("pid"), entry.get("pgid")) for entry in _junkfather.entries(snapshot)):
+            return None
+        fresh = for_process(row, EVERY) if row is not None else []
+    elif page == "lanes":
+        lane = _lanefather.find(snapshot, action.identity[1])
+        fresh = for_lane(lane, EVERY) if lane is not None else []
+    for candidate in fresh:
+        if candidate.name == action.name and (candidate.argv == action.argv or action.kind == "pager"):
+            return candidate
+    return None

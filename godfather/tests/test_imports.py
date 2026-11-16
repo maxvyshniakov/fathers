@@ -14,7 +14,7 @@ LAYERS = {
     "data": ("keys", "theme", "version", "eventcheck", "sources", "events", "news", "entries", "adapters", "text",
              "actions"),
     # where things go and the one state and its reducer: no canvas, no terminal
-    "layout": ("layout", "overlay_text", "settings_model", "state", "modes", "reducer"),
+    "layout": ("layout", "overlay_text", "settings_model", "state", "pages", "modes", "reducer"),
     # drawing: the canvas and terminal (tui), the shared widgets, the screens
     "views": ("tui", "widgets", "views"),
     "app": ("app", "__main__", "__init__"),

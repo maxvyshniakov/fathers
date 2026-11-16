@@ -128,6 +128,13 @@ class NewRowsTests(CursorCase):
         state = self.keys(state, "r")
         self.assertIsNone(state.picked.get("events"))
 
+    def test_a_filter_change_shows_the_newest_it_selects(self) -> None:
+        """fathers#88 review 8: the view goes back to the top with the selection, not left scrolled away."""
+        state = self.keys(self.screen(runs(60), height=30), "\t", *["down"] * 30)
+        self.assertGreater(state.scroll.get("events", 0), 0)
+        state = self.keys(state, "r")
+        self.assertEqual((None, 0), (state.scroll.get("events"), state_module.event_index(state)))
+
 
 class FactsTests(unittest.TestCase):
     marks = common.marks_for()

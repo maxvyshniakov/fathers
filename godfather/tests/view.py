@@ -12,7 +12,7 @@ import helpers  # noqa: F401 - puts src/ on sys.path
 NAMES = ("godfather.views.overview", "godfather.views.queue", "godfather.views.details", "godfather.views.events",
          "godfather.views.machine", "godfather.views.overlays", "godfather.overlay_text", "godfather.views.common",
          "godfather.views.settings", "godfather.widgets",
-         "godfather.layout", "godfather.state", "godfather.reducer", "godfather.modes", "godfather.tui", "godfather.app",
+         "godfather.layout", "godfather.state", "godfather.pages", "godfather.reducer", "godfather.modes", "godfather.tui", "godfather.app",
          "godfather.sources", "godfather.version", "godfather.news", "godfather.adapters.slotfather",
          "godfather.settings_model", "godfather.entries", "godfather.events", "godfather.text")
 

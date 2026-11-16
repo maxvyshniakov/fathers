@@ -17,6 +17,7 @@ from .common import (Item, Marks, Model, bar, expected_run, marks_of, meta_text,
                      share_style, ticket_of)
 
 Fact = tuple[str, list[Part]]
+Link = Optional[tuple[Any, ...]]  # a document row's target (state.Target), or none
 BUILTIN_CONTEXT = {"class", "priority", "ticket", "lane", "phase", "kind", "check", "sha", "on", "session",
                    "lanefather.state"}
 PROCESS_COLUMNS = [("name", "process", 0, False, 0), ("cpu", "cpu", 6, True, 1), ("rss", "memory", 8, True, 2),
@@ -430,27 +431,46 @@ def event_facts(row: dict[str, Any], moment: Optional[datetime.datetime], marks:
     return facts
 
 
+def draw_facts(canvas: Canvas, rect: Rect, title: str, facts: list[tuple[str, list[Part], Link]],
+                  note: str = "") -> None:
+    """A details panel (an event's, fathers#152; a page's row's, fathers#85): label and value rows, long values
+    wrapped, each row's link (state.Target) a click target, and a part styled `url:…` an OSC 8 link."""
+    panel = Panel(canvas, rect, "details").frame(title, note)
+    label_width, value_width = label_column([name for name, _, _ in facts] or [""], panel.inner.width)
+    lines: list[tuple[str, list[Part], Link]] = []
+    for name, parts, link in facts:
+        text = "".join(text for text, _ in parts)
+        if len(parts) != 1 or text_width(text) <= value_width or parts[0][1].startswith("url:"):
+            lines.append((name, parts, link))
+            continue
+        for index, line in enumerate(textwrap.wrap(text, value_width, break_on_hyphens=False) or [""]):
+            lines.append((name if index == 0 else "", [(line, parts[0][1])], link if index == 0 else None))
+    document = Canvas(rect.width, len(lines))
+    column, values = panel.left, panel.left + label_width
+    for row, (name, parts, link) in enumerate(lines):
+        document.put(row, column, name, "dim")
+        end = values
+        for text, style in parts:  # a part styled `url:…` is an OSC 8 link: a folder or file muted, a URL accent
+            room = values + value_width - end
+            if room <= 0:
+                break
+            if style.startswith("url:"):
+                url = style[4:]
+                document.hyperlink(row, end, text, url, room, "dim" if url.startswith("file:") else "accent")
+                end += min(room, text_width(text))
+            else:
+                end = document.put(row, end, text, style, room)
+        if link is not None:
+            document.target(row, values, end, link)
+    panel.document(document, len(lines))
+
+
+
 def draw_event_detail(canvas: Canvas, rect: Rect, row: Optional[dict[str, Any]],
                       moment: Optional[datetime.datetime]) -> None:
     """DETAILS for EVENTS' selected row: its facts as a scrolling document, long values wrapped."""
-    panel = Panel(canvas, rect, "details").frame(event_title(row) if row else "EVENT DETAILS")
     if row is None:
-        panel.viewport(0)
-        panel.put(0, "No events logged yet", "dim")
+        draw_facts(canvas, rect, "EVENT DETAILS", [("", [("No events logged yet", "dim")], None)])
         return
-    facts = event_facts(row, moment, marks_of(canvas))
-    inner = panel.inner.width
-    label_width, value_width = label_column([name for name, _ in facts] or [""], inner)
-    lines: list[Fact] = []
-    for name, parts in facts:
-        text = "".join(text for text, _ in parts)
-        if text_width(text) <= value_width or len(parts) != 1:
-            lines.append((name, parts))
-            continue
-        for index, line in enumerate(textwrap.wrap(text, value_width, break_on_hyphens=False) or [""]):
-            lines.append((name if index == 0 else "", [(line, parts[0][1])]))
-    document = Canvas(rect.width, len(lines))
-    for index, (name, parts) in enumerate(lines):
-        document.put(index, panel.left, name, "dim")
-        document.segments(index, panel.left + label_width, parts, value_width)
-    panel.document(document, len(lines))
+    draw_facts(canvas, rect, event_title(row),
+               [(name, parts, None) for name, parts in event_facts(row, moment, marks_of(canvas))])

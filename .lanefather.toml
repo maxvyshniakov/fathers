@@ -20,7 +20,3 @@ provider = "slotfather"
 integrated_label = true
 land_comment = true
 fixes_trailer = true
-
-[review]
-# Sol and Opus review every lane at once with one prompt, to compare them as reviewers (fathers#151).
-panel = ["sol", "opus"]
