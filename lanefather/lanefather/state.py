@@ -45,7 +45,29 @@ class Store:
     def __init__(self, project: config.Config, directory: Path | None = None):
         """`directory` names the state directory explicitly (the registry's, for status); by default it is the
         environment's LANEFATHER_STATE, else the project's state_dir."""
-        self.directory = directory or _serving or Path(os.path.expanduser(project.env("STATE") or project.state_dir))
+        self.project = project
+        self.directory = directory or Path(os.path.expanduser(project.env("STATE") or project.state_dir))
+
+    def record_path(self, lane_id: str) -> Path:
+        if not ID.match(lane_id):
+            raise LaneError(f"lane id {lane_id!r}: use letters, digits, '_' or '-'")
+        return self.directory / f"{lane_id}.json"
+
+    def receipt_path(self, lane_id: str, kind: str = "receipt") -> Path:
+        return self.directory / f"{lane_id}.{kind}.json"
+
+    def load(self, lane_id: str) -> Record:
+        path = self.record_path(lane_id)
+        record = read_json(path)
+        if record is None and path.exists():
+            raise LaneError(cut_short(path))
+        if not isinstance(record, dict):
+            raise LaneError(f"no lane {lane_id}; register it with {self.project.command} start")
+        return migrate(record)  # pyright: ignore[reportUnknownArgumentType]
+
+    def save(self, record: Record) -> None:
+        self.directory.mkdir(parents=True, exist_ok=True)
+        write_json(self.record_path(record["id"]), record)
 
     def lanes(self, *, strict: bool = False, damaged: list[Path] | None = None) -> list[Record]:
         """The lane records. A record a write cut short raises, so nothing that admits, claims or collects acts on
@@ -80,24 +102,6 @@ class Store:
             yield
 
 
-_serving: Path | None = None
-
-
-@contextlib.contextmanager
-def serving(project: config.Config, directory: Path) -> Generator[None]:
-    """Act as another registered project (fathers#157): its configuration is the run's and `directory`, its
-    registered state directory, every Store's, whatever LANEFATHER_STATE says, until the block ends."""
-    global _serving
-    saved = _serving, config.chosen()
-    config.use(project)
-    _serving = directory
-    try:
-        yield
-    finally:
-        _serving = saved[0]
-        config.use(saved[1])
-
-
 def state_dir() -> Path:
     path = Store(config.current()).directory
     path.mkdir(parents=True, exist_ok=True)
@@ -105,9 +109,8 @@ def state_dir() -> Path:
 
 
 def record_path(lane_id: str) -> Path:
-    if not ID.match(lane_id):
-        raise LaneError(f"lane id {lane_id!r}: use letters, digits, '_' or '-'")
-    return state_dir() / f"{lane_id}.json"
+    state_dir()
+    return Store(config.current()).record_path(lane_id)
 
 
 def receipt_path(lane_id: str, kind: str = "receipt") -> Path:
@@ -189,17 +192,12 @@ def migrate(record: Record) -> Record:
 
 
 def load(lane_id: str) -> Record:
-    path = record_path(lane_id)
-    record = read_json(path)
-    if record is None and path.exists():
-        raise LaneError(cut_short(path))
-    if not isinstance(record, dict):
-        raise LaneError(f"no lane {lane_id}; register it with {config.prog()} start")
-    return migrate(record)  # pyright: ignore[reportUnknownArgumentType]
+    state_dir()
+    return Store(config.current()).load(lane_id)
 
 
 def save(record: Record) -> None:
-    write_json(record_path(record["id"]), record)
+    Store(config.current()).save(record)
 
 
 def lanes() -> list[Record]:

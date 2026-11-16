@@ -12,8 +12,12 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   exempt with every finding marked) runs `done`, as before, unless it is kept; `[done] auto = false` turns that off.
   `lanefather keep ID [--off]` keeps a lane from it. `lanefather done --finished` runs `done` on every finished lane
   of the registered projects, and `--dry-run` lists them with their sizes. `start` under the free-disk minimum now
-  runs that first and admits the lane when it freed enough, instead of only refusing. Every refusal of `done` still
-  applies.
+  runs that first, at most once in 10 minutes and only when the disk is the only refusal, and admits the lane when
+  it freed enough, instead of only refusing. Every refusal of `done` still applies; unattended, `done` also needs a
+  process source that answers, and scans the lane's build directories and scratch as well as its worktree.
+  Install this release before a project sets `[done]` (an older Lanefather refuses a configuration with a key it
+  does not know) and before `keep` is used on a lane an older Lanefather will land (an older land does not carry
+  the flag).
 
 - A review panel (fathers#151): `[review] panel = ["sol", "opus"]` runs every listed reviewer at once on the same
   frozen checkout with the same prompt (its `prompt_sha256` in the receipt), each in its own process, its answer in
@@ -78,6 +82,12 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Changed
 
+- The free-disk floor under which `start` refuses a lane is derived (fathers#157): 40 GB plus the lane cap times the
+  largest of the 20 last done lanes (3 GB before any), in decimal GB, instead of a fixed 150 GB.
+  `LANEFATHER_MIN_DISK_GB` sets it, refusals give the derivation, and `capabilities --json` reports the floor of the
+  project it runs in as `host.min_disk_gb`.
+- `done` refuses a lane whose worktree HEAD has commits not in the integration branch, whose integration worktree
+  is gone, or whose worktree another lane that is not done works in (a fix lane).
 - The review role's `choices` are a priority list (fathers#155): the first whose conditions hold reviews and the next
   is its fallback, in either direction, so listing Opus first makes Opus the reviewer and Sol its fallback. A Codex
   choice that names no limit needs 15% of the weekly limit, as before. The single reviewer gets the diff inline in

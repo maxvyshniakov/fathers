@@ -62,12 +62,26 @@ of its last unmarked finding. `[done] auto = false` turns that off; the lane the
   in its own state directory and configuration, and prints what each removed and freed and why done refused the
   others. `--dry-run` lists the finished lanes with their sizes (worktree, build directories and scratch), and the
   landed lanes that are not finished with the reason, and removes nothing.
-- `start` (and `next --start`) under the free-disk minimum first runs `done --finished` over the registry, leaving
-  the projects whose `[done] auto` is false, then reads the disk again. If it is still short, the refusal says what
-  the repair freed. `--force-reason` skips the repair.
+- `start` (and `next --start`, and `review --fix-lane`, which registers through it) whose only refusal is the
+  free-disk floor first runs `done --finished` over the registry, leaving the projects whose `[done] auto` is false,
+  then decides again. An existing lane, an unknown `--after`, the cap, the load or a claim overlap refuses first,
+  without the repair. The repair runs at most once in 10 minutes on the machine: a start within that window reuses
+  the last result (`disk-repair.json` beside the project registry), and a second start waits for a running one. If
+  the disk is still short, the refusal says what the repair freed. A failing repair never fails start.
+  `--force-reason` skips it.
+
+The free-disk floor (fathers#157) is `40 GB reserve + lane cap x lane peak`, in decimal GB (10^9); the lane peak is
+the largest lane `done` freed among the 20 last done in the state directory (3 GB before any). Refusals give the
+derivation, for example `the floor of 70 GB (10^9) = 40 reserve + 10 x 3.0 GB lane peak`. `LANEFATHER_MIN_DISK_GB`
+(or `<legacy_env_prefix>MIN_DISK_GB`) sets the floor instead.
 
 None of these skips a refusal of `done`: an uncommitted change, an agent's lock, a process the source does not take
-for left behind or cannot see, a branch not merged, or a missing ticket comment leaves the lane where it is.
+for left behind or cannot see in the worktree, the build directories or the scratch, a branch or a worktree HEAD
+with commits not in the integration branch, a missing integration worktree, another lane that is not done working in
+the same worktree (a fix lane), or a missing ticket comment leaves the lane where it is. Unattended (auto-done,
+`done --finished`, the repair), `done` also refuses without a process source that answers (a Slotfather with
+`procs`, or `[hooks] process_scan`) and re-reads `keep` under the state lock; `done ID` without a source removes the
+lane as before. A lane or project that cannot be read or finished is reported as refused, and the others go on.
 
 `lanefather --help` describes the commands. The [glossary](../GLOSSARY.md) distinguishes lane states, receipts,
 reviews and verification gates.
@@ -495,11 +509,11 @@ Free disk (fathers#46). Two values, not to be confused:
 
 | Value | Meaning | Where a project reads it |
 | --- | --- | --- |
-| `host.min_disk_gb` | the free disk, in decimal GB, under which `start` refuses a lane (150); fixed in this release | `capabilities --json` (`"host": {"min_disk_gb": 150}`, capability `host.min_disk_gb`); in a project hook, `LANEFATHER_MIN_DISK_GB` and each other name of the setting (`<legacy_env_prefix>MIN_DISK_GB`) |
+| `host.min_disk_gb` | the free disk, in decimal GB, under which `start` refuses a lane in the project the command runs in: the derived floor of [Finishing lanes](#finishing-lanes), or `LANEFATHER_MIN_DISK_GB` | `capabilities --json` (`"host": {"min_disk_gb": 150}`, capability `host.min_disk_gb`); in a project hook, `LANEFATHER_MIN_DISK_GB` and each other name of the setting (`<legacy_env_prefix>MIN_DISK_GB`) |
 | `DISK_FREE_GB` | a stand-in for the measured free space of the home volume: tests and hooks set it, admission reads it instead of measuring | `LANEFATHER_DISK_FREE_GB` or `<legacy_env_prefix>DISK_FREE_GB`, as the caller set it |
 
-Lanefather sets the minimum's variables for the hook's run and restores the caller's environment after it; it
-never reads them, so setting one does not change admission.
+Lanefather sets the minimum's variables for the hook's run to the project's floor and restores the caller's
+environment after it. Admission reads `LANEFATHER_MIN_DISK_GB` (fathers#157): a caller that sets it sets the floor.
 
 `lanefather --config /path/to/.lanefather.toml project-hook NAME -- ARGS` runs only
 a named script from `[hooks.project]`, with the project's directory as its working

@@ -72,10 +72,11 @@ print(json.dumps(answer))
         self.provider()
         self.env["ADMISSION_CAP"] = "1"
         self.start("first", "src/**")
-        self.env.update(LANEFATHER_DISK_FREE_GB="120", LANEFATHER_LOAD15="9.01")
+        # Under the derived floor (fathers#157): 40 GB reserve + a cap of 1 x 3 GB.
+        self.env.update(LANEFATHER_DISK_FREE_GB="20", LANEFATHER_LOAD15="9.01")
         output = self.start("blocked", "other/**", ok=False)
         self.assertIn("the cap is 1", output)
-        self.assertIn("free disk is 120", output)
+        self.assertIn("free disk is 20 GB (10^9), under the floor of 43 GB", output)
         self.assertIn("load15 is 9.0", output)
         self.start("forced", "other/**", extra=("--force-reason", "owner decision"))
         audit = self.record("forced")["overrides"][0]

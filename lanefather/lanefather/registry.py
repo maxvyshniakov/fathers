@@ -15,6 +15,7 @@ directory is in a temporary directory (a test's) is not registered unless `LANEF
 from __future__ import annotations
 
 import contextlib
+from dataclasses import dataclass
 import datetime
 import json
 import os
@@ -24,6 +25,7 @@ import subprocess
 from typing import Any, cast
 
 from . import config, events, journal, state
+from .errors import LaneError
 from .gitops import main_checkout
 
 VERSION = 1
@@ -138,3 +140,42 @@ def identity(entry: dict[str, Any]) -> tuple[str, str | None]:
     the directory, and lane ids repeat across projects."""
     common = entry.get("common_dir")
     return str(entry["state_dir"]), common if isinstance(common, str) else None
+
+
+@dataclass(frozen=True)
+class Project:
+    """A registered project as the commands that act across projects read it: its configuration, its state
+    directory and its repository (fathers#157). `configured` is the configuration file's path, None without one."""
+    name: str
+    config: config.Config
+    directory: Path
+    common: str | None
+    configured: str | None
+    repository: str | None
+
+
+def projects(registry: Path | None = None) -> list[tuple[dict[str, Any], Project | None, str | None]]:
+    """Each registered project that is not forgotten: (its entry, the project, None), or (its entry, None, why it
+    cannot be read). status and done --finished read the registry through this one resolution."""
+    now = datetime.datetime.now(datetime.UTC)
+    found: list[tuple[dict[str, Any], Project | None, str | None]] = []
+    for entry in read(registry):
+        if forgotten(entry, now):
+            continue
+        directory = Path(entry["state_dir"])
+        configured = entry.get("config") if isinstance(entry.get("config"), str) else None
+        try:
+            if configured is not None and not Path(configured).is_file():
+                raise LaneError(f"config not found at {configured}")
+            project = config.load(Path(configured)) if configured is not None else config.Config()
+            if not directory.is_dir():
+                raise LaneError(f"state directory {directory} not found")
+        except LaneError as error:
+            found.append((entry, None, str(error)))
+            continue
+        common = entry.get("common_dir") if isinstance(entry.get("common_dir"), str) else None
+        name = (journal.project_name(project) if configured is not None
+                else str(entry.get("project") or project.project))
+        repository = entry.get("repository") if isinstance(entry.get("repository"), str) else None
+        found.append((entry, Project(name, project, directory, common, configured, repository), None))
+    return found

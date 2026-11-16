@@ -21,6 +21,9 @@ TIMEOUT = 5.0
 MAX_OUTPUT = 65536
 
 
+NO_FLOOR = host.Floor(host.DISK_RESERVE_GB)
+
+
 @dataclass(frozen=True)
 class Decision:
     cap: int
@@ -32,6 +35,9 @@ class Decision:
     occupying: tuple[state.Record, ...] = ()
     everywhere: tuple[state.Record, ...] = ()
     ceiling: tuple[int, str] | None = None
+    # The free-disk floor of this repository (fathers#157) and whether the disk is under it.
+    floor: host.Floor = NO_FLOOR
+    disk_short: bool = False
 
 
 def transport(command: str, request: dict[str, Any]) -> bytes:
@@ -219,6 +225,16 @@ def grouped(records: list[state.Record]) -> str:
                      for common in sorted(groups, key=lambda c: (names[c], c or "")))
 
 
+def current_floor(project: config.Config) -> host.Floor:
+    """The free-disk floor start applies to `project` now (fathers#157): its cap times the lane peak of its state
+    directory, plus the reserve, or LANEFATHER_MIN_DISK_GB. An unreadable state directory counts no lanes."""
+    try:
+        records = state.Store(project).lanes()
+    except (LaneError, OSError):
+        records = []
+    return host.disk_floor(project, host.lane_cap(project)[0], records)
+
+
 def evaluate(project: config.Config, records: list[state.Record], common: str | None = None, *,
              cap_exempt: bool = False, repaired: str | None = None) -> Decision:
     """Whether one more lane of the repository whose Git common directory is `common` may be registered: the cap
@@ -264,12 +280,14 @@ def evaluate(project: config.Config, records: list[state.Record], common: str | 
     if ceiling and len(everywhere) >= ceiling[0] and not cap_exempt:
         refusals.append(f"{len(everywhere)} lanes are planned or active across projects ({grouped(everywhere)}); "
                         f"the global ceiling is {ceiling[0]} ({ceiling[1]}): land one to make room")
-    if machine["disk_free_gb"] < host.MIN_DISK_GB:
-        refusals.append(f"free disk is {machine['disk_free_gb']:.0f} GB, under {host.MIN_DISK_GB} GB: "
-                        + (f"{repaired}; the rest is not finished lanes' to free" if repaired else
+    floor = host.disk_floor(project, cap, records)
+    short = machine["disk_free_gb"] < floor.gb
+    if short:
+        refusals.append(f"free disk is {machine['disk_free_gb']:.0f} GB (10^9), under the floor of {floor.words()}: "
+                        + (f"{repaired}; free the rest outside finished lanes" if repaired else
                            f"run {project.command} done --finished, or done on landed lanes"))
     if "load15" in codes:
         limit = (f"{host.LOAD_FACTOR}x{machine['cores']} cores" if project.admission_provider == "legacy"
                  else f"the Slotfather admission limit {machine['load_limit']:.1f}")
         refusals.append(f"load15 is {machine['load15']:.1f}, above {limit}")
-    return Decision(cap, source, machine, tuple(refusals), tuple(active), tuple(everywhere), ceiling)
+    return Decision(cap, source, machine, tuple(refusals), tuple(active), tuple(everywhere), ceiling, floor, short)
