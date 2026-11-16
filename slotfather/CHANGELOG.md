@@ -120,6 +120,10 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- `procs --json --cwd` no longer lists in `cwd_unknown` or `lease_unknown` a process that exited between the scan
+  and the read of its directory or environment (a short-lived `lsof`, git or shell helper), which made
+  `lanefather done` refuse nearly every lane on a busy machine; only one still running with the same start
+  time is listed, and the added `unknown` names each with its `start` and `cmd` (fathers#158).
 - A process whose environment cannot be read (another user's, an Apple platform binary on macOS, a `/proc` with
   `hidepid`) is unknown, never "not in a lease": while leases are live the sweep spares and reports it (`lease
   unknown` in its reason, `lease_unknown` in `--json`) instead of stopping it, and `status --json --pid` adds

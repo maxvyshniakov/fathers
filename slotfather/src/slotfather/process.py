@@ -29,7 +29,7 @@ USAGE = "pid=,ppid=,uid=,rss=,time=,lstart="  # usage_table(): the lease's sampl
 MEMBERS = "pid=,ppid=,uid=,tty=,stat=,lstart=,command="  # procs: identities, sessions and commands
 SWEEP = "pid=,ppid=,uid=,rss=,tty=,lstart=,command="  # the sweep's snapshot
 CPU = "pid=,ppid=,%cpu=,rss=,comm="  # the dashboard block's CPU sample
-STARTS = "pid=,stat=,lstart="  # the sweep's check before a signal
+STARTS = "pid=,stat=,lstart="  # the sweep's check before a signal; running()
 OWNER = "uid="  # process_uid()
 ENVIRONMENT = "pid=,command="  # with -wwE: the command and, where shown, the environment
 ARGUMENTS = "pid=,command="  # the full arguments, without the environment
@@ -148,6 +148,27 @@ def starts(pids: Iterable[int], timeout: float | None = None) -> dict[int, tuple
         parts = line.split(None, 2)
         if len(parts) == 3 and parts[0].isdigit():
             found[int(parts[0])] = (" ".join(parts[2].split()), parts[1].startswith("Z"))
+    return found
+
+
+def running(identities: Mapping[int, str], timeout: float | None = 5) -> set[int]:
+    """Those of `identities` (pid -> start time as this client's ps or native table showed it) that still run as
+    that same process, from one targeted ps: one that exited, became a zombie or whose pid now names a process with
+    another start time is not among them (fathers#158: a short-lived helper that exits between a scan and a read of
+    its cwd or environment is gone, not unknown). Raises PsError when ps gives no answer: a pid that cannot be
+    re-checked is never read as gone."""
+    if not identities:
+        return set()
+    result = run(["-o", STARTS, "-p", ",".join(map(str, sorted(identities)))], env=_platform.c_locale(),
+                  timeout=timeout)
+    if result.returncode not in (0, 1) or result.returncode and result.stderr.strip():
+        raise PsError(f"ps exited {result.returncode}: {result.stderr.strip()[:200]}", f"ps exited {result.returncode}")
+    found: set[int] = set()
+    for line in result.stdout.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) == 3 and parts[0].isdigit() and int(parts[0]) in identities and not parts[1].startswith("Z") \
+                and _platform.same_holder(identities[int(parts[0])], None, int(parts[0]), parts[2]):
+            found.add(int(parts[0]))
     return found
 
 

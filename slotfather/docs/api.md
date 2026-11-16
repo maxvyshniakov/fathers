@@ -233,6 +233,11 @@ The versioned response has these fields:
 | `processes` | Matching live process records, in PID order. |
 | `cwd_unknown` | Own-user PIDs whose working directories could not be read as local paths. Relevant when `--cwd` is requested. |
 | `lease_unknown` | PIDs in no live lease's tree whose environment could not be read, so whether they carry a lease is unknown. |
+| `unknown` | One record per PID in either list: `pid`, `start`, `cmd`, and `cwd_unknown` and `lease_unknown` (booleans: which list it is in), so a consumer can name what holds it up. Added in fathers#158. |
+
+A PID enters `cwd_unknown` or `lease_unknown` only if a second, targeted `ps` finds it still running with the start
+time the scan saw: a short-lived helper (`lsof`, git, a shell) that exited between the scan and the read is gone, not
+unknown. A re-check that `ps` does not answer fails the query.
 
 Each process contains `pid`, `ppid`, `uid`, `tty`, `start`, `cmd`, `cwd`,
 `ancestors`, `sessions` and `leases`. `start` is the C-locale `ps lstart`

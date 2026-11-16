@@ -98,7 +98,8 @@ class ProcsTests(unittest.TestCase):
         self.assertEqual("env", found["processes"][-1]["leases"][0]["via"])
         self.assertNotIn("never-print", json.dumps(found))
         wrong = self.ps(f"53 node detached.js SLOTFATHER_LEASE={lease}-other")
-        with mock.patch("sys.platform", "darwin"), mock.patch("subprocess.run", side_effect=[output, wrong]):
+        running = self.ps("53 S Wed Nov  4 10:00:01 2026")  # the re-check of an unknown (fathers#158)
+        with mock.patch("sys.platform", "darwin"), mock.patch("subprocess.run", side_effect=[output, wrong, running]):
             found = self.procs.query()
         self.assertEqual([], found["processes"][-1]["leases"])
         self.assertEqual([53], found["lease_unknown"], "psE cannot prove that a negative environment was readable")
@@ -136,8 +137,9 @@ class ProcsTests(unittest.TestCase):
             (proc / str(number) / "cwd").symlink_to("/work/lane/tests")
         output = self.ps(f"52 1 {uid} ?? S Wed Nov  4 10:00:01 2026 python3 test.py",
                          f"53 1 {uid} ?? S Wed Nov  4 10:00:02 2026 node container.js")
+        running = self.ps("53 S Wed Nov  4 10:00:02 2026")  # the re-check of an unknown (fathers#158)
         with mock.patch("sys.platform", "linux"), mock.patch.dict(os.environ, {"SLOTFATHER_PROC": str(proc)}), \
-                mock.patch("subprocess.run", return_value=output):
+                mock.patch("subprocess.run", side_effect=[output, running]):
             found = self.procs.query(cwd="/work/lane")
         self.assertEqual([52], [item["pid"] for item in found["processes"]])
         self.assertEqual([53], found["cwd_unknown"], "foreign paths must never be treated as local directories")
@@ -170,6 +172,114 @@ class ProcsTests(unittest.TestCase):
         with mock.patch("subprocess.run", return_value=output), self.assertRaisesRegex(errors.SlotError, "schema"):
             self.procs.query(pid=51)
         self.assertEqual('{"v": 999}\n', path.read_text())
+
+
+class TransientUnknownTests(unittest.TestCase):
+    """fathers#158: a pid whose cwd or environment cannot be read is re-checked; one that exited in between is gone,
+    only one still running is unknown, and each unknown is named by its command. Real child processes."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="slotfather-procs-")
+        self.addCleanup(self.tmp.cleanup)
+        self.work = os.path.realpath(self.tmp.name)
+        self.environment = mock.patch.dict(os.environ, {
+            "SLOTFATHER_DIR": str(Path(self.work) / "state"), "SLOTFATHER_LEGACY_DIRS": "",
+        })
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        self.procs = importlib.import_module("slotfather.procs")
+        self.child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "fathers-158-child"],
+                                      cwd=self.work)
+        self.addCleanup(self.stop_child)
+
+    def stop_child(self):
+        if self.child.poll() is None:
+            self.child.kill()
+        self.child.wait()
+
+    def test_a_process_that_exits_before_its_cwd_is_read_is_not_unknown(self):
+        real = self.procs.read_cwds
+
+        def exit_first(processes: dict[int, object], uid: int) -> dict[int, str]:
+            self.assertIn(self.child.pid, processes, "the child was enumerated")
+            self.stop_child()
+            return real(processes, uid)
+
+        with mock.patch.object(self.procs, "read_cwds", exit_first):
+            found = self.procs.query(cwd=self.work)
+        self.assertNotIn(self.child.pid, found["cwd_unknown"])
+        self.assertNotIn(self.child.pid, [item["pid"] for item in found["unknown"]])
+
+    def test_a_live_process_whose_cwd_cannot_be_read_is_still_unknown_and_named(self):
+        real = self.procs.read_cwds
+
+        def hide_child(processes: dict[int, object], uid: int) -> dict[int, str]:
+            found = real(processes, uid)
+            found.pop(self.child.pid, None)
+            return found
+
+        with mock.patch.object(self.procs, "read_cwds", hide_child):
+            found = self.procs.query(cwd=self.work)
+        self.assertIn(self.child.pid, found["cwd_unknown"])
+        named = {item["pid"]: item for item in found["unknown"]}[self.child.pid]
+        self.assertIn("fathers-158-child", named["cmd"])
+        self.assertEqual((True, False), (named["cwd_unknown"], named["lease_unknown"]))
+        self.assertTrue(named["start"])
+
+
+class RecheckTests(unittest.TestCase):
+    """The re-check of unknowns through ps, with the tables given (fathers#158)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="slotfather-procs-")
+        self.addCleanup(self.tmp.cleanup)
+        self.directory = Path(self.tmp.name) / "state"
+        self.environment = mock.patch.dict(os.environ, {
+            "SLOTFATHER_DIR": str(self.directory), "SLOTFATHER_LEGACY_DIRS": "",
+        })
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        self.procs = importlib.import_module("slotfather.procs")
+        queue = self.directory / "queue"
+        queue.mkdir(parents=True)
+        self.lease = queue / "active.json"
+        self.lease.write_text(json.dumps({"pid": 51, "start": "Wed Nov  4 10:00:00 2026", "state": "held",
+                                          "count": 1, "label": "active"}))
+        self.table = subprocess.CompletedProcess([], 0, "51 1 501 ?? S Wed Nov  4 10:00:00 2026 python3 holder.py\n"
+                                                 "53 1 501 ?? S Wed Nov  4 10:00:01 2026 git status\n", "")
+        self.hidden = subprocess.CompletedProcess([], 0, "53 git status\n", "")
+
+    def query(self, recheck: subprocess.CompletedProcess[str]) -> dict[str, object]:
+        with mock.patch("sys.platform", "darwin"), \
+                mock.patch("slotfather.macos_process.environment", return_value=None), \
+                mock.patch("subprocess.run", side_effect=[self.table, self.hidden, recheck]) as run:
+            found = self.procs.query()
+        self.assertIn("-p", run.call_args.args[0], "the re-check asks ps for the unknown pids only")
+        self.assertIn("53", run.call_args.args[0])
+        return found
+
+    def test_an_exited_process_whose_environment_was_unreadable_is_not_lease_unknown(self):
+        found = self.query(subprocess.CompletedProcess([], 1, "", ""))
+        self.assertEqual(([], []), (found["lease_unknown"], found["unknown"]))
+
+    def test_a_reused_pid_is_not_the_unknown_process(self):
+        found = self.query(subprocess.CompletedProcess([], 0, "53 S Wed Nov  4 11:30:00 2026\n", ""))
+        self.assertEqual([], found["lease_unknown"])
+
+    def test_a_running_process_whose_environment_is_unreadable_stays_lease_unknown_and_named(self):
+        found = self.query(subprocess.CompletedProcess([], 0, "53 S Wed Nov  4 10:00:01 2026\n", ""))
+        self.assertEqual([53], found["lease_unknown"])
+        self.assertEqual([{"pid": 53, "start": "Wed Nov 4 10:00:01 2026", "cmd": "git status",
+                           "cwd_unknown": False, "lease_unknown": True}], found["unknown"])
+
+    def test_a_recheck_ps_that_fails_fails_the_query(self):
+        for answer in (subprocess.CompletedProcess([], 1, "", "ps: permission denied"),
+                       subprocess.TimeoutExpired(["ps"], 5)):
+            with self.subTest(answer=answer), mock.patch("sys.platform", "darwin"), \
+                    mock.patch("slotfather.macos_process.environment", return_value=None), \
+                    mock.patch("subprocess.run", side_effect=[self.table, self.hidden, answer]), \
+                    self.assertRaises(self.procs.ProcsError):
+                self.procs.query()
 
 
 if __name__ == "__main__":
