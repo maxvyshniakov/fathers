@@ -3,11 +3,14 @@
 A test describes the tool (its command name, how to run it, the commands it has) and gets one unittest case per rule:
 
     TOOL = Tool("junkfather", (sys.executable, "-m", "junkfather"),
-                (Command("list", json=()), Command("settings", json=()), Command("reap")))
+                (Command("list", json=()), Command("changelog", option=("--since", "0.1.0"), shows="0.2.0"),
+                 Command("reap")))
 
     class CLIConvention(conformance(TOOL, expected={"version": "fathers#NNN"})):
         def prepare(self, tool: Tool) -> Tool:
-            return dataclasses.replace(tool, env={**os.environ, "JUNKFATHER_STATE": self.state})
+            state = tempfile.mkdtemp()
+            self.addCleanup(shutil.rmtree, state, True)
+            return dataclasses.replace(tool, env={**os.environ, "JUNKFATHER_STATE": state}, cwd=state)
 
 `expected` lists the cases the tool does not pass yet, each with the ticket that fixes it; a listed case that passes
 fails the run (an unexpected success), so the list only shrinks. Assign the class `conformance` returns only as a
@@ -26,9 +29,8 @@ import subprocess
 from typing import Callable
 import unittest
 
-# The exit-code table of docs/cli.md.
-OK, FAILED, USAGE, REFUSED, OTHER_USER, READ_ONLY, NOT_FOUND, TEMPORARY = 0, 1, 2, 3, 4, 5, 6, 75
-CONFLICT = REFUSED  # a stale --revision is the settings contract's refusal by state
+# The two codes of docs/cli.md's table these cases can provoke without knowing the tool.
+OK, USAGE = 0, 2
 
 UNKNOWN_COMMAND = "no-such-command"
 UNKNOWN_OPTION = "--no-such-option"
@@ -38,12 +40,15 @@ VERSION_LINE = r"\S+ v?\d+\.\d+(\.\d+)?\S*( .*)?"
 @dataclass(frozen=True)
 class Command:
     """One command of a tool. `json`: the arguments after the command that make it print state, `--json` appended
-    (`()` for the command alone; None for a command that prints no state). `option`: a long option that takes a value
-    and a value that is valid in the test's environment, for `--opt=value`."""
+    (`()` for the command alone; None for a command that prints no state); the same arguments without `--json` must
+    work too. `option`: a long option that takes a value and a value that is valid in the test's environment, for
+    `--opt=value`; `shows`: text its stdout holds only when the value took effect. Without `shows`, `--opt=value` and
+    `--opt value` must print the same."""
 
     name: str
     json: Sequence[str] | None = None
     option: tuple[str, str] | None = None
+    shows: str | None = None
 
 
 @dataclass(frozen=True)
@@ -71,7 +76,8 @@ class Case:
     id: str
     argv: tuple[str, ...]
     check: Callable[[Tool, Run], list[str]]
-    again: tuple[str, ...] | None = None  # a second command line whose exit status must match the first's
+    again: tuple[str, ...] | None = None  # a second command line that must print what the first does
+    shows: str | None = None  # text both command lines must print instead
 
 
 def run(tool: Tool, argv: Sequence[str]) -> Run:
@@ -82,9 +88,9 @@ def run(tool: Tool, argv: Sequence[str]) -> Run:
     return Run(done.returncode, done.stdout, done.stderr)
 
 
-def error_problems(name: str, stderr: str, usage: bool, word: str | None = None) -> list[str]:
-    """What is wrong with a refusal's stderr: `<name>: <reason>` on the first line (naming `word` when given) and,
-    for a usage error, exactly one more line that points to --help."""
+def error_problems(name: str, stderr: str, word: str | None = None, command: str | None = None) -> list[str]:
+    """What is wrong with a usage error's stderr: `<name>: <reason>` on the first line (naming `word` when given) and
+    exactly one more line that points to `<name> [command] --help`."""
     lines = stderr.splitlines()
     if not lines:
         return ["nothing on stderr: a refusal says why in one line"]
@@ -96,11 +102,12 @@ def error_problems(name: str, stderr: str, usage: bool, word: str | None = None)
         problems.append(f"the first stderr line is not '{name}: <reason>': {first!r}")
     elif word is not None and word not in first:
         problems.append(f"the reason does not name {word!r}: {first!r}")
+    pointer = f"{name} {command} --help" if command else f"{name} --help"
     rest = lines[1:]
-    if usage and (len(rest) != 1 or "--help" not in rest[0]):
-        problems.append(f"after the reason, one line pointing to --help, not {len(rest)} lines")
-    elif not usage and len(rest) > 1:
-        problems.append(f"the refusal is {len(lines)} lines, not one")
+    if len(rest) != 1:
+        problems.append(f"after the reason, one line pointing to '{pointer}', not {len(rest)} lines")
+    elif pointer not in rest[0]:
+        problems.append(f"the pointer is not to '{pointer}': {rest[0]!r}")
     return problems
 
 
@@ -137,13 +144,20 @@ def lists_commands(tool: Tool, done: Run) -> list[str]:
     return [f"the help does not name: {', '.join(missing)}"] if missing else []
 
 
-def usage_check(word: str) -> Callable[[Tool, Run], list[str]]:
+def usage_check(word: str, command: str | None = None) -> Callable[[Tool, Run], list[str]]:
     def check(tool: Tool, done: Run) -> list[str]:
         problems = exits(done, USAGE)
         if done.stdout.strip():
             problems.append("a usage error printed on stdout")
-        return problems + error_problems(tool.name, done.stderr, usage=True, word=word)
+        return problems + error_problems(tool.name, done.stderr, word=word, command=command)
     return check
+
+
+def plain_check(tool: Tool, done: Run) -> list[str]:
+    problems = exits(done, OK)
+    if done.code == USAGE and done.stderr.strip():
+        problems.append(f"refused without --json: {done.stderr.splitlines()[0]!r}")
+    return problems
 
 
 def json_check(tool: Tool, done: Run) -> list[str]:
@@ -182,13 +196,15 @@ def cases(tool: Tool) -> list[Case]:
     for command in tool.commands:
         words = tuple(command.name.split())
         found.append(Case(f"{command.name} --help", (*words, "--help"), help_check(command.name)))
-        found.append(Case(f"{command.name} unknown option", (*words, UNKNOWN_OPTION), usage_check(UNKNOWN_OPTION)))
+        found.append(Case(f"{command.name} unknown option", (*words, UNKNOWN_OPTION),
+                          usage_check(UNKNOWN_OPTION, command.name)))
         if command.json is not None:
             found.append(Case(f"{command.name} --json", (*words, *command.json, "--json"), json_check))
+            found.append(Case(f"{command.name} without --json", (*words, *command.json), plain_check))
         if command.option is not None:
             option, value = command.option
             found.append(Case(f"{command.name} --opt=value", (*words, f"{option}={value}"), equals_check(option, value),
-                              again=(*words, option, value)))
+                              again=(*words, option, value), shows=command.shows))
     return found
 
 
@@ -196,12 +212,15 @@ def problems(tool: Tool, case: Case) -> list[str]:
     """What `tool` does against `case`'s rule; empty when it follows it."""
     done = run(tool, case.argv)
     found = case.check(tool, done)
-    if case.again is not None and not found:
-        other = run(tool, case.again)
-        if other.code != done.code:
-            found.append(f"exit {done.code} with '{case.argv[-1]}', {other.code} with "
-                         f"'{' '.join(case.again[-2:])}'")
-    return found
+    if case.again is None or found:
+        return found
+    equals, spaced = case.argv[-1], " ".join(case.again[-2:])
+    other = run(tool, case.again)
+    if case.shows is None:
+        return [] if (other.code, other.stdout) == (done.code, done.stdout) else [
+            f"'{equals}' prints other than '{spaced}'"]
+    return [f"'{argv}' does not print {case.shows!r}"
+            for argv, printed in ((equals, done.stdout), (spaced, other.stdout)) if case.shows not in printed]
 
 
 def method_name(case_id: str) -> str:

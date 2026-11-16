@@ -1,8 +1,9 @@
 # CLI convention
 
-How the four tools' command lines behave, so that learning one teaches the others (fathers#118). Slotfather,
-Lanefather, Junkfather and Godfather follow it; [common/cliconvention.py](../common/cliconvention.py) checks a tool
-against it, and each package's tests run that check (below). Wire behaviour that Godfather or Repo-Kit already reads
+How the four tools' command lines are to behave, so that learning one teaches the others (fathers#118). This is the
+target for Slotfather, Lanefather, Junkfather and Godfather, not yet what each does: [Conformance](#conformance) lists
+each tool's state. [common/cliconvention.py](../common/cliconvention.py) checks a tool against it, and each package's
+tests run that check. Wire behaviour that Godfather or Repo-Kit already reads
 stays accepted where this page says so.
 
 ## Errors
@@ -86,9 +87,11 @@ for something else.
 
 [common/cliconvention.py](../common/cliconvention.py) runs a tool's command line in the environment a test gives it
 and reports each rule above that the tool breaks. It checks what it can check without knowing the tool: the error
-line and the help pointer for unknown commands and options, `--help`, `-h` and `<command> --help`, `--version`, that
-the help names every command, `--json` on the commands that print state, and `--opt=value`. Exit codes beyond 0 and 2
-are each package's own tests.
+line and the help pointer (naming the command when there is one) for unknown commands and options, `--help`, `-h`
+and `<command> --help`, `--version`, that the help names every command, `--json` on the commands that print state and
+the same commands without it, and `--opt=value`: it must print what `--opt value` prints, or the text a test declares
+(`shows`) that appears only when the value took effect. Exit codes beyond 0 and 2, and refusals other than usage
+errors, are each package's own tests.
 
 Each package's tests run it once (`tests/test_cli_convention.py`), with the package's state in a temporary
 directory. A rule the package does not meet yet is listed there as an expected failure with the ticket that fixes it;
@@ -100,7 +103,7 @@ import cliconvention
 from cliconvention import Command
 
 TOOL = cliconvention.Tool("junkfather", (sys.executable, "-m", "junkfather"),
-                          (Command("list", json=()), Command("changelog", json=(), option=("--since", "0.0.1"))))
+                          (Command("list", json=()), Command("changelog", option=("--since", "0.1.0"), shows="0.2.0")))
 EXPECTED = dict.fromkeys(("version", "unknown command"), "fathers#NNN")
 
 
@@ -109,9 +112,9 @@ class CLIConvention(cliconvention.conformance(TOOL, expected=EXPECTED)):
         ...  # the same tool with this test's temporary state directory in its environment
 ```
 
-| Tool | Conformance ticket |
-| --- | --- |
-| Slotfather | fathers#124 |
-| Lanefather | fathers#130 |
-| Junkfather | none yet: its expected failures (argparse's error format, `--version`) name fathers#118 |
-| Godfather | none yet: its expected failures (the usage after the reason) name fathers#118 |
+| Tool | Conformance ticket | Failing cases (2026-11-16) |
+| --- | --- | --- |
+| Slotfather | fathers#124 | 49: most rules |
+| Lanefather | fathers#130 | 24: argparse's error format |
+| Junkfather | fathers#153 | 17: argparse's error format, no `--version` |
+| Godfather | fathers#154 | 3: the usage printed after the reason |
