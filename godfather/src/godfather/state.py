@@ -15,10 +15,10 @@ from typing import Any, Optional, Union, cast
 
 from . import news as _news
 from . import settings_model as _settings
-from .tui import dashboard_text
-from .views import common as _common
-from .views import events as _events_view
-from .views import overlays as _overlays
+from . import entries as _entries
+from . import events as _events_view
+from . import overlay_text as _overlays
+from .tui import dashboard_text, hint_at
 from .widgets import OverlayView
 
 Model = dict[str, Any]
@@ -102,7 +102,7 @@ class Frame:
     switch: Optional[tuple[int, int, int]] = None  # EVENTS' title, which cycles its log (fathers#152): (row, from, to)
 
     def hint_at(self, x: int, y: int) -> Optional[str]:
-        return next((press for row, start, end, press in reversed(self.hints) if row == y and start <= x < end), None)
+        return hint_at(self.hints, x, y)
 
     def filter_at(self, x: int, y: int) -> Optional[int]:
         """The tool filter a click in what's new's top border lands on, None between them."""
@@ -319,7 +319,7 @@ def move(state: AppState, index: int, by_key: bool = False,
 
 def entries(state: AppState) -> tuple[list[dict[str, Any]], list[EntryId]]:
     found = items(state)
-    return found, _common.entry_ids(found)
+    return found, _entries.entry_ids(found)
 
 
 def resolve(state: AppState, known: Optional[tuple[list[dict[str, Any]], list[EntryId]]] = None) -> int:
@@ -497,10 +497,10 @@ def model_loaded(state: AppState, event: ModelLoaded) -> AppState:
     fresh = event.model
     if fresh is not None and fresh is not state.model:
         colours = dict(state.colours)
-        _common.dashboard_colours(fresh, colours, event.colours)
+        _entries.dashboard_colours(fresh, colours, event.colours)
         state = dataclasses.replace(state, colours=colours, model=fresh)
         state = follow_events(state, cast(list[dict[str, Any]], fresh["events"]))
-        ids = _common.entry_ids(items(state))
+        ids = _entries.entry_ids(items(state))
         keep = {(identity, kind) for identity in ids for kind in ("lease", "request")}
         state = dataclasses.replace(state, details={key: value for key, value in state.details.items() if key in keep})
     refresh = Refresh("live") if event.problem is None else Refresh("stale", event.problem)

@@ -31,8 +31,8 @@ from . import layout as _layout
 from . import settings_model as _settings
 from .state import (LOAD_NEWS, OPEN_SETTINGS, QUIT, AppState, Changelog, Help, Key, Mouse, Result, SettingsOverlay, filtered,
                     items, move, overlay_box, settings_context, settings_result)
-from .views import events as _events_view
-from .views import overlays as _overlays
+from . import events as _events_view
+from . import overlay_text as _overlays
 
 Handler = Callable[[AppState, str], Result]
 NAVIGATION = ("up", "k", "down", "j", "page_up", "page_down", "home", "g", "end", "G")
@@ -88,11 +88,12 @@ def scroll_panel(state: AppState, key: str) -> Result:
     if not view:
         return state, []
     visible, count = int(view["visible"]), int(view["count"])
-    last = max(0, count - visible)
+    last = _layout.clamp_scroll(count, count, visible)  # the last offset: the bottom
     offset = state.scroll.get(state.focus, int(view["offset"]))
     moves = {"up": -1, "k": -1, "down": 1, "j": 1, "page_up": -max(1, visible - 1), "page_down": max(1, visible - 1)}
     offset = 0 if key in ("home", "g") else last if key in ("end", "G") else offset + moves[key]
-    return dataclasses.replace(state, scroll={**state.scroll, state.focus: max(0, min(last, offset))}), []
+    return dataclasses.replace(state, scroll={**state.scroll, state.focus: _layout.clamp_scroll(offset, count,
+                                                                                                visible)}), []
 
 
 def events_shown(state: AppState) -> bool:
@@ -182,10 +183,11 @@ PANEL: dict[str, Handler] = {**MAIN, **{key: scroll_panel for key in NAVIGATION}
 def scroll_overlay(state: AppState, key: str) -> Result:
     overlay = cast(Union[Help, Changelog], state.overlay)
     view = overlay_box(state, overlay)
-    page, last = max(1, view.visible - 1), max(0, view.total - view.visible)
+    page, last = max(1, view.visible - 1), _layout.clamp_scroll(view.total, view.total, view.visible)
     moves = {"j": 1, "down": 1, "k": -1, "up": -1, "page_down": page, " ": page, "page_up": -page}
     offset = 0 if key in ("g", "home") else last if key in ("G", "end") else view.offset + moves[key]
-    return dataclasses.replace(state, overlay=dataclasses.replace(overlay, scroll=max(0, min(offset, last)))), []
+    return dataclasses.replace(state, overlay=dataclasses.replace(
+        overlay, scroll=_layout.clamp_scroll(offset, view.total, view.visible))), []
 
 
 def close(state: AppState, _: str) -> Result:
@@ -423,7 +425,7 @@ def click(state: AppState, event: Mouse, now: float = 0.0) -> Result:
             return dataclasses.replace(state, overlay=Changelog(tab)), []
         if event.pressed and code in (WHEEL_UP, WHEEL_DOWN):
             offset = view.offset + (WHEEL if code == WHEEL_DOWN else -WHEEL)
-            scroll = max(0, min(offset, max(0, view.total - view.visible)))
+            scroll = _layout.clamp_scroll(offset, view.total, view.visible)
             return dataclasses.replace(state, overlay=dataclasses.replace(overlay, scroll=scroll)), []
         return state, []
     if not event.pressed:
@@ -443,7 +445,7 @@ def click(state: AppState, event: Mouse, now: float = 0.0) -> Result:
             continue
         if code in (WHEEL_UP, WHEEL_DOWN):
             offset = state.scroll.get(name, int(view["offset"])) + (WHEEL if code == WHEEL_DOWN else -WHEEL)
-            scroll = max(0, min(offset, max(0, int(view["count"]) - int(view["visible"]))))
+            scroll = _layout.clamp_scroll(offset, int(view["count"]), int(view["visible"]))
             return dataclasses.replace(state, scroll={**state.scroll, name: scroll}), []
         row = event.y - int(view["top"])
         if code == LEFT and 0 <= row < min(int(view["visible"]), int(view["count"]) - int(view["offset"])):

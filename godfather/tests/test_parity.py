@@ -24,10 +24,10 @@ from unittest import mock
 
 from helpers import ROOT, timezone
 
-from godfather import app, layout, sources, state, tui
+from godfather import app, entries, layout, overlay_text, sources, state, tui
 from godfather.adapters import slotfather as adapter
 from godfather.layout import Rect
-from godfather.views import common, overlays, overview
+from godfather.views import common, overview
 
 
 FIXTURE = ROOT / "tests" / "fixtures" / "parity"
@@ -94,7 +94,7 @@ class ParityTests(unittest.TestCase):
         model, error = app.Screen().load()
         self.assertIsNone(error)
         assert model is not None
-        common.dashboard_colours(model, {}, self.theme.holders())
+        entries.dashboard_colours(model, {}, self.theme.holders())
         for item in model["holders"] + model["waiters"]:
             item["lane"] = self.scene["lanes"][json.dumps(list(item["key"]))]
             if item["lane"] is None:
@@ -150,7 +150,7 @@ class ParityTests(unittest.TestCase):
         self.assertGreaterEqual(compared, 25)
 
     def test_help_is_slotfathers_in_every_section_but_events(self) -> None:
-        ours = {title: [list(entry) for entry in entries] for title, entries in overlays.HELP}
+        ours = {title: [list(entry) for entry in entries] for title, entries in overlay_text.HELP}
         theirs = {title: entries for title, entries in self.help}
         self.assertEqual(list(theirs), list(ours), "the same sections in the same order")
         what = ["v", "what's new (or click Godfather what's new?)"]  # fathers#102: the changelog became what's new

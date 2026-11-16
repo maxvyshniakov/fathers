@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, NamedTuple, Optional, Union
 
-from .layout import Rect
+from .layout import clamp_scroll, Rect
 from .tui import HINT_GAP, Canvas, hints_width, text_width
 
 Part = tuple[str, str]  # (text, style)
@@ -94,7 +94,7 @@ class Panel:
         visible = self.inner.height
         automatic = max(0, (selected or 0) - visible + 1) if selected is not None else 0
         offset = self.canvas.scroll.get(self.name, automatic) if offset is None else offset
-        offset = max(0, min(offset, max(0, count - visible)))
+        offset = clamp_scroll(offset, count, visible)
         y, x, height, width = self.rect
         self.canvas.tables[self.name] = dict(x=x, y=y, width=width, height=height, top=self.inner.y,
                                              visible=visible, count=count, offset=offset, base=base,

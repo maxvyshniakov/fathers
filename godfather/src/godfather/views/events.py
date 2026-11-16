@@ -17,12 +17,12 @@ of their own. `/` edits a text filter in the bottom border; it filters within th
 from __future__ import annotations
 
 import datetime
-from dataclasses import dataclass
 from typing import Any, Optional, cast
 
 from ..layout import Rect
 from ..tui import Canvas, clock, span, text_width
 from ..widgets import FLEXIBLE_MIN, FOCUS_FRAME, REST_FRAME, Panel, Part, Spec, Table
+from ..events import ALL, Filter, shown_rows, view_of, views
 from . import common as _common
 from .common import Model, cell_run, cells_width
 
@@ -34,70 +34,10 @@ TYPE_MAX = 15  # ALL LOG's type: `lane post-merge`
 SOURCE_STYLES = {"slot": "source-slot", "lane": "source-lane", "junk": "source-junk"}  # theme tokens by tag
 TOO_OLD = "slotfather too old for events"  # its capabilities name no event log
 TOO_NEW = "slotfather's events need a newer godfather"  # they name one of no schema version this one reads
-VIEWS = ("slotfather", "lanefather", "junkfather")
-ALL = "all"
 TITLES = {"slotfather": "SLOTS LOG", "lanefather": "LANES LOG", "junkfather": "PROCS LOG", ALL: "ALL LOG"}
 TYPES = {"slotfather": "slot", "lanefather": "lane", "junkfather": "proc"}  # ALL LOG's type: the tool in a word
 ARROWS = ("◂ ", " ▸")
 SWITCH_ROOM = 40  # the least panel width the arrows are drawn at
-
-
-@dataclass(frozen=True)
-class Filter:
-    """What EVENTS shows (fathers#84, fathers#152): the log (a tool's name or ALL; None: the default), the text
-    matched against kind, subject id, label and detail, whether the text field is open, and `raw`: every event as
-    logged instead of one row per run. They last until Godfather restarts."""
-    source: Optional[str] = None
-    text: str = ""
-    editing: bool = False
-    raw: bool = False
-
-    def active(self) -> bool:
-        return bool(self.text)
-
-
-def present(model: Optional[Model]) -> list[tuple[str, str]]:
-    """The sources EVENTS reads, (name, tag) in the order slotfather, lanefather, junkfather."""
-    pairs = cast(list[Any], (model or {}).get("sources") or [])
-    return [(str(pair[0]), str(pair[1])) for pair in pairs]
-
-
-def views(model: Optional[Model]) -> list[str]:
-    """The logs the title cycles through: each present tool's, then ALL where there are several."""
-    names = [name for name, _ in present(model)]
-    return names + [ALL] if len(names) > 1 else names
-
-
-def view_of(model: Optional[Model], found: Filter) -> str:
-    """The log shown: the one chosen while it is there, else Slotfather's, else the first present one."""
-    shown = views(model)
-    if found.source in shown:
-        return found.source
-    if "slotfather" in shown or not shown:
-        return "slotfather"
-    return shown[0]
-
-
-def cycled(model: Optional[Model], found: Filter, step: int) -> Optional[str]:
-    """The log `step` along the cycle from the one shown; None where there is nothing to switch to."""
-    shown = views(model)
-    if len(shown) < 2:
-        return None
-    return shown[(shown.index(view_of(model, found)) + step) % len(shown)]
-
-
-def shown_rows(model: Optional[Model], found: Filter) -> list[dict[str, Any]]:
-    """The rows the log and the filter let through, oldest first: one row per run unless `raw`."""
-    from ..events import runs, text_of
-
-    rows = cast(list[dict[str, Any]], (model or {}).get("events") or [])
-    view = view_of(model, found)
-    if view != ALL and present(model):
-        rows = [row for row in rows if row.get("source") == view]
-    if not found.raw:
-        rows = runs(rows)
-    needle = found.text.lower()
-    return [row for row in rows if not needle or needle in text_of(row)]
 
 
 def source_style(tag: str) -> str:

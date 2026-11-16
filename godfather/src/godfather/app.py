@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 from typing import Any, cast
 
+from . import entries as _entries
 from . import events as _events
 from . import settings_model as _settings_model
 from . import news as _news
@@ -478,7 +479,7 @@ def once(width: int | None, height: int | None, colour: bool | None, interval: f
     items = cast(list[dict[str, Any]], (model["holders"] + model["waiters"]) if model else [])
     cwd = None
     if model:
-        _common.dashboard_colours(model, {}, theme.holders())
+        _entries.dashboard_colours(model, {}, theme.holders())
         if items:
             _details.enrich_details(items[0])
             cwd = _sources.process_cwd(items[0]["pid"]) if items[0]["kind"] != "waiting" else None

@@ -249,8 +249,7 @@ class Canvas:
 
     def hint_at(self, mx: int, my: int) -> str | None:
         """The key a click on a footer hint presses, None between hints."""
-        return next((press for y, start, end, press in reversed(self.hint_hits) if y == my and start <= mx < end),
-                    None)
+        return hint_at(self.hint_hits, mx, my)
 
     def select(self, y: int, start: int, end: int, tint: bool | str = True) -> None:
         """Marks cells start..end of row y selected: True for the neutral background, a holder style for its tint."""
@@ -299,6 +298,12 @@ class Canvas:
 
     def render(self, colour: bool, ascii_only: bool = False) -> str:
         return "\n".join(line if colour else line.rstrip() for line in self.lines(colour, ascii_only))
+
+
+def hint_at(hints: Any, x: int, y: int) -> str | None:
+    """The key a click at (x, y) on a hint presses, None between hints: the one lookup a drawn canvas and the
+    reducer's last frame share (fathers#141). `hints` are (row, from, to, key), the later drawn first."""
+    return next((press for row, start, end, press in reversed(list(hints)) if row == y and start <= x < end), None)
 
 
 def safe_link(url: str) -> bool:

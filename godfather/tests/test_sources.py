@@ -16,10 +16,10 @@ from unittest import mock
 import view as _view
 from helpers import ROOT, FakeSlotfather
 
-from godfather import app, sources, tui
+from godfather import app, entries, sources, tui
 from godfather.adapters import slotfather as adapter
 from godfather import settings_model
-from godfather.views import common, overlays, overview
+from godfather.views import overlays, overview
 
 SCENE = ROOT / "tests" / "fixtures" / "scene"
 
@@ -50,7 +50,7 @@ class FixtureCase(unittest.TestCase):
         model, error = screen.load()
         canvas = tui.Canvas(width, height)
         if model:
-            common.dashboard_colours(model, {}, tui.current_theme.holders())
+            entries.dashboard_colours(model, {}, tui.current_theme.holders())
         overview.dashboard_draw(canvas, model, error=error, notice=screen.notice())
         self.canvas = canvas
         return canvas.render(False)

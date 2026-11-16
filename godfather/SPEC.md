@@ -188,6 +188,12 @@ Godfather is one Python package, standard library only, Python 3.9+, installed b
   column sharing, scrollbars, overlays (help, changelog, Settings, confirmation, action menu, text field), the footer
   and hint dropping, key reading with the kitty keyboard protocol and layout table, mouse (SGR 1000/1006), full-screen
   setup and restore, the background loader. It knows nothing about any tool.
+- **Layers** (fathers#141): data (keys, theme, version, eventcheck, sources, events, news, entries, adapters, tui)
+  → layout (layout, widgets, overlay_text, settings_model, state, modes) → views → app. A module imports only its
+  own layer or one below, so the reducer reads no view: what EVENTS shows (`events.Filter`), the entries' identity
+  (`entries`), the overlays' text and geometry (`overlay_text`) and Settings (`settings_model`) are below the views
+  that draw them. One scroll clamp (`layout.clamp_scroll`), one hint lookup (`tui.hint_at`); tests/test_imports.py
+  pins the layers.
 - **theme**: Slotfather's theme module moved whole: tokens, terminal colour queries (OSC 10/11/4, mode 2031), muted
   and surface mixing, holder fills and inks, the chart ramp, the three modes. Source colours for the EVENTS tag are
   new tokens chosen by the same rules as holder fills.

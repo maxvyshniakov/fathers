@@ -582,7 +582,7 @@ def scrolled(panel: Panel, found: Sequence[Line], visible: int) -> int:
         if at:
             offset = min(offset, at[0])
             offset = max(offset, at[-1] - visible + 1)
-    return max(0, min(offset, max(0, len(found) - visible)))
+    return _layout.clamp_scroll(offset, len(found), visible)
 
 
 def place(panel: Panel, context: Context) -> Panel:
@@ -840,8 +840,8 @@ def arm(panel: Panel, now: float) -> Panel:
 
 def scroll(panel: Panel, context: Context, rows_by: int) -> Panel:
     view = geometry(panel, context)
-    last = max(0, len(view.lines) - view.visible)
-    return replace(panel, offset=max(0, min(last, view.offset + rows_by)), reveal=False)
+    return replace(panel, offset=_layout.clamp_scroll(view.offset + rows_by, len(view.lines), view.visible),
+                   reveal=False)
 
 
 def page(panel: Panel, context: Context, direction: int) -> Panel:

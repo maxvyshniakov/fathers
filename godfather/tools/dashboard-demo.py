@@ -46,8 +46,8 @@ def load_scene(advance: bool = False, elapsed: Callable[[], float] | None = None
     start) stands in for the wall clock, so frames drawn at chosen moments are the same every time. EVENTS' rows
     are read from the scene's event log (scene_events()); `recorded` keeps the recording's snapshot-style events
     instead, which tools/goldens.py writes that log from."""
-    from godfather import app, sources, theme
-    from godfather.views import common, details, machine
+    from godfather import app, entries, sources, theme
+    from godfather.views import details, machine
 
     data = json.loads(FIXTURE.read_text())
     profiles = json.loads(METRICS.read_text())["samples"]
@@ -88,7 +88,7 @@ def load_scene(advance: bool = False, elapsed: Callable[[], float] | None = None
     model["history"] = machine.held_history(model["events"], model["used"], origin, 2 * model["history_window"])
     if not recorded:  # EVENTS reads the log (fathers#84)
         model["events"], model["sources"] = scene_events(model), [("slotfather", "slot")]
-    common.dashboard_colours(model, {}, theme.from_environment().holders())  # GODFATHER_TERMINAL_BG/_FG
+    entries.dashboard_colours(model, {}, theme.from_environment().holders())  # GODFATHER_TERMINAL_BG/_FG
 
     def sample() -> dict[str, Any]:
         fresh = copy.deepcopy(model)

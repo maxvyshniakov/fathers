@@ -261,9 +261,9 @@ def render(name: str, theme: str | None) -> str:
     the lanes and the chart's window go in as data, the theme and marks with the canvas, the commit what's new shows as
     an argument. No module is patched (fathers#138); the only thing set from outside is the process environment
     (environment(): the fixture folder, the time zone and the terminal's colours), which is what the tools read."""
-    from godfather import app, state, theme as themes, tui
+    from godfather import app, entries, events, overlay_text, state, theme as themes, tui
     from godfather.adapters import slotfather as adapter
-    from godfather.views import common, overlays, overview
+    from godfather.views import common, overview
 
     width, height, overlay = SCREENS[name]
     selected, focus = 0, "requests"
@@ -275,10 +275,8 @@ def render(name: str, theme: str | None) -> str:
     if overlay == "settings:mixed":
         folder, overlay = MIXED, "settings"
     if overlay and overlay.startswith("mixed"):
-        from godfather.views import events as events_view
-
         _, source, text = (overlay.split(":") + ["", ""])[:3]
-        found_filter = events_view.Filter(source or None, text, editing=bool(text))
+        found_filter = events.Filter(source or None, text, editing=bool(text))
         folder, overlay = MIXED, None
     found, everything, unread = scene_news()
     read = everything if name.startswith(("overview-", "help-", "settings-", "expected", "focus-")) else unread
@@ -288,7 +286,7 @@ def render(name: str, theme: str | None) -> str:
         screen = app.Screen()
         model, error = screen.load()
         assert model is not None and error is None, error
-        common.dashboard_colours(model, {}, palette.holders())
+        entries.dashboard_colours(model, {}, palette.holders())
         for item in model["holders"] + model["waiters"]:
             lane = scene["lanes"].get(lane_key(item["key"]))
             if lane:
@@ -304,7 +302,7 @@ def render(name: str, theme: str | None) -> str:
                                                                                              height=height), 0.0)
         elif overlay and overlay.startswith("changelog"):
             tool = overlay.partition(":")[2] or "all"
-            shown = state.Changelog(tab=overlays.filters(found).index(tool))
+            shown = state.Changelog(tab=overlay_text.filters(found).index(tool))
         elif overlay:
             shown = state.Help()
         canvas = tui.Canvas(width, height, palette, common.marks_for(False))

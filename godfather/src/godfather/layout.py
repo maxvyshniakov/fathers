@@ -223,6 +223,12 @@ def resource_bars(width: int, values: int, shorts: int) -> tuple[int, bool]:
     return bar, False
 
 
+def clamp_scroll(offset: int, total: int, visible: int) -> int:
+    """A scroll offset kept in range: from the top to where the last row is the last shown (fathers#141: the one
+    clamp every panel, overlay and key uses)."""
+    return max(0, min(offset, max(0, total - visible)))
+
+
 def overlay_text(width: int, most: int, inset: int) -> int:
     """The text width of an overlay at most `most` columns on a screen `width` wide, `inset` cells of frame and
     padding left of and right of its text."""

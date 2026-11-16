@@ -738,3 +738,66 @@ def runs(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     merged = [joined.get(id(item), run_row(item, None) if item.get("kind") == "lease.granted" else item)
               for item in found]
     return sorted(merged, key=lambda item: item["when"])  # stable: equal times keep the log's order
+
+
+# What EVENTS shows (fathers#84, fathers#152): data the reducer filters and counts by, kept here so it reads no view
+
+VIEWS = ("slotfather", "lanefather", "junkfather")
+ALL = "all"
+Model = dict[str, Any]
+
+
+@dataclass(frozen=True)
+class Filter:
+    """What EVENTS shows (fathers#84, fathers#152): the log (a tool's name or ALL; None: the default), the text
+    matched against kind, subject id, label and detail, whether the text field is open, and `raw`: every event as
+    logged instead of one row per run. They last until Godfather restarts."""
+    source: Optional[str] = None
+    text: str = ""
+    editing: bool = False
+    raw: bool = False
+
+    def active(self) -> bool:
+        return bool(self.text)
+
+
+def present(model: Optional[Model]) -> list[tuple[str, str]]:
+    """The sources EVENTS reads, (name, tag) in the order slotfather, lanefather, junkfather."""
+    pairs = cast(list[Any], (model or {}).get("sources") or [])
+    return [(str(pair[0]), str(pair[1])) for pair in pairs]
+
+
+def views(model: Optional[Model]) -> list[str]:
+    """The logs the title cycles through: each present tool's, then ALL where there are several."""
+    names = [name for name, _ in present(model)]
+    return names + [ALL] if len(names) > 1 else names
+
+
+def view_of(model: Optional[Model], found: Filter) -> str:
+    """The log shown: the one chosen while it is there, else Slotfather's, else the first present one."""
+    shown = views(model)
+    if found.source in shown:
+        return found.source
+    if "slotfather" in shown or not shown:
+        return "slotfather"
+    return shown[0]
+
+
+def cycled(model: Optional[Model], found: Filter, step: int) -> Optional[str]:
+    """The log `step` along the cycle from the one shown; None where there is nothing to switch to."""
+    shown = views(model)
+    if len(shown) < 2:
+        return None
+    return shown[(shown.index(view_of(model, found)) + step) % len(shown)]
+
+
+def shown_rows(model: Optional[Model], found: Filter) -> list[dict[str, Any]]:
+    """The rows the log and the filter let through, oldest first: one row per run unless `raw`."""
+    rows = cast(list[dict[str, Any]], (model or {}).get("events") or [])
+    view = view_of(model, found)
+    if view != ALL and present(model):
+        rows = [row for row in rows if row.get("source") == view]
+    if not found.raw:
+        rows = runs(rows)
+    needle = found.text.lower()
+    return [row for row in rows if not needle or needle in text_of(row)]
