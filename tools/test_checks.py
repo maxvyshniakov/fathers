@@ -183,28 +183,45 @@ class WorkflowTests(unittest.TestCase):
                     self.assertEqual(wanted, declared[1])
         self.assertEqual("3.9", floor((WORKFLOWS / "common.yml").read_text()))  # common/ and install.py: 3.9
 
-    def test_every_package_declares_requires_python(self) -> None:
-        for name in checks.PACKAGES:
-            text = (ROOT / name / "pyproject.toml").read_text()
-            self.assertRegex(text, r'(?m)^requires-python = ">=3\.\d+"(?:\s|$)', name)
+    # One case per package, so a regression in one is not hidden behind another's expected failure.
+    def declares_requires_python(self, name: str) -> None:
+        text = (ROOT / name / "pyproject.toml").read_text()
+        self.assertRegex(text, r'(?m)^requires-python = ">=3\.\d+"(?:\s|$)', name)
 
-    def test_the_reusable_workflow_runs_the_named_checks(self) -> None:
+    def test_slotfather_declares_requires_python(self) -> None:
+        self.declares_requires_python("slotfather")
+
+    def test_lanefather_declares_requires_python(self) -> None:
+        self.declares_requires_python("lanefather")
+
+    def test_junkfather_declares_requires_python(self) -> None:
+        self.declares_requires_python("junkfather")
+
+    def test_godfather_declares_requires_python(self) -> None:
+        self.declares_requires_python("godfather")
+
+    def test_the_reusable_workflow_runs_the_floor_and_the_newest_on_both_systems(self) -> None:
         text = (WORKFLOWS / "package.yml").read_text()
-        self.assertIn('python tools/checks.py run "$PACKAGE lint"', text)
-        self.assertIn('python tools/checks.py run "$PACKAGE tests"', text)
+        legs = re.findall(r"- os: (\S+)\n\s+python: \$\{\{ inputs\.(floor|newest) \}\}(\n\s+lint: true)?", text)
+        self.assertEqual([("ubuntu-24.04", "floor", ""), ("ubuntu-latest", "newest", "\n            lint: true"),
+                          ("macos-latest", "floor", ""), ("macos-latest", "newest", "\n            lint: true")], legs)
+        steps = re.findall(r"^      - name: .+\n(?:        if: (.+)\n)?        run: (.+)$", text, re.M)
+        self.assertEqual([("matrix.lint", 'python -m pip install -r "$PACKAGE/requirements-dev.txt"'),
+                          ("matrix.lint", 'python tools/checks.py run "$PACKAGE lint"'),
+                          ("", 'python tools/checks.py run "$PACKAGE tests"')], steps)
         for name in CALLERS:
             self.assertIn(f"{name} lint", checks.NAMES)
             self.assertIn(f"{name} tests", checks.NAMES)
 
 
 class CommandTests(unittest.TestCase):
-    def test_common_has_a_lint_and_a_test_check_like_the_packages(self) -> None:
-        directory, argvs = checks.commands("common tests")
-        self.assertEqual(ROOT, directory)
-        self.assertEqual([[sys.executable, "-m", "unittest", "discover", "-s", "common/tests"]], argvs)
-        ruff, pyright = checks.commands("common lint")[1]
-        self.assertIn("ruff", ruff)
-        self.assertIn("pyright", pyright)
+    def test_common_tests_runs_commons_own_tests(self) -> None:
+        result = subprocess.run([sys.executable, str(ROOT / "tools/checks.py"), "run", "common tests"], cwd=ROOT,
+                                capture_output=True, text=True, timeout=300)
+        self.assertEqual(0, result.returncode, result.stderr[-2000:])
+        ran = re.search(r"^Ran (\d+) tests?", result.stderr, re.M)
+        assert ran, result.stderr[-2000:]
+        self.assertGreater(int(ran[1]), 0)
 
 
 class RepositoryRuleTests(unittest.TestCase):

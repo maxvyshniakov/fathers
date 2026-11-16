@@ -72,7 +72,7 @@ class Project:
             raise LaneError(f'{self._queue_path}: {error}') from None
         settings, entries = queue.parse_queue(text, self._queue_path)
         records = self._store.lanes(strict=True)
-        common = admission.project_common(self.config)
+        common = admission.running_common(self.config)
         states = queue.queue_states(entries, records, common)
         decision = admission.evaluate(self.config, records, common)
         cap, source, machine = decision.cap, decision.source, decision.machine

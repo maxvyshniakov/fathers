@@ -1,7 +1,7 @@
 # Checks
 
-The installed commands use only Python's standard library (3.9+; Lanefather 3.11+: each package's `requires-python`). Ruff, Pyright, Bun and Repo-Kit
-are development tools only.
+The installed commands use only Python's standard library (3.9+; Lanefather 3.11+: each package's
+`requires-python`). Ruff, Pyright, Bun and Repo-Kit are development tools only.
 
 ## Focused
 
@@ -17,9 +17,9 @@ are development tools only.
 - `bun run verify` (Repo-Kit, [repo-kit.config.mjs](../../repo-kit.config.mjs)) runs the checks the changes since
   `origin/main` select ([tools/checks.py](../../tools/checks.py)): `<package> lint` and `<package> tests` for each
   changed package (every package for `common/`; Slotfather's sources also select `godfather tests`), `common lint`
-  and `common tests` for `common/` and `install.py`, and always `tools`, `kit` (`repo-kit check`) and `test hygiene`. A path no rule knows
-  selects everything, and so does a tree without changes. `FATHERS_CHECKS=all bun run verify` runs every check;
-  `FATHERS_CHECK_BASE=<ref>` names another base.
+  and `common tests` for `common/` and `install.py`, and always `tools`, `kit` (`repo-kit check`) and
+  `test hygiene`. A path no rule knows selects everything, and so does a tree without changes.
+  `FATHERS_CHECKS=all bun run verify` runs every check; `FATHERS_CHECK_BASE=<ref>` names another base.
 - It leases two slots itself and runs the steps side by side. Every check took 2026-11-13: lint gates 2 to 14 s,
   Godfather's tests 1.5 min, Junkfather's 2, Slotfather's 4-5, Lanefather's 13-18 (the whole run: as long as Lanefather's).
 - The pre-push hook runs it on the pushed commits and a lane's `lanefather check` on the lane's diff
