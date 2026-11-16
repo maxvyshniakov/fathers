@@ -1,6 +1,7 @@
 """install.py: a release beside the others, `current` swapped in one rename, the command on its interpreter."""
 from __future__ import annotations
 
+import io
 import json
 import os
 from pathlib import Path
@@ -125,19 +126,24 @@ class InstallOptionTests(Case):
         with self.assertRaisesRegex(self.install_module.InstallError, "Mastack's installer failed"):
             self.install_module.mastack(self.command)
 
-    def test_background_registers_the_bash_hook_once_beside_the_others(self):
+    def test_background_registers_the_bash_hook_and_its_rule_once_beside_the_others(self):
         claude = self.tmp / "claude-config"
         os.environ["CLAUDE_CONFIG_DIR"] = str(claude)
         mastack = {"matcher": "Bash", "hooks": [{"type": "command", "command": "python3 bash_guard.py", "timeout": 10}]}
         claude.mkdir()
-        (claude / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": [mastack]}, "model": "kept"}))
+        (claude / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": [mastack]}, "model": "kept",
+                                                          "permissions": {"allow": ["Bash(ls:*)"]}}))
         (claude / "settings.json").chmod(0o640)
-        for _ in range(2):
-            self.assertEqual(claude / "settings.json", self.install_module.background(self.command))
-        data = json.loads((claude / "settings.json").read_text())
         line = f"""sh -c '[ -x "$0" ] || exit 0; exec "$0" hook' {self.command}"""
+        rule = f"Bash({self.command} background:*)"
+        path, added = self.install_module.background(self.command)
+        self.assertEqual((claude / "settings.json", [f"the PreToolUse hook for Bash: {line}",
+                                                     f"the permission rule {rule}"]), (path, added))
+        self.assertEqual((claude / "settings.json", []), self.install_module.background(self.command))
+        data = json.loads((claude / "settings.json").read_text())
         self.assertEqual([mastack, {"matcher": "Bash", "hooks": [{"type": "command", "command": line, "timeout": 10}]}],
                          data["hooks"]["PreToolUse"])
+        self.assertEqual(["Bash(ls:*)", rule], data["permissions"]["allow"])
         self.assertEqual("kept", data["model"])
         self.assertEqual(0o640, (claude / "settings.json").stat().st_mode & 0o777)
         ran = subprocess.run(["/bin/sh", "-c", line.replace(str(self.command), str(self.tmp / "gone"))],
@@ -146,13 +152,39 @@ class InstallOptionTests(Case):
         (claude / "settings.json").write_text("{")
         with self.assertRaisesRegex(self.install_module.InstallError, "not JSON"):
             self.install_module.background(self.command)
+        (claude / "settings.json").write_text(json.dumps({"permissions": {"allow": "Bash"}}))
+        with self.assertRaisesRegex(self.install_module.InstallError, "permissions.allow"):
+            self.install_module.background(self.command)
+
+    def test_the_rule_allows_the_line_the_hook_writes(self):
+        from junkfather import background as hook_line
+        command = self.tmp / "bin dir" / "junkfather"
+        rule = self.install_module.allow_rule(command)
+        prefix = rule[len("Bash("):-len(":*)")]
+        line = hook_line.adopting_line("toolu_1", hook_line.shlex.quote(str(command)))
+        self.assertTrue(line.startswith(prefix + " "), (rule, line))
+
+    def test_mastack_implies_background_and_the_output_names_what_was_added(self):
+        module = self.install_module
+        added = ["the permission rule Bash(x background:*)"]
+        with mock.patch.object(module, "install", return_value=self.tmp / "release"), \
+                mock.patch.object(module, "mastack") as mastack, \
+                mock.patch.object(module, "background", return_value=(self.tmp / "settings.json", added)) \
+                as background, \
+                mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            code = module.main(["--bin", str(self.tmp / "bin"), "--share", str(self.tmp / "share"), "--mastack"])
+        self.assertEqual(0, code)
+        mastack.assert_called_once_with(self.tmp / "bin" / "junkfather")
+        background.assert_called_once_with(self.tmp / "bin" / "junkfather")
+        self.assertIn(f"Added to {self.tmp / 'settings.json'}: the permission rule Bash(x background:*)",
+                      out.getvalue())
 
     def test_the_flags_run_launchd_and_mastack_on_the_installed_command(self):
         module = self.install_module
         with mock.patch.object(module, "install", return_value=self.tmp / "release"), \
                 mock.patch.object(module, "launchd", return_value=self.tmp / "agent.plist") as launchd, \
                 mock.patch.object(module, "mastack") as mastack, \
-                mock.patch.object(module, "background", return_value=self.tmp / "settings.json") as background:
+                mock.patch.object(module, "background", return_value=(self.tmp / "settings.json", [])) as background:
             code = module.main(["--bin", str(self.tmp / "bin"), "--share", str(self.tmp / "share"), "--launchd",
                                 "--mastack", "--background"])
         self.assertEqual(0, code)

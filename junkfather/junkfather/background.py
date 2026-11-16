@@ -15,8 +15,8 @@ line prints nothing, and its failure (no junkfather, no claim) only leaves the c
 entry's: the subagent's stop (`SubagentStop`), the session's end, the TTL (the `Stop` hook, the sweep), `reap`. A
 shell that ended on its own is marked gone by the sweep, or by the session's next background call (`tidy`).
 
-Left alone: a foreground call, a call whose command names junkfather (it owns what it needs itself, and the claim
-is the one `own` reads), a call without a session or a tool-use id fit for a file name. The hook gives no
+Left alone: a foreground call, a call that runs junkfather (`runs_junkfather`: it owns what it needs itself, and
+the claim is the one `own` reads), a call without a session or a tool-use id fit for a file name. The hook gives no
 permission decision, so Claude Code's permission rules, Mastack's checks and auto mode judge the call as usual
 (the rules see the rewritten command, Mastack's checks, which run beside this hook, the agent's).
 
@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import sys
 import time
@@ -58,12 +59,63 @@ def wanted(data: Mapping[str, Any]) -> Optional[str]:
     command = tool_input.get("command")
     if tool_input.get("run_in_background") is not True or not isinstance(command, str) or not command.strip():
         return None
-    if "junkfather" in command:
+    if runs_junkfather(command):
         return None
     session, tool_use = data.get("session_id"), data.get("tool_use_id")
     if not (isinstance(session, str) and isinstance(tool_use, str)):
         return None
     return command
+
+
+OPERATORS = "();<>|&\n"  # shell punctuation; a token of these alone separates commands or redirects
+STARTERS = {"!", "{", "then", "do", "else", "elif", "if", "while", "until", "time", "exec", "command", "builtin",
+            "nohup", "env"}  # after these a word is still in a command's program position
+ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+PYTHON = re.compile(r"^python[0-9.]*$")
+SUBSTITUTED = re.compile(r"(\$\(|`)\s*(?:[^\s;|&()`]*/)?junkfather(?=[\s;|&()`]|$)")
+
+
+def runs_junkfather(command: str) -> bool:
+    """Whether a simple command of `command` runs junkfather: its program (after assignments and `env`, `exec`,
+    `nohup`...) is junkfather by name or path, `python -m junkfather`, or a command substitution starting with it.
+    A command that only names it (`cd ~/fathers/junkfather && make`) does not. One that cannot be split (an open
+    quote) counts when it names junkfather at all, as every such command did before."""
+    if "junkfather" not in command:
+        return False
+    if SUBSTITUTED.search(command):
+        return True
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=OPERATORS)
+    lexer.whitespace, lexer.whitespace_split = " \t\r", True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return True
+    start, redirected, python = True, False, False
+    for token in tokens:
+        if token and all(ch in OPERATORS for ch in token):
+            if any(ch not in "<>" for ch in token):
+                start, python = True, False
+            else:
+                redirected = True  # the next word is a file
+            continue
+        if redirected:
+            redirected = False
+            continue
+        if python:
+            if token == "junkfather":
+                return True
+            python = token.startswith("-") and token != "-c"
+            continue
+        if not start:
+            continue
+        if ASSIGNMENT.match(token) or token in STARTERS or (token.startswith("-") and token != "-"):
+            continue
+        program = os.path.basename(token)
+        if program == "junkfather":
+            return True
+        python = PYTHON.match(program) is not None
+        start = False
+    return False
 
 
 def launcher() -> str:

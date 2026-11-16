@@ -61,6 +61,26 @@ class RewriteTests(Case):
         self.assertEqual([], self.answer(call("junkfather own --ttl 1h -- vite")))
         self.assertTrue((self.state / "claims" / "s1" / "toolu_01.json").exists(), "the claim for own, as before")
 
+    def test_only_a_command_whose_program_is_junkfather_counts_as_running_it(self):
+        runs = ("junkfather own -- vite", "cd app && ~/.local/bin/junkfather own --detach -- npm start",
+                "PORT=1 junkfather own -- vite", "nohup junkfather own -- x", "env -i A=1 junkfather list",
+                "echo start\n/usr/local/bin/junkfather own -- x", "make || junkfather reap --id j1",
+                "python3 -m junkfather own -- x", "x=$(junkfather list --json)", 'echo "$(junkfather list)"',
+                "echo `junkfather list`", "(junkfather own -- x)", "if true; then junkfather list; fi",
+                'echo "unterminated junkfather')
+        for command in runs:
+            self.assertTrue(background.runs_junkfather(command), command)
+        others = ("cd ~/fathers/junkfather && make", "python3 -m unittest discover -s junkfather/tests",
+                  "grep -rn junkfather docs | head", "echo junkfather > junkfather.txt", "ls < junkfather",
+                  "sleep 600", "cat ~/.local/bin/junkfather")
+        for command in others:
+            self.assertFalse(background.runs_junkfather(command), command)
+
+    def test_a_command_that_only_names_junkfather_is_taken_over(self):
+        (said,) = self.answer(call("cd ~/fathers/junkfather && until test -f done; do sleep 15; done"))
+        rest = said["hookSpecificOutput"]["updatedInput"]["command"].split("\n", 1)[1]
+        self.assertEqual("cd ~/fathers/junkfather && until test -f done; do sleep 15; done", rest)
+
     def test_nothing_without_what_identifies_the_call(self):
         for data in (call("sleep 600", tool_use="../x"), call("sleep 600", tool_use=""), call("   "),
                      {**call("sleep 600"), "session_id": None}, {**call("sleep 600"), "tool_name": "exec_command"}):
