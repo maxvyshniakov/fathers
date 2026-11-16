@@ -3,19 +3,19 @@
 │  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  ╭───────────╮  ╭──────────╮  │ │  label      lane-644-build-once                            │
 │  lane-644-bui…  lane-465-sta…  desktop                                              free  │ │  status     running · 1 slot                               │
 ╰─────────────────────────────────────╭─ SETTINGS ────────────────────── a change saves after a second, or on Enter ─╮                                     │
-┍━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│                                                                              │                                     │
-│                                     │  GODFATHER · this dashboard only                                             │                                     │
-┃  ▶️    lane-644-build-once          │    Refresh every             1s                                              │ 0.9 of 2 cores                      │
-│  ▶️    lane-465-state-definitions-re│    Colour theme              Auto                                            │ waited 19m34s · running 35m10s      │
-│  ▶️    desktop                      │  ──────────────────────────────────────────────────────────────────────────  │ processes                           │
-│                                     │  SLOTFATHER · status read-only, live                                         │                                     │
-│  ⏸️    prof51                       │    queue        ~/.local/state/slotfather                                    │ht/.claude/worktrees/agent-afa3816b  │
-│  ⏸️    lane-555-host-rename-names   │    slots        6 total · 2 free · 4 held · 2 waiting                        │                                     │
-│                                     │    capacity     6 slots · saved, fixed count                                 │ht/.claude/worktrees/agent-afa3816b  │
-┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    budgets      CPU 4 (12 cores) · memory 16 (64 GiB)                        │verify.sh --checks desktop-tests     │
+┏━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│                                                                              │                                     │
+┃                                     │  GODFATHER · this dashboard only                                             │                                     │
+▕  ▶️    lane-644-build-once          │    Refresh every             1s                                              │ 0.9 of 2 cores                      │
+┃  ▶️    lane-465-state-definitions-re│    Colour theme              Auto                                            │ waited 19m34s · running 35m10s      │
+┃  ▶️    desktop                      │  ──────────────────────────────────────────────────────────────────────────  │ processes                           │
+┃                                     │  SLOTFATHER · status read-only, live                                         │                                     │
+┃  ⏸️    prof51                       │    queue        ~/.local/state/slotfather                                    │ht/.claude/worktrees/agent-afa3816b  │
+┃  ⏸️    lane-555-host-rename-names   │    slots        6 total · 2 free · 4 held · 2 waiting                        │                                     │
+┃                                     │    capacity     6 slots · saved, fixed count                                 │ht/.claude/worktrees/agent-afa3816b  │
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    budgets      CPU 4 (12 cores) · memory 16 (64 GiB)                        │verify.sh --checks desktop-tests     │
 ╭─ SLOTS LOG ─────── label ───────────│    draining     none                                                         │ng --jobs 1                          │
 │                                     │    environment  SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB                      │ht                                   │
-│  11:59:35  ▫       agent-ae72d94beb6┃  ▶ Capacity                  ‹ Fixed ›                                       ┃                                     │
+│  11:59:35  ▫       agent-ae72d94beb6▕  ▶ Capacity                  ‹ Fixed ›                                       ▏                                     │
 │  11:58:33  ▫       agent-a1c75285bdf│    Slots                     6                                               │once                                 │
 │  11:57:15  ▫       agent-a1c75285bdf│    Queue order               Backfill                                        │                                     │
 │  11:55:44  ▪▪      desktop          │    Backfill margin           3×                                              │                                     │
@@ -37,7 +37,7 @@
 │  11:47:04  ▫       agent-a0f998f4c57│                                                                              │        slots held  avg 4.4/6        │
 │  11:46:08  ▫       post-merge-491-el│           ↑↓ select   ←→ change   enter edit   d reset   esc close           │9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
 │  11:45:53  ▫       agent-a1c75285bdf╰──────────────────────────────────────────────────────────────────────────────╯normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
-│  11:45:09  ▫       agent-a1c75285bdf2cd615             wait 2m43s          ok 10s  21181  │ │  🆗 swap ■■■■■■■■■░░░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
+│  11:45:09  ▫       agent-a1c75285bdf2cd615             wait 2m43s  ok 10s          21181  │ │  🆗 swap ■■■■■■■■■░░░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                                                                                           │ │                               −80s                    now  │
 ╰───────────────────────────────────────────────────────────────────────────────────────────╯ ╰────────────────────────────────────────────────────────────╯
  Godfather what's new?                            ↑↓ select   tab panel   s settings   ? help   q quit                             updated 11:59:39  ● live

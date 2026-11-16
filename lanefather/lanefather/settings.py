@@ -14,6 +14,8 @@ The knobs, each below the environment, which wins and makes its row read-only:
   rerun.wait                 seconds a red check's rerun waits for its lease (LANEFATHER_RERUN_WAIT)
   slots.priority.<phase>     project | interactive | normal | batch: this machine's slot priority of a phase, above
                              the project's `[slots.priority]` (LANEFATHER_PRIORITY_<PHASE>, LANEFATHER_PRIORITY)
+  host.min_disk_gb           auto | decimal GB: the free disk under which start refuses a lane; auto (shown as 0)
+                             is the derived floor, which the row describes (LANEFATHER_MIN_DISK_GB)
 A project's `[slots.priority]` values are shown as read-only rows of the project the command runs in.
 """
 from __future__ import annotations
@@ -36,6 +38,8 @@ VERSION = 1
 CONFLICT, INVALID, READ_ONLY = 3, 2, 4
 DEFAULT_RERUN_WAIT = 3300  # checks.DEFAULT_RERUN_WAIT reads it
 MAX_WAIT = 86400
+MIN_DISK = "host.min_disk_gb"  # host.disk_floor reads it
+MAX_DISK_GB = 100000
 
 
 class SettingError(Exception):
@@ -70,6 +74,9 @@ KNOBS: tuple[Knob, ...] = (
     Knob("rerun.wait", "Rerun waits", "duration", DEFAULT_RERUN_WAIT, ("RERUN_WAIT",),
          "How long a red check's rerun waits for its slot lease before its checks stay unclassified."),
     *(priority_knob(phase) for phase in config.SLOT_PHASES),
+    Knob(MIN_DISK, "Free disk floor", "number", 0, ("MIN_DISK_GB",),
+         "The free disk, in decimal GB, under which start refuses a lane; auto is the derived floor, a reserve plus "
+         "the lane cap times the largest recent lane."),
 )
 BY_KEY = {knob.key: knob for knob in KNOBS}
 
@@ -124,6 +131,13 @@ def parse(knob: Knob, text: str) -> Any:
         if text not in {choice for choice, _ in knob.choices}:
             raise SettingError(f"{knob.key}: {text!r} is not one of {', '.join(c for c, _ in knob.choices)}")
         return text
+    if knob.type == "number":
+        if text.lower() == "auto":
+            return 0
+        if not re.fullmatch(r"\d+(?:\.\d+)?", text) or float(text) > MAX_DISK_GB:
+            raise SettingError(f"{knob.key}: {text!r} is not auto or a number of decimal GB up to {MAX_DISK_GB}")
+        gb = float(text)
+        return int(gb) if gb.is_integer() else gb
     match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([smh]?)", text)
     if not match:
         raise SettingError(f"{knob.key}: {text!r} is not a duration; give seconds, or a number with s, m or h")
@@ -157,6 +171,8 @@ def row(knob: Knob, values: dict[str, Any], rev: str) -> dict[str, Any]:
         found["choices"] = [{"value": choice, "label": label} for choice, label in knob.choices]
     if knob.type == "duration":
         found.update(min=1, max=MAX_WAIT, step=300, unit="s")
+    if knob.type == "number":
+        found.update(min=0, max=MAX_DISK_GB, step=5, unit="GB", zero="auto")
     env = environment(knob)
     if env:
         found.update(source=f"env {env[0]}", writable=False)
@@ -164,7 +180,22 @@ def row(knob: Knob, values: dict[str, Any], rev: str) -> dict[str, Any]:
             found["value"] = parse(knob, env[1])
         except SettingError as error:
             found.update(value=env[1], error=str(error))
+    if knob.key == MIN_DISK:
+        # What start applies here, and the derived floor auto stands for (fathers#163), for Godfather's row.
+        floor = floor_here()
+        found["description"] = f"{knob.description} auto: {floor.derivation()}."
+        if not (floor.cap_unknown and floor.source == "derived"):  # no applied floor is claimed without its cap
+            found["effective"] = gb(floor.gb)
     return found
+
+
+def floor_here() -> Any:
+    from . import admission  # admission reads the slot and state modules; settings stays below them
+    return admission.floor_here()
+
+
+def gb(value: float) -> float | int:
+    return int(value) if float(value).is_integer() else round(value, 1)
 
 
 def project_rows() -> list[dict[str, Any]]:
@@ -183,7 +214,8 @@ def document() -> dict[str, Any]:
         {"id": "review", "title": "Review", "settings": [row(BY_KEY["review.start"], values, rev),
                                                          row(BY_KEY["rerun.wait"], values, rev)]},
         {"id": "slots", "title": "Slot priorities",
-         "settings": [row(BY_KEY[f"slots.priority.{phase}"], values, rev) for phase in config.SLOT_PHASES]}]
+         "settings": [row(BY_KEY[f"slots.priority.{phase}"], values, rev) for phase in config.SLOT_PHASES]},
+        {"id": "host", "title": "Host", "settings": [row(BY_KEY[MIN_DISK], values, rev)]}]
     with contextlib.suppress(Exception):
         rows = project_rows()
         if rows:
@@ -203,6 +235,10 @@ def preview(knob: Knob, new: Any) -> str | None:
                 else "land starts no review; run lanefather review ID")
     if knob.key == "rerun.wait":
         return f"a rerun waits up to {new} s for its lease"
+    if knob.key == MIN_DISK:
+        if not new:
+            return f"start refuses a lane under the derived floor, now {floor_here().derivation()}"
+        return f"start refuses a lane while the free disk is under {new:g} GB (10^9)"
     phase = knob.key.removeprefix("slots.priority.")
     if new == "project":
         return f"{phase} runs follow the project's [slots.priority] and the built-in"
@@ -282,7 +318,10 @@ def reply(found: dict[str, Any], as_json: bool, code: int = 0) -> int:
             print(section["title"])
             for item in section["settings"]:
                 lock = "" if item["writable"] else " (read-only)"
-                print(f"  {item['key']} = {item['value']}  [{item['source']}{lock}]")
+                shown = item["zero"] if item.get("zero") and item["value"] == 0 else item["value"]
+                if "effective" in item and item["effective"] != item["value"]:
+                    shown = f"{shown} ({item['effective']:g} {item.get('unit', '')})".replace(" )", ")")
+                print(f"  {item['key']} = {shown}  [{item['source']}{lock}]")
     elif found.get("error"):
         print(f"lanefather: {found['error']}", file=sys.stderr)
     else:

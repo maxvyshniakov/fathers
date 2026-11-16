@@ -225,14 +225,51 @@ def grouped(records: list[state.Record]) -> str:
                      for common in sorted(groups, key=lambda c: (names[c], c or "")))
 
 
+def ask(project: config.Config, occupied: int) -> dict[str, Any]:
+    """Slotfather's lifetime answer for one more lane with `occupied` lanes planned or active; LaneError when it
+    cannot give one. A query: it registers nothing."""
+    command = slots.command()
+    if command is None:
+        raise LaneError("lifetime admission unavailable: slotfather is not on PATH")
+    try:
+        request = request_for(project, occupied)
+        return response_for(transport(command, request), request)
+    except (OSError, ValueError, KeyError, TypeError, OverflowError,
+            subprocess.SubprocessError, RecursionError) as error:
+        raise LaneError(f"lifetime admission unavailable: {error}") from None
+
+
+def start_cap(project: config.Config, records: list[state.Record]) -> tuple[int, str]:
+    """The lane cap start applies to `project` (fathers#163): the local cap, or Slotfather's when it is the
+    provider. When Slotfather cannot answer, the local cap and why it stands in."""
+    if project.admission_provider != "slotfather":
+        return host.lane_cap(project)[0], ""
+    occupied = len(state.occupying(state.of_project(records, running_common(project))))
+    try:
+        return int(ask(project, occupied)["cap"]), ""
+    except LaneError as error:
+        return host.lane_cap(project)[0], str(error)
+
+
 def current_floor(project: config.Config) -> host.Floor:
-    """The free-disk floor start applies to `project` now (fathers#157): its cap times the lane peak of its state
-    directory, plus the reserve, or LANEFATHER_MIN_DISK_GB. An unreadable state directory counts no lanes."""
+    """The free-disk floor start applies to `project` now (fathers#157, #163): LANEFATHER_MIN_DISK_GB, the machine
+    setting host.min_disk_gb, or the cap start applies times the lane peak of its state directory plus the
+    reserve. An unreadable state directory counts no lanes."""
     try:
         records = state.Store(project).lanes()
     except (LaneError, OSError):
         records = []
-    return host.disk_floor(project, host.lane_cap(project)[0], records)
+    cap, unknown = start_cap(project, records)
+    return host.disk_floor(project, cap, records, unknown)
+
+
+def floor_here() -> host.Floor:
+    """The floor start applies in the project the command runs in, else to a project without lanes on this machine:
+    what capabilities, a project hook and the settings row report."""
+    try:
+        return current_floor(config.current())
+    except LaneError:
+        return current_floor(config.Config())
 
 
 def evaluate(project: config.Config, records: list[state.Record], common: str | None = None, *,
@@ -255,15 +292,7 @@ def evaluate(project: config.Config, records: list[state.Record], common: str | 
         if machine["load15"] > host.load_limit(machine["cores"]):
             codes.append("load15")
     else:
-        command = slots.command()
-        if command is None:
-            raise LaneError("lifetime admission unavailable: slotfather is not on PATH")
-        try:
-            request = request_for(project, len(active))
-            answer = response_for(transport(command, request), request)
-        except (OSError, ValueError, KeyError, TypeError, OverflowError,
-                subprocess.SubprocessError, RecursionError) as error:
-            raise LaneError(f"lifetime admission unavailable: {error}") from None
+        answer = ask(project, len(active))
         cap = int(answer["cap"])
         source = f"slotfather {answer['cap_source']}; derived: {answer['derived_cap']}"
         machine = {key: answer["host"][key]["value"] for key in ("cores", "load15")}

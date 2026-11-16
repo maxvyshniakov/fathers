@@ -36,7 +36,7 @@
   list [--all] [--json]
   status [--json]                    every registered project's lanes on this machine (lanefather.status)
   settings [check|set|reset KEY [VALUE]] [--json]
-                                     this machine's settings: review start, rerun wait, slot priorities
+                                     this machine's settings: review start, rerun wait, slot priorities, free-disk floor
                                      (lanefather.settings)
 
 --config PATH (or LANEFATHER_CONFIG) names the project's .lanefather.toml; by default it is read from the top of the

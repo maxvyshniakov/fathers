@@ -11,7 +11,7 @@
 │    budgets      CPU 4 (12 cores) · memory 16 (64 GiB)                        │
 │    draining     none                                                         │
 │    environment  SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB                      │
-┃  ▶ Capacity                  ‹ Automatic ›                                   ┃
+▕  ▶ Capacity                  ‹ Automatic ›                                   ▏
 │    Queue order               Backfill                                        │
 │    Backfill margin           3×                                              │
 │    Unknown job runtime       1h                                              │
@@ -37,6 +37,7 @@
 │    gate priority             Project                                         │
 │    rerun priority            Project                                         │
 │    perf priority             Project                                         │
+│    Free disk floor           auto  effective here: 49 GB                     │
 │  ──────────────────────────────────────────────────────────────────────────  │
 │  JUNKFATHER · status read-only, live                                         │
 │    settings     /fake/state/junkfather/settings.json                         │

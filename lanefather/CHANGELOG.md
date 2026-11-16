@@ -19,6 +19,14 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   `lane.dropped` and `lane.rechecked`; capabilities `lane.drop` and `post_merge.cleared`. An older Lanefather
   reads a dropped lane as done and a rechecked one as green.
 
+- The free-disk floor is a machine setting (fathers#163): `lanefather settings set host.min_disk_gb 150` (decimal
+  GB) or `auto` (the default, the derived 40 GB reserve + lane cap x lane peak). `LANEFATHER_MIN_DISK_GB` still wins
+  and makes the row read-only. Admission, `capabilities --json` (`host.min_disk_gb`) and the refusal use the same
+  value; a refusal names its source. The row's description gives the current derived floor and its `effective` the
+  applied one, so Godfather's Settings shows and changes it. With Slotfather as the admission provider, the
+  reported floor uses Slotfather's cap, as start does, and the row says when Slotfather cannot answer instead of
+  showing the local cap's floor as applied. An older Lanefather ignores the saved value.
+
 - Lanes finish by themselves (fathers#157). A lane that becomes finished (landed, smoke green, review finished or
   exempt with every finding marked) runs `done`, as before, unless it is kept; `[done] auto = false` turns that off.
   `lanefather keep ID [--off]` keeps a lane from it. `lanefather done --finished` runs `done` on every finished lane

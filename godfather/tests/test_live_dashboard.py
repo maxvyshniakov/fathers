@@ -29,9 +29,10 @@ class OnceTests(LiveCase):
         lines = self.snapshot(width=220, height=50).splitlines()
         for title, message in (("QUEUE", "No requests"), ("SLOTS LOG", "No events logged yet")):
             row = next(i for i, line in enumerate(lines) if title in line)
-            self.assertFalse(lines[row + 1][1:lines[row + 1].index("│", 1)].strip(), "a blank padding row first")
+            side = "┃" if title == "QUEUE" else "│"  # the focused frame is heavy on every side (fathers#165)
+            self.assertFalse(lines[row + 1][1:lines[row + 1].index(side, 1)].strip(), "a blank padding row first")
             self.assertEqual(lines[row].index(title), lines[row + 2].index(message), "then the message")
-            self.assertIn("┍" if title == "QUEUE" else "╭", lines[row], "QUEUE holds the focus (fathers#139)")
+            self.assertIn("┏" if title == "QUEUE" else "╭", lines[row], "QUEUE holds the focus (fathers#139)")
             if title != "SLOTS LOG":
                 self.assertIn("pid", lines[row], "column names belong on the top border")
 
@@ -62,7 +63,7 @@ class OnceTests(LiveCase):
         text = self.snapshot()
         self.assertIn("queue ahead · 2 waiting", text, "why nothing is admitted (fathers#156)")
         self.assertIn("━ QUEUE ", text)
-        self.assertIn("┃  ▶️    holder", text, "the selected row on the frame, its state (#15), then the label")
+        self.assertIn("▕  ▶️    holder", text, "the selected row on the frame, its state (#15), then the label")
         self.assertEqual(1, text.count("▶"), "only the selected row has a cursor")
         self.assertRegex(text, r"gate +▪▪▪▪ +waiting #1 ")
         self.assertRegex(text, r"small +▪ +waiting #2 ")

@@ -78,8 +78,10 @@ def minimum_gb(project: config.Config | None = None) -> float:
     """The free-disk floor start applies in the project the command runs in (fathers#157), else to a project
     without lanes on this machine."""
     from . import admission  # admission reads the slot and state modules install.py does not import
+    if project is None:
+        return admission.floor_here().gb
     try:
-        return admission.current_floor(project or config.current()).gb
+        return admission.current_floor(project).gb
     except LaneError:
         return admission.current_floor(config.Config()).gb
 

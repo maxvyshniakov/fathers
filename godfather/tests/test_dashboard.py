@@ -62,7 +62,7 @@ class UnifiedLaneTests(unittest.TestCase):
         self.assertFalse(lines[1][1:-1].strip(),"a blank padding row")
         self.assertIn("active",lines[2])
         self.assertFalse(lines[3][1:-1].strip())
-        self.assertIn("┃  ⏸️    pending",lines[4])
+        self.assertIn("▕  ⏸️    pending",lines[4])
         column=lines[0].index("cpu use/share")+len("cpu use/share")
         self.assertTrue(lines[4][:column].rstrip().endswith("waiting #1"),lines[4])
         self.assertEqual(1,mouse(canvas,("mouse",0,20,4,True),{},0,model))
@@ -299,7 +299,7 @@ class EventDetailTests(unittest.TestCase):
                 self.assertEqual(sorted(places), places)
                 row = next(line for line in lines if " gate " in line)
                 self.assertRegex(row, r"^│  \d\d:\d\d:\d\d +▫ +gate +gave up 15m +103  │$")
-                self.assertEqual(header.index("outcome") + len("outcome"), row.index("15m") + 3, "right-aligned")
+                self.assertEqual(header.index("outcome"), row.index("gave up"), "left-aligned (fathers#165)")
                 build = next(line for line in lines if " build " in line)
                 self.assertRegex(build, r"\d\d:04:00 +▫ +build +wait 3m00s +exit 1 · 4m00s +101", "one row per run")
                 live = next(line for line in lines if " live " in line)
@@ -308,7 +308,7 @@ class EventDetailTests(unittest.TestCase):
     def test_a_narrow_panel_drops_pid_then_slots_then_the_wait_and_keeps_the_outcome(self) -> None:
         _, lines = self.draw(64)
         self.assertNotIn("pid", lines[0])
-        self.assertRegex(next(line for line in lines if " gate " in line), r"gate +gave up 15m  │$")
+        self.assertRegex(next(line for line in lines if " gate " in line), r"gate +gave up 15m +│$")
         _, lines = self.draw(48)
         self.assertEqual(["outcome"], [t for t in ("slots", "label", "waited", "outcome", "pid") if t in lines[0]],
                          "the label's own title gives way to the log's")

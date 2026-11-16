@@ -3,16 +3,16 @@
 ││                                                                                                                                                        ││
 ││  KEYS                                                Normal has no mark.                               ▲ ↗ ↘           outlier · type slower/faster    ││
 ╰│    ↑ ↓         select a row · scroll a panel                                                                                                           ││
-┍│    pgup pgdn   a page                              SLOTS                                             PAGES                                             ││
-││    home end    first · last row, top · bottom        One block per slot; the colour is its owner.      2 · 3        lanes · processes (SLOTS'          ││
-┃│    tab         next panel, by columns                Slots budget scheduling, not CPU or memory.                    border)                            ││
-││                (shift-tab: back)                     manual · auto  saved or computed capacity         ▶️ 🗓️ ✅ 💤  active planned landed parked       ││
-││    click       a row, a panel, a footer hint (as     draining N     held above a lowered capacity      👻 ⌛        owner gone · past its TTL          ││
-││                its key)                                                                                ❔ 📦        unowned process · resource         ││
-││    wheel       scroll the panel under the          QUEUE                                               Links in DETAILS open a page.                   ││
-││                pointer                               slots  cells held or asked for                                                                    ││
-││    ← → · f     events: next log (or its title)       cpu    cores used / cores its slots stand for   MACHINE                                           ││
-┕│    r           events: every event as logged                (a soft limit)                             load       the 1-minute load average / cores    ││
+┏│    pgup pgdn   a page                              SLOTS                                             PAGES                                             ││
+┃│    home end    first · last row, top · bottom        One block per slot; the colour is its owner.      2 · 3        lanes · processes (SLOTS'          ││
+▕│    tab         next panel, by columns                Slots budget scheduling, not CPU or memory.                    border)                            ││
+┃│                (shift-tab: back)                     manual · auto  saved or computed capacity         ▶️ 🗓️ ✅ 💤  active planned landed parked       ││
+┃│    click       a row, a panel, a footer hint (as     draining N     held above a lowered capacity      👻 ⌛        owner gone · past its TTL          ││
+┃│                its key)                                                                                ❔ 📦        unowned process · resource         ││
+┃│    wheel       scroll the panel under the          QUEUE                                               Links in DETAILS open a page.                   ││
+┃│                pointer                               slots  cells held or asked for                                                                    ││
+┃│    ← → · f     events: next log (or its title)       cpu    cores used / cores its slots stand for   MACHINE                                           ││
+┗│    r           events: every event as logged                (a soft limit)                             load       the 1-minute load average / cores    ││
 ╭│    /           events: text filter (esc clears)      time   running or waiting for                                (not CPU %)                          ││
 ││    1 2 3       overview · lanes · processes          pid    lease owner                                mem        the kernel's memory pressure:        ││
 ││    enter · a   the row's actions (right-click)       The bar turns red above 1.5× its share and                   normal, warning, critical (Linux:    ││

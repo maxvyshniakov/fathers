@@ -168,18 +168,19 @@ class FocusTests(unittest.TestCase):
         rows = ["".join(cell[0] for cell in row) for row in canvas.cells]
         self.assertEqual(("╭", "╮", "╰", "╯"), (rows[0][0], rows[0][39], rows[9][0], rows[9][39]), "QUEUE")
         self.assertEqual(("│", "─"), (rows[5][0], rows[9][20]), "QUEUE")
-        # fathers#139: the focused panel's top and bottom are heavy rules, its sides light
-        self.assertEqual(("┍", "┑", "┕", "┙"), (rows[0][40], rows[0][79], rows[9][40], rows[9][79]), "DETAILS")
-        self.assertEqual(("│", "━"), (rows[5][40], rows[9][60]), "DETAILS")
+        # fathers#139, fathers#165: the focused panel's frame is heavy on all four sides, corners too
+        self.assertEqual(("┏", "┓", "┗", "┛"), (rows[0][40], rows[0][79], rows[9][40], rows[9][79]), "DETAILS")
+        self.assertEqual(("┃", "┃", "━", "━"), (rows[5][40], rows[5][79], rows[0][60], rows[9][60]), "DETAILS")
         self.assertEqual(("╭", "╮"), (rows[10][0], rows[10][79]))
-        self.assertFalse(set("┏┓┗┛┃") & set("".join(rows)), "no heavy sides or corners")
+        rested = "".join(row[:40] for row in rows[:10]) + "".join(rows[10:])
+        self.assertFalse(set("┏┓┗┛┃━┍┑┕┙") & set(rested), "the others: light and rounded")
         self.assertEqual({"accent"}, {cell[1] for cell in (canvas.cells[0][40], canvas.cells[0][79],
                                                             canvas.cells[5][40], canvas.cells[9][60])})
         self.assertEqual({"frame"}, {cell[1] for cell in (canvas.cells[0][0], canvas.cells[5][39], canvas.cells[15][0])})
         lines = canvas.lines(True)
         blue = view.sgr("accent", False)
-        self.assertIn(blue + "┍", lines[0], "the focused corner in our blue")
-        self.assertIn(blue + "│", lines[5], "and its sides")
+        self.assertIn(blue + "┏", lines[0], "the focused corner in our blue")
+        self.assertIn(blue + "┃", lines[5], "and its sides")
         self.assertEqual("DETAILS", "".join(cell[0] for cell in canvas.cells[0][43:50]))
         self.assertEqual("title", canvas.cells[0][43][1], "the title in the foreground (bold), as on every panel")
 

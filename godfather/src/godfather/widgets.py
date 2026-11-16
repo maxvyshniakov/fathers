@@ -16,9 +16,15 @@ Placed = tuple[str, str, int, int, bool]  # (key, title, x, width, right-aligned
 Spec = tuple[str, str, int, bool, int]  # (key, title, width (0: the flexible one), right-aligned, drop priority)
 Value = Union[str, Part, list[Part]]
 
-# A panel's corners and its top and bottom rule: at rest rounded and light; focused, heavy rules (fathers#139)
-REST_FRAME, FOCUS_FRAME = ("╭╮╰╯", "─"), ("┍┑┕┙", "━")
-SELECTED_FRAME = "┃"  # the left frame beside a selected row, heavy in the row's colour (#15); # on ASCII
+# A panel's corners, its top and bottom rule and its sides: at rest rounded and light; focused, heavy all round
+# (fathers#139, fathers#165)
+REST_FRAME, FOCUS_FRAME = ("╭╮╰╯", "─", "│"), ("┏┓┗┛", "━", "┃")
+# A selected row's marker on each frame, in the row's colour (#15): a bar at the cell's inner edge, leaning toward the
+# row so it never reads as a focused frame's centred `┃` (fathers#165, owner); `>` `<` on ASCII (tui.ASCII)
+SELECTED_FRAME = ("▕", "▏")
+# A tick of rule between two border labels two cells apart (fathers#165, owner): half segments meeting mid-gap,
+# light and heavy (focused); `-` on ASCII
+HALF_RULES = {False: "╶╴", True: "╺╸"}
 # A scrollbar's thumb (#15): a whole cell, a cell's lower half (where it starts), its upper half (where it ends);
 # # on an ASCII terminal
 SCROLL_THUMB, THUMB_LOWER, THUMB_UPPER = "┃", "╻", "╹"
@@ -47,19 +53,19 @@ class Panel:
         return bool(self.name) and self.name == self.canvas.focus
 
     def frame(self, title: str = "", note: str = "") -> Panel:
-        """A rounded light frame in the frame token. The focused panel's is in the accent blue and its top and bottom
-        borders are heavy rules (fathers#139: `┍━━┑`, `=` on ASCII), so focus shows without colour too; its sides stay
-        light, the heavy `┃` being a selected row's. The title is set into the top border at x + 2, a note on its
-        right."""
+        """A rounded light frame in the frame token. The focused panel's is in the accent blue and heavy on all four
+        sides (fathers#139, fathers#165: `┏━┓ ┃ ┗━┛`, `+=+ # +=+` on ASCII), so focus shows without colour too; a
+        selected row's `▕ ▏` (SELECTED_FRAME) lean toward it in its colour. The title is set into the top border at
+        x + 2, a note on its right."""
         canvas, (y, x, height, width) = self.canvas, self.rect
         if height < 2 or width < 6:
             return self
         style = "accent" if self.focused else "frame"
-        (top_left, top_right, bottom_left, bottom_right), rule = FOCUS_FRAME if self.focused else REST_FRAME
+        (top_left, top_right, bottom_left, bottom_right), rule, side = FOCUS_FRAME if self.focused else REST_FRAME
         canvas.put(y, x, top_left + rule * (width - 2) + top_right, style)
         for row in range(y + 1, y + height - 1):
-            canvas.put(row, x, "│", style)
-            canvas.put(row, x + width - 1, "│", style)
+            canvas.put(row, x, side, style)
+            canvas.put(row, x + width - 1, side, style)
         canvas.put(y + height - 1, x, bottom_left + rule * (width - 2) + bottom_right, style)
         after = canvas.put(y, x + 2, f" {title} ", "title", width - 4) if title else x + 2
         if note and x + width - 2 - text_width(note) - 2 > after:
@@ -122,13 +128,26 @@ class Panel:
                 glyph = SCROLL_THUMB if upper and lower else THUMB_LOWER if lower else THUMB_UPPER
                 self.canvas.put(top + row, column, glyph, "text" if self.name in self.canvas.glow else "dim")
 
-    def mark(self, row: int, style: str, tint: Union[bool, str] = True, marker: str = SELECTED_FRAME) -> None:
+    def mark(self, row: int, style: str, tint: Union[bool, str] = True) -> None:
         """A selected row: its background between the frames (a holder's own tint, or the neutral selection) and
-        both frames at that row heavy in its colour: no cursor glyph."""
+        both frames at that row a bar leaning toward the row, in its colour (SELECTED_FRAME): no cursor glyph."""
         x, width = self.rect.x, self.rect.width
         self.canvas.select(row, x + 1, x + width - 1, tint)
-        for frame in (x, x + width - 1):
+        for frame, marker in zip((x, x + width - 1), SELECTED_FRAME):
             self.canvas.put(row, frame, marker, style)
+
+    def gap(self, start: int, end: int) -> None:
+        """The top border's cells from `start` up to `end`, between two labels set into it (fathers#165): a space each
+        side of the rule where there are three or more, half segments meeting in the middle where two
+        (`waited╶╴outcome`), one rule cell where one, so a tick of rule always shows between labels."""
+        size, canvas, y = end - start, self.canvas, self.rect.y
+        rule, style = (FOCUS_FRAME if self.focused else REST_FRAME)[1], "accent" if self.focused else "frame"
+        if size >= 3:
+            canvas.put(y, start, " ", "text")
+            canvas.put(y, start + 1, rule * (size - 2), style)
+            canvas.put(y, end - 1, " ", "text")
+        elif size > 0:
+            canvas.put(y, start, HALF_RULES[self.focused] if size == 2 else rule, style)
 
     def centre(self, lines: list[Part]) -> None:
         """Lines in the middle of the panel, each centred: a spinner and its word."""
@@ -256,6 +275,7 @@ class Table:
         (x + 3), the other labels over their columns, `gutter` in, in the foreground on a focused panel."""
         panel.frame()
         canvas, (y, x, _, width) = panel.canvas, panel.rect
+        spans: list[tuple[int, int]] = []
         for index, (_, label, column, size, right) in enumerate(self.placed):
             value = title if index == 0 else label.lower()
             if not value:  # a column too narrow for a label (EVENTS' one-cell source mark)
@@ -264,6 +284,9 @@ class Table:
             canvas.put(y, start - 1, " ", "text")
             canvas.put(y, start, value, "title" if index == 0 else "text" if panel.focused else "dim", size)
             canvas.put(y, min(x + width - 2, start + min(size, text_width(value))), " ", "text")
+            spans.append((start, start + min(size, text_width(value))))
+        for (_, end), (start, _) in zip(spans, spans[1:]):  # a tick of rule between every two labels
+            panel.gap(end, start)
 
     def row(self, canvas: Canvas, y: int, x: int, values: dict[str, Value]) -> None:
         """One row from column x: each value (text, a (text, style) part or a list of parts) cut to its column,
