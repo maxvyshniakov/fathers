@@ -34,11 +34,13 @@ class Readiness:
     host: dict[str, Any]
     blocked: str | None
     timestamp: str
+    # The Git common directory of the configuration's repository, whose lanes the cap counts (fathers#149).
+    common_dir: str | None = None
 
     @property
     def planned_or_active(self) -> tuple[state.Record, ...]:
-        """Records in either state that counts against the lifetime lane cap."""
-        return tuple(state.occupying(list(self.records)))
+        """This repository's records in either state that counts against the lifetime lane cap."""
+        return tuple(state.occupying(state.of_project(list(self.records), self.common_dir)))
 
     @property
     def can_start(self) -> bool:
@@ -70,13 +72,14 @@ class Project:
             raise LaneError(f'{self._queue_path}: {error}') from None
         settings, entries = queue.parse_queue(text, self._queue_path)
         records = self._store.lanes(strict=True)
-        states = queue.queue_states(entries, records)
-        decision = admission.evaluate(self.config, records)
+        common = admission.running_common(self.config)
+        states = queue.queue_states(entries, records, common)
+        decision = admission.evaluate(self.config, records, common)
         cap, source, machine = decision.cap, decision.source, decision.machine
         blocked = decision.refusals[0] if decision.refusals else None
         return Readiness(self._store.directory, self._queue_path, text, settings, tuple(entries), tuple(records),
                          tuple(states), next((entry for entry, reason in states if reason is None), None),
-                         cap, source, machine, blocked, journal.now())
+                         cap, source, machine, blocked, journal.now(), common)
 
     def update_queue(self, policy: Callable[[Readiness], QueueUpdate | None]) -> str | None:
         """Run project policy under the shared queue lock; validate and atomically persist its proposal."""

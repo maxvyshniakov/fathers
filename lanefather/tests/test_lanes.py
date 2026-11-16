@@ -101,6 +101,116 @@ class StartTests(LaneCase):
         self.lane("land", "second")
 
 
+class ProjectCapTests(LaneCase):
+    """fathers#149: the lane cap counts the lanes of one repository; another project's lanes in the same state
+    directory count only toward an explicit global ceiling."""
+
+    def foreign(self, *ids: str, claims: tuple[str, ...] = ("a/**",)) -> None:
+        """Active lanes of another repository in the shared state directory, claiming the paths the tests claim."""
+        self.state.mkdir(parents=True, exist_ok=True)
+        for lane_id in ids:
+            (self.state / f"{lane_id}.json").write_text(json.dumps({
+                "id": lane_id, "ticket": "7", "branch": f"lane/{lane_id}", "base": "main", "base_sha": "0" * 40,
+                "claims": list(claims), "after": [], "common_dir": str(self.tmp / "data-grid" / ".git"),
+                "integration": None, "worktree": str(self.tmp / "data-grid" / lane_id), "status": "active",
+                "created": "2026-11-13T09:00:00Z", "scratch": [], "overrides": [], "rules": []}))
+
+    def test_another_projects_lanes_neither_fill_the_cap_nor_hold_claims(self):
+        self.foreign("dg-1", "dg-2", "dg-3")
+        self.assertIn("0 of 3 lanes planned or active", self.lane("list"))
+        for index, claim in enumerate(("a/**", "b/**", "c/**")):
+            self.start(f"l{index}", claim)
+        listed = json.loads(self.lane("list", "--json"))
+        self.assertEqual((listed["active"], listed["cap"]), (3, 3))
+        self.assertEqual(listed["global"], {"active": 6, "cap": None, "cap_source": None})
+        output = self.start("l3", "d/**", ok=False)
+        self.assertIn("3 lanes are planned or active in straylight (l0, l1, l2); the cap is 3 (", output)
+        self.assertNotIn("dg-1", output)
+
+    def test_an_explicit_global_ceiling_counts_every_project_and_lists_them_grouped(self):
+        self.foreign("dg-1", "dg-2", "dg-3")
+        self.env["LANEFATHER_GLOBAL_CAP"] = "4"
+        self.start("l0", "b/**")
+        output = self.start("l1", "c/**", ok=False)
+        self.assertIn("4 lanes are planned or active across projects (data-grid: dg-1, dg-2, dg-3; straylight: l0); "
+                      "the global ceiling is 4 (LANEFATHER_GLOBAL_CAP)", output)
+        self.assertNotIn("the cap is 3", output)
+        self.assertIn("1 of 3 lanes planned or active (cap derived from 6 cores and 20 GB of memory); "
+                      "4 of 4 across projects (LANEFATHER_GLOBAL_CAP)", self.lane("list"))
+        self.start("l1", "c/**", extra=("--force-reason", "owner allowed a fifth lane"))
+        for value in ("many", "0"):
+            self.env["LANEFATHER_GLOBAL_CAP"] = value
+            output = self.lane("list")
+            self.assertIn(f"LANEFATHER_GLOBAL_CAP={value!r} is not a positive whole number; no global ceiling",
+                          output)
+            self.assertNotIn("across projects", output)
+
+    def test_the_project_sets_its_cap_below_the_environment(self):
+        path = self.integration / ".lanefather.toml"
+        path.write_text(path.read_text() + "\n[admission]\ncap = 1\n")
+        self.start("l0", "a/**")
+        output = self.start("l1", "b/**", ok=False)
+        self.assertIn("the cap is 1 (.lanefather.toml [admission] cap; derived: 3)", output)
+        self.env["LANEFATHER_CAP"] = "2"
+        self.start("l1", "b/**")
+        self.assertIn("the cap is 2 (LANEFATHER_CAP override; derived: 3)", self.start("l2", "c/**", ok=False))
+        self.env["LANEFATHER_CAP"] = "typo"
+        self.assertIn("LANEFATHER_CAP='typo' is not a positive whole number; the cap is 1", self.lane("list"))
+
+    def test_the_queue_ignores_another_projects_claims(self):
+        self.foreign("dg-1", claims=("src/**",))
+        self.write(self.state.parent, "queue/queue.toml", '[[lane]]\nid="next"\nticket=2\nclaims=["src/**"]\n')
+        self.lane("next", "--start")
+        self.assertEqual(self.record("next")["status"], "planned")
+
+    def test_readiness_and_list_count_the_repository_they_run_in_not_the_configs(self):
+        """Review of fathers#149: a configuration outside the repository named no repository, so every project's
+        lanes counted toward this one's cap."""
+        import contextlib
+        from unittest.mock import patch
+
+        from lanefather import config
+        from lanefather.project import Project
+        self.foreign("dg-1", "dg-2", "dg-3", claims=("other/**",))
+        self.write(self.state.parent, "queue/queue.toml", '[[lane]]\nid="next"\nticket=2\nclaims=["src/**"]\n')
+        elsewhere = self.write(self.tmp / "elsewhere", ".lanefather.toml",
+                               (self.integration / ".lanefather.toml").read_text())
+        with patch.dict("os.environ", self.env, clear=True), contextlib.chdir(self.integration):
+            readiness = Project(config.load(elsewhere)).readiness()
+        self.assertTrue(readiness.can_start, readiness.blocked)
+        self.assertEqual(readiness.planned_or_active, ())
+        # list outside any repository counts the repository its configuration is in.
+        self.env["LANEFATHER_CONFIG"] = str(self.integration / ".lanefather.toml")
+        self.assertIn("0 of 3 lanes planned or active", self.lane("list", cwd=self.tmp))
+
+    def test_a_cap_in_other_digits_warns_instead_of_crashing(self):
+        for name in ("LANEFATHER_CAP", "LANEFATHER_GLOBAL_CAP"):
+            with self.subTest(name):
+                self.env[name] = "\u00b2"
+                output = self.lane("list")
+                self.assertIn(f"{name}='\u00b2' is not a positive whole number", output)
+                self.start(f"lane-{name[11:].lower()}", f"{name.lower()}/**")
+                del self.env[name]
+
+    def test_the_global_ceiling_tells_two_repositories_of_one_name_apart(self):
+        self.foreign("dg-1")
+        (self.state / "svc.json").write_text(json.dumps(dict(
+            json.loads((self.state / "dg-1.json").read_text()), id="svc",
+            common_dir=str(self.tmp / "other" / "data-grid" / ".git"))))
+        self.env["LANEFATHER_GLOBAL_CAP"] = "2"
+        output = self.start("l0", "b/**", ok=False)
+        self.assertIn(f"data-grid ({self.tmp / 'data-grid'}): dg-1; "
+                      f"data-grid ({self.tmp / 'other' / 'data-grid'}): svc", output)
+
+    def test_check_widens_claims_without_warning_of_another_repositorys_lane(self):
+        self.foreign("dg-1", claims=("lib/**",))
+        worktree = self.created("mine", "native/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nmine\n"})
+        output = self.lane("check", "mine")
+        self.assertIn("lib/api.txt", self.record("mine")["claims"])
+        self.assertNotIn("overlaps the claims of lane dg-1", output)
+
+
 class BriefRulesTests(LaneCase):
     """B4 start composes the brief from the rule snippets whose paths the claims touch."""
 

@@ -125,13 +125,14 @@ def project_entry(entry: dict[str, Any]) -> dict[str, Any]:
     if not directory.is_dir():
         raise LaneError(f"state directory {directory} not found")
     common = entry.get("common_dir") if isinstance(entry.get("common_dir"), str) else None
-    # A state directory several projects share holds each one's lanes: a project reports those of its repository.
+    # A state directory several projects share holds each one's lanes: a project reports those of its repository,
+    # and a record that names none, as the cap counts it (state.of_project).
     # A record a write cut short cannot say its repository: every project of the directory lists it (fathers#129).
     damaged: list[Path] = []
-    records = [r for r in state.Store(project, directory=directory).lanes(damaged=damaged)
-               if common is None or r.get("common_dir") == common]
+    everywhere = state.Store(project, directory=directory).lanes(damaged=damaged)
+    records = state.of_project(everywhere, common)
     try:
-        decision = admission.evaluate(project, records)
+        decision = admission.evaluate(project, everywhere, common)
         cap, source = decision.cap, decision.source
     except LaneError as error:
         cap, source = host.lane_cap(project)

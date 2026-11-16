@@ -15,6 +15,7 @@ from typing import Any, cast
 
 from . import config, host, slots, state
 from .errors import LaneError
+from .gitops import common_dir, git_ok, main_checkout
 
 TIMEOUT = 5.0
 MAX_OUTPUT = 65536
@@ -26,6 +27,11 @@ class Decision:
     source: str
     machine: dict[str, Any]
     refusals: tuple[str, ...]
+    # The planned and active lanes of the repository the cap counts (fathers#149), and of every project together
+    # with the global ceiling and its variable, when one is set.
+    occupying: tuple[state.Record, ...] = ()
+    everywhere: tuple[state.Record, ...] = ()
+    ceiling: tuple[int, str] | None = None
 
 
 def transport(command: str, request: dict[str, Any]) -> bytes:
@@ -104,7 +110,7 @@ def request_for(project: config.Config, occupied: int) -> dict[str, Any]:
         if not math.isfinite(value) or value < 0:
             raise LaneError(f"lifetime admission unavailable: invalid {name} override")
         samples[field] = {"value": value, "source": source}
-    cap = project.lookup("CAP")
+    cap = host.cap_override(project)
     return {"v": 1, "kind": "lane-lifetime", "scope": str(state.Store(project).directory.resolve()),
             "occupied": occupied, "cap_override": {"value": cap[1], "source": cap[0]} if cap else None,
             "sample_overrides": samples}
@@ -182,10 +188,48 @@ def response_for(raw: bytes, request: dict[str, Any]) -> dict[str, Any]:
     return response
 
 
-def evaluate(project: config.Config, records: list[state.Record]) -> Decision:
+def repository_of(path: str | os.PathLike[str]) -> str | None:
+    """The Git common directory of the repository `path` is in; None outside one, or when Git cannot be run."""
+    try:
+        return common_dir(path) if git_ok(path, "rev-parse", "--git-dir") else None
+    except OSError:
+        return None
+
+
+def running_common(project: config.Config) -> str | None:
+    """The repository whose lanes a read of the cap counts (review of fathers#149): the one the command runs in, as
+    start registers there; outside any repository, the one the configuration's file is in; else None (every lane
+    counts)."""
+    return repository_of(os.getcwd()) or (repository_of(project.path.parent) if project.path else None)
+
+
+def grouped(records: list[state.Record]) -> str:
+    """The lanes by repository: `data-grid: a, b; sid-kit: c`. Two repositories of one name show their paths."""
+    groups: dict[str | None, list[str]] = {}
+    for record in records:
+        groups.setdefault(record.get("common_dir"), []).append(record["id"])
+    names = {common: state.project_name(common) for common in groups}
+    shared = {name for name in names.values() if list(names.values()).count(name) > 1}
+
+    def label(common: str | None) -> str:
+        name = names[common]
+        return f"{name} ({main_checkout(common)})" if common and name in shared else name
+
+    return "; ".join(f"{label(common)}: {', '.join(groups[common])}"
+                     for common in sorted(groups, key=lambda c: (names[c], c or "")))
+
+
+def evaluate(project: config.Config, records: list[state.Record], common: str | None = None, *,
+             cap_exempt: bool = False) -> Decision:
+    """Whether one more lane of the repository whose Git common directory is `common` may be registered: the cap
+    counts that repository's planned and active lanes (all of `records` when `common` is None), the global ceiling
+    every project's. `cap_exempt` admits a lane outside both (a fix lane in its landed parent's place, fathers#45);
+    disk and load still apply."""
     if project.admission_provider not in ("legacy", "slotfather"):
         raise LaneError("unknown lifetime admission provider")
-    active = state.occupying(records)
+    active = state.occupying(state.of_project(records, common))
+    everywhere = state.occupying(records)
+    ceiling = host.global_cap(project)
     if project.admission_provider == "legacy":
         cap, source = host.lane_cap(project)
         machine = host.host(project)
@@ -213,9 +257,13 @@ def evaluate(project: config.Config, records: list[state.Record]) -> Decision:
         for warning in answer["warnings"]:
             print(f"lane: warning: {warning}; the cap is {cap}", file=sys.stderr)
     refusals: list[str] = []
-    if "cap" in codes:
-        refusals.append(f"{len(active)} lanes are planned or active ({', '.join(r['id'] for r in active)}); "
+    if "cap" in codes and not cap_exempt:
+        where = f" in {state.project_name(common)}" if common else ""
+        refusals.append(f"{len(active)} lanes are planned or active{where} ({', '.join(r['id'] for r in active)}); "
                         f"the cap is {cap} ({source}): land one to make room under the lane cap")
+    if ceiling and len(everywhere) >= ceiling[0] and not cap_exempt:
+        refusals.append(f"{len(everywhere)} lanes are planned or active across projects ({grouped(everywhere)}); "
+                        f"the global ceiling is {ceiling[0]} ({ceiling[1]}): land one to make room")
     if machine["disk_free_gb"] < host.MIN_DISK_GB:
         refusals.append(f"free disk is {machine['disk_free_gb']:.0f} GB, under {host.MIN_DISK_GB} GB: "
                         f"run {project.command} done on landed lanes")
@@ -223,4 +271,4 @@ def evaluate(project: config.Config, records: list[state.Record]) -> Decision:
         limit = (f"{host.LOAD_FACTOR}x{machine['cores']} cores" if project.admission_provider == "legacy"
                  else f"the Slotfather admission limit {machine['load_limit']:.1f}")
         refusals.append(f"load15 is {machine['load15']:.1f}, above {limit}")
-    return Decision(cap, source, machine, tuple(refusals))
+    return Decision(cap, source, machine, tuple(refusals), tuple(active), tuple(everywhere), ceiling)

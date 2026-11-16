@@ -1,7 +1,7 @@
 # Checks
 
-The installed commands use only Python's standard library (3.9+; Lanefather 3.11+). Ruff, Pyright, Bun and Repo-Kit
-are development tools only.
+The installed commands use only Python's standard library (3.9+; Lanefather 3.11+: each package's
+`requires-python`). Ruff, Pyright, Bun and Repo-Kit are development tools only.
 
 ## Focused
 
@@ -9,20 +9,23 @@ are development tools only.
   `python3 -m unittest discover -s tests -t tests -p 'test_<area>.py'`).
 - One package's lint gate, from its directory: `python3 tools/check.py` (about 10 s).
 - The root tools: `python3 tools/checks.py run tools`. Any check by name: `python3 tools/checks.py run "<name>"`.
+- `common/`'s tests (the CLI convention's helper and the root entry points), from the root:
+  `python3 -m unittest discover -s common/tests`.
 
 ## Full gate
 
 - `bun run verify` (Repo-Kit, [repo-kit.config.mjs](../../repo-kit.config.mjs)) runs the checks the changes since
   `origin/main` select ([tools/checks.py](../../tools/checks.py)): `<package> lint` and `<package> tests` for each
-  changed package (every package for `common/`; Slotfather's sources also select `godfather tests`), `common` for
-  `common/` and `install.py`, and always `tools`, `kit` (`repo-kit check`) and `test hygiene`. A path no rule knows
-  selects everything, and so does a tree without changes. `FATHERS_CHECKS=all bun run verify` runs every check;
-  `FATHERS_CHECK_BASE=<ref>` names another base.
+  changed package (every package for `common/`; Slotfather's sources also select `godfather tests`), `common lint`
+  and `common tests` for `common/` and `install.py`, and always `tools`, `kit` (`repo-kit check`) and
+  `test hygiene`. A path no rule knows selects everything, and so does a tree without changes.
+  `FATHERS_CHECKS=all bun run verify` runs every check; `FATHERS_CHECK_BASE=<ref>` names another base.
 - It leases two slots itself and runs the steps side by side. Every check took 2026-11-13: lint gates 2 to 14 s,
   Godfather's tests 1.5 min, Junkfather's 2, Slotfather's 4-5, Lanefather's 13-18 (the whole run: as long as Lanefather's).
 - The pre-push hook runs it on the pushed commits and a lane's `lanefather check` on the lane's diff
   ([orchestration](orchestration.md)); do not run it again by hand right before either.
-- CI runs each package's lint gate and tests on its own workflow ([publishing](publishing.md#ci)).
+- CI runs the same named checks (`<package> lint`, `<package> tests`) through one reusable workflow, on each
+  package's Python floor and the newest Python ([publishing](publishing.md#ci)).
 
 ## Lint gate
 

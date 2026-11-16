@@ -104,5 +104,79 @@ class FixLaneTests(LaneCase):
         self.assertEqual(self.verify_runs()[-1], "FULL structure,lib,native,host-journeys")
 
 
+class FixLaneCapTests(LaneCase):
+    """fathers#45 (a): a fix lane takes its landed, kept parent's place, so a full cap does not stall the fix round;
+    new queue work is still refused, and disk and load still apply."""
+
+    def landed_with_findings(self) -> None:
+        self.review_text.write_text(TWO_FINDINGS)
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.lane("land", "a")
+        self.lane("review", "a")
+        for index, claim in enumerate(("b/**", "c/**", "d/**")):
+            self.start(f"l{index}", claim)
+
+    def test_at_a_full_cap_the_fix_lane_registers_while_next_start_is_refused(self):
+        self.landed_with_findings()
+        self.write(self.state.parent, "queue/queue.toml", '[[lane]]\nid="next"\nticket=2\nclaims=["e/**"]\n')
+        self.assertIn("3 lanes are planned or active", self.lane("next", "--start", ok=False))
+        self.lane("review", "a", "--fix-lane")
+        fix = json.loads((self.state / "a-review-fixes.json").read_text())
+        self.assertEqual((fix["review_fix_of"], fix["cap_source"]), ("a", "fix-lane of a"))
+        self.assertIn("start a-review-fixes", ledger := (self.state / "ledger.log").read_text())
+        self.assertIn("(fix-lane of a)", ledger)
+        started = [json.loads(line) for line in self.events.read_text().splitlines()
+                   if '"lane.started"' in line and '"a-review-fixes"' in line]
+        self.assertEqual(started[-1]["details"]["cap_source"], "fix-lane of a")
+        # The fix lane now counts like any planned or active lane: new work stays refused.
+        self.assertIn("4 lanes are planned or active", self.lane("next", "--start", ok=False))
+
+    def test_disk_still_refuses_a_fix_lane(self):
+        self.landed_with_findings()
+        self.env["LANEFATHER_DISK_FREE_GB"] = "120"
+        output = self.lane("review", "a", "--fix-lane", ok=False)
+        self.assertIn("free disk is 120", output)
+        self.assertNotIn("lanes are planned or active", output)
+        self.assertFalse((self.state / "a-review-fixes.json").exists())
+
+    def test_load_still_refuses_a_fix_lane_and_the_global_ceiling_does_not(self):
+        self.landed_with_findings()
+        self.env.update(LANEFATHER_LOAD15="9.5", LANEFATHER_GLOBAL_CAP="3")
+        output = self.lane("review", "a", "--fix-lane", ok=False)
+        self.assertIn("load15 is 9.5", output)
+        self.assertNotIn("lanes are planned or active", output)
+        self.env["LANEFATHER_LOAD15"] = "0.1"
+        self.lane("review", "a", "--fix-lane")
+        self.assertEqual(json.loads((self.state / "a-review-fixes.json").read_text())["cap_source"],
+                         "fix-lane of a")
+
+    def test_only_a_landed_parent_holding_the_worktree_exempts_a_lane(self):
+        from unittest.mock import patch
+
+        from support import project
+
+        from lanefather import lanes
+        self.state.mkdir(parents=True)
+        worktree = str(self.tmp / "kept")
+        for status, expected in (("landed", "p"), ("released", "p"), ("active", None), ("done", None)):
+            with self.subTest(status):
+                (self.state / "p.json").write_text(json.dumps({"id": "p", "status": status, "worktree": worktree}))
+                with patch.dict("os.environ", self.env, clear=True), project(self.integration):
+                    self.assertEqual(lanes.fix_parent({"review_fix_of": "p", "worktree": worktree}), expected)
+                    self.assertIsNone(lanes.fix_parent({"review_fix_of": "p", "worktree": str(self.tmp / "x")}))
+
+    def test_another_repositorys_claim_keeps_no_file_out_of_the_fix_lane(self):
+        self.landed_with_findings()
+        (self.state / "dg-1.json").write_text(json.dumps({
+            "id": "dg-1", "ticket": "7", "branch": "lane/dg-1", "base": "main", "claims": ["lib/**"], "after": [],
+            "common_dir": str(self.tmp / "data-grid" / ".git"), "worktree": None, "status": "planned"}))
+        self.env["LANEFATHER_CAP"] = "9"
+        output = self.lane("review", "a", "--fix-lane")
+        self.assertNotIn("stays out of the fix lane's claims", output)
+        self.assertIn("lib/api.txt", json.loads((self.state / "a-review-fixes.json").read_text())["claims"])
+
+
 if __name__ == "__main__":
     unittest.main()
