@@ -16,7 +16,9 @@ Definitions: [glossary](../GLOSSARY.md). Naming and wire aliases: [terminology](
 | `lineage` | Process trees and sessions on a table already read: parents, ancestors, descendants and the one session rule; it runs nothing. |
 | `state` | Queue locking, atomic files, bounded journals and persisted schema contracts; it imports no admission code (no `leases`, `schedule`, `runtype`, `events` or `platform`). |
 | `entry` | A queue entry: its persisted fields, the accessors that read them whoever wrote the file, its phase, and the one definition of each transition (new request, grant and resume, yield, priority change, outcome). Pure: callers read and write the files and log. |
-| `schedule` | Queue ranking, backfill, runtime estimates and cooperative-yield decisions. |
+| `schedule` | The queue's policy (fathers#35): ranking, backfill, reservations, yield and idle asks, the memory gate and the forecast, on entries, capacity, order settings, a moment, the overtaking window and an estimate its callers hand it. It reads no file, environment or clock; `free_at()` is the one walk of when slots free by expected ends. |
+| `estimates` | Run-time estimates from the history's finished runs (`Estimates`), their `estimates.json` cache and `estimator()`, which asks a run type's expectations first. Loaded only when an estimate is first asked (`leases.estimator()`), off the admission path. |
+| `runtype` | Expected durations per run type (fathers#106) with their own cache, outliers and trends; `kind()` and `family()`, the command kind and label family the estimates key requests by. |
 | `leases` | Taking, granting, releasing, reaping and inheriting leases; command execution. |
 | `usage` | Process-tree accounting and machine sampling while work runs. |
 | `lane_admission` | Stateless versioned lifetime lane policy and JSON validation; no execution state. |

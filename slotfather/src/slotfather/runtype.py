@@ -19,13 +19,60 @@ import contextlib
 import datetime
 import fcntl
 import json
+import os
 from pathlib import Path
+import re
 from typing import Any, Iterable, cast
 
 from . import config as _config
 from . import entry as _entry
-from . import schedule as _schedule
 from . import state as _state
+
+
+# The names the run-time estimates group requests by (here, estimates.py, stats, askuse, tools/replay.py)
+
+def kind(command: str | None) -> str:
+    """The kind of check a command is: its program's name and first argument; a comma list counts its items, a path
+    keeps its last part, an option keeps its name, and a short option value follows it. `env` and VAR=value before
+    the program go; a runner's `run` keeps what it runs (`bun run build`, `uv run pytest`), and a shell's `-c`
+    script is the kind of the script's command (`sh -c bun run build`)."""
+    words = [w for w in (command or "").split()]
+    while words and (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]) or os.path.basename(words[0]) == "env"):
+        words.pop(0)  # env and VAR=value before the program
+    if not words:
+        return "?"
+    found = [os.path.basename(words[0]) or words[0]]
+    rest = words[1:]
+    if rest and found[0] in _config.SHELLS and re.fullmatch(r"-[a-z]*c", rest[0]) and len(rest) > 1:
+        return f"{found[0]} {rest[0]} {kind(' '.join(rest[1:]))}"[:60]
+    if len(rest) > 1 and rest[0] == "run" and not rest[1].startswith("-"):
+        return f"{found[0]} run {os.path.basename(rest[1].rstrip('/')) or rest[1]}"[:60]
+    if rest:
+        first = rest[0]
+        if first.startswith("-"):
+            found.append(first.split("=", 1)[0])
+            value = rest[1] if len(rest) > 1 and "=" not in first else ""
+            if value and not value.startswith("-"):
+                if "," in value:
+                    found.append(f"[{len([v for v in value.split(',') if v])}]")
+                elif len(value) <= 40 and "=" not in value:
+                    found.append(os.path.basename(value.rstrip("/")) or value)
+        elif "," in first:
+            found.append(f"[{len([v for v in first.split(',') if v])}]")
+        else:
+            found.append(os.path.basename(first.rstrip("/")) or first)
+    return " ".join(found)[:60]
+
+
+def family(label: str | None) -> str:
+    """A label without its ticket or agent id: lane-636-measure and lane-640-smoke-skip are both lane,
+    agent-a17b708a4e705e421 is agent, sid-kit-wt-646 is sid-kit-wt."""
+    label = (label or "").split(" · ")[0]  # a derived label (labels.py): its project, then the old rule
+    words = label.split("-")
+    for at, word in enumerate(words):
+        if at and any(c.isdigit() for c in word):
+            return "-".join(words[:at])
+    return label or ""
 
 RECENT = 20  # runs of a key that make its expected run
 LEAST = 3  # fewer runs than this: the next, broader key
@@ -62,7 +109,7 @@ def project_of(item: dict[str, Any]) -> str:
     derived = item.get("label_derived")
     if isinstance(derived, str) and derived:
         return derived.split(SEP)[0]
-    return _schedule.family(item.get("label"))
+    return family(item.get("label"))
 
 
 def keys(item: dict[str, Any]) -> list[str]:
@@ -76,7 +123,7 @@ def keys(item: dict[str, Any]) -> list[str]:
         if meta.get("plan"):
             found.append(SEP.join((project, phase, "plan " + meta["plan"])))
         found.append(SEP.join((project, phase)))
-    found += [SEP.join((label, _schedule.kind(item.get("cmd")))), label]
+    found += [SEP.join((label, kind(item.get("cmd")))), label]
     return found
 
 
@@ -112,7 +159,7 @@ _cache: dict[str, dict[str, list[dict[str, Any]]]] = {}
 
 def cached(directory: Path) -> dict[str, list[dict[str, Any]]]:
     """series() of the history's end, kept in this process and in runtypes.json, keyed by the history files' size and
-    modification time (as schedule.cached_estimates()): a status look every second reads the small file."""
+    modification time (as estimates.cached_estimates()): a status look every second reads the small file."""
     path = directory / "history.jsonl"
     stamp: list[Any] = []
     for part in (path.with_name(path.name + ".1"), path):

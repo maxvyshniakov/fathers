@@ -114,12 +114,13 @@ def expected(directory: Path, entries: list[dict[str, Any]], slots: int, other: 
     originals = {id(copy): e for copy, e in zip(waiters, waiting)}
     if not waiters:
         return {}
-    estimate = _schedule.estimator(directory)
+    estimate = _leases.estimator(directory)
+    window = _config.overtake_window()
     _schedule.fit(waiters, slots)
-    starts = _schedule.forecast(waiters, held, slots, moment, estimate, other, settings) \
+    starts = _schedule.forecast(waiters, held, slots, moment, estimate, other, settings, window) \
         if settings["order"] == "backfill" else {}
     found = _schedule.plan(waiters, held, slots, moment, estimate=estimate, other=other, reserve_head=True,
-                           settings=settings)
+                           settings=settings, window=window)
     # The order would start these now; memory may hold them back (grant()'s gate), with no start a forecast can tell.
     memory = _platform.memory_level() if found.grants else ("normal", None)
     used = sum(_entry.holds(e, slots) for e in held) + other
@@ -431,7 +432,8 @@ def available(directory: Path | None = None, label: str = "", command: str = "")
     other = sum(count for _, _, count in legacy)
     slots = int(basis["slots"])
     return _schedule.room(waiters, max(0, slots - held_slots(live, legacy, slots)),
-                          held, _schedule.estimator(directory), other, label=label, command=command, slots=slots)
+                          held, _leases.estimator(directory), other, _settings.order_settings(), label=label,
+                          command=command, slots=slots, moment=time.time(), window=_config.overtake_window())
 
 
 def size(maximum: int, cores: int, total: int, averages: tuple[float, float, float], held: int,
@@ -464,9 +466,10 @@ def advise(maximum: int | None = None, exclusive: bool = False, cores_now: int |
     slots = int(basis["slots"])
     held = sum(_entry.holds(e, slots) for e in holders) + other
     waiters = [e for e in live if _entry.is_waiting(e)]
-    estimate = _schedule.estimator(_config.state_dir())
-    waiting = bool(waiters) and _schedule.room(waiters, max(0, slots - held), holders, estimate, other, label=label,
-                                               command=command, slots=slots) == 0
+    estimate = _leases.estimator(_config.state_dir())
+    waiting = bool(waiters) and _schedule.room(waiters, max(0, slots - held), holders, estimate, other,
+                                               _settings.order_settings(), label=label, command=command, slots=slots,
+                                               moment=time.time(), window=_config.overtake_window()) == 0
     found = size(maximum or slots, cores_now or _config.cores(), slots, averages or _platform.loads(), min(held, slots), waiting,
                  exclusive)
     found["run_estimate"] = estimate({"label": label, "cmd": command}) if command else None

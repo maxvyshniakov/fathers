@@ -119,20 +119,20 @@ def used_elsewhere(directory: Path, table: Table) -> int:
 
 
 def ask(directory: Path, live: list[tuple[Path, dict[str, Any]]], held: list[dict[str, Any]],
-        waiters: list[dict[str, Any]], estimate: _schedule.Estimate, other: int, settings: dict[str, Any]) -> None:
+        waiters: list[dict[str, Any]], estimate: _schedule.Estimate, other: int, settings: dict[str, Any],
+        slots: int, moment: float, window: float) -> None:
     """Writes the yield requests yield_asks() wants and withdraws the others. Under the queue lock. `settings` are
     the saved ones without this client's environment, so that every client's look asks alike (a waiter whose
-    client asks later or never says so on its entry)."""
+    client asks later or never says so on its entry); `slots`, `moment` and `window` are the look's (grant())."""
     paths = {id(e): path for path, e in live}
-    moment, slots = time.time(), _settings.total()
     wanted = _schedule.yield_asks(waiters, held, slots, moment, estimate, other, settings,
-                        asked=[e for e in held if _state.marker(paths[id(e)]).exists()])
+                        asked=[e for e in held if _state.marker(paths[id(e)]).exists()], window=window)
     asks = {id(h): w for h, w in wanted}
     # Idle leases (#12): a yieldable one is asked while a request waits that its slots would start.
     idle = [h for h in held if id(h) in paths and id(h) not in asks
             and _idle.idle_since(paths[id(h)], settings, moment) is not None]
     asks.update({id(h): w for h, w in _schedule.idle_asks(waiters, [h for h in held if id(h) not in asks], idle,
-                                                          slots, moment, estimate, other, settings)})
+                                                          slots, moment, estimate, other, settings, window)})
     for path, entry in live:
         place = _state.marker(path)
         if id(entry) in asks:
@@ -212,8 +212,9 @@ def ask_yield(pid: int, start: str, directory: Path | None = None) -> tuple[dict
                 continue
             behind = _schedule.rank_time(waiter, settings, moment) + _config.YIELD_BEHIND
             trial = _schedule.plan([*(e for e in ranked), _entry.trial_yielded(entry, behind)], held,
-                                   _settings.total(), moment, estimate=_schedule.estimator(directory),
-                                   other=used_elsewhere(directory, table), settings=settings)
+                                   _settings.total(), moment, estimate=estimator(directory),
+                                   other=used_elsewhere(directory, table), settings=settings,
+                                   window=_config.overtake_window())
             if any(g is waiter for g in trial.grants):
                 chosen = waiter
                 break
@@ -254,8 +255,8 @@ def yield_lease(path: Path, out=sys.stderr) -> bool:
             table = process_table(directory)
             held = [e for p, e in live if _entry.is_held(e) and p != path]
             waiters = [e for p, e in live if _entry.is_waiting(e)] + [_entry.trial_yielded(entry, behind)]
-            trial = _schedule.plan(waiters, held, _settings.total(), time.time(), estimate=_schedule.estimator(directory),
-                         other=used_elsewhere(directory, table), settings=settings)
+            trial = _schedule.plan(waiters, held, _settings.total(), time.time(), estimate=estimator(directory),
+                         other=used_elsewhere(directory, table), settings=settings, window=_config.overtake_window())
             if not any(e is asker for e in trial.grants):
                 asker = None
         if asker is None:  # it started, left or would still not start; the next look would withdraw the request
@@ -371,6 +372,19 @@ def run_above(ran: float, p90: Any) -> bool:
     return _runtype.above(ran, p90)
 
 
+def estimator(directory: Path) -> _schedule.Estimate:
+    """estimates.estimator(directory), whose module is imported only when plan() first asks for an estimate: `run`
+    with nothing ahead of it never does, which keeps the admission path's imports as they were (fathers#35)."""
+    loaded: list[_schedule.Estimate] = []
+
+    def estimate(entry: _schedule.Entry) -> float | None:
+        if not loaded:
+            from . import estimates as _estimates
+            loaded.append(_estimates.estimator(directory))
+        return loaded[0](entry)
+    return estimate
+
+
 def grant_now(directory: Path) -> None:
     """Grant what a settings change lets start, as a release does (settings.configure()'s `granted`); callers hold
     the queue lock."""
@@ -383,17 +397,18 @@ def grant(directory: Path, table: Table) -> str | None:
     live = reap(directory, table)
     held, waiters = _entry.split(e for _, e in live)
     paths = {id(e): path for path, e in live}
-    estimate = _schedule.estimator(directory)
+    estimate = estimator(directory)
     other = used_elsewhere(directory, table)
     slots = _settings.total()
     moment = time.time()
     settings = _settings.order_settings(directory)
+    window = _config.overtake_window()
     found = _schedule.plan(_schedule.fit(waiters, slots), held, slots, moment, estimate=estimate, other=other,
-                 settings=settings)
+                 settings=settings, window=window)
     # The head's reservation, kept on its entry so that the next look promises no later start; others hold none.
     # Every client keeps it by the shared settings, whatever its environment (shared_plan()).
     keeper = _schedule.shared_plan(found, waiters, held, slots, moment, estimate, other, settings,
-                                   _settings.order_settings(directory, environment=False))
+                                   _settings.order_settings(directory, environment=False), window)
     used = sum(_entry.holds(e, slots) for e in held) + other
     memory = _platform.memory_level() if found.grants else ("normal", None)
     gated = _schedule.memory_gate(found.grants, held, used, memory, settings)
@@ -433,7 +448,8 @@ def grant(directory: Path, table: Table) -> str | None:
         return short
     rest = [e for e in waiters if not any(e is g for g in found.grants)]
     with contextlib.suppress(OSError, _config.SlotError):
-        ask(directory, live, held + found.grants, rest, estimate, other, _settings.order_settings(directory, environment=False))
+        ask(directory, live, held + found.grants, rest, estimate, other, _settings.order_settings(directory, environment=False),
+            _settings.total(), time.time(), window)
     return found.reason
 
 

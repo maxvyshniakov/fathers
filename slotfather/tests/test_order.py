@@ -8,6 +8,8 @@ _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from slotfather import config as sf_config
 from slotfather import entry as sf_entry
 from slotfather import schedule as sf_schedule
+from slotfather import estimates as sf_estimates
+from slotfather import runtype as sf_runtype
 from slotfather import settings as sf_settings
 
 
@@ -232,14 +234,14 @@ class BackfillTests(PlanCase):
     def test_a_new_request_gets_no_slots_behind_the_head_unless_its_run_is_known_to_be_short(self):
         waiters = [waiter("gate", 6, -700)]
         with mock.patch.object(sf_config, "now", return_value=stamp(0)), mock.patch.object(time, "time", return_value=M):
-            self.assertEqual(0, sf_schedule.room(waiters, 5, self.held, runs(one=3600), settings=self.settings))
-            self.assertEqual(0, sf_schedule.room(waiters, 5))
+            self.assertEqual(0, sf_schedule.room(waiters, 5, self.held, runs(one=3600), settings=self.settings, moment=M))
+            self.assertEqual(0, sf_schedule.room(waiters, 5, moment=M))
             self.assertEqual(5, sf_schedule.room([waiter("gate", 6, -100)], 5, self.held, runs(one=3600),
-                                        settings=self.settings))
+                                        settings=self.settings, moment=M))
             self.assertEqual(5, sf_schedule.room(waiters, 5, self.held, runs(one=3600, mine=60), settings=self.settings,
-                                        label="mine", command="make mine"))
+                                        label="mine", command="make mine", moment=M))
             self.settings["fallback"] = 60
-            self.assertEqual(5, sf_schedule.room(waiters, 5, self.held, runs(one=3600), settings=self.settings))
+            self.assertEqual(5, sf_schedule.room(waiters, 5, self.held, runs(one=3600), settings=self.settings, moment=M))
 
 
 class CapacityChangeTests(PlanCase):
@@ -274,7 +276,7 @@ class CapacityChangeTests(PlanCase):
         self.assertEqual([], self.started([waiter("w", 1, -30)], [whole], slots=6))
         self.assertEqual(["w"], self.started([waiter("w", 1, -30)], [holder("four", 4, -60)], slots=6))
         with mock.patch.object(sf_config, "now", return_value=stamp(0)), mock.patch.object(time, "time", return_value=M):
-            self.assertEqual(0, sf_schedule.room([], 0, [whole], settings=self.settings, slots=6))
+            self.assertEqual(0, sf_schedule.room([], 0, [whole], settings=self.settings, slots=6, moment=M))
 
     def test_a_drain_counts_when_an_interactive_waiter_asks_yieldable_holders(self):
         self.settings["yield_after"] = 60
@@ -354,11 +356,11 @@ class EstimateTests(unittest.TestCase):
                                 ("agent-a17b708a4e705e421", "agent"), ("sid-kit-wt-646", "sid-kit-wt"),
                                 ("sid-kit-wt-button-spinner", "sid-kit-wt-button-spinner"), ("", ""), (None, "")):
             with self.subTest(label=label):
-                self.assertEqual(expected, sf_schedule.family(label))
+                self.assertEqual(expected, sf_runtype.family(label))
 
     def test_the_closest_kind_that_ran_gives_the_median_of_its_recent_runs(self):
         checks = lambda n: "/w/verify.sh --checks " + ",".join(f"c{i}" for i in range(n)) + " --jobs 1"
-        found = sf_schedule.Estimates([("lane-1-a", checks(140), 4000), ("lane-1-a", checks(140), 5000),
+        found = sf_estimates.Estimates([("lane-1-a", checks(140), 4000), ("lane-1-a", checks(140), 5000),
                               ("lane-2-b", checks(130), 4600), ("lane-3-c", checks(4), 60),
                               ("post-merge-1-a", checks(140), 700), ("sid-kit", "bun x.mjs", 30)])
         self.assertEqual(4500, found.of("lane-1-a", checks(140)), "same label and kind")
@@ -372,7 +374,7 @@ class EstimateTests(unittest.TestCase):
         self.assertIsNone(found.of("unheard", "make all"))
 
     def test_only_the_last_runs_of_a_kind_count(self):
-        found = sf_schedule.Estimates([("a", "make x", 1000)] * 30 + [("a", "make x", 10)] * sf_config.ESTIMATE_RUNS)
+        found = sf_estimates.Estimates([("a", "make x", 1000)] * 30 + [("a", "make x", 10)] * sf_config.ESTIMATE_RUNS)
         self.assertEqual(10, found.of("a", "make x"))
 
     def test_the_history_gives_every_run_and_skips_requests_that_never_ran(self):
@@ -385,7 +387,7 @@ class EstimateTests(unittest.TestCase):
             v2 = {**v1, "v": 2, "label": "new", "ran": 30, "cpu": 12.0}
             (path / "history.jsonl.1").write_text(json.dumps(v1) + "\n")
             (path / "history.jsonl").write_text(json.dumps(left) + "\n" + "torn {\n" + json.dumps(v2) + "\n")
-            found = sf_schedule.history_estimates(path)
+            found = sf_estimates.history_estimates(path)
             self.assertEqual((600, 30, None), (found.of("old", "make build"), found.of("new", "other"),
                                                found.of("gave-up", "x y")))
 
@@ -401,9 +403,9 @@ class EstimateTests(unittest.TestCase):
             left = {**ran, "outcome": "left", "ran": 1500}  # granted and left: not a run either, whatever wrote it
             (path / "history.jsonl").write_text("".join(json.dumps(item) + "\n" for item in
                                                         (ran, orphan, orphan, left, ran)))
-            for found in (sf_schedule.history_estimates(path), sf_schedule.cached_estimates(path)):
+            for found in (sf_estimates.history_estimates(path), sf_estimates.cached_estimates(path)):
                 self.assertEqual(300, found.of("ci", "sh heavy.sh check"))
-                self.assertEqual([300.0, 300.0], found.runs[("label", "ci", sf_schedule.kind("sh heavy.sh check"))])
+                self.assertEqual([300.0, 300.0], found.runs[("label", "ci", sf_runtype.kind("sh heavy.sh check"))])
             self.assertEqual(sf_config.ESTIMATES_VERSION, json.loads((path / "estimates.json").read_text())["v"])
 
     def test_estimates_kept_by_an_earlier_version_are_worked_out_again(self):
@@ -414,12 +416,12 @@ class EstimateTests(unittest.TestCase):
                     "outcome": "released"}
             (path / "history.jsonl").write_text(json.dumps(line) + "\n" +
                                                 json.dumps({**line, "ran": 2800, "outcome": "reaped"}) + "\n")
-            self.assertEqual(600, sf_schedule.cached_estimates(path).of("a", "make a"))
+            self.assertEqual(600, sf_estimates.cached_estimates(path).of("a", "make a"))
             saved = json.loads((path / "estimates.json").read_text())
-            old = {"stamp": saved["stamp"], "runs": sf_schedule.Estimates([("a", "make a", 600), ("a", "make a", 2800)]).save()}
+            old = {"stamp": saved["stamp"], "runs": sf_estimates.Estimates([("a", "make a", 600), ("a", "make a", 2800)]).save()}
             (path / "estimates.json").write_text(json.dumps(old))
-            sf_schedule._estimates.clear()  # another process
-            self.assertEqual(600, sf_schedule.cached_estimates(path).of("a", "make a"))
+            sf_estimates._estimates.clear()  # another process
+            self.assertEqual(600, sf_estimates.cached_estimates(path).of("a", "make a"))
             self.assertEqual(sf_config.ESTIMATES_VERSION, json.loads((path / "estimates.json").read_text()).get("v"))
 
     def test_the_estimates_are_kept_beside_the_history_until_it_changes(self):
@@ -427,14 +429,14 @@ class EstimateTests(unittest.TestCase):
             path = pathlib.Path(directory)
             line = {"label": "a", "cmd": "make a", "count": 1, "granted": "2026-11-02T10:01:00Z", "ran": 600}
             (path / "history.jsonl").write_text(json.dumps(line) + "\n")
-            self.assertEqual(600, sf_schedule.cached_estimates(path).of("a", "make a"))
+            self.assertEqual(600, sf_estimates.cached_estimates(path).of("a", "make a"))
             self.assertTrue((path / "estimates.json").is_file())
-            sf_schedule._estimates.clear()  # another process
-            with mock.patch.object(sf_schedule, "history_estimates", side_effect=AssertionError("read the history again")):
-                self.assertEqual(600, sf_schedule.cached_estimates(path).of("a", "make a"))
+            sf_estimates._estimates.clear()  # another process
+            with mock.patch.object(sf_estimates, "history_estimates", side_effect=AssertionError("read the history again")):
+                self.assertEqual(600, sf_estimates.cached_estimates(path).of("a", "make a"))
             with open(path / "history.jsonl", "a") as handle:
                 handle.write(json.dumps({**line, "ran": 60}) + "\n")
-            self.assertEqual(330, sf_schedule.cached_estimates(path).of("a", "make a"))
+            self.assertEqual(330, sf_estimates.cached_estimates(path).of("a", "make a"))
 
 
 class KindTests(unittest.TestCase):
@@ -447,7 +449,7 @@ class KindTests(unittest.TestCase):
                                   ("python3 -m unittest discover", "python3 -m unittest"),
                                   ("npx vitest --config vitest.config.ts run", "npx vitest")):
             with self.subTest(command=command):
-                self.assertEqual(expected, sf_schedule.kind(command))
+                self.assertEqual(expected, sf_runtype.kind(command))
 
 
 class OrderTests(SlotCase):

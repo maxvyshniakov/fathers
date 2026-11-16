@@ -31,7 +31,6 @@ from . import runtype as _runtype
 from . import config as _config
 from . import durations as _durations
 from . import entry as _entry
-from . import schedule as _schedule
 from . import settings as _settings
 from . import state as _state
 
@@ -56,7 +55,7 @@ def percentile(values: list[float], q: float) -> float | None:
     return ordered[low] + (ordered[high] - ordered[low]) * (rank - low)
 
 
-kind = _schedule.kind  # the command kind the queue's run-time estimates use too
+kind = _runtype.kind  # the command kind the queue's run-time estimates use too
 
 
 def parse_since(text: str, moment: float | None = None) -> float:
@@ -239,7 +238,7 @@ def summarize(directory: Path | None = None, since: float | None = None, label: 
     for item in items:
         if field:
             value = _entry.priority_of(item) if field == "priority" else _entry.ticket_of(item) \
-                if field == "ticket" else _schedule.family(item.get("label")) if field == "family" \
+                if field == "ticket" else _runtype.family(item.get("label")) if field == "family" \
                 else item.get("label_derived") or item.get("label")
             key = (value, None)
         elif meta_key:

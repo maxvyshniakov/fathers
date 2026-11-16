@@ -1,149 +1,30 @@
-"""Slotfather schedule responsibilities."""
+"""The queue's policy (fathers#35): given the entries, the capacity, the order settings, a moment, the overtaking
+window and an estimate, which waiters start, who is the head, who is asked to yield and when each is expected to
+start. It reads no file, environment or clock: its callers read the settings (settings.order_settings()), the window
+(config.overtake_window()), the moment and the estimator (estimates.py) once per look and hand them in. Where a
+caller leaves the settings or the window out, the built-in defaults (config.ORDER_DEFAULTS, config.OVERTAKE_WINDOW)
+apply, never a file or the environment."""
 from __future__ import annotations
 
-import contextlib
-import json
 import math
-import os
-from pathlib import Path
-from typing import Any, Callable, Optional, cast
-import re
 import time
+from typing import Any, Callable, Optional
 
 from . import config as _config
 from . import entry as _entry
-from . import settings as _settings
-from . import state as _state
 
 
 Entry = _entry.Record  # a queue entry, waiting or held, as the queue files hold it
 Estimate = Callable[[Entry], Optional[float]]  # an entry's expected run in seconds; None when unknown
+DEFAULTS: dict[str, Any] = _config.ORDER_DEFAULTS  # the order settings where a caller gives none (read-only)
+WINDOW: float = float(_config.OVERTAKE_WINDOW)  # the overtaking window where a caller gives none
 
 
-def kind(command: str | None) -> str:
-    """The kind of check a command is: its program's name and first argument; a comma list counts its items, a path
-    keeps its last part, an option keeps its name, and a short option value follows it. `env` and VAR=value before
-    the program go; a runner's `run` keeps what it runs (`bun run build`, `uv run pytest`), and a shell's `-c`
-    script is the kind of the script's command (`sh -c bun run build`)."""
-    words = [w for w in (command or "").split()]
-    while words and (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]) or os.path.basename(words[0]) == "env"):
-        words.pop(0)  # env and VAR=value before the program
-    if not words:
-        return "?"
-    found = [os.path.basename(words[0]) or words[0]]
-    rest = words[1:]
-    if rest and found[0] in _config.SHELLS and re.fullmatch(r"-[a-z]*c", rest[0]) and len(rest) > 1:
-        return f"{found[0]} {rest[0]} {kind(' '.join(rest[1:]))}"[:60]
-    if len(rest) > 1 and rest[0] == "run" and not rest[1].startswith("-"):
-        return f"{found[0]} run {os.path.basename(rest[1].rstrip('/')) or rest[1]}"[:60]
-    if rest:
-        first = rest[0]
-        if first.startswith("-"):
-            found.append(first.split("=", 1)[0])
-            value = rest[1] if len(rest) > 1 and "=" not in first else ""
-            if value and not value.startswith("-"):
-                if "," in value:
-                    found.append(f"[{len([v for v in value.split(',') if v])}]")
-                elif len(value) <= 40 and "=" not in value:
-                    found.append(os.path.basename(value.rstrip("/")) or value)
-        elif "," in first:
-            found.append(f"[{len([v for v in first.split(',') if v])}]")
-        else:
-            found.append(os.path.basename(first.rstrip("/")) or first)
-    return " ".join(found)[:60]
-
-
-def overtakable(entry: dict, moment: float | None = None) -> bool:
-    """Whether later requests that fit may still start before this waiter: it has waited less than the window."""
+def overtakable(entry: Entry, moment: float, window: float) -> bool:
+    """Whether later requests that fit may still start before this waiter at `moment`: it has waited less than the
+    overtaking `window` (seconds)."""
     queued = _config.seconds(entry.get("since"))
-    return queued is not None and (time.time() if moment is None else moment) - queued < _config.overtake_window()
-
-
-def queue_order() -> str:
-    """backfill (the default) or window, the order before #643."""
-    return _settings.order_settings()["order"]
-
-
-def family(label: str | None) -> str:
-    """A label without its ticket or agent id: lane-636-measure and lane-640-smoke-skip are both lane,
-    agent-a17b708a4e705e421 is agent, sid-kit-wt-646 is sid-kit-wt."""
-    label = (label or "").split(" · ")[0]  # a derived label (labels.py): its project, then the old rule
-    words = label.split("-")
-    for at, word in enumerate(words):
-        if at and any(c.isdigit() for c in word):
-            return "-".join(words[:at])
-    return label or ""
-
-
-class Estimates:
-    """Run times of finished requests, for how long a request will run: the median of the last ESTIMATE_RUNS runs
-    of the closest kind that ran before (same label and command kind; same label family and command kind; the same
-    family with a check list of about the same size; the command kind under any label; about the same size under
-    any label; same label; same family), or None for a request like nothing before."""
-
-    def __init__(self, runs=()):
-        self.runs = {}
-        for label, command, ran in runs:
-            self.add(label, command, ran)
-
-    @staticmethod
-    def keys(label: str | None, command: str | None) -> list[tuple]:
-        found = []
-        if command:
-            what = kind(command)
-            # A list of checks keeps its size within a factor of two: 140 checks are not 4.
-            rough = re.sub(r" \[(\d+)\]$", lambda m: f" [~{int(m[1]).bit_length()}]", what)
-            found += [("label", label, what), ("family", family(label), what), ("family", family(label), rough),
-                      ("kind", what), ("rough", rough)]
-        return found + [("label", label), ("family", family(label))]
-
-    def add(self, label: str | None, command: str | None, ran: float) -> None:
-        for key in self.keys(label, command):
-            recent = self.runs.setdefault(key, [])
-            recent.append(float(ran))
-            del recent[:-_config.ESTIMATE_RUNS]
-
-    def save(self) -> dict:
-        return {json.dumps(key): runs for key, runs in self.runs.items()}
-
-    @classmethod
-    def load(cls, saved: dict) -> "Estimates":
-        found = cls()
-        found.runs = {tuple(json.loads(key)): [float(v) for v in runs] for key, runs in saved.items()}
-        return found
-
-    def of(self, label: str | None, command: str | None) -> float | None:
-        for key in self.keys(label, command):
-            recent = self.runs.get(key)
-            if recent:
-                ordered = sorted(recent)
-                middle = len(ordered) // 2
-                return ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
-        return None
-
-
-def history_estimates(directory: Path) -> Estimates:
-    """Estimates from the end of history.jsonl (ESTIMATE_BYTES of it): every request that was granted and ran to its
-    release. A reaped lease is left out: its holder died, and its time runs to whenever a look noticed, such as an
-    orphan of a hung CI job that kept its slots for most of an hour; so is one that gave up (`left`). Requests whose
-    holder ran a slotfather that records no history (before #635) are not in it."""
-    path = directory / "history.jsonl"
-    runs = []
-    for part in (path.with_name(path.name + ".1"), path):
-        try:
-            with open(part, "rb") as handle:
-                end = handle.seek(0, os.SEEK_END)
-                handle.seek(max(0, end - _config.ESTIMATE_BYTES))
-                lines = handle.read().splitlines()
-        except FileNotFoundError:
-            continue
-        for item in _state.objects(lines[1:] if end > _config.ESTIMATE_BYTES else lines):
-            if isinstance(item.get("ran"), (int, float)) and item.get("granted") and \
-                    item.get("outcome") not in _config.UNFINISHED:
-                runs.append((item.get("label"), item.get("cmd"), item["ran"]))
-    return Estimates(runs)
-
-
+    return queued is not None and moment - queued < window
 
 
 def no_estimate(entry: Entry) -> float | None:
@@ -275,6 +156,19 @@ def expected_end(entry: Entry, moment: float, run: float | None, fallback: float
     return moment + max(expected - ran, overrun * ran)
 
 
+def free_at(count: int, ends: list[tuple[float, int]], have: int, moment: float) -> tuple[int, float]:
+    """When `count` slots are free, walking `ends` ((expected end, slots it frees) of what holds slots) in time order
+    from `have` slots free at `moment` (below zero while a shrunk capacity drains: those ends free nothing yet).
+    Returns the slots free then and that moment; fewer than `count` when the ends do not free enough (slots held in an
+    earlier queue, whose ends are unknown), with the moment of the last end."""
+    start = moment
+    for end, size in sorted(ends):
+        if have >= count:
+            break
+        have, start = have + size, end
+    return have, start
+
+
 def reserve(found: Plan, held: list[Entry], slots: int, used: int, moment: float, estimate: Estimate,
             fallback: float, overrun: float) -> int:
     """Sets the head's expected start: when, by the expected ends of what holds slots (`held` and the grants so
@@ -285,11 +179,7 @@ def reserve(found: Plan, held: list[Entry], slots: int, used: int, moment: float
     need: int = found.head["count"]
     ends = [(expected_end(entry, moment, estimate(entry), fallback, overrun), _entry.holds(entry, slots))
             for entry in held + found.grants]
-    have, start = slots - used, moment  # below zero while a shrunk capacity drains: those ends free nothing yet
-    for end, count in sorted(ends):
-        if have >= need:
-            break
-        have, start = have + count, end
+    have, start = free_at(need, ends, slots - used, moment)
     found.start = start
     if have < need:  # slots held in an earlier queue, whose end is unknown: nothing passes
         found.start, found.known = moment, False
@@ -312,11 +202,7 @@ def soonest_start(count: int, holding: list[Entry], slots: int, used: int, momen
         if run is None:
             return None
         ends.append((expected_end(entry, moment, run, run, overrun), _entry.holds(entry, slots)))
-    have, start = slots - used, moment  # below zero while a shrunk capacity drains
-    for end, size in sorted(ends):
-        if have >= count:
-            break
-        have, start = have + size, end
+    have, start = free_at(count, ends, slots - used, moment)
     return start if have >= count else None
 
 
@@ -333,12 +219,12 @@ def fit(waiters: list[Entry], slots: int) -> list[Entry]:
 
 def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, order: str | None = None,
          estimate: Estimate | None = None, other: int = 0, reserve_head: bool = False,
-         settings: dict[str, Any] | None = None) -> Plan:
+         settings: dict[str, Any] | None = None, window: float = WINDOW) -> Plan:
     """Which of `waiters` (queue order) start now beside `held` (entries; `other` slots more held without one) on
     `slots` slots at epoch `moment`. `estimate(entry)` is its expected run in seconds or None (unknown).
 
     window: in arrival order; a waiter that does not fit lets later ones that fit start first until it has waited
-    SLOTFATHER_OVERTAKE_WINDOW, then holds back everyone behind it.
+    `window` seconds (SLOTFATHER_OVERTAKE_WINDOW, read by the caller), then holds back everyone behind it.
 
     backfill: waiters in their class order (ranked(): one served as interactive `interactive` seconds earlier than
     it came, one served as batch `batch` seconds later, a class moving up as the waiter ages, a yielded lease just
@@ -354,12 +240,12 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
     unknown run keeps it the head), is no head: it would leave without running, so it holds nobody back. Nor is a
     batch waiter (deferring(); one that aged is normal) while a normal or interactive one waits (others_wait()),
     and a batch one for the whole machine does not start then; once none waits it is the head as any other.
-    `settings` are _settings.order_settings() unless given; `order` overrides theirs. The head's start is worked out when it
-    holds no reservation yet, when a request behind it fits, or with `reserve_head`."""
-    settings = settings or _settings.order_settings()
+    `settings` are the caller's settings.order_settings() (DEFAULTS where not given); `order` overrides theirs. The
+    head's start is worked out when it holds no reservation yet, when a request behind it fits, or with
+    `reserve_head`."""
+    settings = settings or DEFAULTS
     order = order or settings["order"]
     estimate = estimate or no_estimate
-    window = _config.overtake_window()
     if order == "backfill":
         waiters = ranked(waiters, settings, moment)
     fallback, safety, overrun, limit = (float(settings[key]) for key in ("fallback", "safety", "overrun", "limit"))
@@ -459,16 +345,16 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
 
 
 def shared_plan(found: Plan, waiters: list[Entry], held: list[Entry], slots: int, moment: float, estimate: Estimate,
-                other: int, settings: dict[str, Any], shared: dict[str, Any]) -> Plan:
+                other: int, settings: dict[str, Any], shared: dict[str, Any], window: float = WINDOW) -> Plan:
     """The plan whose head keeps the reservations (reservations()): `found`, a plan by `settings`, when they are the
-    shared ones (_settings.order_settings(environment=False)), else a plan by the shared settings, so that a client whose
+    shared ones (settings.order_settings(environment=False)), else a plan by the shared settings, so that a client whose
     environment tightens the order (SLOTFATHER_QUEUE=window, an ageing step it lengthens) neither drops nor resets
     the reservation every client's looks keep; a shared window order keeps none."""
     if all(settings.get(key) == shared.get(key) for key in _config.ORDER_DEFAULTS):
         return found
     if shared["order"] != "backfill":
         return Plan()
-    return plan(waiters, held, slots, moment, estimate=estimate, other=other, settings=shared)
+    return plan(waiters, held, slots, moment, estimate=estimate, other=other, settings=shared, window=window)
 
 
 def reservations(waiters: list[Entry], found: Plan) -> list[Entry]:
@@ -490,7 +376,7 @@ def reservations(waiters: list[Entry], found: Plan) -> list[Entry]:
 
 def yield_asks(waiters: list[Entry], held: list[Entry], slots: int, moment: float, estimate: Estimate | None = None,
                other: int = 0, settings: dict[str, Any] | None = None,
-               asked: list[Entry] | tuple[Entry, ...] = ()) -> list[tuple[Entry, Entry]]:
+               asked: list[Entry] | tuple[Entry, ...] = (), window: float = WINDOW) -> list[tuple[Entry, Entry]]:
     """Polite preemption (#643): (holder, waiter) pairs, the holders of `held` (entries, after this look's grants)
     that a waiter asks to yield now. Only an interactive waiter asks, once it has waited `yield_after` seconds, does
     not fit, and would not get its slots within `yield_after` by the held leases' expected ends; it asks only
@@ -499,7 +385,7 @@ def yield_asks(waiters: list[Entry], held: list[Entry], slots: int, moment: floa
     their ids, first; then the lowest class; then the one expected to run longest), and only when grant() would
     then start it, with the asked holders back among the waiters at their own rank. Nobody is ever stopped: a
     holder yields when its client gets round to it, or not at all."""
-    settings = settings or _settings.order_settings()
+    settings = settings or DEFAULTS
     after = settings.get("yield_after") or 0
     if not after or settings["order"] != "backfill":
         return []
@@ -529,11 +415,7 @@ def yield_asks(waiters: list[Entry], held: list[Entry], slots: int, moment: floa
         free = slots - other - sum(_entry.holds(h, slots) for h in holding)
         if entry["count"] <= free:
             continue  # it fits: what holds it back is not slots
-        have, when = free, moment
-        for end, count in sorted((ends(h), _entry.holds(h, slots)) for h in holding):
-            if have >= entry["count"]:
-                break
-            have, when = have + count, end
+        have, when = free_at(entry["count"], [(ends(h), _entry.holds(h, slots)) for h in holding], free, moment)
         if have >= entry["count"] and when - moment <= after:
             continue  # its slots are expected soon anyway
         candidates = [h for h in holding if h.get("yieldable") and level[_entry.priority_of(h)] > level[asking]
@@ -553,7 +435,7 @@ def yield_asks(waiters: list[Entry], held: list[Entry], slots: int, moment: floa
         back = [_entry.trial_yielded(h, behind) for h in chosen]
         rest = [w for w in waiters if not any(w is g for g in granted)] + back
         trial = plan(rest, [h for h in holding if not any(h is c for c in chosen)], slots, moment, estimate=estimate,
-                     other=other, settings=settings)
+                     other=other, settings=settings, window=window)
         if not any(g is entry for g in trial.grants):
             continue
         found += [(h, entry) for h in chosen]
@@ -564,22 +446,23 @@ def yield_asks(waiters: list[Entry], held: list[Entry], slots: int, moment: floa
 
 def idle_asks(waiters: list[Entry], held: list[Entry], idle: list[Entry], slots: int, moment: float,
               estimate: Estimate | None = None, other: int = 0,
-              settings: dict[str, Any] | None = None) -> list[tuple[Entry, Entry]]:
+              settings: dict[str, Any] | None = None, window: float = WINDOW) -> list[tuple[Entry, Entry]]:
     """Idle leases asked to yield (#12): (holder, waiter) pairs for the `idle` holders (idle.idle_since()) that opted
     in (`yieldable`), were asked fewer than YIELDS_MAX times, and whose slots would start a waiting request that would
     not start otherwise; that waiter is the one the request names. Nobody is asked while nobody waits, a lease that
     cannot yield is only marked, and nobody is ever stopped: the holder yields when its client gets round to it."""
     if not waiters:
         return []
-    settings = settings or _settings.order_settings()
+    settings = settings or DEFAULTS
     holding = list(held)
     found: list[tuple[Entry, Entry]] = []
     for lease in idle:
         if not lease.get("yieldable") or int(lease.get("yields") or 0) >= _config.YIELDS_MAX:
             continue
-        before = plan(waiters, holding, slots, moment, estimate=estimate, other=other, settings=settings).grants
+        before = plan(waiters, holding, slots, moment, estimate=estimate, other=other, settings=settings,
+                      window=window).grants
         after = plan(waiters, [h for h in holding if h is not lease], slots, moment, estimate=estimate, other=other,
-                     settings=settings).grants
+                     settings=settings, window=window).grants
         started = [w for w in after if not any(w is b for b in before)
                    and not any(w is asked for _, asked in found)]
         if started:
@@ -620,14 +503,14 @@ FORECAST_LOOKS = 200  # looks a forecast takes at most
 
 
 def forecast(waiters: list[Entry], held: list[Entry], slots: int, moment: float, estimate: Estimate | None = None,
-             other: int = 0, settings: dict[str, Any] | None = None) -> dict[int, float]:
+             other: int = 0, settings: dict[str, Any] | None = None, window: float = WINDOW) -> dict[int, float]:
     """When each waiter is expected to start if nothing more comes: id(entry) -> epoch seconds, for the waiters a
     forecast reaches. It plays the queue forward as grant() would: each held lease ends when it is expected to
     (expected_end(); an unknown run counts the fallback), each grant runs its expected run, and plan() decides at
     every end and every FORECAST_STEP seconds between them (windows end and waiters age meanwhile); the head keeps
     its reservation as grant() keeps it. Memory, yields and give-ups are left out. Slots held in an earlier queue
     have no known end: then only the waiters that start now are forecast."""
-    settings = settings or _settings.order_settings()
+    settings = settings or DEFAULTS
     estimate = estimate or no_estimate
     fallback, overrun = float(settings["fallback"]), float(settings["overrun"])
     ends: dict[int, float] = {}  # id(a running copy) -> when it is expected to end
@@ -654,7 +537,7 @@ def forecast(waiters: list[Entry], held: list[Entry], slots: int, moment: float,
     kept: list[Entry] = list(running)
     at = moment
     for _ in range(FORECAST_LOOKS):
-        step = plan(queue, running, slots, at, estimate=expected, other=other, settings=fixed)
+        step = plan(queue, running, slots, at, estimate=expected, other=other, settings=fixed, window=window)
         reservations(queue, step)
         for entry in step.grants:
             found[id(originals[id(entry)])] = at
@@ -676,73 +559,22 @@ def forecast(waiters: list[Entry], held: list[Entry], slots: int, moment: float,
 
 def room(waiters: list[Entry], free: int, held: list[Entry] | None = None, estimate: Estimate | None = None,
          other: int = 0, settings: dict[str, Any] | None = None, label: str = "", command: str = "",
-         slots: int | None = None) -> int:
+         slots: int | None = None, *, moment: float, window: float = WINDOW) -> int:
     """The slots a new request gets at once behind `waiters` with `free` slots unheld, as grant() admits it: one
     for `command` under `label`, whose run the estimates know, or else one of unknown run (the fallback). Without
     `held` (the entries holding slots; `other` slots more held without one), the window order's answer. `slots`
-    is the capacity; without it, what `free` and the held slots add up to (wrong only while a shrink drains)."""
+    is the capacity; without it, what `free` and the held slots add up to (wrong only while a shrink drains).
+    `moment` is when the request would come (the policy reads no clock)."""
     if slots is None:
         slots = free + sum(int(e["count"]) for e in held or ()) + other
     if held is not None:  # the whole capacity: what grant() fits the waiters to
         fit(waiters, slots)
-    moment = time.time()
-    settings = settings or _settings.order_settings()
+    settings = settings or DEFAULTS
     order = settings["order"] if held is not None else "window"
+    since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(moment))
     for count in range(free, 0, -1):
-        probe: Entry = {"count": count, "label": label, "cmd": command, "since": _config.now()}
+        probe: Entry = {"count": count, "label": label, "cmd": command, "since": since}
         if any(entry is probe for entry in plan(waiters + [probe], held or [], slots, moment, order, estimate,
-                                                         other, settings=settings).grants):
+                                                         other, settings=settings, window=window).grants):
             return count
     return 0
-
-
-_estimates = {}  # history files' (size, mtime) -> Estimates, so a waiter's repeated looks read the history once
-
-
-def cached_estimates(directory: Path) -> Estimates:
-    """history_estimates(), kept in this process and in estimates.json beside the history, both keyed by the
-    history files' size and modification time: a new process, a release or `available` reads the small file
-    instead of the history until the history changes. A file another version wrote (its "v" differs) is worked out
-    again, so runs that version counted (reaped leases, before version 2) do not linger until the history changes;
-    an older client reads past the "v"."""
-    path = directory / "history.jsonl"
-    stamp = []
-    for part in (path.with_name(path.name + ".1"), path):
-        with contextlib.suppress(OSError):
-            info = part.stat()
-            stamp.append([part.name, info.st_size, info.st_mtime_ns])
-    key = json.dumps(stamp)
-    if key in _estimates:
-        return _estimates[key]
-    cache = directory / "estimates.json"
-    found = None
-    with contextlib.suppress(OSError, ValueError, TypeError, AttributeError, KeyError):
-        saved = json.loads(cache.read_text())
-        if saved["stamp"] == stamp and saved.get("v") == _config.ESTIMATES_VERSION:
-            found = Estimates.load(saved["runs"])
-    if found is None:
-        found = history_estimates(directory)
-        if _state.foreign_owner(directory) is None:
-            with contextlib.suppress(OSError):
-                _state.write(cache, {"v": _config.ESTIMATES_VERSION, "stamp": stamp, "runs": found.save()})
-    _estimates.clear()
-    _estimates[key] = found
-    return found
-
-
-def estimator(directory: Path) -> Estimate:
-    """estimate(entry) from cached_estimates(), read only when plan() first asks (a head waits and a later
-    request fits)."""
-    def estimate(entry: Entry) -> float | None:
-        spec = entry.get("session")
-        expect = cast(dict[str, Any], spec).get("expect") if isinstance(spec, dict) else None
-        if isinstance(expect, (int, float)) and not isinstance(expect, bool) and expect > 0:
-            return float(expect)  # a session's own estimate (`session start --expect`) before its kind's history
-        if _entry.meta_of(entry).get("phase"):  # a run type (fathers#106): its project, phase and plan
-            with contextlib.suppress(Exception):
-                from . import runtype as _runtype
-                found = _runtype.expected_of(entry, _runtype.peek(directory))  # under the lock: never rebuilt
-                if found is not None and found["p50"] is not None and not found["fallback"]:
-                    return float(found["p50"])
-        return cached_estimates(directory).of(entry.get("label"), entry.get("cmd"))
-    return estimate

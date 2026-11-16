@@ -48,6 +48,10 @@ try:
     from slotfather import settings as shared  # the shared settings (fathers#34)
 except ImportError:
     shared = None
+try:
+    from slotfather import estimates as estimated  # the run-time estimates (fathers#35)
+except ImportError:
+    estimated = schedule  # an older client's
 # an older client's: schedule and config hold them (its settings module, if any, is the `settings` command)
 orders, capacities = (shared, shared) if hasattr(shared, "order_settings") else (schedule, config)
 assert pathlib.Path(config.__file__).resolve().parent.parent == root, config.__file__
@@ -61,7 +65,7 @@ if action == "look":
     slots = capacities.total()
     ranks = {e["label"]: schedule.rank_time(e, settings) for e in waiters}
     found = schedule.plan(schedule.fit(waiters, slots), held, slots, float(sys.argv[4]),
-                          estimate=schedule.estimator(directory), other=0, settings=settings)
+                          estimate=estimated.estimator(directory), other=0, settings=settings)
     status = query.status_json(directory)
     out = {"read": {e["label"]: [fields.priority_of(e), fields.ticket_of(e)] for _, e in live},
            "ranks": ranks, "grants": [e["label"] for e in found.grants], "reason": found.reason,

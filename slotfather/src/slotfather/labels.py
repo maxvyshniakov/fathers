@@ -3,7 +3,7 @@ the command that names the work, and the lane, ticket and phase of its metadata,
 `straylight · lane 743 · check`, where a request gives no `--label`, or one that says little (`scratchpad`, `tmp`, the
 name of its directory when that is a temporary one, or the project's name alone).
 
-Parts are joined by SEP. schedule.family() reads the part before the first SEP, so the requests of one project form
+Parts are joined by SEP. runtype.family() reads the part before the first SEP, so the requests of one project form
 one family as before, while estimates still prefer the whole label.
 """
 from __future__ import annotations
@@ -384,7 +384,7 @@ def choose(given: str | None, cwd: str, argv: list[str], meta: dict[str, str] | 
     rest = [p for p in derived.split(SEP) if p != given]
     if not rest:
         return {"label": given, "given": given, "derived": derived, "hint": None, "project": project}
-    # the derived parts first: the family (schedule.family()) is then the project, never the generic word
+    # the derived parts first: the family (runtype.family()) is then the project, never the generic word
     label = SEP.join([*rest, given]) if project and project != given else SEP.join([given, *rest])
     return {"label": label, "given": given, "derived": derived, "project": project,
             "hint": f"hint: the label {given!r} says little about the work; it runs as {label!r} (a --label that "

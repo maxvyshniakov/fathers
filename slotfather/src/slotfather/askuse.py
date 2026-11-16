@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from . import config as _config
-from . import schedule as _schedule
+from . import runtype as _runtype
 from . import settings as _settings
 from . import state as _state
 
@@ -71,7 +71,7 @@ def family_row(name: str, items: list[dict[str, Any]], fallback: float) -> dict[
 def by_family(items: Iterable[dict[str, Any]], fallback: float) -> list[dict[str, Any]]:
     groups: dict[str, list[dict[str, Any]]] = {}
     for item in items:
-        groups.setdefault(_schedule.family(item.get("label")), []).append(item)
+        groups.setdefault(_runtype.family(item.get("label")), []).append(item)
     rows = [family_row(name, members, fallback) for name, members in groups.items()]
     rows.sort(key=lambda r: (not r["over_ask"], -r["measured"], r["family"]))
     return rows
@@ -82,13 +82,13 @@ def hint(directory: Path, label: str, count: int) -> str | None:
     LEAST) used a median of at most SHARE of the cores they asked, in fewer slots than `count`; else None."""
     if count <= 1:
         return None
-    name = _schedule.family(label)
+    name = _runtype.family(label)
     try:
         fallback = _config.cores() / max(1, _settings.total())
     except (_config.SlotError, OSError, ValueError):
         return None
     lines = _state.tail_objects(directory / "history.jsonl", TAIL)
-    recent = [item for item in lines if _schedule.family(item.get("label")) == name and used(item) is not None]
+    recent = [item for item in lines if _runtype.family(item.get("label")) == name and used(item) is not None]
     recent = recent[-RECENT:]
     if len(recent) < LEAST:
         return None

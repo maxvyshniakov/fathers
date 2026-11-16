@@ -18,6 +18,7 @@ from typing import Any, cast
 
 from . import config as _config
 from . import entry as _entry
+from . import estimates as _estimates
 from . import lineage as _lineage
 from . import platform as _platform
 from . import process as _process
@@ -292,7 +293,8 @@ def dashboard_admission(waiters: list[dict[str, Any]], held: list[dict[str, Any]
             float(settings.get("warning_admits", 1)) >= 1:  # schedule.memory_gate()
         if any(entry.get(_entry.PRESSED) for entry in held):
             return 0
-        return min(1, _schedule.room(waiters, free, held, estimate, other, settings=settings, slots=slots)
+        return min(1, _schedule.room(waiters, free, held, estimate, other, settings=settings, slots=slots,
+                                     moment=time.time(), window=_config.overtake_window())
                    if waiters else free)
     if not free or memory_block and used:
         return 0
@@ -303,9 +305,10 @@ def dashboard_admission(waiters: list[dict[str, Any]], held: list[dict[str, Any]
         # A new generic request may rank ahead of a lower-priority existing waiter.
         probe: dict[str, Any] = dict(count=free, label="", cmd="", since=_config.now())
         found = _schedule.plan(waiters + [probe], held, slots, time.time(), estimate=estimate,
-                               other=other, settings=settings)
+                               other=other, settings=settings, window=_config.overtake_window())
         return free if found.grants and found.grants[0] is probe else 0
-    return _schedule.room(waiters, free, held, estimate, other, settings=settings, slots=slots)
+    return _schedule.room(waiters, free, held, estimate, other, settings=settings, slots=slots, moment=time.time(),
+                          window=_config.overtake_window())
 
 
 def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
@@ -344,7 +347,7 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
                 "reprioritized": entry.get("reprioritized") if entry.get("reprioritized") in _config.PRIORITIES else None,
                 "est_start": datetime.datetime.fromtimestamp(foreseen["est_start"], datetime.timezone.utc)
                 if foreseen.get("est_start") is not None else None,
-                "granted": parse_utc(entry.get("granted")), "passable": kind == "waiting" and bool(cast(Any, _schedule).overtakable(entry)),
+                "granted": parse_utc(entry.get("granted")), "passable": kind == "waiting" and _schedule.overtakable(entry, time.time(), _config.overtake_window()),
                 "all": bool(entry.get("all")),
                 "style": "text" if kind == "waiting" else "legacy"}
 
@@ -368,8 +371,8 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
     if order == "backfill" and live_waiters:
         with contextlib.suppress(Exception):  # an estimate that cannot be read leaves the sentence without a time
             found = _schedule.plan(live_waiters, held, slots, time.time(), order,
-                                   _schedule.estimator(directory), other,
-                                   reserve_head=True, settings=settings)
+                                   _estimates.estimator(directory), other,
+                                   reserve_head=True, settings=settings, window=_config.overtake_window())
             if found.head is not None and found.start is not None:
                 start = datetime.datetime.fromtimestamp(found.start, datetime.timezone.utc)
             if found.head is not None and found.reserved is not None:
@@ -383,7 +386,7 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
     free = max(0, slots - used)
     admission = dashboard_admission(live_waiters, held, slots,
                                     other, memory_block,
-                                    _schedule.estimator(directory) if live_waiters else None, settings, memory_kind)
+                                    _estimates.estimator(directory) if live_waiters else None, settings, memory_kind)
     own_held = sum(h["count"] for h in holders if h["kind"] == "held")
     return {"directory": str(directory), "slots": slots, "saved": saved, "basis": look.basis, "cores": machine,
             "averages": averages, "draining": _query.draining(used, slots),

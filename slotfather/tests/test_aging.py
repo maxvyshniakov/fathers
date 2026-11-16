@@ -11,6 +11,7 @@ from slotfather import config as sf_config
 from slotfather import durations as sf_durations
 from slotfather import entry as sf_entry
 from slotfather import schedule as sf_schedule
+from slotfather import estimates as sf_estimates
 from slotfather import settings as sf_settings
 
 import json
@@ -258,7 +259,7 @@ class DayReplayTests(unittest.TestCase):
         cls.found = replay.requests(DAY, DAY_NOW)
         cls.safari = next(r["id"] for r in cls.found if r["label"] == "safari-profile-6146c4a" and r["count"] == 8
                           and r["priority"] == "batch" and r["arrival"] == sf_config.seconds("2026-11-11T16:31:43Z"))
-        whole = sf_schedule.Estimates((r["label"], r["cmd"], r["run"]) for r in cls.found
+        whole = sf_estimates.Estimates((r["label"], r["cmd"], r["run"]) for r in cls.found
                                       if r["run"] is not None and r.get("outcome") not in sf_config.UNFINISHED)
         seed = replay.seed_runs(DAY, cls.found[0]["arrival"])
         cls.results = {name: replay.Replay(cls.found, 8, replay.POLICIES[name], seed, {"estimates": whole}).simulate()
