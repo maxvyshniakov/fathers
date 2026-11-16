@@ -8,6 +8,13 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Lanes finish by themselves (fathers#157). A lane that becomes finished (landed, smoke green, review finished or
+  exempt with every finding marked) runs `done`, as before, unless it is kept; `[done] auto = false` turns that off.
+  `lanefather keep ID [--off]` keeps a lane from it. `lanefather done --finished` runs `done` on every finished lane
+  of the registered projects, and `--dry-run` lists them with their sizes. `start` under the free-disk minimum now
+  runs that first and admits the lane when it freed enough, instead of only refusing. Every refusal of `done` still
+  applies.
+
 - A review panel (fathers#151): `[review] panel = ["sol", "opus"]` runs every listed reviewer at once on the same
   frozen checkout with the same prompt (its `prompt_sha256` in the receipt), each in its own process. The receipt's
   `panel` keeps each reviewer's model, effort, seconds, status and findings; the one `findings` list numbers them

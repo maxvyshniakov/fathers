@@ -3,17 +3,24 @@ its build directories, its scratch and the shared cache partitions built from it
 
 A lane whose agent still locks its worktree is released instead. It no longer counts toward the lane cap or holds
 claims; done finishes it once the agent exits.
+
+Auto-done (fathers#157): a lane that becomes finished (landed, its smoke green, its review finished or exempt with
+every finding marked) runs done by itself, unless it is kept (`keep ID`, `land --keep`) or `[done] auto` is false.
+`done --finished` runs done on every finished lane of the registered projects, and start below the disk floor does
+so first; neither skips a refusal of done.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+import datetime
 import fcntl
 import json
 import os
 from pathlib import Path
 import subprocess
-from typing import Any
+from typing import Any, cast
 
-from . import config, journal, procs, review, state, tickets, worktrees
+from . import config, journal, procs, registry, review, state, tickets, worktrees
 from .errors import LaneError
 from .gitops import dirty, git, git_ok, main_checkout, worktree_lock
 from .state import Record
@@ -37,22 +44,87 @@ def ticket_commented(record: Record) -> str | None:
 
 
 def done(args: Any) -> int:
+    if args.finished:
+        if args.id or args.force_reason:
+            raise LaneError("done --finished takes no lane id and no --force-reason: it runs done, with every "
+                            "refusal, on each finished lane of the registered projects")
+        finish_finished(args.dry_run, automatic=False)
+        return 0
+    if args.dry_run:
+        raise LaneError("--dry-run goes with --finished: done --finished --dry-run lists the lanes it would finish")
+    if not args.id:
+        raise LaneError("done needs a lane id, or --finished for every finished lane")
     finish(args.id, args.force_reason)
     return 0
 
 
-def finish_landed(lane_id: str, keep: bool) -> None:
-    """After a green post-merge smoke: finish the lane as done does. When its agent still locks the worktree, keep
-    the worktree and release the lane; done finishes it later. A landed lane does not count toward the lane cap;
-    a refused done only leaves cleanup behind."""
+def field(record: Record, name: str) -> dict[str, Any]:
+    """One of the record's objects (`landed`, `post_merge`), empty when it has none."""
+    value: Any = record.get(name)
+    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
+
+
+def kept(record: Record) -> bool:
+    """Whether auto-done and done --finished leave the lane alone (fathers#157): `keep ID` or `land --keep`. The
+    landed lane's flag is the one older installs read."""
+    return bool(record.get("keep")) or bool(field(record, "landed").get("keep"))
+
+
+def keep(args: Any) -> int:
+    """`keep ID [--off]`: auto-done, done --finished and start's disk repair skip the lane until --off; done ID
+    still finishes it."""
     prog = config.prog()
-    if keep:
-        print(f"Lane {lane_id} kept (--keep): it does not count toward the lane cap; "
-              f"finish it with {prog} done {lane_id}")
-        return
+    with state.locked("state"):
+        record = state.load(args.id)
+        if record["status"] == "done":
+            raise LaneError(f"lane {args.id} is already done")
+        record["keep"] = not args.off
+        if record.get("landed"):
+            record["landed"]["keep"] = not args.off
+        state.save(record)
+        journal.ledger(f"{'unkeep' if args.off else 'keep'} {args.id}", kind="lane.kept", lane=record,
+                       details={"keep": not args.off})
+    if args.off:
+        print(f"Lane {args.id} no longer kept: once it is finished, done runs by itself "
+              f"(or {prog} done --finished)")
+    else:
+        print(f"Lane {args.id} kept: auto-done and {prog} done --finished leave it; {prog} done {args.id} "
+              f"finishes it, {prog} keep {args.id} --off releases it")
+    return 0
+
+
+def unfinished(record: Record) -> str | None:
+    """None when the lane is finished (fathers#157): landed, its smoke green, its review finished or exempt with
+    every finding (each panel member's) marked, and not kept; else why not. In the lane's project (state.serving)."""
+    if record["status"] not in ("landed", "released"):
+        return f"it is {record['status']}"
+    smoke = field(record, "post_merge").get("status")
+    if smoke != "green":
+        return f"its post-merge smoke is {smoke or 'not run'}"
+    reviewed, words = review.review_state(record["id"])
+    if not reviewed:
+        return words
+    return "kept" if kept(record) else None
+
+
+def finish_landed(lane_id: str, keep: bool) -> None:
+    """When a lane becomes finished (land of a reviewed or exempt lane, its clean review, the mark of its last
+    finding): finish it as done does, unless it is kept or `[done] auto` is false. When its agent still locks the
+    worktree, keep the worktree and release the lane; done finishes it later. A landed lane does not count toward
+    the lane cap; a refused done only leaves cleanup behind."""
+    prog = config.prog()
     record = state.load(lane_id)
     if record["status"] == "done":
         # land and the lane's review both finish a reviewed lane; whichever comes second has nothing left to do.
+        return
+    if keep or kept(record):
+        how = "--keep" if field(record, "landed").get("keep") and not record.get("keep") else f"{prog} keep"
+        print(f"Lane {lane_id} kept ({how}): it does not count toward the lane cap; "
+              f"finish it with {prog} done {lane_id}")
+        return
+    if not config.current().done_auto:
+        print(f"Lane {lane_id} is finished; auto-done is off ([done] auto = false): "
+              f"finish it with {prog} done {lane_id} or {prog} done --finished")
         return
     worktree = record.get("worktree")
     lock = (worktree_lock(main_checkout(record["common_dir"]), worktree)
@@ -79,7 +151,8 @@ def finish_landed(lane_id: str, keep: bool) -> None:
               f"{error}\nFix that, then run {prog} done {lane_id}")
 
 
-def finish(lane_id: str, force_reason: str | None) -> None:
+def finish(lane_id: str, force_reason: str | None) -> int:
+    """done ID: every refusal, then the removal; the bytes it freed."""
     prog = config.prog()
     with state.locked("state"):
         record = state.load(lane_id)
@@ -176,3 +249,105 @@ def finish(lane_id: str, force_reason: str | None) -> None:
     print(f"Lane {lane_id} done: claims released, {freed / 1e9:.1f} GB freed")
     for item in removed:
         print(f"  {item}" if item.startswith(("stopped ", "did not stop ")) else f"  removed {item}")
+    return freed
+
+
+@dataclass(frozen=True)
+class Registered:
+    """One project of the registry, as done --finished and start's disk repair act in it."""
+    name: str
+    project: config.Config
+    directory: Path
+    common: str | None
+
+
+def registered() -> tuple[list[Registered], list[str]]:
+    """The registry's projects (never a lane outside it) and a line for each that cannot be read."""
+    now = datetime.datetime.now(datetime.UTC)
+    found: list[Registered] = []
+    unreadable: list[str] = []
+    for entry in registry.read():
+        if registry.forgotten(entry, now):
+            continue
+        configured = entry.get("config")
+        name = str(entry.get("project") or Path(entry["state_dir"]).name)
+        try:
+            project = config.load(Path(configured)) if isinstance(configured, str) else config.Config()
+        except LaneError as error:
+            unreadable.append(f"{name}: {error}")
+            continue
+        common = entry.get("common_dir") if isinstance(entry.get("common_dir"), str) else None
+        found.append(Registered(journal.project_name(project) if isinstance(configured, str) else name, project,
+                                Path(entry["state_dir"]), common))
+    return found, unreadable
+
+
+def footprint(record: Record) -> int:
+    """The bytes done would free at least: the worktree, the lane's build directories and its scratch."""
+    paths = [record.get("worktree"), *record.get("cargo_targets", []), *record.get("scratch", [])]
+    return sum(worktrees.size(path) for path in paths if path and os.path.exists(path))
+
+
+def finish_finished(dry_run: bool, *, automatic: bool) -> tuple[int, int, list[str]]:
+    """Run done, with every refusal it has, on each finished lane of the registered projects (fathers#157); a dry
+    run lists them with their sizes and removes nothing. `automatic` (start's disk repair) leaves the projects
+    whose `[done] auto` is false. Prints what it removed and freed; returns the bytes freed, the lanes finished and
+    one line per lane done refused."""
+    projects, unreadable = registered()
+    seen: set[tuple[str, str]] = set()
+    freed, finished, refused, listed = 0, 0, list[str](), 0
+    if dry_run:
+        print("Finished lanes of the registered projects (dry run):")
+    for line in unreadable:
+        print(f"skipped {line}")
+    for where in projects:
+        if automatic and not where.project.done_auto:
+            continue
+        with state.serving(where.project, where.directory):
+            try:
+                records = state.of_project(state.Store(where.project).lanes(), where.common)
+            except LaneError as error:
+                print(f"skipped {where.name}: {error}")
+                continue
+            for record in records:
+                key = (str(where.directory), record["id"])
+                if key in seen or record["status"] not in ("landed", "released"):
+                    continue
+                seen.add(key)
+                why = unfinished(record)
+                if why is not None:
+                    if dry_run:
+                        print(f"  {where.name} {record['id']}: not finished ({why})")
+                    continue
+                if dry_run:
+                    size = footprint(record)
+                    freed += size
+                    listed += 1
+                    print(f"  {where.name} {record['id']}: {size / 1e9:.1f} GB  {record.get('worktree') or '-'}")
+                    continue
+                print(f"{where.name}: done {record['id']}", flush=True)
+                try:
+                    freed += finish(record["id"], None)
+                    finished += 1
+                except LaneError as error:
+                    text = str(error).replace("\n", " ")
+                    journal.ledger(f"auto-done {record['id']} refused: {text}", kind="lane.done_refused",
+                                   level="warn", lane=record["id"], details={"error": str(error)})
+                    refused.append(f"{where.name} {record['id']}: {text}")
+                    print(f"  refused: {text}")
+    if dry_run:
+        print(f"{listed} finished lane{'s' if listed != 1 else ''}, {freed / 1e9:.1f} GB; dry run: nothing removed")
+    else:
+        print(f"done --finished: {finished} lane{'s' if finished != 1 else ''} finished, {freed / 1e9:.1f} GB freed"
+              + (f"; {len(refused)} refused" if refused else ""))
+    return freed, finished, refused
+
+
+def repair_disk(free_gb: float, floor: float) -> str:
+    """start below the disk floor (fathers#157): done on the machine's finished lanes first. The words for the
+    refusal should the disk still be short."""
+    print(f"lane: free disk is {free_gb:.0f} GB, under {floor:.0f} GB: running done on the registered projects' "
+          "finished lanes first", flush=True)
+    freed, finished, refused = finish_finished(False, automatic=True)
+    words = f"done on finished lanes freed {freed / 1e9:.1f} GB on {finished}"
+    return words + (f", {len(refused)} refused ({'; '.join(refused[:3])})" if refused else "")

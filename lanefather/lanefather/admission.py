@@ -220,11 +220,11 @@ def grouped(records: list[state.Record]) -> str:
 
 
 def evaluate(project: config.Config, records: list[state.Record], common: str | None = None, *,
-             cap_exempt: bool = False) -> Decision:
+             cap_exempt: bool = False, repaired: str | None = None) -> Decision:
     """Whether one more lane of the repository whose Git common directory is `common` may be registered: the cap
     counts that repository's planned and active lanes (all of `records` when `common` is None), the global ceiling
     every project's. `cap_exempt` admits a lane outside both (a fix lane in its landed parent's place, fathers#45);
-    disk and load still apply."""
+    disk and load still apply. `repaired` says what start's disk repair did (fathers#157), for a disk refusal."""
     if project.admission_provider not in ("legacy", "slotfather"):
         raise LaneError("unknown lifetime admission provider")
     active = state.occupying(state.of_project(records, common))
@@ -266,7 +266,8 @@ def evaluate(project: config.Config, records: list[state.Record], common: str | 
                         f"the global ceiling is {ceiling[0]} ({ceiling[1]}): land one to make room")
     if machine["disk_free_gb"] < host.MIN_DISK_GB:
         refusals.append(f"free disk is {machine['disk_free_gb']:.0f} GB, under {host.MIN_DISK_GB} GB: "
-                        f"run {project.command} done on landed lanes")
+                        + (f"{repaired}; the rest is not finished lanes' to free" if repaired else
+                           f"run {project.command} done --finished, or done on landed lanes"))
     if "load15" in codes:
         limit = (f"{host.LOAD_FACTOR}x{machine['cores']} cores" if project.admission_provider == "legacy"
                  else f"the Slotfather admission limit {machine['load_limit']:.1f}")

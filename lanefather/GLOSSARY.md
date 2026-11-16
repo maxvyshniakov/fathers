@@ -18,6 +18,8 @@ admission, slot, lease) are in the [fathers glossary](../GLOSSARY.md).
 | Active lane | A registered lane with a worktree, before landing. |
 | Landed lane | A lane whose changes have been merged into its integration branch. |
 | Released lane | A landed lane retained for later cleanup because its agent still locks the worktree. Not a software release: `lanefather shipped <version>` handles those. |
+| Finished lane | A landed or released lane whose post-merge smoke is green and whose review is finished or exempt with every finding marked, and that is not kept: auto-done runs `done` on it. |
+| Kept lane | A lane `lanefather keep` or `land --keep` marked, which auto-done and `done --finished` leave alone. |
 | Done lane | A lane whose cleanup has completed. |
 | Ranked queue | An ordered set of proposed lanes awaiting registration. |
 | Ready entry | An unregistered queue entry (say queue entry, not entry, in shared docs) with no declared block, unmet dependency or conflicting claim. |

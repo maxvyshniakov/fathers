@@ -14,7 +14,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from . import admission, claims, config, host, journal, promote, queue, review, slots, state, tickets, worktrees
+from . import admission, claims, config, done, host, journal, promote, queue, review, slots, state, tickets, worktrees
 from .errors import LaneError
 from .gitops import common_dir, current_branch, git, git_ok, main_checkout, worktree_list
 from .state import Record
@@ -81,6 +81,11 @@ def register(record: Record, rules: list[dict[str, Any]], force_reason: str | No
     """Enforce the cap, disk, load and claims, save the record and print its brief header."""
     prog = config.prog()
     lane_id, lane_claims, after = record["id"], record["claims"], record["after"]
+    # fathers#157: below the disk floor, done on the machine's finished lanes first, outside the state lock that
+    # each done takes; the decision below reads the disk again.
+    free = host.disk_free_gb(config.current())
+    repaired = (done.repair_disk(free, host.MIN_DISK_GB)
+                if free < host.MIN_DISK_GB and not force_reason else None)
     with state.locked("state"):
         existing = state.read_json(state.record_path(lane_id))
         if existing and existing["status"] != "done":
@@ -90,7 +95,8 @@ def register(record: Record, rules: list[dict[str, Any]], force_reason: str | No
             if name not in {r["id"] for r in others if r["status"] != "done"}:
                 raise LaneError(f"--after {name}: no lane that is not done by that name")
         parent = fix_parent(record)
-        decision = admission.evaluate(config.current(), others, record["common_dir"], cap_exempt=parent is not None)
+        decision = admission.evaluate(config.current(), others, record["common_dir"], cap_exempt=parent is not None,
+                                      repaired=repaired)
         cap, source, info = decision.cap, decision.source, decision.machine
         if parent is not None:
             # fathers#45 (a): the fix lane takes its landed parent's place, outside the cap; the record says why.

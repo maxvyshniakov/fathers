@@ -104,6 +104,9 @@ class Config:
     # holds the gate.
     review_panel: tuple[str, ...] = ()
     review_panel_required: bool = False
+    # [done] auto (fathers#157): a lane that becomes finished runs done by itself, and start below the disk floor
+    # runs done on the machine's finished lanes; false leaves both to `done`.
+    done_auto: bool = True
     # [slots.priority]: a phase's (or `default`) Slotfather priority, below the environment's (lanefather#24).
     slot_priority: tuple[tuple[str, str], ...] = ()
     cache_name: str = "lanefather"
@@ -245,7 +248,7 @@ def _steps(data: dict[str, Any], key: str) -> tuple[Step, ...]:
 
 TOP_KEYS = ("project", "command", "state_dir", "legacy_env_prefix", "shared_env", "report_doc", "queue_name",
             "coding_standards", "rules_dir", "steering", "unclaimed", "merge_config", "checks", "lane", "gate",
-            "promote", "hooks", "env", "gc", "admission", "tickets", "slots", "review")
+            "promote", "hooks", "env", "gc", "admission", "tickets", "slots", "review", "done")
 TABLE_KEYS = {
     "admission": ("provider", "cap"),
     "checks": ("verify", "plan_module", "triage", "toolchain", "toolchain_pin", "slot_env", "gate_only"),
@@ -257,6 +260,7 @@ TABLE_KEYS = {
     "tickets": ("integrated_label", "land_comment", "fixes_trailer", "release_comment", "preview", "repo"),
     "slots": ("priority",),
     "review": ("blocks", "panel", "panel_required"),
+    "done": ("auto",),
 }
 
 
@@ -321,9 +325,10 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
     tickets: dict[str, Any] = data.get("tickets", {})
     slot_table: dict[str, Any] = data.get("slots", {})
     review: dict[str, Any] = data.get("review", {})
+    finish: dict[str, Any] = data.get("done", {})
     for name, table in (("checks", checks), ("lane", lane), ("gate", gate), ("promote", promote), ("hooks", hooks),
                         ("env", env), ("gc", gc), ("admission", admission), ("tickets", tickets),
-                        ("slots", slot_table), ("review", review)):
+                        ("slots", slot_table), ("review", review), ("done", finish)):
         if not isinstance(table, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
             raise LaneError(f"{CONFIG_NAME}: [{name}] must be a table")
     if not all(isinstance(v, str) for v in env.values()):
@@ -331,7 +336,7 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
     _known(data, "", TOP_KEYS)
     for name, table in (("checks", checks), ("lane", lane), ("gate", gate), ("promote", promote),
                         ("hooks", hooks), ("gc", gc), ("admission", admission), ("tickets", tickets),
-                        ("slots", slot_table), ("review", review)):
+                        ("slots", slot_table), ("review", review), ("done", finish)):
         _known(table, name, TABLE_KEYS[name])
     for key in ("install", "deploy"):
         steps: list[Any] = promote.get(key, []) if isinstance(promote.get(key), list) else []
@@ -357,6 +362,9 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
     panel_required = review.get("panel_required", default.review_panel_required)
     if type(panel_required) is not bool:
         raise LaneError(f"{CONFIG_NAME}: [review] panel_required must be a boolean")
+    done_auto = finish.get("auto", default.done_auto)
+    if type(done_auto) is not bool:
+        raise LaneError(f"{CONFIG_NAME}: [done] auto must be a boolean")
     lane_cap = admission.get("cap")
     if lane_cap is not None and (type(lane_cap) is not int or lane_cap < 1):
         raise LaneError(f"{CONFIG_NAME}: [admission] cap must be a positive whole number")
@@ -385,6 +393,7 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         review_blocks=_severities(review),
         review_panel=_panel(review),
         review_panel_required=panel_required,
+        done_auto=done_auto,
         slot_priority=_slot_priority(slot_table),
         cache_name=_string(lane, "cache_name", default.cache_name),
         lane_targets=_strings(lane, "targets", default.lane_targets),
@@ -444,6 +453,11 @@ def current() -> Config:
     global _current
     if _current is None:
         _current = load(find(os.getcwd()))
+    return _current
+
+
+def chosen() -> Config | None:
+    """The config `use` set or `current` found, None before either: what a caller that switches projects restores."""
     return _current
 
 

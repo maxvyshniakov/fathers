@@ -358,15 +358,13 @@ def start_lane_review(record: Record) -> str:
 
 
 def review_complete_finish(lane_id: str) -> None:
-    """After the lane's review is clean or fully marked: finish the lane as land would have, unless land is still
-    running its smoke (land finishes it then), kept it (--keep), or its smoke was red."""
+    """After the lane's review is clean or fully marked: finish the lane as land would have (auto-done,
+    fathers#157), unless land is still running its smoke (land finishes it then) or its smoke was red; a kept lane
+    and `[done] auto = false` only say so."""
     record = state.load(lane_id)
     if record["status"] not in ("landed", "released"):
         return
-    if (record.get("landed") or {}).get("keep"):
-        print(f"Lane {lane_id} kept (--keep): finish it with {config.prog()} done {lane_id}")
-        return
-    if (record.get("post_merge") or {}).get("status") != "green":
+    if (record.get("post_merge") or {}).get("status") != "green" and not done.kept(record):
         return
     done.finish_landed(lane_id, False)
 
