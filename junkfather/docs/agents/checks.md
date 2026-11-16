@@ -20,7 +20,9 @@ fixed sleep or an elapsed-time assert (`repo-kit test-hygiene`).
 
 Junkfather has no `tools/type-baseline.json`: every Ruff or Pyright diagnostic fails. For a focused change, run its
 test file first (`python3 -m unittest tests/test_reap.py`). Tests run real child processes in a scratch state
-directory with a fake Claude Code session registry, and must clean up every process they start.
+directory with a fake Claude Code session registry, and must clean up every process they start. Nothing of the
+machine may count in them: the resource tests name their own Safari Technology Preview (`JUNKFATHER_STP_APP`), so
+a running instance, a person's or another suite's, never makes their quit refuse.
 
 ## Review
 

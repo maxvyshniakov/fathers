@@ -34,7 +34,10 @@ class ResourceCase(Case):
                               OTHER_SIM: {"name": "iPhone 18 Pro Max", "state": "Shutdown"}},
                         containers={}, routes={"https:443": "http://127.0.0.1:5186"}, stp=[], fail=[],
                         stp_app=str(app))
-        self.env.update(PATH=f"{FAKES}{os.pathsep}{self.env.get('PATH', '')}", JUNKFATHER_FAKE_STATE=str(self.fake))
+        self.env.update(PATH=f"{FAKES}{os.pathsep}{self.env.get('PATH', '')}", JUNKFATHER_FAKE_STATE=str(self.fake),
+                        JUNKFATHER_STP_APP=str(app))  # the machine's own Safari Technology Preview never counts
+        os.environ["JUNKFATHER_STP_APP"] = str(app)  # for the in-process calls
+        self.addCleanup(os.environ.pop, "JUNKFATHER_STP_APP", None)
         self.addCleanup(self.end_fake_apps)
 
     def write_fake(self, **state: Any) -> None:
@@ -50,7 +53,7 @@ class ResourceCase(Case):
 
     def end_fake_apps(self) -> None:
         for proc in procs.Table.read().procs.values():
-            if resources.STP_MAIN.search(proc.cmd) and str(self.tmp) in proc.cmd:
+            if resources.STP_MAIN.search(proc.cmd) and str(self.tmp) in proc.cmd:  # the elsewhere app too
                 try:
                     os.kill(proc.pid, signal.SIGKILL)
                 except OSError:
@@ -311,6 +314,21 @@ class SafariTests(ResourceCase):
         self.assertEqual(0, self.cli("reap", "--id", entry["id"], env=self.env).returncode)
         self.wait_for(lambda: not self.runs(pid), what="the quit")
         self.assertEqual("reaped", self.state_of(entry["id"]))
+
+    def test_an_instance_outside_the_test_never_counts(self):
+        """The machine's own Safari Technology Preview (a person's, another suite's fake) is not this test's: with
+        JUNKFATHER_STP_APP naming the test's app, only that one is listed, so the quit is not refused for it."""
+        elsewhere = self.tmp / "elsewhere" / "Safari Technology Preview.app" / "Contents" / "MacOS"
+        elsewhere.mkdir(parents=True)
+        other = elsewhere / "Safari Technology Preview"
+        other.write_text(self.app.read_text())
+        other.chmod(0o755)
+        theirs = self.spawn(str(other), start_new_session=True)
+        self.wait_for(lambda: self.runs(theirs.pid), what="the other instance")
+        entry = self.own("--kind", "safari-tp", "--", "open", "-g", "-a", "Safari Technology Preview")
+        self.assertEqual(0, self.cli("reap", "--id", entry["id"], env=self.env).returncode)
+        self.wait_for(lambda: not self.runs(entry["resource"]["pid"]), what="the quit")
+        self.assertTrue(self.runs(theirs.pid), "the other instance is never quit")
 
     def test_an_instance_that_already_ran_is_not_taken_and_a_second_one_is_never_quit(self):
         theirs = self.spawn(str(self.app), start_new_session=True)

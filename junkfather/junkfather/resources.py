@@ -50,6 +50,15 @@ ROUTE = re.compile(r"\A(https|http|tcp|tls-terminated-tcp):(\d{1,5})(/\S*)?\Z")
 STP_BUNDLE = "com.apple.SafariTechnologyPreview"
 STP_MAIN = re.compile(r"Safari Technology Preview\.app/Contents/MacOS/Safari Technology Preview(\s|$)")
 
+
+def stp_main(cmd: str) -> bool:
+    """A Safari Technology Preview main process. $JUNKFATHER_STP_APP (the tests) names the one executable that
+    counts, so the machine's own instance, a person's or another suite's, is never theirs to count or quit."""
+    only = os.environ.get("JUNKFATHER_STP_APP")
+    if only:
+        return re.search(re.escape(only) + r"(\s|$)", cmd) is not None
+    return STP_MAIN.search(cmd) is not None
+
 Listing = Optional[Dict[str, Dict[str, Any]]]
 
 
@@ -294,7 +303,7 @@ class SafariTP(Kind):
         if table is None:
             return None
         return {str(p.pid): {"pid": p.pid, "start": p.start, "name": "Safari Technology Preview"}
-                for p in table.procs.values() if p.uid == os.getuid() and STP_MAIN.search(p.cmd)}
+                for p in table.procs.values() if p.uid == os.getuid() and stp_main(p.cmd)}
 
     def alive(self, resource: Mapping[str, Any], listed: Listing, table: Optional[_procs.Table]) -> Optional[bool]:
         if table is None:
