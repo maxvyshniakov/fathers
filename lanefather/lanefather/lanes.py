@@ -154,11 +154,32 @@ def register_admitted(record: Record, decision: admission.Decision, refusals: li
                             "worktree": record["worktree"], "cap": cap, "cap_source": source})
 
 
+def fix_of(given: list[str] | None) -> list[str]:
+    """start --fix-of: the landed lanes whose review findings a batch fix lane fixes (fathers#174), each once."""
+    parents = list(dict.fromkeys(name for value in given or () for name in value.replace(",", " ").split()))
+    for parent in parents:
+        record = state.read_json(state.record_path(parent))
+        if record is None:
+            raise LaneError(f"--fix-of {parent}: no lane by that name")
+        if record.get("status") not in state.LANDED:
+            raise LaneError(f"--fix-of {parent}: lane {parent} is {record.get('status')}, not landed; a fix lane "
+                            "fixes the review findings of landed lanes")
+    return parents
+
+
 def start(args: Any) -> int:
     lane_claims = [c for claim in args.claims for c in claim.split()]
+    parents = fix_of(getattr(args, "fix_of", None))
     record, rules = prepare(os.getcwd(), args.id, args.ticket, lane_claims, args.base, args.after, args.branch,
                             args.scratch)
+    if parents:
+        # One parent keeps the string every Lanefather reads; several are a list (fathers#174).
+        record["review_fix_of"] = parents[0] if len(parents) == 1 else parents
     register(record, rules, args.force_reason, args.create)
+    if not parents and "review-fixes" in args.id:
+        print(f"{config.prog()}: warning: {args.id} looks like a fix lane but names no parent, so its land starts "
+              f"a review of the fix; to exempt it, {config.prog()} drop {args.id} and start it again with "
+              "--fix-of <lane>,<lane>", file=sys.stderr)
     return 0
 
 

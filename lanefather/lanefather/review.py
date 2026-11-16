@@ -134,8 +134,12 @@ def documentation_only(paths: list[str]) -> bool:
 
 
 def review_exemption(record: Record) -> str | None:
-    if record.get("review_fix_of"):
-        return f"the fix round of {record['review_fix_of']}'s review, which nobody reviews again"
+    parents = state.fix_parents(record)
+    if len(parents) == 1:
+        return f"the fix round of {parents[0]}'s review, which nobody reviews again"
+    if parents:
+        return (f"the fix round of the reviews of {', '.join(parents[:-1])} and {parents[-1]}, which nobody reviews "
+                "again")
     if (record.get("landed") or {}).get("docs_only"):
         return "documentation only: it changes only *.md and docs/** outside the steering files"
     return None

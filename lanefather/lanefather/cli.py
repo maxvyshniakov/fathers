@@ -111,6 +111,8 @@ def parser() -> argparse.ArgumentParser:
                    help="land after these lanes; their claims may overlap")
     p.add_argument("--scratch", nargs="+", default=[], metavar="DIR", help="extra scratch dirs done removes")
     p.add_argument("--create", action="store_true", help="create the worktree now instead of adopting one")
+    p.add_argument("--fix-of", action="append", metavar="ID,ID",
+                   help="a fix lane for the review findings of these landed lanes: its land is exempt from review")
     p.add_argument("--force-reason", help="start despite the lane cap, disk or load; logged")
     p.set_defaults(run=lanes.start)
     p = commands.add_parser("next", help="the first ready entry of the queue: its brief header; --start registers it")

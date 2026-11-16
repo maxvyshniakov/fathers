@@ -8,6 +8,13 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- A batch fix lane is exempt from review (fathers#174): `lanefather start ID --fix-of A,B,C` names the landed lanes
+  whose review findings it fixes, and its land records `review.exempted` instead of starting a review, as for a
+  `review --fix-lane` lane; `review A --mark N fixed:ID` marks the parents' findings with its merge as before.
+  `start` warns when an id that reads `review-fixes` names no parent. The record keeps `review_fix_of` a string for
+  one parent and makes it a list for several; an older Lanefather's land exempts such a lane too.
+  `review --fix-lane` stays one lane: it hands over that lane's worktree.
+
 - Two routine cleanups without `--force-reason` (fathers#167). `lanefather drop ID` removes a planned or active lane
   that adds nothing to its base (no commits beyond it, its tree already the base's, or commits that change nothing)
   and whose worktree has no uncommitted or untracked changes, with `done`'s cleanup; it refuses a lane with work and

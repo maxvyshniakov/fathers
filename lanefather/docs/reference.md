@@ -5,7 +5,7 @@
 ## Commands
 
 ```
-lanefather start <id> --ticket N --claims GLOB... [--base REF] [--after ID...] [--create]
+lanefather start <id> --ticket N --claims GLOB... [--base REF] [--after ID...] [--fix-of ID,ID] [--create]
 lanefather next [--start]                 the first ready entry of the ranked queue
 lanefather adopt <id> <worktree> <branch> register the worktree an agent created
 lanefather check <id>                     the checks the plan selects for the lane's diff -> receipt
@@ -48,6 +48,13 @@ slots) at the rerun's [slot priority](#slot-priorities) (interactive by default)
 
 `review <id> --fix-lane` starts the fix lane from the branch the lane landed on, which holds its merge, and refuses
 when no branch does; the landed lane keeps its own registration.
+
+A fix lane is exempt from review at land (`review.exempted`): the one `review <id> --fix-lane` registers for one
+lane, and a batch fix lane started with `start <id> --fix-of A,B,C` for the findings of several landed lanes
+(fathers#174). The record names its parents in `review_fix_of`: one id as a string, as before, several as a list.
+Mark each parent's findings with the fix lane's merge (`review A --mark N fixed:<fix lane id>`). A batch fix lane has
+its own worktree, counts toward the cap like any lane, and runs its own check plan; `start` warns when an id that
+reads `review-fixes` names no parent.
 
 ### Finishing lanes
 

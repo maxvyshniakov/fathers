@@ -191,6 +191,17 @@ def migrate(record: Record) -> Record:
     return record
 
 
+def fix_parents(record: Record) -> list[str]:
+    """The lanes whose review findings a fix lane fixes: `review_fix_of` is one id (review --fix-lane, start
+    --fix-of with one lane, and every record from before fathers#174) or a list of ids (start --fix-of A,B)."""
+    named: Any = record.get("review_fix_of")
+    if isinstance(named, str):
+        return [named] if named else []
+    if isinstance(named, list):
+        return [str(n) for n in named if isinstance(n, str) and n]  # pyright: ignore[reportUnknownVariableType]
+    return []
+
+
 def load(lane_id: str) -> Record:
     state_dir()
     return Store(config.current()).load(lane_id)
