@@ -97,7 +97,7 @@ def advise(request: dict[str, object]) -> dict[str, object]:
     derived = cap
     cap_source = "derived"
     warnings: list[str] = []
-    cap_override = cast(dict[str, object] | None, request["cap_override"])
+    cap_override = cast("dict[str, object] | None", request["cap_override"])
     if cap_override is not None:
         raw = cast(str, cap_override["value"])
         try:
