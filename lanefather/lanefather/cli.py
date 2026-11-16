@@ -16,6 +16,9 @@
   findings <sha> [--since REF]       whether a review holds the SHA (unmarked P1/P2 findings), for a publish
   done <id>                          after landing: stop what the lane left running, remove its worktree,
                                      branches, build directories and scratch
+  done --finished [--dry-run]        done on every finished lane of the registered projects; --dry-run lists
+                                     them with their sizes
+  keep <id> [--off]                  auto-done, done --finished and start's disk repair leave the lane
   promote <sha> [--ship] [--no-push] [--install [--deploy HOST]]
   sync [--drop-local]
   perf <sha>                         the batch gate, promotion, sync and the perf suite (lanefather.promote)
@@ -120,6 +123,9 @@ def parser() -> argparse.ArgumentParser:
     p = commands.add_parser("check", help="run the lane's affected checks and write its receipt")
     p.add_argument("id")
     p.add_argument("--rerun", action="store_true", help="run every suite even if a receipt covers the tree")
+    p.add_argument("--agent", choices=("claude-code", "codex"),
+                   help="the agent that built the lane, for the review's implementer family (default: the agent "
+                        "session this check runs in)")
     p.add_argument("--slots", type=int, choices=range(1, 5),
                    help="verification worker budget passed as verify --jobs (default: slotfather advise, at most "
                         f"{CHECK_MAX_JOBS})")
@@ -198,9 +204,17 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--force-reason", help="answer 0 although a review holds the SHA; logged")
     p.set_defaults(run=review.findings)
     p = commands.add_parser("done", help="remove a landed lane's worktree, branches, targets and scratch")
-    p.add_argument("id")
+    p.add_argument("id", nargs="?")
+    p.add_argument("--finished", action="store_true",
+                   help="every finished lane of the registered projects: landed, smoke green, review finished or "
+                        "exempt with every finding marked, not kept")
+    p.add_argument("--dry-run", action="store_true", help="with --finished: list the lanes and sizes, remove nothing")
     p.add_argument("--force-reason", help="clean up a lane that is not landed or lacks a ticket comment; logged")
     p.set_defaults(run=done.done)
+    p = commands.add_parser("keep", help="keep a lane from auto-done and done --finished (its scratch is in use)")
+    p.add_argument("id")
+    p.add_argument("--off", action="store_true", help="release the lane to auto-done again")
+    p.set_defaults(run=done.keep)
     p = commands.add_parser("gc", help="remove merged idle agent worktrees and unused branches")
     p.add_argument("--dry-run", action="store_true", help="report removals without changing anything")
     p.add_argument("--json", action="store_true", help="machine-readable removals, retained paths and errors")

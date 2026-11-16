@@ -101,9 +101,11 @@ def asked_reviewers(args: Any) -> tuple[str, ...]:
 
 
 def missing_members(receipt: dict[str, Any]) -> list[str]:
-    """The panel members of a finished review that gave no answer: failed, or skipped with no stand-in."""
+    """The panel members of a finished review that should have answered and did not: a run that failed, or a
+    forced member that could not start. A member skipped by the rules (its condition failed and its fallback is on
+    the panel already) is not missing."""
     panel: list[dict[str, Any]] = receipt.get("panel") or []
-    return [str(e.get("member")) for e in panel if e.get("status") != "finished"]
+    return [str(e.get("member")) for e in panel if e.get("status") == "failed"]
 
 
 # The family of the agent that ran the lane's last check (lanefather.events.actor), for the role's `not_family`.
@@ -194,7 +196,7 @@ def perform_review(label: str, fields: dict[str, Any], main: str, base: str, tip
     receipt: dict[str, Any] = {"version": 1, "label": label, **fields, "base": base, "tip": tip,
                                "tree": git(main, "rev-parse", tip + "^{tree}"), "status": "running",
                                "pid": os.getpid(), "log": config.current().env("REVIEW_LOG"),
-                               "started": journal.now(), "effort": runner.models["sol_effort"]}
+                               "started": journal.now(), "effort": runner.effort}
     with state.locked(f"review-{label}"):
         state.write_json(path, receipt)
     reviews = state.state_dir() / "reviews"
@@ -322,7 +324,7 @@ def spawn_review(label: str, fields: dict[str, Any], argv: list[str], cwd: str) 
                                  stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
                                  start_new_session=True, env=self_env(LANEFATHER_REVIEW_LOG=str(log)))
         receipt = {"version": 1, "label": label, **fields, "status": "running", "pid": child.pid, "log": str(log),
-                   "started": journal.now(), "effort": reviewer.Reviewer(config.current()).models["sol_effort"]}
+                   "started": journal.now(), "effort": reviewer.Reviewer(config.current()).effort}
         state.write_json(state.receipt_path(label, "review"), receipt)
     journal.ledger(f"review-start {label} pid={child.pid} log={log}", kind="review.started",
                    **review_about(label, fields), details={"pid": child.pid, "log": str(log)})
@@ -358,15 +360,13 @@ def start_lane_review(record: Record) -> str:
 
 
 def review_complete_finish(lane_id: str) -> None:
-    """After the lane's review is clean or fully marked: finish the lane as land would have, unless land is still
-    running its smoke (land finishes it then), kept it (--keep), or its smoke was red."""
+    """After the lane's review is clean or fully marked: finish the lane as land would have (auto-done,
+    fathers#157), unless land is still running its smoke (land finishes it then) or its smoke was red; a kept lane
+    and `[done] auto = false` only say so."""
     record = state.load(lane_id)
     if record["status"] not in ("landed", "released"):
         return
-    if (record.get("landed") or {}).get("keep"):
-        print(f"Lane {lane_id} kept (--keep): finish it with {config.prog()} done {lane_id}")
-        return
-    if (record.get("post_merge") or {}).get("status") != "green":
+    if (record.get("post_merge") or {}).get("status") != "green" and not done.kept(record):
         return
     done.finish_landed(lane_id, False)
 
@@ -718,6 +718,9 @@ def review(args: Any) -> int:
         return overall_review(args)
     if not args.id:
         raise LaneError("give a lane id, or --overall <sha> --since <base>")
+    reviewer_flag = getattr(args, "reviewer", None)
+    if reviewer_flag and (args.mark or getattr(args, "compare", False) or args.fix_lane):
+        raise LaneError("--reviewer chooses who reviews; it does not combine with --mark, --compare or --fix-lane")
     if getattr(args, "compare", False):
         return compare(args)
     if args.mark:

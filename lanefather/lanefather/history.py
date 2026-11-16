@@ -165,7 +165,9 @@ def stats(days: float | None = 7, lane: str | None = None) -> dict[str, Any]:
 
 def reviewer_totals(days: float | None = 7, lane: str | None = None) -> list[dict[str, Any]]:
     """Per reviewer (fathers#151), over the finished review receipts of the window (and lane): reviews, failed
-    panel runs, findings by severity, and how many were marked fixed, rejected or are still unmarked."""
+    panel runs, findings by severity and their marks, by review.reviewer_views and review.mark_counts."""
+    from . import review  # review imports checks, which imports this module
+
     cutoff = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=days)) if days else None
     table: dict[str, dict[str, Any]] = {}
     try:
@@ -181,33 +183,20 @@ def reviewer_totals(days: float | None = 7, lane: str | None = None) -> list[dic
                 continue
         except ValueError:
             continue
-        findings: list[dict[str, Any]] = receipt.get("findings") or []
-        panel: list[dict[str, Any]] = receipt.get("panel") or []
-        members = panel or [{"reviewer": receipt.get("reviewer"), "model": receipt.get("model"), "status": "finished",
-                             "numbers": [f.get("n") for f in findings]}]
-        for member in members:
-            name = member.get("reviewer")
-            if not isinstance(name, str) or member.get("status") == "skipped":
+        for view in review.reviewer_views(receipt):
+            name = view.get("reviewer")
+            if not isinstance(name, str) or view.get("status") == "skipped":
                 continue
-            row = table.setdefault(name, {"reviewer": name, "models": [], "reviews": 0, "failed": 0, "findings": 0,
-                                          "p1": 0, "p2": 0, "p3": 0, "fixed": 0, "rejected": 0, "unmarked": 0})
-            if member.get("model") and member["model"] not in row["models"]:
-                row["models"].append(member["model"])
-            if member.get("status") != "finished":
+            row = table.setdefault(name, {"reviewer": name, "models": [], "reviews": 0, "failed": 0,
+                                          **dict.fromkeys(review.mark_counts([]), 0)})
+            if view.get("model") and view["model"] not in row["models"]:
+                row["models"].append(view["model"])
+            if view.get("status") != "finished":
                 row["failed"] += 1
                 continue
             row["reviews"] += 1
-            numbers = set(member.get("numbers") or [])
-            for finding in findings:
-                if finding.get("n") not in numbers:
-                    continue
-                mark: dict[str, Any] = finding.get("mark") or {}
-                kind = mark.get("kind")
-                row["findings"] += 1
-                severity = str(finding.get("severity", "")).lower()
-                if severity in ("p1", "p2", "p3"):
-                    row[severity] += 1
-                row[kind if kind in ("fixed", "rejected") else "unmarked"] += 1
+            for key, count in review.mark_counts(view["findings"]).items():
+                row[key] += count
     return sorted(table.values(), key=lambda r: r["reviewer"])
 
 

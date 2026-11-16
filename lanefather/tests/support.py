@@ -345,24 +345,29 @@ else:
 # (FIXTURE_CODEX_USED percent used, FIXTURE_CODEX_REACHED a rateLimitReachedType) and `exec` with the
 # review in FIXTURE_REVIEW_TEXT; FIXTURE_CODEX_EXEC=model-error|limit|empty|no-output fails the run as Sol can.
 # Both log their argv and keep the prompt they were given; FIXTURE_REVIEW_HOLD holds a run until it exists.
-# FIXTURE_PANEL_MEET (a directory) makes each reviewer say it started there and wait for the other one (fathers#151):
-# a panel that ran them one after the other would fail, so the test shows they run at once without timing them.
-# FIXTURE_CLAUDE_TEXT gives Claude another answer than FIXTURE_REVIEW_TEXT.
+# FIXTURE_PANEL_MEET (a FIFO) makes codex open it for reading and claude for writing, so each blocks until the
+# other has started (fathers#151): a panel that ran them one after the other never meets, and the stand-in exits 3
+# after 60 s. Codex writes its answer before it meets; FIXTURE_MEET_LIST (a directory) makes claude record what that
+# directory holds once both met, in FIXTURE_MEET_LIST + ".seen". FIXTURE_CLAUDE_TEXT gives Claude another answer.
 MEET = r'''
-def meet(name, other):
-    folder = os.environ.get("FIXTURE_PANEL_MEET")
-    if not folder:
+def meet(name):
+    fifo = os.environ.get("FIXTURE_PANEL_MEET")
+    if not fifo:
         return
-    pathlib.Path(folder, name).write_text("")
-    deadline = time.monotonic() + 60
-    while not pathlib.Path(folder, other).exists():
-        if time.monotonic() > deadline:
-            print(f"{name}: {other} never started beside me", file=sys.stderr)
-            sys.exit(3)
-        time.sleep(0.05)
+    def late(*_):
+        print(f"{name}: the other reviewer never started beside me", file=sys.stderr)
+        os._exit(3)
+    signal.signal(signal.SIGALRM, late)
+    signal.alarm(60)
+    with open(fifo, "r" if name == "codex" else "w"):
+        pass
+    signal.alarm(0)
+    listed = os.environ.get("FIXTURE_MEET_LIST")
+    if listed and name == "claude":
+        pathlib.Path(listed + ".seen").write_text(json.dumps(sorted(os.listdir(listed))))
 '''
 FAKE_CODEX = r'''#!/usr/bin/env python3
-import json, os, pathlib, sys, time
+import json, os, pathlib, signal, sys, time
 ''' + MEET + r'''
 args = sys.argv[1:]
 log = os.environ["FIXTURE_CODEX_LOG"]
@@ -387,34 +392,34 @@ if args[:1] == ["app-server"]:
     sys.exit(0)
 if args[:1] == ["exec"]:
     pathlib.Path(log + ".prompt").write_text(sys.stdin.read())
-    meet("codex", "claude")
     hold = os.environ.get("FIXTURE_REVIEW_HOLD")
     while hold and not os.path.exists(hold):
         time.sleep(0.05)
     mode = os.environ.get("FIXTURE_CODEX_EXEC", "ok")
+    out = pathlib.Path(args[args.index("-o") + 1])
+    if mode in ("ok", "empty"):
+        out.write_text("" if mode == "empty" else pathlib.Path(os.environ["FIXTURE_REVIEW_TEXT"]).read_text())
+    meet("codex")
     if mode == "model-error":
         print("ERROR: The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.", file=sys.stderr)
         sys.exit(1)
     if mode == "limit":
         print("ERROR: You've hit your usage limit. Try again later.", file=sys.stderr)
         sys.exit(1)
-    out = pathlib.Path(args[args.index("-o") + 1])
-    if mode == "no-output":
-        sys.exit(0)
-    out.write_text("" if mode == "empty" else pathlib.Path(os.environ["FIXTURE_REVIEW_TEXT"]).read_text())
-    print("codex exec transcript: rate limit and usage limit are words a lane diff may contain")
+    if mode == "ok":
+        print("codex exec transcript: rate limit and usage limit are words a lane diff may contain")
     sys.exit(0)
 sys.exit(2)
 '''
 
 FAKE_CLAUDE = r'''#!/usr/bin/env python3
-import json, os, pathlib, sys, time
+import json, os, pathlib, signal, sys
 ''' + MEET + r'''
 log = os.environ["FIXTURE_CLAUDE_LOG"]
 with open(log, "a") as handle:
     handle.write(json.dumps([os.path.realpath(os.getcwd()), *sys.argv[1:]]) + "\n")
 pathlib.Path(log + ".prompt").write_text(sys.stdin.read())
-meet("claude", "codex")
+meet("claude")
 if os.environ.get("FIXTURE_CLAUDE_FAIL"):
     print("claude: API Error: overloaded", file=sys.stderr)
     sys.exit(1)
@@ -422,11 +427,12 @@ sys.stdout.write(pathlib.Path(os.environ.get("FIXTURE_CLAUDE_TEXT") or os.enviro
 '''
 
 # A stand-in for Mastack's `bin/role` (fathers#150), installed beside a models file by LaneCase.with_role: it logs
-# its argv and the MASTACK_ variables, and answers `review` as models.toml's review role does (Sol while Codex has
-# 15% of its week left and the implementer is not OpenAI; else Opus) from FIXTURE_CODEX_USED. It never reads a
-# real limit; FIXTURE_ROLE_EXIT=2 fails it as an unreadable table does.
+# its argv and the MASTACK_ variables and answers from the review role of the models file MASTACK_MODELS names, its
+# choices in order (when.not_family, when.limit), with FIXTURE_CODEX_USED and FIXTURE_CODEX_REACHED as the weekly
+# Codex limit; it never reads a real limit. FIXTURE_ROLE_EFFORT overrides its choice's effort; FIXTURE_ROLE_EXIT=2
+# fails it as an unreadable table does. The shared cases also run Mastack's own bin/role (test_review_panel.REAL_ROLE, when present).
 FAKE_ROLE = r'''#!/usr/bin/env python3
-import json, os, sys
+import json, os, sys, tomllib
 args = sys.argv[1:]
 with open(os.environ["FIXTURE_ROLE_LOG"], "a") as handle:
     handle.write(json.dumps({"argv": args, "models": os.environ.get("MASTACK_MODELS"),
@@ -434,23 +440,39 @@ with open(os.environ["FIXTURE_ROLE_LOG"], "a") as handle:
 if os.environ.get("FIXTURE_ROLE_EXIT"):
     print("role: cannot read the table", file=sys.stderr)
     sys.exit(int(os.environ["FIXTURE_ROLE_EXIT"]))
+table = tomllib.loads(open(os.environ["MASTACK_MODELS"]).read())
 family = args[args.index("--implementer-family") + 1] if "--implementer-family" in args else None
 left = int(100 - float(os.environ.get("FIXTURE_CODEX_USED", "27")))
+reached = os.environ.get("FIXTURE_CODEX_REACHED") or None
 unknown = "implementer family not given (pass --implementer-family)"
-skipped, quotas, caution = [], {}, None
-if family is None:
-    skipped = [{"model": "sol", "reason": "sol: " + unknown}, {"model": "opus", "reason": "opus: " + unknown}]
-    caution = unknown + ": choices that need another family were skipped, so a note about the family may not apply"
-elif family == "openai":
-    skipped = [{"model": "sol", "reason": "sol: same family as the implementer (openai)"}]
-else:
-    quotas = {"codex_weekly": {"left": left, "reached": None, "error": None, "resets_at": None}}
-    if left < 15:
-        skipped = [{"model": "sol", "reason": f"sol: codex_weekly {left}% left, needs 15%"}]
-sol = not skipped
-print(json.dumps({"role": "review", "model": "sol" if sol else "opus", "id": "gpt-6.1-sol" if sol else "claude-opus-5-5",
-                  "family": "openai" if sol else "anthropic", "cli": "codex" if sol else "claude", "effort": "medium",
-                  "argv": {}, "note": None, "caution": caution, "skipped": skipped, "quotas": quotas}))
+skipped, quotas = [], {}
+for choice in table["roles"]["review"]["choices"]:
+    name = choice["model"]
+    model = table["models"][name]
+    when = choice.get("when") or {}
+    reason = None
+    if when.get("not_family") and family is None:
+        reason = unknown
+    elif when.get("not_family") and model.get("family") == family:
+        reason = f"same family as the implementer ({family})"
+    else:
+        for quota, need in (when.get("limit") or {}).items():
+            quotas[quota] = {"left": left, "reached": reached, "error": None, "resets_at": None}
+            if left < need:
+                reason = f"{quota} {left}% left, needs {need:g}%"
+            elif reached:
+                reason = f"{quota} {left}% left, but Codex reports {reached}"
+    if reason:
+        skipped.append({"model": name, "reason": f"{name}: {reason}"})
+        continue
+    caution = (unknown + ": choices that need another family were skipped, so a note about the family may not apply"
+               if any(s["reason"].endswith(unknown) for s in skipped) else None)
+    print(json.dumps({"role": "review", "model": name, "id": model["id"], "family": model.get("family"),
+                      "cli": model["cli"], "effort": os.environ.get("FIXTURE_ROLE_EFFORT") or choice.get("effort", "medium"),
+                      "argv": {}, "note": choice.get("note"), "caution": caution, "skipped": skipped, "quotas": quotas}))
+    sys.exit(0)
+print(json.dumps({"role": "review", "error": "no choice qualifies", "skipped": skipped, "quotas": quotas}))
+sys.exit(1)
 '''
 
 # The review role as Mastack's models.toml has it (2026-11-16).
@@ -652,7 +674,8 @@ class LaneCase(unittest.TestCase):
         self.review_text.write_text(NO_FINDINGS)
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith(("STRAYLIGHT_", "LANEFATHER_", "SLOTFATHER_", "GIT_", "FIXTURE_"))
-                    and k not in ("CODEX_CLI_PATH", "PYTHONPATH", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")}
+                    and k not in ("CODEX_CLI_PATH", "PYTHONPATH", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")
+                    and not k.startswith("MASTACK_")}
         self.env.update(PATH=f"{self.tmp / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}", PYTHONPATH=str(ROOT),
                         CODEX_HOME=str(self.tmp / "codex-home"), FIXTURE_CODEX_LOG=str(self.tmp / "codex.log"),
                         FIXTURE_CLAUDE_LOG=str(self.tmp / "claude.log"), FIXTURE_REVIEW_TEXT=str(self.review_text),
@@ -783,15 +806,23 @@ class LaneCase(unittest.TestCase):
             time.sleep(0.05)
         return started.read_text()
 
-    def with_role(self, table: str = "") -> pathlib.Path:
+    def with_role(self, table: str = "", real: pathlib.Path | None = None) -> pathlib.Path:
         """A Mastack checkout in scratch: a models file (the review role of models.toml unless `table` is given)
-        and the stand-in `bin/role` beside it; returns the role's log."""
-        root = self.tmp / "mastack"
+        and `bin/role` beside it, the stand-in or a link to `real` (Mastack's own, which then reads the stand-in
+        codex and keeps its state in scratch); returns the stand-in's log."""
+        root = self.tmp / ("mastack-real" if real else "mastack")
         (root / "bin").mkdir(parents=True, exist_ok=True)
         (root / "models.toml").write_text(table or MODELS_TABLE)
         role = root / "bin" / "role"
-        role.write_text(FAKE_ROLE)
-        role.chmod(0o755)
+        role.unlink(missing_ok=True)
+        if real:
+            role.symlink_to(real)
+            (self.tmp / "mastack-config").mkdir(exist_ok=True)
+            self.env.update(MASTACK_HOOK_STATE=str(self.tmp / "mastack-state"),
+                            MASTACK_CONFIG=str(self.tmp / "mastack-config"))
+        else:
+            role.write_text(FAKE_ROLE)
+            role.chmod(0o755)
         log = self.tmp / "role.log"
         self.env.update(LANEFATHER_MODELS=str(root / "models.toml"), FIXTURE_ROLE_LOG=str(log))
         return log

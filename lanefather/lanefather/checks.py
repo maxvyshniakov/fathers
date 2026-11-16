@@ -693,6 +693,16 @@ def plan_base(record: Record, worktree: str) -> str:
 
 # The command
 
+def implementer(args: Any) -> str | None:
+    """The agent that built the lane, for the review's implementer family (fathers#150): `check --agent`, else the
+    agent session this check runs in (events.agent_session), else None."""
+    stated: str | None = getattr(args, "agent", None)
+    if stated:
+        return stated
+    session = events.agent_session()
+    return session[0] if session else None
+
+
 def check(args: Any) -> int:
     from . import lanes  # adopt_worktree; lanes imports this module for its commands
     prog = config.prog()
@@ -811,7 +821,7 @@ def check(args: Any) -> int:
                             "paths": lane_plan["paths"], **({"fix_of": fix_of} if fix_of else {}),
                             "leases": leases_of(fresh, classification),
                             # Who ran the check, which a review takes for the implementer (fathers#150).
-                            **({"agent": agent} if (agent := events.actor().get("name")) else {}),
+                            **({"agent": agent} if (agent := implementer(args)) else {}),
                             "finished": journal.now()})
     # fathers#91: what ran, and what was reused for this tree, is on record for any later run of the tree. A check
     # that failed and passed rerun by itself stays failed here: the merge runs it again (#640); the history marks it

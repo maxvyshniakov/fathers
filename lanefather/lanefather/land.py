@@ -184,13 +184,14 @@ def land(args: Any) -> int:
             raise LaneError(f"merge conflict, integration left at {previous[:10]}; send it back to the lane:\n"
                             f"{conflicts or merged.stdout + merged.stderr}")
         merge = git(integration, "rev-parse", "HEAD")
+        # `lanefather keep` before the land marks the record; land carries it where older installs read it.
+        keep = bool(args.keep or record.get("keep"))
         record.update(status="landed", landed={"merge": merge, "previous": previous, "tip": tip, "tree": tree,
-                                               "integration": integration, "at": journal.now(),
-                                               "keep": bool(args.keep)})
+                                               "integration": integration, "at": journal.now(), "keep": keep})
         state.save(record)
         journal.ledger(f"land {args.id} merge={merge} previous={previous}", kind="lane.landed", lane=record,
                        details={"merge": merge, "previous": previous, "tip": tip, "onto": onto,
-                                "integration": integration, "keep": bool(args.keep)})
+                                "integration": integration, "keep": keep})
     # The land lock is free from here on (#573): the next land merges while this merge's smoke runs on its own
     # checkout of the merge, since the integration worktree moves on.
     with worktrees.smoke_checkout(record["common_dir"], merge) as checkout:
@@ -286,8 +287,8 @@ def land(args: Any) -> int:
         print(checks.changed_red_tests_line(receipt["changed_red_tests"]))
     if status == "green":
         reviewed, words = review.review_state(args.id)
-        if reviewed or args.keep:
-            done.finish_landed(args.id, args.keep)
+        if reviewed or keep:
+            done.finish_landed(args.id, keep)
         else:
             # The fix round runs in the lane's worktree, where a resumed agent keeps its context (#570).
             print(f"Lane {args.id} kept for its review ({words}): it does not count toward the lane cap; "
