@@ -14,6 +14,10 @@ the state and returns the new state and its effects; a key a mode does not list 
     settings-edit  a value typed: digits and a dot, Backspace, Ctrl-U clears, Enter or Tab saves, Esc cancels;
              typed values are not taken as hotkeys
     settings-small Settings too small to show: only Esc, s and q
+    page     a page's table focused (fathers#85: Lanes on `2`, Processes on `3`): ↑↓ and the page keys move its
+             selection over the rows that can be selected; Esc goes back where a link came from, else to the
+             overview; `1` `2` `3` switch pages on the main screen and every page; Tab moves the focus
+    page-panel  a page's DETAILS or EVENTS strip focused: the same, but ↑↓ and the page keys scroll it
     filter   EVENTS' text field, opened by `/` (fathers#84): what is typed goes into it, Backspace deletes, Enter
              keeps the filter, Esc clears it; on the main screen and a panel `f` cycles EVENTS' log
              (SLOTS LOG, LANES LOG, PROCS LOG, ALL LOG), as ← → do while EVENTS has the focus and a click on its
@@ -29,8 +33,9 @@ from typing import Any, Callable, Union, cast
 from . import keys as _keys
 from . import layout as _layout
 from . import settings_model as _settings
-from .state import (LOAD_NEWS, OPEN_SETTINGS, QUIT, AppState, Changelog, Help, Key, Mouse, Result, SettingsOverlay,
-                    event_index, event_move, filtered, items, move, overlay_box, settings_context, settings_result)
+from .state import (LOAD_NEWS, OPEN_SETTINGS, PAGE_TABLES, QUIT, AppState, Changelog, Help, Key, Mouse, Result,
+                    SettingsOverlay, event_index, event_move, filtered, follow_link, go_back, items, move, open_page,
+                    overlay_box, page_move, page_select, settings_context, settings_result)
 from . import events as _events_view
 from . import overlay_text as _overlays
 
@@ -52,11 +57,11 @@ def quit_(state: AppState, _: str) -> Result:
 
 def focus_step(step: int) -> Handler:
     """Tab and Shift-Tab: the next panel drawn, by columns, in the order the layout placed them (layout.tab_order());
-    a focus whose panel is no longer drawn starts again from QUEUE."""
+    a focus whose panel is no longer drawn starts again from QUEUE (on a page, from its table)."""
     def handler(state: AppState, _: str) -> Result:
         order = state.frame.order
         if state.focus not in order:
-            return dataclasses.replace(state, focus="requests"), []
+            return dataclasses.replace(state, focus=PAGE_TABLES[state.page]), []
         return dataclasses.replace(state, focus=order[(order.index(state.focus) + step) % len(order)]), []
     return handler
 
@@ -88,7 +93,7 @@ def scroll_panel(state: AppState, key: str) -> Result:
     view = state.frame.tables.get(state.focus)
     if not view:
         return state, []
-    if state.focus == "events":
+    if state.focus == "events" and state.page == "overview":  # a page's strip only scrolls
         index, page = event_index(state), max(1, int(view["visible"]) - 1)
         moves = {"up": -1, "k": -1, "down": 1, "j": 1, "page_up": -page, "page_down": page}
         target = 0 if key in ("home", "g") else int(view["count"]) - 1 if key in ("end", "G") else index + moves[key]
@@ -170,6 +175,27 @@ def clear_filter(state: AppState, _: str) -> Result:
 
 FILTER_MAX = 40  # characters EVENTS' text filter takes
 
+
+def go_page(page: str) -> Handler:
+    """`1` `2` `3`: the overview, Lanes, Processes; a page whose tool is absent does nothing (fathers#85)."""
+    def handler(state: AppState, _: str) -> Result:
+        return open_page(state, page), []
+    return handler
+
+
+def back(state: AppState, _: str) -> Result:
+    return go_back(state), []
+
+
+def page_select_key(target: Callable[[int, int], int]) -> Handler:
+    """↑↓ and the page keys on a page's table: its selection moves over the rows that can be selected."""
+    def handler(state: AppState, _: str) -> Result:
+        return page_move(state, state.page, target), []
+    return handler
+
+
+PAGE_KEYS: dict[str, Handler] = {"1": go_page("overview"), "2": go_page("lanes"), "3": go_page("processes")}
+
 MAIN: dict[str, Handler] = {
     "q": quit_, "Q": quit_, "f": cycle_source, "r": toggle_raw, "/": open_filter, "esc": clear_filter,
     "\t": focus_step(1), "back_tab": focus_step(-1),
@@ -178,10 +204,20 @@ MAIN: dict[str, Handler] = {
     "k": select(lambda index, _: index - 1), "up": select(lambda index, _: index - 1),
     "g": select(lambda _, __: 0), "home": select(lambda _, __: 0), "page_up": select(lambda _, __: 0),
     "G": select(lambda _, count: count - 1), "end": select(lambda _, count: count - 1),
-    "page_down": select(lambda _, count: count - 1),
+    "page_down": select(lambda _, count: count - 1), **PAGE_KEYS,
 }
 PANEL: dict[str, Handler] = {**MAIN, **{key: scroll_panel for key in NAVIGATION},
                               "left": arrows(-1), "h": arrows(-1), "right": arrows(1), "l": arrows(1)}
+PAGE: dict[str, Handler] = {
+    "q": quit_, "Q": quit_, "esc": back, "\t": focus_step(1), "back_tab": focus_step(-1),
+    "?": open_help, "v": open_changelog, "s": open_settings, **PAGE_KEYS,
+    "j": page_select_key(lambda index, _: index + 1), "down": page_select_key(lambda index, _: index + 1),
+    "k": page_select_key(lambda index, _: index - 1), "up": page_select_key(lambda index, _: index - 1),
+    "g": page_select_key(lambda _, __: 0), "home": page_select_key(lambda _, __: 0),
+    "page_up": page_select_key(lambda _, __: 0), "G": page_select_key(lambda _, count: count - 1),
+    "end": page_select_key(lambda _, count: count - 1), "page_down": page_select_key(lambda _, count: count - 1),
+}
+PAGE_PANEL: dict[str, Handler] = {**PAGE, **{key: scroll_panel for key in NAVIGATION}}
 
 
 # Help and the changelog: each owns its scroll; ? and v switch between them
@@ -382,7 +418,8 @@ def settings_click(state: AppState, event: Mouse, now: float) -> Result:
                           now)
 
 
-TABLE: dict[str, dict[str, Handler]] = {"main": MAIN, "panel": PANEL, "help": HELP, "changelog": CHANGELOG}
+TABLE: dict[str, dict[str, Handler]] = {"main": MAIN, "panel": PANEL, "help": HELP, "changelog": CHANGELOG,
+                                        "page": PAGE, "page-panel": PAGE_PANEL}
 
 
 def mode(state: AppState) -> str:
@@ -395,6 +432,8 @@ def mode(state: AppState) -> str:
         return "settings-edit" if overlay.editing else "settings"
     if overlay is not None:
         return overlay.kind
+    if state.page != "overview":
+        return "page" if state.focus == PAGE_TABLES[state.page] else "page-panel"
     if state.events_filter.editing:
         return "filter"
     return "main" if state.focus == "requests" else "panel"
@@ -405,7 +444,7 @@ def press(state: AppState, key: str, now: float) -> Result:
     overlay = state.overlay
     if isinstance(overlay, SettingsOverlay):
         return settings_press(state, key if overlay.editing else _keys.hotkey(key), now)
-    if overlay is None and state.events_filter.editing:  # typed text stays as typed
+    if overlay is None and state.page == "overview" and state.events_filter.editing:  # typed text stays as typed
         return type_filter(state, key)
     key = _keys.hotkey(key)
     return TABLE[mode(state)].get(key, same)(state, key)
@@ -439,6 +478,9 @@ def click(state: AppState, event: Mouse, now: float) -> Result:
     at = state.frame.version_at
     if code == LEFT and at and event.y == at[0] and at[1] <= event.x < at[2]:
         return open_changelog(state, "")  # the footer's what's new opens it
+    target = state.frame.target_at(event.x, event.y) if code == LEFT else None
+    if target is not None:  # a link: a summary, DETAILS' lane or process row, a page's link back
+        return follow_link(state, target), []
     title = state.frame.switch
     if code == LEFT and title and event.y == title[0] and title[1] <= event.x < title[2]:
         state, effects = switch_log(1)(state, "")  # EVENTS' title switches its log
@@ -457,11 +499,13 @@ def click(state: AppState, event: Mouse, now: float) -> Result:
         if code == LEFT and 0 <= row < min(int(view["visible"]), int(view["count"]) - int(view["offset"])):
             position = int(view["offset"]) + row
             row_items = cast(Union[list[Any], None], view.get("row_items"))
+            if name in ("lanes", "procs") and row_items is not None and row_items[position] is not None:
+                return page_select(state, state.page, int(row_items[position])), []
             if row_items is not None and row_items[position] is not None:
                 return move(state, int(row_items[position])), []
             if row_items is None and view.get("base") is not None:
                 return move(state, int(view["base"]) + position), []
-            if name == "events":  # an event or run: the cursor on it, DETAILS shows it (fathers#152)
+            if name == "events" and state.page == "overview":  # the cursor on it, DETAILS shows it (fathers#152)
                 return event_move(state, position), []
         return state, []
     return state, []

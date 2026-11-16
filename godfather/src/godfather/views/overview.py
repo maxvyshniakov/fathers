@@ -20,6 +20,7 @@ from . import details as _details
 from . import events as _events
 from . import machine as _machine
 from . import overlays as _overlays
+from . import pages as _pages
 from . import queue as _queue
 from . import settings as _settings_view
 from .common import Model
@@ -32,19 +33,31 @@ if TYPE_CHECKING:
 FOOTER_HINTS: tuple[Part, ...] = (("↑↓", "select"), ("tab", "panel"), ("s", "settings"), ("?", "help"), ("q", "quit"))
 
 
-def footer_hints(focus: str) -> list[Part]:
-    """The footer's hints; with EVENTS focused, ← → switch its log (fathers#152)."""
-    found: list[Part] = [("↑↓", "select" if focus in ("requests", "events") else "scroll")]
+def footer_hints(focus: str, pages: str = "") -> list[Part]:
+    """The footer's hints; with EVENTS focused, ← → switch its log (fathers#152); `pages` the page keys of the
+    tools present (`1 2 3`, fathers#85), none where only the overview is."""
+    found: list[Part] = [("↑↓", "select" if focus in ("requests", "events", "lanes", "procs") else "scroll")]
     if focus == "events":
         found.append(("←→", "log"))
-    return [*found, *FOOTER_HINTS[1:]]
+    found.append(FOOTER_HINTS[1])
+    if pages:
+        found.append((pages, "pages"))
+    return [*found, *FOOTER_HINTS[2:]]
+
+
+def page_keys(tools: Optional[dict[str, Any]]) -> str:
+    """`1 2 3`: the overview's key and those of the pages whose tool is present; empty with none."""
+    keys = [key for page, key in _pages.PAGE_KEYS.items()
+            if (tools or {}).get("lanefather" if page == "lanes" else "junkfather") is not None
+            and (tools or {})["lanefather" if page == "lanes" else "junkfather"].present]
+    return " ".join(["1", *keys]) if keys else ""
 
 
 WHATS_NEW = "what's new?"
 
 
 def draw_footer(canvas: Canvas, model: Optional[Model], error: Optional[str], message: Optional[str],
-                moment: Optional[datetime.datetime] = None) -> None:
+                moment: Optional[datetime.datetime] = None, pages: str = "") -> None:
     """`Godfather what's new?` (fathers#102: the name in the title style; what's new? always muted like the key
     hints, unread or not, which only the overlay marks (owner, 2026-11-13); ↻ after it
     while a newer install waits for a restart; a click opens what's new), the hints, then the refresh failure or a
@@ -52,7 +65,7 @@ def draw_footer(canvas: Canvas, model: Optional[Model], error: Optional[str], me
     the status."""
     installed = _common.stale_install(model)
     Footer(canvas).draw([(_version.NAME, "title"), (" " + WHATS_NEW + (" ↻" if installed else ""), "dim")],
-                        footer_hints(canvas.focus), ("● stale", "bad") if error else ("● live", "ok"),
+                        footer_hints(canvas.focus, pages), ("● stale", "bad") if error else ("● live", "ok"),
                         clock(model["updated"], moment) if model else "",
                         (message, "bad") if message else (f"refresh failed: {error}", "bad") if error else ("", ""))
 
@@ -62,7 +75,8 @@ def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, ov
                    notice: Optional[list[str]] = None, message: Optional[str] = None,
                    failure: Optional[str] = None, news: Any = None, read: Optional[dict[str, str]] = None,
                    moment: Optional[datetime.datetime] = None, events_filter: Optional[_events.Filter] = None,
-                   settings: Any = None, event: Optional[int] = None) -> None:
+                   settings: Any = None, event: Optional[int] = None, tools: Optional[dict[str, Any]] = None,
+                   page: str = "overview", page_row: Optional[int] = None) -> None:
     """The whole screen at `moment` (where None, the model's own update time: the screen never reads the clock).
     `overlay` is the one open (state.Help, Changelog or SettingsOverlay); `error` the refresh's
     failure, `message` a passing notice; `notice` stands in for the panels when Slotfather is absent or unsupported;
@@ -70,31 +84,36 @@ def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, ov
     the time it went stale in SLOTS' border. `news` and `read` are what's new and its read versions; `events_filter`
     EVENTS' source and text filters (fathers#84); `settings` what Settings reads beside its panel
     (settings_model.Context: this dashboard's own settings, the refresh error); `event` EVENTS' selected row (newest
-    first) while DETAILS shows it instead of the selected request (fathers#152)."""
+    first) while DETAILS shows it instead of the selected request (fathers#152). `tools` are the other tools as
+    sources (state.Tool by name), `page` the page shown and `page_row` its selected row (fathers#85)."""
     canvas.scroll = scroll if scroll is not None else {}
     if moment is None and model is not None:
         moment = cast(Optional[datetime.datetime], model.get("updated"))
-    draw_footer(canvas, model, error, message, moment)
+    draw_footer(canvas, model, error, message, moment, page_keys(tools))
     if notice:
         draw_notice(canvas, notice)
         model = None
     elif model is None:
         canvas.put(2, 3, f"Queue unavailable: {error}" if error else "Reading the queue…",
                    "bad" if error else "dim", canvas.width - 6)
-    if model is not None:
-        draw_panels(canvas, model, selected, cwd, failure, cast(datetime.datetime, moment), events_filter, event)
+    if model is not None and page != "overview":
+        draw_page(canvas, page, tools or {}, page_row, model, moment)
+    elif model is not None:
+        draw_panels(canvas, model, selected, cwd, failure, cast(datetime.datetime, moment), events_filter, event,
+                    tools)
     if overlay is not None:
         draw_overlay(canvas, overlay, model, news, read, settings)
 
 
 def draw_panels(canvas: Canvas, model: Model, selected: int, cwd: Optional[str], failure: Optional[str],
                 moment: datetime.datetime, events_filter: Optional[_events.Filter] = None,
-                event: Optional[int] = None) -> None:
+                event: Optional[int] = None, tools: Optional[dict[str, Any]] = None) -> None:
     screen = _layout.overview(canvas.width, canvas.height, _queue.queue_rows(model), _layout.machine_height)
     panels = screen.panels
     canvas.order = screen.order
     if "slots" in panels:
         Panel(canvas, panels["slots"]).frame("SLOTS", _queue.slots_note(model))
+        _pages.draw_summaries(canvas, panels["slots"], tools or {}, SUMMARIES)
     _queue.draw_slots(canvas, screen.slots, model)
     if screen.note_row is not None:
         canvas.put(screen.note_row, screen.slots.x, "Enlarge the terminal for leases and the queue", "dim",
@@ -110,11 +129,23 @@ def draw_panels(canvas: Canvas, model: Model, selected: int, cwd: Optional[str],
             rows = newest_first(model, events_filter or Filter())
             _details.draw_event_detail(canvas, rect, rows[event] if 0 <= event < len(rows) else None, moment)
         elif name == "details":
-            _details.draw_detail(canvas, rect, model, selected, cwd, moment, failure)
+            lanes = (tools or {}).get("lanefather")
+            _details.draw_detail(canvas, rect, model, selected, cwd, moment, failure,
+                                 lanes.snapshot if lanes is not None and lanes.readable else None)
         elif name == "machine":
             _machine.draw_machine(canvas, rect, model)
     if model.get("stale_since"):  # the last good picture, dimmed, until a snapshot arrives again
         dim_panels(canvas)
+
+
+SUMMARIES = {"lanes": _pages.lanes_summary}  # the summaries in SLOTS' bottom border, by page
+
+
+def draw_page(canvas: Canvas, page: str, tools: dict[str, Any], row: Optional[int], model: Model,
+              moment: Optional[datetime.datetime]) -> None:
+    """A page instead of the overview's panels (fathers#85)."""
+    if page == "lanes" and "lanefather" in tools:
+        _pages.draw_lanes(canvas, tools["lanefather"], row, model, moment)
 
 
 def draw_overlay(canvas: Canvas, overlay: Any, model: Optional[Model], news: Any = None,
@@ -157,7 +188,7 @@ def render(canvas: Canvas, state: AppState, now: float, notice: Optional[list[st
     found = _state.items(state)
     index, cwd, failure = state.selection.index, None, None
     canvas.focus, canvas.fresh_events, canvas.glow = state.focus, state.fresh_events, _state.glowing(state, now)
-    event = _state.event_index(state) if state.shows == "events" else None
+    event = _state.event_index(state) if state.shows == "events" and state.page == "overview" else None
     if found and event is None:
         item = found[index]
         known = state.details.get(_state.details_key(item, cast(_state.EntryId, state.selection.key)))
@@ -167,4 +198,6 @@ def render(canvas: Canvas, state: AppState, now: float, notice: Optional[list[st
             cwd, failure = known.cwd, known.error
     dashboard_draw(canvas, state.model, index, state.overlay, state.refresh.error, cwd, state.scroll, notice,
                    state.notice.text if state.notice else None, failure, state.news, state.read, state.moment,
-                   state.events_filter, _settings_view.context_of(state, canvas.width, canvas.height), event)
+                   state.events_filter, _settings_view.context_of(state, canvas.width, canvas.height), event,
+                   state.tools, state.page,
+                   _state.page_index(state, state.page) if state.page != "overview" else None)

@@ -35,6 +35,7 @@ sys.path.insert(0, str(ROOT / "src"))
 SCENE = ROOT / "tests" / "fixtures" / "scene"
 EXPECTED = ROOT / "tests" / "fixtures" / "expected"  # the scene with expected runs, outliers and trends (fathers#108)
 MIXED = ROOT / "tests" / "fixtures" / "mixed"  # the scene with Lanefather's and junkfather's event logs (fathers#84)
+LANES = ROOT / "tests" / "fixtures" / "lanes"  # mixed, with Lanefather's status snapshot (fathers#85)
 NEWS = ROOT / "tests" / "fixtures" / "news"
 GOLDENS = ROOT / "tests" / "goldens"
 COMMIT = "9f600e1c0ffee"  # Godfather's own install commit in what's new, so a commit changes no golden
@@ -58,6 +59,10 @@ SCREENS = {  # name: (width, height, overlay); what's new's filter after a colon
     # fathers#84: EVENTS with every source, wide, at 100 and at 76 columns; filtered to Lanefather while "710" is typed
     "mixed-156x43": (156, 43, "mixed"), "mixed-100x40": (100, 40, "mixed"), "mixed-76x40": (76, 40, "mixed"),
     "mixed-filter-156x43": (156, 43, "mixed:lanefather:710"),
+    # fathers#85: Lanefather's lanes: the Lanes page wide and in one column, the overview with the lanes summary and
+    # DETAILS' lane link, wide and at 76 columns (the summary narrowed)
+    "lanes-156x43": (156, 43, "lanes:page"), "lanes-100x40": (100, 40, "lanes:page"),
+    "lanes-overview-156x43": (156, 43, "lanes:overview"), "lanes-overview-76x40": (76, 40, "lanes:overview"),
     # fathers#152: each log the title switches to, wide and at 100 columns (76 draws no EVENTS)
     **{f"mixed-{name}-{width}x{height}": (width, height, f"mixed:{tool}")
        for name, tool in (("lanes", "lanefather"), ("procs", "junkfather"), ("all", "all"))
@@ -240,6 +245,69 @@ def write_mixed() -> None:
         (MIXED / tool / "events.jsonl").write_text("\n".join(log) + "\n")
 
 
+def write_lanes() -> None:
+    """tests/fixtures/lanes/: the mixed scene with Lanefather's `status --json` (fathers#85): Straylight with four
+    lanes and a red batch gate, data-grid with a lane of the same id as one of Straylight's, sid-kit whose config is
+    gone. The first lease names its lane and Straylight's state directory; the last waiter only its lane, from inside
+    that lane's worktree; the second names a lane of no project here. Lanefather advertises no `show`."""
+    import shutil
+
+    shutil.rmtree(LANES, ignore_errors=True)
+    shutil.copytree(MIXED, LANES)
+    straylight, grid = "/fixture/straylight/lanes", "/fixture/data-grid/lanes"
+    replies = json.loads((LANES / "slotfather" / "replies.json").read_text())
+    block = replies["status --json --full"]["json"]["dashboard"]
+    for item in block["holders"] + block["waiters"]:
+        if item["pid"] == 10000:
+            item["context"] = dict(item["context"], **{"lanefather.state": straylight})
+        if item["pid"] == 10004:
+            item["workdir"] = "/fixture/straylight/worktrees/555-host-rename-names/desktop"
+        if item["pid"] == 10001:
+            item["context"] = dict(item["context"], lane="471-missing-lane")
+    (LANES / "slotfather" / "replies.json").write_text(json.dumps(replies, indent=1) + "\n")
+
+    def lane(ident: str, status: str, receipt: str, match: Any, review: str, open_: int, findings: int,
+             created: str, claims: int, post: Any = None, ticket: Any = None) -> dict[str, Any]:
+        number = ticket if ticket is not None else ident.split("-", 1)[0]
+        return {"id": ident, "status": status,
+                "ticket": {"number": number, "url": f"https://github.com/maxvyshniakov/straylight/issues/{number}"},
+                "branch": f"lane/{ident}", "base": "integrate/queue-347",
+                "worktree": f"/fixture/straylight/worktrees/{ident}",
+                "claims": [f"src/part{n}/**" for n in range(claims)], "after": [], "created": created,
+                "receipt": {"status": receipt, "tree_match": match, "path": None}, "post_merge": post,
+                "review": {"status": review, "open": open_, "findings": findings},
+                "logs": {"check": f"/fixture/straylight/lanes/logs/lane-{ident}-20261104T0950{claims}0.log"},
+                "outcome": None}
+
+    status = {"v": 1, "host": "mbp", "time": "2026-11-04T09:59:39Z", "registry": "/fixture/projects.json",
+              "projects": [
+                  {"project": "Straylight", "state_dir": straylight, "config": "/fixture/straylight/.lanefather.toml",
+                   "repository": "maxvyshniakov/straylight", "cap": 4, "cap_source": "derived", "active": 3,
+                   "planned": 1, "gate": {"sha": "cedf8b972dd8", "status": "red", "at": "2026-11-04T09:58:10Z"},
+                   "lanes": [lane("644-build-once", "active", "in progress", None, "not started", 0, 0,
+                                  "2026-11-04T09:04:00Z", 11),
+                             lane("710-speech-paste-phase", "active", "green", True, "running", 2, 3,
+                                  "2026-11-04T08:12:00Z", 2, post="green"),
+                             lane("612-overlay-keys", "active", "red", False, "finished", 0, 1,
+                                  "2026-11-03T16:40:00Z", 4),
+                             lane("555-host-rename-names", "planned", "not run", None, "not started", 0, 0,
+                                  "2026-11-04T09:50:00Z", 1)], "damaged": []},
+                  {"project": "data-grid", "state_dir": grid, "config": "/fixture/data-grid/.lanefather.toml",
+                   "repository": "maxvyshniakov/data-grid", "cap": 2, "cap_source": "derived", "active": 1,
+                   "planned": 0, "gate": {"sha": "0a1b2c3d", "status": "green", "at": "2026-11-04T07:00:00Z"},
+                   "lanes": [dict(lane("644-build-once", "active", "red", False, "not started", 0, 0,
+                                       "2026-11-04T09:30:00Z", 3, ticket="88"),
+                                  worktree="/fixture/data-grid/worktrees/644-build-once")], "damaged": []},
+                  {"project": "sid-kit", "state_dir": "/fixture/sid-kit/lanes",
+                   "error": "config not found at /fixture/sid-kit/.lanefather.toml"}]}
+    lanefather = json.loads((LANES / "lanefather" / "replies.json").read_text())
+    lanefather["status --json"] = {"code": 0, "json": status}
+    (LANES / "lanefather" / "replies.json").write_text(json.dumps(lanefather, indent=1) + "\n")
+    scene = json.loads((LANES / "scene.json").read_text())
+    scene["lanes"] = {key: {"error": "lanefather too old"} for key in scene["lanes"]}  # no `show` to ask
+    (LANES / "scene.json").write_text(json.dumps(scene, indent=1) + "\n")
+
+
 def fake_state(state: dict[str, Any]) -> dict[str, Any]:
     os.environ.pop("SLOTFATHER_QUEUE", None)  # the fake reads it as the environment's queue order
     return dict(state, version="0.2.0")
@@ -288,6 +356,9 @@ def render(name: str, theme: str | None) -> str:
         folder, selected, overlay = EXPECTED, int(overlay.partition(":")[2]) if event is None else 0, None
     if overlay == "settings:mixed":
         folder, overlay = MIXED, "settings"
+    page = "overview"
+    if overlay and overlay.startswith("lanes:"):  # fathers#85
+        folder, page, overlay = LANES, "lanes" if overlay == "lanes:page" else "overview", None
     if overlay and overlay.startswith("mixed"):
         _, source, text = (overlay.split(":") + ["", ""])[:3]
         found_filter = events.Filter(source or None, text, editing=bool(text))
@@ -319,10 +390,14 @@ def render(name: str, theme: str | None) -> str:
             shown = state.Changelog(tab=overlay_text.filters(found).index(tool))
         elif overlay:
             shown = state.Help()
+        tools = {name: screen.load_tool(name) for name in app.TOOL_ADAPTERS}  # the other tools as sources
+        opened = state.open_page(state.settle(state.AppState(model=model, tools=tools), 0.0)[0], page)
         canvas = tui.Canvas(width, height, palette, common.marks_for(False))
-        canvas.focus = focus
+        canvas.focus = opened.focus if page != "overview" else focus
         overview.dashboard_draw(canvas, model, selected, shown, cwd="~/straylight", news=found, read=read,
-                                moment=moment, events_filter=found_filter, event=event)
+                                moment=moment, events_filter=found_filter, event=event, tools=tools,
+                                page=opened.page,
+                                page_row=state.page_index(opened, opened.page) if opened.page != "overview" else None)
         return canvas.render(theme is not None)
 
 
@@ -399,6 +474,7 @@ def main(argv: list[str]) -> int:
     write_scene()
     write_expected()
     write_mixed()
+    write_lanes()
     GOLDENS.mkdir(parents=True, exist_ok=True)
     for name, text in goldens().items():
         (GOLDENS / name).write_text(text)

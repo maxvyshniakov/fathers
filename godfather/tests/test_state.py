@@ -116,6 +116,8 @@ class ModeTableTests(Case):
             "f": none, "/": ({"events_filter"}, [], lambda state: state.events_filter.editing),
             # fathers#152: r shows every event as logged
             "r": ({"events_filter"}, [], lambda state: state.events_filter.raw),
+            # fathers#85: the page keys; no Lanefather or Junkfather here, so they do nothing
+            "1": none, "2": none, "3": none,
         }
         events = self.start("panel").frame.tables["events"]
         page, last = events["visible"] - 1, events["count"] - events["visible"]
@@ -157,7 +159,40 @@ class ModeTableTests(Case):
             "l": ({"overlay"}, [], overlay("changelog", tab=1, scroll=0)),
             "\t": ({"overlay"}, [], overlay("changelog", tab=1, scroll=0)),
             "q": ({"read"}, ["save-read", "quit"], nothing), "Q": ({"read"}, ["save-read", "quit"], nothing)})
-        return {"main": main, "panel": panel, "help": help_, "changelog": changelog}
+        # fathers#85: the Lanes page, its table focused on its second lane; and its DETAILS focused, scrolled to 1
+        lanes = [row["key"] for row in self.tool.page_rows(self.start("page"), "lanes") if row.get("key")]
+
+        def lane(index: int) -> Check:
+            return lambda state: state.picked.get("lanes") == lanes[index]
+
+        def page_shown(name: str) -> Check:
+            return lambda state: state.page == name
+
+        def detail_scroll(offset: int) -> Check:
+            return lambda state: state.scroll.get("details") == offset
+
+        pages: dict[str, Row] = {
+            "q": quit_, "Q": quit_, "?": main["?"], "v": main["v"], "s": main["s"],
+            "esc": ({"page", "focus"}, [], page_shown("overview")), "1": ({"page", "focus"}, [], page_shown("overview")),
+            "2": none, "3": none,  # Lanes already; no Junkfather here
+        }
+        page_table: dict[str, Row] = {
+            **pages, "\t": ({"focus"}, [], focus("events")), "back_tab": ({"focus"}, [], focus("details")),
+            **{key: ({"picked"}, [], lane(2)) for key in ("j", "down")},
+            **{key: ({"picked"}, [], lane(0)) for key in ("k", "up", "g", "home", "page_up")},
+            **{key: ({"picked"}, [], lane(len(lanes) - 1)) for key in ("G", "end", "page_down")}}
+        view = self.start("page-panel").frame.tables["details"]
+        step, bottom = view["visible"] - 1, view["count"] - view["visible"]
+        page_panel: dict[str, Row] = {
+            **pages, "esc": ({"page", "focus", "scroll"}, [], page_shown("overview")),
+            "1": ({"page", "focus", "scroll"}, [], page_shown("overview")),  # a page's scroll goes with it
+            "\t": ({"focus"}, [], focus("lanes")), "back_tab": ({"focus"}, [], focus("events")),
+            **{key: ({"scroll", "glow"}, [], detail_scroll(offset)) for key, offset in (
+                ("j", min(bottom, 2)), ("down", min(bottom, 2)), ("k", 0), ("up", 0),
+                ("page_down", min(bottom, 1 + step)), ("page_up", 0),
+                ("g", 0), ("home", 0), ("G", bottom), ("end", bottom))}}
+        return {"main": main, "panel": panel, "help": help_, "changelog": changelog, "page": page_table,
+                "page-panel": page_panel}
 
     def start(self, mode: str) -> Any:
         """Each mode's state: QUEUE focused on the middle of five entries; EVENTS focused, scrolled to 3 of 40
@@ -172,6 +207,17 @@ class ModeTableTests(Case):
         from godfather import news
         state = dataclasses.replace(state, news=news.News((), (news.Item("slotfather", "1.0.0", "2026-11-01", "Added",
                                                                          "a"),)))
+        if mode in ("page", "page-panel"):  # fathers#85: the Lanes page over the lanes fixture, short enough to scroll
+            from test_lanes import decoded
+
+            state = dataclasses.replace(state, tools={"lanefather": tool.Tool("lanefather", "ok", None, decoded())})
+            def second(_position: int, _count: int) -> int:
+                return 1
+
+            state = tool.page_move(tool.open_page(self.draw(state, 156, 30), "lanes"), "lanes", second)
+            state = self.draw(state, 156, 30)
+            if mode == "page-panel":
+                state = self.draw(dataclasses.replace(state, focus="details", scroll={"details": 1}), 156, 16)
         if mode == "panel":
             state = dataclasses.replace(state, focus="events", shows="events", scroll={"events": 3})
             state = dataclasses.replace(state, picked={"events": tool.event_id(tool.event_rows(state)[3])})

@@ -1,0 +1,43 @@
+┍━ LANES ━━━━━━━━━━━━━ ticket  stage ━━━━━━━ receipt ━━━━━━ review ━━━━━━━━ claims ━━━ age ━┑ ╭─ LANE DETAILS ─────────────────────────────────────────────╮
+│                                                                                           │ │                                                            │
+│  Straylight · 3 of 4 lanes                                                                │ │  lane      644-build-once                                  │
+┃  ▶️  644-build-once    #644  active        in progress    not started         11     55m  ┃ │  project   Straylight                                      │
+│  ▶️  710-speech-pa…    #710  active · po…  green · curr…  running · 2 o…       2   1h47m  │ │  stage     active                                          │
+│  ▶️  612-overlay-k…    #612  active        red · stale    finished             4  17h19m  │ │  ticket    #644                                            │
+│  🗓️  555-host-rena…    #555  planned       not run        not started          1      9m  │ │  branch    lane/644-build-once                             │
+│  data-grid · 1 of 2 lanes                                                                 │ │  base      integrate/queue-347                             │
+│  ▶️  644-build-once     #88  active        red · stale    not started          3     29m  │ │  worktree  /fixture/straylight/worktrees/644-build-once    │
+│  sid-kit · config not found at /fixture/sid-kit/.lanefather.toml                          │ │  claims    src/part0/**, src/part1/**, src/part2/**,       │
+│                                                                                           │ │            src/part3/**, src/part4/**, src/part5/**,       │
+┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┙ │            src/part6/**, src/part7/**, src/part8/**,       │
+╭─ LANES LOG ───────── lane ─────────────────────────────────────────────── result  ticket ─╮ │            src/part9/**, src/part10/**                     │
+│                                                                                           │ │  after     —                                               │
+│  11:59:02  reviewed  644-build-once                              2 findings · 9m    #644  │ │  receipt   in progress                                     │
+│                                                                                           │ │  review    not started                                     │
+│                                                                                           │ │  log       check · /fixture/straylight/lanes/logs/lane-6…  │
+│                                                                                           │ │                                                            │
+│                                                                                           │ │  leases    lane-644-build-once · running                   │
+│                                                                                           │ │                                                            │
+│                                                                                           │ │                                                            │
+│                                                                                           │ │                                                            │
+│                                                                                           │ │                                                            │
+│                                                                                           │ │                                                            │
+│                                                                                           │ │                                                            │
+│                                                                                           │ │                                                            │
+│                                                                                           │ │                                                            │
+│                                                                                           │ │                                                            │
+│                                                                                           │ │                                                            │
+│                                                                                           │ │                                                            │
+│                                                                                           │ │                                                            │
+│                                                                                           │ │                                                            │
+│                                                                                           │ │                                                            │
+│                                                                                           │ │                                                            │
+│                                                                                           │ │                                                            │
+│                                                                                           │ │                                                            │
+│                                                                                           │ │                                                            │
+│                                                                                           │ │                                                            │
+│                                                                                           │ │                                                            │
+│                                                                                           │ │                                                            │
+│                                                                                           │ │                                                            │
+╰───────────────────────────────────────────────────────────────────────────────────────────╯ ╰────────────────────────────────────────────────────────────╯
+ Godfather what's new?                      ↑↓ select   tab panel   1 2 pages   s settings   ? help   q quit                       updated 11:59:39  ● live

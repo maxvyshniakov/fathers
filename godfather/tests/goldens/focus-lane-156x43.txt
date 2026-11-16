@@ -40,4 +40,4 @@
 │  11:49:34  slot run         data-grid · ok 1m03s · 2 slots                                │ │  🆗 swap ■■■■■■■■■░░░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                                                                                           │ │                               −80s                    now  │
 ┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┙ ╰────────────────────────────────────────────────────────────╯
- Godfather what's new?                        ↑↓ select   ←→ log   tab panel   s settings   ? help   q quit                        updated 11:59:39  ● live
+ Godfather what's new?                  ↑↓ select   ←→ log   tab panel   1 2 pages   s settings   ? help   q quit                  updated 11:59:39  ● live

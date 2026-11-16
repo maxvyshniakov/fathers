@@ -11,11 +11,12 @@ from __future__ import annotations
 import dataclasses
 import datetime
 from dataclasses import dataclass, field
-from typing import Any, Optional, Union, cast
+from typing import Any, Callable, Optional, Union, cast
 
 from . import news as _news
 from . import settings_model as _settings
 from . import entries as _entries
+from .adapters import lanefather as _lanefather
 from . import events as _events_view
 from . import layout as _layout
 from . import overlay_text as _overlays
@@ -31,6 +32,10 @@ DETAILS_RETRY = DETAILS_FRESH  # seconds before a failed load is tried again, it
 NOTICE_SECONDS = 4.0  # how long a notice (a Settings panel that would not open) stays in the footer
 SCROLL_GLOW = 0.28  # seconds a scrolled panel's thumb stays in the foreground after its last scroll: a flash
 PANELS = ("requests", "details", "events")  # the focusable panels
+# The pages (fathers#85, fathers#86): `1` the overview, `2` Lanes, `3` Processes; each page's tool and its table
+PAGES = ("overview", "lanes", "processes")
+PAGE_TOOLS = {"lanes": "lanefather", "processes": "junkfather"}
+PAGE_TABLES = {"overview": "requests", "lanes": "lanes", "processes": "procs"}
 
 
 # The overlays: at most one is open (fathers#17), and each owns its scroll
@@ -90,6 +95,32 @@ class Loaded:
 
 
 @dataclass(frozen=True)
+class Tool:
+    """Another tool as a source (fathers#85, fathers#86): absent, unsupported (with why), ok or stale (with why and
+    since when), its last good snapshot as its adapter decoded it, the actions its capabilities advertise, and for
+    Lanefather whether it answers `show --json`."""
+    name: str
+    state: str = "absent"
+    problem: Optional[str] = None
+    snapshot: Optional[dict[str, Any]] = None
+    stale_since: Optional[datetime.datetime] = None
+    actions: tuple[str, ...] = ()
+    show: bool = False
+
+    @property
+    def present(self) -> bool:
+        return self.state != "absent"
+
+    @property
+    def readable(self) -> bool:
+        """It has a snapshot to show (dimmed while stale)."""
+        return self.state in ("ok", "stale") and self.snapshot is not None
+
+
+Target = tuple[Any, ...]  # where a link goes: (page, row key); ("overview", entry id) selects a request
+
+
+@dataclass(frozen=True)
 class Frame:
     """What the last drawn frame placed, for hit testing and the panel keys: each panel's viewport, the footer's
     version and hints, and the screen's size."""
@@ -101,9 +132,15 @@ class Frame:
     order: tuple[str, ...] = ("requests",)  # Tab's order, as layout.overview() placed the panels
     filters: tuple[tuple[int, int, int, int], ...] = ()  # what's new's tool filters: (row, from, to, tab)
     switch: Optional[tuple[int, int, int]] = None  # EVENTS' title, which cycles its log (fathers#152): (row, from, to)
+    targets: tuple[tuple[int, int, int, Target], ...] = ()  # links to a page's row: (row, from, to, target)
 
     def hint_at(self, x: int, y: int) -> Optional[str]:
         return hint_at(self.hints, x, y)
+
+    def target_at(self, x: int, y: int) -> Optional[Target]:
+        """Where a click on a link (a summary, DETAILS' lane or process row, a page's link back) goes."""
+        return next((target for row, start, end, target in reversed(self.targets) if row == y and start <= x < end),
+                    None)
 
     def filter_at(self, x: int, y: int) -> Optional[int]:
         """The tool filter a click in what's new's top border lands on, None between them."""
@@ -131,10 +168,13 @@ class AppState:
     read: dict[str, str] = field(default_factory=lambda: cast(dict[str, str], {}))  # news.Read: newest read, by tool
     frame: Frame = Frame()
     moment: Optional[datetime.datetime] = None  # the wall-clock second the screen is drawn at (Tick; fathers#138)
-    # A table's selected row other than QUEUE's, by the row's identity (fathers#152: EVENTS' cursor); EVENTS without
-    # one is on its newest row, and stays there as new ones arrive
+    # A table's selected row other than QUEUE's, by the row's identity: EVENTS' cursor (fathers#152; without one it
+    # is on its newest row, and stays there as new ones arrive) and each page's row (fathers#85)
     picked: dict[str, Any] = field(default_factory=lambda: cast(dict[str, Any], {}))
     shows: str = "requests"  # what DETAILS shows: the panel focused last of QUEUE and EVENTS (fathers#152)
+    tools: dict[str, Tool] = field(default_factory=lambda: cast(dict[str, Tool], {}))  # Lanefather, Junkfather
+    page: str = "overview"  # the page shown (PAGES)
+    came_from: tuple[str, ...] = ()  # the pages a link left, Esc goes back through them
 
 
 # Events
@@ -229,6 +269,12 @@ class NewsLoaded:
 
 
 @dataclass(frozen=True)
+class ToolLoaded:
+    """Another tool's snapshot polled (or why not): its Tool."""
+    tool: Tool
+
+
+@dataclass(frozen=True)
 class Drawn:
     frame: Frame
 
@@ -241,7 +287,7 @@ class Tick:
 
 
 Event = Union[Key, Mouse, ModelLoaded, ModelFailed, DetailsLoaded, SettingsOpened, SettingsSections, SettingsRead,
-              SettingsChecked, SettingsWritten, SettingsFailed, NewsLoaded, Drawn, Tick]
+              SettingsChecked, SettingsWritten, SettingsFailed, NewsLoaded, ToolLoaded, Drawn, Tick]
 
 
 # Effects, for the app to carry out
@@ -265,6 +311,130 @@ Result = tuple[AppState, list[Effect]]
 def items(state: AppState) -> list[dict[str, Any]]:
     model = state.model
     return cast(list[dict[str, Any]], model["holders"] + model["waiters"]) if model else []
+
+
+def tool(state: AppState, name: str) -> Tool:
+    """Another tool as the state last heard of it; absent until its first poll."""
+    return state.tools.get(name) or Tool(name)
+
+
+def selected_item(state: AppState) -> Optional[dict[str, Any]]:
+    found = items(state)
+    return found[min(state.selection.index, len(found) - 1)] if found else None
+
+
+def selected_cwd(state: AppState) -> Optional[str]:
+    """The selected request's holder directory, once its details loaded: the worktree join's fallback."""
+    item = selected_item(state)
+    if item is None or state.selection.key is None:
+        return None
+    known = state.details.get(details_key(item, state.selection.key))
+    return known.cwd if known is not None else None
+
+
+def page_rows(state: AppState, page: str) -> list[dict[str, Any]]:
+    """A page's table rows, from its tool's last good snapshot; a row without a `key` is not selectable."""
+    if page == "lanes":
+        return _lanefather.page_rows(tool(state, "lanefather").snapshot)
+    return []
+
+
+def page_index(state: AppState, page: str, rows: Optional[list[dict[str, Any]]] = None) -> Optional[int]:
+    """The selected row of a page: the one picked while it is there, else the first selectable one."""
+    rows = page_rows(state, page) if rows is None else rows
+    keys = [row.get("key") for row in rows]
+    picked = state.picked.get(page)
+    if picked is not None and picked in keys:
+        return keys.index(picked)
+    return next((index for index, key in enumerate(keys) if key is not None), None)
+
+
+def linked(state: AppState, page: str) -> Any:
+    """The row of `page` the selected request links to: its lane (fathers#85), None where it has none."""
+    item = selected_item(state)
+    if item is None:
+        return None
+    if page == "lanes":
+        lane = _lanefather.lane_of(item, tool(state, "lanefather").snapshot, selected_cwd(state))
+        return lane["key"] if lane is not None else None
+    return None
+
+
+PAGE_SCROLLS = ("details", "events", "lanes", "procs")  # what a page shows: scrolled again from the top on a switch
+
+
+def open_page(state: AppState, page: str, key: Any = None, link: bool = False) -> AppState:
+    """`page` shown (fathers#85): from the overview with the row the selected request links to selected, else `key`,
+    else the row picked before; a link (`link`) remembers where it came from for Esc. A page whose tool is absent
+    does not open."""
+    if page != "overview" and not tool(state, PAGE_TOOLS[page]).present:
+        return state
+    if page == state.page and key is None:
+        return state
+    picked = dict(state.picked)
+    if page != "overview":
+        found = key if key is not None else linked(state, page) if state.page == "overview" else None
+        if found is not None:
+            picked[page] = tuple(cast(list[Any], found)) if isinstance(found, list) else found
+    if not link:
+        came: tuple[str, ...] = ()
+    else:
+        came = (*state.came_from, state.page) if page != state.page else state.came_from
+    scroll = {name: offset for name, offset in state.scroll.items() if name not in PAGE_SCROLLS}
+    return dataclasses.replace(state, page=page, picked=picked, came_from=came, focus=PAGE_TABLES[page],
+                               scroll=scroll, events_filter=dataclasses.replace(state.events_filter, editing=False))
+
+
+def follow_link(state: AppState, target: Target) -> AppState:
+    """A click on a link: to a page's row, or back to the overview with a request selected."""
+    page, key = target[0], target[1] if len(target) > 1 else None
+    if page == "overview":
+        state = open_page(state, "overview")
+        known = entries(state)
+        return move(state, known[1].index(key), known=known) if key in known[1] else state
+    return open_page(state, page, key, link=True)
+
+
+def go_back(state: AppState) -> AppState:
+    """Esc on a page: the page a link came from, else the overview."""
+    if state.page == "overview":
+        return state
+    back = state.came_from[-1] if state.came_from else "overview"
+    opened = open_page(dataclasses.replace(state, came_from=()), back, state.picked.get(back) if back != "overview"
+                       else None)
+    return dataclasses.replace(opened, came_from=state.came_from[:-1])
+
+
+def page_move(state: AppState, page: str, target: Callable[[int, int], int], by_key: bool = True) -> AppState:
+    """The page's selection moved to the selectable row `target(position, count)` picks among them (project rows and
+    separators are skipped); a key move scrolls the table to it again, any move starts the details over."""
+    rows = page_rows(state, page)
+    selectable = [index for index, row in enumerate(rows) if row.get("key") is not None]
+    if not selectable:
+        return state
+    current = page_index(state, page, rows)
+    position = selectable.index(current) if current in selectable else 0
+    chosen = selectable[min(max(int(target(position, len(selectable))), 0), len(selectable) - 1)]
+    key = rows[chosen]["key"]
+    scroll = dict(state.scroll)
+    if by_key:
+        scroll.pop(PAGE_TABLES[page], None)
+    if key != state.picked.get(page):
+        scroll.pop("details", None)
+        scroll.pop("events", None)
+    picked = {**state.picked, page: key}
+    if picked == state.picked and scroll == state.scroll:
+        return state
+    return dataclasses.replace(state, picked=picked, scroll=scroll)
+
+
+def page_select(state: AppState, page: str, index: int) -> AppState:
+    """A click on a page's row `index`: selected where it is selectable."""
+    rows = page_rows(state, page)
+    if not 0 <= index < len(rows) or rows[index].get("key") is None:
+        return state
+    selectable = [position for position, row in enumerate(rows) if row.get("key") is not None]
+    return page_move(state, page, lambda _position, _count: selectable.index(index), by_key=False)
 
 
 def details_key(item: dict[str, Any], identity: EntryId) -> DetailsKey:
@@ -399,7 +569,7 @@ def follow_events(state: AppState, events: list[dict[str, Any]]) -> AppState:
     ids = [event_id(event) for event in _events_view.shown_rows(model, state.events_filter)[::-1]]
     arrived = ids.index(state.newest) if state.newest in ids else 0
     scroll, fresh = dict(state.scroll), 0
-    if scroll.get("events"):
+    if scroll.get("events") and state.page == "overview":  # a page's strip is another list
         scroll["events"] += arrived
         fresh = state.fresh_events + arrived
     return dataclasses.replace(state, scroll=scroll, fresh_events=fresh, newest=ids[0] if ids else None)
@@ -533,13 +703,15 @@ def settle(state: AppState, now: float) -> Result:
     """After every event: the selection found again in the model, its details loaded when missing, stale or due a
     retry, a notice gone once it is old, the count of new events gone at EVENTS' top."""
     effects: list[Effect] = []
+    if state.page != "overview" and not tool(state, PAGE_TOOLS[state.page]).present:  # its tool went: the overview
+        state = open_page(state, "overview")
     if state.notice is not None and now - state.notice.at >= NOTICE_SECONDS:
         state = dataclasses.replace(state, notice=None)
     if not state.scroll.get("events") and state.fresh_events:
         state = dataclasses.replace(state, fresh_events=0)
     # DETAILS follows the focused panel (fathers#152): QUEUE's entry or EVENTS' row, whichever was focused last; with
     # EVENTS not drawn (one column), QUEUE's
-    shows = state.focus if state.focus in ("requests", "events") else state.shows
+    shows = state.focus if state.focus in ("requests", "events") and state.page == "overview" else state.shows
     if shows == "events" and state.frame.width and "events" not in state.frame.tables:
         shows = "requests"
     if shows != state.shows:

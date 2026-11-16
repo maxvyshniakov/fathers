@@ -62,6 +62,7 @@ class Canvas:
         self.hint_hits: list[tuple[int, int, int, str]] = []  # (row, from, to, key) of every footer hint drawn
         self.filter_hits: list[tuple[int, int, int, int]] = []  # (row, from, to, tab) of what's new's tool filters
         self.switch_at: tuple[int, int, int] | None = None  # (row, from, to) of EVENTS' title, which cycles its log
+        self.targets: list[tuple[int, int, int, Any]] = []  # (row, from, to, target) of every link to a page's row
         self.order: tuple[str, ...] = ("requests",)  # Tab's order among the panels drawn (layout.tab_order())
         self.glow: set[str] = set()  # panels scrolled within SCROLL_GLOW seconds: their thumb in the foreground
         self.width, self.height = max(0, width), max(0, height)
@@ -106,6 +107,11 @@ class Canvas:
             for column in range(max(0, x), min(self.width, end)):
                 self.links[y, column] = url
 
+    def target(self, y: int, start: int, end: int, target: Any) -> None:
+        """Cells start..end of row y link to a page's row (state.Target): a click follows it."""
+        if 0 <= y < self.height and end > start:
+            self.targets.append((y, max(0, start), min(self.width, end), target))
+
     def right(self, y: int, end: int, value: Any, style: str = "text") -> int:
         """Writes value ending just before column `end`; the column it starts at."""
         start = end - text_width(value)
@@ -133,9 +139,12 @@ class Canvas:
         the one registry both drawing and clicks use. The column after it."""
         end = self.segments(y, x, [(key, "key"), (f" {action}", "dim")], width)
         presses = HINT_KEYS.get(key)
+        if presses is None and key.replace(" ", "").isdigit():  # `1 2 3 pages`: each digit its own key
+            presses = tuple(key)
         if isinstance(presses, tuple):  # ↑↓, ←→: each arrow its own key; the label does nothing
             for offset, press in enumerate(presses):
-                self.hint_hits.append((y, x + offset, x + offset + 1, press))
+                if press != " ":
+                    self.hint_hits.append((y, x + offset, x + offset + 1, press))
         elif presses:
             self.hint_hits.append((y, x, end, presses))
         return end

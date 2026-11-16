@@ -104,12 +104,13 @@ class DetailsTests(unittest.TestCase):
                 + 'Path(' + repr(str(calls)) + ').write_text(json.dumps(sys.argv[1:]))\n'
                 + 'print(json.dumps({"version":1,"id":"compiler","project":"source-project","status":"active"}))\n')
             command.chmod(0o755)
+            shows = {'v': 1, 'dashboard': {'v': 1, 'show': {'versions': [1]}}}  # fathers#85: show is advertised
             with mock.patch.dict(os.environ, {'PATH': tmp + os.pathsep + os.environ['PATH']}):
-                view.enrich_details(item)
+                view.enrich_details(item, shows)
                 self.assertEqual('source-project', item['lane']['project'])
                 self.assertEqual(['show', 'compiler', '--state-dir', '/project/state', '--json'], json.loads(calls.read_text()))
                 command.unlink()
-                view.enrich_details(item)
+                view.enrich_details(item, shows)
                 self.assertEqual('source-project', item['lane']['project'], 'unchanged identity should reuse the cached response')
         item['context'] = {'lane': 'compiler', 'lanefather.state': '/another-project/state'}
         with mock.patch.dict(os.environ, {'PATH': '/does-not-exist'}):

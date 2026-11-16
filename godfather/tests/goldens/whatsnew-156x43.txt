@@ -4,40 +4,40 @@
 │  lane-644-bui…  lane-465-sta…  desktop│  Godfather · unreleased · installed 9f600e1                             ┃│· 1 slot                               │
 ╰───────────────────────────────────────│                                                                         ┃│                                       │
 ┍━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│  ADDED                                                                  ┃│                                       │
-│                                       │                                                                         ┃│                                       │
-┃  ▶️    lane-644-build-once            │  • EVENTS rows are selectable (fathers#152): with EVENTS focused, ↑ ↓    │░░ 0.9 of 2 cores                      │
-│  ▶️    lane-465-state-definitions-revi│    or a click move a row cursor (the ┃ bar QUEUE's selection has) and    │ · waited 19m34s · running 35m10s      │
-│  ▶️    desktop                        │    DETAILS shows that run or event instead of QUEUE's entry: a run's     │ 1 processes                           │
-│                                       │    label, slots, wait, priority, run time, outcome and pid with each     │                                       │
-│  ⏸️    prof51                         │    mark explained (▲ outlier · ran 1m13s · its run type's p90 52s, ↗     │ight/.claude/worktrees/agent-afa3816b  │
-│  ⏸️    lane-555-host-rename-names     │    slower +38% than its run type's p50 and why), another event's tool,   │2                                      │
-│                                       │    kind, subject and fields. The cursor on the newest row follows new    │ight/.claude/worktrees/agent-afa3816b  │
-┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    rows; on an older one it stays put and ↑ N new counts what arrived;   │2/verify.sh --checks desktop-tests     │
-╭─ SLOTS LOG ─────── label ─────────────│    Home goes back.                                                       │oing --jobs 1                          │
-│                                       │                                                                          │ight                                   │
-│  11:59:35  ▫       agent-ae72d94beb6f0│  • Settings has a section per present tool (fathers#87): this            │                                       │
-│  11:58:33  ▫       agent-a1c75285bdf2c│    dashboard's own (Refresh every, Colour theme) first, then             │d-once                                 │
-│  11:57:15  ▫       agent-a1c75285bdf2c│    Slotfather's, Lanefather's and Junkfather's, each its read-only       │ht                                     │
-│  11:55:44  ▪▪      desktop            │    status rows and its settings, read with <tool> settings --json        │                                       │
-│  11:55:31  ▫       desktop            │    (Slotfather's every second, the others' every two) and changed with   │-build-once                            │
-│  11:55:26  ▫       agent-a1c75285bdf2c│    settings set and reset, each carrying its row's revision. One         │e/queue-347                            │
-│  11:55:00  ▫       desktop            │    cursor moves through every section; rows a tool marks read-only       │ess                                    │
-│  11:54:02  ▫       agent-a1c75285bdf2c│    show their source and are skipped; a tool without a settings          │ted                                    │
-│  11:52:53  ▫       agent-a1c75285bdf2c│    contract says why in one dimmed row. A pending or typed value is      │rification_plan.py, tools/verify.py,   │
-│  11:52:30  ▫       desktop            │    checked with settings check: its preview or its error shows under     │main-module.sh, tools/test-build-      │
-│  11:51:40  ▫       post-merge-456-rena│    the row. A conflict, an invalid value or a refusal shows once, in     │odule.py, tools/app-build.py,          │
-│  11:51:24  ▫       agent-a1c75285bdf2c│    red under its row, and nothing is saved. D twice resets the           │st-app-build.py, tools/cargo-test.py,  │
-│  11:49:34  ▫▫      data-grid          │    selected row's section only. Junkfather's read-only exit 5 is taken   │elopment.md, tools/test-cargo-build-   │
-│  11:48:30  ▫       agent-ae72d94beb6f0│    like 4.                                                               │, tools/test-heavy.py,                 │
-│  11:47:21  ▫       agent-a0f998f4c57cd│                                                                          │rgo_build_cache.py                     │
-│  11:47:17  ▫       agent-a0f998f4c57cd│  • EVENTS is one feed of every tool's event log, newest first            │                                       │
-│  11:47:13  ▫       agent-a0f998f4c57cd│    (fathers#84): Lanefather's and junkfather's rows come between         │                                       │
-│  11:47:10  ▫       agent-a0f998f4c57cd│    Slotfather's in time order, each with its tool's tag (slot, lane,     │───────────────────────────────────────╯
-│  11:47:07  ▫       agent-a0f998f4c57cd│    junk) in a colour of its own and the event (checked, owned,           │nleased 0.4 · queue ahead · 2 waiting ─╮
-│  11:47:04  ▫       agent-a0f998f4c57cd│    reaped); with Slotfather alone those two columns are not drawn. f     │          slots held  avg 4.4/6        │
-│  11:46:08  ▫       post-merge-491-elec│    cycles the source filter (all, then each tool), / types a text        │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
-│  11:45:53  ▫       agent-a1c75285bdf2c│    filter into EVENTS' bottom border (Enter keeps it, Esc clears it,     │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
+│                                       │                                                                         ╹│                                       │
+┃  ▶️    lane-644-build-once            │  • Lanefather is a source (fathers#85): its machine-wide lanefather      │░░ 0.9 of 2 cores                      │
+│  ▶️    lane-465-state-definitions-revi│    status --json is polled every 5 s (its hint, up to 10 s) and soon     │ · waited 19m34s · running 35m10s      │
+│  ▶️    desktop                        │    after one of its events. SLOTS' bottom border sums it up, 2 lanes 3   │ 1 processes                           │
+│                                       │    active · 1 planned · 2 reviews · 🔥 gate red (a narrow border drops   │                                       │
+│  ⏸️    prof51                         │    planned, then reviews; dimmed while stale), and 2 or a click on it    │ight/.claude/worktrees/agent-afa3816b  │
+│  ⏸️    lane-555-host-rename-names     │    opens the Lanes page: LANES by project (Straylight · 3 of 4 lanes,    │2                                      │
+│                                       │    an unreadable project's error dimmed) with each lane's state,         │ight/.claude/worktrees/agent-afa3816b  │
+┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    ticket, stage, receipt, review, claims and age; LANE DETAILS with     │2/verify.sh --checks desktop-tests     │
+╭─ SLOTS LOG ─────── label ─────────────│    its ticket and worktree links, the latest log and the leases          │oing --jobs 1                          │
+│                                       │    running for it, each a link back to the request; and its Lanefather   │ight                                   │
+│  11:59:35  ▫       agent-ae72d94beb6f0│    events under the table. DETAILS shows a request's lane as a link      │                                       │
+│  11:58:33  ▫       agent-a1c75285bdf2c│    (710-speech-paste-phase · Straylight) when it joins: by its lane      │d-once                                 │
+│  11:57:15  ▫       agent-a1c75285bdf2c│    and Lanefather state directory, or by its lane and a directory        │ht                                     │
+│  11:55:44  ▪▪      desktop            │    inside that lane's worktree, never by the id alone. 1 shows the       │                                       │
+│  11:55:31  ▫       desktop            │    overview again, Esc goes back where a link came from; 1 2 pages in    │-build-once                            │
+│  11:55:26  ▫       agent-a1c75285bdf2c│    the footer names the keys of the tools present. godfather --once      │e/queue-347                            │
+│  11:55:00  ▫       desktop            │    --page lanes prints the page. lanefather show is asked only where     │ess                                    │
+│  11:54:02  ▫       agent-a1c75285bdf2c│    Lanefather's capabilities advertise it; otherwise a request with no   │ted                                    │
+│  11:52:53  ▫       agent-a1c75285bdf2c│    joined lane says lanefather too old.                                  │rification_plan.py, tools/verify.py,   │
+│  11:52:30  ▫       desktop            │                                                                          │main-module.sh, tools/test-build-      │
+│  11:51:40  ▫       post-merge-456-rena│  • EVENTS rows are selectable (fathers#152): with EVENTS focused, ↑ ↓    │odule.py, tools/app-build.py,          │
+│  11:51:24  ▫       agent-a1c75285bdf2c│    or a click move a row cursor (the ┃ bar QUEUE's selection has) and    │st-app-build.py, tools/cargo-test.py,  │
+│  11:49:34  ▫▫      data-grid          │    DETAILS shows that run or event instead of QUEUE's entry: a run's     │elopment.md, tools/test-cargo-build-   │
+│  11:48:30  ▫       agent-ae72d94beb6f0│    label, slots, wait, priority, run time, outcome and pid with each     │, tools/test-heavy.py,                 │
+│  11:47:21  ▫       agent-a0f998f4c57cd│    mark explained (▲ outlier · ran 1m13s · its run type's p90 52s, ↗     │rgo_build_cache.py                     │
+│  11:47:17  ▫       agent-a0f998f4c57cd│    slower +38% than its run type's p50 and why), another event's tool,   │                                       │
+│  11:47:13  ▫       agent-a0f998f4c57cd│    kind, subject and fields. The cursor on the newest row follows new    │                                       │
+│  11:47:10  ▫       agent-a0f998f4c57cd│    rows; on an older one it stays put and ↑ N new counts what arrived;   │───────────────────────────────────────╯
+│  11:47:07  ▫       agent-a0f998f4c57cd│    Home goes back.                                                       │nleased 0.4 · queue ahead · 2 waiting ─╮
+│  11:47:04  ▫       agent-a0f998f4c57cd│                                                                          │          slots held  avg 4.4/6        │
+│  11:46:08  ▫       post-merge-491-elec│  • Settings has a section per present tool (fathers#87): this            │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
+│  11:45:53  ▫       agent-a1c75285bdf2c│    dashboard's own (Refresh every, Colour theme) first, then             │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
 │  11:45:09  ▫       agent-a1c75285bdf2c│                                                                          │░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
-│                                       │                     ←→ tool   ↑↓ scroll   esc close                  11% │          −80s                    now  │
+│                                       │                     ←→ tool   ↑↓ scroll   esc close                  10% │          −80s                    now  │
 ╰───────────────────────────────────────╰──────────────────────────────────────────────────────────────────────────╯───────────────────────────────────────╯
  Godfather what's new?                            ↑↓ select   tab panel   s settings   ? help   q quit                             updated 11:59:39  ● live

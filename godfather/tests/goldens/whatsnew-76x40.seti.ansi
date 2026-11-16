@@ -5,36 +5,36 @@
 [0;38;2;90;92;93m╰│[0m[0m                                                                       [0m[0;38;2;122;125;125m┃[0m[0;38;2;90;92;93m│╯[0m
 [0;38;2;77;163;255m┍[0m[0;38;2;90;92;93m│[0m[0m  [0m[0;38;2;122;125;125mADDED[0m[0m                                                                [0m[0;38;2;122;125;125m┃[0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m┑[0m
 [0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m                                                                        [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
-[0;38;2;255;152;202m┃[0m[0;38;2;90;92;93m│[0m[0m  [0m[0;38;2;122;125;125m• [0m[0mEVENTS rows are selectable (fathers#152): with EVENTS focused, ↑    [0m[0;38;2;90;92;93m│[0m[0;38;2;255;152;202m┃[0m
-[0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m    ↓ or a click move a row cursor (the ┃ bar QUEUE's selection has)    [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
-[0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m    and DETAILS shows that run or event instead of QUEUE's entry: a     [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
-[0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m    run's label, slots, wait, priority, run time, outcome and pid       [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
-[0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m    with each mark explained (▲ outlier · ran 1m13s · its run type's    [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
-[0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m    p90 52s, ↗ slower +38% than its run type's p50 and why), another    [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
-[0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m    event's tool, kind, subject and fields. The cursor on the newest    [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
-[0;38;2;77;163;255m┕[0m[0;38;2;90;92;93m│[0m[0m    row follows new rows; on an older one it stays put and ↑ N new      [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m┙[0m
-[0;38;2;90;92;93m╭│[0m[0m    counts what arrived; Home goes back.                                [0m[0;38;2;90;92;93m│╮[0m
+[0;38;2;255;152;202m┃[0m[0;38;2;90;92;93m│[0m[0m  [0m[0;38;2;122;125;125m• [0m[0mLanefather is a source (fathers#85): its machine-wide lanefather    [0m[0;38;2;90;92;93m│[0m[0;38;2;255;152;202m┃[0m
+[0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m    status --json is polled every 5 s (its hint, up to 10 s) and soon   [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
+[0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m    after one of its events. SLOTS' bottom border sums it up, 2 lanes   [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
+[0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m    3 active · 1 planned · 2 reviews · 🔥 gate red (a narrow border     [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
+[0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m    drops planned, then reviews; dimmed while stale), and 2 or a        [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
+[0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m    click on it opens the Lanes page: LANES by project (Straylight ·    [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
+[0;38;2;77;163;255m│[0m[0;38;2;90;92;93m│[0m[0m    3 of 4 lanes, an unreadable project's error dimmed) with each       [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m│[0m
+[0;38;2;77;163;255m┕[0m[0;38;2;90;92;93m│[0m[0m    lane's state, ticket, stage, receipt, review, claims and age;       [0m[0;38;2;90;92;93m│[0m[0;38;2;77;163;255m┙[0m
+[0;38;2;90;92;93m╭│[0m[0m    LANE DETAILS with its ticket and worktree links, the latest log     [0m[0;38;2;90;92;93m│╮[0m
+[0;38;2;90;92;93m││[0m[0m    and the leases running for it, each a link back to the request;     [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    and its Lanefather events under the table. DETAILS shows a          [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    request's lane as a link (710-speech-paste-phase · Straylight)      [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    when it joins: by its lane and Lanefather state directory, or by    [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    its lane and a directory inside that lane's worktree, never by      [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    the id alone. 1 shows the overview again, Esc goes back where a     [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    link came from; 1 2 pages in the footer names the keys of the       [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    tools present. godfather --once --page lanes prints the page.       [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    lanefather show is asked only where Lanefather's capabilities       [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    advertise it; otherwise a request with no joined lane says          [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    lanefather too old.                                                 [0m[0;38;2;90;92;93m││[0m
 [0;38;2;90;92;93m││[0m[0m                                                                        [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m  [0m[0;38;2;122;125;125m• [0m[0mSettings has a section per present tool (fathers#87): this          [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    dashboard's own (Refresh every, Colour theme) first, then           [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    Slotfather's, Lanefather's and Junkfather's, each its read-only     [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    status rows and its settings, read with <tool> settings --json      [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    (Slotfather's every second, the others' every two) and changed      [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    with settings set and reset, each carrying its row's revision.      [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    One cursor moves through every section; rows a tool marks           [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    read-only show their source and are skipped; a tool without a       [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    settings contract says why in one dimmed row. A pending or typed    [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    value is checked with settings check: its preview or its error      [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    shows under the row. A conflict, an invalid value or a refusal      [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    shows once, in red under its row, and nothing is saved. D twice     [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    resets the selected row's section only. Junkfather's read-only      [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    exit 5 is taken like 4.                                             [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m╰│[0m[0m                                                                        [0m[0;38;2;90;92;93m│╯[0m
-[0;38;2;90;92;93m╭│[0m[0m  [0m[0;38;2;122;125;125m• [0m[0mEVENTS is one feed of every tool's event log, newest first          [0m[0;38;2;90;92;93m│╮[0m
-[0;38;2;90;92;93m││[0m[0m    (fathers#84): Lanefather's and junkfather's rows come between       [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    Slotfather's in time order, each with its tool's tag (slot, lane,   [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    junk) in a colour of its own and the event (checked, owned,         [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m  [0m[0;38;2;122;125;125m• [0m[0mEVENTS rows are selectable (fathers#152): with EVENTS focused, ↑    [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    ↓ or a click move a row cursor (the ┃ bar QUEUE's selection has)    [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    and DETAILS shows that run or event instead of QUEUE's entry: a     [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m╰│[0m[0m    run's label, slots, wait, priority, run time, outcome and pid       [0m[0;38;2;90;92;93m│╯[0m
+[0;38;2;90;92;93m╭│[0m[0m    with each mark explained (▲ outlier · ran 1m13s · its run type's    [0m[0;38;2;90;92;93m│╮[0m
+[0;38;2;90;92;93m││[0m[0m    p90 52s, ↗ slower +38% than its run type's p50 and why), another    [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    event's tool, kind, subject and fields. The cursor on the newest    [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    row follows new rows; on an older one it stays put and ↑ N new      [0m[0;38;2;90;92;93m││[0m
 [0;38;2;90;92;93m││[0m[0m                                                                        [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m                    [0m[0;1m←→[0m[0;38;2;122;125;125m tool[0m[0m   [0m[0;1m↑↓[0m[0;38;2;122;125;125m scroll[0m[0m   [0m[0;1mesc[0m[0;38;2;122;125;125m close[0m[0m                 [0m[0;38;2;122;125;125m10%[0m[0m [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m                    [0m[0;1m←→[0m[0;38;2;122;125;125m tool[0m[0m   [0m[0;1m↑↓[0m[0;38;2;122;125;125m scroll[0m[0m   [0m[0;1mesc[0m[0;38;2;122;125;125m close[0m[0m                  [0m[0;38;2;122;125;125m9%[0m[0m [0m[0;38;2;90;92;93m││[0m
 [0;38;2;90;92;93m╰╰────────────────────────────────────────────────────────────────────────╯╯[0m
 [0m [0m[0;1mGodfather[0m[0;38;2;122;125;125m what's new?[0m[0m     [0m[0;1m↑↓[0m[0;38;2;122;125;125m select[0m[0m   [0m[0;1m?[0m[0;38;2;122;125;125m help[0m[0m   [0m[0;1mq[0m[0;38;2;122;125;125m quit[0m[0m     [0m[0;38;2;122;125;125m11:59:39[0m[0m  [0m[0;38;2;61;220;132m● live[0m[0m [0m

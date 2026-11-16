@@ -6,6 +6,18 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Added
 
+- Lanefather is a source (fathers#85): its machine-wide `lanefather status --json` is polled every 5 s (its hint, up
+  to 10 s) and soon after one of its events. SLOTS' bottom border sums it up, `2 lanes 3 active · 1 planned ·
+  2 reviews · 🔥 gate red` (a narrow border drops planned, then reviews; dimmed while stale), and `2` or a click on it
+  opens the Lanes page: LANES by project (`Straylight · 3 of 4 lanes`, an unreadable project's error dimmed) with each
+  lane's state, ticket, stage, receipt, review, claims and age; LANE DETAILS with its ticket and worktree links, the
+  latest log and the leases running for it, each a link back to the request; and its Lanefather events under the
+  table. DETAILS shows a request's lane as a link (`710-speech-paste-phase · Straylight`) when it joins: by its lane
+  and Lanefather state directory, or by its lane and a directory inside that lane's worktree, never by the id alone.
+  `1` shows the overview again, Esc goes back where a link came from; `1 2 pages` in the footer names the keys of the
+  tools present. `godfather --once --page lanes` prints the page. `lanefather show` is asked only where Lanefather's
+  capabilities advertise it; otherwise a request with no joined lane says `lanefather too old`.
+
 - EVENTS rows are selectable (fathers#152): with EVENTS focused, ↑ ↓ or a click move a row cursor (the `┃` bar
   QUEUE's selection has) and DETAILS shows that run or event instead of QUEUE's entry: a run's label, slots, wait,
   priority, run time, outcome and pid with each mark explained (`▲ outlier · ran 1m13s · its run type's p90 52s`,

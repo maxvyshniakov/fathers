@@ -350,6 +350,9 @@ Every tool answers `<tool> capabilities --json` with an object that has a `dashb
   Slotfather, 5–10 for the others).
 - Missing `events`, `settings`, `actions` or `changelog` means unsupported; the matching feature is hidden for that
   tool.
+- Lanefather adds `"show": {"versions": [1]}` when it answers `show ID --json` (fathers#85); without it Godfather never
+  runs `show`, and a request the status snapshot does not join to a lane says `lanefather too old` in DETAILS
+  ([docs/contracts/lanefather.md](docs/contracts/lanefather.md)).
 - The changelog overlay became what's new (fathers#102, owner 2026-11-12): the footer says `Godfather  what's
   new?`, and the overlay shows one timeline of every tool's changelog, Unreleased entries included, read through
   each tool's `changelog --json` ([docs/contracts/changelog.md](docs/contracts/changelog.md)), not the

@@ -40,4 +40,4 @@
 │                                                                                           │ │  🆗 swap ■■■■■■■■■░░░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                                                                                           │ │                               −80s                    now  │
 ╰─ / 710_ ──────────────────────────────────────────────────────────────────────────────────╯ ╰────────────────────────────────────────────────────────────╯
- Godfather what's new?                            ↑↓ select   tab panel   s settings   ? help   q quit                             updated 11:59:39  ● live
+ Godfather what's new?                      ↑↓ select   tab panel   1 2 pages   s settings   ? help   q quit                       updated 11:59:39  ● live

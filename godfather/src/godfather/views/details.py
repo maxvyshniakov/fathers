@@ -178,7 +178,10 @@ def lane_facts(context: dict[str, str], lane: dict[str, Any], value_width: int) 
 
 
 def draw_detail(canvas: Canvas, rect: Rect, model: Model, selected: int, cwd: Optional[str],
-                moment: datetime.datetime, failure: Optional[str] = None) -> None:
+                moment: datetime.datetime, failure: Optional[str] = None,
+                lanes: Optional[dict[str, Any]] = None) -> None:
+    """The selected request's details. `lanes` is Lanefather's status snapshot, decoded: the lane the request joins
+    to there (fathers#85) gives its lane facts and makes the `lane` row a link to the Lanes page."""
     items = cast(list[Item], model["holders"] + model["waiters"])
     panel = Panel(canvas, rect, "details").frame(detail_title(items[selected] if items else None))
     if not items or canvas.loading is not None:  # drawn, so it can hold the focus, with nothing to scroll yet
@@ -192,6 +195,9 @@ def draw_detail(canvas: Canvas, rect: Rect, model: Model, selected: int, cwd: Op
     item = items[selected]
     lane: dict[str, Any] = item.get("lane") or {}
     context: dict[str, str] = item.get("context") or {}
+    joined = _lanefather.lane_of(item, lanes, cwd)
+    if joined is not None:  # the status snapshot knows its lane: no `show` needed
+        lane = _lanefather.as_summary(joined)
     _, ticket_url = detail_ticket(item, lane)
     facts = request_facts(item, model, selected - len(model["holders"]), moment, marks_of(canvas),
                           canvas.theme.track)
@@ -223,8 +229,13 @@ def draw_detail(canvas: Canvas, rect: Rect, model: Model, selected: int, cwd: Op
             facts.append((name if index == 0 else "", [(line, "dim")]))
     if where:
         facts.append(("cwd", [(where, "dim")]))
+    lane_row = -1
     if context.get("lane"):
-        facts.extend(lane_facts(context, lane, value_width))
+        found = lane_facts(context, lane, value_width)
+        if joined is not None:  # `710-speech-paste-phase · Straylight`, a link to the Lanes page
+            lane_row = len(facts) + 1
+            found[1] = ("lane", [(dashboard_text(f"{joined['id']} · {joined['project']}"), "accent")])
+        facts.extend(found)
     if failure:  # the slow facts could not be read (fathers#23): said, and tried again
         facts.extend([("", []), ("details", [(f"not loaded · {failure} · retrying", "bad")])])
     tree = cast(list[tuple[int, float, int, str]], item["tree"])
@@ -239,7 +250,9 @@ def draw_detail(canvas: Canvas, rect: Rect, model: Model, selected: int, cwd: Op
         elif name == "ticket" and ticket_url:
             document.hyperlink(row, values, str(parts[0][0]), ticket_url, value_width)
         else:
-            document.segments(row, values, parts, value_width)
+            end = document.segments(row, values, parts, value_width)
+            if row == lane_row and joined is not None:
+                document.target(row, values, end, ("lanes", joined["key"]))
     if tree:  # under the facts, a blank row, its header, a blank row, then a row per process
         processes = Table.fit(inner, PROCESS_COLUMNS)
         processes.row(document, len(facts) + 1, column, {key: (title, "dim") for key, title, *_ in processes.placed})
@@ -254,10 +267,12 @@ def clip_start(path: str, width: int) -> str:
     return path if text_width(path) <= width else "…" + path[-max(0, width - 1):]
 
 
-def enrich_details(item: Item) -> None:
+def enrich_details(item: Item, capabilities: Optional[dict[str, Any]] = None) -> None:
+    """A request's lane summary from `lanefather show`, asked only of a Lanefather whose capabilities advertise it
+    (fathers#85); `lanefather too old` otherwise."""
     context: dict[str, str] = item.get("context") or {}
     if context.get("lane"):
-        item["lane"] = _lanefather.fetch(context, item.get("workdir") or "")
+        item["lane"] = _lanefather.fetch(context, item.get("workdir") or "", capabilities)
 
 
 # An event or run (fathers#152): DETAILS while EVENTS was focused last

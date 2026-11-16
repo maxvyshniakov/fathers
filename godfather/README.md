@@ -48,7 +48,8 @@ runs their CLIs. A tool that is not installed simply has no panels; one without 
 | Settings | `<tool> settings --json`, `settings check`, `settings set`, `settings reset`, for each present tool |
 | Events | `events.jsonl` in the tool's state directory, one shared versioned schema |
 
-[docs/contracts/slotfather.md](docs/contracts/slotfather.md) is the exact shape read from Slotfather;
+[docs/contracts/slotfather.md](docs/contracts/slotfather.md) is the exact shape read from Slotfather,
+[docs/contracts/lanefather.md](docs/contracts/lanefather.md) from Lanefather;
 [docs/contracts/changelog.md](docs/contracts/changelog.md) is what every tool answers for what's new.
 The event schema is [docs/events.md](docs/events.md), with a JSON Schema and
 [`common/eventcheck.py`](../common/eventcheck.py), one MIT-licensed standard-library file every tool's tests
