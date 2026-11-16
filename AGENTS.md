@@ -10,3 +10,5 @@
 - Each package keeps its own version and `CHANGELOG.md`; a change a user would notice adds an entry to the changed
   package's changelog in the same commit.
 - The installed commands stay standard-library Python; Bun and Repo-Kit (`package.json`) are development tools only.
+- Shared code: a behaviour two packages need goes to `common/` (fathers#117), not into a second copy; the copies that
+  exist today (atomic writes, event writers, installers, changelog parsers, process identity) are being folded there.

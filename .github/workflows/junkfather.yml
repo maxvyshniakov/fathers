@@ -1,5 +1,7 @@
 name: junkfather
 
+# The shared shape: package.yml runs the lint gate and the tests on the floor and the newest Python, on Ubuntu and
+# macOS (fathers#120).
 on:
   push:
     branches: [main]
@@ -7,13 +9,17 @@ on:
       - 'junkfather/**'
       - 'common/**'
       - 'tools/ruff.toml'
+      - 'tools/checks.py'
       - '.github/workflows/junkfather.yml'
+      - '.github/workflows/package.yml'
   pull_request:
     paths:
       - 'junkfather/**'
       - 'common/**'
       - 'tools/ruff.toml'
+      - 'tools/checks.py'
       - '.github/workflows/junkfather.yml'
+      - '.github/workflows/package.yml'
   workflow_dispatch:
 
 permissions:
@@ -23,39 +29,9 @@ concurrency:
   group: junkfather-${{ github.ref }}
   cancel-in-progress: true
 
-defaults:
-  run:
-    working-directory: junkfather
-
 jobs:
   gate:
-    name: junkfather (${{ matrix.os }}, Python ${{ matrix.python }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-        python: ['3.12']
-        # junkfather supports 3.9; setup-python still builds it for Ubuntu 24.04.
-        include:
-          - os: ubuntu-24.04
-            python: '3.9'
-    steps:
-      - name: Check out full history
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: ${{ matrix.python }}
-      - name: Install uv (tools/check.py runs Ruff and Pyright through uvx)
-        if: matrix.python == '3.12'
-        run: python -m pip install uv==0.13.5
-      - name: Check Ruff and Pyright
-        if: matrix.python == '3.12'
-        run: python tools/check.py
-      - name: Run tests
-        run: python -m unittest discover -s tests -v
+    uses: ./.github/workflows/package.yml
+    with:
+      package: junkfather
+      floor: '3.9'
