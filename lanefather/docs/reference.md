@@ -474,7 +474,7 @@ writes them; Godfather's Settings section goes through it.
 | `review.start` | `auto` (default), `manual` | land: start the lane's review in the background, or leave it for `review ID` | `LANEFATHER_REVIEW_START` |
 | `rerun.wait` | seconds, `90`, `15m`, `1h` (default 3300, at most 86400) | a red check's rerun: how long it waits for its lease | `LANEFATHER_RERUN_WAIT` |
 | `slots.priority.<phase>` | `project` (default), `interactive`, `normal`, `batch` | each phase's [slot priority](#slot-priorities), above the project's `[slots.priority]` | `LANEFATHER_PRIORITY_<PHASE>`, `LANEFATHER_PRIORITY` |
-| `host.min_disk_gb` | `auto` (default; shown and saved as `0`), or decimal GB up to 100000 | start, `capabilities` and a project hook: the [free-disk floor](#finishing-lanes) | `LANEFATHER_MIN_DISK_GB` (and its other names) |
+| `host.min_disk_gb` | `auto` (default; shown and saved as `0`), or decimal GB up to 100000 (`150`, `60.5`, `1.5e2`) | start, `capabilities` and a project hook: the [free-disk floor](#finishing-lanes) | `LANEFATHER_MIN_DISK_GB` (and its other names) |
 
 With a slot priority saved, the order of [slot priorities](#slot-priorities) becomes: `LANEFATHER_PRIORITY_<PHASE>`,
 `LANEFATHER_PRIORITY`, the machine's `slots.priority.<phase>`, the project's `[slots.priority]` phase and default,
@@ -484,9 +484,11 @@ The `host.min_disk_gb` row is a `number` in GB with `min` 0, `step` 5 and `zero:
 start applies in the project the command runs in, and its description gives the derived floor `auto` stands for, for
 example `auto: 58 GB (10^9) = 40 reserve + 6 x 3.0 GB lane peak`, so Godfather's Settings shows it as `auto  effective
 here: 58 GB`. Admission, `capabilities --json` (`host.min_disk_gb`) and the refusal resolve the same value, with
-the cap start applies: Slotfather's when `[admission] provider = "slotfather"`, which they ask as start does. When
-Slotfather cannot answer, the description says so (`auto: cap unknown (lifetime admission unavailable: …); local cap
-3 gives 49 GB …`), the row has no `effective`, and `capabilities` reports the local cap's floor.
+the cap start applies: Slotfather's when `[admission] provider = "slotfather"`, which they ask as start does but
+wait at most 1 s for, inside Godfather's deadlines. When Slotfather cannot answer in that time, the description says
+so (`auto: cap unknown (lifetime admission unavailable: query timed out); local cap 3 gives 49 GB …`), the row has no
+`effective`, and `capabilities` reports the local cap's floor. `LANEFATHER_MIN_DISK_GB` takes any finite positive
+number, as before the setting, beyond the setting's 100000 too.
 
 ```text
 lanefather settings [--json]                                  the schema and the current values

@@ -14,7 +14,8 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   value; a refusal names its source. The row's description gives the current derived floor and its `effective` the
   applied one, so Godfather's Settings shows and changes it. With Slotfather as the admission provider, the
   reported floor uses Slotfather's cap, as start does, and the row says when Slotfather cannot answer instead of
-  showing the local cap's floor as applied. An older Lanefather ignores the saved value.
+  showing the local cap's floor as applied; a report waits at most 1 s for Slotfather. `LANEFATHER_MIN_DISK_GB`
+  keeps its numeric syntax (`1.5e2` still sets 150 GB). An older Lanefather ignores the saved value.
 
 - Lanes finish by themselves (fathers#157). A lane that becomes finished (landed, smoke green, review finished or
   exempt with every finding marked) runs `done`, as before, unless it is kept; `[done] auto = false` turns that off.
