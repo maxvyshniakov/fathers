@@ -1,0 +1,70 @@
+name: package
+
+# The one CI shape (fathers#120): slotfather.yml, lanefather.yml, junkfather.yml, godfather.yml and common.yml call
+# this with their name and Python floor, and differ only in those and the paths that trigger them
+# (tools/test_checks.py holds them to it). The steps are the local gate's named checks (tools/checks.py), so CI and
+# `bun run verify` run the same commands.
+on:
+  workflow_call:
+    inputs:
+      package:
+        description: slotfather, lanefather, junkfather, godfather or common
+        type: string
+        required: true
+      floor:
+        description: the oldest Python the package supports (its install.py MIN_PYTHON, its requires-python)
+        type: string
+        required: true
+      newest:
+        description: the newest released Python
+        type: string
+        default: '3.15'
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: ${{ inputs.package }} (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor and the newest Python on Ubuntu and on macOS. The two Ubuntu legs differ on purpose: 24.04 has
+        # GNU coreutils (and setup-python's 3.9 builds, which 26.04 lacks); ubuntu-latest is 26.04, whose coreutils
+        # are uutils', whose output and options differ from GNU's and macOS's. Tests that assumed macOS's tools
+        # failed only there (junkfather, aa8db1d): keep both, and never pin a test to one system's `ps`, `date` or
+        # `stat` output.
+        include:
+          - os: ubuntu-24.04
+            python: ${{ inputs.floor }}
+          - os: ubuntu-latest
+            python: ${{ inputs.newest }}
+            lint: true
+          - os: macos-latest
+            python: ${{ inputs.floor }}
+          - os: macos-latest
+            python: ${{ inputs.newest }}
+            lint: true
+    env:
+      PACKAGE: ${{ inputs.package }}
+      PYRIGHT_PYTHON_IGNORE_WARNINGS: '1'
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0  # the lint gate's budget reads the committed baselines; Godfather's tests read history
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install the pinned development tools
+        if: matrix.lint
+        run: python -m pip install -r "$PACKAGE/requirements-dev.txt"
+      - name: Lint gate (Ruff and Pyright, on the newest Python)
+        if: matrix.lint
+        run: python tools/checks.py run "$PACKAGE lint"
+      - name: Tests
+        run: python tools/checks.py run "$PACKAGE tests"
