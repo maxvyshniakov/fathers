@@ -13,28 +13,28 @@
 ┃  ⏸️    lane-555-host-rename-names                   ▪        waiting #2            10s    10004  ┃
 ┃                                                                                                  ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-╭─ LEASE DETAILS ──────────────────────────────────────────────────────────────────────────────────╮
+╭─ ❮ FULL LOG ❯ ───────────── description ─────────────────────────────────────────────────────────╮
 │                                                                                                  │
-│  label      lane-644-build-once                                                                 ┃│
-│  status     running · 1 slot                                                                    ┃│
-│  priority   normal                                                                              ┃│
-│  ticket     #644                                                                                 │
-│  phase      check                                                                                │
-│  cpu        ■■■■░░░░░░ 0.9 of 2 cores                                                            │
-│  granted    11:24:29 · waited 19m34s · running 35m10s                                            │
-│  memory     20 MB in 1 processes                                                                 │
-│  owner pid  10000                                                                                │
+│  11:59:35  slot run         agent-ae72d94beb6f08961 · ok 5m41s · 1 slot                         ┃│
+│  11:59:20  proc extended    vite dev · ttl 4h00m                                                 │
+│  11:59:02  lane reviewed    644-build-once · 2 findings · 9m                                     │
+│  11:58:33  slot run         agent-a1c75285bdf2cd615 · ok 1m13s · 1 slot                          │
+│  11:58:10  lane gate        Straylight cedf8b972d · red · 19m                                    │
+│  11:57:48  lane post-merge  710-speech-paste-phase · green · narrowed                            │
+│  11:57:15  slot run         agent-a1c75285bdf2cd615 · ok 1m34s · 1 slot                          │
+│  11:57:00  proc reaped      simulator · ttl expired                                              │
+│  11:56:05  lane landed      710-speech-paste-phase · onto integrate/queue-347                    │
 │                                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
-╭─ ❮ FULL LOG ❯ ───────────── description ───────╮ ╭─ MACHINE ─────────── queue ahead · 2 waiting ─╮
-│                                                │ │                                               │
-│  11:59:35  slot run         agent-ae72d94beb… ╹│ │  🆗 load ■■■■■■■■■■■■■■■■■■■■■■░░░░░░ 9.3/12  │
-│  11:59:20  proc extended    vite dev · ttl 4…  │ │  🆗 mem  ■■■■■■■■■░░░░░░░░░░░░░░░░░░░ normal  │
-│  11:59:02  lane reviewed    644-build-once ·   │ │  🆗 swap ■■■■■■■■■■■■■■■■■■■■■░░░░░░░ 4.4/6G  │
-│  11:58:33  slot run         agent-a1c75285bd…  │ │                       ▄▄     ▄▄               │
-│  11:58:10  lane gate        Straylight cedf8…  │ │  ▄█████████▄ ▄     ▄▄██████████████▄▄▄█▄▄█▄▄  │
-│  11:57:48  lane post-merge  710-speech-paste…  │ │  ███████████████████████████████████████████  │
-│  11:57:15  slot run         agent-a1c75285bd…  │ │  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
-│                                                │ │  −85s   avg 4.4/6 · peak 6 · full 10%    now  │
-╰────────────────────────────────────────────────╯ ╰─ slots held ──────────────────────────────────╯
+╭─ MACHINE ─────────── queue ahead · 2 waiting ─╮ ╭─ LEASE DETAILS ────────────────────────────────╮
+│                                               │ │                                                │
+│  🆗 load ■■■■■■■■■■■■■■■■■■■■■■░░░░░░ 9.3/12  │ │  label      lane-644-build-once               ┃│
+│  🆗 mem  ■■■■■■■■■░░░░░░░░░░░░░░░░░░░ normal  │ │  status     running · 1 slot                  ╹│
+│  🆗 swap ■■■■■■■■■■■■■■■■■■■■■░░░░░░░ 4.4/6G  │ │  priority   normal                             │
+│                       ▄▄     ▄▄               │ │  ticket     #644                               │
+│  ▄█████████▄ ▄     ▄▄██████████████▄▄▄█▄▄█▄▄  │ │  phase      check                              │
+│  ███████████████████████████████████████████  │ │  cpu        ■■■■░░░░░░ 0.9 of 2 cores          │
+│  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │ │  granted    11:24:29 · waited 19m34s · runni…  │
+│  −85s   avg 4.4/6 · peak 6 · full 10%    now  │ │                                                │
+╰─ slots held ──────────────────────────────────╯ ╰────────────────────────────────────────────────╯
  Godfather what's new?      ↑↓ select   1 2 3 pages   ? help   q quit      updated 11:59:39  ● live

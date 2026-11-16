@@ -290,7 +290,7 @@ class EventDetailTests(unittest.TestCase):
         return canvas, canvas.render(False).splitlines()
 
     def test_slotfather_alone_has_time_slots_label_waited_outcome_and_pid(self) -> None:
-        for width in (156, 120, 92):  # wide, the one-column layout's EVENTS beside MACHINE
+        for width in (156, 120, 92):  # wide, and the one-column layout's full-width EVENTS
             with self.subTest(width=width):
                 _, lines = self.draw(width)
                 header = lines[0]
@@ -835,8 +835,8 @@ class MemoryBarTests(unittest.TestCase):
                 right=lines[top].index("╮",left)
                 bottom=next(y for y in range(top+1,height) if lines[y][left:].startswith("╰"))
                 self.assertEqual(tool.machine_height(right-left+1),bottom-top+1,"MACHINE at its own height")
-                details=canvas.tables["details"]
-                self.assertEqual(top,details["y"]+details["height"],"the details take everything above it")
+                above=canvas.tables["details" if width>=tool.WIDE else "events"]  # one column: EVENTS (fathers#169)
+                self.assertEqual(top,above["y"]+above["height"],"the panel above takes everything over it")
 
     def test_mem_shows_what_admission_reads(self):
         tool=load_dashboard()
@@ -867,14 +867,16 @@ class MemoryBarTests(unittest.TestCase):
                 canvas=tool.Canvas(width,height)
                 tool.dashboard_draw(canvas,model)
                 details,queue=canvas.tables["details"],canvas.tables["requests"]
-                self.assertGreaterEqual(details["height"],tool.DETAILS_FLOOR,"the details keep 9 rows and more")
+                band=canvas.tables["events" if width<tool.WIDE else "details"]  # one column: EVENTS' (fathers#169)
+                self.assertGreaterEqual(band["height"],tool.DETAILS_FLOOR,"the band keeps 9 rows and more")
                 self.assertGreaterEqual(queue["height"],tool.QUEUE_FLOOR)
-                if width<tool.WIDE:  # one column: QUEUE scrolls instead of growing into the details
+                if width<tool.WIDE:  # one column: QUEUE scrolls instead of growing into the band
                     self.assertLess(queue["visible"],queue["count"])
+                    self.assertEqual(tool.MACHINE_HEIGHT,details["height"],"DETAILS as tall as MACHINE beside it")
                 else:  # wide: the details have their own column, the whole right side above MACHINE
                     self.assertGreater(details["height"],20)
-        self.assertEqual(dict(requests=13,details=5,machine=6),{name:rect.height for name,rect in
-                         tool.overview(100,30,17,tool.machine_height).panels.items() if name!="slots" and name!="events"},
+        self.assertEqual(dict(requests=13,events=5,machine=6,details=6),{name:rect.height for name,rect in
+                         tool.overview(100,30,17,tool.machine_height).panels.items() if name!="slots"},
                          "too short for the floors: the earlier order")
 
     def layout_model(self) -> dict[str, Any]:

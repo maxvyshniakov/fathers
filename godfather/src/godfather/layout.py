@@ -5,9 +5,11 @@ given and do no arithmetic of their own about where things go.
 
 Today's rules, which these tables reproduce exactly: SLOTS on top at its five rows; from WIDE columns the panels sit
 in two columns (QUEUE over EVENTS on the left, DETAILS over MACHINE on the right, the right column 2/5 of the width
-and at least 52); below that one column (QUEUE, DETAILS, then EVENTS beside MACHINE, or MACHINE alone where EVENTS
-would get under 38 columns, which is under 83); under SMALL_WIDTH or SMALL_HEIGHT only the slots and a note. MACHINE
-sits at its natural height (7 with its chart beside the rows, from 62 columns; 11 stacked); DETAILS takes the rest.
+and at least 52); below that one column: QUEUE, a full-width band, then a bottom row. From 83 columns the band is
+EVENTS' and the bottom row holds MACHINE on the left and DETAILS on the right (fathers#169); below 83, where DETAILS
+would get under 38 columns beside MACHINE, or where the bottom row gets no rows, the band is DETAILS' and MACHINE has
+the bottom row alone (EVENTS is not shown). Under SMALL_WIDTH or SMALL_HEIGHT only the slots and a note. MACHINE sits
+at its natural height (7 with its chart beside the rows, from 62 columns; 11 stacked); the band takes the rest.
 Wide, EVENTS shows from the height that gives it its least rows under QUEUE's least, and below that height QUEUE keeps
 its rows (less what MACHINE's three-row compact form needs), MACHINE goes under it and DETAILS takes the whole right
 column (fathers#140), so as a terminal grows taller panels only ever arrive.
@@ -32,8 +34,10 @@ SMALL_WIDTH, SMALL_HEIGHT = 50, 14  # below either, only the slots and a note
 SLOTS_HEIGHT = 5
 SMALL_NOTE_ROW = 6
 RIGHT_MIN = 52  # the right column's least width; it takes 2/5 of the screen where that is more
-NARROW_MACHINE, NARROW_EVENTS = 44, 38  # the least width each takes side by side in one column; below both, EVENTS goes
-QUEUE_MIN, QUEUE_FLOOR, DETAILS_FLOOR = 10, 6 + 4, 9 + 4  # rows: QUEUE's least, one column's comfortable floors
+NARROW_MACHINE, NARROW_DETAILS = 44, 38  # the least width each takes side by side in one column; below both, EVENTS
+# goes and DETAILS takes the band
+QUEUE_MIN, QUEUE_FLOOR, DETAILS_FLOOR = 10, 6 + 4, 9 + 4  # rows: QUEUE's least, one column's comfortable floors (the
+# band's, whichever panel has it)
 EVENTS_MIN, DETAILS_MIN, DETAILS_WIDE_MIN, MACHINE_MIN = 5, 5, 10, 6
 MACHINE_SHORT = 3  # MACHINE's least rows as one compact line in its frame: the short wide arrangement (fathers#140)
 
@@ -132,21 +136,26 @@ def overview(width: int, height: int, rows: int, machine_natural: Callable[[int]
         arrangement = "wide"
         slots_width = left
     else:
-        machine_width, events_width = split(width, (width - 1) // 2, NARROW_MACHINE, NARROW_EVENTS)
+        machine_width, details_width = split(width, (width - 1) // 2, NARROW_MACHINE, NARROW_DETAILS)
         bottom = machine_natural(machine_width)
         heights = stack(available, (
-            Tier((("requests", min(queue, QUEUE_FLOOR)), ("details", DETAILS_FLOOR), ("bottom", MACHINE_MIN)),
-                 grow=("bottom", "requests"), rest=("details", "requests"), whole=True),
-            Tier((("requests", min(queue, QUEUE_MIN)), ("details", DETAILS_MIN), ("bottom", MACHINE_MIN)),
-                 grow=("requests", "details", "bottom"), rest=("details", "requests"))),
-            {"requests": queue, "details": DETAILS_MIN, "bottom": bottom})
-        column(panels, ("requests", "details", "bottom"), heights, SLOTS_HEIGHT, 0, width)
-        row = panels.pop("bottom", None)
-        if row is not None and events_width:  # EVENTS on the left, MACHINE on the right (owner, 2026-11-12)
-            panels["events"] = Rect(row.y, 0, row.height, events_width)
-            panels["machine"] = Rect(row.y, events_width + 1, row.height, machine_width)
-        elif row is not None:
-            panels["machine"] = row
+            Tier((("requests", min(queue, QUEUE_FLOOR)), ("band", DETAILS_FLOOR), ("bottom", MACHINE_MIN)),
+                 grow=("bottom", "requests"), rest=("band", "requests"), whole=True),
+            Tier((("requests", min(queue, QUEUE_MIN)), ("band", DETAILS_MIN), ("bottom", MACHINE_MIN)),
+                 grow=("requests", "band", "bottom"), rest=("band", "requests"))),
+            {"requests": queue, "band": DETAILS_MIN, "bottom": bottom})
+        column(panels, ("requests", "band", "bottom"), heights, SLOTS_HEIGHT, 0, width)
+        band, row = panels.pop("band", None), panels.pop("bottom", None)
+        if band is not None and row is not None and details_width:
+            # EVENTS the full-width band; MACHINE on the left and DETAILS on the right under it (owner, fathers#169)
+            panels["events"] = band
+            panels["machine"] = Rect(row.y, 0, row.height, machine_width)
+            panels["details"] = Rect(row.y, machine_width + 1, row.height, details_width)
+        else:
+            if band is not None:
+                panels["details"] = band
+            if row is not None:
+                panels["machine"] = row
         arrangement = "column"
         slots_width = width
     panels = {"slots": Rect(0, 0, SLOTS_HEIGHT, slots_width), **panels}

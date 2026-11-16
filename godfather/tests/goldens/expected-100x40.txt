@@ -13,28 +13,28 @@
 ┃  ⏸️    lane-555-host-rename-names                ▪       waiting #2                 10s   10004  ┃
 ┃                                                                                                  ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-╭─ LEASE DETAILS ──────────────────────────────────────────────────────────────────────────────────╮
+╭─ SLOTS LOG ─────── label ──────────────────────────────────────── waited╶╴outcome ───────── pid ─╮
 │                                                                                                  │
-│  label      lane-644-build-once                                                                 ┃│
-│  status     running · 1 slot                                                                    ┃│
-│  priority   normal                                                                              ┃│
-│  ticket     #644                                                                                 │
-│  phase      check                                                                                │
-│  cpu        ■■■■░░░░░░ 0.9 of 2 cores                                                            │
-│  granted    11:24:29 · waited 19m34s · running 35m10s                                            │
-│  expected   18m · p90 31m · 23 runs                                                              │
-│  memory     20 MB in 1 processes                                                                 │
+│  11:59:35  ▫       agent-ae72d94beb6f08961                       no wait  ok 5m41s ↗      21202 ┃│
+│  11:58:33  ▫       agent-a1c75285bdf2cd615                       no wait  ok 1m13s ▲      21201  │
+│  11:57:15  ▫       agent-a1c75285bdf2cd615                       no wait  ok 1m34s        21200  │
+│  11:55:44  ▪▪      desktop                                       no wait  running 3m55s   10002  │
+│  11:55:31  ▫       desktop                                       no wait  exit 1 · 7s     21199  │
+│  11:55:26  ▫       agent-a1c75285bdf2cd615                       no wait  ok 1m20s        21198  │
+│  11:55:00  ▫       desktop                                       no wait  ok 6s           21197  │
+│  11:54:02  ▫       agent-a1c75285bdf2cd615                       no wait  ok 54s          21196  │
+│  11:52:53  ▫       agent-a1c75285bdf2cd615                    wait 2m21s  ok 1m13s        21195  │
 │                                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
-╭─ SLOTS LOG ─────────────────── outcome ────────╮ ╭─ MACHINE ─────────── queue ahead · 2 waiting ─╮
-│                                                │ │                                               │
-│  11:59:35  agent-ae72d94beb6…  ok 5m41s ↗     ╹│ │  🆗 load ■■■■■■■■■■■■■■■■■■■■■■░░░░░░ 9.3/12  │
-│  11:58:33  agent-a1c75285bdf…  ok 1m13s ▲      │ │  🆗 mem  ■■■■■■■■■░░░░░░░░░░░░░░░░░░░ normal  │
-│  11:57:15  agent-a1c75285bdf…  ok 1m34s        │ │  🆗 swap ■■■■■■■■■■■■■■■■■■■■■░░░░░░░ 4.4/6G  │
-│  11:55:44  desktop             running 3m55s   │ │                       ▄▄     ▄▄               │
-│  11:55:31  desktop             exit 1 · 7s     │ │  ▄█████████▄ ▄     ▄▄██████████████▄▄▄█▄▄█▄▄  │
-│  11:55:26  agent-a1c75285bdf…  ok 1m20s        │ │  ███████████████████████████████████████████  │
-│  11:55:00  desktop             ok 6s           │ │  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
-│                                                │ │  −85s   avg 4.4/6 · peak 6 · full 10%    now  │
-╰────────────────────────────────────────────────╯ ╰─ slots held ──────────────────────────────────╯
+╭─ MACHINE ─────────── queue ahead · 2 waiting ─╮ ╭─ LEASE DETAILS ────────────────────────────────╮
+│                                               │ │                                                │
+│  🆗 load ■■■■■■■■■■■■■■■■■■■■■■░░░░░░ 9.3/12  │ │  label      lane-644-build-once               ┃│
+│  🆗 mem  ■■■■■■■■■░░░░░░░░░░░░░░░░░░░ normal  │ │  status     running · 1 slot                  ╹│
+│  🆗 swap ■■■■■■■■■■■■■■■■■■■■■░░░░░░░ 4.4/6G  │ │  priority   normal                             │
+│                       ▄▄     ▄▄               │ │  ticket     #644                               │
+│  ▄█████████▄ ▄     ▄▄██████████████▄▄▄█▄▄█▄▄  │ │  phase      check                              │
+│  ███████████████████████████████████████████  │ │  cpu        ■■■■░░░░░░ 0.9 of 2 cores          │
+│  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │ │  granted    11:24:29 · waited 19m34s · runni…  │
+│  −85s   avg 4.4/6 · peak 6 · full 10%    now  │ │                                                │
+╰─ slots held ──────────────────────────────────╯ ╰────────────────────────────────────────────────╯
  Godfather what's new?      ↑↓ select   s settings   ? help   q quit       updated 11:59:39  ● live
