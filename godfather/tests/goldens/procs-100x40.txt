@@ -1,7 +1,7 @@
 ┏━ PROCESSES ━━━━━━━━━━━━━━━ id ━━━━━━ owner ━━━━━━━━━━━ lane ━━━━━━━━━━━━━ age╺╸ttl left ━━━ pid ━┓
 ┃                                                                                                  ┃
 ┃  ▶️  vite dev              j3f9a1c   claude 4bceaaaf…  710-speech-pa…     30m     1h06m   90412  ┃
-▕  ▶️  storybook             j5e6f7a   claude 4bceaaaf…                     30m     1h46m   55001  ▏
+▌  ▶️  storybook             j5e6f7a   claude 4bceaaaf…                     30m     1h46m   55001  ▐
 ┃  ▶️  iPhone 17 Pro         j8d9e0f   claude 4bceaaaf…                     30m     1h23m          ┃
 ┃  👻  playwright server     j7a8b9c   claude 4bceaaaf…                   1h30m       50m   61200  ┃
 ┃  ⌛  pg-test               j2b3c4d   claude 4bceaaaf…                   2h05m   expired          ┃

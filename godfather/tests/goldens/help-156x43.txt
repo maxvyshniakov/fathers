@@ -5,7 +5,7 @@
 ╰│    ↑ ↓         select a row · scroll a panel                                                                                                           ││
 ┏│    pgup pgdn   a page                              SLOTS                                             PAGES                                             ││
 ┃│    home end    first · last row, top · bottom        One block per slot; the colour is its owner.      2 · 3        lanes · processes (SLOTS'          ││
-▕│    tab         next panel, by columns                Slots budget scheduling, not CPU or memory.                    border)                            ││
+▌│    tab         next panel, by columns                Slots budget scheduling, not CPU or memory.                    border)                            ││
 ┃│                (shift-tab: back)                     manual · auto  saved or computed capacity         ▶️ 🗓️ ✅ 💤  active planned landed parked       ││
 ┃│    click       a row, a panel, a footer hint (as     draining N     held above a lowered capacity      👻 ⌛        owner gone · past its TTL          ││
 ┃│                its key)                                                                                ❔ 📦        unowned process · resource         ││

@@ -92,7 +92,7 @@ def swapped(canvas: tui.Canvas) -> set[tuple[int, int]]:
 
 
 RESTED = {"┏": "╭", "┓": "╮", "┗": "╰", "┛": "╯", "━": "─", "┃": "│"}  # a focused frame as a resting one
-MARKED = {"▕": "┃", "▏": "┃"}  # a selected row's markers, leaning toward the row since fathers#165, as Slotfather's
+MARKED = {"▌": "┃", "▐": "┃"}  # a focused panel's selected row's markers since fathers#165, as Slotfather's
 
 
 class ParityTests(unittest.TestCase):

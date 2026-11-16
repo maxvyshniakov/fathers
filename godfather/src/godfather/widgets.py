@@ -19,9 +19,10 @@ Value = Union[str, Part, list[Part]]
 # A panel's corners, its top and bottom rule and its sides: at rest rounded and light; focused, heavy all round
 # (fathers#139, fathers#165)
 REST_FRAME, FOCUS_FRAME = ("╭╮╰╯", "─", "│"), ("┏┓┗┛", "━", "┃")
-# A selected row's marker on each frame, in the row's colour (#15): a bar at the cell's inner edge, leaning toward the
-# row so it never reads as a focused frame's centred `┃` (fathers#165, owner); `>` `<` on ASCII (tui.ASCII)
-SELECTED_FRAME = ("▕", "▏")
+# A selected row's markers, (left frame, right frame) by whether the panel holds the focus, in the row's colour (#15;
+# fathers#165, owner): on a resting frame the heavy `┃` beside its light sides (`#` on ASCII); on a focused, heavy
+# frame the cell's outer half, the frame's line made thicker toward the outside (`>` `<` on ASCII, tui.ASCII)
+SELECTED_FRAME = {False: ("┃", "┃"), True: ("▌", "▐")}
 # A tick of rule between two border labels two cells apart (fathers#165, owner): half segments meeting mid-gap,
 # light and heavy (focused); `-` on ASCII
 HALF_RULES = {False: "╶╴", True: "╺╸"}
@@ -55,8 +56,8 @@ class Panel:
     def frame(self, title: str = "", note: str = "") -> Panel:
         """A rounded light frame in the frame token. The focused panel's is in the accent blue and heavy on all four
         sides (fathers#139, fathers#165: `┏━┓ ┃ ┗━┛`, `+=+ # +=+` on ASCII), so focus shows without colour too; a
-        selected row's `▕ ▏` (SELECTED_FRAME) lean toward it in its colour. The title is set into the top border at
-        x + 2, a note on its right."""
+        selected row's markers are thicker still (SELECTED_FRAME). The title is set into the top border at x + 2, a
+        note on its right."""
         canvas, (y, x, height, width) = self.canvas, self.rect
         if height < 2 or width < 6:
             return self
@@ -130,10 +131,10 @@ class Panel:
 
     def mark(self, row: int, style: str, tint: Union[bool, str] = True) -> None:
         """A selected row: its background between the frames (a holder's own tint, or the neutral selection) and
-        both frames at that row a bar leaning toward the row, in its colour (SELECTED_FRAME): no cursor glyph."""
+        both frames at that row a bar in its colour, thicker than the frame's sides (SELECTED_FRAME): no cursor glyph."""
         x, width = self.rect.x, self.rect.width
         self.canvas.select(row, x + 1, x + width - 1, tint)
-        for frame, marker in zip((x, x + width - 1), SELECTED_FRAME):
+        for frame, marker in zip((x, x + width - 1), SELECTED_FRAME[self.focused]):
             self.canvas.put(row, frame, marker, style)
 
     def gap(self, start: int, end: int) -> None:

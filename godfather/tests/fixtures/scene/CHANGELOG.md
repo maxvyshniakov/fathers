@@ -100,8 +100,8 @@ Versions and release rules: [README.md](README.md#versions).
   that switches the log (← →, `f`, a click on the title) flashes the arrow on its side as a scroll flashes the
   scrollbar's thumb. SLOTS LOG's outcome, LANES LOG's result and PROCS LOG's detail are left-aligned, header and
   cells. The focused panel's frame is heavy on all four sides, corners and sides too (`┏━┓ ┃ ┗━┛`, `#` sides on
-  ASCII), no longer only its top and bottom rules; a selected row's markers are bars at the frame cell's inner edge,
-  leaning toward the row (`▕ … ▏`, `> … <` on ASCII), so they never read as the focused frame's `┃`. Column labels
+  ASCII), no longer only its top and bottom rules. A selected row's markers stay the heavy `┃` on a resting frame and
+  on a focused one are thicker than its sides: each frame cell's outer half (`▌ … ▐`, `> … <` on ASCII). Column labels
   set into a top border always keep a tick of rule between them: two cells apart, half segments meet mid-gap
   (`waited╶╴outcome`, `╺╸` on a focused frame), one cell apart, one rule cell (`-` on ASCII).
 

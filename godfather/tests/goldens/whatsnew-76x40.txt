@@ -5,7 +5,7 @@
 ╰│                                                                       ┃│╯
 ┏│  ADDED                                                                ╹│┓
 ┃│                                                                        │┃
-▕│  • Row actions (fathers#88): Enter, a or a right-click on a QUEUE      │▏
+▌│  • Row actions (fathers#88): Enter, a or a right-click on a QUEUE      │▐
 ┃│    row or a page's row opens its action menu, only the actions its     │┃
 ┃│    tool advertises and that apply to the row now (no actions in the    │┃
 ┃│    footer otherwise): reprioritize a request to another class and      │┃

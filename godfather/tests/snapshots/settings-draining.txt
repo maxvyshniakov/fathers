@@ -12,7 +12,7 @@
 │    draining     2 slots · nothing starts until at most 2 are held            │
 │    environment  SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB                      │
 │    Capacity                  Fixed                                           │
-▕  ▶ Slots                     2                                               ▏
+┃  ▶ Slots                     2                                               ┃
 │    Queue order               Backfill                                        │
 │    Backfill margin           3×                                              │
 │    Unknown job runtime       1h                                              │

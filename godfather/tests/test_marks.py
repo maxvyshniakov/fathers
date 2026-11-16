@@ -78,7 +78,7 @@ class MarkTests(unittest.TestCase):
                                   "the priority: two cells, blank for normal")
                     self.assertEqual(" ", cells[8][0], "then a gap")
                     self.assertNotEqual(" ", cells[9][0], "the label starts in the same cell on every row")
-                    self.assertEqual("▏" if y == rows[0] else "┃", cells[width - 1][0], "the frame stays put")
+                    self.assertEqual("▐" if y == rows[0] else "┃", cells[width - 1][0], "the frame stays put")
                     self.assertNotIn("▶", [cell[0] for cell in cells], "no cursor glyph")
                     self.assertFalse({"◌", "↓"} & {cell[0] for cell in cells}, "no marker column")
                 if width >= 60:  # the columns right of the label start in the same cell on every running row
@@ -131,7 +131,7 @@ class MarkTests(unittest.TestCase):
         canvas = self.tool.Canvas(60, 14)
         self.tool.draw_requests(canvas, Rect(0, 0, 14, 60), model, 0, self.now)
         row = next(line for line in canvas.render(False).splitlines() if "lane-pin" in line)
-        self.assertRegex(row, r"^▕  ▶️    lane-pin-u\S*… ", "the state, a blank priority, the name cut with an ellipsis")
+        self.assertRegex(row, r"^▌  ▶️    lane-pin-u\S*… ", "the state, a blank priority, the name cut with an ellipsis")
 
     def test_the_selected_row_has_its_background_and_no_cursor(self) -> None:
         canvas = self.tool.Canvas(120, 14)
@@ -149,8 +149,8 @@ class MarkTests(unittest.TestCase):
                 canvas = self.tool.Canvas(120, 14)
                 self.tool.draw_requests(canvas, Rect(0, 0, 14, 120), model, index, self.now)
                 [y] = [y for y in range(14) if any(cell[2] for cell in canvas.cells[y])]
-                self.assertEqual(["▕", style], canvas.cells[y][0][:2], "a bar leaning toward the row (fathers#165)")
-                self.assertTrue(canvas.lines(True)[y].startswith(sgr + "▕"), canvas.lines(True)[y][:40])
+                self.assertEqual(["▌", style], canvas.cells[y][0][:2], "a bar leaning toward the row (fathers#165)")
+                self.assertTrue(canvas.lines(True)[y].startswith(sgr + "▌"), canvas.lines(True)[y][:40])
                 others = [canvas.cells[row][0][0] for row in range(1, 13) if row != y]
                 self.assertEqual({"┃"}, set(others), "the focused frame is heavy too (fathers#165)")
                 self.assertEqual({"accent"}, {canvas.cells[row][0][1] for row in range(1, 13) if row != y},
@@ -160,6 +160,22 @@ class MarkTests(unittest.TestCase):
                                  "ASCII: the marker is no frame side")
                 self.assertEqual(" ", canvas.cells[y][1][0], "nothing after the frame moves")
 
+    def test_the_marker_is_the_heavy_side_at_rest_and_the_outer_half_cell_on_a_focused_frame(self) -> None:
+        """fathers#165 (owner): unfocused, the heavy `┃` beside the light frame (`#` on ASCII), as before; focused,
+        thicker than the heavy frame: each frame cell's outer half, `▌` left and `▐` right (`>` `<` on ASCII)."""
+        for focus, left, right, plain in (("details", "┃", "┃", ("#", "#")), ("requests", "▌", "▐", (">", "<"))):
+            with self.subTest(focus=focus):
+                canvas = self.tool.Canvas(120, 14)
+                canvas.focus = focus
+                self.tool.draw_requests(canvas, Rect(0, 0, 14, 120), self.model(), 0, self.now)
+                [y] = [y for y in range(14) if any(cell[2] for cell in canvas.cells[y])]
+                self.assertEqual([[left, "f0"], [right, "f0"]], [canvas.cells[y][0][:2], canvas.cells[y][119][:2]])
+                side = canvas.cells[y + 1][0][0]
+                self.assertEqual("┃" if focus == "requests" else "│", side)
+                ascii_line = canvas.lines(False, ascii_only=True)[y]
+                self.assertEqual(plain, (ascii_line[0], ascii_line[-1]))
+                self.assertNotEqual(canvas.lines(False, ascii_only=True)[y + 1][0], ascii_line[0], "never the frame")
+
     def test_the_selected_row_is_marked_on_both_frames_never_in_the_thumbs_cell(self) -> None:
         model = self.model()
         for index, fill in ((0, "f0"), (6, "text")):  # a running lease in its fill; a waiter in the text colour
@@ -168,7 +184,7 @@ class MarkTests(unittest.TestCase):
                     canvas = self.tool.Canvas(120, height)
                     self.tool.draw_requests(canvas, Rect(0, 0, height, 120), model, index, self.now)
                     [y] = [y for y in range(height) if any(cell[2] for cell in canvas.cells[y])]
-                    self.assertEqual([["▕", fill], ["▏", fill]], [canvas.cells[y][0][:2], canvas.cells[y][119][:2]])
+                    self.assertEqual([["▌", fill], ["▐", fill]], [canvas.cells[y][0][:2], canvas.cells[y][119][:2]])
                     thumbs = {(row, column) for row in range(height) for column in range(120)
                               if canvas.cells[row][column][0] in ("┃", "╻", "╹") and column not in (0, 119)}
                     self.assertEqual(height == 6, bool(thumbs), "a thumb only when the rows overflow")
@@ -273,7 +289,7 @@ class TintTests(unittest.TestCase):
             self.assertTrue(code.startswith(unselected[:-1] + ";48;2;"), "the same text colour as unselected")
             self.assertEqual(unselected[:-1] + ";48;2;%d;%d;%dm" % self.tool.current_theme.tints["h0"], code)
             self.assertNotIn("38;2;%d;%d;%d" % fg, code)  # not the foreground
-            self.assertEqual(["▕", "f0"], cells[0][:2], "the frame marker in its fill")
+            self.assertEqual(["▌", "f0"], cells[0][:2], "the frame marker in its fill")
             self.assertEqual("f0", next(cell[1] for cell in cells if cell[0] == "▪"), "slot cells too")
             code, _ = self.selected_sgr(6)
             self.assertEqual("\x1b[0;48;2;%d;%d;%dm" % theme.mix(bg, fg, theme.SELECTION_MIX), code, "waiting: neutral")
@@ -432,9 +448,9 @@ class FrameTests(unittest.TestCase):
         canvas = self.tool.Canvas(120, 7)  # room for three of the nine rows
         self.tool.draw_requests(canvas, Rect(0, 0, 7, 120), model, 0, self.now)
         selected = [y for y in range(7) if any(cell[2] for cell in canvas.cells[y])]
-        self.assertEqual(["▕", "f0"], canvas.cells[selected[0]][0][:2], "left: the row's fill")
+        self.assertEqual(["▌", "f0"], canvas.cells[selected[0]][0][:2], "left: the row's fill")
         self.assertEqual(["┃", "dim"], canvas.cells[selected[0]][118][:2], "right: the thumb, same row, muted at rest")
-        self.assertEqual(["▏", "f0"], canvas.cells[selected[0]][119][:2], "right: the row's fill on the frame too")
+        self.assertEqual(["▐", "f0"], canvas.cells[selected[0]][119][:2], "right: the row's fill on the frame too")
         self.assertEqual(["┃", "accent"], canvas.cells[selected[0] + 1][119][:2], "the focused frame: heavy, in blue")
         self.assertNotIn("↓", canvas.render(False), "no row counts: the scrollbar shows it")
 

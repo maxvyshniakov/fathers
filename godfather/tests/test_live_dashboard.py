@@ -63,7 +63,7 @@ class OnceTests(LiveCase):
         text = self.snapshot()
         self.assertIn("queue ahead · 2 waiting", text, "why nothing is admitted (fathers#156)")
         self.assertIn("━ QUEUE ", text)
-        self.assertIn("▕  ▶️    holder", text, "the selected row on the frame, its state (#15), then the label")
+        self.assertIn("▌  ▶️    holder", text, "the selected row on the frame, its state (#15), then the label")
         self.assertEqual(1, text.count("▶"), "only the selected row has a cursor")
         self.assertRegex(text, r"gate +▪▪▪▪ +waiting #1 ")
         self.assertRegex(text, r"small +▪ +waiting #2 ")

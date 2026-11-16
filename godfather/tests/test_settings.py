@@ -320,7 +320,7 @@ class RenderTests(PanelCase):
         self.assertEqual(1, len({line.strip("│ ") for line in rules}), "every rule one length")
         self.assertEqual(1, len({line.index("─") for line in rules}), "every rule from one column")
         for line in rows[1:-1]:
-            self.assertTrue(line.startswith(("│  ", "▕  ")), f"two cells of padding: {line!r}")
+            self.assertTrue(line.startswith(("│  ", "┃  ")), f"two cells of padding: {line!r}")
         self.assertTrue(any(line.startswith("│  GODFATHER") for line in rows))
 
     def test_status_labels_are_dim_and_the_selected_field_alone_is_highlighted(self) -> None:
