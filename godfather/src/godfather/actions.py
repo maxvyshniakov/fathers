@@ -20,10 +20,11 @@ import os
 import shlex
 import sys
 from dataclasses import dataclass
-from typing import Any, Optional, cast
+from typing import Any, Mapping, Optional, cast
 
 from .adapters import junkfather as _junkfather
 from .adapters import lanefather as _lanefather
+from .model import ProcessTableRow
 
 NEVER = frozenset({"land", "promote", "done", "sync", "review", "sweep"})
 PRIORITIES = ("interactive", "normal", "batch")
@@ -112,22 +113,23 @@ def for_request(item: dict[str, Any], waiters: list[dict[str, Any]], advertised:
     return found
 
 
-def for_process(row: dict[str, Any], advertised: Any) -> list[Action]:
+def for_process(row: ProcessTableRow, advertised: Any) -> list[Action]:
     """PROCESSES: reap an orphan or expired entry, or an unowned process the last sweep reported (confirmed); extend
     a running entry's TTL. A running entry whose owner lives is never reaped from here."""
     tools = offered(advertised)
+    if row["kind"] == "separator":
+        return []
     label = _junkfather.label_of(row)
-    if row.get("kind") == "unowned":
-        if "reap" not in tools or row.get("alive") is False:  # gone since the sweep: its pid may be another's now
+    if row["kind"] == "unowned":
+        if "reap" not in tools or row["alive"] is False:  # gone since the sweep: its pid may be another's now
             return []
-        target = (("process", label), ("pid", str(row["pid"])), ("why", str(row.get("why") or "")))
+        target = (("process", label), ("pid", str(row["pid"])), ("why", row["why"]))
         return [Action("junkfather", "Reap", ("reap", "--pid", str(row["pid"]), "--force",
                                               "--reason=godfather: unowned"), confirm=True, target=target,
                        identity=("processes", row["key"]))]
-    if row.get("kind") != "entry":
+    if row["kind"] != "entry":
         return []
-    target = (("entry", label), ("id", str(row["id"])), ("pid", str(row.get("pid") or "—")),
-              ("owner", str(row.get("owner") or "?")))
+    target = (("entry", label), ("id", row["id"]), ("pid", str(row["pid"] or "—")), ("owner", row["owner"] or "?"))
     identity = ("processes", row["key"])
     if row["state"] in ("orphan", "expired"):
         # an expired entry's reap says so, so Junkfather refuses it too once it was extended meanwhile
@@ -141,7 +143,7 @@ def for_process(row: dict[str, Any], advertised: Any) -> list[Action]:
                    identity=identity) for words, ttl in EXTEND]
 
 
-def for_lane(lane: dict[str, Any], advertised: Any) -> list[Action]:
+def for_lane(lane: Mapping[str, Any], advertised: Any) -> list[Action]:
     """LANES: open its ticket, latest log or worktree (no owner command); park an active lane, with a reason
     (confirmed), where Lanefather advertises park."""
     found: list[Action] = []
@@ -167,7 +169,7 @@ def for_lane(lane: dict[str, Any], advertised: Any) -> list[Action]:
 EVERY = frozenset({"reprioritize", "ask-yield", "reap", "extend", "park"})  # a re-check rebuilds any of them
 
 
-def revalidate(action: Action, snapshot: Optional[dict[str, Any]], uid: Optional[int] = None) -> Optional[Action]:
+def revalidate(action: Action, snapshot: Optional[Mapping[str, Any]], uid: Optional[int] = None) -> Optional[Action]:
     """The action as the row offers it now, in a fresh snapshot of its source, or None (SPEC 23, step 3): the row is
     found by its identity (a request by key, pid and start; an entry, unowned process or resource by key; a lane by
     project and id), its actions are built again from the fresh row and one with the same name and arguments must be
@@ -185,7 +187,7 @@ def revalidate(action: Action, snapshot: Optional[dict[str, Any]], uid: Optional
                 fresh = for_request(item, waiters, EVERY, uid)
     elif page == "processes":
         row = _junkfather.find(snapshot, action.identity[1])
-        if row is not None and row.get("kind") == "unowned" and any(
+        if row is not None and row["kind"] == "unowned" and any(
                 row["pid"] in (entry.get("pid"), entry.get("pgid")) for entry in _junkfather.entries(snapshot)):
             return None
         fresh = for_process(row, EVERY) if row is not None else []

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional, cast
+from typing import Any, Callable, Optional, Sequence, TypeVar, cast
 
 from .. import entries as _entries
 from .. import layout as _layout
@@ -19,6 +19,7 @@ from ..adapters import junkfather as _junkfather
 from ..adapters import lanefather as _lanefather
 from ..events import Filter
 from ..layout import Rect
+from ..model import Entry, Lane, LaneRow, LaneTableRow, ProcessRow, ProcessTableRow
 from ..text import clip, dashboard_text, minutes, span, text_width, tilde
 from ..tui import Canvas, safe_link
 from ..widgets import Panel, Part, Spec, Table
@@ -32,6 +33,10 @@ Link = Optional[tuple[Any, ...]]  # a document row's target, or none
 PAGE_KEYS = {"lanes": "2", "processes": "3"}
 TITLES = {"lanes": "LANES", "processes": "PROCESSES"}
 TOOL_NAMES = {"lanes": "Lanefather", "processes": "Junkfather"}
+
+# A page table's row (model.py): LANES' lanes under their project headings, PROCESSES' entries, unowned processes
+# and resources around their separator
+Row = TypeVar("Row", LaneTableRow, ProcessTableRow)
 
 
 # The summaries in SLOTS' bottom border (SPEC 13)
@@ -116,9 +121,9 @@ PAGE_TABLE = {"lanes": "lanes", "processes": "procs"}
 MARK = 4  # a row's state mark and the gap after it
 
 
-def draw_table(canvas: Canvas, rect: Rect, name: str, title: str, spec: list[Spec], rows: list[dict[str, Any]],
-               selected: Optional[int], values: Callable[[dict[str, Any]], dict[str, Any]],
-               heading: Callable[[dict[str, Any]], Part], note: str = "") -> None:
+def draw_table(canvas: Canvas, rect: Rect, name: str, title: str, spec: list[Spec], rows: Sequence[Row],
+               selected: Optional[int], values: Callable[[Row], dict[str, Any]],
+               heading: Callable[[Row], Part], note: str = "") -> None:
     """A page's table: its columns in the top border, a heading row for each unselectable row (a project, a
     separator), the selected row marked as QUEUE's is; clicks reach rows through row_items."""
     panel = Panel(canvas, rect, name)
@@ -187,7 +192,7 @@ LANE_COLUMNS: list[Spec] = [("state", "", 2, False, 0), ("lane", "lane", 0, Fals
                             ("age", "age", 6, True, 1)]
 
 
-def lane_values(row: dict[str, Any], marks: _common.Marks, moment: Optional[datetime.datetime]) -> dict[str, Any]:
+def lane_values(row: LaneRow, marks: _common.Marks, moment: Optional[datetime.datetime]) -> dict[str, Any]:
     ticket = row["ticket"].get("number")
     receipt = row["receipt"]["status"]
     review = row["review"]
@@ -199,15 +204,17 @@ def lane_values(row: dict[str, Any], marks: _common.Marks, moment: Optional[date
             "claims": (str(len(row["claims"])), "dim"), "age": (age(moment, row.get("created")), "dim")}
 
 
-def project_heading(row: dict[str, Any]) -> Part:
-    if row.get("error"):
+def project_heading(row: LaneTableRow) -> Part:
+    if row["kind"] != "project":
+        return "", "dim"
+    if row["error"]:
         return f"{row['project']} · {dashboard_text(row['error'])}", "dim"
-    of = f"{row['active']} of {row['cap']} lanes" if row.get("cap") is not None else \
+    of = f"{row['active']} of {row['cap']} lanes" if row["cap"] is not None else \
         f"{row['count']} lane{'s' if row['count'] != 1 else ''}"
     return f"{row['project']} · {of}", "bold"
 
 
-def lane_facts(lane: dict[str, Any], model: Optional[Model], extra: list[tuple[str, list[Part], Link]]) \
+def lane_facts(lane: Lane, model: Optional[Model], extra: list[tuple[str, list[Part], Link]]) \
         -> list[tuple[str, list[Part], Link]]:
     """LANE DETAILS: project, ticket, branch and base, worktree, claims, after, receipt, review, the latest log, and
     the leases that run for it, each a link back to the overview."""
@@ -249,7 +256,7 @@ def lane_facts(lane: dict[str, Any], model: Optional[Model], extra: list[tuple[s
 
 
 def draw_lanes(canvas: Canvas, tool: Any, selected: Optional[int], model: Optional[Model],
-               moment: Optional[datetime.datetime], extra: Callable[[dict[str, Any]], list[Any]] = lambda _: []) -> None:
+               moment: Optional[datetime.datetime], extra: Callable[[Lane], list[Any]] = lambda _: []) -> None:
     """The Lanes page: LANES grouped by project, LANE DETAILS for the selected lane, its Lanefather events."""
     if tool.state == "unsupported":
         draw_notice(canvas, "lanes", [str(tool.problem), "The Lanes page needs a Lanefather with `status --json`."])
@@ -261,11 +268,13 @@ def draw_lanes(canvas: Canvas, tool: Any, selected: Optional[int], model: Option
     screen = _layout.page(canvas.width, canvas.height, max(1, len(rows)), "lanes")
     canvas.order = screen.order
     marks = _common.marks_of(canvas)
-    lane = rows[selected] if selected is not None and 0 <= selected < len(rows) else None
+    found = rows[selected] if selected is not None and 0 <= selected < len(rows) else None
+    lane = found if found is not None and found["kind"] == "lane" else None
     for name, rect in screen.panels.items():
         if name == "lanes":
             draw_table(canvas, rect, "lanes", "LANES", LANE_COLUMNS, rows, selected,
-                       lambda row: lane_values(row, marks, moment), project_heading, stale_note(tool))
+                       lambda row: lane_values(row, marks, moment) if row["kind"] == "lane" else {}, project_heading,
+                       stale_note(tool))
         elif name == "details":
             if lane is None:
                 _details.draw_facts(canvas, rect, "LANE DETAILS", [("", [("No lanes", "dim")], None)])
@@ -282,7 +291,7 @@ def draw_lanes(canvas: Canvas, tool: Any, selected: Optional[int], model: Option
                 cell[1] = "dim"
 
 
-def lane_event_of(row: dict[str, Any], lane: dict[str, Any]) -> bool:
+def lane_event_of(row: dict[str, Any], lane: Lane) -> bool:
     """A Lanefather event is the lane's when its subject is the lane's id in the lane's project: by the state
     directory it names, else by the project's name; never by the id alone where the event names another project."""
     subject: dict[str, Any] = row.get("subject") or {}
@@ -311,18 +320,22 @@ PROCESS_COLUMNS: list[Spec] = [("state", "", 2, False, 0), ("label", "label", 0,
                                ("pid", "pid", 6, True, 6), ("processes", "processes", 14, False, 7)]
 
 
-def process_values(row: dict[str, Any], marks: _common.Marks, elapsed: float) -> dict[str, Any]:
+def process_values(row: ProcessRow, marks: _common.Marks, elapsed: float) -> dict[str, Any]:
     """A PROCESSES row: an owned entry, an unowned process or an unowned resource."""
     label = (dashboard_text(_junkfather.label_of(row)), "text")
     if row["kind"] == "unowned":
+        seen = row["age"]
+        shown_age = minutes(seen + elapsed) if seen is not None else "—"
         return {"state": (marks.rows["unowned"], "text"), "id": ("", "dim"), "label": label,
                 "owner": (dashboard_text(row["why"]), "warn"), "lane": ("", "dim"),
-                "age": (minutes(row["age"] + elapsed) if row.get("age") is not None else "—", "dim"),
-                "ttl": ("", "dim"), "pid": (str(row["pid"]), "dim"), "processes": ("", "dim")}
+                "age": (shown_age, "dim"), "ttl": ("", "dim"), "pid": (str(row["pid"]), "dim"),
+                "processes": ("", "dim")}
     if row["kind"] == "resource":
+        idle = row["age"]
+        shown_age = long(idle) if idle is not None else "—"
         return {"state": (marks.rows["resource"], "text"), "id": ("", "dim"), "label": label,
                 "owner": (dashboard_text(row["why"]), "warn"), "lane": ("", "dim"),
-                "age": (long(row["age"]) if row.get("age") is not None else "—", "dim"), "ttl": ("", "dim"),
+                "age": (shown_age, "dim"), "ttl": ("", "dim"),
                 "pid": ("", "dim"), "processes": (resource_text(row["resource_kind"], row["id"]), "dim")}
     resource = row.get("resource")
     count = row.get("processes")
@@ -340,11 +353,11 @@ def resource_text(kind: str, ident: str) -> str:
     return f"{kind} {_junkfather.short_id(ident, 9)}"
 
 
-def separator(row: dict[str, Any]) -> Part:
-    return ("unowned · the last sweep's", "dim") if row.get("kind") == "separator" else ("", "dim")
+def separator(row: ProcessTableRow) -> Part:
+    return ("unowned · the last sweep's", "dim") if row["kind"] == "separator" else ("", "dim")
 
 
-def process_facts(row: dict[str, Any], model: Optional[Model], lanes: Optional[dict[str, Any]],
+def process_facts(row: ProcessRow, model: Optional[Model], lanes: Optional[dict[str, Any]],
                   elapsed: float) -> list[tuple[str, list[Part], Link]]:
     """PROCESS DETAILS: an owned entry's command, directory, log, owner and whether it lives, keep, mode, its
     resource, its TTL, and its lease and lane as links; an unowned process's command and why; an unowned resource's
@@ -359,16 +372,18 @@ def process_facts(row: dict[str, Any], model: Optional[Model], lanes: Optional[d
         for name in ("branch", "repo"):
             if row.get(name):
                 facts.append((name, [(dashboard_text(row[name]), "text")], None))
-        if row.get("age") is not None:
-            facts.append(("idle", [(long(row["age"]), "text")], None))
-        if row.get("size") is not None:
-            facts.append(("size", [(f"{row['size'] / 1e9:.1f} GB", "text")], None))
+        idle, size = row["age"], row["size"]
+        if idle is not None:
+            facts.append(("idle", [(long(idle), "text")], None))
+        if size is not None:
+            facts.append(("size", [(f"{size / 1e9:.1f} GB", "text")], None))
         return facts
     if row["kind"] == "unowned":
         facts += [("command", [(dashboard_text(row["cmd"]), "dim")], None), ("pid", [(str(row["pid"]), "text")], None),
                   ("why", [(dashboard_text(row["why"]), "warn")], None)]
-        if row.get("age") is not None:
-            facts.append(("age", [(minutes(row["age"] + elapsed), "text")], None))
+        running = row["age"]
+        if running is not None:
+            facts.append(("age", [(minutes(running + elapsed), "text")], None))
         for name in ("cwd", "root"):
             if row.get(name):
                 facts.append(("directory" if name == "cwd" else "root", [path_part(row[name])], None))
@@ -415,7 +430,7 @@ def process_facts(row: dict[str, Any], model: Optional[Model], lanes: Optional[d
     return facts
 
 
-def process_links(entries: list[dict[str, Any]], elapsed: float, label: str = "processes") \
+def process_links(entries: Sequence[Entry], elapsed: float, label: str = "processes") \
         -> list[tuple[str, list[Part], Link]]:
     """`processes` rows: each owned entry's label, state and TTL left, a link to the Processes page; `none owned`."""
     if not entries:
@@ -442,11 +457,13 @@ def draw_processes(canvas: Canvas, tool: Any, selected: Optional[int], model: Op
     screen = _layout.page(canvas.width, canvas.height, max(1, len(rows)), "procs")
     canvas.order = screen.order
     marks = _common.marks_of(canvas)
-    row = rows[selected] if selected is not None and 0 <= selected < len(rows) else None
+    found = rows[selected] if selected is not None and 0 <= selected < len(rows) else None
+    row = found if found is not None and found["kind"] != "separator" else None
     for name, rect in screen.panels.items():
         if name == "procs":
             draw_table(canvas, rect, "procs", "PROCESSES", PROCESS_COLUMNS, rows, selected,
-                       lambda found: process_values(found, marks, elapsed), separator, stale_note(tool))
+                       lambda shown: process_values(shown, marks, elapsed) if shown["kind"] != "separator" else {},
+                       separator, stale_note(tool))
         elif name == "details":
             nothing: list[tuple[str, list[Part], Link]] = [("", [("Nothing owned or reported", "dim")], None)]
             facts = process_facts(row, model, lanes, elapsed) if row else nothing
@@ -462,7 +479,7 @@ def draw_processes(canvas: Canvas, tool: Any, selected: Optional[int], model: Op
                 cell[1] = "dim"
 
 
-def process_event_of(event: dict[str, Any], row: dict[str, Any]) -> bool:
+def process_event_of(event: dict[str, Any], row: ProcessRow) -> bool:
     """A Junkfather event is the row's when its subject is the entry, the unowned pid or the resource."""
     subject: dict[str, Any] = event.get("subject") or {}
     if row["kind"] == "entry":

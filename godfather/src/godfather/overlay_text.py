@@ -50,7 +50,7 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
         ("?", "help"),
         ("v", "what's new (or click Godfather what's new?)"),
         ("esc", "close an overlay · leave a page"),
-        ("q", "quit"),
+        ("q · ctrl+l", "quit · redraw"),
         ("shift+drag", "select text"),
         ("", "Hotkeys work on any keyboard layout."),
     ]),

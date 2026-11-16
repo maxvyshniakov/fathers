@@ -12,9 +12,10 @@ from .. import tui as _tui
 from .. import version as _version
 from ..text import text_width
 
+from ..model import Dashboard as Model
+from ..model import Request as Item
+
 Part = tuple[str, str]
-Model = dict[str, Any]
-Item = dict[str, Any]
 
 # A QUEUE row's state (#15), the first column of every row: (emoji, ASCII). A running row shows the first of asked,
 # idle, hot and legacy that applies, else running; a waiting row yielded or waiting.
@@ -99,7 +100,7 @@ def ramp_bar(fraction: float, width: int, critical: bool, track: str) -> list[Pa
 
 def share(item: Item, model: Model) -> tuple[float, float]:
     """(cores the lease's commands use, cores its slots stand for)."""
-    return item["cpu"] / 100, item["count"] * model["cores"] / model["slots"]
+    return (item["cpu"] or 0.0) / 100, item["count"] * model["cores"] / model["slots"]
 
 
 def share_style(item: Item, model: Model) -> str:
@@ -149,15 +150,13 @@ PRIORITIES = ("interactive", "normal", "batch")  # Slotfather's request classes
 META_VALUE_MAX = 200  # the longest ticket Slotfather accepts
 
 
-def priority_of(entry: Item) -> str:
-    """A request's class as Slotfather reads it: normal for anything it does not know."""
-    value = entry.get("priority")
+def priority_of(value: Any) -> str:
+    """A request's class (its `priority` or `served`) as Slotfather reads it: normal for anything it does not know."""
     return value if isinstance(value, str) and value in PRIORITIES else "normal"
 
 
-def ticket_of(entry: Item) -> Union[str, None]:
+def ticket_of(value: Any) -> Union[str, None]:
     """A ticket as Slotfather reads one: short printable text, `#12` as `12`, empty or "none" as no ticket."""
-    value = entry.get("ticket")
     if isinstance(value, int) and not isinstance(value, bool):
         value = str(value)
     if not isinstance(value, str) or len(value) > META_VALUE_MAX or not value.isprintable():
@@ -187,4 +186,4 @@ def expected_run(item: Item) -> Optional[dict[str, Any]]:
 def priority_mark(item: Item, marks: Marks) -> str:
     """⚡ for an interactive request, 🐌 for a batch one (! and ~ in ASCII), nothing for normal: the class it is
     served in, aged (`served`), else the one it asked."""
-    return marks.priority.get(priority_of({"priority": item.get("served") or item.get("priority")}), "")
+    return marks.priority.get(priority_of(item.get("served") or item.get("priority")), "")

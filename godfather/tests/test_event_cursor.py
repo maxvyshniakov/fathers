@@ -6,13 +6,14 @@ from __future__ import annotations
 
 import datetime
 import unittest
-from typing import Any
+from typing import Any, cast
 
 import helpers
 from helpers import logged, rows_of
 from test_state import entry, model
 
 from godfather import reducer, state as state_module, tui
+from godfather.model import Dashboard
 from godfather.views import common, details, overview
 
 WHEN = datetime.datetime(2026, 11, 16, 9, 0, tzinfo=datetime.timezone.utc)
@@ -34,7 +35,7 @@ def runs(count: int) -> list[dict[str, Any]]:
 class CursorCase(unittest.TestCase):
     def screen(self, events: list[dict[str, Any]], width: int = 156, height: int = 43) -> Any:
         found = model([entry(0), entry(1)], events=rows_of(events), updated=at(3600))
-        state, _ = reducer.reduce(state_module.AppState(), state_module.ModelLoaded(found, 8), 0.0)
+        state, _ = reducer.reduce(state_module.AppState(), state_module.ModelLoaded(cast(Dashboard, found), 8), 0.0)
         return self.draw(state, width, height)
 
     def draw(self, state: Any, width: int = 156, height: int = 43) -> Any:
@@ -102,7 +103,7 @@ class FocusTests(CursorCase):
 class NewRowsTests(CursorCase):
     def arrive(self, state: Any, events: list[dict[str, Any]]) -> Any:
         found = model([entry(0), entry(1)], events=rows_of(events), updated=at(3600))
-        state, _ = reducer.reduce(state, state_module.ModelLoaded(found, 8), 0.0)
+        state, _ = reducer.reduce(state, state_module.ModelLoaded(cast(Dashboard, found), 8), 0.0)
         return self.draw(state)
 
     def test_the_cursor_on_the_newest_stays_on_the_newest(self) -> None:

@@ -15,7 +15,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest import mock
 
 import helpers
@@ -24,6 +24,7 @@ from test_state import entry, model
 
 from godfather import pages, app, reducer, sources, state as state_module, tui
 from godfather.adapters import lanefather
+from godfather.model import Dashboard, Lanes
 from godfather.views import overview
 
 LANES = ROOT / "tests" / "fixtures" / "lanes"
@@ -35,7 +36,7 @@ def snapshot() -> dict[str, Any]:
     return replies["status --json"]["json"]
 
 
-def decoded() -> dict[str, Any]:
+def decoded() -> Lanes:
     return lanefather.decode(snapshot())
 
 
@@ -50,7 +51,7 @@ class DecodeTests(unittest.TestCase):
     def test_projects_lanes_and_an_error_project(self) -> None:
         found = decoded()
         self.assertEqual(["Straylight", "data-grid", "sid-kit"], [project["project"] for project in found["projects"]])
-        self.assertIn("config not found", found["projects"][2]["error"])
+        self.assertIn("config not found", found["projects"][2].get("error", ""))
         lane = found["projects"][0]["lanes"][0]
         self.assertEqual(((STRAYLIGHT, "644-build-once"), "Straylight"), (lane["key"], lane["project"]))
         self.assertEqual("in progress", lane["receipt"]["status"])
@@ -135,7 +136,7 @@ class Case(unittest.TestCase):
                **fields: Any) -> Any:
         found = model(items if items is not None else [request("644-build-once", STRAYLIGHT), entry(1)])
         state = dataclasses.replace(state_module.AppState(), tools=self.tools, **fields)
-        state, _ = reducer.reduce(state, state_module.ModelLoaded(found, 8), 0.0)
+        state, _ = reducer.reduce(state, state_module.ModelLoaded(cast(Dashboard, found), 8), 0.0)
         return self.draw(self.loaded(state), width, height)
 
     def loaded(self, state: Any) -> Any:

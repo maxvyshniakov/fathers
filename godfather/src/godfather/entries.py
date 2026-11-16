@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 Item = dict[str, Any]
-Model = dict[str, Any]
+from .model import Dashboard as Model  # noqa: E402
 
 
 def entry_ids(items: list[Item]) -> list[tuple[Any, int]]:

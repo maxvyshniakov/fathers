@@ -11,7 +11,7 @@ from __future__ import annotations
 import dataclasses
 import datetime
 from dataclasses import dataclass, field
-from typing import Any, Optional, Union, cast
+from typing import Any, Mapping, Optional, Union, cast
 
 from . import actions as _actions
 from . import news as _news
@@ -23,7 +23,7 @@ from . import overlay_text as _overlays
 from .overlay_text import OverlayView
 from .text import hint_at
 
-Model = dict[str, Any]
+from .model import Dashboard as Model  # noqa: E402
 EntryId = tuple[Any, int]
 DetailsKey = tuple[EntryId, str]
 
@@ -130,7 +130,7 @@ class Tool:
     name: str
     state: str = "absent"
     problem: Optional[str] = None
-    snapshot: Optional[dict[str, Any]] = None
+    snapshot: Optional[Mapping[str, Any]] = None  # model.Lanes or model.Processes
     stale_since: Optional[datetime.datetime] = None
     actions: tuple[str, ...] = ()
     show: bool = False
@@ -663,9 +663,16 @@ def join_lane(state: AppState, index: int, lane: Any) -> AppState:
     model = cast(Model, state.model)
     holders = len(model["holders"])
     group, position = ("holders", index) if index < holders else ("waiters", index - holders)
-    entries_now = list(model[group])
-    entries_now[position] = dict(entries_now[position], lane=lane)
-    return dataclasses.replace(state, model={**model, group: entries_now})
+    joined = model.copy()
+    entries_now = list(model["holders"] if group == "holders" else model["waiters"])
+    entry = entries_now[position].copy()
+    entry["lane"] = lane
+    entries_now[position] = entry
+    if group == "holders":
+        joined["holders"] = entries_now
+    else:
+        joined["waiters"] = entries_now
+    return dataclasses.replace(state, model=joined)
 
 
 def model_loaded(state: AppState, event: ModelLoaded) -> AppState:
@@ -674,7 +681,7 @@ def model_loaded(state: AppState, event: ModelLoaded) -> AppState:
         colours = dict(state.colours)
         _entries.dashboard_colours(fresh, colours, event.colours)
         state = dataclasses.replace(state, colours=colours, model=fresh)
-        state = follow_events(state, cast(list[dict[str, Any]], fresh["events"]))
+        state = follow_events(state, fresh["events"])
         ids = _entries.entry_ids(items(state))
         keep = {(identity, kind) for identity in ids for kind in ("lease", "request")}
         state = dataclasses.replace(state, details={key: value for key, value in state.details.items() if key in keep})

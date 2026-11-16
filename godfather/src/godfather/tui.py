@@ -159,9 +159,9 @@ class Canvas:
             for column in range(max(0, start), min(self.width, end)):
                 self.cells[y][column][2] = tint
 
-    def runs(self, y: int) -> list[list]:
+    def runs(self, y: int) -> list[list[Any]]:
         """Row y as [text, style, selected] runs."""
-        found = []
+        found: list[list[Any]] = []
         for char, style, selected in self.cells[y]:
             if found and found[-1][1] == style and found[-1][2] == selected:
                 found[-1][0] += char
@@ -173,7 +173,7 @@ class Canvas:
         """Every row at full width, with SGR colour codes when `colour`. `place` (the live screen, never --once): a
         wide glyph is drawn over two spaces in its style, from its own cell, and the cursor is then put on the cell
         after it (CHA), so a terminal that draws it one cell or four wide shifts nothing and leaves no gap (#15)."""
-        found = []
+        found: list[str] = []
         for y in range(self.height):
             runs: list[list[Any]] = []
             for column, (char, style, selected) in enumerate(cast(list[tuple[str, str, bool]], self.cells[y])):

@@ -25,11 +25,8 @@ PROCESS_COLUMNS = [("name", "process", 0, False, 0), ("cpu", "cpu", 6, True, 1),
 
 
 def detail_ticket(item: Item, lane: dict[str, Any]) -> tuple[str, str]:
-    source: dict[str, Any] = {}
-    if item.get("ticket") is not None:
-        source["ticket"] = item["ticket"]
     ticket: dict[str, Any] = lane.get("ticket") or {}
-    value = ticket_of(source) or ticket_of({"ticket": ticket.get("number")})
+    value = ticket_of(item.get("ticket")) or ticket_of(ticket.get("number"))
     if not value:
         return "", ""
     url = value if value.startswith("https://") and safe_link(value) else ""
@@ -51,14 +48,14 @@ def detail_title(item: Optional[Item]) -> str:
 
 def queue_policy(model: Model, moment: Optional[datetime.datetime] = None) -> dict[str, str]:
     """Admission estimates and deadlines for the head, exposed as table fields; times off `moment`'s day say it."""
-    waiters = cast(list[Item], model["waiters"])
+    waiters = model["waiters"]
     if not waiters:
         return {}
     head = waiters[0]
     if head["count"] <= model["free"]:
         return {}
     fields: dict[str, str] = {}
-    since = cast(Optional[datetime.datetime], head.get("since"))
+    since = head.get("since")
     if model["free"] and head.get("passable") and since:
         fields["pass until"] = clock(since + datetime.timedelta(seconds=float(model.get("overtake_window") or 0)),
                                      moment)
@@ -85,11 +82,11 @@ def request_facts(item: Item, model: Model, position: int, moment: datetime.date
         heading = (("earlier queue" if item["kind"] == "legacy" else "running")
                    + f" · {item['count']} slot{'s' if item['count'] != 1 else ''}")
     facts: list[Fact] = [("label", [(item["label"] or "(no label)", "bold")]), ("status", [(heading, "text")])]
-    priority = priority_of({"priority": item.get("served") or item.get("priority")})
+    priority = priority_of(item.get("served") or item.get("priority"))
     mark = priority_mark(item, marks)
-    asked = priority_of({"priority": item.get("priority")})
+    asked = priority_of(item.get("priority"))
     how = f" · aged from {asked}" if priority != asked else ""
-    how += f" · reprioritized from {item['reprioritized']}" if item.get("reprioritized") else ""
+    how += f" · reprioritized from {item.get('reprioritized')}" if item.get("reprioritized") else ""
     facts.append(("priority", ([(mark, "text"), (" ", "text")] if mark else []) + [(priority, "text"), (how, "dim")]))
     if ticket_text:
         facts.append(("ticket", [(ticket_text, "accent" if ticket_url else "text")]))
@@ -107,7 +104,7 @@ def request_facts(item: Item, model: Model, position: int, moment: datetime.date
             if model["used"] and model["memory_block"]:
                 facts.append(("blocked", [(model["memory_block"], "warn")]))
         else:
-            waiters = cast(list[Item], model["waiters"])
+            waiters = model["waiters"]
             facts.append(("ahead", [(f"{position} requests · {sum(w['count'] for w in waiters[:position])} slots",
                                      "text")]))
             if item.get("est_start") is not None:  # schedule.forecast(): if nothing more comes
@@ -130,7 +127,7 @@ def request_facts(item: Item, model: Model, position: int, moment: datetime.date
         facts.append(("idle", [(f"{minutes((moment - idle).total_seconds())} since "
                                 f"{idle.astimezone().strftime('%H:%M')}", "warn")]))
     if item.get("asked"):
-        at = cast(Optional[datetime.datetime], item.get("asked_at"))
+        at = item.get("asked_at")
         facts.append(("yield", [(f"asked at {at.astimezone().strftime('%H:%M')} for {item['asked']}"
                                  if at else f"asked to yield for {item['asked']}", "warn")]))
     elif item.get("yieldable") or item.get("yields"):
@@ -185,7 +182,7 @@ def draw_detail(canvas: Canvas, rect: Rect, model: Model, selected: int, cwd: Op
     """The selected request's details. `lanes` is Lanefather's status snapshot, decoded: the lane the request joins
     to there (fathers#85) gives its lane facts and makes the `lane` row a link to the Lanes page; `procs` is
     Junkfather's, whose entries the request owns are `processes` rows, links to the Processes page (fathers#86)."""
-    items = cast(list[Item], model["holders"] + model["waiters"])
+    items = model["holders"] + model["waiters"]
     panel = Panel(canvas, rect, "details").frame(detail_title(items[selected] if items else None))
     if not items or canvas.loading is not None:  # drawn, so it can hold the focus, with nothing to scroll yet
         panel.viewport(0)
@@ -253,7 +250,7 @@ def draw_detail(canvas: Canvas, rect: Rect, model: Model, selected: int, cwd: Op
                            (f" · {entry['state']} · {_junkfather.ttl_text(entry, elapsed)}", "dim")]))
     if failure:  # the slow facts could not be read (fathers#23): said, and tried again
         facts.extend([("", []), ("details", [(f"not loaded · {failure} · retrying", "bad")])])
-    tree = cast(list[tuple[int, float, int, str]], item["tree"])
+    tree = item["tree"]
     content_height = len(facts) + (3 + len(tree) if tree else 0)
     document = Canvas(rect.width, content_height)
     column = panel.left  # the document is the panel's width, its content at the panel's columns

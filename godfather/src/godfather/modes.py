@@ -38,7 +38,7 @@ from . import keys as _keys
 from . import layout as _layout
 from . import settings_model as _settings
 from .pages import follow_link, go_back, open_actions, open_page, page_move, page_select
-from .state import (LOAD_NEWS, OPEN_SETTINGS, PAGE_TABLES, QUIT, ActionMenu, AppState, Changelog, Confirm, Effect, Help,
+from .state import (LOAD_NEWS, OPEN_SETTINGS, PAGE_TABLES, QUIT, REPAINT, ActionMenu, AppState, Changelog, Confirm, Effect, Help,
                     Key, Mouse, Notice, Reason, Result, SettingsOverlay, action_key, event_index, event_move, filtered,
                     items, move,
                     overlay_box, settings_context, settings_result)
@@ -518,6 +518,8 @@ def action_press(state: AppState, key: str, now: float) -> Result:
 
 def press(state: AppState, key: str, now: float) -> Result:
     """A key in the current mode: a hotkey by its US-QWERTY position (#13) unless a Settings value is typed."""
+    if key == "\x0c":  # Ctrl-L, in every mode: every row written again (fathers#143)
+        return state, [REPAINT]
     overlay = state.overlay
     if isinstance(overlay, SettingsOverlay):
         return settings_press(state, key if overlay.editing else _keys.hotkey(key), now)

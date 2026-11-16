@@ -7,6 +7,7 @@ from __future__ import annotations
 import fcntl
 import importlib.util
 import json
+import os
 import re
 import shutil
 import struct
@@ -20,7 +21,8 @@ from pathlib import Path
 from typing import Any
 
 from helpers import ROOT
-from terminal import PLAIN, LiveCase, event, item
+import terminal
+from terminal import ENTRY, PLAIN, LiveCase, event, item
 
 
 class LiveTests(LiveCase):
@@ -93,6 +95,42 @@ class LiveTests(LiveCase):
         screen.write(b"\x1b[H")  # Home: back to the newest
         screen.until(lambda _: listed("job42"), 3, "the newest again")
         self.assertEqual(0, screen.quit())
+
+    def test_stopping_it_ends_and_waits_for_a_tool_call_still_in_flight(self) -> None:
+        """A tool call outlives the dashboard that quit while it ran, in its process group, and writes into the fake's
+        directory; stop() ends it and waits, so the cleanup that removes that directory never races it (CI: Errno 66,
+        Directory not empty)."""
+        screen = self.start(argv=[sys.executable, str(ENTRY), "--interval", "1"])
+        screen.receive(" QUEUE ")
+        state = self.fake.read()
+        self.fake.update(sleep={**state.get("sleep", {}), "status": 30}, ignore_hangup=True)
+        def polls() -> int:
+            return sum(1 for argv in self.fake.argv() if argv[:1] == ["status"])
+
+        calls = polls()
+        screen.until(lambda _: polls() > calls, 8, "a status call started")
+        self.assertEqual(0, screen.quit())
+        self.assertTrue(terminal.group_alive(screen.process.pid), "the call outlived the dashboard")
+        screen.stop()
+        self.assertFalse(terminal.group_alive(screen.process.pid))
+
+    def test_stopping_kills_a_call_that_ignores_sigterm_and_says_so(self) -> None:
+        screen = self.start(argv=[sys.executable, str(ENTRY), "--interval", "1"])
+        screen.grace = 0.5
+        screen.receive(" QUEUE ")
+        self.fake.update(sleep={"status": 30}, ignore_hangup=True, ignore_term=True)
+
+        def polls() -> int:
+            return sum(1 for argv in self.fake.argv() if argv[:1] == ["status"])
+
+        calls = polls()
+        screen.until(lambda _: polls() > calls, 8, "a status call started")
+        self.assertEqual(0, screen.quit())
+        with self.assertRaisesRegex(AssertionError, "ignored SIGTERM.*; killed"):
+            screen.stop()
+        self.assertFalse(terminal.group_alive(screen.process.pid))
+        with self.assertRaises(OSError):  # the PTY is closed all the same
+            os.fstat(screen.master)
 
     def test_a_resize_redraws_the_whole_screen_in_the_new_layout(self) -> None:
         self.queue(holders=[item("resized", 400)])

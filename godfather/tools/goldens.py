@@ -487,6 +487,7 @@ def admission_screen(name: str, theme: str | None) -> str:
 
     from godfather import theme as themes, tui
     from godfather.layout import Rect
+    from godfather.model import Dashboard
     from godfather.views import common, machine
 
     with environment(theme):
@@ -500,7 +501,7 @@ def admission_screen(name: str, theme: str | None) -> str:
             history=[(moment - dt.timedelta(minutes=1), moment, 8)])
         model.update(ADMISSION[name])
         canvas = tui.Canvas(72, 13, palette, common.marks_for(False))
-        machine.draw_machine(canvas, Rect(0, 0, 13, 72), model)
+        machine.draw_machine(canvas, Rect(0, 0, 13, 72), cast(Dashboard, model))
         return canvas.render(theme is not None)
 
 

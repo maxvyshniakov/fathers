@@ -139,7 +139,7 @@ class Resource(NamedTuple):
 
 def machine_resources(model: Model) -> list[Resource]:
     """load, mem and swap as used/total (owner, 2026-11-12): `10.1/12`, `23.0/32G`, `10.0/11G`; short `23/32G`."""
-    memory = cast(dict[str, Any], model["memory"])
+    memory = model["memory"]
     cores, slots = int(model["cores"]), int(model["slots"])
     load1 = float(model["averages"][0])
     # Critical where the one-minute load leaves less than one slot's share of the cores free (#15 review): by load
@@ -222,7 +222,7 @@ def draw_chart(canvas: Canvas, area: Rect, model: Model, slots: int, titled: boo
     the window and now, so no figure sits under a gauge's value. Stacked: the axis line keeps the figures and the
     bottom border, right under it, names the chart. Neither costs a row."""
     chart_width = max(1, area.width)
-    history = cast(list[Step], model["history"])
+    history: list[Step] = model["history"]
     window = history_window(model)
     buckets = history_buckets(history, chart_width, window)
     rows = area.height

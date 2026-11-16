@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT.parent / "common"))
@@ -18,19 +19,20 @@ sys.path.insert(0, str(ROOT.parent / "common"))
 import eventcheck  # noqa: E402  common/eventcheck.py, the shared validator
 
 FIXTURES = ROOT / "tests" / "fixtures" / "events"
-VALID = {
+VALID: dict[str, Any] = {
     "v": 1, "time": "2026-11-12T02:24:16.204Z", "host": "mbp", "source": "slotfather", "kind": "lease.granted",
     "subject": {"type": "request", "id": "0000009701-51587"}, "actor": {"type": "process"}, "details": {},
 }
 
 
-def spec_examples() -> list:
+def spec_examples() -> list[dict[str, Any]]:
     """The example events in SPEC.md, one JSON object per blank-line-separated block of its json fence."""
     text = (ROOT / "SPEC.md").read_text(encoding="utf-8")
     start = text.index("Example events, one per line")
     block = re.search(r"```json\n(.*?)```", text[start:], re.S)
     assert block is not None
-    return [json.loads(chunk) for chunk in block.group(1).split("\n\n") if chunk.strip()]
+    found: list[dict[str, Any]] = [json.loads(chunk) for chunk in block.group(1).split("\n\n") if chunk.strip()]
+    return found
 
 
 class Examples(unittest.TestCase):
@@ -142,7 +144,7 @@ class Cli(unittest.TestCase):
             handle.write(text)
         return path
 
-    def run_main(self, *args: str) -> tuple:
+    def run_main(self, *args: str) -> tuple[int, str]:
         out = io.StringIO()
         with redirect_stdout(out):
             code = eventcheck.main(list(args))

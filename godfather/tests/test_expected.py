@@ -42,7 +42,7 @@ def raw_item(pid: int, since: str, kind: str = "held", **fields: Any) -> dict[st
 def snapshot(holders: list[dict[str, Any]], waiters: Optional[list[dict[str, Any]]] = None,
              entries: Optional[list[dict[str, Any]]] = None, events: Optional[list[dict[str, Any]]] = None) -> Any:
     block: dict[str, Any] = {"v": 1, "directory": "/q", "slots": 4, "cores": 8, "saved": False, "basis": {}, "averages": [1, 1, 1],
-             "draining": 0, "advice": {}, "holders": holders, "waiters": waiters or [], "used": len(holders),
+             "draining": 0, "advice": {"unleased_load": 0.0}, "holders": holders, "waiters": waiters or [], "used": len(holders),
              "free": 4 - len(holders), "memory_block": None, "admission": None, "order": "window", "start": None,
              "reserved": None, "limit": 0, "memory": {}, "history": [], "events": events or [],
              "updated": stamp(NOW), "overtake_window": 600}

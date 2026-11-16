@@ -27,6 +27,7 @@ from helpers import ROOT, timezone
 from godfather import app, entries, layout, overlay_text, sources, state, tui
 from godfather.adapters import slotfather as adapter
 from godfather.layout import Rect
+from godfather.model import Dashboard
 from godfather.views import common, overview
 
 
@@ -103,7 +104,7 @@ class ParityTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.theme = app._theme.from_environment(environ={})
 
-    def model(self) -> dict[str, Any]:
+    def model(self) -> Dashboard:
         model, error = app.Screen().load()
         self.assertIsNone(error)
         assert model is not None
@@ -173,6 +174,9 @@ class ParityTests(unittest.TestCase):
         esc = ["esc", "close an overlay · leave a page"]  # fathers#85: Esc leaves a page too
         self.assertIn(esc, ours["KEYS"])
         ours["KEYS"][ours["KEYS"].index(esc)] = ["esc", "close an overlay"]
+        redraw = ["q · ctrl+l", "quit · redraw"]  # fathers#143: Ctrl-L writes every row again
+        self.assertIn(redraw, ours["KEYS"])
+        ours["KEYS"][ours["KEYS"].index(redraw)] = ["q", "quit"]
         # fathers#84, #152: EVENTS' log, raw, text filter; #85: pages; #88: row actions
         for key in ("← → · f", "r", "/", "1 2 3", "enter · a"):
             ours["KEYS"] = [entry for entry in ours["KEYS"] if entry[0] != key]

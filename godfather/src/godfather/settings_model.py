@@ -119,7 +119,7 @@ class Context(NamedTuple):
     slots, the capacity the queue read), the refresh error, and the screen's size."""
     interval: float = DEFAULT_INTERVAL
     theme: str = _theme.DEFAULT_MODE
-    model: Optional[dict[str, Any]] = None
+    model: Optional[Mapping[str, Any]] = None
     problem: Optional[str] = None
     width: int = 0
     height: int = 0

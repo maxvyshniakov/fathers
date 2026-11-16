@@ -22,7 +22,7 @@ import socket
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, BinaryIO, Optional, cast
+from typing import Any, BinaryIO, Mapping, Optional, cast
 
 from . import eventcheck as _eventcheck
 
@@ -756,7 +756,7 @@ def runs(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 VIEWS = ("slotfather", "lanefather", "junkfather")
 ALL = "all"
-Model = dict[str, Any]
+Model = Mapping[str, Any]  # the overview's model (model.Dashboard), or a strip's events and sources alone
 
 
 @dataclass(frozen=True)

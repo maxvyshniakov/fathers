@@ -36,8 +36,10 @@ cpu                 the last sweep's CPU report (v2), not read
 errors              [str]
 ```
 
-Unknown fields are ignored; a missing one reads as empty. Another `v`, or no `entries` list, leaves the last good
-snapshot on screen, dimmed, with `stale since` in the page's border.
+Unknown fields are ignored; a missing one reads as empty, but for the fields that name a row: an entry's `id`, an
+unowned process's `pid`, an unowned resource's `kind` and `id`. Without one the snapshot is refused (`an entry has
+no id; update junkfather`, fathers#142), never shown with the row left out. That, another `v`, or no `entries` list
+leaves the last good snapshot on screen, dimmed, with `stale since` in the page's border.
 
 ### What Godfather computes from it
 
