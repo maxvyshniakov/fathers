@@ -9,6 +9,7 @@ from typing import Any, Mapping, Optional, Union, cast
 from .. import sources as _sources
 from ..model import Entry, Lane, Processes, Resource, Unowned, UnownedResource
 from ..text import minutes
+from . import decoding as _decoding
 from . import lanefather as _lanefather
 
 TAG = "junk"
@@ -44,30 +45,6 @@ def unsupported(capabilities: dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _object(value: Any) -> dict[str, Any]:
-    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
-
-
-def _number(value: Any) -> Optional[float]:
-    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
-
-
-def _flag(value: Any) -> Optional[bool]:
-    return value if isinstance(value, bool) else None
-
-
-def _pid(value: Any) -> Optional[int]:
-    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
-
-
-def _text(value: Any) -> Optional[str]:
-    return value if isinstance(value, str) and value else None
-
-
-def _str_or_none(value: Any) -> Optional[str]:
-    return str(value) if value is not None else None
-
-
 def state_of(entry: Mapping[str, Any]) -> str:
     """An owned entry as the page tells it: orphan once its owner is gone, expired once its TTL passed (not reaped
     yet), else running."""
@@ -79,23 +56,26 @@ def state_of(entry: Mapping[str, Any]) -> str:
 
 
 def _entry(raw: dict[str, Any]) -> Entry:
-    resource = _object(raw.get("resource")) or None
+    resource = _decoding.as_object(raw.get("resource")) or None
     argv: Any = raw.get("argv")
     processes: Any = raw.get("processes")
     owner_alive: Any = raw.get("owner_alive")
-    held: Optional[Resource] = {"kind": _str_or_none(resource.get("kind")), "id": _str_or_none(resource.get("id")),
-                                "name": _str_or_none(resource.get("name"))} if resource else None
+    held: Optional[Resource] = {"kind": _decoding.str_or_none(resource.get("kind")),
+                                "id": _decoding.str_or_none(resource.get("id")),
+                                "name": _decoding.str_or_none(resource.get("name"))} if resource else None
     found: Entry = {"id": str(raw["id"]), "key": ("entry", str(raw["id"])), "kind": "entry",
-             "phase": _text(raw.get("state")) or "running", "owner": _text(raw.get("owner")) or "?",
-             "session": _text(raw.get("session")), "agent": _text(raw.get("agent")), "lane": _text(raw.get("lane")),
+             "phase": _decoding.text(raw.get("state")) or "running", "owner": _decoding.text(raw.get("owner")) or "?",
+             "session": _decoding.text(raw.get("session")), "agent": _decoding.text(raw.get("agent")),
+             "lane": _decoding.text(raw.get("lane")),
              "owner_alive": owner_alive if isinstance(owner_alive, bool) else None,
-             "age": _number(raw.get("age")) or 0.0, "ttl": _number(raw.get("ttl")),
-             "ttl_left": _number(raw.get("ttl_left")) or 0.0, "keep": _text(raw.get("keep")),
-             "pid": _pid(raw.get("pid")), "pgid": _pid(raw.get("pgid")),
+             "age": _decoding.number(raw.get("age")) or 0.0, "ttl": _decoding.number(raw.get("ttl")),
+             "ttl_left": _decoding.number(raw.get("ttl_left")) or 0.0, "keep": _decoding.text(raw.get("keep")),
+             "pid": _decoding.pid(raw.get("pid")), "pgid": _decoding.pid(raw.get("pgid")),
              "processes": processes if isinstance(processes, int) else None,
-             "label": _text(raw.get("label")), "mode": _text(raw.get("mode")), "cwd": _text(raw.get("cwd")),
+             "label": _decoding.text(raw.get("label")), "mode": _decoding.text(raw.get("mode")),
+             "cwd": _decoding.text(raw.get("cwd")),
              "argv": [str(part) for part in cast(list[Any], argv)] if isinstance(argv, list) else [],
-             "log": _text(raw.get("log")),
+             "log": _decoding.text(raw.get("log")),
              "resource": held, "state": "running"}
     found["state"] = state_of(found)
     return found
@@ -110,32 +90,39 @@ def decode(snapshot: Any) -> Processes:
         raise _sources.SnapshotError(f"junkfather status --json version {found.get('v')!r} needs a newer godfather")
     if not isinstance(found.get("entries"), list):
         raise _sources.SnapshotError("junkfather status --json has no entries list")
-    entries = [_entry(_object(raw)) for raw in cast(list[Any], found["entries"])
-               if isinstance(_object(raw).get("id"), str)]
+    # A row without the field that names it is the source's notice, never dropped quietly: a renamed field would
+    # hide work while the source looked healthy (fathers#142 review)
+    entries: list[Entry] = []
+    for raw in _decoding.as_list(found["entries"]):
+        entry = _decoding.as_object(raw)
+        if _decoding.text(entry.get("id")) is None:
+            raise _sources.SnapshotError("an entry has no id; update junkfather")
+        entries.append(_entry(entry))
     unowned: list[Unowned] = []
     for raw in cast(list[Any], found.get("unowned") or []):
-        item = _object(raw)
-        pid = _pid(item.get("pid"))
+        item = _decoding.as_object(raw)
+        pid = _decoding.pid(item.get("pid"))
         if pid is None:
-            continue
+            raise _sources.SnapshotError("an unowned process has no pid; update junkfather")
         unowned.append({"kind": "unowned", "key": ("pid", pid, str(item.get("start") or "")), "pid": pid,
-                        "start": str(item.get("start") or ""), "cmd": _text(item.get("cmd")) or "?",
-                        "cwd": _text(item.get("cwd")), "root": _text(item.get("root")),
-                        "why": _text(item.get("why")) or "", "age": _number(item.get("age")),
-                        "alive": _flag(item.get("alive"))})
+                        "start": str(item.get("start") or ""), "cmd": _decoding.text(item.get("cmd")) or "?",
+                        "cwd": _decoding.text(item.get("cwd")), "root": _decoding.text(item.get("root")),
+                        "why": _decoding.text(item.get("why")) or "", "age": _decoding.number(item.get("age")),
+                        "alive": _decoding.flag(item.get("alive"))})
     resources: list[UnownedResource] = []
     for raw in cast(list[Any], found.get("unowned_resources") or []):
-        item = _object(raw)
-        kind, ident = _text(item.get("kind")), _text(str(item.get("id"))) if item.get("id") is not None else None
+        item = _decoding.as_object(raw)
+        kind, ident = _decoding.text(item.get("kind")), _decoding.text(_decoding.str_or_none(item.get("id")))
         if kind is None or ident is None:
-            continue
+            raise _sources.SnapshotError("an unowned resource has no kind or id; update junkfather")
         resources.append({"kind": "resource", "key": ("resource", kind, ident), "resource_kind": kind, "id": ident,
-                          "name": _text(item.get("name")), "why": _text(item.get("why")) or "",
-                          "branch": _text(item.get("branch")), "repo": _text(item.get("repo")),
-                          "age": _number(item.get("age")), "size": _number(item.get("size"))})
-    sweep = _object(found.get("sweep"))
+                          "name": _decoding.text(item.get("name")), "why": _decoding.text(item.get("why")) or "",
+                          "branch": _decoding.text(item.get("branch")), "repo": _decoding.text(item.get("repo")),
+                          "age": _decoding.number(item.get("age")), "size": _decoding.number(item.get("size"))})
+    sweep = _decoding.as_object(found.get("sweep"))
     return {"time": _lanefather.parse_time(found.get("time")), "entries": entries, "unowned": unowned,
-            "unowned_resources": resources, "sweep": {"time": _text(sweep.get("time")), "result": sweep.get("result")},
+            "unowned_resources": resources, "sweep": {"time": _decoding.text(sweep.get("time")),
+            "result": sweep.get("result")},
             "errors": [str(error) for error in cast(list[Any], found.get("errors") or [])]}
 
 
@@ -178,7 +165,7 @@ def label_of(row: Mapping[str, Any]) -> str:
         return row.get("name") or row["id"]
     if row["kind"] == "unowned":
         return str(row["cmd"])
-    resource = _object(row.get("resource"))
+    resource = _decoding.as_object(row.get("resource"))
     argv = cast(list[str], row.get("argv") or [])
     return str(row.get("label") or resource.get("name") or " ".join(argv) or row["id"])
 

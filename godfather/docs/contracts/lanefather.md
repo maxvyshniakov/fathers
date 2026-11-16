@@ -55,8 +55,10 @@ lane         id            str                    unique within its project only
 ```
 
 A lane is identified by its project's `state_dir` and its `id`, never by its id alone (SPEC, Open risks 5). Unknown
-fields are ignored; a missing one reads as empty. Another `v`, or no `projects` list, leaves the last good snapshot
-on screen, dimmed, with `stale since` in its border.
+fields are ignored; a missing one reads as empty, but for a project's `state_dir` and a lane's `id`, which name
+them: without one the snapshot is refused (`a lane has no id; update lanefather`, fathers#142), never shown with the
+row left out. That, another `v`, or no `projects` list leaves the last good snapshot on screen, dimmed, with
+`stale since` in its border.
 
 ### What Godfather computes from it
 

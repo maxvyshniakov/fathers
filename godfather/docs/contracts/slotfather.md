@@ -116,7 +116,8 @@ The adapter checks the reply once, when it decodes it into `model.Dashboard` and
 or null required key is the source's notice, as an unknown version is, never an error at draw time:
 `a request has no pid; update slotfather` for a request's `kind`, `count`, `pid`, `procs`, `yields` or `rss`, and
 `dashboard.slots is missing; update slotfather` for the block's `slots`, `cores`, `used`, `free`, `advice`,
-`memory` or `overtake_window`. The last good snapshot then stays on screen, stale, with the reason in the footer
+`memory` or `overtake_window`; `advice.unleased_load` must be a number, and each process row `[pid, cpu, rss, name]`
+whole, number, number and string. The last good snapshot then stays on screen, stale, with the reason in the footer
 and Settings' STATUS; with none yet, the screen says it.
 
 ### Row actions (fathers#88)

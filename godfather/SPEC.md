@@ -293,6 +293,7 @@ Every module under `src/godfather/`, as built (`tests/test_spec.py` holds this t
 | `adapters.lanefather` | Lanefather's machine-wide snapshot, its border summary and the lane joins. |
 | `adapters.junkfather` | Junkfather's snapshot, its border summary and the entry joins. |
 | `adapters.settings` | Any tool's `settings` CLI: read, check, set and reset. |
+| `adapters.decoding` | One field of a tool's JSON read as its documented type, for every adapter. |
 | `views.common` | Marks, holder colours, bars and cells several panels draw alike. |
 | `views.details` | DETAILS: the selected row's facts, links and marks. |
 | `views.events` | EVENTS: one tool's log at a time, its rows and its switch. |

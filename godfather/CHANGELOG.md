@@ -156,8 +156,11 @@ Versions and release rules: [README.md](README.md#versions).
 
 - A Slotfather snapshot missing a request's `pid`, `kind`, `count`, `procs`, `yields` or `rss`, or one of the
   dashboard block's required fields, is now the source's notice (`a request has no pid; update slotfather`) instead of
-  ending the view with a KeyError (fathers#142); unknown keys are still ignored and optional ones defaulted. Each
-  tool's snapshot is checked once, when it is decoded, into a typed model.
+  ending the view with a KeyError (fathers#142), and so is an `advice` without a numeric `unleased_load` or a process
+  row that is not `[pid, cpu, rss, name]`; unknown keys are still ignored and optional ones defaulted. A Lanefather
+  lane without an `id` or project without a `state_dir`, and a Junkfather entry without an `id` (or an unowned process
+  without a `pid`, a resource without a `kind` and `id`), now leave the last good snapshot with that notice instead of
+  being left out quietly. Each tool's snapshot is checked once, when it is decoded, into a typed model.
 
 - `?` and `v` switch between help and the changelog instead of closing one, and keys typed right after `v`
   scroll the changelog (fathers#17).

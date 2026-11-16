@@ -18,6 +18,7 @@ from typing import Any, Mapping, Optional, cast
 from .. import sources as _sources
 from ..events import dashboard_block
 from ..model import Gate, Lane, Lanes, Project
+from . import decoding as _decoding
 
 TAG = "lane"
 CAPABILITIES_VERSIONS = (1,)
@@ -56,21 +57,6 @@ def actions(capabilities: Optional[dict[str, Any]]) -> tuple[str, ...]:
 
 # The snapshot
 
-def _text(value: Any) -> Optional[str]:
-    return value if isinstance(value, str) and value else None
-
-
-def _int(value: Any) -> int:
-    return value if isinstance(value, int) and not isinstance(value, bool) else 0
-
-
-def _object(value: Any) -> dict[str, Any]:
-    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
-
-
-def _strings(value: Any) -> list[str]:
-    return [str(item) for item in cast(list[Any], value) if isinstance(item, str)] if isinstance(value, list) else []
-
 
 def parse_time(value: Any) -> Optional[datetime.datetime]:
     """An RFC 3339 UTC time with or without fractions (`2026-11-12T04:26:00Z`)."""
@@ -85,23 +71,26 @@ def parse_time(value: Any) -> Optional[datetime.datetime]:
 
 
 def _lane(raw: dict[str, Any], project: Project) -> Lane:
-    ticket, receipt, review = _object(raw.get("ticket")), _object(raw.get("receipt")), _object(raw.get("review"))
-    logs = {str(phase): str(path) for phase, path in _object(raw.get("logs")).items() if isinstance(path, str)}
+    ticket, receipt, review = (_decoding.as_object(raw.get(name)) for name in ("ticket", "receipt", "review"))
+    logs = {str(phase): str(path) for phase, path in _decoding.as_object(raw.get("logs")).items()
+            if isinstance(path, str)}
     return {
         "id": str(raw["id"]), "key": (project["state_dir"], str(raw["id"])), "project": project["project"],
         "state_dir": project["state_dir"], "repository": project.get("repository"),
-        "status": _text(raw.get("status")) or "?",
-        "ticket": {"number": _text(str(ticket.get("number"))) if ticket.get("number") is not None else None,
-                   "url": _text(ticket.get("url"))},
-        "branch": _text(raw.get("branch")), "base": _text(raw.get("base")), "worktree": _text(raw.get("worktree")),
-        "claims": _strings(raw.get("claims")), "after": _strings(raw.get("after")),
+        "status": _decoding.text(raw.get("status")) or "?",
+        "ticket": {"number": _decoding.text(str(ticket.get("number"))) if ticket.get("number") is not None else None,
+                   "url": _decoding.text(ticket.get("url"))},
+        "branch": _decoding.text(raw.get("branch")), "base": _decoding.text(raw.get("base")),
+        "worktree": _decoding.text(raw.get("worktree")),
+        "claims": _decoding.strings(raw.get("claims")), "after": _decoding.strings(raw.get("after")),
         "created": parse_time(raw.get("created")),
-        "receipt": {"status": _text(receipt.get("status")) or "unknown",
+        "receipt": {"status": _decoding.text(receipt.get("status")) or "unknown",
                     "tree_match": receipt.get("tree_match") if isinstance(receipt.get("tree_match"), bool) else None,
-                    "path": _text(receipt.get("path"))},
-        "post_merge": _text(raw.get("post_merge")),
-        "review": {"status": _text(review.get("status")) or "not started", "open": _int(review.get("open")),
-                   "findings": _int(review.get("findings"))},
+                    "path": _decoding.text(receipt.get("path"))},
+        "post_merge": _decoding.text(raw.get("post_merge")),
+        "review": {"status": _decoding.text(review.get("status")) or "not started",
+        "open": _decoding.whole(review.get("open")),
+                   "findings": _decoding.whole(review.get("findings"))},
         "logs": logs, "outcome": raw.get("outcome")}
 
 
@@ -118,25 +107,32 @@ def decode(snapshot: Any) -> Lanes:
         raise _sources.SnapshotError("lanefather status --json has no projects list")
     decoded: list[Project] = []
     for raw in cast(list[Any], projects):
-        item = _object(raw)
-        state_dir = _text(item.get("state_dir"))
-        if state_dir is None:
-            continue
-        name = _text(item.get("project")) or posixpath.basename(state_dir.rstrip("/")) or state_dir
-        project: Project = {"project": name, "state_dir": state_dir, "repository": _text(item.get("repository")),
+        item = _decoding.as_object(raw)
+        state_dir = _decoding.text(item.get("state_dir"))
+        if state_dir is None:  # a project is known by its state directory: without one, nothing of it can be joined
+            raise _sources.SnapshotError("a project has no state_dir; update lanefather")
+        name = _decoding.text(item.get("project")) or posixpath.basename(state_dir.rstrip("/")) or state_dir
+        project: Project = {"project": name, "state_dir": state_dir,
+                            "repository": _decoding.text(item.get("repository")),
                             "lanes": []}
         if "error" in item:
             project["error"] = str(item.get("error") or "unreadable")
             decoded.append(project)
             continue
-        gate = _object(item.get("gate"))
+        gate = _decoding.as_object(item.get("gate"))
         cap: Any = item.get("cap")
-        found_gate: Optional[Gate] = {"status": _text(gate.get("status")), "sha": _text(gate.get("sha")),
+        found_gate: Optional[Gate] = {"status": _decoding.text(gate.get("status")),
+                                      "sha": _decoding.text(gate.get("sha")),
                                       "at": parse_time(gate.get("at"))} if gate else None
-        project.update(cap=cap if isinstance(cap, int) else None, active=_int(item.get("active")),
-                       planned=_int(item.get("planned")), gate=found_gate)
-        project["lanes"] = [_lane(_object(lane), project) for lane in cast(list[Any], item.get("lanes") or [])
-                            if isinstance(lane, dict) and isinstance(cast(dict[str, Any], lane).get("id"), str)]
+        project.update(cap=cap if isinstance(cap, int) else None, active=_decoding.whole(item.get("active")),
+                       planned=_decoding.whole(item.get("planned")), gate=found_gate)
+        lanes: list[Lane] = []
+        for value in _decoding.as_list(item.get("lanes")):
+            lane = _decoding.as_object(value)
+            if _decoding.text(lane.get("id")) is None:  # never dropped quietly: a renamed field would hide work
+                raise _sources.SnapshotError("a lane has no id; update lanefather")
+            lanes.append(_lane(lane, project))
+        project["lanes"] = lanes
         decoded.append(project)
     return {"time": parse_time(found.get("time")), "projects": decoded}
 

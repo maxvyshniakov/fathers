@@ -10,7 +10,7 @@ import datetime
 from typing import Any, Dict, List, Mapping, Optional, Tuple, TypedDict
 
 Moment = Optional[datetime.datetime]
-TreeRow = Tuple[Any, ...]  # [pid, cpu, rss_kb, name] as the snapshot gives it
+TreeRow = Tuple[int, float, int, str]  # pid, cpu %, rss KB, name
 
 
 def missing(raw: Mapping[str, Any], required: Tuple[str, ...]) -> Optional[str]:
@@ -119,6 +119,7 @@ class Dashboard(_Dashboard, total=False):
 
 
 DASHBOARD_REQUIRED = ("slots", "cores", "used", "free", "advice", "memory", "overtake_window")
+ADVICE_REQUIRED = ("unleased_load",)  # what MACHINE's border reads of `advice`
 
 
 # Lanefather: `lanefather status --json` (docs/contracts/lanefather.md); a missing field reads as empty
