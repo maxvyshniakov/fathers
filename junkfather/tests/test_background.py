@@ -284,14 +284,15 @@ class BackgroundTests(Case):
 
         def sleepers() -> List[int]:
             seen: List[List[Any]] = list(self.loaded(entry["id"]).get("known_seen") or [])
-            return [int(item[0]) for item in seen if str(item[2]).endswith("sleep 600")]
+            return [int(item[0]) for item in seen if str(item[2]) == "sleep 600"]  # not the shell naming it
         self.wait_for(sleepers, what="the watcher to record the sleep", seen=lambda: str(self.loaded(entry["id"])))
         (sleeper,) = sleepers()
         self.assertTrue(self.runs(sleeper))
         self.hook("SubagentStop", "s1", env=self.session_env, agent_id=agent)
         self.wait_for(lambda: self.state_of(entry["id"]) == "reaped", what="the stop to reap it",
                       seen=lambda: str(self.loaded(entry["id"])))
-        self.wait_for(lambda: not self.runs(sleeper), what="the sleep to end")
+        self.wait_for(lambda: not self.runs(sleeper), what="the sleep to end",
+                      seen=lambda: f"{self.loaded(entry['id'])}\n{procs.Table.read().get(sleeper)}")
 
 
 class FakeEyes:
@@ -360,3 +361,20 @@ class WatcherTests(Case):
         reused = table(proc(500, pgid=500, start="Mon Nov 16 11:00:00 2026", cmd="vim"), orphan)
         self.assertEqual([], background._joining(  # pyright: ignore[reportPrivateUsage]
             self.store, entry, reused, {}, True, exited_at), "the group's id leads another process: nothing")
+
+    def test_a_reap_takes_the_members_recorded_while_it_read(self):
+        """The watcher records the exec'd leader's command after the reaper read the entry and before it marked it
+        reaping: the reaper goes by the entry as marked, so the exec'd leader is stopped."""
+        from unittest import mock
+        from junkfather import entry as entry_module, reap
+        child = self.spawn("sleep", "600", start_new_session=True)
+        made = self.entry(child)
+        real = entry_module.begin_reap
+
+        def watcher_wrote_first(store: Any, entry_id: str, reason: str, table: Any = None) -> Any:
+            store.update(entry_id, lambda e: e.update(known_seen=[[child.pid, made["start"], "sleep 600"]]))
+            return real(store, entry_id, reason, table)
+        with mock.patch.object(entry_module, "begin_reap", side_effect=watcher_wrote_first):
+            result = reap.reap(self.store, "jw", "subagent-stop", grace=1)
+        self.assertEqual(("stopped", [child.pid]), (result["result"], result["pids"]))
+        self.assertIsNotNone(child.wait(15))

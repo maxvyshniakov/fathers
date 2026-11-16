@@ -272,9 +272,13 @@ def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None
     me = _entry.begin_reap(store, entry_id, reason, table)
     if me is None:
         return {"id": entry_id, "result": "skipped", "reason": "another reaper has it", "pids": [], "how": how}
+    # The entry as it was marked: its members can have changed since it was read (a background shell's watcher
+    # records an exec'd leader's new command), and no one changes them while it is reaping.
+    entry = store.load(entry_id) or entry
     pids: List[int] = []
     outcome: Dict[str, Any] = {"result": "gone", "signalled": [], "left": []}
     results: List[str] = []
+    targets, how = targets_of(store, entry, table, force=force)
     for round_ in range(ROUNDS):
         if round_:
             try:
