@@ -83,16 +83,20 @@ class JoinTests(unittest.TestCase):
 
 class FormatterTests(unittest.TestCase):
     def test_every_kind_junkfather_logs_has_its_word(self) -> None:
-        kinds = ("entry.owned", "entry.adopted", "entry.exited", "entry.extended", "entry.handed", "entry.reaped",
-                 "entry.reap_failed", "resource.owned", "resource.stopped", "resource.stop_failed",
-                 "unowned.reported", "unowned.reaped", "sweep.finished", "hook.failed")
+        """The kinds come from Junkfather's own events.KINDS (the sibling checkout), not a list kept here
+        (fathers#88 review 10); a kind it adds without a word here fails."""
+        import ast
+
         package = ROOT.parent / "junkfather" / "junkfather" / "events.py"
-        if package.is_file():
-            text = package.read_text()
-            self.assertEqual(set(kinds), {kind for kind in kinds if f'"{kind}"' in text}, "the kinds it names")
+        if not package.is_file():
+            self.skipTest("no junkfather checkout beside godfather")
+        tree = ast.parse(package.read_text())
+        kinds = next(ast.literal_eval(node.value) for node in ast.walk(tree) if isinstance(node, ast.Assign)
+                     and any(isinstance(target, ast.Name) and target.id == "KINDS" for target in node.targets))
+        self.assertGreater(len(kinds), 10)
         for kind in kinds:
             with self.subTest(kind):
-                self.assertIsNotNone(events.junkfather_shown(kind, {}), f"{kind} falls back to the kind itself")
+                self.assertIsNotNone(events.junkfather_shown(kind, {}), f"{kind} has no word in EVENTS")
         swept = events.junkfather_shown("sweep.finished", {"reaped": ["a", "b"], "failed": []})
         assert swept is not None
         self.assertEqual("2 reaped", swept.detail[0][0])

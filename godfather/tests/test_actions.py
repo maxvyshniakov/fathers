@@ -416,6 +416,101 @@ class SuspendTests(unittest.TestCase):
         out_w = -1
 
 
+class EveryRowTests(unittest.TestCase):
+    """Each row of the actions table in a PTY under fixtures (fathers#88 review 10): the keys to the row and through
+    the menu (and the confirmation or the reason), and the argv recorded, never run."""
+
+    CASES = [  # name, keys to the row, keys in the menu and after, the recorded argv's start
+        ("reprioritize", "", "j\r", ["slotfather", "reprioritize", "10000", "interactive", "--start"]),
+        ("ask to yield", "j", "jjj\r", ["slotfather", "ask-yield", "10001", "--start"]),
+        ("extend", "3g", "j\r", ["junkfather", "extend", "j3f9a1c", "--ttl", "1h"]),
+        ("reap an orphan", "3gjjj", "j\ry", ["junkfather", "reap", "--id", "j7a8b9c", "--reason=godfather: orphan"]),
+        ("reap an expired entry", "3gjjjj", "j\ry",
+         ["junkfather", "reap", "--id", "j2b3c4d", "--expired", "--reason=godfather: expired"]),
+        ("reap an unowned process", "3Gkk", "j\ry",
+         ["junkfather", "reap", "--pid", "88123", "--force", "--reason=godfather: unowned"]),
+        ("open the ticket", "2", "j\r", [actions.opener(), "https://github.com/maxvyshniakov/straylight/issues/644"]),
+        ("open the latest log", "2", "jj\r", [*actions.pager()]),
+        ("open the worktree", "2", "jjj\r", [actions.opener(), "/fixture/straylight/worktrees/644-build-once"]),
+        ("park", "2", "G\rlater\ry",
+         ["lanefather", "park", "644-build-once", "--state-dir", "/fixture/straylight/lanes", "--reason=later"]),
+    ]
+
+    def test_each_row_and_its_action(self) -> None:
+        import terminal
+
+        for name, to_row, menu, argv in self.CASES:
+            with self.subTest(name):
+                tmp = Path(tempfile.mkdtemp(prefix="godfather-every-row-"))
+                self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+                record = tmp / "record.jsonl"
+                env = {key: value for key, value in os.environ.items()
+                       if not key.startswith(("GODFATHER_", "SLOTFATHER_", "PAGER"))}
+                env.update(GODFATHER_FIXTURES=str(PROCS), GODFATHER_FIXTURES_RECORD=str(record), TZ="UTC")
+                screen = terminal.Terminal(self, env, 43, 156,
+                                           [sys.executable, str(terminal.ENTRY), "--interval", "0.5"])
+                screen.receive("3 procs 5", "2 lanes")
+                for key in to_row:
+                    at = screen.mark()
+                    screen.write(key)
+                    if key in "23":
+                        screen.receive("LANE DETAILS" if key == "2" else "PROCESS DETAILS", since=at)
+                at = screen.mark()
+                screen.write("\r")
+                screen.receive("ACTIONS", since=at)
+                for key in menu:
+                    screen.write(key)
+                screen.until(lambda _, written=record: written.exists() and written.read_text().endswith("\n"),
+                             what=f"{name} recorded")
+                line = json.loads(record.read_text().splitlines()[-1])
+                self.assertEqual(argv, line["argv"][:len(argv)])
+                self.assertTrue(line["env"]["GODFATHER_ACTOR"].startswith("godfather/"))
+                self.assertEqual(0, screen.quit())
+
+
+class StandInTests(unittest.TestCase):
+    """The live dashboard against a stand-in Slotfather (tests/fake_slotfather.py) that answers reprioritize and
+    ask-yield as Slotfather does: Godfather's argv and GODFATHER_ACTOR, the ❓ on the next poll and the
+    `lease.yield_asked` event with `actor.via` godfather in EVENTS (fathers#88 review 10)."""
+
+    def test_ask_to_yield_and_reprioritize(self) -> None:
+        import terminal
+
+        case = terminal.LiveCase("run")
+        case.setUp()
+        self.addCleanup(case.fake.close)
+        case.fake.update(actions=["reprioritize", "ask-yield"])
+        case.queue(holders=[terminal.item("batchy", 300, priority="batch", yieldable=True, start=START)],
+                   waiters=[terminal.item("hurry", 301, kind="waiting", priority="interactive", start=START)])
+        case.fake.update(snapshot=dict(case.fake.read()["snapshot"]))
+        screen = terminal.Terminal(self, terminal.environ(case.fake), 40, 140,
+                                   [sys.executable, str(terminal.ENTRY), "--interval", "0.3"])
+        screen.receive("batchy", "hurry")
+        at = screen.mark()
+        screen.write("\r")
+        screen.receive("ACTIONS", "Ask to yield", since=at)
+        at = screen.mark()
+        screen.write("jjj\r")  # Reprioritize to interactive, to normal, then Ask to yield
+        screen.receive("❓", since=at)
+        written = case.fake.state.with_name(case.fake.state.name + ".env")
+        line = json.loads(written.read_text().splitlines()[-1])
+        self.assertEqual(["ask-yield", "300", "--start", START], line["argv"])
+        self.assertTrue(line["GODFATHER_ACTOR"].startswith("godfather/"))
+        events = [json.loads(text) for text in (case.fake.root / "events.jsonl").read_text().splitlines()]
+        asked = [event for event in events if event["kind"] == "lease.yield_asked"]
+        self.assertEqual("godfather", asked[-1]["actor"]["via"])
+        screen.write("\t")  # EVENTS: the event is there, with the run's rows
+        screen.receive("asked", since=at)
+        at = screen.mark()
+        screen.write("\t\t\r")  # back to QUEUE, its menu again: reprioritize to interactive
+        screen.receive("ACTIONS", since=at)
+        screen.write("j\r")
+        screen.until(lambda _: "reprioritize" in written.read_text(), what="the reprioritize")
+        line = json.loads(written.read_text().splitlines()[-1])
+        self.assertEqual(["reprioritize", "300", "interactive", "--start", START], line["argv"])
+        self.assertEqual(0, screen.quit())
+
+
 class ContractTests(unittest.TestCase):
     """The real Junkfather (the sibling checkout) in a temporary state directory: extend and reap a resource entry
     through sources.act, as the app runs them."""

@@ -357,6 +357,21 @@ def write_procs() -> None:
     junk["capabilities --json"]["json"]["dashboard"]["snapshot"]["versions"] = [1, 2]
     junk["capabilities --json"]["json"]["dashboard"]["actions"] = ["reap", "extend"]
     (PROCS / "junkfather" / "replies.json").write_text(json.dumps(junk, indent=1) + "\n")
+    # fathers#88: every row's actions advertised; the requests carry their holders' start, the second lease yields
+    # for the interactive waiter
+    slot = json.loads((PROCS / "slotfather" / "replies.json").read_text())
+    slot["capabilities --json"]["json"]["dashboard"]["actions"] = ["reprioritize", "ask-yield"]
+    block = slot["status --json --full"]["json"]["dashboard"]
+    for item in block["holders"] + block["waiters"]:
+        item["start"] = f"Tue Nov  4 08:{item['pid'] % 60:02d}:00 2026"
+        if item["pid"] == 10001:
+            item.update(yieldable=True, priority="batch")
+        if item["pid"] == 10003:
+            item["priority"] = "interactive"
+    (PROCS / "slotfather" / "replies.json").write_text(json.dumps(slot, indent=1) + "\n")
+    lanes = json.loads((PROCS / "lanefather" / "replies.json").read_text())
+    lanes["capabilities --json"]["json"]["dashboard"]["actions"] = ["park"]
+    (PROCS / "lanefather" / "replies.json").write_text(json.dumps(lanes, indent=1) + "\n")
 
 
 def fake_state(state: dict[str, Any]) -> dict[str, Any]:
