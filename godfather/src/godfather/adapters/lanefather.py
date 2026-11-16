@@ -17,7 +17,7 @@ from typing import Any, Mapping, Optional, cast
 
 from .. import sources as _sources
 from ..events import dashboard_block
-from ..model import Gate, Lane, Lanes, Project
+from ..model import Gate, Lane, LaneRow, Lanes, LaneTableRow, Project, ProjectRow
 from . import decoding as _decoding
 
 TAG = "lane"
@@ -210,14 +210,17 @@ def leases_of(lane: Mapping[str, Any], items: list[dict[str, Any]]) -> list[int]
 
 # The Lanes page's rows
 
-def page_rows(decoded: Decoded) -> list[Mapping[str, Any]]:
+def page_rows(decoded: Decoded) -> list[LaneTableRow]:
     """LANES' rows: each project an unselectable row (`Straylight · 3 of 4 lanes`, or its error), its lanes under it."""
-    found: list[Mapping[str, Any]] = []
+    found: list[LaneTableRow] = []
     for project in projects(decoded):
-        found.append({"kind": "project", "project": project["project"], "state_dir": project["state_dir"],
-                      "error": project.get("error"), "active": project.get("active", 0), "cap": project.get("cap"),
-                      "count": len(project["lanes"])})
-        found += [dict(lane, kind="lane") for lane in project["lanes"]]
+        heading: ProjectRow = {"kind": "project", "project": project["project"], "state_dir": project["state_dir"],
+                               "error": project.get("error"), "active": project.get("active", 0),
+                               "cap": project.get("cap"), "count": len(project["lanes"])}
+        found.append(heading)
+        for lane in project["lanes"]:
+            row: LaneRow = {**lane, "kind": "lane"}
+            found.append(row)
     return found
 
 

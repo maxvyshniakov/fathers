@@ -7,7 +7,7 @@ Python 3.9 has no NotRequired: a shape's optional keys are a `total=False` subcl
 from __future__ import annotations
 
 import datetime
-from typing import Any, Dict, List, Mapping, Optional, Tuple, TypedDict
+from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, TypedDict, Union
 
 Moment = Optional[datetime.datetime]
 TreeRow = Tuple[int, float, int, str]  # pid, cpu %, rss KB, name
@@ -192,6 +192,25 @@ class Lanes(TypedDict):
     projects: List[Project]
 
 
+class LaneRow(Lane):
+    """A lane as a LANES row."""
+    kind: Literal["lane"]
+
+
+class ProjectRow(TypedDict):
+    """A project as LANES' unselectable heading row."""
+    kind: Literal["project"]
+    project: str
+    state_dir: str
+    error: Optional[str]
+    active: int
+    cap: Optional[int]
+    count: int
+
+
+LaneTableRow = Union[ProjectRow, LaneRow]
+
+
 # Junkfather: `junkfather status --json` (docs/contracts/junkfather.md); a missing field reads as empty
 
 class Resource(TypedDict):
@@ -204,7 +223,7 @@ class Entry(TypedDict):
     """An owned entry."""
     id: str
     key: Tuple[str, str]  # ("entry", id)
-    kind: str  # "entry"
+    kind: Literal["entry"]
     phase: str
     owner: str
     session: Optional[str]
@@ -229,7 +248,7 @@ class Entry(TypedDict):
 
 class Unowned(TypedDict):
     """A process the last sweep found that no entry owns."""
-    kind: str  # "unowned"
+    kind: Literal["unowned"]
     key: Tuple[str, int, str]  # ("pid", pid, start)
     pid: int
     start: str
@@ -243,7 +262,7 @@ class Unowned(TypedDict):
 
 class UnownedResource(TypedDict):
     """A resource the last sweep found that no entry owns (a worktree, a browser session)."""
-    kind: str  # "resource"
+    kind: Literal["resource"]
     key: Tuple[str, str, str]  # ("resource", kind, id)
     resource_kind: str
     id: str
@@ -253,6 +272,15 @@ class UnownedResource(TypedDict):
     repo: Optional[str]
     age: Optional[float]
     size: Optional[float]
+
+
+class Separator(TypedDict):
+    """PROCESSES' row between the owned entries and what the last sweep found."""
+    kind: Literal["separator"]
+
+
+ProcessRow = Union[Entry, Unowned, UnownedResource]
+ProcessTableRow = Union[Entry, Separator, Unowned, UnownedResource]
 
 
 class Sweep(TypedDict):

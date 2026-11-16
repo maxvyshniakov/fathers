@@ -13,7 +13,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any, Mapping, cast
+from typing import Any, cast
 from unittest import mock
 
 from helpers import ROOT
@@ -23,7 +23,7 @@ from test_state import entry
 
 from godfather import actions, app, reducer, sources, state as state_module
 from godfather.adapters import junkfather, lanefather
-from godfather.model import Lane, Processes
+from godfather.model import Lane, Processes, ProcessTableRow
 
 START = "Tue Nov  4 09:00:00 2026"
 
@@ -60,7 +60,7 @@ class RequestTests(unittest.TestCase):
 
 
 class ProcessTests(unittest.TestCase):
-    def row(self, ident: str) -> Mapping[str, Any]:
+    def row(self, ident: str) -> ProcessTableRow:
         found = junkfather.find(procs_decoded(), ("entry", ident))
         assert found is not None
         return found
@@ -83,9 +83,10 @@ class ProcessTests(unittest.TestCase):
     def test_an_unowned_process_is_reaped_by_pid_with_force_and_a_resource_has_none(self) -> None:
         rows = junkfather.page_rows(procs_decoded())
         process = next(row for row in rows if row["kind"] == "unowned")
+        assert process["kind"] == "unowned"
         found = actions.for_process(process, ["reap"])
         self.assertEqual("junkfather reap --pid 88123 --force '--reason=godfather: unowned'", found[0].shown())
-        self.assertEqual([], actions.for_process(dict(process, alive=False), ["reap"]), "gone since the sweep")
+        self.assertEqual([], actions.for_process({**process, "alive": False}, ["reap"]), "gone since the sweep")
         self.assertEqual([], actions.for_process(next(row for row in rows if row["kind"] == "resource"), ["reap"]))
         self.assertEqual([], actions.for_process(process, ["extend", "sweep"]), "not advertised")
 

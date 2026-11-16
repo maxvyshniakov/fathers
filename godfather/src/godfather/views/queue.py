@@ -3,7 +3,7 @@ requests, one row each, the selected one marked on both frames."""
 from __future__ import annotations
 
 import datetime
-from typing import NamedTuple, Optional, cast
+from typing import NamedTuple, Optional
 
 from .. import layout as _layout
 from ..layout import Rect
@@ -27,7 +27,7 @@ def draw_slots(canvas: Canvas, area: Rect, model: Model) -> None:
     cells = _layout.slot_cells(area.x, area.width, slots)
     labels: list[tuple[int, str, str]] = []
     filled = 0
-    for holder in cast(list[Item], model["holders"]):
+    for holder in model["holders"]:
         count = min(int(holder["count"]), slots - filled)
         if count <= 0:
             break
@@ -84,8 +84,8 @@ def queue_layout(inner: int, model: Model, moment: Optional[datetime.datetime] =
     """The QUEUE table's columns in `inner` cells, shared out by their natural widths (Table.share): a wide table
     lets the CPU bar grow with its column up to twice CPU_BAR; a narrow one shrinks the label first, then drops pid,
     time and cpu use/share in that order."""
-    holders = cast(list[Item], model["holders"])
-    waiters = cast(list[Item], model["waiters"])
+    holders = model["holders"]
+    waiters = model["waiters"]
     items = holders + waiters
     shares = [share(item, model) for item in holders]
     use_width = max([3] + [len(f"{used:.1f}") for used, _ in shares])
@@ -143,13 +143,13 @@ def waiting_text(item: Item, place: int) -> str:
 def queue_rows(model: Model) -> int:
     """QUEUE's table rows: every request (at least one row, for the empty note) and a gap between running and
     waiting."""
-    holders, waiters = cast(list[Item], model["holders"]), cast(list[Item], model["waiters"])
+    holders, waiters = model["holders"], model["waiters"]
     return max(1, len(holders) + len(waiters)) + bool(holders and waiters)
 
 
 def draw_requests(canvas: Canvas, rect: Rect, model: Model, selected: int, moment: datetime.datetime) -> None:
-    holders = cast(list[Item], model["holders"])
-    waiters = cast(list[Item], model["waiters"])
+    holders = model["holders"]
+    waiters = model["waiters"]
     items = holders + waiters
     row_items: list[Optional[int]] = list(range(len(holders)))
     if holders and waiters:

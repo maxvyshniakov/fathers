@@ -39,7 +39,7 @@ from .adapters import settings as _settings_adapter
 from .adapters import slotfather as _slotfather
 from .adapters.settings import Conflict, ReadOnly, SettingsClient, SettingsError
 from .adapters.slotfather import Unsupported
-from .model import Dashboard
+from .model import Dashboard, Request
 from .sources import SnapshotError, Source
 from . import pages as _pages
 from . import reducer as _reducer
@@ -252,7 +252,7 @@ class Screen:
         hint: Any = cast(dict[str, Any], snapshot).get("poll") if isinstance(snapshot, dict) else None
         return float(min(10, max(5, hint))) if isinstance(hint, (int, float)) and not isinstance(hint, bool) else 5.0
 
-    def load_details(self, item: dict[str, Any]) -> tuple[Any, str | None]:
+    def load_details(self, item: Request) -> tuple[Any, str | None]:
         """A request's slow facts, off the main thread (#15): its holder's directory (lsof or /proc) and, where
         Lanefather's status snapshot does not join it to a lane, its lane from `lanefather show` when Lanefather
         advertises it (fathers#85). GODFATHER_DETAILS_DELAY, a test seam, adds seconds first."""
@@ -343,7 +343,7 @@ def settings_failed(request: _settings_model.Request, failure: BaseException) ->
 TOOL_ADAPTERS: dict[str, Any] = {"lanefather": _lanefather, "junkfather": _junkfather}  # the other tools, by name
 
 
-def load_details(item: dict[str, Any], lanes: Source | None = None) -> tuple[Any, str | None]:
+def load_details(item: Request, lanes: Source | None = None) -> tuple[Any, str | None]:
     """A request's slow facts, off the main thread (#15): its holder's directory (lsof or /proc) and its lane from
     `lanefather show` where Lanefather's status snapshot (`lanes`, its source) does not join it already.
     GODFATHER_DETAILS_DELAY, a test seam, adds seconds first."""
@@ -351,7 +351,7 @@ def load_details(item: dict[str, Any], lanes: Source | None = None) -> tuple[Any
         delay = float(os.environ.get("GODFATHER_DETAILS_DELAY") or 0)
         if delay > 0:
             time.sleep(delay)
-    found = dict(item)
+    found = item.copy()
     cwd = _sources.process_cwd(item["pid"]) if item.get("kind") != "waiting" else None
     snapshot = lanes.snapshot if lanes is not None else None
     if _lanefather.lane_of(found, snapshot, cwd) is None:
@@ -679,7 +679,7 @@ def once(width: int | None, height: int | None, colour: bool | None, interval: f
     theme = theme if theme is not None else _theme.from_environment()
     screen = Screen()
     model, error = screen.load()
-    items = cast(list[dict[str, Any]], (model["holders"] + model["waiters"]) if model else [])
+    items: list[Request] = (model["holders"] + model["waiters"]) if model else []
     tools = {name: screen.load_tool(name) for name in TOOL_ADAPTERS}
     cwd = None
     if model:

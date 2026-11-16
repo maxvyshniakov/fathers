@@ -53,7 +53,7 @@ class DecodeTests(unittest.TestCase):
 
     def test_a_resource_entry_keeps_its_kind_and_id(self) -> None:
         simulator = junkfather.find(decoded(), ("entry", "j8d9e0f"))
-        assert simulator is not None
+        assert simulator is not None and simulator["kind"] == "entry"
         self.assertEqual("simulator", (simulator["resource"] or {})["kind"])
         self.assertIsNone(simulator["pid"])
 

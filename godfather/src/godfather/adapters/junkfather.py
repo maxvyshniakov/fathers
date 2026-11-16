@@ -7,7 +7,8 @@ import datetime
 from typing import Any, Mapping, Optional, Union, cast
 
 from .. import sources as _sources
-from ..model import Entry, Lane, Processes, Resource, Unowned, UnownedResource
+from ..model import (Entry, Lane, ProcessRow, Processes, ProcessTableRow, Resource, Separator, Unowned,
+                     UnownedResource)
 from ..text import minutes
 from . import decoding as _decoding
 from . import lanefather as _lanefather
@@ -146,28 +147,27 @@ def summary(decoded: Decoded) -> dict[str, int]:
             "expired": sum(1 for entry in owned if entry["state"] == "expired"), "unowned": len(unowned(decoded))}
 
 
-def page_rows(decoded: Decoded) -> list[Mapping[str, Any]]:
+def page_rows(decoded: Decoded) -> list[ProcessTableRow]:
     """PROCESSES' rows: owned entries (running, then orphan, then expired), then, after a separator, the unowned
     processes and the unowned resources the last sweep reported."""
     owned = sorted(entries(decoded), key=lambda entry: ORDER.index(entry["state"]))
     others = unowned(decoded)
-    separator: list[Mapping[str, Any]] = [{"kind": "separator"}] if owned and others else []
+    separator: list[Separator] = [{"kind": "separator"}] if owned and others else []
     return [*owned, *separator, *others]
 
 
-def find(decoded: Decoded, key: Any) -> Optional[Mapping[str, Any]]:
+def find(decoded: Decoded, key: Any) -> Optional[ProcessTableRow]:
     return next((row for row in page_rows(decoded) if row.get("key") == tuple(key or ())), None)
 
 
-def label_of(row: Mapping[str, Any]) -> str:
+def label_of(row: ProcessRow) -> str:
     """What a row is called: its label, else its resource's name, else its command."""
     if row["kind"] == "resource":
-        return row.get("name") or row["id"]
+        return row["name"] or row["id"]
     if row["kind"] == "unowned":
-        return str(row["cmd"])
-    resource = _decoding.as_object(row.get("resource"))
-    argv = cast(list[str], row.get("argv") or [])
-    return str(row.get("label") or resource.get("name") or " ".join(argv) or row["id"])
+        return row["cmd"]
+    resource = row["resource"]
+    return row["label"] or (resource["name"] if resource else None) or " ".join(row["argv"]) or row["id"]
 
 
 def short_id(value: str, width: int = 8) -> str:
