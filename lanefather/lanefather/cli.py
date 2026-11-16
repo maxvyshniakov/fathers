@@ -10,7 +10,7 @@
   land <id> [--into WORKTREE] [--keep]
                                      merge after a current green receipt, start the review, run the post-merge
                                      smoke, finish the lane (lanefather.land)
-  review <id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane]
+  review <id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane] [--compare]
   review --overall <sha> --since <base>
                                      the independent review (lanefather.review)
   findings <sha> [--since REF]       whether a review holds the SHA (unmarked P1/P2 findings), for a publish
@@ -171,13 +171,16 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--since", required=True, metavar="REF", help="the previous release (tag or commit)")
     p.add_argument("--head", default="HEAD", metavar="REF", help="the released commit (default: HEAD)")
     p.set_defaults(run=tickets.shipped)
-    p = commands.add_parser("review", help="the lane's one independent review (Sol, or Opus when Codex is low), its "
-                                           "marks and its fix lane; --overall for promote --ship")
+    p = commands.add_parser("review", help="the lane's one independent review (Sol, or Opus when Codex is low; or "
+                                           "the [review] panel), its marks and its fix lane; --overall for "
+                                           "promote --ship")
     p.add_argument("id", nargs="?")
     p.add_argument("--mark", nargs=2, action="append", metavar=("N", "fixed:MERGE|rejected:REASON"),
                    help="mark finding N fixed by a follow-up merge (or the fix lane's id) or rejected with a reason")
     p.add_argument("--fix-lane", action="store_true",
                    help="register <id>-review-fixes on the landed lane's worktree for the fix round")
+    p.add_argument("--compare", action="store_true",
+                   help="each reviewer's findings side by side with their marks (fixed or rejected)")
     p.add_argument("--overall", metavar="SHA",
                    help="the overall review of --since..SHA; its findings become one ticket")
     p.add_argument("--since", metavar="BASE", help="with --overall: the base, origin/main for promote --ship")

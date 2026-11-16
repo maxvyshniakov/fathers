@@ -8,6 +8,21 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- A review panel (fathers#151): `[review] panel = ["sol", "opus"]` runs every listed reviewer at once on the same
+  frozen checkout with the same prompt (its `prompt_sha256` in the receipt), each in its own process. The receipt's
+  `panel` keeps each reviewer's model, effort, seconds, status and findings; the one `findings` list numbers them
+  across the panel, so `review --mark N` and the gate work as before. A member whose condition fails (a used-up Codex
+  week) is replaced by the fallback, or skipped when that is already on the panel; one that fails keeps the others'
+  answers, and holds the gate only with `[review] panel_required = true`. `review ID --compare` shows who found what
+  and how it was marked; `stats --json` adds per-reviewer totals (`reviewers`). Without `panel`, one reviewer as
+  before.
+- The reviewer is chosen by Mastack's `role review --json` when the models file has `bin/role` beside it
+  (fathers#150): its model, effort and skip reasons, printed and kept in the receipt's `role`; the implementer's
+  family comes from the agent that ran the lane's check (the check receipt's new `agent`). Without `role`, the
+  models file decides as before.
+- The reviewer is asked two design questions besides bugs and the standards (does the change fit the structure it
+  lands in or is it bolted on beside it, and does it copy behaviour the repository already has), answered as findings
+  of the new category `design`.
 - The free-disk minimum under which `start` refuses a lane is part of the runtime contract (fathers#46):
   `capabilities --json` reports it as `"host": {"min_disk_gb": 150}` (capability `host.min_disk_gb`), and a
   project hook finds it in `LANEFATHER_MIN_DISK_GB` and `<legacy_env_prefix>MIN_DISK_GB`, next to `DISK_FREE_GB`,
