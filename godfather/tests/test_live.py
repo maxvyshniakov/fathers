@@ -356,7 +356,7 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
                 top = next(y for y, line in enumerate(lines) if "╭─ MACHINE " in line)
                 left = lines[top].index("╭─ MACHINE ")
                 bottom = next(y for y in range(top + 1, height) if lines[y][left:].startswith("╰"))
-                row = max(view.MACHINE_HEIGHT, view.DETAILS_FLOOR)  # MACHINE's own, or DETAILS' key fields
+                row = max(view.MACHINE_HEIGHT, view.framed(7))  # MACHINE's own, or DETAILS' 7 key fields
                 self.assertEqual(row, bottom - top + 1, "MACHINE as tall as the row, its chart the taller")
                 self.assertIn("now", lines[bottom - 1], "its axis right over the bottom border: no blank rows")
                 details = canvas.tables["details"]

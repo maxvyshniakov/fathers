@@ -137,6 +137,15 @@ def request_facts(item: Item, model: Model, position: int, moment: datetime.date
     return facts
 
 
+def key_rows(model: Model, moment: datetime.datetime, marks: Marks, track: str) -> int:
+    """The rows of DETAILS' key fields (request_facts(), label to owner pid): the most any QUEUE entry has, so the
+    panels stay where they are as the selection moves (gf-heights review); 0 with the queue empty."""
+    items = model["holders"] + model["waiters"]
+    holders = len(model["holders"])
+    return max((len(request_facts(item, model, index - holders, moment, marks, track))
+                for index, item in enumerate(items)), default=0)
+
+
 def expected_facts(item: Item) -> list[Fact]:
     """`expected 18m · p90 31m · 23 runs` (fathers#108): its run type's p50 and p90 over its last runs, as Slotfather
     gives them; yellow once a lease has run past that p90."""
