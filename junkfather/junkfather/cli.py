@@ -36,7 +36,7 @@ import shlex
 import sys
 import time
 import traceback
-from typing import Any, Callable, Dict, List, Mapping, NoReturn, Optional
+from typing import Any, Callable, ClassVar, Dict, List, Mapping, NoReturn, Optional
 
 from . import __version__
 from . import changelog as _changelog
@@ -64,14 +64,11 @@ class Parser(argparse.ArgumentParser):
     to the help of the command whose parser refused it. Options are exact (no abbreviations), and a word that names
     no option of the parser is reported before a missing required argument."""
 
+    given: ClassVar[List[str]] = []  # the command line main parses (main sets it)
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         kwargs.setdefault("allow_abbrev", False)
-        self.given: List[str] = []
         super().__init__(*args, **kwargs)
-
-    def parse_known_args(self, args: Any = None, namespace: Any = None) -> Any:
-        self.given = list(sys.argv[1:] if args is None else args)
-        return super().parse_known_args(args, namespace)
 
     def error(self, message: str) -> NoReturn:
         command = " ".join(self.prog.split()[1:]) or None
@@ -81,11 +78,15 @@ class Parser(argparse.ArgumentParser):
         raise Usage(message[len("argument "):] if message.startswith("argument ") else message, command)
 
     def unknown_option(self) -> Optional[str]:
-        """The first word this parser was given that looks like an option and names none in argparse's own table,
-        up to `--`; the value of an option that takes one is skipped."""
+        """The first word of this parser's part of the command line (after its command's name) that looks like an
+        option and names none in argparse's own table, up to `--`; the value of an option that takes one is
+        skipped."""
         table: Dict[str, argparse.Action] = self._option_string_actions  # pyright: ignore[reportPrivateUsage]
+        words, name = Parser.given, self.prog.split()[1:]
+        if name and name[0] in words:
+            words = words[words.index(name[0]) + 1:]
         skip = False
-        for word in self.given:
+        for word in words:
             if skip:
                 skip = False
                 continue
@@ -209,6 +210,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         if words and not words[0].startswith("-") and words[0] not in COMMANDS:
             raise Usage(f"unknown command {words[0]!r}")
+        Parser.given = words
         args, extra = parser().parse_known_args(words)
         command = args.command
         if extra:
