@@ -293,7 +293,7 @@ def still_leftover(session: Session, table: Optional[_procs.Table], now: float) 
 
 
 def clean(survey: Survey, now: float, dry_run: bool,
-          reader: Callable[[], Optional[_procs.Table]] = _procs.read_or_none) -> Dict[str, Any]:
+          reader: Optional[Callable[[], Optional[_procs.Table]]] = None) -> Dict[str, Any]:
     """Remove (or, in a dry run, list) the leftover sessions' files. The process table is read again before the
     removals start, and each session is checked again right before its files go (still_leftover). Returns the
     report part."""
@@ -302,7 +302,7 @@ def clean(survey: Survey, now: float, dry_run: bool,
                               "files": 0, "bytes": 0, "names": [], "notes": []}
     if survey.unresolved:
         report["notes"].append("an agent-browser daemon's session cannot be told (lsof failed): nothing removed")
-    table = reader() if found else None
+    table = (reader or _procs.read_or_none)() if found else None  # looked up now: a test can stand in for it
     for session in found:
         why = still_leftover(session, table, now)
         if why:
