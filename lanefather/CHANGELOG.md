@@ -8,6 +8,17 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Two routine cleanups without `--force-reason` (fathers#167). `lanefather drop ID` removes a planned or active
+  lane that adds nothing to its base (no commits beyond it, its tree already the base's, or commits that change
+  nothing) and whose worktree has no uncommitted or untracked changes, with `done`'s cleanup; it refuses a lane
+  with work and has no override. `done` no longer refuses a landed lane whose red post-merge smoke a later green
+  run on the same integration branch cleared: the batch gate, or another lane's smoke that ran each check the red
+  one ran, on a commit holding the merge; the ledger and the record (`post_merge.cleared_by`) name that receipt,
+  and `done --finished` counts such a lane as finished. `lanefather recheck ID` reruns the red smoke's checks on
+  the integration tip; green, it replaces the red result and finishes the lane as land would. New event kinds
+  `lane.dropped` and `lane.rechecked`; capabilities `lane.drop` and `post_merge.cleared`. An older Lanefather
+  reads a dropped lane as done and a rechecked one as green.
+
 - Lanes finish by themselves (fathers#157). A lane that becomes finished (landed, smoke green, review finished or
   exempt with every finding marked) runs `done`, as before, unless it is kept; `[done] auto = false` turns that off.
   `lanefather keep ID [--off]` keeps a lane from it. `lanefather done --finished` runs `done` on every finished lane

@@ -14,6 +14,8 @@ lanefather review <id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane]
 lanefather review --overall <sha> --since <base>
 lanefather done <id>
 lanefather done --finished [--dry-run]    done on every finished lane of the registered projects
+lanefather drop <id>                      remove an active lane that adds nothing to its base
+lanefather recheck <id> [--slots N]       rerun a red post-merge smoke on the integration tip
 lanefather keep <id> [--off]              auto-done and done --finished leave the lane
 lanefather gc [--dry-run] [--json]         merged idle worktrees and unused branches
 lanefather promote <sha> [--ship] [--no-push] [--install [--deploy HOST]]
@@ -82,6 +84,31 @@ the same worktree (a fix lane), or a missing ticket comment leaves the lane wher
 `done --finished`, the repair), `done` also refuses without a process source that answers (a Slotfather with
 `procs`, or `[hooks] process_scan`) and re-reads `keep` under the state lock; `done ID` without a source removes the
 lane as before. A lane or project that cannot be read or finished is reported as refused, and the others go on.
+
+### Routine cleanups without --force-reason
+
+`--force-reason` stays for the exceptional cases; these two cleanups need none (fathers#167).
+
+- `lanefather drop ID` removes a planned or active lane that adds nothing to its base: its branch (and its
+  worktree's HEAD) has no commits beyond the base, its tree is the base's (the integration made the change
+  already), or its commits since its merge-base with the base change nothing. Its worktree must have no
+  uncommitted or untracked changes (ignored build output does not count). It cleans up as `done` does, with the
+  same refusals for an agent's lock, a process in the worktree, the build directories or the scratch, and a fix
+  lane in the same worktree. The record becomes `done` with `dropped` (`why`, `tip`, `base`) and the ledger names
+  why (`lane.dropped`). A lane with work refuses, with no flag to override it: land it, or revert its commits on
+  the lane first.
+- A landed lane whose post-merge smoke went red for a reason outside it (the smoke checkout's environment) is
+  cleared by a later green run on the same integration branch, on a commit that holds the lane's merge and that
+  the integration worktree's HEAD holds: the batch gate there (its `promote-<sha>.gate.json`, the full gate), or
+  another lane's green post-merge smoke that ran each check the red smoke ran on its own tree (a result it took
+  from another tree, such as the lane's receipt or the previous tip, does not count; a smoke receipt naming a
+  platform must name the red smoke's). `done` and `done --finished` look for that evidence themselves, nothing
+  runs, and the oldest receipt that clears the smoke is named in the ledger (`lane.done`, details
+  `post_merge_cleared_by`) and in the record (`post_merge.cleared_by`).
+- `lanefather recheck ID` reruns the checks the red smoke ran on the integration tip, in a smoke checkout, when the
+  tip holds the merge. Green, its receipt `<id>.recheck.json` replaces the red result in the record (the red
+  receipt stays), the lane's issue is marked as after a green land, and the lane is finished as land would have
+  finished it; red, the lane stays red (`lane.rechecked`, error when red).
 
 `lanefather --help` describes the commands. The [glossary](../GLOSSARY.md) distinguishes lane states, receipts,
 reviews and verification gates.
@@ -405,10 +432,11 @@ absolute path as `dashboard.events.path`. One `journal.ledger` call writes both,
   `CODEX_THREAD_ID` is set, else `process`; always `pid`; `via: godfather` when `GODFATHER_ACTOR` is
   `godfather/<version>`.
 - `level`: `warn` for an override, a red lane check, a failed review or ticket rule; `error` for a merge conflict, a
-  red post-merge smoke, gate or perf run and a failed promote step.
+  red post-merge smoke, recheck, gate or perf run and a failed promote step.
 
 Kinds: `lane.started`, `lane.adopted`, `claims.added`, `lane.checked`, `landing.reviewed`, `lane.conflict`,
-`lane.landed`, `lane.post_merge`, `lane.released`, `lane.done_refused`, `lane.done`, `lane.kept`, `process.stopped`,
+`lane.landed`, `lane.post_merge`, `lane.released`, `lane.done_refused`, `lane.done`, `lane.dropped`,
+`lane.rechecked`, `lane.kept`, `process.stopped`,
 `review.started`, `review.kept`, `review.exempted`, `review.finished`, `finding.marked`, `review.marked`,
 `review.handed_over`, `review.ticket_filed`, `gate.finished`, `perf.finished`, `promote.step`, `promote.finished`,
 `sync.finished`, `load.waited`, `landing.lock_taken`, `ticket.marked`, `ticket.skipped`,

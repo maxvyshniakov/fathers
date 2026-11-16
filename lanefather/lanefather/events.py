@@ -52,6 +52,8 @@ KINDS: dict[str, str] = {
     "lane.done_refused": "done did not run by itself on a finished lane (warn)",
     "lane.kept": "keep, or keep --off, changed whether auto-done leaves the lane",
     "lane.done": "done removed the lane's worktree, branches and scratch",
+    "lane.dropped": "drop removed a lane that added nothing to its base",
+    "lane.rechecked": "recheck reran a red post-merge smoke on the integration tip (error when red)",
     "process.stopped": "done stopped a process the lane left behind",
     "review.started": "the review started in the background",
     "review.kept": "land kept a review that already ran",

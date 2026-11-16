@@ -12,6 +12,10 @@
   the root checks) and runs them through Repo-Kit's lane adapter; the receipt is the evidence.
 - Land: `lanefather land <id> --into <integration worktree>`, which merges, runs the post-merge smoke and starts the
   review. Then `lanefather done <id>`, and `lanefather gc` for leftovers.
+- Without `--force-reason`: a lane with nothing to land goes with `lanefather drop <id>`; a post-merge smoke that went
+  red for the environment clears with `lanefather recheck <id>`, or by itself once a later green smoke or gate on
+  the integration branch ran its checks
+  ([routine cleanups](../../lanefather/docs/reference.md#routine-cleanups-without---force-reason)).
 - No `promote`: the batch reaches `main` by the explicit push of [publishing](publishing.md).
 
 ## Report labels
