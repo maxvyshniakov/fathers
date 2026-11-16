@@ -9,7 +9,7 @@ adapter reads it, capabilities and a `settings --json` reply, with scene.json ho
 summaries the scene recorded, and CHANGELOG.md the changelog the changelog screen shows, so a new entry in the real
 one changes no golden. tests/goldens/ holds, for each screen, the plain text (`.txt`) and the exact escape
 sequences in the owner's two themes (`.seti.ansi`, Seti dark; `.prolight.ansi`, Pro Light): the overview wide
-(156×43), at 100 and at 76 columns (one column), short (156×20), the help and Settings overlays, and what's new
+(156×43), at 100 and at 76 columns (one column), short (156×20 and 100×30), the help and Settings overlays, and what's new
 (fathers#102); and, from tests/fixtures/expected/ (the scene with lease ids, expected runs and an event log of an
 outlier and slower trends, fathers#108), the overview at 100 columns with an overrun lease and with a waiter
 selected; and the overview with Tab's focus on EVENTS, and at 76 columns on DETAILS (fathers#139).
@@ -43,7 +43,9 @@ COMMIT = "9f600e1c0ffee"  # Godfather's own install commit in what's new, so a c
 THEMES = {"seti": ("#111213", "#cacecd"), "prolight": ("#ffffff", "#191919")}  # tools/raster.py THEMES
 SCREENS = {  # name: (width, height, overlay); what's new's filter after a colon
     "overview-156x43": (156, 43, None), "overview-100x40": (100, 40, None), "overview-76x40": (76, 40, None),
-    "overview-156x20": (156, 20, None), "help-156x43": (156, 43, "help"), "settings-156x43": (156, 43, "settings"),
+    "overview-156x20": (156, 20, None),
+    "overview-100x30": (100, 30, None),  # fathers#169: one column short of rows, the bottom row given way first
+    "help-156x43": (156, 43, "help"), "settings-156x43": (156, 43, "settings"),
     "settings-mixed-156x43": (156, 43, "settings:mixed"),  # fathers#87: every tool's section
     "unread-156x43": (156, 43, None), "unread-100x40": (100, 40, None), "unread-76x40": (76, 40, None),
     "whatsnew-156x43": (156, 43, "changelog"), "whatsnew-76x40": (76, 40, "changelog"),

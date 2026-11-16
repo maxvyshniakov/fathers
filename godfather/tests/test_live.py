@@ -346,9 +346,9 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
                     self.assertGreaterEqual(width - details_x, view.NARROW_DETAILS)
                     self.assertTrue(lines[machine].rstrip().endswith("╮"))
 
-    def test_side_by_side_machine_keeps_its_own_height_and_events_gets_the_rest(self) -> None:
+    def test_the_bottom_row_is_as_tall_as_details_key_fields_and_events_gets_the_rest(self) -> None:
         view = tool()
-        for height in (60, 44, 40):  # 34 and less: EVENTS keeps the band's floor, the bottom row gives way
+        for height in (60, 44, 40):  # shorter: the bottom row gives way first, then EVENTS (fathers#169)
             with self.subTest(height=height):
                 canvas = view.Canvas(100, height)
                 view.dashboard_draw(canvas, sample_model())
@@ -356,14 +356,15 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
                 top = next(y for y, line in enumerate(lines) if "╭─ MACHINE " in line)
                 left = lines[top].index("╭─ MACHINE ")
                 bottom = next(y for y in range(top + 1, height) if lines[y][left:].startswith("╰"))
-                self.assertEqual(view.MACHINE_HEIGHT, bottom - top + 1, "MACHINE at its own height, chart and all")
+                row = max(view.MACHINE_HEIGHT, view.DETAILS_FLOOR)  # MACHINE's own, or DETAILS' key fields
+                self.assertEqual(row, bottom - top + 1, "MACHINE as tall as the row, its chart the taller")
                 self.assertIn("now", lines[bottom - 1], "its axis right over the bottom border: no blank rows")
                 details = canvas.tables["details"]
-                self.assertEqual((top, view.MACHINE_HEIGHT), (details["y"], details["height"]), "DETAILS beside it")
+                self.assertEqual((top, row), (details["y"], details["height"]), "DETAILS beside it")
                 events, queue = canvas.tables["events"], canvas.tables["requests"]
                 self.assertEqual(top, events["y"] + events["height"], "EVENTS right above")
-                self.assertEqual(height - 1 - 5 - queue["height"] - view.MACHINE_HEIGHT, events["height"],
-                                 "EVENTS takes what QUEUE and MACHINE leave")
+                self.assertEqual(height - 1 - 5 - queue["height"] - row, events["height"],
+                                 "EVENTS takes what QUEUE and the bottom row leave")
 
     def test_a_scrolled_thumb_flashes_and_fades_with_one_wake(self) -> None:
         view = tool()
