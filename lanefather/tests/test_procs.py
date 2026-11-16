@@ -182,23 +182,14 @@ class DoneWhileHelpersComeAndGoTests(LaneCase):
         self.assertIn("Lane a done", output)
         self.assertFalse(Path(worktree).exists())
 
-    def test_done_on_an_idle_lane_succeeds_while_real_short_lived_processes_come_and_go_elsewhere(self) -> None:
-        # fathers#158 on the real process table: a busy loop elsewhere starts and reaps short-lived children while
-        # done reads the lane's processes through a procs answer built from ps and lsof (fixtures/procs-slotfather).
+    def landed_with_real_process_table(self) -> str:
+        """A landed idle lane whose done reads processes through fixtures/procs-slotfather, an answer built from ps
+        and lsof over this test's process tree."""
         worktree = self.created("a", "lib/a.txt")
         self.commit(worktree, {"lib/a.txt": "a\n"})
         self.lane("check", "a")
         self.lane("land", "a", "--keep")
-        elsewhere = self.tmp / "elsewhere"
-        elsewhere.mkdir()
-        churn = subprocess.Popen(
-            [sys.executable, "-c", "import subprocess, sys\n"
-             "subprocess.run(['true'])\nprint('ready', flush=True)\n"
-             "while True: subprocess.Popen(['true']).wait()"],
-            cwd=elsewhere, stdout=subprocess.PIPE, text=True, start_new_session=True)
-        self.addCleanup(lambda: (churn.kill(), churn.wait()))
-        assert churn.stdout is not None
-        self.assertEqual(churn.stdout.readline().strip(), "ready")
+        self.env["FIXTURE_PROCS_ROOT"] = str(os.getpid())
         source = SlotfatherSource(str(Path(__file__).parent / "fixtures" / "procs-slotfather"))
         source.pause = 0
 
@@ -206,9 +197,57 @@ class DoneWhileHelpersComeAndGoTests(LaneCase):
             del project
             return source
 
-        with unittest.mock.patch.object(procs, "source", given):
-            output = self.lane("done", "a", process=False)
+        patch = unittest.mock.patch.object(procs, "source", given)
+        patch.start()
+        self.addCleanup(patch.stop)
+        return worktree
+
+    def sleeper(self, *, detached: bool) -> int:
+        """A sleeping process of this user outside the lane: a child of this test, or one reparented away from
+        its tree as the machine's own processes are."""
+        elsewhere = self.tmp / "elsewhere"
+        elsewhere.mkdir(exist_ok=True)
+        if detached:
+            pid = int(subprocess.run(["sh", "-c", "sleep 60 >/dev/null 2>&1 & echo $!"], cwd=elsewhere, check=True,
+                                     capture_output=True, text=True, start_new_session=True).stdout)
+            self.addCleanup(subprocess.run, ["kill", "-9", str(pid)], capture_output=True)
+            return pid
+        child = subprocess.Popen(["sleep", "60"], cwd=elsewhere, start_new_session=True)
+        self.addCleanup(lambda: (child.kill(), child.wait()))
+        return child.pid
+
+    def test_done_on_an_idle_lane_succeeds_while_real_short_lived_processes_come_and_go_elsewhere(self) -> None:
+        # fathers#158 on the real process table: a busy loop elsewhere starts and reaps short-lived children while
+        # done reads the lane's processes through a procs answer built from ps and lsof (fixtures/procs-slotfather).
+        worktree = self.landed_with_real_process_table()
+        elsewhere = self.tmp / "elsewhere"
+        elsewhere.mkdir()
+        churn = subprocess.Popen(
+            [sys.executable, "-c", "import subprocess, sys\n"
+             "subprocess.run(['true'])\nprint('ready', flush=True)\n"
+             "while True: subprocess.Popen(['true']).wait()"],
+            cwd=elsewhere, stdout=subprocess.PIPE, text=True, start_new_session=True)
+        assert churn.stdout is not None
+        self.addCleanup(lambda: (churn.kill(), churn.wait(), churn.stdout and churn.stdout.close()))
+        self.assertEqual(churn.stdout.readline().strip(), "ready")
+        output = self.lane("done", "a", process=False)
         self.assertIn("Lane a done", output)
         self.assertFalse(Path(worktree).exists())
         self.assertIsNone(churn.poll(), "the churn ran throughout")
+
+    def test_the_machine_s_unreadable_processes_stay_out_of_the_real_table_answer_and_the_test_s_own_refuse(
+            self) -> None:
+        # CI run 43841660700: on a Linux runner systemd --user and (sd-pam) are not dumpable, their cwd is
+        # unreadable, and the answer over the whole machine named them unknown. The answer is over this test's
+        # process tree; an unreadable process inside it still refuses done.
+        worktree = self.landed_with_real_process_table()
+        own = self.sleeper(detached=False)
+        self.env["FIXTURE_PROCS_UNREADABLE"] = str(own)
+        output = self.lane("done", "a", process=False, ok=False)
+        self.assertIn(f"pid {own} (sleep 60) cwd unknown", output)
+        self.assertTrue(Path(worktree).exists())
+        self.env["FIXTURE_PROCS_UNREADABLE"] = str(self.sleeper(detached=True))
+        output = self.lane("done", "a", process=False)
+        self.assertIn("Lane a done", output)
+        self.assertFalse(Path(worktree).exists())
 

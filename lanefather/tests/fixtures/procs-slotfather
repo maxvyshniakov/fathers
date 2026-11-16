@@ -4,6 +4,12 @@ runs done while short-lived processes come and go: ps lists this user's processe
 working directories (a zombie has none and is left out), and a pid whose directory could not be read is re-checked with ps and dropped when it exited
 (Slotfather's procs.recheck), else reported unknown with its command. `sweep --json` offers nothing to stop.
 
+`--cwd` answers for the test's own processes only: FIXTURE_PROCS_ROOT names the test's pid, and the processes outside
+its tree are the machine's, not the test's. They cannot be in the lane's fresh temporary worktree, and some of them
+have a working directory nobody of their user can read: on a Linux runner systemd --user and (sd-pam) are not
+dumpable, so /proc/PID/cwd answers EACCES, the real source reports them unknown and every unattended done refuses.
+FIXTURE_PROCS_UNREADABLE (comma-separated pids) reads those pids as such a process, on every platform.
+
   procs --json [--cwd PATH | --pid PID]    the version-2 answer with `unknown`
   sweep --json ...                         {"v": 2, "items": []}
 """
@@ -52,6 +58,20 @@ def alive(rows, pids):
     return live
 
 
+def descendants(rows, root):
+    """The pids of root and every process below it in the table."""
+    children = {}
+    for row in rows.values():
+        children.setdefault(row["ppid"], []).append(row["pid"])
+    found, todo = set(), [root]
+    while todo:
+        pid = todo.pop()
+        if pid not in found:
+            found.add(pid)
+            todo.extend(children.get(pid, []))
+    return found
+
+
 def main(args):
     if args[:1] == ["sweep"]:
         print(json.dumps({"v": 2, "items": []}))
@@ -70,7 +90,10 @@ def main(args):
     if "--cwd" in args:
         root = os.path.realpath(args[args.index("--cwd") + 1])
         directories = cwds()
-        mine = [p for p in rows.values() if p["uid"] == os.geteuid() and p["pid"] not in own]
+        for pid in filter(None, os.environ.get("FIXTURE_PROCS_UNREADABLE", "").split(",")):
+            directories.pop(int(pid), None)
+        tree = descendants(rows, int(os.environ["FIXTURE_PROCS_ROOT"]))
+        mine = [p for p in rows.values() if p["uid"] == os.geteuid() and p["pid"] not in own and p["pid"] in tree]
         unknown = sorted(alive(rows, [p["pid"] for p in mine if p["pid"] not in directories]))
         selected = [dict(p, cwd=directories[p["pid"]]) for p in mine if p["pid"] in directories
                     and (directories[p["pid"]] == root or directories[p["pid"]].startswith(root + "/"))]
