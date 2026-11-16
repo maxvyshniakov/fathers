@@ -141,6 +141,16 @@ class ClearedPostMergeTests(LaneCase):
         self.assertIn(f"post-merge red cleared by the post-merge smoke of b {merge[:10]} ({receipt})", ledger)
         self.assertNotIn("override", ledger)
 
+    def test_a_green_smoke_that_finished_in_the_red_smokes_second_clears_it(self):
+        # CI run 43896662055 (Linux): the stamps have one-second resolution, and on a fast runner the later lane's
+        # smoke finished within the second the red smoke did. Same second is not earlier.
+        self.red_lane()
+        self.green_lane("b", "tooling/b.txt")
+        red = self.state / "a.post-merge.json"
+        finished = json.loads((self.state / "b.post-merge.json").read_text())["finished"]
+        red.write_text(json.dumps({**json.loads(red.read_text()), "finished": finished}))
+        self.lane("done", "a")
+
     def test_a_green_smoke_that_did_not_run_the_red_check_or_precedes_the_merge_clears_nothing(self):
         # A green smoke before the red lane's merge does not hold it.
         self.green_lane("z", "tooling/z.txt")

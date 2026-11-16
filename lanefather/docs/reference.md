@@ -100,15 +100,15 @@ lane as before. A lane or project that cannot be read or finished is reported as
   lane in the same worktree. The record becomes `done` with `dropped` (`why`, `tip`, `base`) and the ledger names
   why (`lane.dropped`). A lane with work refuses, with no flag to override it: land it, or revert its commits on
   the lane first.
-- A landed lane whose post-merge smoke went red for a reason outside it (the smoke checkout's environment) is
-  cleared by a later green run on the same integration branch, on a commit that holds the lane's merge and that
-  the integration worktree's HEAD holds: the batch gate there (its `promote-<sha>.gate.json`, the full gate), or
-  another lane's green post-merge smoke that ran each check the red smoke ran on its own tree (a result it took
-  from another tree, such as the lane's receipt or the previous tip, does not count). The run must have finished
-  after the red smoke and on its platform (a gate's platform comes from its receipt, or for an older receipt from
-  its results-store entry). `done` and `done --finished` look for that evidence themselves, nothing
-  runs, and the oldest receipt that clears the smoke is named in the ledger (`lane.done`, details
-  `post_merge_cleared_by`) and in the record (`post_merge.cleared_by`).
+- A landed lane whose post-merge smoke went red for a reason outside it (the smoke checkout's environment) is cleared
+  by a later green run on the same integration branch, on a commit that holds the lane's merge and that the
+  integration worktree's HEAD holds: the batch gate there (its `promote-<sha>.gate.json`, the full gate), or another
+  lane's green post-merge smoke that ran each check the red smoke ran on its own tree (a result it took from another
+  tree, such as the lane's receipt or the previous tip, does not count). The run must not have finished before the red
+  smoke (the stamps' one-second resolution: within its second counts) and ran on its platform (a gate's platform comes
+  from its receipt, or for an older receipt from its results-store entry). `done` and `done --finished` look for that
+  evidence themselves, nothing runs, and the oldest receipt that clears the smoke is named in the ledger (`lane.done`,
+  details `post_merge_cleared_by`) and in the record (`post_merge.cleared_by`).
 - `lanefather recheck ID` reruns the checks the red smoke ran on the integration tip, in a smoke checkout, when the
   tip holds the merge. Green, its receipt `<id>.recheck.json` replaces the red result in the record (the red
   receipt stays), the lane's issue is marked as after a green land, and the lane is finished as land would have

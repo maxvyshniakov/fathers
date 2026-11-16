@@ -14,8 +14,8 @@ instead of the integration build. Two kinds of evidence clear it, and `done` nam
 
 Each receipt is matched by identity: its commit exists and has the tree the receipt names, the lane's merge is its
 ancestor, the integration worktree's HEAD holds it, and a smoke's lane landed into the same integration worktree.
-It ran on the red smoke's platform (a gate's from its receipt or its results-store entry) and finished after the
-red smoke did.
+It ran on the red smoke's platform (a gate's from its receipt or its results-store entry) and did not finish
+before the red smoke (within its second counts).
 """
 from __future__ import annotations
 
@@ -102,13 +102,14 @@ def candidates(record: Record, store: state.Store, integration: str, red: Receip
     """Every receipt that clears the red smoke, oldest first."""
     merge = str(red["merge"])
     head = git(integration, "rev-parse", "HEAD")
-    # The evidence must stand for the platform the red smoke ran on, and come after it: a run that passed before
-    # the smoke failed says nothing about that failure.
+    # The evidence must stand for the platform the red smoke ran on, and not come before it: a run that passed
+    # before the smoke failed says nothing about that failure. The stamps have one-second resolution, so a run that
+    # finished within the red smoke's second is not earlier (a fast runner lands the next lane in that second).
     platform = red.get("platform") or result_store.host_platform()
     after = str(red.get("finished") or "")
 
     def later(at: str) -> bool:
-        return bool(after) and at > after
+        return bool(after) and at >= after
 
     def holds(sha: str, tree: Any) -> bool:
         return (bool(sha) and git(integration, "rev-parse", "--verify", "--quiet", f"{sha}^{{tree}}", check=False)
