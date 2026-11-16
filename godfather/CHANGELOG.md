@@ -88,6 +88,11 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Changed
 
+- The live view writes each frame as one synchronized update (`CSI ? 2026 h` … `l`, fathers#143), so a terminal
+  that supports it never paints half a frame and one that does not ignores it; a resize is taken from SIGWINCH and
+  drawn at once instead of within a quarter second; the whole screen is no longer rewritten every five seconds, only
+  after a resize, a theme change or Ctrl-L (new, in help as `q · ctrl+l`).
+
 - A command line Godfather does not take prints one line with the reason and one pointing to the help (`Try
   'godfather events --help'.`), no longer the whole usage text, as the tools' CLI convention says (docs/cli.md,
   fathers#154); so does the live view without a terminal. Every option that takes a value takes `--opt=value` too

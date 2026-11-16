@@ -21,7 +21,7 @@
 ││    v           what's new (or click Godfather        a request waits for its slots. Nothing is         Admission follows memory pressure, not used     ││
 ││                what's new?)                          ever killed.                                      RAM, which the file cache keeps near full.      ││
 ││    esc         close an overlay · leave a page                                                         🆗 · 🔥    fine · critical                      ││
-││    q           quit                                DETAILS                                             unleased   demand outside leased work           ││
+││    q · ctrl+l  quit · redraw                       DETAILS                                             unleased   demand outside leased work           ││
 ││    shift+drag  select text                           start est   when the queue head should start      admission  slots a new request could get now    ││
 ││    Hotkeys work on any keyboard layout.              pass until  later work may overtake until         Bars run indigo→red, and turn all red when      ││
 ││                                                                  then                                  the resource is critical.                       ││

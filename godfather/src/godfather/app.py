@@ -18,6 +18,7 @@ import math
 import os
 import select
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -376,7 +377,8 @@ class Live:
         self.saved = (interval, theme)  # Refresh every and Colour theme as saved; a change is written back
         self.shown: list[str] = []
         self.drawn_size: Any = None
-        self.drawn = self.whole = 0.0
+        self.resized = True  # SIGWINCH came (fathers#143): the size is read again at the next pass
+        self.drawn = 0.0
         self.glowing: set[str] = set()  # the thumbs drawn in the foreground
         self.dirty, self.done = True, False
         self.wake_read, self.wake_write = os.pipe()
@@ -530,16 +532,34 @@ class Live:
         if time.monotonic() - self.fetched >= self.state.interval and not self.models.wants("model"):
             self.load_model()
 
+    def on_resize(self, *_: Any) -> None:
+        """SIGWINCH: the size is read again, and the loop woken to draw it now."""
+        self.resized = True
+        with contextlib.suppress(OSError):  # a full pipe already wakes the loop
+            os.write(self.wake_write, b"w")
+
+    @contextlib.contextmanager
+    def resizes(self) -> Any:
+        """SIGWINCH handled by on_resize() while inside; the previous handler back on the way out."""
+        previous = signal.signal(signal.SIGWINCH, self.on_resize)
+        try:
+            yield
+        finally:
+            signal.signal(signal.SIGWINCH, previous)
+
     def draw(self) -> bool:
         """The screen when something changed, a second passed or the details' spinner turns; only the rows that
-        changed are written. True while the spinner turns."""
-        size = os.get_terminal_size(self.fd_out)  # read each pass: at most 0.25 s behind a resize
-        if size != self.drawn_size:
-            # A terminal reflows its own screen on resize: clear it and draw every row.
-            os.write(self.fd_out, b"\x1b[2J")
-            self.shown, self.drawn_size, self.dirty = [], size, True
-        elif time.monotonic() - self.whole >= 5:
-            self.shown = []  # rewrite every row now and then, in place, so a stray line cannot stay wrong
+        changed are written, all of them in one synchronized update (fathers#143). Every row is written again only
+        after a resize, a theme change or Ctrl-L. True while the spinner turns."""
+        clear = b""
+        if self.resized:
+            self.resized = False  # before the read: a resize meanwhile is read at the next pass
+            size = terminal_size(self.fd_out)
+            if size != self.drawn_size:
+                # A terminal reflows its own screen on resize: clear it and draw every row.
+                clear = b"\x1b[2J"
+                self.shown, self.drawn_size, self.dirty = [], size, True
+        size = self.drawn_size
         now = time.monotonic()
         glowing = _state.glowing(self.state, now)
         if glowing != self.glowing:  # a thumb lit up or faded back
@@ -556,9 +576,8 @@ class Live:
         # Only rows that changed are written: a second's tick usually touches the clock and a few ages.
         frame = "".join(f"\x1b[{row + 1};1H{line}" for row, line in enumerate(lines)
                         if row >= len(self.shown) or self.shown[row] != line)
-        if frame:
-            os.write(self.fd_out, frame.encode("utf-8", "replace"))
-        self.whole = time.monotonic() if not self.shown else self.whole
+        if frame or clear:
+            os.write(self.fd_out, SYNC_ON + clear + frame.encode("utf-8", "replace") + SYNC_OFF)
         self.shown, self.drawn, self.dirty = lines, time.monotonic(), False
         return loading
 
@@ -594,10 +613,22 @@ class Live:
             self.apply_theme()
             self.load_model()
             self.news.request("news")
-            while not self.done:
-                self.take()
-                loading = self.draw()
-                self.read(0.1 if loading else 0.25)
+            with self.resizes():
+                self.loop()
+
+    def loop(self) -> None:
+        while not self.done:
+            self.take()
+            loading = self.draw()
+            self.read(0.1 if loading else 0.25)
+
+
+# A frame as one synchronized update (fathers#143): the terminal paints it whole; one without mode 2026 ignores both
+SYNC_ON, SYNC_OFF = b"\x1b[?2026h", b"\x1b[?2026l"
+
+
+def terminal_size(fd: int) -> os.terminal_size:
+    return os.get_terminal_size(fd)
 
 
 ACTOR = f"godfather/{_version.VERSION}"  # GODFATHER_ACTOR for every action (SPEC 24)

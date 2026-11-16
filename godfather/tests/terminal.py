@@ -98,6 +98,11 @@ def environ(fake: FakeSlotfather, **extra: str) -> dict[str, str]:
     return env
 
 
+# Run in the child, after setsid: its stdin, the PTY, becomes its controlling terminal, then the command runs in its place
+CONTROLLING = ("import fcntl, os, sys, termios; fcntl.ioctl(0, termios.TIOCSCTTY, 0); "
+               "os.execvp(sys.argv[1], sys.argv[1:])")
+
+
 class Terminal:
     """`godfather` (or another argv) running in a PTY of rows x columns; what it wrote, raw and plain."""
 
@@ -107,8 +112,10 @@ class Terminal:
         self.master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
         command = argv if argv is not None else [sys.executable, str(ENTRY), "--interval", "60"]
-        self.process = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave, env=env,
-                                        start_new_session=True)
+        # Its own session with the PTY as its controlling terminal, as a shell starts it: a resize reaches it as
+        # SIGWINCH (fathers#143)
+        self.process = subprocess.Popen([sys.executable, "-c", CONTROLLING, *command], stdin=slave, stdout=slave,
+                                        stderr=slave, env=env, start_new_session=True)
         os.close(slave)
         self.raw = bytearray()
         case.addCleanup(self.stop)
