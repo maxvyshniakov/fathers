@@ -275,7 +275,7 @@ class SweepTests(WorktreeCase):
         stopped = [e for e in self.events() if e["kind"] == "resource.stopped"]
         self.assertEqual([f"worktree:{gone}"], [e["subject"]["id"] for e in stopped])
         reported = [e for e in self.events()
-                    if e["kind"] == "unowned.reported" and e["subject"]["type"] == "resource"]
+                    if e["kind"] == "unowned.reported" and e["subject"].get("kind") == "worktree"]
         self.assertEqual({f"worktree:{fresh}", f"worktree:{work}"}, {e["subject"]["id"] for e in reported})
         for line in (self.state / "events.jsonl").read_text().splitlines():
             self.assertEqual([], eventcheck.validate_line(line, strict=True), line)
