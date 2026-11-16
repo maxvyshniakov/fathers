@@ -8,8 +8,10 @@ import sys as _path_sys
 from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from slotfather import config as sf_config
+from slotfather import durations as sf_durations
 from slotfather import entry as sf_entry
 from slotfather import schedule as sf_schedule
+from slotfather import settings as sf_settings
 
 import json
 import os
@@ -85,19 +87,19 @@ class AgingTests(PlanCase):
 
     def test_the_environment_can_only_age_less(self):
         with mock.patch.dict(os.environ, {"SLOTFATHER_AGING_BATCH": "600", "SLOTFATHER_AGING_NORMAL": "7200"}):
-            found = sf_schedule.order_settings()
+            found = sf_settings.order_settings()
         self.assertEqual((1800.0, 7200.0), (found["aging_batch"], found["aging_normal"]))
         with mock.patch.dict(os.environ, {"SLOTFATHER_AGING_BATCH": "0"}):
-            self.assertEqual(0.0, sf_schedule.order_settings()["aging_batch"], "0: never, the tightest")
+            self.assertEqual(0.0, sf_settings.order_settings()["aging_batch"], "0: never, the tightest")
         with mock.patch.dict(os.environ, {"SLOTFATHER_WARN_WAIT": "60"}):
-            self.assertEqual(60.0, sf_schedule.order_settings()["warn_wait"], "its own warnings: either way")
+            self.assertEqual(60.0, sf_settings.order_settings()["warn_wait"], "its own warnings: either way")
 
     def test_durations_read_as_seconds_or_with_a_unit(self):
         self.assertEqual([90.0, 90.0, 1800.0, 5400.0, 5400.0],
-                         [sf_config.parse_duration(t) for t in ("90", "90s", "30m", "1.5h", "1h30m")])
+                         [sf_durations.clock(t) for t in ("90", "90s", "30m", "1.5h", "1h30m")])
         for bad in ("", "-1", "1d", "m"):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
-                sf_config.parse_duration(bad)
+                sf_durations.clock(bad)
 
 
 class ReservationTests(PlanCase):
@@ -325,10 +327,10 @@ class ForecastTests(PlanCase):
 
 class SafetyTests(SlotCase):
     def test_only_the_owner_may_reprioritize_and_a_failing_forecast_breaks_nothing(self):
-        from slotfather import leases, platform, query
+        from slotfather import leases, process, query
         pid, start = self.holder()
         cast(Any, self).queue_entry(self.state, pid, start, 1, "theirs", state="waiting")
-        with mock.patch.object(platform, "process_uid", return_value=os.geteuid() + 1), \
+        with mock.patch.object(process, "process_uid", return_value=os.geteuid() + 1), \
                 mock.patch.dict(os.environ, {"SLOTFATHER_DIR": str(self.state), "SLOTFATHER_LEGACY_DIRS": ""}):
             with self.assertRaisesRegex(sf_config.SlotError, "only its owner"):
                 leases.reprioritize(str(pid), "interactive", self.state)

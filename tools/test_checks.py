@@ -188,7 +188,6 @@ class WorkflowTests(unittest.TestCase):
         text = (ROOT / name / "pyproject.toml").read_text()
         self.assertRegex(text, r'(?m)^requires-python = ">=3\.\d+"(?:\s|$)', name)
 
-    @unittest.expectedFailure  # slotfather/pyproject.toml gains it in lane sf-38 (fathers#120)
     def test_slotfather_declares_requires_python(self) -> None:
         self.declares_requires_python("slotfather")
 

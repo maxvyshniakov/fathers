@@ -6,14 +6,17 @@ import math
 import time
 import sys
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 from . import config as _config
 from . import entry as _entry
 from . import idle as _idle
 from . import leases as _leases
+from . import lineage as _lineage
 from . import platform as _platform
+from . import process as _process
 from . import schedule as _schedule
+from . import settings as _settings
 from . import state as _state
 
 
@@ -55,7 +58,7 @@ def look(directory: Path | None = None) -> Look:
     with _state.locked(directory):
         table = _leases.process_table(directory, log=False)
         found = _leases.reap(directory, table)
-        basis: dict[str, Any] = _config.capacity_basis()
+        basis: dict[str, Any] = _settings.capacity_basis()
         requests = [_state.asked(path) for path, _ in found]
         strange = tuple(_state.unknown(directory))
         kept = tuple(_leases.reserved(directory, table))
@@ -77,7 +80,7 @@ def locked_snapshot(directory: Path | None = None) -> tuple[list[dict[str, Any]]
 def idle_of(directory: Path, live: list[tuple[Path, dict[str, Any]]]) -> dict[int, float | None]:
     """id(entry) -> since when each held lease has been idle (#12; idle.idle_since(), by the queue's saved
     settings), None where it is not."""
-    settings = _schedule.order_settings(directory, environment=False)
+    settings = _settings.order_settings(directory, environment=False)
     moment = time.time()
     return {id(entry): _idle.idle_since(path, settings, moment) for path, entry in live if _entry.is_held(entry)}
 
@@ -105,7 +108,7 @@ def expected(directory: Path, entries: list[dict[str, Any]], slots: int, other: 
     "memory_wait" (why memory holds back a request the order would start now, else None)}. Read only: the forecast
     works on copies (schedule.forecast())."""
     moment = time.time() if moment is None else moment
-    settings = _schedule.order_settings(directory)
+    settings = _settings.order_settings(directory)
     held, waiting = _entry.split(entries)
     waiters = [dict(e) for e in waiting]
     originals = {id(copy): e for copy, e in zip(waiters, waiting)}
@@ -120,7 +123,7 @@ def expected(directory: Path, entries: list[dict[str, Any]], slots: int, other: 
     # The order would start these now; memory may hold them back (grant()'s gate), with no start a forecast can tell.
     memory = _platform.memory_level() if found.grants else ("normal", None)
     used = sum(_entry.holds(e, slots) for e in held) + other
-    shared = _schedule.order_settings(directory, environment=False)  # the queue's rule, not this reader's
+    shared = _settings.order_settings(directory, environment=False)  # the queue's rule, not this reader's
     held_back = {id(e): why for e, why in _schedule.memory_gate(found.grants, held, used, memory, shared) if why}
     warn = float(settings.get("warn_wait") or 0)
     result: dict[int, dict[str, Any]] = {}
@@ -144,7 +147,7 @@ def status_lines(directory: Path | None = None) -> list[str]:
     with _state.locked(directory):  # the processes and capacity the plans of this moment read
         table = _leases.process_table(directory, log=False)
         live = _leases.reap(directory, table)
-        slots = _config.total()
+        slots = _settings.total()
         strange = _state.unknown(directory)
         kept = _leases.reserved(directory, table)
     legacy = _leases.legacy_holders(table)
@@ -202,7 +205,7 @@ def entry_item(path: Path, entry: dict[str, Any], table: dict[int, tuple[int, st
             "state": entry.get("state"), "count": entry.get("count"), "label": entry.get("label"),
             "pid": entry.get("pid"), "pgid": _platform.process_group(pid), "start": entry.get("start"),
             "since": entry.get("since"), "granted": entry.get("granted"), "cmd": entry.get("cmd"),
-            "cwd": entry.get("cwd"), "meta": _entry.meta_of(entry), "tree": _platform.descendants(table, pid),
+            "cwd": entry.get("cwd"), "meta": _entry.meta_of(entry), "tree": _lineage.descendants(table, pid),
             "priority": _entry.priority_of(entry), "ticket": _entry.ticket_of(entry),
             "yieldable": bool(entry.get("yieldable")), "yields": int(entry.get("yields") or 0)}
 
@@ -258,7 +261,7 @@ def long_wait_report(directory: Path, path: Path) -> tuple[str, dict[str, Any]] 
     with _state.locked(directory):
         table = _leases.process_table(directory, log=False)
         live = _leases.reap(directory, table)
-        slots = _config.total()
+        slots = _settings.total()
         other = _leases.used_elsewhere(directory, table)
     mine = next((e for p, e in live if p == path), None)
     if mine is None or _entry.is_held(mine):
@@ -266,7 +269,7 @@ def long_wait_report(directory: Path, path: Path) -> tuple[str, dict[str, Any]] 
     expect = outlook(directory, [e for _, e in live], slots, other).get(id(mine))
     if expect is None:
         return None
-    settings = _schedule.order_settings(directory)
+    settings = _settings.order_settings(directory)
     held, waiting = _entry.split(e for _, e in live)
     serving = _schedule.ranked(waiting, settings, time.time()) if settings["order"] == "backfill" else waiting
     ahead = next((n for n, e in enumerate(serving) if e is mine), 0)
@@ -347,7 +350,7 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
         with _state.locked(directory):
             table = status_processes(directory, pid)
             live = _leases.reap(directory, table)
-            slots = _config.total()
+            slots = _settings.total()
             strange = _state.unknown(directory)
             kept = _leases.reserved(directory, table)
         marked = idle_of(directory, live)
@@ -361,7 +364,7 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
             from .session import view
             item["session"] = view(path, entry)
         entries_found.append(item)
-    settings = _schedule.order_settings(directory)
+    settings = _settings.order_settings(directory)
     moment = time.time()
     waiting = [e for _, e in live if _entry.is_waiting(e)]
     serving = _schedule.ranked(waiting, settings, moment) if settings["order"] == "backfill" else waiting
@@ -395,24 +398,24 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
     for path, entry, count in earlier:
         legacy.append({"id": path.stem, "lease": str(path), "state": "held", "count": count,
                        "label": entry.get("label"), "pid": entry.get("pid"), "pgid": _platform.process_group(entry.get("pid")),
-                       "tree": _platform.descendants(table, entry.get("pid"))})
+                       "tree": _lineage.descendants(table, entry.get("pid"))})
     held = held_slots([entry for _, entry in live], [*earlier, *kept], slots)
     # Entries this client does not know, after the others: left alone; a live one's slots count as held (`holds`).
     entries_found += [unknown_item(path, entry, table) for path, entry in strange]
     found = {}
     if pid is not None:
-        from .procs import environment_leases
-        candidates = [item for item in entries_found if pid not in item["tree"]]
-        marked, _ = environment_leases([pid] if pid in table else [], candidates)
-        mine = []
-        for item in entries_found:
-            if pid in item["tree"]:
-                mine.append(dict(item, via="tree"))
-            elif item["lease"] in marked.get(pid, set()):
-                mine.append(dict(item, via="env"))
-        entries_found = mine
-        legacy = [dict(e, via="tree") for e in legacy if pid in e["tree"]]
+        # The one membership rule (process.lease_membership(), fathers#38): `procs` and the sweep decide the same way.
+        both: list[dict[str, Any]] = [*entries_found, *cast(list[dict[str, Any]], legacy)]
+        membership = _process.lease_membership(_lineage.parents_of(table),
+                                               [_process.Lease(str(item["lease"]), item["pid"], n < len(entries_found))
+                                                for n, item in enumerate(both)], [pid])
+        via = dict(membership.leases.get(pid, []))
+        mine = [(n < len(entries_found), {**item, "via": via[n]}) for n, item in enumerate(both) if n in via]
+        entries_found = [item for current, item in mine if current]
+        legacy = [item for current, item in mine if not current]
         found["query"] = {"pid": pid, "start": table[pid][1] if pid in table else None}
+        if membership.unknown:  # its environment cannot be read: in or out of the leases outside its tree is unknown
+            found["lease_unknown"] = membership.unknown
     return {"v": 2, "slots": slots, "held": held, "free": max(0, slots - held), "draining": draining(held, slots),
             "entries": entries_found,
             "legacy": legacy, **found}

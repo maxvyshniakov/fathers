@@ -95,7 +95,6 @@ only, Python 3.9 or later: install.py puts thin entry points in ~/.local/bin and
 from __future__ import annotations
 
 import json
-import math
 import os
 import sys
 from typing import Any
@@ -167,7 +166,8 @@ USAGE = ("usage: slotfather                     (in a terminal: the live dashboa
 
 def parse_count(value: str) -> int:
     if value == "all":
-        return _config.total()
+        from . import settings as _settings
+        return _settings.total()
     if not value.isdigit() or int(value) < 1:
         raise _config.SlotError(f"-n takes a positive count or all, not {value!r}")
     return int(value)
@@ -254,12 +254,12 @@ def yield_command(argv: list[str]) -> int:
     """`slotfather yield`, from inside a yieldable lease between two steps: yields if asked and returns once the
     lease is held again; returns at once when nothing asked. Exit 0 either way."""
     from . import leases as _leases
-    from . import platform as _platform
+    from . import process as _process
     from . import state as _state
     if argv:
         raise _config.SlotError("yield takes no arguments")
     _state.require_own(_config.state_dir(), "yield")
-    found = _leases.inherited_lease(_platform.processes())
+    found = _leases.inherited_lease(_process.processes())
     if found is None or found[0].parent.parent != _config.state_dir():
         raise _config.SlotError("yield runs inside a lease of this queue (SLOTFATHER_LEASE, or a holder among its ancestors)")
     if not _leases.yield_lease(found[0]):
@@ -352,8 +352,9 @@ def order_command(argv: list[str]) -> int:
     """`slotfather order [backfill|window] [--safety X] [--limit S] [--fallback S] [--overrun X] [--idle-cpu C]
     [--idle-after S] [--aging-batch S] [--aging-normal S] [--warn-wait S] [--warning-admits 1|0] | reset`; S is
     seconds or 30m, 1.5h."""
-    from . import schedule as _schedule
-    from . import state as _state
+    from . import durations as _durations
+    from . import leases as _leases
+    from . import settings as _settings
     directory = _config.state_dir()
     changes: dict[str, Any] = {}
     reset = False
@@ -366,7 +367,7 @@ def order_command(argv: list[str]) -> int:
         elif word.startswith("--") and word[2:].replace("-", "_") in _config.ORDER_KNOBS and argv:
             key = word[2:].replace("-", "_")
             try:
-                changes[key] = _config.parse_duration(argv.pop(0)) if key in _config.DURATION_KNOBS else \
+                changes[key] = _durations.clock(argv.pop(0)) if key in _config.DURATION_KNOBS else \
                     float(argv.pop(0))
             except ValueError:
                 raise _config.SlotError(f"{word} takes " + ("seconds, or a duration such as 30m or 1.5h"
@@ -378,8 +379,8 @@ def order_command(argv: list[str]) -> int:
     if reset and changes:
         raise _config.SlotError("order reset takes nothing else")
     if changes or reset:
-        _state.configure({"order.json": None if reset else changes})
-    saved = _schedule.order_settings(directory, environment=False)
+        _settings.configure({"order.json": None if reset else changes}, granted=_leases.grant_now)
+    saved = _settings.order_settings(directory, environment=False)
     moved = [k for k in _config.ORDER_DEFAULTS if k not in _config.ORDER_BASE + ("limit",)
              and saved[k] != _config.ORDER_DEFAULTS[k]]  # every slotfather knows `limit`
     if (changes or reset) and moved:
@@ -387,58 +388,33 @@ def order_command(argv: list[str]) -> int:
               f"(3e3a621 and older know no classes, those before ageing no aging or warn settings, those before "
               f"the memory warning allowance no warning_admits): their looks fall "
               f"back to the window order until they are updated", file=sys.stderr)
-    print(order_line(_schedule.order_settings(directory)))
+    print(order_line(_settings.order_settings(directory)))
     return 0
 
 
 def slots_value(argv: list[str]) -> dict[str, Any] | None:
-    """What `slots` saves: {"slots": N}, {"mode", "gib_per_slot", "slots"} or None for reset. The memory modes also
-    save the count they give now as "slots", which slotfather 0af7546 and older read alone."""
-    from . import platform as _platform
-    if len(argv) == 1 and argv[0] == "reset":
-        return None
-    if len(argv) == 1 and argv[0].isascii() and argv[0].isdigit() and int(argv[0]) >= 1:
-        return {"slots": int(argv[0])}
-    if len(argv) == 2 and argv[0] in _config.CAPACITY_MODES:
-        try:
-            per_slot = float(argv[1])
-        except ValueError:
-            per_slot = 0.0
-        if math.isfinite(per_slot) and per_slot > 0:
-            per_slot = int(per_slot) if per_slot.is_integer() else per_slot
-            # The cgroup is the saver's (SLOTFATHER_CGROUP, or its outermost limited one), not the one saved before.
-            group = (_config.setting("CGROUP") or _config.DEFAULT_CGROUP or _platform.limited_cgroup()) if _platform.linux() else None
-            if _platform.linux() and _platform.cgroup_limit(group) is None:
-                print("slotfather: note: no cgroup with a memory limit here or in SLOTFATHER_CGROUP: the count "
-                      "follows MemTotal, which a VM's balloon moves and which differs from what clients inside a "
-                      "limited cgroup see; name the cgroup the leases share (SLOTFATHER_CGROUP=/a.slice/b.slice, "
-                      "or install.py --cgroup)", file=sys.stderr)
-            by_memory = _config.memory_slots(_platform.memory_gib(group or ""), per_slot)
-            if by_memory is None:
-                raise _config.SlotError("the machine's memory is unknown here; save a count instead (slotfather slots N)")
-            cpu = max(1, _config.cores() // _config.CORES_PER_SLOT)
-            found = {"slots": by_memory if argv[0] == "memory" else min(cpu, by_memory), "mode": argv[0],
-                     "gib_per_slot": per_slot}
-            if _platform.cgroup_limit(group) is not None:
-                found["cgroup"] = group
-            return found
-    raise _config.SlotError("slots takes a positive integer, memory GIB or lower GIB (GiB per slot), or reset")
+    """What `slots` saves (settings.capacity_change()), its note on stderr."""
+    from . import settings as _settings
+    return _settings.capacity_change(argv, lambda note: print(note, file=sys.stderr))
 
 
 def slots_command(argv: list[str]) -> int:
+    from . import leases as _leases
+    from . import query as _query
+    from . import settings as _settings
     from . import state as _state
     directory = _config.state_dir()
-    from . import query as _query
     if argv:
         _state.require_own(directory, "a capacity change")
-        _state.configure({"capacity.json": slots_value(argv)})  # applies at the next grant, busy or not (#7)
+        # applies at the next grant, busy or not (#7)
+        _settings.configure({"capacity.json": slots_value(argv)}, granted=_leases.grant_now)
     live, legacy, _, found = _query.locked_snapshot(directory)
     held = _query.held_slots(live, legacy, int(found["slots"]))
     drain = _query.draining(held, found["slots"])
     if drain:
         print(f"slotfather: note: {held} slots held: draining {drain}; running work keeps its slots and nothing "
               f"more starts until at most {found['slots']} are held", file=sys.stderr)
-    print(_config.capacity_text(found))
+    print(_settings.capacity_text(found))
     return 0
 
 
@@ -471,7 +447,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(capabilities(), sort_keys=True))
             return 0
         if command == "settings":
-            from .settings import command as settings_command
+            from .settings_cli import command as settings_command
             return settings_command(rest)
         if command == "procs":
             from .procs import command as procs_command

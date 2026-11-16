@@ -8,8 +8,10 @@ import sys as _path_sys
 from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from slotfather import platform as sf_platform
+from slotfather import process as sf_process
 
 
+import importlib
 import json
 import os
 import pathlib
@@ -26,6 +28,8 @@ from test_slotfather import TOOL, SlotCase
 from test_usage import load
 
 sweep = load(TOOL + "-sweep", "slotfather_sweep_under_test")
+sweep_plan = importlib.import_module("slotfather.sweep_plan")  # the classifier and planner (fathers#38)
+sweep_os = importlib.import_module("slotfather.sweep_os")  # the adapters
 
 NOW = 1_800_000_000.0
 UID = 501
@@ -34,18 +38,18 @@ SETTINGS = {**sweep.DEFAULTS, "classes": list(sweep.CLASSES)}
 
 
 def proc(pid, ppid, cmd, age=36000.0, uid=UID, tty="", rss=10240):
-    return sweep.Proc(pid, ppid, uid, rss, tty, f"start-{pid}", NOW - age, cmd)
+    return sweep_plan.Proc(pid, ppid, uid, rss, tty, f"start-{pid}", NOW - age, cmd)
 
 
 def snap(procs, cwds=None, managed=(), gone=(), me=(999,)):
     """A snapshot of `procs`; directories listed in `gone` (and below them) do not exist."""
     def isdir(path):
         return not any(path == g or path.startswith(g.rstrip("/") + "/") for g in gone)
-    return sweep.Snapshot({p.pid: p for p in procs}, cwds or {}, managed, moment=NOW, uid=UID, me=me, isdir=isdir)
+    return sweep_plan.Snapshot({p.pid: p for p in procs}, cwds or {}, managed, moment=NOW, uid=UID, me=me, isdir=isdir)
 
 
 def plan(s, settings=None, **options):
-    return {i["pid"]: i for i in sweep.plan(s, settings or SETTINGS, **options)}
+    return {i["pid"]: i for i in sweep_plan.plan(s, settings or SETTINGS, **options)}
 
 
 SHELL = proc(50, 1, "/usr/bin/some-daemon")  # a live parent that is no session
@@ -82,27 +86,27 @@ class KindTests(unittest.TestCase):
         }
         for cmd, (orphan, dev) in cases.items():
             with self.subTest(cmd=cmd):
-                self.assertEqual(orphan, sweep.orphan_kind(cmd))
-                self.assertEqual(dev, sweep.dev_server_kind(cmd))
+                self.assertEqual(orphan, sweep_plan.orphan_kind(cmd))
+                self.assertEqual(dev, sweep_plan.dev_server_kind(cmd))
 
     def test_sessions_and_programs(self):
-        self.assertTrue(sweep.is_session(proc(1, 1, "/Users/m/.local/share/claude/versions/2.1.293 --resume")))
-        self.assertTrue(sweep.is_session(proc(1, 1, "/Users/m/Library/Application Support/Claude/claude-code/2.1/"
+        self.assertTrue(sweep_plan.is_session(proc(1, 1, "/Users/m/.local/share/claude/versions/2.1.293 --resume")))
+        self.assertTrue(sweep_plan.is_session(proc(1, 1, "/Users/m/Library/Application Support/Claude/claude-code/2.1/"
                                                       "x/claude.app/Contents/MacOS/claude --output-format x")))
-        self.assertTrue(sweep.is_session(proc(1, 1, "tmux new -s work")))
-        self.assertTrue(sweep.is_session(proc(1, 1, "vim notes.md", tty="ttys003")))
-        self.assertFalse(sweep.is_session(proc(1, 1, "node /w/claude/index.js")))
+        self.assertTrue(sweep_plan.is_session(proc(1, 1, "tmux new -s work")))
+        self.assertTrue(sweep_plan.is_session(proc(1, 1, "vim notes.md", tty="ttys003")))
+        self.assertFalse(sweep_plan.is_session(proc(1, 1, "node /w/claude/index.js")))
         self.assertEqual("/Applications/Google Chrome.app/Contents/MacOS/Google",
-                         sweep.program("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --x"))
-        self.assertEqual("node", sweep.program("node /x/Foo.app/Contents/a.js"))
+                         sweep_plan.program("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --x"))
+        self.assertEqual("node", sweep_plan.program("node /x/Foo.app/Contents/a.js"))
 
     def test_ps_lines_of_macos_and_procps(self):
-        found = sweep.parse_table(
+        found = sweep_os.parse_table(
             "  100     1   501  20480 ??       Wed Nov  4 01:00:00 2026     tail -f /x/a.output\n"
             "  101   100     0   1024 pts/0    Wed Nov  4 01:00:01 2026 /bin/bash\n"
             "  102   100  1000   1024 ?        Wed Nov  4 01:00:02 2026 \n"
             "garbage\n")
-        self.assertEqual(sweep.Proc(100, 1, 501, 20480, "", "Wed Nov 4 01:00:00 2026",
+        self.assertEqual(sweep_plan.Proc(100, 1, 501, 20480, "", "Wed Nov 4 01:00:00 2026",
                                     sf_platform.started_at("Wed Nov 4 01:00:00 2026"), "tail -f /x/a.output"), found[100])
         self.assertEqual(("pts/0", "/bin/bash"), (found[101].tty, found[101].cmd))
         self.assertEqual(("", ""), (found[102].tty, found[102].cmd))
@@ -120,8 +124,8 @@ class PlanTests(unittest.TestCase):
                   proc(104, 50, "node /opt/gone/x.js", age=700),
                   proc(105, 50, f"sh -c ls {HOME}/*-wt-shoot/static $HOME/x {gone}/$name/y", age=700),
                   proc(106, 50, f"zsh -c cd {HOME}/wt\\012d=/tmp\\012tools/lane check", age=700)],
-                 cwds={100: sweep.Cwd(f"{gone}", True), 101: sweep.Cwd(f"{gone}", True),
-                       103: sweep.Cwd("/w", False)},
+                 cwds={100: sweep_plan.Cwd(f"{gone}", True), 101: sweep_plan.Cwd(f"{gone}", True),
+                       103: sweep_plan.Cwd("/w", False)},
                  gone=(gone, "/opt/gone", f"{HOME}/wt\\012d="))  # what the glued words would name
         found = plan(s)
         self.assertEqual({100, 102}, set(found), "young (101), an existing parent (103), a path outside home and "
@@ -158,17 +162,17 @@ class PlanTests(unittest.TestCase):
                  proc(106, 1, "/Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/"
                               "Contents/MacOS/Python /work/server.py"),
                  proc(999, 1, "python3 slotfather-sweep")]
-        s = snap(procs, cwds={p.pid: sweep.Cwd(gone, True) for p in procs}, managed={102}, gone=(gone,))
+        s = snap(procs, cwds={p.pid: sweep_plan.Cwd(gone, True) for p in procs}, managed={102}, gone=(gone,))
         self.assertEqual({}, plan(s))
-        self.assertEqual("a launchd or systemd job", sweep.exempt(s.procs[102], s))
-        self.assertEqual("another user's", sweep.exempt(s.procs[103], s))
+        self.assertEqual("a launchd or systemd job", sweep_plan.exempt(s.procs[102], s))
+        self.assertEqual("another user's", sweep_plan.exempt(s.procs[103], s))
 
     def test_a_live_lease_spares_its_tree_its_carriers_and_trees_holding_them(self):
         gone = f"{HOME}/sweep-fixture-gone"
         procs = [SHELL, proc(100, 50, "sleep 300"), proc(101, 50, "sh -c x"), proc(102, 101, "sleep 300"),
                  proc(103, 1, "node /w/verify.mjs"), proc(104, 50, "sleep 1"),
                  proc(105, 50, "sh -c y"), proc(106, 105, "tmux new -s z")]
-        s = snap(procs, cwds={p.pid: sweep.Cwd(gone, True) for p in procs}, gone=(gone,))
+        s = snap(procs, cwds={p.pid: sweep_plan.Cwd(gone, True) for p in procs}, gone=(gone,))
         asked = []
 
         def carriers(pids):
@@ -196,8 +200,8 @@ class PlanTests(unittest.TestCase):
                  proc(140, 1, "node /w5/node_modules/.bin/vite", age=27 * 3600),
                  proc(141, 1, "/Users/m/.local/share/claude/versions/2.1.293"),
                  proc(150, 1, "node /w6/node_modules/.bin/vite", age=3600)]
-        cwds = {100: sweep.Cwd("/w", False), 121: sweep.Cwd("/w3", False), 140: sweep.Cwd("/w5", False),
-                141: sweep.Cwd("/w5", False)}
+        cwds = {100: sweep_plan.Cwd("/w", False), 121: sweep_plan.Cwd("/w3", False), 140: sweep_plan.Cwd("/w5", False),
+                141: sweep_plan.Cwd("/w5", False)}
         found = plan(snap(procs, cwds))
         self.assertEqual({100, 121}, set(found), "a terminal (111) or an IDE (131) above, a session in its checkout "
                                                  "(140) and a young server (150) are left")
@@ -212,8 +216,8 @@ class PlanTests(unittest.TestCase):
         procs = [proc(100, 1, "/Users/m/.agent-browser/bin/agent-browser daemon"),
                  proc(101, 1, "/Users/m/.local/share/claude/versions/2.1.293"),
                  proc(102, 1, "/Users/m/.agent-browser/bin/agent-browser daemon")]
-        cwds = {100: sweep.Cwd("/kit/wt-a", False), 101: sweep.Cwd("/kit/wt-a", False),
-                102: sweep.Cwd("/kit/wt-b", False)}
+        cwds = {100: sweep_plan.Cwd("/kit/wt-a", False), 101: sweep_plan.Cwd("/kit/wt-a", False),
+                102: sweep_plan.Cwd("/kit/wt-b", False)}
         found = plan(snap(procs, cwds), live=True)
         self.assertEqual("spared", found[100]["action"])
         self.assertIn("a session works in its checkout /kit/wt-a", found[100]["reason"])
@@ -223,7 +227,7 @@ class PlanTests(unittest.TestCase):
         gone = f"{HOME}/sweep-fixture-gone"
         procs = [SHELL, proc(100, 50, "sh -c verify"), proc(101, 100, "node x.js"),
                  proc(102, 1, "tail -f /x/a.output")]
-        s = snap(procs, cwds={100: sweep.Cwd(gone, True), 101: sweep.Cwd(gone, True)}, gone=(gone,))
+        s = snap(procs, cwds={100: sweep_plan.Cwd(gone, True), 101: sweep_plan.Cwd(gone, True)}, gone=(gone,))
         found = plan(s)
         self.assertEqual({100, 102}, set(found))
         self.assertEqual([100, 101], found[100]["tree"])
@@ -236,7 +240,7 @@ class PlanTests(unittest.TestCase):
         procs = [proc(40, 1, "/Users/m/Library/Application Support/Claude/claude-code/2.1/x/claude.app/Contents/"
                                 "MacOS/claude --output-format stream-json"),
                  proc(100, 40, "/bin/zsh -c source snapshot.sh && eval 'while :; do sleep 20; done'")]
-        found = plan(snap(procs, cwds={100: sweep.Cwd(gone, True)}, gone=(gone,)))
+        found = plan(snap(procs, cwds={100: sweep_plan.Cwd(gone, True)}, gone=(gone,)))
         self.assertEqual(40, found[100]["session"])
         self.assertIn("under live session pid 40 (claude)", found[100]["reason"])
 
@@ -255,9 +259,9 @@ class SessionTests(unittest.TestCase):
                  proc(104, 40, "/bin/zsh -c until ! pgrep -f v; do sleep 20; done", age=30 * 3600),
                  proc(105, 104, "ugrep -E FAIL", age=30 * 3600),
                  proc(110, 1, "/bin/zsh -c until ! pgrep -f w; do sleep 20; done", age=1 * 3600)]
-        cwds = {100: sweep.Cwd("/w", False), 101: sweep.Cwd(gone, True), 102: sweep.Cwd(gone, True),
-                104: sweep.Cwd(gone, True), 105: sweep.Cwd(gone, True), 110: sweep.Cwd(gone, True)}
-        seen = {sweep.gone_key(procs[2]): NOW - 7 * 3600, sweep.gone_key(procs[3]): NOW - 5 * 3600}
+        cwds = {100: sweep_plan.Cwd("/w", False), 101: sweep_plan.Cwd(gone, True), 102: sweep_plan.Cwd(gone, True),
+                104: sweep_plan.Cwd(gone, True), 105: sweep_plan.Cwd(gone, True), 110: sweep_plan.Cwd(gone, True)}
+        seen = {sweep_plan.gone_key(procs[2]): NOW - 7 * 3600, sweep_plan.gone_key(procs[3]): NOW - 5 * 3600}
         found = plan(snap(procs, cwds, gone=(gone, f"{wt}/scratch")), live=True, gone_since=seen)
         self.assertEqual({100: "spared", 101: "stop", 102: "spared", 104: "spared", 110: "stop"},
                          {pid: i["action"] for pid, i in found.items()},
@@ -278,7 +282,7 @@ class SessionTests(unittest.TestCase):
         gone = f"{HOME}/sweep-fixture-wt-gone"
         procs = [proc(40, 1, self.CLAUDE), proc(100, 40, "node mcp-server.js", age=30 * 3600),
                  proc(101, 40, "node language-server.js", age=30 * 3600)]
-        cwds = {40: sweep.Cwd(gone, True), 100: sweep.Cwd(gone, True), 101: sweep.Cwd(f"{gone}/src", True)}
+        cwds = {40: sweep_plan.Cwd(gone, True), 100: sweep_plan.Cwd(gone, True), 101: sweep_plan.Cwd(f"{gone}/src", True)}
         found = plan(snap(procs, cwds, gone=(gone,)), {**SETTINGS, "session_removed_age": 0}, live=True)
         self.assertEqual({100: "spared", 101: "spared"}, {pid: i["action"] for pid, i in found.items()})
         self.assertIn("the session works in the same removed directory", found[100]["reason"])
@@ -286,24 +290,24 @@ class SessionTests(unittest.TestCase):
     def test_the_state_keeps_when_a_cwd_was_first_seen_gone(self):
         gone = f"{HOME}/sweep-fixture-gone"
         procs = [proc(100, 1, "sleep 1"), proc(101, 1, "sleep 2"), proc(102, 1, "sleep 3", uid=0)]
-        s = snap(procs, {100: sweep.Cwd(gone, True), 101: sweep.Cwd(gone, True), 102: sweep.Cwd(gone, True)})
-        first = sweep.track_gone(s, {sweep.gone_key(procs[0]): NOW - 100, "999 old": NOW - 9})
-        self.assertEqual({sweep.gone_key(procs[0]): NOW - 100, sweep.gone_key(procs[1]): NOW}, first,
+        s = snap(procs, {100: sweep_plan.Cwd(gone, True), 101: sweep_plan.Cwd(gone, True), 102: sweep_plan.Cwd(gone, True)})
+        first = sweep_plan.track_gone(s, {sweep_plan.gone_key(procs[0]): NOW - 100, "999 old": NOW - 9})
+        self.assertEqual({sweep_plan.gone_key(procs[0]): NOW - 100, sweep_plan.gone_key(procs[1]): NOW}, first,
                          "kept from before, new ones now, gone processes and other users' dropped")
 
     def test_a_pgrep_wait_that_matches_its_own_command_line(self):
         shell = "/bin/zsh -c source snap.sh && eval 'until ! pgrep -f {} >/dev/null; do sleep 20; done; tail x'"
-        self.assertEqual("lane check 425-parity-table-1", sweep.self_matching(shell.format('"lane check 425-parity-table-1"')))
-        self.assertEqual("build-storybooks.sh", sweep.self_matching(shell.format("build-storybooks.sh")))
-        self.assertEqual("verify", sweep.self_matching("sh -c while pgrep -lf 'verify' > /dev/null; do sleep 1; done"))
-        self.assertIsNone(sweep.self_matching(shell.format('"[l]ane check 7"')), "the bracket trick matches no itself")
-        self.assertIsNone(sweep.self_matching("sh -c until ! pgrep node; do sleep 1; done"), "pgrep without -f")
-        self.assertIsNone(sweep.self_matching("pgrep -f lane"), "no loop")
+        self.assertEqual("lane check 425-parity-table-1", sweep_plan.self_matching(shell.format('"lane check 425-parity-table-1"')))
+        self.assertEqual("build-storybooks.sh", sweep_plan.self_matching(shell.format("build-storybooks.sh")))
+        self.assertEqual("verify", sweep_plan.self_matching("sh -c while pgrep -lf 'verify' > /dev/null; do sleep 1; done"))
+        self.assertIsNone(sweep_plan.self_matching(shell.format('"[l]ane check 7"')), "the bracket trick matches no itself")
+        self.assertIsNone(sweep_plan.self_matching("sh -c until ! pgrep node; do sleep 1; done"), "pgrep without -f")
+        self.assertIsNone(sweep_plan.self_matching("pgrep -f lane"), "no loop")
         procs = [proc(40, 1, self.CLAUDE), proc(100, 40, shell.format('"lane check 7"'), age=3600),
                  proc(101, 100, "sleep 20"), proc(102, 1, shell.format("x"), uid=0)]
         procs.append(proc(103, 40, shell.format('"lane check 7"'), age=60))
         procs.append(proc(104, 103, 'pgrep -f lane check 7'))
-        waits = sweep.self_matching_waits(snap(procs))
+        waits = sweep_plan.self_matching_waits(snap(procs))
         self.assertEqual([(100, "lane check 7", 3600, 40, [103]), (103, "lane check 7", 60, 40, [100])],
                          [(w["pid"], w["pattern"], w["age"], w["session"], w["matched_by"]) for w in waits],
                          "each finds the other; not itself, its children or a pgrep run")
@@ -317,16 +321,16 @@ class ReviewTests(unittest.TestCase):
     def test_lists_and_output_paths_are_no_removed_directory(self):
         gone = f"{HOME}/sweep-fixture-gone"
         isdir = (lambda path: not path.startswith(gone))
-        within = sweep.roots()
+        within = sweep_plan.roots()
         for cmd in (f"java -cp {HOME}/a.jar:{HOME}/b.jar Main", f"env NODE_PATH={HOME}/a:{HOME}/b node x.js",
                     f"PATH={HOME}/.local/bin:/usr/bin make", f"tool --paths={HOME}/x,{HOME}/y"):
-            self.assertEqual([], sweep.gone_paths(cmd, isdir, within), cmd)
-        self.assertEqual([f"{gone}/a/b"], sweep.gone_paths(f"x -cp {HOME}/a.jar:{gone}/a/b", isdir, within))
+            self.assertEqual([], sweep_plan.gone_paths(cmd, isdir, within), cmd)
+        self.assertEqual([f"{gone}/a/b"], sweep_plan.gone_paths(f"x -cp {HOME}/a.jar:{gone}/a/b", isdir, within))
         s = snap([SHELL, proc(100, 50, f"java -jar app.jar --out {gone}/new/dir/f", age=99 * 3600),
                   proc(101, 50, f"/usr/bin/nohup node server.js --data {gone}/db", age=99 * 3600),
                   proc(102, 50, f"node {gone}/node_modules/vitest/vitest.mjs run", age=99 * 3600),
                   proc(103, 50, "java -Dgradle GradleDaemon", age=99 * 3600)],
-                 cwds={103: sweep.Cwd(gone, True)}, gone=(gone,))
+                 cwds={103: sweep_plan.Cwd(gone, True)}, gone=(gone,))
         self.assertEqual({102: "removed", 103: "removed"}, {p: i["class"] for p, i in plan(s).items()},
                          "a path in argv counts only for dev kinds (102); a gone cwd for any process (103)")
 
@@ -337,17 +341,17 @@ class ReviewTests(unittest.TestCase):
         self.addCleanup(locked.chmod, 0o700)
         if os.geteuid() == 0:
             self.skipTest("root reads every directory")
-        self.assertIsNone(sweep.dir_state(str(locked / "inside")))
-        self.assertIsNone(sweep.removed_dir(str(locked / "inside"), 5))
-        self.assertTrue(sweep.removed_dir(str(locked.parent / "missing"), None))
-        self.assertFalse(sweep.dir_state(str(locked.parent / "missing")))
-        self.assertTrue(sweep.dir_state(str(locked.parent)))
-        self.assertFalse(sweep.removed_dir(str(locked.parent), os.stat(locked.parent).st_ino))
-        self.assertTrue(sweep.removed_dir(str(locked.parent), os.stat(locked.parent).st_ino + 1),
+        self.assertIsNone(sweep_plan.dir_state(str(locked / "inside")))
+        self.assertIsNone(sweep_plan.removed_dir(str(locked / "inside"), 5))
+        self.assertTrue(sweep_plan.removed_dir(str(locked.parent / "missing"), None))
+        self.assertFalse(sweep_plan.dir_state(str(locked.parent / "missing")))
+        self.assertTrue(sweep_plan.dir_state(str(locked.parent)))
+        self.assertFalse(sweep_plan.removed_dir(str(locked.parent), os.stat(locked.parent).st_ino))
+        self.assertTrue(sweep_plan.removed_dir(str(locked.parent), os.stat(locked.parent).st_ino + 1),
                         "another directory at the path now")
-        self.assertEqual([], sweep.gone_paths(f"vitest --root {locked}/inside/x", sweep.dir_state,
+        self.assertEqual([], sweep_plan.gone_paths(f"vitest --root {locked}/inside/x", sweep_plan.dir_state,
                                               (str(locked.parent) + "/",)))
-        s = snap([SHELL, proc(100, 50, "node verify.mjs")], {100: sweep.Cwd(str(locked / "inside"), None)})
+        s = snap([SHELL, proc(100, 50, "node verify.mjs")], {100: sweep_plan.Cwd(str(locked / "inside"), None)})
         self.assertEqual({}, plan(s))
 
     def tmp_dir(self):
@@ -372,46 +376,46 @@ class ReviewTests(unittest.TestCase):
         process(103, "/home/u/gone-but-not-said")
         procs = {pid: proc(pid, 1, "x") for pid in (100, 101, 102, 103)}
         with unittest.mock.patch.dict(os.environ, {"SLOTFATHER_PROC": str(fake)}):
-            cwds, notes, foreign = sweep.proc_cwds(procs, UID)
-        self.assertEqual(sweep.Cwd("/home/u/wt", True), cwds[100])
-        self.assertEqual(sweep.Cwd(str(real), False), cwds[101])
+            cwds, notes, foreign = sweep_os.proc_cwds(procs, UID)
+        self.assertEqual(sweep_plan.Cwd("/home/u/wt", True), cwds[100])
+        self.assertEqual(sweep_plan.Cwd(str(real), False), cwds[101])
         self.assertEqual({102}, foreign)
         self.assertNotIn(102, cwds)
-        self.assertEqual(sweep.Cwd("/home/u/gone-but-not-said", None), cwds[103],
+        self.assertEqual(sweep_plan.Cwd("/home/u/gone-but-not-said", None), cwds[103],
                          "a path the host cannot see is unknown, not gone")
         self.assertIn("1 process(es) in another mount namespace", notes[0])
-        s = sweep.Snapshot({102: proc(102, 1, "node verify.mjs")}, {}, moment=NOW, uid=UID, foreign={102})
-        self.assertEqual("in another mount namespace", sweep.exempt(s.procs[102], s))
+        s = sweep_plan.Snapshot({102: proc(102, 1, "node verify.mjs")}, {}, moment=NOW, uid=UID, foreign={102})
+        self.assertEqual("in another mount namespace", sweep_plan.exempt(s.procs[102], s))
 
     def test_services_of_the_user_manager_and_the_gui_domain(self):
-        self.assertEqual((True, "app.service"), sweep.service_of(
+        self.assertEqual((True, "app.service"), sweep_os.service_of(
             ["0::/user.slice/user-1000.slice/user@1000.service/app.slice/app.service"]))
-        self.assertEqual((False, "actions.runner.x.service"), sweep.service_of(
+        self.assertEqual((False, "actions.runner.x.service"), sweep_os.service_of(
             ["0::/ci.slice/ci-runners.slice/actions.runner.x.service"]))
-        self.assertIsNone(sweep.service_of(["0::/user.slice/user-1000.slice/session-3.scope"]))
+        self.assertIsNone(sweep_os.service_of(["0::/user.slice/user-1000.slice/session-3.scope"]))
         asked = []
 
         def run(command, **_):
             asked.append(command)
             return subprocess.CompletedProcess(command, 0, "4242\n", "")
-        self.assertEqual(4242, sweep.main_pid(True, "app.service", run))
+        self.assertEqual(4242, sweep_os.main_pid(True, "app.service", run))
         self.assertEqual(["systemctl", "--user", "show", "--property", "MainPID", "--value", "app.service"], asked[0])
-        sweep.main_pid(False, "x.service", run)
+        sweep_os.main_pid(False, "x.service", run)
         self.assertNotIn("--user", asked[1])
-        self.assertEqual(-1, sweep.main_pid(True, "x.service", lambda c, **_: subprocess.CompletedProcess(c, 1, "", "")))
+        self.assertEqual(-1, sweep_os.main_pid(True, "x.service", lambda c, **_: subprocess.CompletedProcess(c, 1, "", "")))
         printed = ("gui/501 = {\n\tservices = {\n\t\t    1329      - \tapplication.bt\n\t\t       0      0 \tidle\n"
                    "\t\t   65817   (pe) \tcom.apple.x\n\t}\n\tother = {\n\t\t  77 x\n\t}\n}\n")
-        self.assertEqual({1329, 65817}, sweep.launchd_pids(printed, "print"))
-        self.assertEqual({57462}, sweep.launchd_pids("PID\tStatus\tLabel\n57462\t-15\tcom.x\n-\t0\tcom.y\n", "list"))
+        self.assertEqual({1329, 65817}, sweep_os.launchd_pids(printed, "print"))
+        self.assertEqual({57462}, sweep_os.launchd_pids("PID\tStatus\tLabel\n57462\t-15\tcom.x\n-\t0\tcom.y\n", "list"))
 
     def test_a_runner_is_known_by_its_script_not_any_argument(self):
         for cmd in ("python3 -m http.server --directory /Users/m/tests", "node server.js --root /srv/e2e",
                     "bun run --cwd apps/x build", "python3 tool.py --suite test"):
-            self.assertIsNone(sweep.orphan_kind(cmd), cmd)
+            self.assertIsNone(sweep_plan.orphan_kind(cmd), cmd)
         for cmd in ("node /w/src/cli.mjs verify", "npm run test", "npm test", "bun test", "node --test",
                     "node --import tsx /w/a.test.ts", "make smoke", "sh -c ./verify.sh --checks x",
                     "deno run -A e2e.ts"):
-            self.assertEqual("runner", sweep.orphan_kind(cmd), cmd)
+            self.assertEqual("runner", sweep_plan.orphan_kind(cmd), cmd)
 
 
 class StopTests(unittest.TestCase):
@@ -466,8 +470,8 @@ class ReportTests(unittest.TestCase):
                     "State": {"Status": status, "Restarting": restarting, "StartedAt": started, "ExitCode": 1},
                     "HostConfig": {"RestartPolicy": {"Name": policy}},
                     "Config": {"Labels": {"com.docker.compose.project": "acme-demo"}}}
-        moment = sweep.docker_time("2027-01-15T08:00:00Z")
-        found = sweep.restart_loops([
+        moment = sweep_plan.docker_time("2027-01-15T08:00:00Z")
+        found = sweep_plan.restart_loops([
             container("acme-demo-app-1", 412),
             container("steady", 5, "running", False, started="2027-01-14T00:00:00Z"),
             container("few", 2),
@@ -483,15 +487,15 @@ class ReportTests(unittest.TestCase):
         s = snap([proc(100, 1, "tail -f x", rss=900 * 1024), proc(101, 50, "node gate.mjs", rss=2000 * 1024),
                   proc(102, 1, "Finder", rss=10 * 1024, uid=0)])
         items = [{"class": "orphan", "tree": [100]}]
-        calm = sweep.memory_report({"swap_total_mb": 8192, "swap_free_mb": 4000, "short": None}, s, SETTINGS, items,
+        calm = sweep_os.memory_report({"swap_total_mb": 8192, "swap_free_mb": 4000, "short": None}, s, SETTINGS, items,
                                    {101: "lane-7"})
         self.assertEqual((None, []), (calm["short"], calm["top"]))
-        short = sweep.memory_report({"swap_total_mb": 8192, "swap_free_mb": 1030, "short": None}, s,
+        short = sweep_os.memory_report({"swap_total_mb": 8192, "swap_free_mb": 1030, "short": None}, s,
                                     {**SETTINGS, "memory_top": 2}, items, {101: "lane-7"})
         self.assertIn("free swap 1030 of 8192 MB is under 1638 MB", short["short"], "20% of 8 GB")
         self.assertEqual([(101, 2000, "lease lane-7"), (100, 900, "orphan")],
                          [(t["pid"], t["rss_mb"], t["class"]) for t in short["top"]])
-        guard = sweep.memory_report({"swap_total_mb": None, "swap_free_mb": None, "short": "memory pressure level 4"},
+        guard = sweep_os.memory_report({"swap_total_mb": None, "swap_free_mb": None, "short": "memory pressure level 4"},
                                     s, SETTINGS, [], {})
         self.assertEqual(3, len(guard["top"]))
 
@@ -641,7 +645,7 @@ class LiveTests(SweepCase):
         self.assertTrue(self.alive(pid) and self.alive(holder.pid))
         lease = json.loads(self.tool("status", "--json").stdout)["entries"][0]["lease"]
         orphan = self.orphan("leased-orphan", {"SLOTFATHER_LEASE": lease})
-        if not sf_platform.carrying([orphan], lease):
+        if not sf_process.carrying([orphan], lease):
             self.skipTest("this host does not show the orphan's environment (an Apple platform python)")
         found = self.report("--live", "--pid", str(orphan))
         self.assertEqual([(orphan, "spared")], [(i["pid"], i["action"]) for i in found["items"]], found)

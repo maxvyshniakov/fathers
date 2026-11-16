@@ -12,6 +12,7 @@ import time
 
 from . import config as _config
 from . import entry as _entry
+from . import settings as _settings
 from . import state as _state
 
 
@@ -58,66 +59,9 @@ def overtakable(entry: dict, moment: float | None = None) -> bool:
     return queued is not None and (time.time() if moment is None else moment) - queued < _config.overtake_window()
 
 
-def order_settings(directory: Path | None = None, environment: bool = True) -> dict[str, Any]:
-    """The queue's order and backfill settings: order.json beside the queue (`slotfather order`), else
-    ORDER_DEFAULTS, with "saved" saying which. A client's environment only tightens them: SLOTFATHER_QUEUE=window
-    falls back to the window order, a higher SLOTFATHER_BACKFILL_SAFETY or _FALLBACK, a lower _OVERRUN and a lower
-    (nonzero) _LIMIT count; looser values are ignored, since every client's look grants for the whole queue. A file
-    that cannot be read gives the window order."""
-    found: dict[str, Any] = dict(_config.ORDER_DEFAULTS, saved=False)
-    try:
-        data = json.loads(((directory or _config.state_dir()) / "order.json").read_text())
-        found.update(checked_order(data), saved=True)
-    except FileNotFoundError:
-        pass
-    except (OSError, ValueError, TypeError, AttributeError):
-        found.update(order="window", saved=True)
-    if not environment:  # what every client shares; yield requests are decided on it alone
-        return found
-    if _config.setting("QUEUE") == "window":
-        found["order"] = "window"
-    for key, (name, least, tighten) in _config.ORDER_KNOBS.items():
-        try:
-            value = float(_config.setting(name) or "nan")
-        except ValueError:
-            continue
-        if not math.isfinite(value) or value < least:
-            continue
-        if tighten == "up":
-            found[key] = max(found[key], value)
-        elif tighten == "down":
-            found[key] = min(found[key], value)
-        elif tighten == "delay":  # 0 asks nobody (ages nobody), the tightest
-            found[key] = 0.0 if not value or not found[key] else max(found[key], value)
-        elif tighten == "own":  # decides nothing for other clients: this client's environment sets it
-            found[key] = value
-        elif value > 0:  # limit: 0 is no limit, the loosest
-            found[key] = value if not found[key] else min(found[key], value)
-    return found
-
-
-def checked_order(data: Any) -> dict[str, Any]:
-    """Saved order settings, validated: raises ValueError for anything `slotfather order` would refuse."""
-    if not isinstance(data, dict) or set(data) - set(_config.ORDER_DEFAULTS) or data.get("order", "backfill") not in \
-            _config.QUEUE_ORDERS:
-        raise ValueError(f"not order settings: {data!r}")
-    data = cast(dict[str, Any], data)
-    found: dict[str, Any] = {}
-    for key, value in data.items():
-        if key != "order":
-            least = _config.ORDER_KNOBS[key][1]
-            if type(value) not in (int, float) or not math.isfinite(value) or value < least:
-                raise ValueError(f"{key} must be a number of at least {least:g}, not {value!r}")
-            if key == "warning_admits" and value not in (0, 1):
-                raise ValueError(f"warning_admits must be 1 or 0, not {value!r}")
-        found[key] = value
-    return found
-
-
-
 def queue_order() -> str:
     """backfill (the default) or window, the order before #643."""
-    return order_settings()["order"]
+    return _settings.order_settings()["order"]
 
 
 def family(label: str | None) -> str:
@@ -410,9 +354,9 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
     unknown run keeps it the head), is no head: it would leave without running, so it holds nobody back. Nor is a
     batch waiter (deferring(); one that aged is normal) while a normal or interactive one waits (others_wait()),
     and a batch one for the whole machine does not start then; once none waits it is the head as any other.
-    `settings` are order_settings() unless given; `order` overrides theirs. The head's start is worked out when it
+    `settings` are _settings.order_settings() unless given; `order` overrides theirs. The head's start is worked out when it
     holds no reservation yet, when a request behind it fits, or with `reserve_head`."""
-    settings = settings or order_settings()
+    settings = settings or _settings.order_settings()
     order = order or settings["order"]
     estimate = estimate or no_estimate
     window = _config.overtake_window()
@@ -517,7 +461,7 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
 def shared_plan(found: Plan, waiters: list[Entry], held: list[Entry], slots: int, moment: float, estimate: Estimate,
                 other: int, settings: dict[str, Any], shared: dict[str, Any]) -> Plan:
     """The plan whose head keeps the reservations (reservations()): `found`, a plan by `settings`, when they are the
-    shared ones (order_settings(environment=False)), else a plan by the shared settings, so that a client whose
+    shared ones (_settings.order_settings(environment=False)), else a plan by the shared settings, so that a client whose
     environment tightens the order (SLOTFATHER_QUEUE=window, an ageing step it lengthens) neither drops nor resets
     the reservation every client's looks keep; a shared window order keeps none."""
     if all(settings.get(key) == shared.get(key) for key in _config.ORDER_DEFAULTS):
@@ -555,7 +499,7 @@ def yield_asks(waiters: list[Entry], held: list[Entry], slots: int, moment: floa
     their ids, first; then the lowest class; then the one expected to run longest), and only when grant() would
     then start it, with the asked holders back among the waiters at their own rank. Nobody is ever stopped: a
     holder yields when its client gets round to it, or not at all."""
-    settings = settings or order_settings()
+    settings = settings or _settings.order_settings()
     after = settings.get("yield_after") or 0
     if not after or settings["order"] != "backfill":
         return []
@@ -627,7 +571,7 @@ def idle_asks(waiters: list[Entry], held: list[Entry], idle: list[Entry], slots:
     cannot yield is only marked, and nobody is ever stopped: the holder yields when its client gets round to it."""
     if not waiters:
         return []
-    settings = settings or order_settings()
+    settings = settings or _settings.order_settings()
     holding = list(held)
     found: list[tuple[Entry, Entry]] = []
     for lease in idle:
@@ -683,7 +627,7 @@ def forecast(waiters: list[Entry], held: list[Entry], slots: int, moment: float,
     every end and every FORECAST_STEP seconds between them (windows end and waiters age meanwhile); the head keeps
     its reservation as grant() keeps it. Memory, yields and give-ups are left out. Slots held in an earlier queue
     have no known end: then only the waiters that start now are forecast."""
-    settings = settings or order_settings()
+    settings = settings or _settings.order_settings()
     estimate = estimate or no_estimate
     fallback, overrun = float(settings["fallback"]), float(settings["overrun"])
     ends: dict[int, float] = {}  # id(a running copy) -> when it is expected to end
@@ -742,7 +686,7 @@ def room(waiters: list[Entry], free: int, held: list[Entry] | None = None, estim
     if held is not None:  # the whole capacity: what grant() fits the waiters to
         fit(waiters, slots)
     moment = time.time()
-    settings = settings or order_settings()
+    settings = settings or _settings.order_settings()
     order = settings["order"] if held is not None else "window"
     for count in range(free, 0, -1):
         probe: Entry = {"count": count, "label": label, "cmd": command, "since": _config.now()}

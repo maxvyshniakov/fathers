@@ -11,6 +11,7 @@ from slotfather import config as sf_config
 from slotfather import entry as sf_entry
 from slotfather import leases as sf_leases
 from slotfather import schedule as sf_schedule
+from slotfather import settings as sf_settings
 from slotfather import state as sf_state
 
 
@@ -281,31 +282,31 @@ class SettingsTests(unittest.TestCase):
         loose = {"SLOTFATHER_PRIORITY_INTERACTIVE": "3600", "SLOTFATHER_PRIORITY_BATCH": "3600",
                  "SLOTFATHER_YIELD_AFTER": "30"}
         with mock.patch.dict(os.environ, loose):
-            found = sf_schedule.order_settings()
+            found = sf_settings.order_settings()
         self.assertEqual((1800, 1800, 120), (found["interactive"], found["batch"], found["yield_after"]))
         tight = {"SLOTFATHER_PRIORITY_INTERACTIVE": "600", "SLOTFATHER_PRIORITY_BATCH": "0",
                  "SLOTFATHER_YIELD_AFTER": "300"}
         with mock.patch.dict(os.environ, tight):
-            found = sf_schedule.order_settings()
+            found = sf_settings.order_settings()
         self.assertEqual((600, 0, 300), (found["interactive"], found["batch"], found["yield_after"]))
         with mock.patch.dict(os.environ, {"SLOTFATHER_YIELD_AFTER": "0"}):
-            self.assertEqual(0, sf_schedule.order_settings()["yield_after"])
-        sf_state.save_order({**sf_config.ORDER_DEFAULTS, "yield_after": 0})
+            self.assertEqual(0, sf_settings.order_settings()["yield_after"])
+        sf_settings.configure({"order.json": {**sf_config.ORDER_DEFAULTS, "yield_after": 0}})
         with mock.patch.dict(os.environ, {"SLOTFATHER_YIELD_AFTER": "60"}):
-            self.assertEqual(0, sf_schedule.order_settings()["yield_after"], "nothing asks earlier than never")
+            self.assertEqual(0, sf_settings.order_settings()["yield_after"], "nothing asks earlier than never")
 
     def test_the_saved_settings_alone_are_every_clients_view_for_asking(self):
         with mock.patch.dict(os.environ, {"SLOTFATHER_YIELD_AFTER": "0", "SLOTFATHER_QUEUE": "window"}):
-            self.assertEqual((0, "window"), (sf_schedule.order_settings()["yield_after"], sf_schedule.order_settings()["order"]))
-            saved = sf_schedule.order_settings(environment=False)
+            self.assertEqual((0, "window"), (sf_settings.order_settings()["yield_after"], sf_settings.order_settings()["order"]))
+            saved = sf_settings.order_settings(environment=False)
         self.assertEqual((120, "backfill"), (saved["yield_after"], saved["order"]))
 
     def test_class_knobs_are_saved_only_when_they_differ_from_their_defaults(self):
-        sf_state.save_order(dict(sf_config.ORDER_DEFAULTS))
+        sf_settings.configure({"order.json": dict(sf_config.ORDER_DEFAULTS)})
         self.assertEqual(set(sf_config.ORDER_BASE), set(json.loads((self.dir / "order.json").read_text())))
-        sf_state.save_order({**sf_config.ORDER_DEFAULTS, "batch": 600})
+        sf_settings.configure({"order.json": {**sf_config.ORDER_DEFAULTS, "batch": 600}})
         self.assertEqual(600, json.loads((self.dir / "order.json").read_text())["batch"])
-        self.assertEqual(600, sf_schedule.order_settings()["batch"])
+        self.assertEqual(600, sf_settings.order_settings()["batch"])
 
 
 class ProtocolTests(SlotCase):

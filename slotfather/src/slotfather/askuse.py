@@ -8,6 +8,7 @@ from typing import Any, Iterable
 
 from . import config as _config
 from . import schedule as _schedule
+from . import settings as _settings
 from . import state as _state
 
 RECENT = 20  # a family's last runs that count for the hint
@@ -83,7 +84,7 @@ def hint(directory: Path, label: str, count: int) -> str | None:
         return None
     name = _schedule.family(label)
     try:
-        fallback = _config.cores() / max(1, _config.total())
+        fallback = _config.cores() / max(1, _settings.total())
     except (_config.SlotError, OSError, ValueError):
         return None
     lines = _state.tail_objects(directory / "history.jsonl", TAIL)

@@ -70,47 +70,9 @@ def loads() -> tuple[float, float, float]:
     return os.getloadavg()
 
 
-def ps_environment() -> dict[str, str] | None:
-    """The environment ps runs in for processes(), whose lstart a new entry writes as its `start`: on Linux the C
-    locale (procps writes lstart in the locale's words; every client since #653 writes C there); macOS keeps the
-    caller's locale and time zone, as every older client does, so that an older client still reads a current
-    client's `start` exactly as it read its own (fathers#122). Current clients compare `started` instead."""
-    return c_locale() if sys.platform.startswith("linux") else None
-
-
 def c_locale() -> dict[str, str]:
     """This process's environment in the C locale, for a command whose output is parsed."""
     return {**os.environ, "LC_ALL": "C"}
-
-
-def processes() -> dict[int, tuple[int, str]]:
-    """Live pid -> (ppid, start time); the start time tells a reused pid from the holder. Zombies are dead. The same
-    ps flags serve macOS and Linux (procps-ng). Raises ProcessTableError for a ps that fails, takes longer than
-    PS_TIMEOUT, or gives a table without this process in it: such a table is no table, and reaping by it would
-    take every lease from commands that still run."""
-    try:
-        result = subprocess.run(["ps", "-axo", "pid=,ppid=,stat=,lstart="], capture_output=True, text=True,
-                                env=ps_environment(), timeout=_config.PS_TIMEOUT)
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise _config.ProcessTableError(f"ps: {error}") from None
-    if result.returncode:
-        raise _config.ProcessTableError(f"ps exited {result.returncode}: {result.stderr.strip()[:200]}")
-    table: dict[int, tuple[int, str]] = {}
-    for line in result.stdout.splitlines():
-        parts = line.split(None, 3)
-        if len(parts) == 4 and parts[0].isdigit() and parts[1].isdigit() and not parts[2].startswith("Z"):
-            table[int(parts[0])] = (int(parts[1]), parts[3].strip())
-    if os.getpid() not in table:
-        raise _config.ProcessTableError(f"ps listed {len(table)} processes and not this one ({os.getpid()})")
-    return table
-
-
-def ancestors(table: dict, pid: int) -> set[int]:
-    found = set()
-    while pid in table and pid not in found and pid > 1:
-        found.add(pid)
-        pid = table[pid][0]
-    return found
 
 
 def alive(entry: dict[str, Any], table: dict[int, tuple[int, str]]) -> bool:
@@ -495,55 +457,7 @@ def children_cpu(pid: int) -> float | None:
     return macos_process.children_cpu_seconds(pid)
 
 
-def usage_table() -> dict[int, tuple[int, str, int, int, float]]:
-    """Live pid -> (ppid, start, uid, resident KB, CPU seconds of its own), from one ps over the machine (on Linux
-    the CPU from /proc/PID/stat where it can be read). Raises SlotError when ps fails or takes longer than
-    PS_TIMEOUT."""
-    try:
-        result = subprocess.run(["ps", "-axo", "pid=,ppid=,uid=,rss=,time=,lstart="], capture_output=True,
-                                text=True, env=c_locale(), timeout=_config.PS_TIMEOUT)
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise _config.SlotError(f"ps: {error}") from None
-    table = {}
-    for line in result.stdout.splitlines():
-        parts = line.split(None, 5)
-        if len(parts) == 6 and all(p.isdigit() for p in parts[:4]):
-            cpu = cpu_seconds(parts[4])
-            if linux():
-                cpu = proc_cpu_seconds(int(parts[0])) or cpu
-            if cpu is not None:
-                table[int(parts[0])] = (int(parts[1]), parts[5].strip(), int(parts[2]), int(parts[3]), cpu)
-    return table
-
-
-def carrying(pids: list[int], lease: str) -> set[int]:
-    """Those of `pids` whose environment holds SLOTFATHER_LEASE=<lease>. macOS shows another process's environment
-    only for the user's own processes that are not platform binaries; Linux (/proc/PID/environ) only for the user's
-    own (all of them for root); the rest read as not carrying it."""
-    if not pids:
-        return set()
-    if linux():
-        wanted = ("SLOTFATHER_LEASE=" + lease).encode()
-        found = set()
-        for pid in pids:
-            with contextlib.suppress(OSError):
-                if wanted in proc_path(str(pid), "environ").read_bytes().split(b"\0"):
-                    found.add(pid)
-        return found
-    try:
-        result = subprocess.run(["ps", "-wwE", "-o", "pid=,command=", "-p", ",".join(map(str, pids))],
-                                capture_output=True, text=True, env=c_locale(), timeout=_config.PS_TIMEOUT)
-    except (OSError, subprocess.TimeoutExpired):
-        return set()
-    mark = " SLOTFATHER_LEASE=" + lease
-    found = set()
-    for line in result.stdout.splitlines():
-        pid, _, rest = line.strip().partition(" ")
-        at = (" " + rest).find(mark)
-        tail = (" " + rest)[at + len(mark):] if at >= 0 else None
-        if pid.isdigit() and tail is not None and (not tail or tail[0] == " "):
-            found.add(int(pid))
-    return found
+_host_port: int | None = None  # the Mach host port cpu_ticks() asks, looked up once
 
 
 def cpu_ticks() -> list[int] | None:
@@ -553,11 +467,11 @@ def cpu_ticks() -> list[int] | None:
         try:
             import ctypes
             libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
-            if _config._host_port is None:
+            if _host_port is None:
                 libc.mach_host_self.restype = ctypes.c_uint
-                _config._host_port = libc.mach_host_self()
+                _host_port = libc.mach_host_self()
             counts, size = (ctypes.c_uint * 4)(), ctypes.c_uint(4)
-            if libc.host_statistics(_config._host_port, 3, counts, ctypes.byref(size)) == 0:  # HOST_CPU_LOAD_INFO
+            if libc.host_statistics(_host_port, 3, counts, ctypes.byref(size)) == 0:  # HOST_CPU_LOAD_INFO
                 return list(counts)
         except (OSError, AttributeError):
             return None
@@ -569,36 +483,8 @@ def cpu_ticks() -> list[int] | None:
     return None
 
 
-def process_uid(pid: object) -> int | None:
-    """The real uid a live process runs as, or None when it is not running or cannot be inspected."""
-    if type(pid) is not int or pid < 1:
-        return None
-    try:
-        result = subprocess.run(["ps", "-o", "uid=", "-p", str(pid)], capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    words = result.stdout.split()
-    return int(words[0]) if result.returncode == 0 and len(words) == 1 and words[0].isdigit() else None
-
-
 def process_group(pid) -> int | None:
     try:
         return os.getpgid(pid)
     except (OSError, TypeError):
         return None
-
-
-def descendants(table: dict, pid) -> list[int]:
-    """`pid` and its live descendants, from a processes() table; [] when `pid` is not live."""
-    if pid not in table:
-        return []
-    children = {}
-    for child, (parent, _) in table.items():
-        children.setdefault(parent, []).append(child)
-    found, stack = [], [pid]
-    while stack:
-        here = stack.pop()
-        if here not in found:
-            found.append(here)
-            stack.extend(children.get(here, ()))
-    return sorted(found)

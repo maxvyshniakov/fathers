@@ -9,12 +9,13 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
 import sys
 from typing import Any, NamedTuple, cast
 
 from . import config, platform, state
+from . import lineage as _lineage
+from . import process as _process
 from . import entry as _entry
 
 
@@ -31,10 +32,6 @@ class Process(NamedTuple):
     cmd: str
 
 
-_SESSION = re.compile(r"(^|/)(claude|codex|CodexCLI|tmux|screen|zellij|mosh-server|sshd|sshd-session|login|"
-                      r"Runner\.Listener|Runner\.Worker)$|/claude/versions/[^/]+$")
-
-
 def read_processes(pid: int | None = None, required: set[int] | None = None) -> dict[int, Process]:
     """One locale-stable process table; failure is never an empty answer."""
     if sys.platform == "darwin" and pid is not None:
@@ -43,16 +40,14 @@ def read_processes(pid: int | None = None, required: set[int] | None = None) -> 
             return {number: Process(*process) for number, process in snapshot(pid, required or set()).items()}
         except (OSError, ValueError, AttributeError):
             pass  # Unsupported native ABI or required identity: use the full ps adapter.
-    argv = ["ps", "-ax", "-ww", "-o", "pid=,ppid=,uid=,tty=,stat=,lstart=,command="]
     try:
-        result = subprocess.run(argv, capture_output=True, text=True, timeout=5,
-                                env=platform.c_locale())
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise ProcsError(f"cannot read processes: {error}") from None
-    if result.returncode:
-        raise ProcsError(f"ps exited {result.returncode}: {result.stderr.strip()[:200]}")
+        rows = _process.table(["-ax", "-ww", "-o", _process.MEMBERS], caller=False, env=platform.c_locale(),
+                              timeout=5)
+    except _process.PsError as error:
+        message = str(error) if error.detail.startswith("ps ") else f"cannot read processes: {error.detail}"
+        raise ProcsError(message) from None
     found: dict[int, Process] = {}
-    for line in result.stdout.splitlines():
+    for line in rows:
         parts = line.split(None, 10)
         if len(parts) < 10 or not all(value.isdigit() for value in parts[:3]):
             continue
@@ -68,19 +63,11 @@ def read_processes(pid: int | None = None, required: set[int] | None = None) -> 
 
 def ancestors(processes: dict[int, Process], pid: int) -> list[int]:
     """Nearest parent first; cycles and PID 1 end the chain."""
-    found: list[int] = []
-    seen = {pid}
-    parent = processes[pid].ppid if pid in processes else 0
-    while parent > 1 and parent in processes and parent not in seen:
-        seen.add(parent)
-        found.append(parent)
-        parent = processes[parent].ppid
-    return found
+    return _lineage.ancestors({number: process.ppid for number, process in processes.items()}, pid)
 
 
 def session(process: Process) -> bool:
-    executable = (process.cmd.split() or [""])[0]
-    return bool(process.tty or _SESSION.search(executable))
+    return _lineage.session_command(process.cmd, process.tty)
 
 
 def lease_entries(directory: Path | None = None,
@@ -177,39 +164,6 @@ def read_cwds(processes: dict[int, Process], uid: int) -> dict[int, str]:
     return found
 
 
-def environment_leases(pids: list[int], leases: list[dict[str, Any]]) -> tuple[dict[int, set[str]], list[int]]:
-    """Read only lease markers; environment contents are never retained or returned."""
-    found: dict[int, set[str]] = {}
-    if not pids or not leases:
-        return found, []
-    paths = {str(lease["lease"]) for lease in leases}
-    if sys.platform.startswith("linux"):
-        proc = Path(os.environ.get("SLOTFATHER_PROC", "/proc"))
-        unknown: list[int] = []
-        for number in pids:
-            try:
-                fields = (proc / str(number) / "environ").read_bytes().split(b"\0")
-            except OSError:
-                unknown.append(number)
-                continue
-            found[number] = {path for path in paths if os.fsencode("SLOTFATHER_LEASE=" + path) in fields}
-        return found, unknown
-    try:
-        result = subprocess.run(["ps", "-wwE", "-o", "pid=,command=", "-p", ",".join(map(str, pids))],
-                                capture_output=True, text=True, env=platform.c_locale(), timeout=5)
-    except (OSError, subprocess.TimeoutExpired):
-        return found, pids
-    if result.returncode:
-        return found, pids
-    for line in result.stdout.splitlines():
-        number, _, rest = line.strip().partition(" ")
-        if number.isdigit() and int(number) in pids:
-            found[int(number)] = {path for path in paths if f" SLOTFATHER_LEASE={path} " in f" {rest} "}
-    # ps may print command text while suppressing a protected process's entire
-    # environment. No matched marker is an unknown result, never proof of absence.
-    return found, sorted(number for number in pids if not found.get(number))
-
-
 def query(pid: int | None = None, cwd: str | None = None, directory: Path | None = None) -> dict[str, Any]:
     """Observe processes; ``--pid`` is exact and does not scan working directories."""
     strange: list[tuple[Path, dict[str, Any], bool]] = []
@@ -237,21 +191,19 @@ def query(pid: int | None = None, cwd: str | None = None, directory: Path | None
                          if process.uid == os.geteuid() and number not in cwds and number not in own)
         selected = [number for number in selected if processes[number].uid == os.geteuid() and number not in own
                     and number in cwds and (cwds[number] == cwd or cwds[number].startswith(cwd.rstrip("/") + "/"))]
-    chains = {number: ancestors(processes, number) for number in selected}
-    detached = [number for number in selected if not any(lease["pid"] in [number, *chains[number]] for lease in leases)]
-    marked, lease_unknown = environment_leases(detached, leases)
+    parents = {number: process.ppid for number, process in processes.items()}
+    membership = _process.lease_membership(parents, [_process.Lease(str(lease["lease"]), lease["pid"])
+                                                     for lease in leases], selected, detached_only=True)
     records: list[dict[str, Any]] = []
     for number in selected:
         process = processes[number]
-        chain = chains[number]
+        chain = _lineage.ancestors(parents, number)
         records.append({**process._asdict(), "cwd": cwds.get(number), "ancestors": chain,
                         "sessions": [{"pid": item, "start": processes[item].start, "cmd": processes[item].cmd}
                                      for item in [number, *chain] if session(processes[item])],
-                        "leases": [{**lease, "via": "tree" if lease["pid"] in [number, *chain] else "env"}
-                                   for lease in leases if lease["pid"] in [number, *chain]
-                                   or lease["lease"] in marked.get(number, set())]})
+                        "leases": [{**leases[index], "via": via} for index, via in membership.leases.get(number, [])]})
     return {"v": 2, "query": {"pid": pid, "cwd": cwd, "start": processes[pid].start if pid in processes else None},
-            "cwd_unknown": unknown, "lease_unknown": lease_unknown, "processes": records, "warnings": warnings}
+            "cwd_unknown": unknown, "lease_unknown": membership.unknown, "processes": records, "warnings": warnings}
 
 
 USAGE = "usage: slotfather procs --json [--pid PID] [--cwd PATH]"

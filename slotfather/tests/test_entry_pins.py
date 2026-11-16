@@ -28,7 +28,9 @@ from slotfather import config as sf_config
 from slotfather import events as sf_events
 from slotfather import leases as sf_leases
 from slotfather import platform as sf_platform
+from slotfather import process as sf_process
 from slotfather import query as sf_query
+from slotfather import settings as sf_settings
 from slotfather import state as sf_state
 
 FIXTURE = _Path(__file__).resolve().parent / "fixtures" / "entry-pins.json"
@@ -104,11 +106,11 @@ class Queue:
             stack.callback(time.tzset)
             stack.enter_context(mock.patch("time.time", lambda: self.clock))
             stack.enter_context(mock.patch.object(sf_config, "now", lambda: stamp(self.clock)))
-            stack.enter_context(mock.patch.object(sf_config, "capacity_basis", lambda: dict(BASIS)))
-            stack.enter_context(mock.patch.object(sf_platform, "processes", lambda: dict(self.table)))
+            stack.enter_context(mock.patch.object(sf_settings, "capacity_basis", lambda: dict(BASIS)))
+            stack.enter_context(mock.patch.object(sf_process, "processes", lambda: dict(self.table)))
             stack.enter_context(mock.patch.object(sf_query, "status_processes", self.processes))
             stack.enter_context(mock.patch.object(sf_platform, "start_epoch", unknown))
-            stack.enter_context(mock.patch.object(sf_platform, "process_uid", own_uid))
+            stack.enter_context(mock.patch.object(sf_process, "process_uid", own_uid))
             stack.enter_context(mock.patch.object(sf_platform, "process_group", unknown))
             stack.enter_context(mock.patch.object(sf_leases.uuid, "uuid4", self.uuid))
             stack.enter_context(mock.patch.object(sf_events, "moment", lambda: stamp(self.clock)))

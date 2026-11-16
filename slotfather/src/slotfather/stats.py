@@ -18,11 +18,9 @@ imported from HOST (`slotfather history import HOST`). It only reads; it lives a
 """
 from __future__ import annotations
 
-import datetime
 import fnmatch
 import json
 from pathlib import Path
-import re
 import sys
 import time
 from typing import Any, Iterable, cast
@@ -31,8 +29,10 @@ from typing import Any, Iterable, cast
 from . import askuse as _askuse
 from . import runtype as _runtype
 from . import config as _config
+from . import durations as _durations
 from . import entry as _entry
 from . import schedule as _schedule
+from . import settings as _settings
 from . import state as _state
 
 
@@ -60,16 +60,11 @@ kind = _schedule.kind  # the command kind the queue's run-time estimates use too
 
 
 def parse_since(text: str, moment: float | None = None) -> float:
-    """An age (90m, 36h, 7d) before now, or a local ISO date or time, as epoch seconds."""
-    moment = time.time() if moment is None else moment
-    age = re.fullmatch(r"(\d+(?:\.\d+)?)([smhd])", text.strip())
-    if age:
-        return moment - float(age[1]) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[age[2]]
+    """--since: an age (90m, 36h, 7d) before now, or a local ISO date or time, as epoch seconds (durations.since())."""
     try:
-        value = datetime.datetime.fromisoformat(text.strip().replace("Z", "+00:00"))
+        return _durations.since(text, moment)
     except ValueError:
         raise StatsError(f"--since takes an age like 36h or 7d or a date like 2026-11-02, not {text!r}") from None
-    return value.timestamp()  # a naive value is local time
 
 
 def wall_of(item: dict) -> float | None:
@@ -260,11 +255,11 @@ def summarize(directory: Path | None = None, since: float | None = None, label: 
         rows.append({**row, **usage_of(members)})
     rows.sort(key=lambda r: (-r["slot_hours"], -r["requests"]))
     try:
-        capacity, saved = _config.capacity()
+        capacity, saved = _settings.capacity()
     except _config.SlotError:
-        capacity, saved = _config.automatic_capacity(), False
+        capacity, saved = _settings.automatic_capacity(), False
     cores = _config.cores()
-    automatic = _config.automatic_capacity()
+    automatic = _settings.automatic_capacity()
     if host is not None:
         capacity = automatic = recorded_capacity(items, capacity)
         seen = [i["cores"] for i in items if isinstance(i.get("cores"), int) and i["cores"] > 0]

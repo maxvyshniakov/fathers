@@ -11,6 +11,8 @@ from slotfather import cli as sf_cli
 from slotfather import config as sf_config
 from slotfather import leases as sf_leases
 from slotfather import platform as sf_platform
+from slotfather import process as sf_process
+from slotfather import settings as sf_settings
 from slotfather import usage as sf_usage
 
 
@@ -173,7 +175,7 @@ class CgroupTests(unittest.TestCase):
 
     def test_capacity_follows_the_slice_and_saves_it_for_every_client(self):
         with mock.patch.dict(os.environ, self.environment(SLOTFATHER_CORES="16"), clear=True):
-            self.assertEqual(2, sf_config.capacity_basis()["slots"], "automatic: the lower of 5 by cores and 10 GiB / 4")
+            self.assertEqual(2, sf_settings.capacity_basis()["slots"], "automatic: the lower of 5 by cores and 10 GiB / 4")
             saved = sf_cli.slots_value(["memory", "5"])
         self.assertEqual({"slots": 2, "mode": "memory", "gib_per_slot": 5, "cgroup": SLICE}, saved)
         (self.dir / "capacity.json").write_text(json.dumps(saved))
@@ -181,10 +183,10 @@ class CgroupTests(unittest.TestCase):
         with mock.patch.dict(os.environ, clean_environment(SLOTFATHER_PROC=str(PROC / "calm"), SLOTFATHER_CORES="6",
                                                            SLOTFATHER_CGROUP_ROOT=str(CGROUP / "calm"),
                                                            SLOTFATHER_DIR=str(self.dir)), clear=True):
-            found = sf_config.capacity_basis()
+            found = sf_settings.capacity_basis()
             self.assertEqual((2, 10.0, SLICE), (found["slots"], found["memory_gib"], found["cgroup"]))
             self.assertEqual(SLICE, sf_platform.memory_cgroup())
-            self.assertEqual(f"2 slots (saved: one per 5 GiB of 10 GiB in {SLICE})", sf_config.capacity_text(found))
+            self.assertEqual(f"2 slots (saved: one per 5 GiB of 10 GiB in {SLICE})", sf_settings.capacity_text(found))
 
     def test_the_guard_reads_the_slices_headroom_and_pressure(self):
         cases = {"calm": None, "cached": None,
@@ -216,13 +218,13 @@ class CapacityMathTests(unittest.TestCase):
         if saved is not None:
             (self.dir / "capacity.json").write_text(json.dumps(saved))
         with mock.patch.dict(os.environ, clean_environment(SLOTFATHER_DIR=str(self.dir), **values), clear=True):
-            return sf_config.capacity_basis()
+            return sf_settings.capacity_basis()
 
     def test_memory_counts_in_whole_gib_and_gives_at_least_one_slot(self):
-        self.assertEqual([3, 2, 4, 1, 1, None], [sf_config.memory_slots(11.68, 4), sf_config.memory_slots(11.68, 5),
-                                                 sf_config.memory_slots(11.68, 2.5), sf_config.memory_slots(1.6, 4),
-                                                 sf_config.memory_slots(0.2, 4), sf_config.memory_slots(None, 4)])
-        self.assertEqual(8, sf_config.memory_slots(32, 4))
+        self.assertEqual([3, 2, 4, 1, 1, None], [sf_settings.memory_slots(11.68, 4), sf_settings.memory_slots(11.68, 5),
+                                                 sf_settings.memory_slots(11.68, 2.5), sf_settings.memory_slots(1.6, 4),
+                                                 sf_settings.memory_slots(0.2, 4), sf_settings.memory_slots(None, 4)])
+        self.assertEqual(8, sf_settings.memory_slots(32, 4))
 
     def test_the_automatic_capacity_is_the_lower_of_the_cpu_and_memory_budgets(self):
         cases = {("12", "32"): 4, ("6", "11.68"): 2, ("16", "11.68"): 3, ("12", "64"): 4, ("4", "2"): 1,
@@ -374,7 +376,7 @@ class LinuxEnvironmentTests(unittest.TestCase):
             (proc / str(pid)).mkdir()
             (proc / str(pid) / "environ").write_bytes(environ.encode())
         with mock.patch.dict(os.environ, clean_environment(SLOTFATHER_PROC=str(proc)), clear=True):
-            self.assertEqual({101}, sf_platform.carrying([101, 102, 103, 104], lease))
+            self.assertEqual({101}, sf_process.carrying([101, 102, 103, 104], lease))
 
     @unittest.skipUnless(LINUX, "Linux /proc")
     def test_a_real_process_carrying_the_lease_is_found(self):
@@ -382,16 +384,16 @@ class LinuxEnvironmentTests(unittest.TestCase):
                                  env={**os.environ, "SLOTFATHER_LEASE": "/probe/lease"})
         self.addCleanup(lambda: (child.kill(), child.wait()))
         with mock.patch.dict(os.environ, clean_environment(), clear=True):
-            self.assertEqual({child.pid}, sf_platform.carrying([child.pid, os.getpid()], "/probe/lease"))
+            self.assertEqual({child.pid}, sf_process.carrying([child.pid, os.getpid()], "/probe/lease"))
 
     @unittest.skipUnless(LINUX, "Linux procps")
     def test_procps_gives_the_tables_the_queue_and_the_sampler_read(self):
         child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
         self.addCleanup(lambda: (child.kill(), child.wait()))
-        table = sf_platform.processes()
+        table = sf_process.processes()
         self.assertEqual(os.getpid(), table[child.pid][0])
         self.assertIsNotNone(sf_platform.started_at(table[child.pid][1]), table[child.pid][1])
-        usage = sf_platform.usage_table()
+        usage = sf_process.usage_table()
         self.assertEqual((os.getpid(), os.getuid()), (usage[child.pid][0], usage[child.pid][2]))
         self.assertGreater(usage[child.pid][3], 0, "resident KB")
         self.assertIsNotNone(sf_platform.proc_cpu_seconds(os.getpid()))
@@ -425,7 +427,7 @@ class ReviewCgroupTests(unittest.TestCase):
         (self.dir / "capacity.json").write_text(json.dumps({"slots": 2, "mode": "memory", "gib_per_slot": 5,
                                                             "cgroup": SLICE}))
         with mock.patch.dict(os.environ, self.env(proc="ballooned", SLOTFATHER_CORES="6"), clear=True):
-            self.assertEqual(2, sf_config.capacity_basis()["slots"], "10 GiB of the slice, not 4 of MemTotal")
+            self.assertEqual(2, sf_settings.capacity_basis()["slots"], "10 GiB of the slice, not 4 of MemTotal")
             os.environ["SLOTFATHER_MIN_AVAILABLE_MB"] = "4096"
             self.assertEqual("available memory 3072 MB is under 4096 MB", sf_platform.memory_short(),
                              "MemTotal's MemAvailable stays in the admission guard")

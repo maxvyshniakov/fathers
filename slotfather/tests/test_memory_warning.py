@@ -10,7 +10,7 @@ _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from slotfather import config as sf_config
 from slotfather import entry as sf_entry
 from slotfather import leases as sf_leases
-from slotfather import platform as sf_platform
+from slotfather import process as sf_process
 from slotfather import query as sf_query
 from slotfather import schedule as sf_schedule
 
@@ -98,7 +98,7 @@ class GrantTests(SlotCase):
     def grant(self, memory: str, **env: str) -> str | None:
         self.memory.write_text(memory + "\n")
         with mock.patch.dict(os.environ, {**self.env, **env}, clear=True):
-            return sf_leases.grant(self.state, sf_platform.processes())
+            return sf_leases.grant(self.state, sf_process.processes())
 
     def state_of(self, path: _Path) -> str:
         return json.loads(path.read_text())["state"]
@@ -201,11 +201,11 @@ class GrantTests(SlotCase):
         first, second = self.entry("first", 1), self.entry("second", 1)
         with mock.patch.dict(os.environ, clean_environment(**{**env, "SLOTFATHER_PROC": str(PROC / "thrashing")}),
                              clear=True):
-            self.assertIn("PSI full avg10 12%", sf_leases.grant(self.state, sf_platform.processes()) or "")
+            self.assertIn("PSI full avg10 12%", sf_leases.grant(self.state, sf_process.processes()) or "")
         self.assertEqual("waiting", self.state_of(first))
         with mock.patch.dict(os.environ, clean_environment(**{**env, "SLOTFATHER_PROC": str(PROC / "stalled")}),
                              clear=True):
-            self.assertEqual(WARNING, sf_leases.grant(self.state, sf_platform.processes()))
+            self.assertEqual(WARNING, sf_leases.grant(self.state, sf_process.processes()))
         self.assertEqual(("held", "waiting"), (self.state_of(first), self.state_of(second)))
 
 

@@ -40,15 +40,25 @@ try:
     from slotfather import entry as fields  # the entry accessors (fathers#33)
 except ImportError:
     fields = config  # an older client's
+try:
+    from slotfather import process as tables  # the process tables (fathers#38)
+except ImportError:
+    tables = platform  # an older client's
+try:
+    from slotfather import settings as shared  # the shared settings (fathers#34)
+except ImportError:
+    shared = None
+# an older client's: schedule and config hold them (its settings module, if any, is the `settings` command)
+orders, capacities = (shared, shared) if hasattr(shared, "order_settings") else (schedule, config)
 assert pathlib.Path(config.__file__).resolve().parent.parent == root, config.__file__
 directory, action = pathlib.Path(sys.argv[2]), sys.argv[3]
 if action == "look":
     with state.locked(directory):
-        live = leases.reap(directory, platform.processes())
+        live = leases.reap(directory, tables.processes())
     held = [e for _, e in live if e["state"] == "held"]
     waiters = [e for _, e in live if e["state"] != "held"]
-    settings = schedule.order_settings(directory)
-    slots = config.total()
+    settings = orders.order_settings(directory)
+    slots = capacities.total()
     ranks = {e["label"]: schedule.rank_time(e, settings) for e in waiters}
     found = schedule.plan(schedule.fit(waiters, slots), held, slots, float(sys.argv[4]),
                           estimate=schedule.estimator(directory), other=0, settings=settings)
@@ -60,7 +70,7 @@ if action == "look":
            "lines": [line.split(" pid=")[0] for line in query.status_lines(directory)]}
 elif action == "grant":
     with state.locked(directory):
-        leases.grant(directory, platform.processes())
+        leases.grant(directory, tables.processes())
     out = {e["label"]: e["state"] for _, e in state.entries(directory)}
 else:
     raise SystemExit("unknown action " + action)

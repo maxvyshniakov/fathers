@@ -15,7 +15,10 @@ from typing import Any, cast
 from . import config as _config
 from . import entry as _entry
 from . import idle as _idle
+from . import lineage as _lineage
 from . import platform as _platform
+from . import process as _process
+from . import settings as _settings
 from . import state as _state
 
 
@@ -37,7 +40,7 @@ class TreeUsage:
         self.uid = os.getuid() if uid is None else uid
         self.root_start = None
         self.root_gone = False  # set once wait4 has reaped the command: its pid may then be another process
-        self.members = {}  # (pid, start) -> [own CPU seconds at the last sample, attached]
+        self.members: dict[tuple[int, str], list[Any]] = {}  # (pid, start) -> [own CPU seconds at the last sample, attached]
         self.checked = set()  # (pid, start) of launchd children already considered
         self.detached_gone = 0.0
         self.processes = self.samples = 0
@@ -58,7 +61,7 @@ class TreeUsage:
                     fresh.append(pid)
         return fresh
 
-    def observe(self, moment: float, table: dict, adopted: set[int] | None = None) -> None:
+    def observe(self, moment: float, table: dict[int, tuple[Any, ...]], adopted: set[int] | None = None) -> None:
         """Takes in one process table. `adopted` are the candidates() of this table that carry the lease; without
         it observe asks `marked` itself."""
         if adopted is None:
@@ -70,22 +73,14 @@ class TreeUsage:
                 cpu, attached = self.members.pop(key)
                 if not attached:
                     self.detached_gone += cpu
-        children = {}
-        for pid, row in table.items():
-            children.setdefault(row[0], []).append(pid)
+        children = _lineage.children_of(_lineage.parents_of(table))
 
-        def tree(roots) -> set[int]:
-            found, stack = set(), [p for p in roots if p in table]
-            while stack:
-                pid = stack.pop()
-                if pid not in found:
-                    found.add(pid)
-                    stack.extend(children.get(pid, ()))
-            return found
+        def tree(roots: list[int]) -> set[int]:
+            return set(_lineage.tree(children, roots, table.__contains__))
 
         if self.root_start is None and self.root in table and not self.root_gone:
             self.root_start = table[self.root][1]
-        attached = set() if self.root_gone or self.root not in table or table[self.root][1] != self.root_start \
+        attached: set[int] = set() if self.root_gone or self.root not in table or table[self.root][1] != self.root_start \
             else tree([self.root])
         adopted = {pid for pid in adopted if pid in table}
         detached = tree([pid for pid, _ in self.members if pid not in attached] + list(adopted)) - attached
@@ -139,7 +134,7 @@ class Watch(threading.Thread):
 
     def observe(self) -> None:
         """One look at the tree. The ps calls run outside the lock, so finish() never waits on a slow ps for it."""
-        moment, table = time.time(), _platform.usage_table()
+        moment, table = time.time(), _process.usage_table()
         with self.lock:
             fresh = self.usage.candidates(table)
         adopted = self.usage.marked(fresh) if fresh else set()
@@ -159,8 +154,7 @@ class Watch(threading.Thread):
         usage = cast(Any, self.usage)
         if self.entry is None or usage.last is None:
             return
-        from . import schedule as _schedule
-        threshold = float(_schedule.order_settings(self.directory, environment=False)["idle_cpu"])
+        threshold = float(_settings.order_settings(self.directory, environment=False)["idle_cpu"])
         with self.lock:
             moment = float(usage.last[0])
             known = cast(dict[tuple[int, str], list[Any]], usage.members)
@@ -231,7 +225,7 @@ def machine_facts(directory: Path) -> dict:
                         cgroup_available_mb=None if linux_facts["cgroup_available"] is None
                         else round(linux_facts["cgroup_available"]))
     with contextlib.suppress(_config.SlotError):
-        item["capacity"] = _config.total()
+        item["capacity"] = _settings.total()
     return item
 
 

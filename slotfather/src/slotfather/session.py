@@ -29,11 +29,13 @@ from types import FrameType
 from typing import Any, cast
 
 from . import config as _config
+from . import durations as _durations
 from . import entry as _entry
 from . import events as _events
 from . import facts as _facts
 from . import leases as _leases
 from . import platform as _platform
+from . import process as _process
 from . import state as _state
 
 IDLE_DEFAULT = 120.0  # seconds without an active run before a session releases its slots
@@ -106,7 +108,7 @@ def parse_start(argv: list[str]) -> dict[str, Any]:
             spec["name"] = option_value(argv, at)
         elif word in ("--idle", "--expect", "--wait"):
             try:
-                value = _config.parse_duration(option_value(argv, at))
+                value = _durations.clock(option_value(argv, at))
             except ValueError:
                 raise _config.SlotError(f"{word} takes seconds or a duration such as 30m") from None
             if value <= 0:
@@ -141,7 +143,7 @@ def start(argv: list[str]) -> int:
     spec = parse_start(argv)
     directory = _config.state_dir()
     _state.require_own(directory, "a session")
-    if _leases.inherited_lease(_platform.processes()) is not None:
+    if _leases.inherited_lease(_process.processes()) is not None:
         raise _config.SlotError("a session cannot start inside a lease: it would wait for the slots its caller holds")
     with _state.locked(directory):  # the process table of this moment: one taken earlier would reap new waiters
         found = find(_leases.reap(directory, _leases.process_table(directory)), spec["name"])
@@ -234,7 +236,7 @@ class Holder:
             table = None
             if full:
                 with contextlib.suppress(_config.SlotError):  # no table to trust: no run is pruned this time
-                    table = _platform.processes()
+                    table = _process.processes()
             if full:
                 pruned = time.monotonic()
             with _state.locked(directory):
@@ -321,7 +323,7 @@ def stop(argv: list[str]) -> int:
         if found is None:
             raise _config.SlotError(f"no session {name} in this queue")
         path, entry = found
-        if _platform.process_uid(entry.get("pid")) != os.geteuid():
+        if _process.process_uid(entry.get("pid")) != os.geteuid():
             raise _config.SlotError(f"session {name} (pid {entry.get('pid')}) is another user's")
         os.kill(int(entry["pid"]), signal.SIGTERM)
     said = False
@@ -372,7 +374,7 @@ def run_inside(name: str, argv: list[str], label: str | None = None, meta: dict[
                 if found is None:
                     raise _config.SlotError(f"no session {name} in this queue (slotfather session start --label {name})")
                 path, entry = found
-                if _platform.process_uid(entry.get("pid")) != os.geteuid():
+                if _process.process_uid(entry.get("pid")) != os.geteuid():
                     raise _config.SlotError(f"session {name} (pid {entry.get('pid')}) is another user's")
                 if entry["session"].get("stopping"):
                     raise _config.SlotError(f"session {name} is stopping: it starts no more runs")

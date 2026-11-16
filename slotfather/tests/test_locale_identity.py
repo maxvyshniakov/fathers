@@ -18,6 +18,7 @@ from typing import Any
 
 from slotfather import leases as sf_leases
 from slotfather import platform as sf_platform
+from slotfather import process as sf_process
 from test_slotfather import SlotCase
 
 LOCALES = ("ru_RU.UTF-8", "de_DE.UTF-8")
@@ -62,7 +63,7 @@ class SameHolderTests(unittest.TestCase):
         epoch = sf_platform.start_epoch(me)
         if epoch is None:
             self.skipTest("this system gives no start in epoch seconds")
-        shown = sf_platform.processes()[me][1]
+        shown = sf_process.processes()[me][1]
         self.assertTrue(sf_platform.same_holder("Thu Jan  1 00:00:00 1970", epoch, me, shown),
                         "an entry from a client in another locale or time zone")
         self.assertFalse(sf_platform.same_holder(shown, epoch + 5, me, shown), "a recycled pid with equal words")
@@ -70,7 +71,7 @@ class SameHolderTests(unittest.TestCase):
 
     def test_without_started_the_words_decide(self) -> None:
         me = os.getpid()
-        shown = sf_platform.processes()[me][1]
+        shown = sf_process.processes()[me][1]
         self.assertTrue(sf_platform.same_holder(shown, None, me, shown))
         self.assertTrue(sf_platform.same_holder("", None, me, shown))
         self.assertFalse(sf_platform.same_holder("Thu Jan  1 00:00:00 1970", None, me, shown))

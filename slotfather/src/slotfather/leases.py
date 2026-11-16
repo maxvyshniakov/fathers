@@ -19,9 +19,12 @@ from . import entry as _entry
 from . import events as _events
 from . import facts as _facts
 from . import idle as _idle
+from . import lineage as _lineage
 from . import platform as _platform
+from . import process as _process
 from . import query as _query
 from . import schedule as _schedule
+from . import settings as _settings
 from . import state as _state
 
 
@@ -32,7 +35,7 @@ _skipping: list[str] = []  # the reason this process last logged a skipped look 
 
 
 def process_table(directory: Path, log: bool = True) -> Table:
-    """platform.processes() for a look that reaps or sweeps the queue at `directory`. When ps gives no table that
+    """process.processes() for a look that reaps or sweeps the queue at `directory`. When ps gives no table that
     can be trusted (config.ProcessTableError, a SlotError) the look reaps nothing and this raises; the caller skips
     that pass (a waiter's next look tries again). With `log`, a look that changes the queue says so in queue.log
     and the event log once per failure streak of this process (`skipped reaping`, reap.skipped), and once when ps
@@ -40,7 +43,7 @@ def process_table(directory: Path, log: bool = True) -> Table:
     must not flood the log a lasting failure fills already (fathers#121 review)."""
     own = _state.foreign_owner(directory) is None
     try:
-        table = _platform.processes()
+        table = _process.processes()
     except _config.ProcessTableError as error:
         if log and own and not _skipping:
             _skipping.append(str(error))
@@ -74,7 +77,8 @@ def reap(directory: Path, table: Table) -> list[tuple[Path, dict[str, Any]]]:
             path.with_suffix(".session").unlink(missing_ok=True)  # a session's runs (session.py)
             _state.log(directory, f"reaped {entry.get('state')} lease of {entry.get('count')} for "
                            f"{entry.get('label')} (pid {entry.get('pid')} exited)")
-            item = _state.record(directory, entry, _entry.outcome(entry, reaped=True), path=path)
+            item = _state.record(directory, entry, _entry.outcome(entry, reaped=True), path=path,
+                                 capacity=_settings.total, above=run_above)
             _events.emit(directory, "lease.reaped" if _entry.is_held(entry) else "request.reaped",
                          _events.request(entry, path),
                          {"count": entry.get("count"), "ran": item.get("ran"), "waited": item.get("waited"),
@@ -89,7 +93,7 @@ def legacy_holders(table: Table) -> list[tuple[Path, dict[str, Any], int]]:
     for directory in _config.legacy_dirs():
         for path, entry in _state.entries(directory):
             if _entry.is_held(entry) and _platform.alive(entry, table):
-                found.append((path, entry, min(_config.total(), math.ceil(entry["count"] * _config.total() / _config.LEGACY_TOTAL))))
+                found.append((path, entry, min(_settings.total(), math.ceil(entry["count"] * _settings.total() / _config.LEGACY_TOTAL))))
     return found
 
 
@@ -120,7 +124,7 @@ def ask(directory: Path, live: list[tuple[Path, dict[str, Any]]], held: list[dic
     the saved ones without this client's environment, so that every client's look asks alike (a waiter whose
     client asks later or never says so on its entry)."""
     paths = {id(e): path for path, e in live}
-    moment, slots = time.time(), _config.total()
+    moment, slots = time.time(), _settings.total()
     wanted = _schedule.yield_asks(waiters, held, slots, moment, estimate, other, settings,
                         asked=[e for e in held if _state.marker(paths[id(e)]).exists()])
     asks = {id(h): w for h, w in wanted}
@@ -195,7 +199,7 @@ def ask_yield(pid: int, start: str, directory: Path | None = None) -> tuple[dict
         before = _state.asked(path)
         if before is not None and any(p.stem == before.get("by") and _entry.is_waiting(e) for p, e in live):
             return entry, before, True  # a request that stands; one naming a waiter gone is replaced below
-        settings = _schedule.order_settings(directory, environment=False)
+        settings = _settings.order_settings(directory, environment=False)
         moment = time.time()
         own = CLASS_RANK[_entry.priority_of(entry)]  # its own class, as schedule.yield_asks() compares it
         waiters = [(p, e) for p, e in live if _entry.is_waiting(e)]
@@ -208,7 +212,7 @@ def ask_yield(pid: int, start: str, directory: Path | None = None) -> tuple[dict
                 continue
             behind = _schedule.rank_time(waiter, settings, moment) + _config.YIELD_BEHIND
             trial = _schedule.plan([*(e for e in ranked), _entry.trial_yielded(entry, behind)], held,
-                                   _config.total(), moment, estimate=_schedule.estimator(directory),
+                                   _settings.total(), moment, estimate=_schedule.estimator(directory),
                                    other=used_elsewhere(directory, table), settings=settings)
             if any(g is waiter for g in trial.grants):
                 chosen = waiter
@@ -244,13 +248,13 @@ def yield_lease(path: Path, out=sys.stderr) -> bool:
             return False
         live = reap(directory, process_table(directory))
         asker = next((e for p, e in live if p.stem == request.get("by") and _entry.is_waiting(e)), None)
-        settings = _schedule.order_settings(directory, environment=False)
+        settings = _settings.order_settings(directory, environment=False)
         behind = _schedule.rank_time(asker, settings, time.time()) + _config.YIELD_BEHIND if asker is not None else None
         if asker is not None:  # would the asker start? Things may have changed since it asked.
             table = process_table(directory)
             held = [e for p, e in live if _entry.is_held(e) and p != path]
             waiters = [e for p, e in live if _entry.is_waiting(e)] + [_entry.trial_yielded(entry, behind)]
-            trial = _schedule.plan(waiters, held, _config.total(), time.time(), estimate=_schedule.estimator(directory),
+            trial = _schedule.plan(waiters, held, _settings.total(), time.time(), estimate=_schedule.estimator(directory),
                          other=used_elsewhere(directory, table), settings=settings)
             if not any(e is asker for e in trial.grants):
                 asker = None
@@ -309,7 +313,7 @@ def reprioritize(target: str, priority: str, directory: Path | None = None,
             raise _config.SlotError(f"no request in the queue has pid or label {target}")
         me = os.geteuid()
         for _, entry in chosen:
-            owner = _platform.process_uid(entry.get("pid"))
+            owner = _process.process_uid(entry.get("pid"))
             if owner != me:
                 raise _config.SlotError(f"{entry.get('label')} (pid {entry.get('pid')}) runs as uid {owner}: only its "
                                         f"owner may change its priority")
@@ -361,6 +365,18 @@ def held_again(path: Path) -> None:
         time.sleep(min(poll, max(0.0, look - time.monotonic())))
 
 
+def run_above(ran: float, p90: Any) -> bool:
+    """runtype.above(), for state.record(): loaded only when a run is judged, never on admission."""
+    from . import runtype as _runtype
+    return _runtype.above(ran, p90)
+
+
+def grant_now(directory: Path) -> None:
+    """Grant what a settings change lets start, as a release does (settings.configure()'s `granted`); callers hold
+    the queue lock."""
+    grant(directory, process_table(directory))
+
+
 def grant(directory: Path, table: Table) -> str | None:
     """Grant the waiters plan() starts, in their order, that memory lets start (schedule.memory_gate()); then ask yieldable holders to yield for
     interactive waiters that still wait (yield_asks()). Returns why the first that does not start still waits."""
@@ -369,15 +385,15 @@ def grant(directory: Path, table: Table) -> str | None:
     paths = {id(e): path for path, e in live}
     estimate = _schedule.estimator(directory)
     other = used_elsewhere(directory, table)
-    slots = _config.total()
+    slots = _settings.total()
     moment = time.time()
-    settings = _schedule.order_settings(directory)
+    settings = _settings.order_settings(directory)
     found = _schedule.plan(_schedule.fit(waiters, slots), held, slots, moment, estimate=estimate, other=other,
                  settings=settings)
     # The head's reservation, kept on its entry so that the next look promises no later start; others hold none.
     # Every client keeps it by the shared settings, whatever its environment (shared_plan()).
     keeper = _schedule.shared_plan(found, waiters, held, slots, moment, estimate, other, settings,
-                                   _schedule.order_settings(directory, environment=False))
+                                   _settings.order_settings(directory, environment=False))
     used = sum(_entry.holds(e, slots) for e in held) + other
     memory = _platform.memory_level() if found.grants else ("normal", None)
     gated = _schedule.memory_gate(found.grants, held, used, memory, settings)
@@ -417,7 +433,7 @@ def grant(directory: Path, table: Table) -> str | None:
         return short
     rest = [e for e in waiters if not any(e is g for g in found.grants)]
     with contextlib.suppress(OSError, _config.SlotError):
-        ask(directory, live, held + found.grants, rest, estimate, other, _schedule.order_settings(directory, environment=False))
+        ask(directory, live, held + found.grants, rest, estimate, other, _settings.order_settings(directory, environment=False))
     return found.reason
 
 
@@ -474,7 +490,8 @@ class Lease:
                     entry = cast(dict[str, Any], entry)
                     outcome = _entry.outcome(entry)  # a yielded lease ran
                     item = _state.record(directory, entry, outcome, self.status, self.usage,
-                                         path=self.path, expected=expected)
+                                         path=self.path, expected=expected, capacity=_settings.total,
+                                         above=run_above)
                     if outcome == "released":
                         _events.emit(directory, "lease.released", _events.request(entry, self.path),
                                      {"count": self.count, "exit": item.get("status"), "ran": item.get("ran"),
@@ -503,7 +520,7 @@ class Lease:
 
 def inherited_lease(table: Table) -> tuple[Path, dict[str, Any], int] | None:
     """The held lease this process runs under, here or in an earlier queue: (path, entry, slots here)."""
-    mine = _platform.ancestors(table, os.getpid())
+    mine = {os.getpid(), *_lineage.ancestors(_lineage.parents_of(table), os.getpid())}
     own = _config.setting("LEASE")
     for path, entry in _state.entries(_config.state_dir()):
         mine_now = _entry.phase(entry).name in (_entry.HELD, _entry.YIELDED)  # a yielded lease is still this tree's
@@ -568,9 +585,9 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
     selected_priority = priority if priority is not None else "normal"
     selected_ticket = _entry.checked_ticket(ticket)
     if policy() == "bypass":
-        return Lease(_config.total())
+        return Lease(_settings.total())
     directory = _config.state_dir()
-    table = _platform.processes()
+    table = _process.processes()
     found = inherited(table)
     if found:
         return found
@@ -586,7 +603,7 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
     with _state.locked(directory):
         # Admission and capacity changes share this lock; resolve all only now (and again at the grant: plan()).
         if session is not None:
-            fresh = _platform.processes()
+            fresh = _process.processes()
             for _, other in _state.entries(directory):
                 spec = other.get("session")
                 same = isinstance(spec, dict) and cast(dict[str, Any], spec).get("name") == session["name"]
@@ -595,10 +612,10 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
                                             f"{other.get('state')}): stop it first (slotfather session stop "
                                             f"{session['name']})")
         whole = count == "all"
-        count = _config.total() if whole else min(count, _config.total())
+        count = _settings.total() if whole else min(count, _settings.total())
         sequence = next_sequence(directory)
         path = directory / "queue" / f"{sequence:010d}-{me}.json"
-        own = _schedule.order_settings(directory)["yield_after"]
+        own = _settings.order_settings(directory)["yield_after"]
         entry = _entry.new_request(
             me, table.get(me, (0, ""))[1], count, label, command, cwd, _config.now(), selected_priority,
             uuid.uuid4().hex, started=_platform.start_epoch(me), ticket=selected_ticket, whole=whole, meta=meta,
@@ -606,7 +623,7 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
             # when this client gives up (plan(): a head that would give up before its expected start holds nobody back)
             until=None if wait is None else time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + wait)),
             # this client asks later or never (SLOTFATHER_YIELD_AFTER)
-            yield_after=own if own != _schedule.order_settings(directory, environment=False)["yield_after"] else None)
+            yield_after=own if own != _settings.order_settings(directory, environment=False)["yield_after"] else None)
         _state.write(path, entry)
     lease = Lease(count, path, yieldable=yieldable)
     deadline = None if wait is None else time.monotonic() + wait
@@ -640,7 +657,7 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
                 return lease
             if deadline is not None and time.monotonic() >= deadline:
                 raise _config.SlotTimeout(f"no {count} slot(s) within {wait:g} s: {waiting or 'earlier requests first'}")
-            warn = float(_schedule.order_settings(directory).get("warn_wait") or 0)
+            warn = float(_settings.order_settings(directory).get("warn_wait") or 0)
             if warn and time.monotonic() - queued >= warn and (warned is None or
                                                               time.monotonic() - warned >= _config.WARN_REPEAT):
                 warned = time.monotonic()
@@ -693,7 +710,7 @@ def execute(argv: list[str], environment: dict[str, str], background: bool = Fal
     if marker is not None:
         text = str(marker)
         def carrying(pids: list[int]) -> set[int]:
-            return _platform.carrying(pids, text)
+            return _process.carrying(pids, text)
         watch = _usage.Watch(_usage.TreeUsage(child.pid, time.time() - 1, carrying), marker.parent.parent, entry=marker)
     elif directory is not None:
         watch = _usage.Watch(_usage.TreeUsage(child.pid, time.time() - 1), directory)

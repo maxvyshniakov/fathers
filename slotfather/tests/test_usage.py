@@ -7,6 +7,7 @@ from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from slotfather import config as sf_config
 from slotfather import platform as sf_platform
+from slotfather import process as sf_process
 from slotfather import state as sf_state
 from slotfather import usage as sf_usage
 
@@ -156,9 +157,11 @@ class WatchTests(unittest.TestCase):
         return watch
 
     def patch(self, name, value):
-        patcher = mock.patch.object(sf_usage if name == "sample_machine" else sf_platform, name, value)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for module in [sf_usage] if name == "sample_machine" else [sf_platform, sf_process]:
+            if name in vars(module):  # ps runs in process, sysctl in platform (fathers#38)
+                patcher = mock.patch.object(module, name, value)
+                patcher.start()
+                self.addCleanup(patcher.stop)
 
     def test_the_environment_query_runs_outside_the_lock(self):
         held = []
@@ -188,9 +191,9 @@ class WatchTests(unittest.TestCase):
             self.assertEqual(sf_config.PS_TIMEOUT, kwargs.get("timeout"))
             raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
         self.patch("subprocess", mock.Mock(run=stalled, TimeoutExpired=subprocess.TimeoutExpired))
-        self.assertEqual(set(), sf_platform.carrying([1, 2], "/lease"))
+        self.assertEqual(set(), sf_process.carrying([1, 2], "/lease"))
         with self.assertRaises(sf_config.SlotError):
-            sf_platform.usage_table()
+            sf_process.usage_table()
         self.assertIsNone(sf_platform.sysctl("kern.memorystatus_level"))
 
     def test_the_sampler_thread_leaves_signals_to_the_holder(self):
@@ -241,7 +244,7 @@ class RunUsageTests(SlotCase):
         self.addCleanup(probe.wait)
         self.addCleanup(probe.kill)
         time.sleep(0.3)
-        if probe.pid not in sf_platform.carrying([probe.pid], "/probe"):
+        if probe.pid not in sf_process.carrying([probe.pid], "/probe"):
             self.skipTest(f"ps shows no environment for {sys.executable} on this host")
         result = self.tool("run", "--label", "daemon", "--", "sh", "-c", '( "$PY" -c "$BURN" 0.5 & ); sleep 1.5')
         self.assertEqual(0, result.returncode, result.stderr)
@@ -264,6 +267,14 @@ class RunUsageTests(SlotCase):
         self.assertEqual(["outer"], [item["label"] for item in self.history()])
 
 
+def four() -> int:
+    return 4
+
+
+def never(ran: float, p90: object) -> bool:
+    return False
+
+
 class BoundedHistoryTests(SlotCase):
     def test_history_rotates_into_one_older_file_and_reads_across_both(self):
         self.state.mkdir(parents=True)
@@ -271,7 +282,8 @@ class BoundedHistoryTests(SlotCase):
         sf_config.HISTORY_MAX = 2000
         self.addCleanup(setattr, sf_config, "HISTORY_MAX", original)
         for n in range(40):
-            sf_state.record(self.state, {"label": f"r{n}", "count": 1, "since": "2026-11-03T00:00:00Z"}, "left")
+            sf_state.record(self.state, {"label": f"r{n}", "count": 1, "since": "2026-11-03T00:00:00Z"}, "left",
+                            capacity=four, above=never)
         current, older = self.state / "history.jsonl", self.state / "history.jsonl.1"
         self.assertTrue(older.exists())
         self.assertLessEqual(current.stat().st_size if current.exists() else 0, 2000)
@@ -284,7 +296,7 @@ class BoundedHistoryTests(SlotCase):
     def test_a_torn_line_does_not_swallow_the_next_one(self):
         self.state.mkdir(parents=True)
         (self.state / "history.jsonl").write_text('{"label": "torn", "cou')
-        sf_state.record(self.state, {"label": "whole", "count": 1}, "left")
+        sf_state.record(self.state, {"label": "whole", "count": 1}, "left", capacity=four, above=never)
         self.assertEqual(["whole"], [item["label"] for item in sf_state.history_items(self.state)])
 
     def test_a_short_listing_reads_only_the_current_file(self):
@@ -292,7 +304,7 @@ class BoundedHistoryTests(SlotCase):
         older = self.state / "history.jsonl.1"
         older.write_text(json.dumps({"label": "older", "count": 1}) + "\n")
         for n in range(3):
-            sf_state.record(self.state, {"label": f"r{n}", "count": 1}, "left")
+            sf_state.record(self.state, {"label": f"r{n}", "count": 1}, "left", capacity=four, above=never)
         older.chmod(0)
         self.addCleanup(older.chmod, 0o644)
         self.assertEqual(2, len(sf_state.history_lines(2, self.state)))

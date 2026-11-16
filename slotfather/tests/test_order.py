@@ -7,8 +7,8 @@ from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from slotfather import config as sf_config
 from slotfather import entry as sf_entry
-from slotfather import state as sf_state
 from slotfather import schedule as sf_schedule
+from slotfather import settings as sf_settings
 
 
 import json
@@ -310,42 +310,42 @@ class SettingsTests(unittest.TestCase):
             os.environ.pop(key)
 
     def test_the_defaults_hold_until_something_is_saved(self):
-        self.assertEqual({**sf_config.ORDER_DEFAULTS, "saved": False}, sf_schedule.order_settings())
+        self.assertEqual({**sf_config.ORDER_DEFAULTS, "saved": False}, sf_settings.order_settings())
 
     def test_saved_settings_are_every_clients(self):
-        sf_state.save_order({"order": "backfill", "safety": 4, "limit": 1800, "fallback": 7200, "overrun": 0.25})
+        sf_settings.configure({"order.json": {"order": "backfill", "safety": 4, "limit": 1800, "fallback": 7200, "overrun": 0.25}})
         self.assertEqual({**sf_config.ORDER_DEFAULTS, "order": "backfill", "safety": 4, "limit": 1800, "fallback": 7200,
-                          "overrun": 0.25, "saved": True}, sf_schedule.order_settings())
+                          "overrun": 0.25, "saved": True}, sf_settings.order_settings())
 
     def test_the_environment_can_only_tighten_them(self):
-        sf_state.save_order(dict(sf_config.ORDER_DEFAULTS))
+        sf_settings.configure({"order.json": dict(sf_config.ORDER_DEFAULTS)})
         loose = {"SLOTFATHER_BACKFILL_SAFETY": "1", "SLOTFATHER_BACKFILL_LIMIT": "0",
                  "SLOTFATHER_BACKFILL_FALLBACK": "60", "SLOTFATHER_BACKFILL_OVERRUN": "5",
                  "SLOTFATHER_QUEUE": "backfill"}
         with mock.patch.dict(os.environ, loose):
-            found = sf_schedule.order_settings()
+            found = sf_settings.order_settings()
         self.assertEqual({**sf_config.ORDER_DEFAULTS, "saved": True}, found)
         tight = {"SLOTFATHER_BACKFILL_SAFETY": "5", "SLOTFATHER_BACKFILL_LIMIT": "600",
                  "SLOTFATHER_BACKFILL_FALLBACK": "7200", "SLOTFATHER_BACKFILL_OVERRUN": "0.1"}
         with mock.patch.dict(os.environ, tight):
-            found = sf_schedule.order_settings()
+            found = sf_settings.order_settings()
         self.assertEqual((5, 600, 7200, 0.1), (found["safety"], found["limit"], found["fallback"], found["overrun"]))
 
     def test_the_environment_may_fall_back_to_the_window_order_but_not_leave_it(self):
         with mock.patch.dict(os.environ, {"SLOTFATHER_QUEUE": "window"}):
-            self.assertEqual("window", sf_schedule.order_settings()["order"])
-        sf_state.save_order({**sf_config.ORDER_DEFAULTS, "order": "window"})
+            self.assertEqual("window", sf_settings.order_settings()["order"])
+        sf_settings.configure({"order.json": {**sf_config.ORDER_DEFAULTS, "order": "window"}})
         with mock.patch.dict(os.environ, {"SLOTFATHER_QUEUE": "backfill"}):
-            self.assertEqual("window", sf_schedule.order_settings()["order"])
+            self.assertEqual("window", sf_settings.order_settings()["order"])
 
     def test_a_limit_from_the_environment_counts_where_none_is_saved(self):
-        sf_state.save_order({**sf_config.ORDER_DEFAULTS, "limit": 0})
+        sf_settings.configure({"order.json": {**sf_config.ORDER_DEFAULTS, "limit": 0}})
         with mock.patch.dict(os.environ, {"SLOTFATHER_BACKFILL_LIMIT": "900"}):
-            self.assertEqual(900, sf_schedule.order_settings()["limit"])
+            self.assertEqual(900, sf_settings.order_settings()["limit"])
 
     def test_an_unreadable_file_is_the_window_order(self):
         (self.dir / "order.json").write_text("{not json")
-        self.assertEqual("window", sf_schedule.order_settings()["order"])
+        self.assertEqual("window", sf_settings.order_settings()["order"])
 
 
 class EstimateTests(unittest.TestCase):

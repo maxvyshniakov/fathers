@@ -21,6 +21,7 @@ from slotfather import board as sf_board
 from slotfather import config as sf_config
 from slotfather import leases as sf_leases
 from slotfather import platform as sf_platform
+from slotfather import process as sf_process
 from slotfather import query as sf_query
 from slotfather import sweep as sf_sweep
 from test_slotfather import SlotCase
@@ -68,7 +69,7 @@ class ProcessTableTests(unittest.TestCase):
         self.addCleanup(sf_leases._skipping.clear)  # pyright: ignore[reportPrivateUsage]
         (self.dir / "queue").mkdir(parents=True)
         me = os.getpid()
-        start = sf_platform.processes()[me][1]
+        start = sf_process.processes()[me][1]
         self.live = self.dir / "queue" / f"{1:010d}-{me}.json"
         self.live.write_text(json.dumps({"pid": me, "start": start, "count": 1, "label": "live", "cmd": "x",
                                          "since": "2026-11-13T00:00:00Z", "state": "held"}))
@@ -86,7 +87,7 @@ class ProcessTableTests(unittest.TestCase):
         for name, run in FAILURES.items():
             with self.subTest(name), mock.patch.object(sf_platform.subprocess, "run", side_effect=run):
                 with self.assertRaises(sf_config.ProcessTableError):
-                    sf_platform.processes()
+                    sf_process.processes()
 
     def test_a_ps_that_hangs_is_given_up_after_the_timeout(self) -> None:
         bins = self.dir / "bin"
@@ -97,7 +98,7 @@ class ProcessTableTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"PATH": f"{bins}{os.pathsep}{os.environ.get('PATH', '')}"}), \
                 mock.patch.object(sf_config, "PS_TIMEOUT", 0.3):
             with self.assertRaises(sf_config.ProcessTableError):
-                sf_platform.processes()
+                sf_process.processes()
         self.assertLess(time.monotonic() - began, 5)
 
     def test_no_look_reaps_on_a_bad_table_and_the_next_good_table_reaps(self) -> None:
@@ -108,7 +109,7 @@ class ProcessTableTests(unittest.TestCase):
             "status --json": lambda: sf_query.status_json(self.dir),
         }
         changing: dict[str, Callable[[], Any]] = {
-            "sweep": lambda: sf_sweep.leases(self.dir, mock.Mock()),
+            "sweep": lambda: sf_sweep.leases(self.dir),
             "grant": lambda: sf_leases.grant(self.dir, sf_leases.process_table(self.dir)),
         }
         for name, run in FAILURES.items():

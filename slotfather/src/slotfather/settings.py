@@ -1,423 +1,385 @@
-"""`slotfather settings`: the shared settings as data, for Godfather's Settings panel and any other program (#27).
+"""The shared queue settings (fathers#34): capacity.json, order.json and sweep.json beside the queue, read,
+validated, tightened by a client's environment and saved in one place.
 
-  slotfather settings --json                               the settings, their values and the queue's STATUS rows
-  slotfather settings check KEY VALUE --json               validate without saving: {"ok", "error", "preview"}
-  slotfather settings set KEY VALUE [--revision R] --json  save; refused (exit 3) when R no longer matches
-  slotfather settings reset (KEY | --all) [--revision R] --json
-
-Every change goes through state.configure(), the same validation, ownership check and queue lock as `slotfather
-slots` and `slotfather order`, and applies at the queue's next grant. The labels, checks and previews here are
-the ones Godfather's Settings panel shows. Exit codes: 0
-done, 2 invalid (the reply says why), 3 conflict (the reply is the current settings), 4 another user's queue.
-docs/api.md has the reply shapes.
+- Capacity: capacity_basis() (the slots and how they were found), capacity_text(), capacity_change() (what
+  `slotfather slots` saves for a mode, the one computation `slots` and `settings` share) and total().
+- Order: order_settings() (shared, or tightened by this client's environment), checked_order(), order_bytes().
+- Sweep: sweep_settings() and checked_sweep().
+- configure(): the only write path for the three files, under the queue lock, with the ownership check, the
+  per-file conflict check and rollback. What a change starts (a grant) is the caller's callback; the change events
+  are emitted here. `slotfather settings` is settings_cli.py.
 """
 from __future__ import annotations
 
 import contextlib
-import io
+import hashlib
 import json
 import math
-import os
-import pwd
-from typing import Any, cast
+from pathlib import Path
+from typing import Any, Callable, Mapping, cast
 
 from . import config as _config
-from . import entry as _entry
-from . import schedule as _schedule
+from . import events as _events
+from . import platform as _platform
 from . import state as _state
 
-VERSION = 1
-
-MODES = ("automatic", "fixed", "memory", "lower")
-MODE_LABELS = {"automatic": "Automatic", "fixed": "Fixed", "memory": "Memory", "lower": "CPU + memory"}
-ORDER_LABELS = {"backfill": "Backfill", "window": "Arrival"}
-# Each setting's label and arrow step; the unit goes beside the value (UNITS), not in the label. Display text only:
-# the keys, order.json, the CLI flags and the environment keep their names.
-KNOBS = {"safety": ("Backfill margin", 0.5), "limit": ("Overtaking stops after", 60),
-         "fallback": ("Unknown job runtime", 60), "overrun": ("Overrun estimate", 0.1),
-         "interactive": ("Interactive head start", 60), "batch": ("Batch held back", 60),
-         "yield_after": ("Ask to yield after", 30), "idle_cpu": ("Idle when below", 0.05),
-         "idle_after": ("Idle for", 60), "aging_batch": ("Batch promoted after", 300),
-         "aging_normal": ("Normal promoted after", 300), "warn_wait": ("Warn after waiting", 300)}
-UNITS = {"safety": "×", "overrun": "×", "limit": " s", "fallback": " s", "interactive": " s", "batch": " s",
-         "yield_after": " s", "idle_after": " s", "idle_cpu": " cores", "interval": " s", "aging_batch": " s",
-         "aging_normal": " s", "warn_wait": " s"}
-# The queue's settings in the panel's order (one flat list, owner, 2026-11-11)
-ORDER_FIELDS = ("order", "safety", "fallback", "overrun", "limit", "interactive", "batch", "aging_batch",
-                "aging_normal", "warn_wait", "idle_cpu", "idle_after", "yield_after")
-NEVER = ("limit", "aging_batch", "aging_normal", "warn_wait")  # 0 is off: shown as "never"
-DESCRIPTIONS = {
-    "mode": "Shared by every client. Automatic: the lower of the CPU and memory budgets.",
-    "amount.fixed": "Total slots for every client. Applies at the next grant; a shrink drains.",
-    "amount.memory": "One slot per this many GiB of memory. Applies at the next grant.",
-    "order": "Backfill lets short work pass; Arrival serves in arrival order.",
-    "safety": "Multiplier on expected runtimes for backfill; at least 1.",
-    "limit": "After this a waiting head lets nothing pass; 0: its reserved start alone.",
-    "fallback": "Assumed runtime of work with no history.",
-    "overrun": "Remaining runtime as a share of elapsed time once a run overruns.",
-    "interactive": "How far interactive requests move ahead; 0: not at all.",
-    "batch": "How far batch requests move back; 0: not at all.",
-    "aging_batch": "A waiting batch request is served as normal after this; 0: never.",
-    "aging_normal": "A waiting normal request is served as interactive after this; 0: never.",
-    "warn_wait": "A request waiting this long says so and is flagged; 0: never.",
-    "yield_after": "Before a yieldable holder is asked to yield; 0: nobody is asked.",
-    "idle_cpu": "A lease below this for the idle time is idle (💤); 0: never.",
-    "idle_after": "Below the idle cores this long: idle, and asked if it can yield.",
-}
-CAPACITY_PER_CORE = 4  # the most slots a setting saves: this many per core
-CAPACITY_KEYS = ("capacity.mode", "capacity.slots", "capacity.gib_per_slot")
-EXIT_INVALID, EXIT_CONFLICT, EXIT_READ_ONLY = 2, 3, 4
+FILES = ("capacity.json", "order.json", "sweep.json")
 
 
-def number(value: float) -> str:
-    return f"{value:g}"
+# Capacity
 
-
-def plural(count: int, word: str) -> str:
-    return f"{count} {word}{'' if count == 1 else 's'}"
-
-
-def most_slots() -> int:
-    return CAPACITY_PER_CORE * _config.cores()
-
-
-def parse(key: str, text: str, mode: str) -> tuple[Any, str]:
-    """(value, "") for typed text that a numeric setting accepts, else (None, why not, as the panel says it). `key`
-    is the panel's: "amount" (the slots in mode fixed, else GiB per slot) or an order knob."""
-    try:
-        value = _config.parse_duration(text) if key in _config.DURATION_KNOBS else float(text)  # 30m, 1.5h
-    except ValueError:
-        value = math.nan
-    if key == "amount" and mode == "fixed":
-        if not (text.isascii() and text.isdigit() and int(text) >= 1):
-            return None, "Enter a whole number of slots, at least 1."
-        if int(text) > most_slots():
-            return None, f"At most {most_slots()} slots ({CAPACITY_PER_CORE} per core)."
-        return int(text), ""
-    if not math.isfinite(value):
-        return None, "Enter a number."
-    if key == "amount":
-        return (value, "") if value > 0 else (None, "Enter GiB per slot, more than 0.")
-    least = _config.ORDER_KNOBS[key][1]
-    return (value, "") if value >= least else (None, f"Enter a number of at least {least:g}.")
-
-
-def capacity_value(mode: str, amount: Any) -> dict[str, Any] | None:
-    """What `slotfather slots` would save for the mode and amount; raises SlotError where it would refuse, or where
-    it gives more slots than a setting saves."""
-    from . import cli
-    arguments = ["reset"] if mode == "automatic" else [str(amount)] if mode == "fixed" else [mode, str(amount)]
-    with contextlib.redirect_stderr(io.StringIO()):
-        found = cli.slots_value(arguments)
-    if found and found["slots"] > most_slots():
-        raise _config.SlotError(f"{found['slots']} slots is above the most the panel saves, "
-                                f"{most_slots()} ({CAPACITY_PER_CORE} per core).")
-    return found
-
-
-def capacity_slots(mode: str, amount: Any) -> int:
-    found = capacity_value(mode, amount)
-    return int(found["slots"]) if found else _config.automatic_capacity()
-
-
-def drain_note(slots: int, held: int) -> str:
-    drain = max(0, held - slots)
-    return f"will drain {drain}: running work keeps its slots" if drain else ""
-
-
-def starts(slots: int, held: int, waiting: list[int]) -> int:
-    """How many waiting requests a capacity of `slots` lets start now by slot counts alone, in queue order."""
-    free, started = slots - held, 0
-    for count in waiting:
-        if 0 < count <= free:
-            free, started = free - count, started + 1
-    return started
-
-
-def effect(slots: int, held: int, waiting: list[int]) -> tuple[str, str]:
-    """What a capacity of `slots` would do, (text, style): the slots and what drains or starts."""
-    drain, start = drain_note(slots, held), starts(slots, held, waiting)
-    if drain:
-        return f"→ {plural(slots, 'slot')} · {drain}", "warn"
-    return f"→ {plural(slots, 'slot')}" + (f" · will start {start} waiting" if start else ""), "dim"
-
-
-def location() -> str:
-    directory, home = str(_config.state_dir()), os.path.expanduser("~")
-    return "~" + directory[len(home):] if directory.startswith(home + os.sep) else directory
-
-
-def filled_basis(basis: dict[str, Any]) -> dict[str, Any]:
-    """The capacity basis with the memory budget filled in by the automatic rule where the saved mode does not work
-    it out (Fixed), as STATUS' budgets row shows it."""
-    from . import platform as _platform
-    found = dict(basis)
-    if found["memory_slots"] is None and found["mode"] == "fixed":
-        gib = _platform.memory_gib()
-        found["memory_slots"] = _config.memory_slots(gib, _config.AUTO_GIB_PER_SLOT)
-        found["memory_gib"] = None if gib is None else round(gib, 1)
-    return found
-
-
-def status_rows(basis: dict[str, Any], queue: dict[str, Any] | None,
-                where: str | None = None) -> list[tuple[str, str, str]]:
-    """The STATUS block, (label, value, style): `queue` is {"slots", "free", "used", "waiting"} as the queue's last
-    look read them (None: unavailable), `basis` filled_basis(), `where` the queue's directory as shown (location())."""
-    rows = [("queue", location() if where is None else where, "text")]
-    if queue:
-        rows.append(("slots", f"{queue['slots']} total · {queue.get('free', 0)} free · "
-                              f"{queue.get('used', 0)} held · {queue.get('waiting', 0)} waiting", "text"))
-    else:
-        rows.append(("slots", "queue unavailable", "dim"))
-    per = number(basis["gib_per_slot"] or 0)
-    how = {"fixed": "saved, fixed count", "memory": f"saved, one per {per} GiB of memory",
-           "lower": f"saved, lower of CPU and one per {per} GiB",
-           "automatic": "automatic, lower of the two budgets"}[basis["mode"]]
-    rows.append(("capacity", f"{basis['slots']} slots · {how}", "text"))
-    budget = (f"CPU {basis['cpu_slots']} ({basis['cores']} cores) · memory "
-              + (f"{basis['memory_slots']}" if basis["memory_slots"] is not None else "unknown")
-              + (f" ({number(basis['memory_gib'])} GiB)" if basis["memory_gib"] is not None else ""))
-    rows.append(("budgets", budget, "text"))
-    drain = max(0, int(queue["used"]) - int(queue["slots"])) if queue else 0
-    rows.append(("draining", f"{drain} slots · nothing starts until at most {queue['slots']} are held"
-                 if drain and queue else "none", "warn" if drain else "dim"))
-    overrides = ["SLOTFATHER_" + name for name in ("CORES", "MEMORY_GIB", "CGROUP") if _config.setting(name)]
-    if overrides:
-        rows.append(("environment", ", ".join(overrides), "dim"))
-    return rows
-
-
-# The CLI
-
-revision = _state.revision  # an opaque token for a settings file as read
-
-
-def owner_reason() -> str | None:
-    directory = _config.state_dir()
-    owner = _state.foreign_owner(directory)
-    if owner is None:
+def memory_slots(gib: float | None, per_slot: float) -> int | None:
+    """One slot per `per_slot` GiB of `gib`, at least one; None when the memory is unknown. The memory counts in whole
+    GiB, rounded: Linux's MemTotal is a little under the size a VM was given (11.7 for 12)."""
+    if gib is None:
         return None
+    return max(1, math.floor(round(gib) / per_slot + 1e-9))
+
+
+def capacity_basis() -> dict[str, Any]:
+    """The capacity and how it was found: {"slots", "saved", "mode", "cores", "cpu_slots", "memory_gib",
+    "gib_per_slot", "memory_slots"}. Mode "fixed" is a saved count, "memory" one slot per gib_per_slot GiB, "lower"
+    the lower of the CPU and memory budgets, "automatic" the lower at AUTO_GIB_PER_SLOT; atomic publication keeps
+    readers consistent."""
+    path = _config.state_dir() / "capacity.json"
+    machine = _config.cores()
+    cpu = max(1, machine // _config.CORES_PER_SLOT)
+    found: dict[str, Any] = {"saved": True, "cores": machine, "cpu_slots": cpu, "memory_gib": None,
+                             "gib_per_slot": None, "memory_slots": None, "cgroup": None}
     try:
-        name = pwd.getpwuid(owner).pw_name
-    except KeyError:
-        name = str(owner)
-    return f"the queue {directory} belongs to uid {owner} ({name}); only that user can change its settings"
+        data: Any = json.loads(path.read_text())
+        value = data["slots"]
+    except FileNotFoundError:
+        data, value = {"mode": "automatic", "gib_per_slot": _config.AUTO_GIB_PER_SLOT}, None
+        found["saved"] = False
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise _config.SlotError(f"cannot read capacity from {path}: {error}") from None
+    invalid = _config.SlotError(f"invalid saved capacity in {path}; use slotfather slots reset")
+    if value is not None and (type(value) is not int or value < 1):
+        raise invalid
+    mode = data.get("mode", "fixed")
+    if mode == "fixed":
+        return {**found, "slots": value, "mode": mode}
+    per_slot = data.get("gib_per_slot")
+    if mode not in _config.CAPACITY_MODES + ("automatic",) or type(per_slot) not in (int, float) or not per_slot > 0:
+        raise invalid
+    group = data.get("cgroup") if isinstance(data.get("cgroup"), str) else None
+    gib = _platform.memory_gib(group)
+    by_memory = memory_slots(gib, per_slot)
+    found.update(mode=mode, gib_per_slot=per_slot, memory_slots=by_memory,
+                 memory_gib=None if gib is None else round(gib, 1), cgroup=group or _platform.memory_cgroup())
+    if by_memory is None:  # memory unknown: the count saved with the mode, or the CPU budget
+        slots = value or cpu
+    else:
+        slots = by_memory if mode == "memory" else min(cpu, by_memory)
+    return {**found, "slots": slots}
 
 
-class Reading:
-    """The shared settings and the queue as one reply reads them: capacity.json and the basis read until they
-    agree, the order settings with and without this environment, and the slots held and waiting."""
+def automatic_capacity() -> int:
+    """The capacity with nothing saved: the lower of the CPU budget and one slot per AUTO_GIB_PER_SLOT GiB."""
+    by_memory = memory_slots(_platform.memory_gib(), _config.AUTO_GIB_PER_SLOT)
+    cpu = max(1, _config.cores() // _config.CORES_PER_SLOT)
+    return cpu if by_memory is None else min(cpu, by_memory)
 
-    def __init__(self) -> None:
-        directory = _config.state_dir()
-        files = _state.configuration_bytes(directory)
-        for _ in range(3):
-            self.basis: dict[str, Any] = _config.capacity_basis()
-            again = _state.configuration_bytes(directory)
-            if again == files:
-                break
-            files = again
-        self.files = files
-        self.saved = _schedule.order_settings(directory, environment=False)
-        self.effective = _schedule.order_settings(directory)
+
+def capacity() -> tuple[int, bool]:
+    """The shared saved capacity, or the automatic default: (slots, saved)."""
+    found = capacity_basis()
+    return found["slots"], found["saved"]
+
+
+def total() -> int:
+    return capacity()[0]
+
+
+def capacity_text(found: Mapping[str, Any]) -> str:
+    """`slotfather slots`' line: "N slots (saved)", "N slots (automatic)", with the budgets where memory counts."""
+    slots, mode = found["slots"], found["mode"]
+    if mode == "fixed":
+        return f"{slots} slots (saved)"
+    memory = f"{found['memory_gib']:g} GiB" if found["memory_gib"] is not None else "unknown memory"
+    if found.get("cgroup") and found["memory_gib"] is not None and not _config.setting("MEMORY_GIB"):
+        memory += f" in {found['cgroup']}"
+    per = f"one per {found['gib_per_slot']:g} GiB of {memory}"
+    cpu = f"{found['cpu_slots']} by {found['cores']} cores"
+    if mode == "automatic":
+        if found["memory_slots"] is None or found["memory_slots"] >= found["cpu_slots"]:
+            return f"{slots} slots (automatic)"
+        return f"{slots} slots (automatic, by memory: {per}; {cpu})"
+    if mode == "memory":
+        return f"{slots} slots (saved: {per})"
+    return f"{slots} slots (saved: the lower of {cpu} and {found['memory_slots'] or '?'} by memory, {per})"
+
+
+NO_CGROUP = ("slotfather: note: no cgroup with a memory limit here or in SLOTFATHER_CGROUP: the count follows MemTotal, "
+             "which a VM's balloon moves and which differs from what clients inside a limited cgroup see; name the "
+             "cgroup the leases share (SLOTFATHER_CGROUP=/a.slice/b.slice, or install.py --cgroup)")
+
+
+def capacity_change(argv: list[str], note: Callable[[str], None] | None = None) -> dict[str, Any] | None:
+    """What `slotfather slots ARGV` saves: {"slots": N}, {"mode", "gib_per_slot", "slots"} or None for reset; `note`
+    gets what the user should know (`slots` prints it). The memory modes also save the count they give now as
+    "slots", which slotfather 0af7546 and older read alone. Raises SlotError for anything `slots` refuses."""
+    if len(argv) == 1 and argv[0] == "reset":
+        return None
+    if len(argv) == 1 and argv[0].isascii() and argv[0].isdigit() and int(argv[0]) >= 1:
+        return {"slots": int(argv[0])}
+    if len(argv) == 2 and argv[0] in _config.CAPACITY_MODES:
         try:
-            stored = json.loads(files["order.json"] or b"{}")
+            per_slot: float = float(argv[1])
         except ValueError:
-            stored = {}
-        self.stored: set[str] = set(cast(dict[str, Any], stored)) if isinstance(stored, dict) else set()
-        self.queue: dict[str, Any] | None = None
-        self.held, self.waiting = 0, cast(list[int], [])
-        with contextlib.suppress(_config.SlotError, OSError):
-            from . import query as _query
-            look = _query.look(directory)
-            slots = int(look.basis["slots"])
-            self.held = _query.held_slots(look.live, [*look.legacy, *look.reserved], slots)
-            waiters = [e for e in look.live if _entry.is_waiting(e)]
-            _schedule.fit(waiters, slots)
-            if self.effective["order"] == "backfill":
-                import time
-                waiters = _schedule.ranked(waiters, self.effective, time.time())
-            self.waiting = [int(e.get("count") or 1) for e in waiters]
-            self.queue = {"slots": slots, "free": max(0, slots - self.held), "used": self.held,
-                          "waiting": len(waiters)}
-
-    def mode(self) -> str:
-        return str(self.basis["mode"])
-
-    def amount_for(self, mode: str) -> Any:
-        """The amount a mode starts from: the current capacity for Fixed, the GiB per slot for the memory modes."""
-        if mode == "fixed":
-            return self.basis["slots"]
-        return self.basis["gib_per_slot"] or _config.AUTO_GIB_PER_SLOT
-
-    def knob_row(self, key: str, writable: bool) -> dict[str, Any]:
-        name = _config.ORDER_KNOBS[key][0] if key != "order" else "QUEUE"
-        row: dict[str, Any] = {"key": f"order.{key}", "value": self.saved[key], "default": _config.ORDER_DEFAULTS[key],
-                               "writable": writable, "revision": revision(self.files["order.json"]),
-                               "description": DESCRIPTIONS[key]}
-        if key == "order":
-            row.update(label="Queue order", type="choice",
-                       choices=[{"value": value, "label": ORDER_LABELS[value]} for value in _config.QUEUE_ORDERS])
-        else:
-            row.update(label=KNOBS[key][0], type="duration" if key in _config.DURATION_KNOBS else "number",
-                       min=_config.ORDER_KNOBS[key][1], max=None, step=KNOBS[key][1], unit=UNITS[key].strip())
-            if key in NEVER:
-                row["zero"] = "never"
-        row["source"] = "saved" if key in self.stored else "default"
-        if self.effective[key] != self.saved[key]:
-            row.update(effective=self.effective[key], source=f"env SLOTFATHER_{name}")
-        return row
-
-    def document(self) -> dict[str, Any]:
-        reason = owner_reason()
-        writable = reason is None
-        token = revision(self.files["capacity.json"])
-        source = "saved" if self.basis["saved"] else "default"
-        mode = self.mode()
-        capacity = [
-            {"key": "capacity.mode", "label": "Capacity", "type": "choice", "value": mode, "default": "automatic",
-             "choices": [{"value": value, "label": MODE_LABELS[value]} for value in MODES], "source": source,
-             "writable": writable, "revision": token, "description": DESCRIPTIONS["mode"]},
-            {"key": "capacity.slots", "label": "Slots", "type": "integer", "value": self.amount_for("fixed"),
-             "default": None, "min": 1, "max": most_slots(), "step": 1, "unit": "slots", "source": source,
-             "writable": writable, "revision": token, "when": {"capacity.mode": ["fixed"]},
-             "description": DESCRIPTIONS["amount.fixed"]},
-            {"key": "capacity.gib_per_slot", "label": "GiB per slot", "type": "number",
-             "value": self.amount_for("memory"), "default": _config.AUTO_GIB_PER_SLOT, "min": 0, "min_exclusive": True,
-             "max": None,
-             "step": 0.5, "unit": "GiB", "source": source, "writable": writable, "revision": token,
-             "when": {"capacity.mode": ["memory", "lower"]}, "description": DESCRIPTIONS["amount.memory"]}]
-        basis = filled_basis(self.basis)
-        return {"v": VERSION, "tool": "slotfather", "writable": writable, "reason": reason,
-                "status": [{"label": label, "value": value, "style": style}
-                           for label, value, style in status_rows(basis, self.queue)],
-                "basis": basis,
-                "sections": [{"id": "capacity", "title": "Capacity", "settings": capacity},
-                             {"id": "order", "title": "Queue order",
-                              "settings": [self.knob_row(key, writable) for key in ORDER_FIELDS]}]}
+            per_slot = 0.0
+        if math.isfinite(per_slot) and per_slot > 0:
+            per_slot = int(per_slot) if per_slot.is_integer() else per_slot
+            # The cgroup is the saver's (SLOTFATHER_CGROUP, or its outermost limited one), not the one saved before.
+            group = (_config.setting("CGROUP") or _config.DEFAULT_CGROUP or _platform.limited_cgroup()) \
+                if _platform.linux() else None
+            if _platform.linux() and _platform.cgroup_limit(group) is None and note is not None:
+                note(NO_CGROUP)
+            by_memory = memory_slots(_platform.memory_gib(group or ""), per_slot)
+            if by_memory is None:
+                raise _config.SlotError("the machine's memory is unknown here; save a count instead (slotfather slots N)")
+            cpu = max(1, _config.cores() // _config.CORES_PER_SLOT)
+            found: dict[str, Any] = {"slots": by_memory if argv[0] == "memory" else min(cpu, by_memory),
+                                     "mode": argv[0], "gib_per_slot": per_slot}
+            if _platform.cgroup_limit(group) is not None:
+                found["cgroup"] = group
+            return found
+    raise _config.SlotError("slots takes a positive integer, memory GIB or lower GIB (GiB per slot), or reset")
 
 
-class Invalid(_config.SlotError):
-    pass
+# Order
 
-
-def change(reading: Reading, key: str, text: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    """(the configure() change for KEY=text, the check reply) or Invalid with the panel's words for why not."""
-    reply: dict[str, Any] = {"ok": True, "error": None, "preview": None}
-    if key in CAPACITY_KEYS:
-        if key == "capacity.mode":
-            if text not in MODES:
-                raise Invalid(f"Capacity is one of {', '.join(MODES)}.")
-            mode, amount = text, reading.amount_for(text)
-        elif key == "capacity.slots":
-            mode = "fixed"
-            amount, problem = parse("amount", text, mode)
-            if problem:
-                raise Invalid(problem)
-        else:
-            mode = reading.mode()
-            if mode not in _config.CAPACITY_MODES:
-                raise Invalid("GiB per slot applies in the Memory and CPU + memory modes; set capacity.mode first.")
-            amount, problem = parse("amount", text, mode)
-            if problem:
-                raise Invalid(problem)
+def order_settings(directory: Path | None = None, environment: bool = True) -> dict[str, Any]:
+    """The queue's order and backfill settings: order.json beside the queue (`slotfather order`), else
+    ORDER_DEFAULTS, with "saved" saying which. A client's environment only tightens them: SLOTFATHER_QUEUE=window
+    falls back to the window order, a higher SLOTFATHER_BACKFILL_SAFETY or _FALLBACK, a lower _OVERRUN and a lower
+    (nonzero) _LIMIT count; looser values are ignored, since every client's look grants for the whole queue. A file
+    that cannot be read gives the window order."""
+    found: dict[str, Any] = dict(_config.ORDER_DEFAULTS, saved=False)
+    try:
+        data = json.loads(((directory or _config.state_dir()) / "order.json").read_text())
+        found.update(checked_order(data), saved=True)
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, TypeError, AttributeError):
+        found.update(order="window", saved=True)
+    if not environment:  # what every client shares; yield requests are decided on it alone
+        return found
+    if _config.setting("QUEUE") == "window":
+        found["order"] = "window"
+    for key, (name, least, tighten) in _config.ORDER_KNOBS.items():
         try:
-            value = capacity_value(mode, amount)
-        except _config.SlotError as error:
-            raise Invalid(str(error)) from None
-        slots = int(value["slots"]) if value else _config.automatic_capacity()
-        preview, _ = effect(slots, reading.held, reading.waiting)
-        reply.update(preview=preview, slots=slots)
-        return {"capacity.json": value}, reply
-    knob = key[len("order."):] if key.startswith("order.") else ""
-    if knob == "order":
-        if text not in _config.QUEUE_ORDERS:
-            raise Invalid(f"Queue order is one of {', '.join(_config.QUEUE_ORDERS)}.")
-        return {"order.json": {"order": text}}, reply
-    if knob not in _config.ORDER_KNOBS:
-        raise Invalid(f"no setting {key!r}; `slotfather settings --json` lists them")
-    value, problem = parse(knob, text, reading.mode())
-    if problem:
-        raise Invalid(problem)
-    return {"order.json": {knob: value}}, reply
+            value = float(_config.setting(name) or "nan")
+        except ValueError:
+            continue
+        if not math.isfinite(value) or value < least:
+            continue
+        if tighten == "up":
+            found[key] = max(found[key], value)
+        elif tighten == "down":
+            found[key] = min(found[key], value)
+        elif tighten == "delay":  # 0 asks nobody (ages nobody), the tightest
+            found[key] = 0.0 if not value or not found[key] else max(found[key], value)
+        elif tighten == "own":  # decides nothing for other clients: this client's environment sets it
+            found[key] = value
+        elif value > 0:  # limit: 0 is no limit, the loosest
+            found[key] = value if not found[key] else min(found[key], value)
+    return found
 
 
-def reset_change(key: str) -> dict[str, Any]:
-    if key == "--all":
-        return {"capacity.json": None, "order.json": None}
-    if key in CAPACITY_KEYS:
-        return {"capacity.json": None}
-    knob = key[len("order."):] if key.startswith("order.") else ""
-    if knob in _config.ORDER_DEFAULTS:
-        return {"order.json": {knob: _config.ORDER_DEFAULTS[knob]}}
-    raise Invalid(f"no setting {key!r}; `slotfather settings --json` lists them")
+def checked_order(data: Any) -> dict[str, Any]:
+    """Saved order settings, validated: raises ValueError for anything `slotfather order` would refuse."""
+    if not isinstance(data, dict) or set(cast(dict[str, Any], data)) - set(_config.ORDER_DEFAULTS) or \
+            cast(dict[str, Any], data).get("order", "backfill") not in _config.QUEUE_ORDERS:
+        raise ValueError(f"not order settings: {data!r}")
+    found: dict[str, Any] = {}
+    for key, value in cast(dict[str, Any], data).items():
+        if key != "order":
+            least = _config.ORDER_KNOBS[key][1]
+            if type(value) not in (int, float) or not math.isfinite(value) or value < least:
+                raise ValueError(f"{key} must be a number of at least {least:g}, not {value!r}")
+            if key == "warning_admits" and value not in (0, 1):
+                raise ValueError(f"warning_admits must be 1 or 0, not {value!r}")
+        found[key] = value
+    return found
 
 
-def message(document: dict[str, Any], changes: dict[str, Any]) -> str:
-    if "capacity.json" in changes and "order.json" in changes:
-        return f"Saved · every setting at its default, capacity {document['basis']['slots']} slots"
-    if "capacity.json" in changes:
-        return f"Saved · capacity {document['basis']['slots']} slots"
-    knob = next(iter(cast(dict[str, Any], changes["order.json"])))
-    row = next(row for section in document["sections"] for row in section["settings"] if row["key"] == f"order.{knob}")
-    value = row["value"]
-    shown = ORDER_LABELS.get(str(value), str(value)) if knob == "order" else \
-        "never" if knob in NEVER and not value else number(value) + UNITS.get(knob, "")
-    return f"Saved · {row['label']} {shown}"
+def order_bytes(values: Mapping[str, Any]) -> dict[str, Any]:
+    """order.json as it is saved: the keys before classes always; a class knob only when it differs from its
+    default, since a slotfather before them refuses a file with keys it does not know (and falls back to the window
+    order)."""
+    defaults = _config.ORDER_DEFAULTS
+    return {k: values.get(k, defaults[k]) if k == "order" else float(values.get(k, defaults[k]))
+            for k in defaults if k in _config.ORDER_BASE or values.get(k, defaults[k]) != defaults[k]}
 
 
-def save(changes: dict[str, Any], revision_wanted: str | None) -> tuple[int, dict[str, Any]]:
-    """Applies `changes` through state.configure(); with a revision, only while every file it touches is as read
-    then (exit 3 and the current settings otherwise)."""
-    if owner_reason() is not None:
-        return EXIT_READ_ONLY, {"ok": False, "error": owner_reason()}
-    # One revision covers capacity.json (the three capacity keys, and reset --all), another order.json.
-    expected = None if revision_wanted is None else \
-        {"capacity.json" if "capacity.json" in changes else "order.json": revision_wanted}
+# Sweep
+
+SWEEP_DEFAULTS: dict[str, Any] = {
+    "classes": list(_config.SWEEP_CLASSES), "removed_age": 600.0, "orphan_age": 7200.0, "dev_server_age": 28800.0,
+    "session_removed_age": 21600.0, "grace": 10.0, "container_minutes": 30.0, "container_restarts": 3.0,
+    "swap_free_mb": 1024.0, "swap_free_pct": 20.0, "memory_top": 8.0}
+SWEEP_DURATIONS = ("removed_age", "orphan_age", "dev_server_age", "session_removed_age", "grace",
+                   "container_minutes")
+
+
+def sweep_defaults() -> dict[str, Any]:
+    return dict(SWEEP_DEFAULTS, classes=list(SWEEP_DEFAULTS["classes"]))
+
+
+def sweep_from(text: str | bytes | None) -> dict[str, Any]:
+    """sweep.json's text (None: no file) over SWEEP_DEFAULTS, as sweep_settings() reads it."""
+    found = dict(sweep_defaults(), saved=False, warnings=[])
+    if text is None:
+        return found
     try:
-        _state.configure(changes, revisions=expected)
-    except _state.Conflict as error:
-        document = Reading().document()
-        return EXIT_CONFLICT, dict(document, ok=False, conflict=True,
-                                   error=f"{error}; now {document['basis']['slots']} slots")
-    except _config.SlotError as error:
-        return EXIT_INVALID, {"ok": False, "error": str(error)}
-    document = Reading().document()
-    return 0, dict(document, ok=True, message=message(document, changes))
+        data: Any = json.loads(text)
+        if not isinstance(data, dict):
+            raise ValueError(f"not sweep settings: {data!r}")
+        data = cast(dict[str, Any], data)
+        unknown = sorted(set(data) - set(SWEEP_DEFAULTS))
+        if unknown:
+            found["warnings"].append(f"sweep.json: unknown setting(s) {', '.join(unknown)} ignored")
+        found.update(checked_sweep({k: v for k, v in data.items() if k in SWEEP_DEFAULTS}), saved=True)
+    except (ValueError, TypeError) as error:
+        found["error"] = f"sweep.json ignored: {error}"
+    return found
 
 
-USAGE = ("settings takes --json, check KEY VALUE --json, set KEY VALUE [--revision R] --json or "
-         "reset (KEY | --all) [--revision R] --json")
-
-
-def command(argv: list[str]) -> int:
-    words = list(argv)
-    if "--json" not in words:
-        raise _config.SlotError(USAGE)
-    words.remove("--json")
-    wanted: str | None = None
-    if "--revision" in words:
-        at = words.index("--revision")
-        if at + 1 >= len(words):
-            raise _config.SlotError(USAGE)
-        wanted = words[at + 1]
-        del words[at:at + 2]
-    code, reply = EXIT_INVALID, cast(dict[str, Any], {})
+def sweep_settings(directory: Path | None = None) -> dict[str, Any]:
+    """sweep.json beside the queue over SWEEP_DEFAULTS. Unknown keys are ignored with a "warnings" entry (a newer
+    slotfather may have written them); a file that cannot be read or holds a bad value gives the defaults with
+    "error", and a live sweep then stops nothing."""
     try:
-        if not words and wanted is None:
-            code, reply = 0, Reading().document()
-        elif len(words) == 3 and words[0] == "check" and wanted is None:
-            _, reply = change(Reading(), words[1], words[2])
-            code = 0
-        elif len(words) == 3 and words[0] == "set":
-            changes, _ = change(Reading(), words[1], words[2])
-            code, reply = save(changes, wanted)
-        elif len(words) == 2 and words[0] == "reset":
-            code, reply = save(reset_change(words[1]), wanted)
+        return sweep_from(((directory or _config.state_dir()) / "sweep.json").read_text())
+    except FileNotFoundError:
+        return sweep_from(None)
+    except OSError as error:
+        return dict(sweep_from(None), error=f"sweep.json ignored: {error}")
+
+
+def checked_sweep(data: Any) -> dict[str, Any]:
+    """Sweep settings, validated: raises ValueError for anything `slotfather sweep config` would refuse."""
+    if not isinstance(data, dict) or set(cast(dict[str, Any], data)) - set(SWEEP_DEFAULTS):
+        raise ValueError(f"not sweep settings: {data!r}")
+    found: dict[str, Any] = {}
+    for key, value in cast(dict[str, Any], data).items():
+        if key == "classes":
+            if not isinstance(value, list) or set(cast(list[Any], value)) - set(_config.SWEEP_CLASSES):
+                raise ValueError(f"classes are some of {', '.join(_config.SWEEP_CLASSES)}, not {value!r}")
+            found[key] = [c for c in _config.SWEEP_CLASSES if c in value]
+        elif type(value) not in (int, float) or value < 0 or (key == "memory_top" and value < 1):
+            raise ValueError(f"{key} must be a number of at least {1 if key == 'memory_top' else 0}, not {value!r}")
         else:
-            raise _config.SlotError(USAGE)
-    except Invalid as error:
-        reply = {"ok": False, "error": str(error), "preview": None} if words[:1] == ["check"] else \
-            {"ok": False, "error": str(error)}
-    print(json.dumps(reply, sort_keys=True))
-    return code
+            found[key] = float(value)
+    return found
+
+
+# Saving
+
+def configuration_bytes(directory: Path, names: tuple[str, ...] = FILES[:2]) -> dict[str, bytes | None]:
+    """Read shared settings without creating a queue or lock; bytes are an optimistic edit token."""
+    result: dict[str, bytes | None] = {}
+    for name in names:
+        try:
+            result[name] = (directory / name).read_bytes()
+        except FileNotFoundError:
+            result[name] = None
+    return result
+
+
+def revision(data: bytes | None) -> str:
+    """An opaque token for a settings file as read (configuration_bytes()): its SHA-256, or "absent"."""
+    return "absent" if data is None else "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+class Conflict(_config.SlotError):
+    """A settings file changed since the caller read it (configure()'s `expected`): nothing was saved."""
+
+
+def configure(changes: Mapping[str, Mapping[str, Any] | None], *,
+              expected: Mapping[str, bytes | None] | None = None, revisions: Mapping[str, str] | None = None,
+              granted: Callable[[Path], None] | None = None, what: str = "a settings change",
+              directory: Path | None = None) -> None:
+    """The one write path of capacity.json, order.json and sweep.json, shared by the CLI and the dashboard:
+    validation, ownership, conflict checking and the queue lock. A change applies at once, also while requests run
+    or wait. order.json and sweep.json changes merge over the saved values (a sweep.json that cannot be read is
+    replaced by the defaults and the changes); None resets a file. `expected` names files as their bytes were read,
+    `revisions` as revision() tokens (`settings set --revision`); a file changed since is a Conflict and nothing is
+    saved. `granted(directory)` runs under the lock once saved: the caller's grant of what the change lets start.
+    `what` names the change in the refusal for another user's queue."""
+    directory = directory or _config.state_dir()
+    if set(changes) - set(FILES):
+        raise _config.SlotError("unknown configuration file")
+    if not changes:
+        return
+    _state.require_own(directory, what)
+    with _state.locked(directory):
+        # Only the files this change touches or names: a broken sweep.json must not stop a capacity change. A file
+        # that cannot be read (its mode, a directory in its place) is replaced as a broken one is.
+        before: dict[str, bytes | None] = {}
+        unreadable: set[str] = set()
+        names: list[str] = sorted({*changes, *(expected or {}), *(revisions or {})})
+        for name in names:
+            try:
+                before.update(configuration_bytes(directory, (name,)))
+            except OSError:
+                before[name] = None
+                unreadable.add(name)
+        changed_since = [name for name, value in (expected or {}).items() if before.get(name) != value]
+        changed_since += [name for name, token in (revisions or {}).items()
+                          if name not in changed_since and revision(before.get(name)) != token]
+        if changed_since:  # per file: a caller expects only the files it read and means to replace
+            raise Conflict(f"{', '.join(changed_since)} changed in another process; nothing was saved")
+        values: dict[str, Any] = dict(changes)
+        try:
+            if values.get("order.json") is not None:
+                saved = dict(_config.ORDER_DEFAULTS)
+                with contextlib.suppress(OSError, ValueError, TypeError, AttributeError):
+                    saved.update(checked_order(json.loads(before["order.json"] or b"{}")))
+                values["order.json"] = order_bytes(checked_order({**saved, **values["order.json"]}))
+            if values.get("sweep.json") is not None:
+                current = sweep_defaults() if "sweep.json" in unreadable else sweep_from(before["sweep.json"])
+                if "error" in current:  # a broken file is replaced by the defaults and these changes
+                    current = sweep_defaults()
+                kept = {k: v for k, v in current.items() if k in SWEEP_DEFAULTS}
+                values["sweep.json"] = checked_sweep({**kept, **values["sweep.json"]})
+        except ValueError as error:
+            raise _config.SlotError(str(error)) from None
+        # A capacity change applies at the next grant, whatever the queue holds (#7): every client's plan reads it
+        # under this lock. Running leases keep their slots; a shrink below them drains, a growth grants below.
+        changed: list[str] = []
+        try:
+            for name, value in values.items():
+                if value is None:
+                    (directory / name).unlink(missing_ok=True)
+                else:
+                    _state.write(directory / name, value)
+                changed.append(name)
+        except OSError as error:
+            for name in reversed([name for name in changed if name not in unreadable]):
+                path, original = directory / name, before[name]
+                if original is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    pending = path.with_name(path.name + ".pending")
+                    pending.write_bytes(original)
+                    pending.replace(path)
+            raise _config.SlotError(f"cannot save settings: {error}") from None
+        after: dict[str, bytes | None] = {}
+        for name in changed:
+            with contextlib.suppress(OSError):
+                after.update(configuration_bytes(directory, (name,)))
+        for name in [name for name in changed if name in unreadable or after.get(name) != before.get(name)]:  # a no-op save is no event
+            if name == "capacity.json":
+                with contextlib.suppress(_config.SlotError, OSError):
+                    basis = capacity_basis()
+                    _events.emit(directory, "capacity.changed", {"type": "capacity", "id": "capacity"},
+                                 {"saved": values[name], "mode": basis["mode"], "slots": basis["slots"]})
+            elif name == "order.json":
+                _events.emit(directory, "order.changed", {"type": "order", "id": "order"},
+                             {"reset": True} if changes[name] is None else {"saved": changes[name]})
+        if granted is not None:  # what the new settings start, granted now as a release does
+            with contextlib.suppress(_config.SlotError, OSError):
+                granted(directory)
