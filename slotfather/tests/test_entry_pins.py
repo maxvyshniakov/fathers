@@ -27,6 +27,7 @@ from unittest import mock
 from slotfather import config as sf_config
 from slotfather import events as sf_events
 from slotfather import leases as sf_leases
+from slotfather import queue as sf_queue
 from slotfather import platform as sf_platform
 from slotfather import process as sf_process
 from slotfather import query as sf_query
@@ -180,23 +181,23 @@ def scenarios() -> dict[str, Callable[[Queue], None]]:
         queue.entry(90002, "aged", 1, since=-7200, priority="batch")
         queue.entry(90003, "fresh", 1, since=-60)
         with contextlib.redirect_stderr(io.StringIO()):
-            sf_leases.grant(queue.directory, sf_leases.process_table(queue.directory))
+            sf_leases.grant(queue.directory, sf_queue.process_table(queue.directory))
         queue.snapshot("an aged batch waiter and a fresh one granted")
         queue.memory.write_text("8000 2\n")
         queue.at(10)
         queue.entry(90004, "pressed", 1, since=-5)
         queue.entry(90005, "second", 1, since=-4)
-        sf_leases.grant(queue.directory, sf_leases.process_table(queue.directory))
+        sf_leases.grant(queue.directory, sf_queue.process_table(queue.directory))
         queue.snapshot("under warning: one granted pressed, the next held back")
         queue.memory.write_text("8000 1\n")
         queue.at(20)
-        sf_leases.grant(queue.directory, sf_leases.process_table(queue.directory))
+        sf_leases.grant(queue.directory, sf_queue.process_table(queue.directory))
         queue.snapshot("memory normal again")
 
     def yield_and_resume(queue: Queue) -> None:
         gate = queue.entry(90011, "gate", 4, "held", since=-7200, priority="batch", yieldable=True)
         quick = queue.entry(90012, "quick", 4, since=-600, priority="interactive")
-        sf_leases.grant(queue.directory, sf_leases.process_table(queue.directory))
+        sf_leases.grant(queue.directory, sf_queue.process_table(queue.directory))
         queue.snapshot("the interactive waiter asks the gate to yield")
         queue.at(5)
         out = io.StringIO()
@@ -250,7 +251,7 @@ def scenarios() -> dict[str, Callable[[Queue], None]]:
         queue.entry(90051, "crashed", 2, "held", since=-900, alive=False)
         queue.entry(90052, "gone", 1, since=-100, alive=False)
         queue.entry(90053, "waits", 1, since=-50)
-        sf_leases.grant(queue.directory, sf_leases.process_table(queue.directory))
+        sf_leases.grant(queue.directory, sf_queue.process_table(queue.directory))
         queue.snapshot("a crashed holder and a gone waiter reaped; the waiter granted")
 
     def ask_by_hand(queue: Queue) -> None:

@@ -23,6 +23,7 @@ from slotfather import board as sf_board
 from slotfather import config as sf_config
 from slotfather import entry as sf_entry
 from slotfather import leases as sf_leases
+from slotfather import queue as sf_queue
 from slotfather import platform as sf_platform
 from slotfather import procs as sf_procs
 from slotfather import query as sf_query
@@ -72,8 +73,8 @@ class UnknownEntryTests(unittest.TestCase):
                 with self.subTest(why, alive=alive):
                     queue, strange, before = self.queue(change, alive)
                     with queue.running():
-                        reason = sf_leases.grant(queue.directory, sf_leases.process_table(queue.directory))
-                        live = sf_leases.reap(queue.directory, sf_leases.process_table(queue.directory))
+                        reason = sf_leases.grant(queue.directory, sf_queue.process_table(queue.directory))
+                        live = sf_queue.reap(queue.directory, sf_queue.process_table(queue.directory))
                     kept = alive and why in RESERVES
                     self.assertEqual(kept, reason is not None, reason)
                     self.assertEqual(before, strange.read_bytes(), "left as it was")
@@ -119,7 +120,7 @@ class UnknownEntryTests(unittest.TestCase):
         strange = queue.entry(90201, "newer", 2, "paused", since=-900)
         three = queue.entry(90202, "three", 3, since=-100)
         with queue.running():
-            reason = sf_leases.grant(queue.directory, sf_leases.process_table(queue.directory))
+            reason = sf_leases.grant(queue.directory, sf_queue.process_table(queue.directory))
             lines = sf_query.status_lines(queue.directory)
             listing = sf_query.status_json(queue.directory)
             block = sf_board.full_status(queue.directory)["dashboard"]
@@ -133,7 +134,7 @@ class UnknownEntryTests(unittest.TestCase):
         self.assertEqual(0, free, "the 3-slot waiter comes first in the 2 free slots")
         del queue.table[90201]  # its holder exits: the slots are free again, the file stays
         with queue.running():
-            sf_leases.grant(queue.directory, sf_leases.process_table(queue.directory))
+            sf_leases.grant(queue.directory, sf_queue.process_table(queue.directory))
         self.assertEqual("held", json.loads(three.read_text())["state"])
         self.assertTrue(strange.exists())
 

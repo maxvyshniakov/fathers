@@ -21,6 +21,7 @@ from unittest import mock
 from slotfather import config as sf_config
 from slotfather import entry as sf_entry
 from slotfather import leases as sf_leases
+from slotfather import queue as sf_queue
 from slotfather import schedule as sf_schedule
 from slotfather import settings as sf_settings
 from slotfather import state as sf_state
@@ -223,7 +224,7 @@ class SequenceTests(unittest.TestCase):
                     mirror[path.name] = json.loads(path.read_text())
                     done.append("arrive")
                 elif op == "grant":
-                    sf_leases.grant(queue.directory, sf_leases.process_table(queue.directory))
+                    sf_leases.grant(queue.directory, sf_queue.process_table(queue.directory))
                     self.granted(queue, mirror, done)
                     done.append("grant")
                 elif op == "yield" and held and waiting:

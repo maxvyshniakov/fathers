@@ -49,6 +49,10 @@ try:
 except ImportError:
     shared = None
 try:
+    from slotfather import queue as stored  # the queue's reads (fathers#36)
+except ImportError:
+    stored = leases  # an older client's
+try:
     from slotfather import estimates as estimated  # the run-time estimates (fathers#35)
 except ImportError:
     estimated = schedule  # an older client's
@@ -58,7 +62,7 @@ assert pathlib.Path(config.__file__).resolve().parent.parent == root, config.__f
 directory, action = pathlib.Path(sys.argv[2]), sys.argv[3]
 if action == "look":
     with state.locked(directory):
-        live = leases.reap(directory, tables.processes())
+        live = stored.reap(directory, tables.processes())
     held = [e for _, e in live if e["state"] == "held"]
     waiters = [e for _, e in live if e["state"] != "held"]
     settings = orders.order_settings(directory)

@@ -20,6 +20,7 @@ from unittest import mock
 from slotfather import board as sf_board
 from slotfather import config as sf_config
 from slotfather import leases as sf_leases
+from slotfather import queue as sf_queue
 from slotfather import platform as sf_platform
 from slotfather import process as sf_process
 from slotfather import query as sf_query
@@ -65,8 +66,8 @@ class ProcessTableTests(unittest.TestCase):
                                                "SLOTFATHER_CORES": "4"})
         patcher.start()
         self.addCleanup(patcher.stop)
-        sf_leases._skipping.clear()  # pyright: ignore[reportPrivateUsage]
-        self.addCleanup(sf_leases._skipping.clear)  # pyright: ignore[reportPrivateUsage]
+        sf_queue._skipping.clear()  # pyright: ignore[reportPrivateUsage]
+        self.addCleanup(sf_queue._skipping.clear)  # pyright: ignore[reportPrivateUsage]
         (self.dir / "queue").mkdir(parents=True)
         me = os.getpid()
         start = sf_process.processes()[me][1]
@@ -110,7 +111,7 @@ class ProcessTableTests(unittest.TestCase):
         }
         changing: dict[str, Callable[[], Any]] = {
             "sweep": lambda: sf_sweep.leases(self.dir),
-            "grant": lambda: sf_leases.grant(self.dir, sf_leases.process_table(self.dir)),
+            "grant": lambda: sf_leases.grant(self.dir, sf_queue.process_table(self.dir)),
         }
         for name, run in FAILURES.items():
             for look_name, look in {**read_only, **changing}.items():
@@ -129,8 +130,8 @@ class ProcessTableTests(unittest.TestCase):
         self.assertTrue(self.live.exists())
         self.assertFalse(self.dead.exists(), "the next good table reaps the dead holder")
         self.assertEqual(["reap.skipped", "lease.reaped"], self.kinds())
-        sf_leases.process_table(self.dir)
-        sf_leases.process_table(self.dir)
+        sf_queue.process_table(self.dir)
+        sf_queue.process_table(self.dir)
         self.assertEqual(["reap.skipped", "lease.reaped", "reap.resumed"], self.kinds())
         self.assertTrue((self.dir / "queue.log").read_text().splitlines()[-1].endswith("reaping resumed: ps answers "
                                                                                       "again"))
@@ -140,8 +141,8 @@ class ProcessTableTests(unittest.TestCase):
         import eventcheck
         with mock.patch.object(sf_platform.subprocess, "run", side_effect=answer(0, "")):
             with self.assertRaises(sf_config.SlotError):
-                sf_leases.process_table(self.dir)
-        sf_leases.process_table(self.dir)
+                sf_queue.process_table(self.dir)
+        sf_queue.process_table(self.dir)
         self.assertEqual(["reap.skipped", "reap.resumed"], self.kinds())
         self.assertEqual([], eventcheck.validate_file(str(self.dir / "events.jsonl"), strict=True))
 

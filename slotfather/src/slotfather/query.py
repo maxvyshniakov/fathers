@@ -6,15 +6,15 @@ import math
 import time
 import sys
 from pathlib import Path
-from typing import Any, NamedTuple, cast
+from typing import Any, Callable, NamedTuple, cast
 
 from . import config as _config
 from . import entry as _entry
 from . import idle as _idle
-from . import leases as _leases
 from . import lineage as _lineage
 from . import platform as _platform
 from . import process as _process
+from . import queue as _queue
 from . import schedule as _schedule
 from . import settings as _settings
 from . import state as _state
@@ -22,57 +22,98 @@ from . import state as _state
 
 def snapshot(directory: Path | None = None) -> tuple[list[dict[str, Any]], list[tuple[Path, dict[str, Any], int]],
                                                     dict[int, tuple[int, str]]]:
-    """The live queue entries, the earlier queues' holders and the process table, taken under the queue lock so
-    that no holder starts or ends between the table and the entries."""
-    directory = directory or _config.state_dir()
-    with _state.locked(directory):
-        table = _leases.process_table(directory, log=False)
-        live = [entry for _, entry in _leases.reap(directory, table)]
-    return live, _leases.legacy_holders(table), table
+    """The live queue entries, the earlier queues' holders and the process table, from one look()."""
+    found = look(directory)
+    return [entry for _, entry in found.found], found.legacy, found.table
 
 
 class Look(NamedTuple):
-    """One look at the queue under its lock (#20): the process table, the live entries with their paths (reaped as
-    every look reaps them), the capacity basis and each entry's yield request read under that same lock, then the
-    earlier queues' holders and each held lease's idle mark. `live` are the entries as `status` and the dashboard
-    read them: a held one with `idle_since` (epoch seconds or None). `unknown` are the entries this client does not
-    know (state.unknown(); fathers#19), read under the same lock and left alone."""
+    """One look at the queue under its lock (#20, fathers#36): the process table, the live entries with their paths
+    (reaped as every look reaps them), the capacity basis and each entry's yield request read under that same lock,
+    then the earlier queues' holders, each held lease's idle mark, and the order settings and estimator the outlook
+    plans by. `live` are the entries as `status` and the dashboard read them: a held one with `idle_since` (epoch
+    seconds or None). `unknown` are the entries this client does not know (state.unknown(); fathers#19), read under
+    the same lock and left alone. Every reader of the queue takes one (`status`, `status --json`, the long-wait
+    line, `available`, `advise`, `slots`, the dashboard block, the sweep's protection)."""
     directory: Path
     table: dict[int, tuple[int, str]]
     found: list[tuple[Path, dict[str, Any]]]
     live: list[dict[str, Any]]
     basis: dict[str, Any]
     legacy: list[tuple[Path, dict[str, Any], int]]
-    asks: dict[int, dict[str, Any] | None]  # id() of an entry in `live` -> its yield request
+    asks: dict[str, dict[str, Any] | None]  # an entry's id (its file's stem) -> its yield request
     unknown: tuple[tuple[Path, dict[str, Any]], ...] = ()
     reserved: tuple[tuple[Path, dict[str, Any], int], ...] = ()  # the unknown ones whose holder is alive
+    settings: dict[str, Any] | None = None  # settings.order_settings(), with this client's environment
+    estimate: _schedule.Estimate | None = None  # queue.estimator(): the history read only when a plan asks
+
+    def id_of(self, entry: dict[str, Any]) -> str | None:
+        """The id (file stem) of an entry of this look, by identity: one of `live` or of `found`."""
+        for (path, raw), item in zip(self.found, self.live):
+            if entry is item or entry is raw:
+                return path.stem
+        return None
 
     def asked_of(self, entry: dict[str, Any]) -> dict[str, Any] | None:
-        return self.asks.get(id(entry))
+        found = self.id_of(entry)
+        return None if found is None else self.asks.get(found)
+
+    def phase_of(self, entry: dict[str, Any]) -> _entry.Phase:
+        """The entry's phase (entry.phase()), with its yield request and idle mark from this look."""
+        at = next((n for n, ((_, raw), item) in enumerate(zip(self.found, self.live)) if entry is item or entry is raw),
+                  None)
+        idle = None if at is None else self.live[at].get("idle_since")
+        return _entry.phase(entry, bool(self.asked_of(entry)), idle)
+
+    @property
+    def slots(self) -> int:
+        return int(self.basis["slots"])
+
+    @property
+    def other(self) -> int:
+        """The slots held without a known entry of this queue: earlier queues' holders and live unknown entries."""
+        return sum(count for _, _, count in [*self.legacy, *self.reserved])
+
+    @property
+    def held(self) -> int:
+        return held_slots(self.live, [*self.legacy, *self.reserved], self.slots)
+
+    @property
+    def free(self) -> int:
+        return max(0, self.slots - self.held)
+
+    @property
+    def draining(self) -> int:
+        return draining(self.held, self.slots)
 
 
-def look(directory: Path | None = None) -> Look:
+Table = dict[int, tuple[int, str]]
+
+
+def look(directory: Path | None = None, processes: Callable[[], Table] | None = None, log: bool = False) -> Look:
     """Look at the queue once, under its lock, as a plan reads it: a capacity saved meanwhile counts for the next
-    look, never for half of this one."""
+    look, never for half of this one. `processes` reads the process table under the lock (default
+    queue.process_table(); `status --json --pid` passes its native one); `log`: a look that reaps for a change
+    (the sweep's) says so when ps fails (queue.process_table())."""
     directory = directory or _config.state_dir()
     with _state.locked(directory):
-        table = _leases.process_table(directory, log=False)
-        found = _leases.reap(directory, table)
+        table = processes() if processes is not None else _queue.process_table(directory, log=log)
+        found = _queue.reap(directory, table)
         basis: dict[str, Any] = _settings.capacity_basis()
-        requests = [_state.asked(path) for path, _ in found]
+        requests = {path.stem: _state.asked(path) for path, _ in found}
         strange = tuple(_state.unknown(directory))
-        kept = tuple(_leases.reserved(directory, table))
+        kept = tuple(_queue.reserved(directory, table))
     marked = idle_of(directory, found)
     live = [dict(entry, idle_since=marked.get(id(entry))) if _entry.is_held(entry) else entry
             for _, entry in found]
-    return Look(directory, table, found, live, basis, _leases.legacy_holders(table),
-                {id(entry): request for entry, request in zip(live, requests)}, strange, kept)
+    return Look(directory, table, found, live, basis, _queue.legacy_holders(table), requests, strange, kept,
+                _settings.order_settings(directory), _queue.estimator(directory))
 
 
 def locked_snapshot(directory: Path | None = None) -> tuple[list[dict[str, Any]], list[tuple[Path, dict[str, Any], int]],
                                                            dict[int, tuple[int, str]], dict[str, Any]]:
     """look() as (live entries, the slots held without a known entry: earlier queues' holders and live unknown
-    entries (leases.reserved()), process table, capacity basis)."""
+    entries (queue.reserved()), process table, capacity basis)."""
     found = look(directory)
     return found.live, [*found.legacy, *found.reserved], found.table, found.basis
 
@@ -114,7 +155,7 @@ def expected(directory: Path, entries: list[dict[str, Any]], slots: int, other: 
     originals = {id(copy): e for copy, e in zip(waiters, waiting)}
     if not waiters:
         return {}
-    estimate = _leases.estimator(directory)
+    estimate = _queue.estimator(directory)
     window = _config.overtake_window()
     _schedule.fit(waiters, slots)
     starts = _schedule.forecast(waiters, held, slots, moment, estimate, other, settings, window) \
@@ -144,25 +185,21 @@ def expected(directory: Path, entries: list[dict[str, Any]], slots: int, other: 
 
 
 def status_lines(directory: Path | None = None) -> list[str]:
-    directory = directory or _config.state_dir()
-    with _state.locked(directory):  # the processes and capacity the plans of this moment read
-        table = _leases.process_table(directory, log=False)
-        live = _leases.reap(directory, table)
-        slots = _settings.total()
-        strange = _state.unknown(directory)
-        kept = _leases.reserved(directory, table)
-    legacy = _leases.legacy_holders(table)
-    marked = idle_of(directory, live)
-    expect = outlook(directory, [e for _, e in live], slots, sum(c for _, _, c in [*legacy, *kept]))
+    """`status`: one line per entry of one look(), the earlier queues' holders, unreadable and unknown entries, and
+    the slots held."""
+    found = look(directory)  # the processes and capacity the plans of this moment read
+    directory, table, live, slots = found.directory, found.table, found.found, found.slots
+    legacy = found.legacy
+    expect = outlook(directory, [e for _, e in live], slots, found.other)
     lines: list[str] = []
-    for path, e in live:
+    for (path, e), item in zip(live, found.live):
         meta = _entry.meta_of(e)
         tags = f" meta={_config.meta_text(meta)}" if meta else ""
-        since = marked.get(id(e))
+        since = item.get("idle_since") if _entry.is_held(e) else None
         if since is not None:  # #12: below the idle threshold for at least the idle duration
             tags += f" idle={_config.duration(time.time() - since)}"
         if e.get("yieldable"):
-            request = _state.asked(path) if _entry.is_held(e) else None
+            request = found.asks.get(path.stem) if _entry.is_held(e) else None
             tags += " yieldable" + (f" asked-to-yield-for={request.get('label')}" if request else "") + \
                 (f" yielded={e['yields']}" if e.get("yields") else "")
         if isinstance(e.get("session"), dict):
@@ -175,9 +212,8 @@ def status_lines(directory: Path | None = None) -> list[str]:
               for path, e, count in legacy]
     lines += [f"unreadable: queue/{path.name} (empty or not JSON; left in place)"
               for path in _state.unreadable(directory)]
-    lines += [f"unknown: {unknown_text(path, e, table)}" for path, e in strange]
-    used = held_slots([e for _, e in live], [*legacy, *kept], slots)
-    return lines + [held_line(used, slots)]
+    lines += [f"unknown: {unknown_text(path, e, table)}" for path, e in found.unknown]
+    return lines + [held_line(found.held, slots)]
 
 
 def unknown_holds(entry: dict[str, Any], table: dict[int, tuple[int, str]]) -> int:
@@ -259,18 +295,15 @@ def long_wait(directory: Path, path: Path) -> str | None:
 def long_wait_report(directory: Path, path: Path) -> tuple[str, dict[str, Any]] | None:
     """long_wait()'s line and its facts for the request.waiting_long event: {"waited" (seconds), "est_start" (UTC
     stamp or None), "behind": {"earlier", "running"}, "priority" (served), "aged"}."""
-    with _state.locked(directory):
-        table = _leases.process_table(directory, log=False)
-        live = _leases.reap(directory, table)
-        slots = _settings.total()
-        other = _leases.used_elsewhere(directory, table)
+    found = look(directory)
+    live = found.found
     mine = next((e for p, e in live if p == path), None)
     if mine is None or _entry.is_held(mine):
         return None
-    expect = outlook(directory, [e for _, e in live], slots, other).get(id(mine))
+    expect = outlook(directory, [e for _, e in live], found.slots, found.other).get(id(mine))
     if expect is None:
         return None
-    settings = _settings.order_settings(directory)
+    settings = found.settings or _settings.order_settings(directory)
     held, waiting = _entry.split(e for _, e in live)
     serving = _schedule.ranked(waiting, settings, time.time()) if settings["order"] == "backfill" else waiting
     ahead = next((n for n, e in enumerate(serving) if e is mine), 0)
@@ -323,11 +356,18 @@ def status_processes(directory: Path, pid: int | None = None) -> dict[int, tuple
             # Legacy clients use their own lock: a lease may appear during this observation.
             if any(entry["pid"] in table and not table[entry["pid"]][1]
                    for source in sources for _, entry in _state.entries(source) if type(entry.get("pid")) is int):
-                return _leases.process_table(directory, log=False)
+                return _queue.process_table(directory, log=False)
             return table
         except OSError:
             pass
-    return _leases.process_table(directory, log=False)
+    return _queue.process_table(directory, log=False)
+
+
+def pid_look(directory: Path | None, pid: int | None) -> Look:
+    """`status --json`'s look: its process table from status_processes() (the native one where every holder can
+    be seen)."""
+    directory = directory or _config.state_dir()
+    return look(directory, lambda: status_processes(directory, pid))
 
 
 def status_json(directory: Path | None = None, pid: int | None = None, look: Look | None = None) -> dict[str, Any]:
@@ -338,39 +378,28 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
     SLOTFATHER_LEASE; macOS shows that only for the user's own processes that are not Apple platform binaries), and
     `query`: the pid and its start time as `ps -o lstart=` gives it (None: not running), for a guard to check again
     that it is the same process before it acts."""
-    asks: dict[int, dict[str, Any] | None] | None = None
-    if look is not None:  # status --json --full: the look the dashboard block reads too (#20)
-        directory, table, slots = look.directory, look.table, int(look.basis["slots"])
-        live = look.found
-        strange = list(look.unknown)
-        kept = list(look.reserved)
-        marked = {id(entry): item.get("idle_since") for (_, entry), item in zip(look.found, look.live)}
-        asks = {id(entry): look.asked_of(item) for (_, entry), item in zip(look.found, look.live)}
-    else:
-        directory = directory or _config.state_dir()
-        with _state.locked(directory):
-            table = status_processes(directory, pid)
-            live = _leases.reap(directory, table)
-            slots = _settings.total()
-            strange = _state.unknown(directory)
-            kept = _leases.reserved(directory, table)
-        marked = idle_of(directory, live)
+    if look is None:  # status --json --full passes the look the dashboard block reads too (#20)
+        look = pid_look(directory, pid)
+    directory, table, slots = look.directory, look.table, look.slots
+    live = look.found
+    strange = list(look.unknown)
+    kept = list(look.reserved)
+    marked = {id(entry): item.get("idle_since") for (_, entry), item in zip(look.found, look.live)}
     entries_found: list[dict[str, Any]] = []
     for path, entry in live:
         item = entry_item(path, entry, table)
-        item.update(yield_asked=_state.asked(path) if asks is None else asks.get(id(entry)), position=None,
-                    idle_since=marked.get(id(entry)))
+        item.update(yield_asked=look.asks.get(path.stem), position=None, idle_since=marked.get(id(entry)))
         item["phase"] = _entry.phase(entry, bool(item["yield_asked"]), item["idle_since"]).name  # fathers#19
         if isinstance(entry.get("session"), dict):
             from .session import view
             item["session"] = view(path, entry)
         entries_found.append(item)
-    settings = _settings.order_settings(directory)
+    settings = look.settings or _settings.order_settings(directory)
     moment = time.time()
     waiting = [e for _, e in live if _entry.is_waiting(e)]
     serving = _schedule.ranked(waiting, settings, moment) if settings["order"] == "backfill" else waiting
     places = {id(e): n for n, e in enumerate(serving, 1)}
-    earlier = _leases.legacy_holders(table)
+    earlier = look.legacy
     # A guard asking about one process (--pid) needs no forecast.
     expect = outlook(directory, [e for _, e in live], slots, sum(c for _, _, c in [*earlier, *kept]), moment) \
         if pid is None else {}
@@ -432,7 +461,7 @@ def available(directory: Path | None = None, label: str = "", command: str = "")
     other = sum(count for _, _, count in legacy)
     slots = int(basis["slots"])
     return _schedule.room(waiters, max(0, slots - held_slots(live, legacy, slots)),
-                          held, _leases.estimator(directory), other, _settings.order_settings(), label=label,
+                          held, _queue.estimator(directory), other, _settings.order_settings(), label=label,
                           command=command, slots=slots, moment=time.time(), window=_config.overtake_window())
 
 
@@ -460,13 +489,13 @@ def advise(maximum: int | None = None, exclusive: bool = False, cores_now: int |
     whether a request waits, a request for `command` under `label` when given (else one of unknown run), with
     "run_estimate", the run the history expects of it (None: unknown, counted as the fallback)."""
     live, legacy, table, basis = locked_snapshot()
-    mine = _leases.inherited_lease(table)
+    mine = _queue.inherited_lease(table)
     holders = [e for e in live if _entry.is_held(e) and not (mine and e["pid"] == mine[1]["pid"])]
     other = sum(count for path, e, count in legacy if not (mine and path == mine[0]))
     slots = int(basis["slots"])
     held = sum(_entry.holds(e, slots) for e in holders) + other
     waiters = [e for e in live if _entry.is_waiting(e)]
-    estimate = _leases.estimator(_config.state_dir())
+    estimate = _queue.estimator(_config.state_dir())
     waiting = bool(waiters) and _schedule.room(waiters, max(0, slots - held), holders, estimate, other,
                                                _settings.order_settings(), label=label, command=command, slots=slots,
                                                moment=time.time(), window=_config.overtake_window()) == 0

@@ -255,11 +255,12 @@ def yield_command(argv: list[str]) -> int:
     lease is held again; returns at once when nothing asked. Exit 0 either way."""
     from . import leases as _leases
     from . import process as _process
+    from . import queue as _queue
     from . import state as _state
     if argv:
         raise _config.SlotError("yield takes no arguments")
     _state.require_own(_config.state_dir(), "yield")
-    found = _leases.inherited_lease(_process.processes())
+    found = _queue.inherited_lease(_process.processes())
     if found is None or found[0].parent.parent != _config.state_dir():
         raise _config.SlotError("yield runs inside a lease of this queue (SLOTFATHER_LEASE, or a holder among its ancestors)")
     if not _leases.yield_lease(found[0]):
@@ -408,9 +409,8 @@ def slots_command(argv: list[str]) -> int:
         _state.require_own(directory, "a capacity change")
         # applies at the next grant, busy or not (#7)
         _settings.configure({"capacity.json": slots_value(argv)}, granted=_leases.grant_now)
-    live, legacy, _, found = _query.locked_snapshot(directory)
-    held = _query.held_slots(live, legacy, int(found["slots"]))
-    drain = _query.draining(held, found["slots"])
+    look = _query.look(directory)
+    found, held, drain = look.basis, look.held, look.draining
     if drain:
         print(f"slotfather: note: {held} slots held: draining {drain}; running work keeps its slots and nothing "
               f"more starts until at most {found['slots']} are held", file=sys.stderr)

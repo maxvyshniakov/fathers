@@ -36,6 +36,7 @@ from . import facts as _facts
 from . import leases as _leases
 from . import platform as _platform
 from . import process as _process
+from . import queue as _queue
 from . import state as _state
 
 IDLE_DEFAULT = 120.0  # seconds without an active run before a session releases its slots
@@ -143,10 +144,10 @@ def start(argv: list[str]) -> int:
     spec = parse_start(argv)
     directory = _config.state_dir()
     _state.require_own(directory, "a session")
-    if _leases.inherited_lease(_process.processes()) is not None:
+    if _queue.inherited_lease(_process.processes()) is not None:
         raise _config.SlotError("a session cannot start inside a lease: it would wait for the slots its caller holds")
     with _state.locked(directory):  # the process table of this moment: one taken earlier would reap new waiters
-        found = find(_leases.reap(directory, _leases.process_table(directory)), spec["name"])
+        found = find(_queue.reap(directory, _queue.process_table(directory)), spec["name"])
     if found is not None:
         raise _config.SlotError(f"session {spec['name']} exists (pid {found[1].get('pid')}, {found[1].get('state')})")
     env = {k: v for k, v in os.environ.items() if k not in ("SLOTFATHER_LEASE", "SLOTFATHER_COUNT", "SLOTFATHER_YIELD")}
@@ -318,8 +319,8 @@ def stop(argv: list[str]) -> int:
     directory = _config.state_dir()
     _state.require_own(directory, "a session stop")
     with _state.locked(directory):
-        table = _leases.process_table(directory)
-        found = find(_leases.reap(directory, table), name)
+        table = _queue.process_table(directory)
+        found = find(_queue.reap(directory, table), name)
         if found is None:
             raise _config.SlotError(f"no session {name} in this queue")
         path, entry = found
@@ -338,7 +339,7 @@ def stop(argv: list[str]) -> int:
         if time.monotonic() - reaped >= 5:
             reaped = time.monotonic()
             with _state.locked(directory), contextlib.suppress(_config.SlotError):
-                _leases.reap(directory, _leases.process_table(directory))
+                _queue.reap(directory, _queue.process_table(directory))
     if path.exists():
         print(f"slot: session {name} still holds its slots after {STOP_WAIT:g} s", file=sys.stderr)
         return 1
@@ -366,11 +367,11 @@ def run_inside(name: str, argv: list[str], label: str | None = None, meta: dict[
     while True:
         with _state.locked(directory):
             try:
-                table = _leases.process_table(directory)
+                table = _queue.process_table(directory)
             except _config.ProcessTableError:
                 table = None  # no table to trust: this look reaps nothing, and the run looks again
             if table is not None:
-                found = find(_leases.reap(directory, table), name)
+                found = find(_queue.reap(directory, table), name)
                 if found is None:
                     raise _config.SlotError(f"no session {name} in this queue (slotfather session start --label {name})")
                 path, entry = found
