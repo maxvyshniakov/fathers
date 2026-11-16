@@ -29,7 +29,8 @@ class SettingsTests(LaneCase):
         self.assertEqual((found["v"], found["tool"], found["writable"]), (1, "lanefather", True))
         rows = self.rows(found)
         self.assertEqual(set(rows), {"review.start", "rerun.wait", *(f"slots.priority.{p}" for p in
-                                                                     ("check", "post-merge", "gate", "rerun", "perf"))})
+                                                                     ("check", "post-merge", "gate", "rerun", "perf")),
+                                     "host.min_disk_gb"})
         self.assertEqual((rows["review.start"]["value"], rows["review.start"]["source"]), ("auto", "default"))
         self.assertEqual(rows["rerun.wait"]["value"], 3300)
         self.assertEqual([c["value"] for c in rows["slots.priority.gate"]["choices"]],
@@ -127,3 +128,71 @@ class SettingsTests(LaneCase):
 
     def test_the_capabilities_advertise_settings(self):
         self.assertEqual(json.loads(self.lane("capabilities", "--json"))["dashboard"]["settings"], {"versions": [1]})
+
+    # The free-disk floor (fathers#163): LaneCase's 6 cores and 20 GB derive a cap of 3, so the derived floor is
+    # 40 reserve + 3 x 3.0 GB lane peak = 49 GB.
+
+    def floor_gb(self, warning: str = "") -> float:
+        output = self.lane("capabilities", "--json")
+        self.assertIn(warning, output)
+        return json.loads(next(line for line in output.splitlines() if line.startswith("{")))["host"]["min_disk_gb"]
+
+    def test_the_disk_floor_row_is_auto_and_describes_the_derived_floor(self):
+        row = self.rows(self.settings(cwd=self.integration))["host.min_disk_gb"]
+        self.assertEqual((row["type"], row["value"], row["default"], row["zero"], row["unit"]),
+                         ("number", 0, 0, "auto", "GB"))
+        self.assertEqual((row["source"], row["writable"], row["effective"]), ("default", True, 49))
+        self.assertEqual((row["min"], row["step"]), (0, 5))
+        self.assertGreater(row["max"], 1000)
+        self.assertIn("auto: 49 GB (10^9) = 40 reserve + 3 x 3.0 GB lane peak", row["description"])
+        self.assertEqual(self.floor_gb(), 49)
+
+    def test_the_saved_floor_sets_admission_capabilities_and_the_refusal_until_reset(self):
+        self.env["LANEFATHER_DISK_FREE_GB"] = "100"
+        found = self.settings("set", "host.min_disk_gb", "150")
+        row = self.rows(found)["host.min_disk_gb"]
+        self.assertEqual((row["value"], row["source"], row["effective"]), (150, "saved", 150))
+        self.assertIn("auto: 49 GB", row["description"])
+        self.assertEqual(self.floor_gb(), 150)
+        refused = self.start("a", "lib/**", ok=False)
+        self.assertIn("free disk is 100 GB (10^9), under the floor of 150 GB (10^9; lanefather settings "
+                      "host.min_disk_gb)", refused)
+        self.assertEqual(self.rows(self.settings("reset", "host.min_disk_gb"))["host.min_disk_gb"]["source"],
+                         "default")
+        self.assertEqual(self.floor_gb(), 49)
+        self.start("a", "lib/**")
+        # auto, and 0 (what an arrow down to the end sends), save the default: the file keeps no value.
+        self.settings("set", "host.min_disk_gb", "60.5")
+        self.assertEqual(self.floor_gb(), 60.5)
+        self.settings("set", "host.min_disk_gb", "auto")
+        self.assertNotIn("host.min_disk_gb", json.loads(self.file().read_text())["settings"])
+        self.settings("set", "host.min_disk_gb", "70")
+        self.settings("set", "host.min_disk_gb", "0")
+        self.assertEqual(self.floor_gb(), 49)
+
+    def test_the_environment_wins_over_the_saved_floor_and_makes_the_row_read_only(self):
+        self.settings("set", "host.min_disk_gb", "150")
+        self.env["LANEFATHER_MIN_DISK_GB"] = "70"
+        self.assertEqual(self.floor_gb(), 70)
+        row = self.rows(self.settings(cwd=self.integration))["host.min_disk_gb"]
+        self.assertEqual((row["value"], row["source"], row["writable"], row["effective"]),
+                         (70, "env LANEFATHER_MIN_DISK_GB", False, 70))
+        reply = self.settings("set", "host.min_disk_gb", "80", code=4)
+        self.assertIn("LANEFATHER_MIN_DISK_GB", reply["error"])
+        self.env["LANEFATHER_DISK_FREE_GB"] = "60"
+        self.assertIn("under the floor of 70 GB (10^9; LANEFATHER_MIN_DISK_GB)", self.start("a", "lib/**", ok=False))
+        # An invalid environment value warns and the saved floor applies.
+        self.env["LANEFATHER_MIN_DISK_GB"] = "lots"
+        self.assertEqual(self.floor_gb("LANEFATHER_MIN_DISK_GB='lots' is not auto or a positive number of GB"), 150)
+        # auto in the environment is the derived floor, over the saved one.
+        self.env["LANEFATHER_MIN_DISK_GB"] = "auto"
+        self.assertEqual(self.floor_gb(), 49)
+
+    def test_an_invalid_floor_is_refused_with_the_settings_error(self):
+        for bad in ("lots", "-5", "inf", "nan", "1e9", "", "50 GB"):
+            reply = self.settings("set", "host.min_disk_gb", bad, code=2)
+            self.assertEqual((reply["v"], reply["ok"], reply["preview"]), (1, False, None))
+            self.assertIn("host.min_disk_gb", reply["error"], bad)
+        self.assertFalse(self.file().exists())
+        self.assertIn("150 GB", self.settings("check", "host.min_disk_gb", "150")["preview"])
+        self.assertIn("derived", self.settings("check", "host.min_disk_gb", "auto")["preview"])

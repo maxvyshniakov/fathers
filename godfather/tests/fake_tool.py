@@ -33,6 +33,11 @@ ROWS: dict[str, list[tuple[str, str, str, str, str, Any, dict[str, Any], str, st
             {"choices": PRIORITY}, f"LANEFATHER_PRIORITY_{phase.upper().replace('-', '_')}",
             f"The Slotfather priority of this machine's {phase} runs; project follows the project's "
             "[slots.priority] and the built-in.") for phase in ("check", "post-merge", "gate", "rerun", "perf")),
+        # fathers#163: 0 is auto, the derived floor; `effective` is the floor start applies (a 3-lane cap here).
+        ("host", "Host", "host.min_disk_gb", "Free disk floor", "number", 0,
+         {"min": 0, "max": 100000, "step": 5, "unit": "GB", "zero": "auto", "effective": 49}, "LANEFATHER_MIN_DISK_GB",
+         "The free disk, in decimal GB, under which start refuses a lane; auto is the derived floor, a reserve plus "
+         "the lane cap times the largest recent lane. auto: 49 GB (10^9) = 40 reserve + 3 x 3.0 GB lane peak."),
     ],
     "junkfather": [
         ("own", "Owning", "own.default_ttl", "Default TTL", "duration", 7200,
@@ -111,6 +116,12 @@ def parse(tool: str, key: str, text: str) -> Any:
         if text not in allowed:
             raise ValueError(f"{key}: {text!r} is not one of {', '.join(allowed)}")
         return text
+    if kind == "number":
+        if text.strip().lower() == "auto":
+            return 0
+        if not re.fullmatch(r"\d+(?:\.\d+)?", text.strip()) or float(text) > extra["max"]:
+            raise ValueError(f"{key}: {text!r} is not auto or a number of decimal GB up to {extra['max']}")
+        return int(float(text)) if float(text).is_integer() else float(text)
     found = re.fullmatch(r"(\d+(?:\.\d+)?)([smhd]?)", text.strip())
     if not found:
         raise ValueError(f"{key}: {text!r} is not a duration; give seconds, or 90s, 30m, 2h, 1d")

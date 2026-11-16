@@ -41,7 +41,8 @@ checks or builds. You can also use protected-branch promotion with your own pre-
 - Slotfather when enabling its admission provider or configured execution leases.
 
 Admission is intentionally conservative. The disk guard requires free space on the home filesystem of **40 GB plus
-the lane cap times the largest recent lane** (decimal GB; `LANEFATHER_MIN_DISK_GB` sets it); cap and load checks
+the lane cap times the largest recent lane** (decimal GB; the machine setting `host.min_disk_gb` in
+`lanefather settings`, or `LANEFATHER_MIN_DISK_GB` above it, sets it); cap and load checks
 also apply. See
 [admission configuration and override semantics](docs/admission.md) before adoption.
 
