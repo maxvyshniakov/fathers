@@ -29,10 +29,10 @@ ROWS: dict[str, list[tuple[str, str, str, str, str, Any, dict[str, Any], str, st
         ("review", "Review", "rerun.wait", "Rerun waits", "duration", 3300,
          {"min": 1, "max": 86400, "step": 300, "unit": "s"}, "LANEFATHER_RERUN_WAIT",
          "How long a red check's rerun waits for its slot lease before its checks stay unclassified."),
-        ("slots", "Slot priorities", "slots.priority.check", "check priority", "choice", "project",
-         {"choices": PRIORITY}, "LANEFATHER_PRIORITY_CHECK",
-         "The Slotfather priority of this machine's check runs; project follows the project's [slots.priority] and "
-         "the built-in."),
+        *(("slots", "Slot priorities", f"slots.priority.{phase}", f"{phase} priority", "choice", "project",
+            {"choices": PRIORITY}, f"LANEFATHER_PRIORITY_{phase.upper().replace('-', '_')}",
+            f"The Slotfather priority of this machine's {phase} runs; project follows the project's "
+            "[slots.priority] and the built-in.") for phase in ("check", "post-merge", "gate", "rerun", "perf")),
     ],
     "junkfather": [
         ("own", "Owning", "own.default_ttl", "Default TTL", "duration", 7200,
@@ -46,6 +46,11 @@ ROWS: dict[str, list[tuple[str, str, str, str, str, Any, dict[str, Any], str, st
          "Between SIGTERM and SIGKILL when reap has no --grace; the sweep and the supervisor use it too."),
     ],
 }
+JUNK_ENVIRONMENT = (("JUNKFATHER_STATE", "State directory", "Where entries, logs, events and these settings live."),
+                    ("JUNKFATHER_SCRATCH_ROOTS", "Extra scratch roots",
+                     "Directories (colon-separated) the sweep treats like an agent's scratchpad."),
+                    ("JUNKFATHER_CLAUDE_SESSIONS", "Claude Code sessions", "Claude Code's live-session registry."),
+                    ("JUNKFATHER_LANE_RECORDS", "Lane records", "Where the lane of a working directory is looked up."))
 STATUS = {"lanefather": [("settings", "/fake/config/lanefather/settings.json"),
                          ("events", "/fake/state/lanefather/events.jsonl"),
                          ("projects", "2 registered in /fake/state/lanefather/projects.json")],
@@ -87,11 +92,11 @@ def document(state: dict[str, Any]) -> dict[str, Any]:
             row.update(source=f"env {variable}", writable=False, value=parse(tool, key, given))
         sections[-1]["settings"].append(row)
     if tool == "junkfather":
+        shown = {"JUNKFATHER_STATE": "/fake/state/junkfather", "JUNKFATHER_CLAUDE_SESSIONS": "/fake/claude/sessions"}
         sections.append({"id": "environment", "title": "Environment", "settings": [
-            {"key": "env.JUNKFATHER_STATE", "label": "State directory", "type": "text",
-             "value": "/fake/state/junkfather", "default": None, "source": "default", "writable": False,
-             "description": "Where entries, logs, events and these settings live. Set by JUNKFATHER_STATE; "
-                            "read-only here."}]})
+            {"key": f"env.{name}", "label": label, "type": "text", "value": shown.get(name), "default": None,
+             "source": "default", "writable": False, "description": f"{description} Set by {name}; read-only here."}
+            for name, label, description in JUNK_ENVIRONMENT]})
     return {"v": 1, "tool": tool, "writable": writable, "reason": None if writable else "/fake: is not writable",
             "revision": rev, "status": [{"label": label, "value": value} for label, value in STATUS[tool]],
             "sections": sections}

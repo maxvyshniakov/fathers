@@ -153,7 +153,8 @@ def mouse(canvas: Any, event: tuple[str, int, int, int, bool], scroll: dict[str,
     """One mouse event through the reducer on the frame `canvas` drew: `scroll` takes the panels' offsets after it;
     the selected index after it."""
     state = importlib.import_module("godfather.state")
-    found, _ = state.reduce(drawn_state(canvas, model, selected, scroll=dict(scroll)),
+    reducer = importlib.import_module("godfather.reducer")
+    found, _ = reducer.reduce(drawn_state(canvas, model, selected, scroll=dict(scroll)),
                             state.Mouse(event[1], event[2], event[3], event[4]), 0.0)
     scroll.clear()
     scroll.update(found.scroll)

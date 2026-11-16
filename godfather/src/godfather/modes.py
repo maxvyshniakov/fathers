@@ -88,7 +88,7 @@ def scroll_panel(state: AppState, key: str) -> Result:
     if not view:
         return state, []
     visible, count = int(view["visible"]), int(view["count"])
-    last = _layout.clamp_scroll(count, count, visible)  # the last offset: the bottom
+    last = _layout.last_offset(count, visible)
     offset = state.scroll.get(state.focus, int(view["offset"]))
     moves = {"up": -1, "k": -1, "down": 1, "j": 1, "page_up": -max(1, visible - 1), "page_down": max(1, visible - 1)}
     offset = 0 if key in ("home", "g") else last if key in ("end", "G") else offset + moves[key]
@@ -183,7 +183,7 @@ PANEL: dict[str, Handler] = {**MAIN, **{key: scroll_panel for key in NAVIGATION}
 def scroll_overlay(state: AppState, key: str) -> Result:
     overlay = cast(Union[Help, Changelog], state.overlay)
     view = overlay_box(state, overlay)
-    page, last = max(1, view.visible - 1), _layout.clamp_scroll(view.total, view.total, view.visible)
+    page, last = max(1, view.visible - 1), _layout.last_offset(view.total, view.visible)
     moves = {"j": 1, "down": 1, "k": -1, "up": -1, "page_down": page, " ": page, "page_up": -page}
     offset = 0 if key in ("g", "home") else last if key in ("G", "end") else view.offset + moves[key]
     return dataclasses.replace(state, overlay=dataclasses.replace(
@@ -258,7 +258,7 @@ def settings_digit(panel: _settings.Panel, context: _settings.Context, key: str,
 
 def settings_reset_all(panel: _settings.Panel, context: _settings.Context, _: str, now: float) -> _settings.Result:
     """D: once, it asks; again within the flash, the selected row's section is reset."""
-    if panel.armed is not None and now - panel.armed < _settings.FLASH_SECONDS:
+    if panel.armed is not None and panel.armed_tool == panel.focus[0] and now - panel.armed < _settings.FLASH_SECONDS:
         return _settings.reset_section(panel, context, now)
     return _settings.arm(panel, now), context, []
 
@@ -339,7 +339,7 @@ def settings_press(state: AppState, key: str, now: float) -> Result:
     panel = cast(SettingsOverlay, state.overlay)
     which = mode(state)
     if which == "settings" and panel.armed is not None and key != "D":
-        state = dataclasses.replace(state, overlay=_settings.replace(panel, armed=None, flash=None))
+        state = dataclasses.replace(state, overlay=_settings.replace(panel, armed=None, armed_tool="", flash=None))
     handler = SETTINGS_TABLE[which].get(key)
     return handler(state, key, now) if handler else (state, [])
 
@@ -394,7 +394,7 @@ def mode(state: AppState) -> str:
     return "main" if state.focus == "requests" else "panel"
 
 
-def press(state: AppState, key: str, now: float = 0.0) -> Result:
+def press(state: AppState, key: str, now: float) -> Result:
     """A key in the current mode: a hotkey by its US-QWERTY position (#13) unless a Settings value is typed."""
     overlay = state.overlay
     if isinstance(overlay, SettingsOverlay):
@@ -407,7 +407,7 @@ def press(state: AppState, key: str, now: float = 0.0) -> Result:
 
 # The mouse
 
-def click(state: AppState, event: Mouse, now: float = 0.0) -> Result:
+def click(state: AppState, event: Mouse, now: float) -> Result:
     """The mouse in the current mode. In an overlay the wheel scrolls it, a click on one of what's new's tool filters
     shows that tool and a click outside closes it; on the main
     screen the footer's `Godfather what's new?` opens what's new, a click focuses the panel it lands in and selects a QUEUE row,
@@ -468,7 +468,7 @@ def panel_at(state: AppState, x: int, y: int) -> Union[str, None]:
     return None
 
 
-def dispatch(state: AppState, event: Union[Key, Mouse], now: float = 0.0) -> Result:
+def dispatch(state: AppState, event: Union[Key, Mouse], now: float) -> Result:
     """A key or a mouse event at `now` (Settings times its changes): a click on a footer hint is the hint's key."""
     if isinstance(event, Mouse):
         hint = state.frame.hint_at(event.x, event.y) if event.pressed and event.button & ~28 == LEFT else None

@@ -35,6 +35,7 @@ from .adapters import slotfather as _slotfather
 from .adapters.settings import Conflict, ReadOnly, SettingsClient, SettingsError
 from .adapters.slotfather import Unsupported
 from .sources import SnapshotError, Source
+from . import reducer as _reducer
 from . import state as _state
 from .tui import Canvas, Jobs, Loader, full_screen, read_keys
 from .views import common as _common
@@ -112,6 +113,9 @@ class Screen:
         self.others = others if others is not None else [Source(name, _events.EventsContract(name))
                                                          for name in _sources.TOOLS if name != "slotfather"]
         self.feed = _events.Feed()
+        # Settings' own view of the tools (fathers#87 review): discovered and read on Settings' worker alone, never on
+        # the screen's thread nor on the Source objects the model loader uses
+        self.settings_found = [Source(name, _settings_adapter.Contract(name)) for name in _sources.TOOLS]
         self.rows: list[dict[str, Any]] = []
         self.followed: tuple[tuple[str, str], ...] = ()
 
@@ -179,14 +183,14 @@ class Screen:
         return [self.source, *self.others]
 
     def settings_client(self, tool: str) -> SettingsClient:
-        source = next((found for found in self.sources() if found.name == tool), None)
+        source = next((found for found in self.settings_found if found.name == tool), None)
         return SettingsClient(source.executable if source else None, tool)
 
     def settings_sections(self) -> list[_settings_model.Section]:
         """Settings as it opens (fathers#87): a section for each present tool, read once now; one without a settings
         contract this Godfather reads says why in its section, an absent one has none."""
         found: list[_settings_model.Section] = []
-        for source in self.sources():
+        for source in self.settings_found:
             if source.due():
                 source.discover()
             name = source.name
@@ -205,6 +209,8 @@ class Screen:
 
     def settings_call(self, request: _settings_model.Request) -> _state.Event:
         """One settings call for the panel, answered as the event the reducer takes."""
+        if request.kind == "open":
+            return _state.SettingsSections(tuple(self.settings_sections()))
         client = self.settings_client(request.tool)
         if request.kind == "read":
             try:
@@ -234,6 +240,8 @@ class Screen:
 def settings_failed(request: _settings_model.Request, failure: BaseException) -> _state.Event:
     """A settings call that raised what settings_call() does not expect: its answer, a failure."""
     why = str(failure) or type(failure).__name__
+    if request.kind == "open":
+        return _state.SettingsSections((), why)
     if request.kind == "read":
         return _state.SettingsRead(request.tool, request.generation, None, why)
     if request.kind == "check":
@@ -304,7 +312,7 @@ class Live:
     def send(self, event: _state.Event) -> None:
         """One event through the reducer, and its effects carried out; any change is drawn at the next pass."""
         before = self.state
-        self.state, effects = _state.reduce(self.state, event, time.monotonic())
+        self.state, effects = _reducer.reduce(self.state, event, time.monotonic())
         self.dirty = self.dirty or self.state is not before
         for effect in effects:
             self.carry_out(effect)
@@ -334,13 +342,8 @@ class Live:
         elif kind == "settings":
             self.asked += 1
             self.settings.request(self.asked, effect.item)
-        elif kind == "open-settings":
-            try:
-                sections = self.screen.settings_sections()
-            except (SettingsError, OSError) as failure:
-                self.send(_state.SettingsFailed(str(failure)))
-                return
-            self.send(_state.SettingsOpened(tuple(sections)))
+        elif kind == "open-settings":  # at once; the tools' sections come from Settings' worker (fathers#87 review)
+            self.send(_state.SettingsOpened((), loading=True))
 
     def settings_work(self, request: _settings_model.Request) -> _state.Event:
         try:
@@ -508,10 +511,22 @@ def event_text(event: _events.Event, tag: str) -> str:
     return _events.CONTROL.sub(" ", "  ".join(field for field in fields if field).rstrip())
 
 
+def split_options(argv: list[str]) -> list[str]:
+    """`--opt=value` as `--opt value` (docs/cli.md): every long option that takes a value takes both forms."""
+    found: list[str] = []
+    for arg in argv:
+        if arg.startswith("--") and "=" in arg:
+            found += arg.split("=", 1)
+        else:
+            found.append(arg)
+    return found
+
+
 def events_command(argv: list[str]) -> int:
     """`godfather events [--source NAME]... [--follow] [--json]`: every present source's events merged, newest last;
     --follow keeps printing what the logs gain (checked every 250 ms), --json prints the lines as read. An absent
     source is left out; a present one that is unsupported is named on stderr. Never in colour."""
+    argv = split_options(argv)
     names: list[str] = []
     follow = as_json = False
     while argv:
@@ -566,6 +581,7 @@ def events_command(argv: list[str]) -> int:
 def command(argv: list[str]) -> int:
     if argv[:1] == ["events"]:
         return events_command(argv[1:])
+    argv = split_options(argv)
     interval, run_once, colour, width, height = None, False, None, None, None
     while argv:
         if argv[0] == "--once":
@@ -573,7 +589,7 @@ def command(argv: list[str]) -> int:
         elif argv[0] == "--color":
             colour, argv = True, argv[1:]
         elif argv[0] in ("--version", "-V") and len(argv) == 1:
-            print(_version.text(_version.running_identity()) if _version.running_source() else _version.VERSION)
+            print(_version.text(_version.running_identity()) if _version.running_source() else f"godfather {_version.VERSION}")
             return 0
         elif argv[0] in ("--help", "-h"):
             print(USAGE)
@@ -608,8 +624,8 @@ def command(argv: list[str]) -> int:
     if run_once:
         return once(width, height, colour, interval, resolved)
     if not sys.stdin.isatty() or not sys.stdout.isatty():
-        print(USAGE, file=sys.stderr)
         print("godfather: the live view needs an interactive terminal; --once prints one frame", file=sys.stderr)
+        print("Try 'godfather --help'.", file=sys.stderr)
         return 2
     try:
         dashboard_live(interval, theme)

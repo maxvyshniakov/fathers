@@ -18,16 +18,18 @@ from cliconvention import Command
 
 PACKAGE = Path(__file__).resolve().parents[1]
 
-# `events --json` reads the installed tools' logs, so only its help and refusals are checked here.
-TOOL = cliconvention.Tool("godfather", (sys.executable, str(PACKAGE / "godfather")), (Command("events"),))
-EXPECTED: dict[str, str] = {}
+# `events` runs with no tool on PATH (prepare()), so it reads no log: what is checked is how it takes its options.
+TOOL = cliconvention.Tool("godfather", (sys.executable, str(PACKAGE / "godfather")),
+                          (Command("events", json=(), option=("--source", "slotfather")),))
+# `godfather events --json` prints the logs' lines as JSON Lines, a stream (SPEC.md), not one state object with `v`.
+EXPECTED = {"events --json": "fathers#154"}
 
 
 class CLIConvention(cliconvention.conformance(TOOL, expected=EXPECTED)):
     def prepare(self, tool: cliconvention.Tool) -> cliconvention.Tool:
         root = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, root, True)
-        environment = dict(os.environ, XDG_CONFIG_HOME=root, XDG_STATE_HOME=root, NO_COLOR="1")
+        environment = dict(os.environ, XDG_CONFIG_HOME=root, XDG_STATE_HOME=root, NO_COLOR="1", PATH=root)
         return cliconvention.Tool(tool.name, tool.argv, tool.commands, environment, root)
 
 

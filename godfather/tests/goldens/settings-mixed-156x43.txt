@@ -1,5 +1,5 @@
 ╭─ SLOTS ───────────────────────────────────────────────────── 12 cores · 6 slots (manual) ─╮ ╭─ LEASE DETAILS ────────────────────────────────────────────╮
-│                                     ╭─ SETTINGS ─────────────────────── saved at once · applies at the next grant ─╮                                     │
+│                                     ╭─ SETTINGS ────────────────────── a change saves after a second, or on Enter ─╮                                     │
 │  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅│                                                                              │uild-once                            │
 │  lane-644-bui…  lane-465-sta…  deskt│  GODFATHER · this dashboard only                                            ┃│1 slot                               │
 ╰─────────────────────────────────────│    Refresh every             1s                                             ┃│                                     │
@@ -21,10 +21,10 @@
 │  11:55:44  ▪▪      desktop          │    Overtaking stops after    never                                          ┃│                                     │
 │  11:55:31  ▫       desktop          │    Interactive head start    30m                                            ┃│uild-once                            │
 │  11:55:26  ▫       agent-a1c75285bdf│    Batch held back           30m                                            ┃│queue-347                            │
-│  11:55:00  ▫       desktop          │    Batch promoted after      30m                                            ┃│s                                    │
-│  11:54:02  ▫       agent-a1c75285bdf│    Normal promoted after     1h                                             ┃│d                                    │
-│  11:52:53  ▫       agent-a1c75285bdf│    Warn after waiting        30m                                            ┃│fication_plan.py, tools/verify.py,   │
-│  11:52:30  ▫       desktop          │    Idle when below           0.1 cores                                      ┃│in-module.sh, tools/test-build-      │
+│  11:55:00  ▫       desktop          │    Batch promoted after      30m                                            ╹│s                                    │
+│  11:54:02  ▫       agent-a1c75285bdf│    Normal promoted after     1h                                              │d                                    │
+│  11:52:53  ▫       agent-a1c75285bdf│    Warn after waiting        30m                                             │fication_plan.py, tools/verify.py,   │
+│  11:52:30  ▫       desktop          │    Idle when below           0.1 cores                                       │in-module.sh, tools/test-build-      │
 │  11:51:40  ▫       post-merge-456-re│    Idle for                  5m                                              │ule.py, tools/app-build.py,          │
 │  11:51:24  ▫       agent-a1c75285bdf│    Ask to yield after        2m                                              │-app-build.py, tools/cargo-test.py,  │
 │  11:49:34  ▫▫      data-grid        │  ──────────────────────────────────────────────────────────────────────────  │opment.md, tools/test-cargo-build-   │

@@ -16,12 +16,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, cast
 from unittest import mock
 
 from helpers import FakeSlotfather, FakeTool
 
-from godfather import app, settings_model, state as state_module, tui
+from godfather import app, reducer, settings_model, state as state_module, tui
+from godfather.text import span
 from godfather.views import settings as settings_view
 
 SNAPSHOTS = Path(__file__).resolve().parent / "snapshots"
@@ -97,23 +98,34 @@ class Clock:
 
 
 class Settings:
-    """Settings in an app state, as the live view drives it: keys, clicks and ticks through state.reduce(), every
+    """Settings in an app state, as the live view drives it: keys, clicks and ticks through reducer.reduce(), every
     settings call it asks for carried out at once (app.Screen.settings_call) and its answer sent back."""
 
     def __init__(self, clock: Clock, interval: float = 1.0, theme: str = "auto",
                  model: Optional[dict[str, Any]] = None, width: int = 90, height: int = 40) -> None:
         self.clock, self.screen = clock, app.Screen()
+        self.deferred = False  # True: settings calls wait in `waiting` until answer() (a slow tool, the live worker)
+        self.waiting: list[Any] = []
         self.state = state_module.AppState(interval=interval, theme=theme, model=model or idle(),
                                            frame=state_module.Frame(width, height))
         self.send(state_module.SettingsOpened(tuple(self.screen.settings_sections())))
 
     def send(self, event: Any) -> list[str]:
         """The effects' kinds, the answers' too; each settings call is answered before this returns."""
-        self.state, effects = state_module.reduce(self.state, event, self.clock.now)
+        self.state, effects = reducer.reduce(self.state, event, self.clock.now)
         kinds = [effect.kind for effect in effects]
         for effect in effects:
-            if effect.kind == "settings":
+            if effect.kind == "settings" and self.deferred:
+                self.waiting.append(effect.item)
+            elif effect.kind == "settings":
                 kinds += self.send(self.screen.settings_call(effect.item))
+        return kinds
+
+    def answer(self, count: int = 1) -> list[str]:
+        """The oldest `count` deferred calls carried out and answered, in order, as the live worker does."""
+        kinds: list[str] = []
+        for _ in range(count):
+            kinds += self.send(self.screen.settings_call(self.waiting.pop(0)))
         return kinds
 
     def key(self, *names: str) -> list[str]:
@@ -263,6 +275,8 @@ class RenderTests(PanelCase):
 
     def test_editing_a_field_previews_what_a_shrink_drains(self) -> None:
         self.assertEqual(0, self.tool("slots", "4").returncode)
+        if not self.real:
+            self.fake.update(held=4, waiting=[1])  # the preview is Slotfather's, from its queue
         settings = self.open(model=busy(4, 4, 1))
         settings.key("down", "\r", "1")
         self.assert_snapshot("editing", settings.text(busy(4, 4, 1)))
@@ -442,6 +456,8 @@ class KeyTests(PanelCase):
     def test_typed_capacity_has_an_upper_bound_and_a_large_grow_says_what_starts(self) -> None:
         self.assertEqual(0, self.tool("slots", "4").returncode)
         model = {**busy(4, 4, 3), "waiters": waiters(2, 6, 1)}
+        if not self.real:
+            self.fake.update(held=4, waiting=[2, 6, 1])  # the preview is Slotfather's, from its queue
         settings = self.open(model=model)
         settings.key("down", "\r", "4", "9")
         self.assertIn("✗ At most 48 slots (4 per core).", settings.text(model))
@@ -762,6 +778,113 @@ class ContractTests(PanelCase):
         self.assertEqual(before + 1, reads(), "not under a value being typed")
 
 
+class DeferredTests(PanelCase):
+    """fathers#87 review: what happens while a tool has not answered yet, as on the live worker."""
+
+    def test_a_second_change_made_before_the_first_save_answers_is_not_a_conflict(self) -> None:
+        settings = self.open()
+        settings.select(SAFETY)
+        settings.deferred = True
+        settings.key("right")
+        settings.answer(len(settings.waiting))  # its check
+        settings.key("\r")  # saves 3.5: the set is under way, not answered
+        self.assertEqual(["set"], [request.kind for request in settings.waiting])
+        settings.select(("slotfather", "order.fallback"))
+        settings.key("right")
+        settings.answer(len(settings.waiting))  # the first set and the second change's check
+        settings.key("\r")
+        while settings.waiting:
+            settings.answer()
+        self.assertEqual((3.5, 3660.0), (self.saved_order()["safety"], self.saved_order()["fallback"]),
+                         "both saved")
+        self.assertNotIn("changed", settings.text(idle()), "the user's own changes never conflict")
+        revisions = [argv[argv.index("--revision") + 1] for argv in self.writes()]
+        self.assertEqual(2, len(set(revisions)), "the second went with the revision the first save gave")
+
+    def test_a_change_made_while_a_save_is_under_way_waits_for_its_answer(self) -> None:
+        settings = self.open()
+        settings.select(SAFETY)
+        settings.deferred = True
+        settings.key("right")
+        settings.answer(len(settings.waiting))
+        settings.key("\r", "right")  # the set of 3.5 under way, then 4 and its check
+        self.assertEqual(["set", "check"], [request.kind for request in settings.waiting])
+        settings.send(settings.screen.settings_call(settings.waiting.pop(1)))  # the check answers first
+        settings.key("\r")
+        self.assertEqual(["set"], [request.kind for request in settings.waiting], "one set at a time per tool")
+        while settings.waiting:
+            settings.answer()
+        self.assertEqual(4.0, self.saved_order()["safety"])
+        self.assertEqual(2, len(self.writes()))
+
+    def test_a_value_whose_check_refused_or_has_not_answered_is_never_sent(self) -> None:
+        if self.real:
+            self.skipTest("the fake's refusal")
+        settings = self.open()
+        settings.key("right")  # Capacity Fixed
+        settings.key("\r")
+        self.fake.update(memory_gib=None)  # Memory needs the machine's memory: its check refuses
+        settings.tick(settings_model.READ_EVERY["slotfather"])
+        settings.deferred = True
+        settings.key("right")  # Memory, its check not answered
+        settings.tick(settings_model.SETTLE_SECONDS)
+        self.assertNotIn("set", [request.kind for request in settings.waiting], "no save before its check")
+        while settings.waiting:
+            settings.answer()
+        settings.tick(settings_model.SETTLE_SECONDS)
+        settings.key("\r")
+        self.assertEqual([], [argv for argv in self.writes() if "memory" in argv], "a refused value is never sent")
+        settings.key("down")  # moving on drops it, its reason kept under its row
+        self.assertIsNone(settings.panel.pending)
+        self.assertIn("memory is unknown", settings.text(idle()))
+        self.assertEqual({"slots": 4}, self.saved_capacity())
+
+    def test_enter_on_a_typed_value_waits_for_its_check_then_saves(self) -> None:
+        settings = self.open()
+        settings.select(SAFETY)
+        settings.deferred = True
+        settings.key("5")
+        settings.key("\r")
+        self.assertTrue(settings.panel.editing, "not saved before its check says yes")
+        self.assertEqual(["check"], [request.kind for request in settings.waiting])
+        while settings.waiting:
+            settings.answer()
+        self.assertFalse(settings.panel.editing)
+        self.assertEqual(5.0, self.saved_order()["safety"])
+
+    def test_typing_in_one_section_does_not_stop_the_others_refreshing(self) -> None:
+        if self.real:
+            self.skipTest("the fake tools sit beside the fake Slotfather")
+        lane = FakeTool("lanefather", self.fake.bin)
+        settings = self.open()
+        settings.select(SAFETY)
+        settings.key("\r")
+        def reads(fake: Any) -> int:
+            return sum(argv == ["settings", "--json"] for argv in cast(list[list[str]], fake.argv()))
+
+        before = (reads(self.fake), reads(lane))
+        settings.tick(3)
+        self.assertEqual(before[0], reads(self.fake), "not the section being typed in")
+        self.assertEqual(before[1] + 1, reads(lane), "the others go on")
+
+    def test_d_twice_resets_only_the_section_it_was_asked_in(self) -> None:
+        if self.real:
+            self.skipTest("the fake tools sit beside the fake Slotfather")
+        junk = FakeTool("junkfather", self.fake.bin, values={"reap.grace": 30})
+        self.tool("order", "--safety", "4")
+        settings = self.open()
+        settings.show(idle(), 90, 70)
+        settings.select(SAFETY)
+        settings.key("D")
+        settings.click(*settings.hit(("junkfather", "reap.grace")))  # another section, by the mouse
+        settings.key("D")
+        self.assertEqual([], self.writes(junk) + self.writes(), "the first D asked about Slotfather")
+        self.assertIn("Press D again to reset every Junkfather setting", settings.text(idle(), height=70))
+        settings.key("D")
+        self.assertEqual([["settings", "reset", "--all", "--json"]], self.writes(junk))
+        self.assertEqual(4.0, self.saved_order()["safety"])
+
+
 class SectionTests(PanelCase):
     """Lanefather's and Junkfather's sections (fathers#87), against the fakes of tests/fake_tool.py."""
 
@@ -881,7 +1004,7 @@ class ModelTests(unittest.TestCase):
     def test_durations(self) -> None:
         for seconds, text in ((3600, "1h"), (1800, "30m"), (5400, "1h30m"), (45, "45s"), (0, "0s"), (0.1, "0.1s"),
                               (90000, "1d1h"), (3601, "1h1s"), (3300, "55m")):
-            self.assertEqual(text, settings_model.duration(seconds), seconds)
+            self.assertEqual(text, span(seconds, compact=True), seconds)
 
     def test_an_unknown_type_is_shown_read_only(self) -> None:
         found = self.section({"key": "a.colour", "label": "Accent", "type": "colour", "value": "#ff0000",
@@ -919,6 +1042,7 @@ class ModelTests(unittest.TestCase):
         context = settings_model.Context(width=90, height=40)
         panel = settings_model.opened([self.section(row)], context, 0.0)
         panel, context, _ = settings_model.step(panel, context, 1, 0.0)
+        panel = settings_model.replace(panel, checked={("lanefather", "a.wait", "120", "r1"): {"ok": True}})
         panel, context, requests = settings_model.commit_pending(panel, context, 0.1)
         self.assertEqual([("set", "a.wait", "120", "r1")],
                          [(request.kind, request.key, request.value, request.revision) for request in requests])

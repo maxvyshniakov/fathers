@@ -165,6 +165,21 @@ DESCRIPTIONS = {
     "idle_cpu": "A lease below this for the idle time is idle (💤); 0: never.",
     "idle_after": "Below the idle cores this long: idle, and asked if it can yield.",
 }
+def effect(slots: int, state: dict[str, Any]) -> str:
+    """What a capacity of `slots` would do, as Slotfather's settings.effect() says it from its queue: `held` slots
+    held and `waiting` the waiting requests' slot counts in queue order (state keys; none by default)."""
+    held, waiting = int(state.get("held", 0)), [int(count) for count in state.get("waiting", [])]
+    drain = max(0, held - slots)
+    free, started = slots - held, 0
+    for count in waiting:
+        if 0 < count <= free:
+            free, started = free - count, started + 1
+    found = f"→ {slots} slot{'' if slots == 1 else 's'}"
+    if drain:
+        return found + f" · will drain {drain}: running work keeps its slots"
+    return found + (f" · will start {started} waiting" if started else "")
+
+
 FOREIGN = "the queue /fake/state belongs to uid 502 (other); only that user can change its settings"
 
 
@@ -286,7 +301,7 @@ def main(argv: list[str]) -> int:
         if args[1].startswith("capacity."):
             answer["slots"] = basis(dict(state, capacity=capacity))["slots"] if capacity else \
                 basis(dict(state, capacity=None))["slots"]
-            answer["preview"] = f"→ {answer['slots']} slot{'' if answer['slots'] == 1 else 's'}"
+            answer["preview"] = effect(answer["slots"], state)
         return reply(answer)
     expected = args[args.index("--revision") + 1] if "--revision" in args else None
     args = [arg for index, arg in enumerate(args) if arg != "--revision" and (index == 0 or args[index - 1] != "--revision")]

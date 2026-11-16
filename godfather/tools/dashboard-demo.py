@@ -186,6 +186,7 @@ def frames(steps: list[Step], times: list[float], width: int, height: int, palet
     """The live dashboard's screens at `times` (seconds) with `steps` pressed, in colour: the real reducer and
     renderer over the scene, its clock moved by hand and every load done at once, so each run gives the same
     frames."""
+    from godfather import reducer as _reducer
     from godfather import state as _state
     from godfather.tui import Canvas
     from godfather.views import overview
@@ -202,7 +203,7 @@ def frames(steps: list[Step], times: list[float], width: int, height: int, palet
 
     def send(event: Any) -> None:
         nonlocal current
-        current, effects = _state.reduce(current, event, moment[0])
+        current, effects = _reducer.reduce(current, event, moment[0])
         for effect in effects:
             if effect.kind == "load-details":
                 lane, cwd = app.load_details(effect.item)

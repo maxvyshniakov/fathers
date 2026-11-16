@@ -226,7 +226,12 @@ def resource_bars(width: int, values: int, shorts: int) -> tuple[int, bool]:
 def clamp_scroll(offset: int, total: int, visible: int) -> int:
     """A scroll offset kept in range: from the top to where the last row is the last shown (fathers#141: the one
     clamp every panel, overlay and key uses)."""
-    return max(0, min(offset, max(0, total - visible)))
+    return max(0, min(offset, last_offset(total, visible)))
+
+
+def last_offset(total: int, visible: int) -> int:
+    """The offset that shows the last row last: the bottom of a scroll."""
+    return max(0, total - visible)
 
 
 def overlay_text(width: int, most: int, inset: int) -> int:

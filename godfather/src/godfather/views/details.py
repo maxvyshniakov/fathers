@@ -9,8 +9,8 @@ from typing import Any, Optional, cast
 
 from ..adapters import lanefather as _lanefather
 from ..layout import Rect
-from ..tui import SPINNER, Canvas, clip, clock, dashboard_text, megabytes, minutes, safe_link, short, span, text_width, \
-    tilde
+from ..tui import SPINNER, Canvas, safe_link
+from ..text import clip, clock, dashboard_text, megabytes, minutes, short, span, text_width, tilde
 from ..widgets import Panel, Part, Table, label_column
 from .common import (Item, Marks, Model, bar, expected_run, marks_of, meta_text, priority_mark, priority_of, share,
                      share_style, ticket_of)

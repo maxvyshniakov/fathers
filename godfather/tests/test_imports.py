@@ -1,6 +1,6 @@
 """The package's layers (fathers#141): data → layout → views → app. A module imports only from its own layer or one
 below it, so the reducer (state, modes) reads no view, and the views read the state they draw; one scroll clamp
-(layout.clamp_scroll) and one hint lookup (tui.hint_at)."""
+(layout.clamp_scroll) and one hint lookup (text.hint_at)."""
 from __future__ import annotations
 
 import ast
@@ -11,10 +11,11 @@ from pathlib import Path
 PACKAGE = Path(__file__).resolve().parents[1] / "src" / "godfather"
 LAYERS = {
     # what the tools say and how it is read: no geometry, no drawing
-    "data": ("keys", "theme", "version", "eventcheck", "sources", "events", "news", "entries", "adapters", "tui"),
-    # where things go and the one state and its reducer
-    "layout": ("layout", "widgets", "overlay_text", "settings_model", "state", "modes"),
-    "views": ("views",),
+    "data": ("keys", "theme", "version", "eventcheck", "sources", "events", "news", "entries", "adapters", "text"),
+    # where things go and the one state and its reducer: no canvas, no terminal
+    "layout": ("layout", "overlay_text", "settings_model", "state", "modes", "reducer"),
+    # drawing: the canvas and terminal (tui), the shared widgets, the screens
+    "views": ("tui", "widgets", "views"),
     "app": ("app", "__main__", "__init__"),
 }
 ORDER = list(LAYERS)
@@ -58,22 +59,33 @@ class LayerTests(unittest.TestCase):
                     self.assertLessEqual(ORDER.index(layer_of(target)), own,
                                          f"{module} ({ORDER[own]}) imports {target} ({layer_of(target)})")
 
+    def test_no_function_imports_a_module_of_its_own_package_to_break_a_cycle(self) -> None:
+        """state.reduce imported modes inside a function (fathers#141): reducer.py imports both at its top."""
+        for name in ("state", "modes", "reducer"):
+            tree = ast.parse((PACKAGE / f"{name}.py").read_text())
+            inner = [node for function in ast.walk(tree) if isinstance(function, ast.FunctionDef)
+                     for node in ast.walk(function) if isinstance(node, ast.ImportFrom) and node.level]
+            self.assertEqual([], [ast.unparse(node) for node in inner], name)
+
     def test_the_reducer_imports_no_view(self) -> None:
-        for name in ("state", "modes", "settings_model"):
+        for name in ("state", "modes", "reducer", "settings_model"):
             with self.subTest(name):
                 self.assertFalse({target for target in imports(PACKAGE / f"{name}.py") if target.startswith("views")})
 
     def test_one_scroll_clamp_and_one_hint_lookup(self) -> None:
-        clamp = re.compile(r"max\(0, min\((offset|last)\b")
+        """No scroll kept in range by hand: no `max(0, min(` nor a bottom offset worked out (`total - visible`)
+        outside layout.py; the few `max(0, min(` that clamp no scroll are named here."""
+        clamps = re.compile(r"max\(0,\s*min\(|max\(0,\s*[\w.\[\]\"()]+\s*-\s*[\w.\[\]\"()]*visible")
+        others = ("fraction * width", "height - 8 * above", "visible, count - offset", "index, len(found)",
+                  "selection.index, len(found)", "width - 2), most", "height - 2, height")
         hints = re.compile(r"for \w+, \w+, \w+, press in")
         for path in sorted(PACKAGE.rglob("*.py")):
-            text = path.read_text()
             with self.subTest(module=module_of(path)):
-                expected = 1 if path.name == "layout.py" else 0
-                self.assertEqual(expected, len(clamp.findall(text)), "only layout.clamp_scroll clamps a scroll")
-                self.assertEqual(1 if path.name == "tui.py" else 0, len(hints.findall(text)),
-                                 "only tui.hint_at finds a hint")
-
+                for line in path.read_text().splitlines():
+                    if clamps.search(line) and path.name != "layout.py" and not any(o in line for o in others):
+                        self.fail(f"{module_of(path)}: a scroll clamped by hand: {line.strip()}")
+                self.assertEqual(1 if path.name == "text.py" else 0, len(hints.findall(path.read_text())),
+                                 "only text.hint_at finds a hint")
 
 if __name__ == "__main__":
     unittest.main()
