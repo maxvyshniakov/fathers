@@ -25,7 +25,9 @@ def run(ran: float, n: int, plan: str | None = "p1", checks: int | None = 10, ph
     if checks is not None:
         meta["checks"] = str(checks)
     day = 1 + n // 24
-    return {"v": 2, "label": label, "label_derived": "fathers · lanefather", "cmd": "./verify.sh", "count": 1,
+    # as `run` records it: a derived label that begins with the project comes with `project` (labels.py)
+    return {"v": 2, "label": label, "label_derived": "fathers · lanefather", "project": "fathers", "cmd": "./verify.sh",
+            "count": 1,
             "granted": f"2026-10-{day:02d}T{n % 24:02d}:00:00Z", "ended": f"2026-10-{day:02d}T{n % 24:02d}:30:00Z",
             "outcome": "released", "ran": ran, "status": 0, "meta": meta, "lease_id": f"id{n:04d}", **extra}
 
@@ -36,6 +38,18 @@ class KeyTests(unittest.TestCase):
                          runtype.keys(run(1, 0)))
         self.assertEqual(["fathers · check", "lane-106-x · verify.sh", "lane-106-x"], runtype.keys(run(1, 0, plan=None)))
         self.assertEqual(["lane-106-x · verify.sh", "lane-106-x"], runtype.keys(run(1, 0, phase=None)))
+
+    def test_outside_a_repository_the_run_type_does_not_depend_on_the_command(self):
+        """A request run outside any git repository (a temporary directory, the pre-push gate's clean worktree) has
+        no `project`: its derived label then begins with the command's name ("true · check"), which is no project,
+        so the run type keys by the label's family, whatever the command (fathers#106)."""
+        def outside(cmd: str) -> dict[str, Any]:
+            item = dict(run(1, 0, label="lane-106-y"), cmd=cmd, label_derived=f"{cmd} · check")
+            item.pop("project", None)
+            return item
+        self.assertEqual(["lane · check · plan p1", "lane · check"], runtype.keys(outside("true"))[:2])
+        self.assertEqual(runtype.keys(outside("true"))[:2], runtype.keys(outside("echo"))[:2])
+        self.assertEqual(runtype.trend_key(outside("true")), runtype.trend_key(outside("sh")))
 
     def test_expected_falls_back_with_few_runs(self):
         known = runtype.series([run(100, 0, plan="old"), run(110, 1, plan="old"), run(120, 2, plan="new")])
