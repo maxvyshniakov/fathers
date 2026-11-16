@@ -8,7 +8,8 @@ from typing import NamedTuple, Optional, cast
 from .. import layout as _layout
 from ..layout import Rect
 from ..theme import Theme
-from ..tui import Canvas, minutes, short, span, text_width
+from ..tui import Canvas
+from ..text import minutes, short, span, text_width
 from ..widgets import Panel, Part, Table, Value
 from . import common as _common
 from .common import Item, Model, cell_run, fill, share, share_style

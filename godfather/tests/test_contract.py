@@ -20,7 +20,6 @@ import helpers  # noqa: F401 - src/ on sys.path
 import fake_slotfather
 import fake_tool
 from godfather import app, sources
-from godfather.adapters import settings as settings_adapter
 from godfather.adapters import slotfather as adapter
 
 SIBLING = Path(__file__).resolve().parents[2] / "slotfather" / "slotfather"
@@ -159,14 +158,15 @@ class ToolContractTests(unittest.TestCase):
         os.chdir(tmp)
         return bin_dir / name, environ
 
-    def check_tool(self, name: str, key: str, value: str, read_only: int) -> None:
+    def check_tool(self, name: str, key: str, value: str, read_only: tuple[str, str]) -> None:
         executable, _ = self.tool(name)
         client = adapter.SettingsClient(str(executable), name)
         reply = client.read()
         fake = fake_tool.document({"tool": name, "values": {}, "environment": {}, "writable": True})
-        self.assertEqual([row for row in rows(fake)], [row for row in rows(reply) if row in rows(fake)],
-                         "the fake's rows are the real ones, in order")
+        real = [row for row in rows(reply) if not row.startswith("project.")]  # the project the command runs in
+        self.assertEqual(real, list(rows(fake)), "the fake's rows are the real ones, every one, in order")
         for row_key, row in rows(fake).items():
+            self.assertEqual(sorted(rows(reply)[row_key]), sorted(row), f"{row_key}: the same fields")
             for field in ("label", "type", "default", "choices", "min", "max", "step", "unit", "writable"):
                 if field in rows(reply)[row_key]:
                     self.assertEqual(rows(reply)[row_key][field], row.get(field), f"{row_key} {field}")
@@ -179,13 +179,22 @@ class ToolContractTests(unittest.TestCase):
             client.set(key, value, revision)
         client.reset(None)
         self.assertEqual("default", rows(client.read())[key]["source"])
-        self.assertIn(read_only, settings_adapter.READ_ONLY)
+        variable, changed = read_only
+        environment = dict(os.environ, **{variable: "60"})
+        refused = subprocess.run([str(executable), "settings", "set", changed, "120", "--json"], capture_output=True,
+                                 text=True, env=environment, cwd=os.getcwd(), timeout=30)
+        self.assertEqual(self.READ_ONLY[name], refused.returncode, f"{name}: a row its environment sets is read-only")
+        with mock.patch.dict(os.environ, {variable: "60"}):
+            with self.assertRaises(adapter.ReadOnly):
+                client.set(changed, "120")
+
+    READ_ONLY = {"lanefather": 4, "junkfather": 5}  # what each tool exits with for a read-only row (fathers#118)
 
     def test_lanefather(self) -> None:
-        self.check_tool("lanefather", "rerun.wait", "600", 4)
+        self.check_tool("lanefather", "rerun.wait", "600", ("LANEFATHER_RERUN_WAIT", "rerun.wait"))
 
     def test_junkfather(self) -> None:
-        self.check_tool("junkfather", "reap.grace", "30", 5)
+        self.check_tool("junkfather", "reap.grace", "30", ("JUNKFATHER_STATE", "env.JUNKFATHER_STATE"))
 
     def test_junkfather_read_only_is_exit_5_and_the_client_says_so(self) -> None:
         executable, _ = self.tool("junkfather")

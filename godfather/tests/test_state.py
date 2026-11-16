@@ -13,7 +13,7 @@ import helpers  # noqa: F401 - src/ on sys.path
 import view as _view
 from test_settings import INTERVAL, SAFETY, SLOTS, THEME, PanelCase, Settings, idle
 
-from godfather import settings_model, state as state_module
+from godfather import reducer, settings_model, state as state_module
 
 from godfather.layout import Rect
 
@@ -608,24 +608,36 @@ class NoticeTests(Case):
         state, _ = self.send(state, tool.Tick(), now=5.0 + tool.NOTICE_SECONDS)
         self.assertIsNone(state.notice, "a notice passes")
 
-    def test_opening_settings_on_an_unreadable_capacity_json(self) -> None:
+    def test_settings_opens_at_once_and_reads_the_tools_on_its_worker(self) -> None:
+        """fathers#87 review: no tool is asked on the screen's thread; the sections come as an event."""
+        import threading
+        import time
+
         tool = self.tool
+        asked: list[Any] = []
 
         class Screen(tool.Screen):
             def settings_sections(self) -> Any:
+                asked.append(threading.current_thread())
                 return [settings_model.Section("slotfather", problem="slotfather settings: capacity.json is unreadable")]
 
         live = tool.Live(0, 1, Screen(), 1.0, "auto")
         self.addCleanup(live.close)
         live.state = self.screen()
         live.send(tool.Key("s"))
-        self.assertEqual("settings", live.state.overlay.kind, "it opens; the section says why (fathers#87)")
-        self.assertEqual("live", live.state.refresh.kind)
+        self.assertEqual("settings", live.state.overlay.kind, "open at once")
+        self.assertTrue(live.state.overlay.loading)
+        deadline = time.monotonic() + 30
+        while live.state.overlay.loading and time.monotonic() < deadline:
+            live.read(0.1)
+            live.take()
+        self.assertEqual(1, len(asked))
+        self.assertNotIn(threading.current_thread(), asked, "nothing read on the screen's thread")
         self.assertIn("capacity.json is unreadable", " ".join(
             part[1] for line in settings_model.lines(live.state.overlay, state_module.settings_context(live.state))
             for part in line.parts))
 
-    def test_a_settings_panel_that_will_not_open_is_a_notice(self) -> None:
+    def test_settings_whose_tools_cannot_be_read_says_why(self) -> None:
         tool = self.tool
 
         class Screen(tool.Screen):
@@ -636,8 +648,9 @@ class NoticeTests(Case):
         self.addCleanup(live.close)
         live.state = self.screen()
         live.send(tool.Key("s"))
-        self.assertIsNone(live.state.overlay)
-        self.assertIn("too many open files", live.state.notice.text)
+        live.send(live.settings_work(settings_model.Request("open")))
+        self.assertFalse(live.state.overlay.loading)
+        self.assertIn("too many open files", live.state.overlay.flash.text)
 
     def test_a_failed_refresh_is_stale_and_keeps_the_model(self) -> None:
         tool = self.tool
@@ -715,10 +728,10 @@ class SettingsModeTests(PanelCase):
         settings = Settings(self.clock)
         settings.select(SAFETY)
         settings.key("right")
-        state, effects = state_module.reduce(settings.state, state_module.Key("\r"), self.clock.now)
+        state, effects = reducer.reduce(settings.state, state_module.Key("\r"), self.clock.now)
         self.assertEqual([("settings", "set")], [(effect.kind, effect.item.kind) for effect in effects])
         answer = settings.screen.settings_call(effects[0].item)
-        _, effects = state_module.reduce(state, answer, self.clock.now)
+        _, effects = reducer.reduce(state, answer, self.clock.now)
         self.assertIn("load-model", [effect.kind for effect in effects])
 
 

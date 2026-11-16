@@ -12,9 +12,9 @@ import helpers  # noqa: F401 - puts src/ on sys.path
 NAMES = ("godfather.views.overview", "godfather.views.queue", "godfather.views.details", "godfather.views.events",
          "godfather.views.machine", "godfather.views.overlays", "godfather.overlay_text", "godfather.views.common",
          "godfather.views.settings", "godfather.widgets",
-         "godfather.layout", "godfather.state", "godfather.modes", "godfather.tui", "godfather.app",
+         "godfather.layout", "godfather.state", "godfather.reducer", "godfather.modes", "godfather.tui", "godfather.app",
          "godfather.sources", "godfather.version", "godfather.news", "godfather.adapters.slotfather",
-         "godfather.settings_model", "godfather.entries", "godfather.events")
+         "godfather.settings_model", "godfather.entries", "godfather.events", "godfather.text")
 
 
 class View:
@@ -56,7 +56,7 @@ def fresh() -> Any:
     for name in ("godfather.theme", "godfather.keys", "godfather.tui", "godfather.layout", "godfather.widgets",
                  "godfather.news", "godfather.views.common", "godfather.views.queue", "godfather.views.events", "godfather.views.details",
                  "godfather.views.machine", "godfather.overlay_text", "godfather.views.overlays", "godfather.settings_model",
-                 "godfather.views.settings", "godfather.views.overview", "godfather.state", "godfather.modes",
+                 "godfather.views.settings", "godfather.views.overview", "godfather.state", "godfather.modes", "godfather.reducer",
                  "godfather.app"):
         importlib.reload(importlib.import_module(name))
     for name in NAMES:

@@ -10,7 +10,7 @@ from typing import Any, NamedTuple, Optional, Union, cast
 from .. import theme as _theme
 from .. import tui as _tui
 from .. import version as _version
-from ..tui import text_width
+from ..text import text_width
 
 Part = tuple[str, str]
 Model = dict[str, Any]

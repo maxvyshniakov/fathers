@@ -37,7 +37,7 @@ from PIL import Image, ImageDraw, ImageFont, features
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from godfather.tui import cluster_width, clusters  # noqa: E402  (the dashboard's own idea of a cell's width)
+from godfather.text import cluster_width, clusters  # noqa: E402  (the dashboard's own idea of a cell's width)
 
 FONTS = ROOT / "tools" / "fonts"
 RGB = tuple[int, int, int]

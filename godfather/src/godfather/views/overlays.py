@@ -7,7 +7,8 @@ from typing import Optional
 from .. import layout as _layout
 from .. import news as _news
 from ..overlay_text import overlay_view
-from ..tui import Canvas, text_width
+from ..tui import Canvas
+from ..text import text_width
 from ..widgets import Panel, Part
 
 

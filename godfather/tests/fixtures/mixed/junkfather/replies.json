@@ -131,6 +131,36 @@
        "source": "default",
        "writable": false,
        "description": "Where entries, logs, events and these settings live. Set by JUNKFATHER_STATE; read-only here."
+      },
+      {
+       "key": "env.JUNKFATHER_SCRATCH_ROOTS",
+       "label": "Extra scratch roots",
+       "type": "text",
+       "value": null,
+       "default": null,
+       "source": "default",
+       "writable": false,
+       "description": "Directories (colon-separated) the sweep treats like an agent's scratchpad. Set by JUNKFATHER_SCRATCH_ROOTS; read-only here."
+      },
+      {
+       "key": "env.JUNKFATHER_CLAUDE_SESSIONS",
+       "label": "Claude Code sessions",
+       "type": "text",
+       "value": "/fake/claude/sessions",
+       "default": null,
+       "source": "default",
+       "writable": false,
+       "description": "Claude Code's live-session registry. Set by JUNKFATHER_CLAUDE_SESSIONS; read-only here."
+      },
+      {
+       "key": "env.JUNKFATHER_LANE_RECORDS",
+       "label": "Lane records",
+       "type": "text",
+       "value": null,
+       "default": null,
+       "source": "default",
+       "writable": false,
+       "description": "Where the lane of a working directory is looked up. Set by JUNKFATHER_LANE_RECORDS; read-only here."
       }
      ]
     }

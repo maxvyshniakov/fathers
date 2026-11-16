@@ -6,12 +6,11 @@ from __future__ import annotations
 
 import re
 import textwrap
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 from . import layout as _layout
 from . import news as _news
-from .tui import text_width
-from .widgets import OverlayView, Part
+from .text import Part, text_width
 
 Line = list[Part]
 HELP_INDENT, HELP_GAP = 2, 2  # before a term, and between the term column and its description
@@ -165,6 +164,18 @@ def help_columns(screen_width: int, visible: int) -> tuple[int, list[Line]]:
             return width * len(columns) + COLUMN_GAP * (len(columns) - 1), side_by_side(columns, width)
     width = min(OVERLAY_WIDTH - TEXT_INSET, room)
     return width, help_lines(width)
+
+
+class OverlayView(NamedTuple):
+    """Where a scrollable overlay (help, the changelog) was drawn, and what it shows: the hit-test geometry."""
+    x: int
+    y: int
+    width: int
+    height: int
+    offset: int
+    visible: int
+    total: int
+    name: str = "help"
 
 
 def blank_lines(count: int) -> list[Line]:

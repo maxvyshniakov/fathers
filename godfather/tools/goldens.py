@@ -312,12 +312,51 @@ def render(name: str, theme: str | None) -> str:
         return canvas.render(theme is not None)
 
 
+# fathers#156: MACHINE alone, for each reason the queue admits nothing (and one where it admits): its border says why
+ADMISSION: dict[str, dict[str, Any]] = {
+    "full": {"holders": [{"kind": "held", "label": "build", "count": 4}, {"kind": "held", "label": "gate", "count": 4}]},
+    "whole-machine": {"holders": [{"kind": "held", "label": "dg-striped perf JS parity vs CSS parity", "count": 8}]},
+    "queue-ahead": {"used": 6, "free": 2, "waiters": [{"kind": "waiting", "count": 4}]},
+    "draining": {"slots": 4, "used": 6, "free": 0, "draining": 2},
+    "memory": {"used": 2, "free": 6, "memory_block": "memory pressure: critical"},
+    "memory-full": {"memory_block": "memory pressure: warning"},
+    "open": {"admission": 2, "used": 6, "free": 2},
+}
+
+
+def admission_screen(name: str, theme: str | None) -> str:
+    """MACHINE at 72x13 over a model whose queue admits nothing for one reason (ADMISSION)."""
+    import datetime as dt
+
+    from godfather import theme as themes, tui
+    from godfather.layout import Rect
+    from godfather.views import common, machine
+
+    with environment(theme):
+        palette = themes.from_environment()
+        moment = dt.datetime(2026, 11, 16, 1, 30, tzinfo=dt.timezone.utc)
+        model: dict[str, Any] = dict(
+            slots=8, cores=12, averages=(6.3, 6.0, 6.0), admission=0, advice={"unleased_load": 0.2, "jobs": 1},
+            memory_block=None, used=8, free=0, holders=[], waiters=[], draining=0,
+            memory={"level": 1, "used": 768, "total": 1024, "swap_total": 1024, "swap_free": 800, "low": False,
+                    "swap_low": False},
+            history=[(moment - dt.timedelta(minutes=1), moment, 8)])
+        model.update(ADMISSION[name])
+        canvas = tui.Canvas(72, 13, palette, common.marks_for(False))
+        machine.draw_machine(canvas, Rect(0, 0, 13, 72), model)
+        return canvas.render(theme is not None)
+
+
 def goldens() -> dict[str, str]:
     found = {}
     for name in SCREENS:
         found[f"{name}.txt"] = render(name, None) + "\n"
         for theme in THEMES:
             found[f"{name}.{theme}.ansi"] = render(name, theme) + "\n"
+    for name in ADMISSION:
+        found[f"admission-{name}-72x13.txt"] = admission_screen(name, None) + "\n"
+        for theme in THEMES:
+            found[f"admission-{name}-72x13.{theme}.ansi"] = admission_screen(name, theme) + "\n"
     return found
 
 

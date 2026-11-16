@@ -40,7 +40,7 @@ dashboard:
   directory          str          the state directory (STATUS "queue" row, tilde-shortened by Godfather)
   slots, cores       int
   saved              bool
-  basis              object       config.capacity_basis() as is (mode, slots, gib_per_slot, memory_slots,
+  basis              object       settings.capacity_basis() as is (mode, slots, gib_per_slot, memory_slots,
                                   memory_gib, cpu_slots, cores, saved, ...)
   averages           [l1, l5, l15]
   draining           int
@@ -159,7 +159,7 @@ Keys Godfather 0.1.0 edits, and the panel row each is shown as:
 `settings --json` replies with SPEC.md's settings object. Godfather reads, per setting: `key`, `value` (the saved
 value, the environment ignored), `effective` (the value here when the environment tightens it, else absent or
 equal), `default`, `writable`, `source` and `revision`; and at the top level `writable`, `reason`, `status` (rows
-of `label`, `value` and an optional `style`), plus `basis`, `config.capacity_basis()` as is, with `memory_slots`
+of `label`, `value` and an optional `style`), plus `basis`, `settings.capacity_basis()` as is, with `memory_slots`
 and `memory_gib` filled in by the automatic rule when the saved mode does not compute them (today's panel does that
 for Fixed).
 

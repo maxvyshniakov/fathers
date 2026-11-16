@@ -607,6 +607,8 @@ class MachineStatusTests(unittest.TestCase):
                ("whole machine",dict(holders=[perf]),"unleased 0.2 · whole machine: dg-striped perf JS parity vs CSS parity",
                 "status-normal"),
                ("memory",dict(memory_block="memory pressure: critical",used=2,free=6),"unleased 0.2 · memory short","bad"),
+               ("memory and full",dict(memory_block="memory pressure: warning"),
+                "unleased 0.2 · memory short · full · 8 of 8 held","bad"),
                ("draining",dict(slots=4,used=6,free=0,draining=2),"unleased 0.2 · draining · 6 of 4 held","warn"),
                ("queue ahead",dict(used=6,free=2,waiters=[dict(kind="waiting",count=4)]),
                 "unleased 0.2 · queue ahead · 1 waiting","status-normal"),

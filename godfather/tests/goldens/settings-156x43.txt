@@ -2,7 +2,7 @@
 │                                                                                           │ │                                                            │
 │  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  ╭───────────╮  ╭──────────╮  │ │  label      lane-644-build-once                            │
 │  lane-644-bui…  lane-465-sta…  desktop                                              free  │ │  status     running · 1 slot                               │
-╰─────────────────────────────────────╭─ SETTINGS ─────────────────────── saved at once · applies at the next grant ─╮                                     │
+╰─────────────────────────────────────╭─ SETTINGS ────────────────────── a change saves after a second, or on Enter ─╮                                     │
 ┍━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│                                                                              │                                     │
 │                                     │  GODFATHER · this dashboard only                                             │                                     │
 ┃  ▶️    lane-644-build-once          │    Refresh every             1s                                              │ 0.9 of 2 cores                      │

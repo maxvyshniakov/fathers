@@ -36,6 +36,19 @@ def supported(capabilities: Optional[dict[str, Any]]) -> bool:
     return isinstance(versions, list) and any(v in SETTINGS_VERSIONS for v in cast(list[Any], versions))
 
 
+class Contract:
+    """A tool read only for its settings (sources.Source's adapter for Settings' own sources, fathers#87 review):
+    any dashboard block; whether it has a settings contract is supported()'s to say."""
+
+    def __init__(self, name: str) -> None:
+        self.name, self.TAG = name, name[:4]
+
+    def unsupported(self, capabilities: dict[str, Any]) -> Optional[str]:
+        if capabilities.get("v") != 1 or not isinstance(capabilities.get("dashboard"), dict):
+            return f"no dashboard contract; update {self.name}"
+        return None
+
+
 class SettingsClient:
     """`<tool> settings ...` through sources.run_json(), with `--json` last."""
 

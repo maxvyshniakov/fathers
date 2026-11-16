@@ -384,13 +384,13 @@ def _number(value: Any) -> bool:
 
 
 def _span(value: Any) -> str:
-    from .tui import span
+    from .text import span
 
     return span(float(value)) if _number(value) else ""
 
 
 def _minutes(value: Any) -> str:
-    from .tui import minutes
+    from .text import minutes
 
     return minutes(float(value)) if _number(value) else ""
 
@@ -503,7 +503,7 @@ def lanefather_shown(kind: str, details: dict[str, Any]) -> Optional[Shown]:
         return Shown("released", (("claims freed", "dim"),))
     if kind == "lane.done":
         freed: Any = details.get("freed_bytes")
-        from .tui import megabytes
+        from .text import megabytes
 
         return Shown("done", ((f"freed {megabytes(float(freed) / 2**20)}" if _number(freed) else "", "dim"),))
     if kind == "review.started":
