@@ -21,7 +21,7 @@
                                      them with their sizes
   drop <id>                          an active lane that adds nothing to its base: done's cleanup, no force
   recheck <id> [--slots N]           a landed lane's red post-merge smoke again, on the integration tip that
-                                     holds its merge; green replaces the red result (lanefather.postmerge)
+                                     holds its merge; green replaces the red result (lanefather.land)
   keep <id> [--off]                  auto-done, done --finished and start's disk repair leave the lane
   promote <sha> [--ship] [--no-push] [--install [--deploy HOST]]
   sync [--drop-local]
@@ -60,7 +60,6 @@ from . import (
     history,
     land,
     lanes,
-    postmerge,
     promote,
     registry,
     results,
@@ -225,7 +224,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("id")
     p.add_argument("--slots", type=int, choices=range(1, 5),
                    help="worker budget passed as verify --jobs (default: slotfather advise --max 3)")
-    p.set_defaults(run=postmerge.recheck)
+    p.set_defaults(run=land.recheck)
     p = commands.add_parser("keep", help="keep a lane from auto-done and done --finished (its scratch is in use)")
     p.add_argument("id")
     p.add_argument("--off", action="store_true", help="release the lane to auto-done again")

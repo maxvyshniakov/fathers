@@ -18,7 +18,7 @@ import os
 import subprocess
 from typing import Any
 
-from . import checks, config, done, journal, plan, review, state, tickets, worktrees
+from . import checks, config, done, journal, plan, postmerge, review, state, tickets, worktrees
 from . import results as result_store
 from .errors import LaneError
 from .gitops import current_branch, dirty, git, git_ok, main_checkout
@@ -115,6 +115,102 @@ def merge_problem(args: Any, tip: str, tree: str, receipt: dict[str, Any] | None
                     f"{' again when rerun by itself' if rerun else ''} and passes on its base "
                     f"{receipt['classification']['base'][:10]}")
     return problem
+
+
+Smoke = tuple[dict[str, Any], list[dict[str, Any]], dict[str, dict[str, Any]], str | None, dict[str, Any], str]
+
+
+def run_smoke(record: dict[str, Any], checkout: str, suites: list[str], selected: dict[str, list[str]] | None,
+              label: str, slots: int | None, toolchain: Any) -> Smoke:
+    """Run a post-merge smoke's suites (land's, or recheck's) in its checkout: (the jobs decision, suite results,
+    check results, triage, the verified-tree stamp, green or red)."""
+    if not suites:
+        decision: dict[str, Any] = {"jobs": 0, "reason": "nothing to run"}
+    else:
+        decision = given_jobs(slots, "--slots") if slots else post_merge_jobs(host())
+    results, check_results, triaged, stamp = checks.run_suites(checkout, suites, label, decision["jobs"],
+                                                               selected=selected, phase="post-merge",
+                                                               meta=checks.lane_meta(record),
+                                                               ticket=checks.lane_ticket(record),
+                                                               toolchain=toolchain)
+    status = "green" if all(r["status"] == "passed" for r in results) else "red"
+    return decision, results, check_results, triaged, stamp, status
+
+
+def complete(record: dict[str, Any], merge: str, integration: str, onto: str, receipt: dict[str, Any] | None,
+             status: str, smoke: str, keep: bool) -> None:
+    """After a post-merge smoke of the lane's merge (land's, or a recheck's): mark its issue (a red smoke leaves it),
+    and after a green one finish the lane once its review is clean or marked, or it is kept."""
+    lane_id = record["id"]
+    tickets.after_land(record, merge, integration, onto, receipt, status, smoke)
+    if status != "green":
+        return
+    reviewed, words = review.review_state(lane_id)
+    if reviewed or keep:
+        done.finish_landed(lane_id, keep)
+    else:
+        # The fix round runs in the lane's worktree, where a resumed agent keeps its context (#570).
+        print(f"Lane {lane_id} kept for its review ({words}): it does not count toward the lane cap; "
+              "marking its last finding "
+              f"finishes it (" + review.mark_help(lane_id) + ")")
+
+
+def recheck(args: Any) -> int:
+    """`recheck ID` (fathers#167): the checks the lane's red post-merge smoke ran, again, on the integration tip when
+    it holds the merge; green, its receipt replaces the red result and the lane is completed as land completes it.
+    Rechecks of one lane run one at a time, so a later one never rewrites the receipt a green one left."""
+    store = state.Store(config.current())
+    with store.locked(f"recheck-{args.id}", f"lane: waiting for another recheck of {args.id}"):
+        with store.locked("state"):
+            record = store.load(args.id)
+            red, integration, tip = postmerge.recheckable(record, store)
+        selected, suites = postmerge.ran(red)
+        merge = str(red["merge"])
+        with worktrees.smoke_checkout(record["common_dir"], tip) as checkout:
+            toolchain = plan.toolchain_state(checkout)
+            decision, results, check_results, triaged, _stamp, status = run_smoke(
+                record, checkout, suites, selected, f"recheck-{args.id}", args.slots, toolchain)
+            tree = git(checkout, "rev-parse", "HEAD^{tree}")
+        status = status if results else "red"
+        path = store.receipt_path(args.id, "recheck")
+        red_path = str(store.receipt_path(args.id, "post-merge"))
+        state.write_json(path, {"version": 1, "lane": args.id, "kind": "recheck", "merge": merge, "sha": tip,
+                                "tree": tree, "checkout": checkout, "platform": result_store.host_platform(),
+                                "red_receipt": red_path, "suites": suites, "checks": selected,
+                                "check_results": check_results, "results": results, "triage": triaged,
+                                "status": status, "jobs": decision["jobs"], "jobs_decision": decision,
+                                "leases": checks.leases_of(results), "host": host(), "finished": journal.now()})
+        result_store.record(tree, checks.recordable(check_results), source="post-merge", toolchain=toolchain,
+                            lane=args.id, sha=tip, receipt=str(path), phase="post-merge")
+        with store.locked("state"):
+            record = store.load(args.id)
+            if status == "green":
+                record["post_merge"] = {"status": "green", "receipt": str(path),
+                                        "cleared_by": {"kind": "recheck", "receipt": str(path), "sha": tip,
+                                                       "red_receipt": red_path}}
+                store.save(record)
+        journal.ledger(f"recheck {args.id} {status} sha={tip} merge={merge} receipt={path}"
+                       + (f" replaces red {red_path}" if status == "green" else ""),
+                       kind="lane.rechecked", level="info" if status == "green" else "error", lane=record,
+                       details={"status": status, "sha": tip, "merge": merge, "receipt": str(path),
+                                "red_receipt": red_path, "suites": suites},
+                       directory=store.directory, project=store.project)
+    ids = [c for s in suites for c in (selected or {}).get(s, [])] if selected is not None else None
+    what = ", ".join(ids) if ids is not None and len(ids) <= 8 else f"{len(ids)} checks" if ids else ", ".join(suites)
+    if status != "green":
+        print(f"Lane {args.id}: post-merge still red on {tip[:10]} (recheck: {what}); {path}")
+        for result in results:
+            if result["status"] != "passed":
+                named = ", ".join(result.get("failed_checks") or []) or "(see log)"
+                print(f"  {result['suite']}: failed checks {named}  {result['log']}")
+        if triaged:
+            print(triaged)
+        return 1
+    print(f"Lane {args.id}: post-merge green on {tip[:10]} (recheck: {what}); it replaces the red smoke of "
+          f"{merge[:10]} ({path})")
+    complete(record, merge, integration, current_branch(integration) or integration,
+             state.read_json(store.receipt_path(args.id)), status, f"recheck on {tip[:10]}: {what}", done.kept(record))
+    return 0
 
 
 def land(args: Any) -> int:
@@ -214,18 +310,9 @@ def land(args: Any) -> int:
                                                        git(checkout, "rev-parse", previous + "^{tree}"))
         suites, selected = ((merged_plan["selected"], None) if rows is None
                             else (plan.suites_of(rows), plan.by_suite(rows)))
-        info = host()
-        if not suites:
-            decision: dict[str, Any] = {"jobs": 0, "reason": "nothing to run"}
-        else:
-            decision = given_jobs(args.slots, "--slots") if args.slots else post_merge_jobs(info)
+        decision, results, check_results, triaged, stamp, status = run_smoke(
+            record, checkout, suites, selected, f"post-merge-{args.id}", args.slots, toolchain)
         jobs = decision["jobs"]
-        results, check_results, triaged, stamp = checks.run_suites(checkout, suites, f"post-merge-{args.id}", jobs,
-                                                                   selected=selected, phase="post-merge",
-                                                                   meta=checks.lane_meta(record),
-                                                                   ticket=checks.lane_ticket(record),
-                                                                   toolchain=toolchain)
-    status = "green" if all(r["status"] == "passed" for r in results) else "red"
     post = state.receipt_path(args.id, "post-merge")
     info = host()
     state.write_json(post, {"version": 1, "lane": args.id, "merge": merge, "base": previous,
@@ -282,18 +369,10 @@ def land(args: Any) -> int:
     print(f"Landed {record['branch']} as {merge[:10]} on {current_branch(integration) or integration}; "
           f"post-merge {status} ({prefix}{what})")
     # #25: the lane's issue shows the land once its smoke is green; a gh failure only warns.
-    tickets.after_land(record, merge, integration, onto or integration, receipt, status, prefix + what)
     if receipt and receipt.get("changed_red_tests"):
         print(checks.changed_red_tests_line(receipt["changed_red_tests"]))
+    complete(record, merge, integration, onto or integration, receipt, status, prefix + what, keep)
     if status == "green":
-        reviewed, words = review.review_state(args.id)
-        if reviewed or keep:
-            done.finish_landed(args.id, keep)
-        else:
-            # The fix round runs in the lane's worktree, where a resumed agent keeps its context (#570).
-            print(f"Lane {args.id} kept for its review ({words}): it does not count toward the lane cap; "
-                  "marking its last finding "
-                  f"finishes it (" + review.mark_help(args.id) + ")")
         return 0
     # A suite whose checks did not start because the first checks were red (#639) is not one of the failures.
     failed = [r for r in results if r["status"] == "failed"]

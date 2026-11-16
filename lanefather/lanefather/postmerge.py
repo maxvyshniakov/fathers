@@ -8,23 +8,24 @@ instead of the integration build. Two kinds of evidence clear it, and `done` nam
   integration branch holds: the batch gate there (`promote-<sha>.gate.json`, the full gate), or another lane's
   green post-merge smoke that ran each check the red smoke ran (its own run on its tree, not a result taken from
   another tree). done and done --finished look for it themselves; nothing runs.
-- `recheck ID`: the checks the red smoke ran, again, on the integration tip when the tip holds the merge. Green, its
-  receipt (`<id>.recheck.json`) replaces the red result in the record; the red receipt stays as it was.
+- `recheck ID` (lanefather.land.recheck, which runs and completes it as land does its smoke): the checks the red
+  smoke ran, again, on the integration tip when the tip holds the merge. Green, its receipt (`<id>.recheck.json`)
+  replaces the red result in the record; the red receipt stays as it was.
 
 Each receipt is matched by identity: its commit exists and has the tree the receipt names, the lane's merge is its
-ancestor, the integration worktree's HEAD holds it, a smoke's lane landed into the same integration worktree, and a
-smoke receipt naming a platform names the red smoke's.
+ancestor, the integration worktree's HEAD holds it, and a smoke's lane landed into the same integration worktree.
+It ran on the red smoke's platform (a gate's from its receipt or its results-store entry) and finished after the
+red smoke did.
 """
 from __future__ import annotations
 
 import os
 from typing import Any, cast
 
-from . import checks, config, journal, plan, state, tickets, worktrees
 from . import results as result_store
+from . import state
 from .errors import LaneError
-from .gitops import current_branch, git, git_ok
-from .host import given_jobs, host, post_merge_jobs
+from .gitops import git, git_ok
 from .state import Record
 
 Receipt = dict[str, Any]
@@ -85,10 +86,29 @@ def uncovered(red: Receipt, green: Receipt) -> list[str]:
     return [c for suite, ids in selected.items() for c in ids if suite not in whole and not stands(c)]
 
 
+def gate_platform(gate: Receipt, path: Any) -> str | None:
+    """The platform a batch gate ran on: its receipt's, else that of the full-gate result the results store holds
+    for this receipt (promote records both); None when neither names one."""
+    if gate.get("platform"):
+        return str(gate["platform"])
+    tree = gate.get("tree")
+    if not isinstance(tree, str) or not result_store.TREE.match(tree):
+        return None
+    found = [e for e in result_store.entries(tree) if e.get("full") and e.get("receipt") == str(path)]
+    return str(found[-1]["platform"]) if found and found[-1].get("platform") else None
+
+
 def candidates(record: Record, store: state.Store, integration: str, red: Receipt) -> list[dict[str, Any]]:
     """Every receipt that clears the red smoke, oldest first."""
     merge = str(red["merge"])
     head = git(integration, "rev-parse", "HEAD")
+    # The evidence must stand for the platform the red smoke ran on, and come after it: a run that passed before
+    # the smoke failed says nothing about that failure.
+    platform = red.get("platform") or result_store.host_platform()
+    after = str(red.get("finished") or "")
+
+    def later(at: str) -> bool:
+        return bool(after) and at > after
 
     def holds(sha: str, tree: Any) -> bool:
         return (bool(sha) and git(integration, "rev-parse", "--verify", "--quiet", f"{sha}^{{tree}}", check=False)
@@ -98,7 +118,8 @@ def candidates(record: Record, store: state.Store, integration: str, red: Receip
     for path in sorted(store.directory.glob("*.gate.json")):
         gate = state.read_json(path) or {}
         sha = str(gate.get("sha") or "")
-        if gate.get("full") is True and gate.get("status") == "green" and holds(sha, gate.get("tree")):
+        if (gate.get("full") is True and gate.get("status") == "green" and later(str(gate.get("finished") or ""))
+                and gate_platform(gate, path) == platform and holds(sha, gate.get("tree"))):
             found.append({"kind": "gate", "receipt": str(path), "sha": sha, "at": str(gate.get("finished") or ""),
                           "red_receipt": str(store.receipt_path(record["id"], "post-merge"))})
     for other in store.lanes():
@@ -107,9 +128,8 @@ def candidates(record: Record, store: state.Store, integration: str, red: Receip
         path = store.receipt_path(other["id"], "post-merge")
         smoke: Receipt = state.read_json(path) or {}
         sha = str(smoke.get("merge") or "")
-        platform = smoke.get("platform")
         if (smoke.get("status") != "green" or sha != landed(other).get("merge")
-                or (platform and red.get("platform") and platform != red["platform"])
+                or smoke.get("platform") != platform or not later(str(smoke.get("finished") or ""))
                 or uncovered(red, smoke) or not holds(sha, smoke.get("tree"))):
             continue
         found.append({"kind": "post-merge", "lane": other["id"], "receipt": str(path), "sha": sha,
@@ -137,89 +157,26 @@ def words(cleared: dict[str, Any]) -> str:
     return f"{what} ({cleared.get('receipt')})"
 
 
-def recheck(args: Any) -> int:
-    """`recheck ID`: the checks the lane's red post-merge smoke ran, on the integration tip when it holds the merge.
-    Green, its receipt replaces the red result, and the lane is finished as land would have finished it."""
-    store = state.Store(config.current())
-    prog = store.project.command
-    with store.locked("state"):
-        record = store.load(args.id)
-        if record["status"] not in ("landed", "released"):
-            raise LaneError(f"recheck refused: lane {args.id} is {record['status']}, not landed")
-        smoke = post_merge(record).get("status")
-        if smoke != "red":
-            raise LaneError(f"recheck refused: lane {args.id}'s post-merge smoke is {smoke or 'not run'}: "
-                            "nothing to recheck")
-        red = red_receipt(record, store)
-        if red is None:
-            raise LaneError(f"recheck refused: {store.receipt_path(args.id, 'post-merge')} is not the red smoke of "
-                            f"the merge {str(landed(record).get('merge'))[:10]}")
-        integration = integration_of(record)
-        if integration is None:
-            raise LaneError(f"recheck refused: lane {args.id}'s integration worktree is gone")
-        merge = str(red["merge"])
-        tip = git(integration, "rev-parse", "HEAD")
-        if not git_ok(integration, "merge-base", "--is-ancestor", merge, tip):
-            raise LaneError(f"recheck refused: the integration tip {tip[:10]} does not hold the merge {merge[:10]}")
-        selected, suites = ran(red)
-        if not suites:
-            raise LaneError(f"recheck refused: the red smoke {store.receipt_path(args.id, 'post-merge')} names no "
-                            "suites")
-    with worktrees.smoke_checkout(record["common_dir"], tip) as checkout:
-        toolchain = plan.toolchain_state(checkout)
-        decision = given_jobs(args.slots, "--slots") if args.slots else post_merge_jobs(host())
-        results, check_results, triaged, _stamp = checks.run_suites(
-            checkout, suites, f"recheck-{args.id}", decision["jobs"], selected=selected, phase="post-merge",
-            meta=checks.lane_meta(record), ticket=checks.lane_ticket(record), toolchain=toolchain)
-        tree = git(checkout, "rev-parse", "HEAD^{tree}")
-    status = "green" if results and all(r["status"] == "passed" for r in results) else "red"
-    path = store.receipt_path(args.id, "recheck")
-    red_path = str(store.receipt_path(args.id, "post-merge"))
-    state.write_json(path, {"version": 1, "lane": args.id, "kind": "recheck", "merge": merge, "sha": tip,
-                            "tree": tree, "checkout": checkout, "platform": result_store.host_platform(),
-                            "red_receipt": red_path, "suites": suites, "checks": selected,
-                            "check_results": check_results, "results": results, "triage": triaged, "status": status,
-                            "jobs": decision["jobs"], "jobs_decision": decision,
-                            "leases": checks.leases_of(results), "host": host(), "finished": journal.now()})
-    result_store.record(tree, checks.recordable(check_results), source="post-merge", toolchain=toolchain,
-                        lane=args.id, sha=tip, receipt=str(path), phase="post-merge")
-    cleared = {"kind": "recheck", "receipt": str(path), "sha": tip, "red_receipt": red_path}
-    with store.locked("state"):
-        record = store.load(args.id)
-        if status == "green" and post_merge(record).get("status") == "red":
-            record["post_merge"] = {"status": "green", "receipt": str(path), "cleared_by": cleared}
-            store.save(record)
-    journal.ledger(f"recheck {args.id} {status} sha={tip} merge={merge} receipt={path}"
-                   + (f" replaces red {red_path}" if status == "green" else ""),
-                   kind="lane.rechecked", level="info" if status == "green" else "error", lane=record,
-                   details={"status": status, "sha": tip, "merge": merge, "receipt": str(path),
-                            "red_receipt": red_path, "suites": suites},
-                   directory=store.directory, project=store.project)
-    ids = [c for s in suites for c in (selected or {}).get(s, [])] if selected is not None else None
-    what = ", ".join(ids) if ids is not None and len(ids) <= 8 else f"{len(ids)} checks" if ids else ", ".join(suites)
-    if status != "green":
-        print(f"Lane {args.id}: post-merge still red on {tip[:10]} (recheck: {what}); {path}")
-        for result in results:
-            if result["status"] != "passed":
-                named = ", ".join(result.get("failed_checks") or []) or "(see log)"
-                print(f"  {result['suite']}: failed checks {named}  {result['log']}")
-        if triaged:
-            print(triaged)
-        return 1
-    print(f"Lane {args.id}: post-merge green on {tip[:10]} (recheck: {what}); it replaces the red smoke of "
-          f"{merge[:10]} ({path})")
-    receipt = state.read_json(store.receipt_path(args.id))
-    tickets.after_land(record, merge, integration, current_branch(integration) or integration, receipt, status,
-                       f"recheck on {tip[:10]}: {what}")
-    # done and review import this module.
-    from . import done as done_module
-    from . import review
-    reviewed, review_words = review.review_state(args.id, store)
-    keep = done_module.kept(record)
-    if reviewed or keep:
-        done_module.finish_landed(args.id, keep)
-    else:
-        print(f"Lane {args.id} kept for its review ({review_words}); marking its last finding finishes it ("
-              + review.mark_help(args.id, prog) + ")")
-    return 0
-
+def recheckable(record: Record, store: state.Store) -> tuple[Receipt, str, str]:
+    """What `recheck` reruns (lanefather.land.recheck), under the state lock: the red smoke receipt, the integration
+    worktree and its tip, which holds the merge; else why not."""
+    lane_id = record["id"]
+    if record["status"] not in ("landed", "released"):
+        raise LaneError(f"recheck refused: lane {lane_id} is {record['status']}, not landed")
+    smoke = post_merge(record).get("status")
+    if smoke != "red":
+        raise LaneError(f"recheck refused: lane {lane_id}'s post-merge smoke is {smoke or 'not run'}: "
+                        "nothing to recheck")
+    red = red_receipt(record, store)
+    if red is None:
+        raise LaneError(f"recheck refused: {store.receipt_path(lane_id, 'post-merge')} is not the red smoke of "
+                        f"the merge {str(landed(record).get('merge'))[:10]}")
+    if not ran(red)[1]:
+        raise LaneError(f"recheck refused: the red smoke {store.receipt_path(lane_id, 'post-merge')} names no suites")
+    integration = integration_of(record)
+    if integration is None:
+        raise LaneError(f"recheck refused: lane {lane_id}'s integration worktree is gone")
+    merge, tip = str(red["merge"]), git(integration, "rev-parse", "HEAD")
+    if not git_ok(integration, "merge-base", "--is-ancestor", merge, tip):
+        raise LaneError(f"recheck refused: the integration tip {tip[:10]} does not hold the merge {merge[:10]}")
+    return red, integration, tip

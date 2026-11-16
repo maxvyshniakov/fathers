@@ -5,10 +5,15 @@ from __future__ import annotations
 
 import json
 import pathlib
+import subprocess
+import sys
+import time
 from typing import Any
 import unittest
 
 from support import LaneCase
+
+from lanefather import results
 
 
 class DropTests(LaneCase):
@@ -152,7 +157,8 @@ class ClearedPostMergeTests(LaneCase):
     def gate_receipt(self, sha: str, **changes: Any) -> pathlib.Path:
         path = self.state / f"promote-{sha[:10]}.gate.json"
         receipt = {"version": 1, "lane": f"promote-{sha[:10]}", "sha": sha, "full": True, "status": "green",
-                   "tree": self.git(self.repo, "rev-parse", sha + "^{tree}"), "finished": "2999-01-01T00:00:00Z"}
+                   "tree": self.git(self.repo, "rev-parse", sha + "^{tree}"), "finished": "2999-01-01T00:00:00Z",
+                   "platform": results.host_platform()}
         path.write_text(json.dumps({**receipt, **changes}))
         return path
 
@@ -174,6 +180,61 @@ class ClearedPostMergeTests(LaneCase):
         self.git(self.repo, "worktree", "add", "-q", "-b", "side", str(side), merge)
         self.gate_receipt(self.commit(side, {"side.txt": "off the branch\n"}))
         self.assertIn("post-merge check is red", self.lane("done", "a", ok=False))
+
+    def test_a_gate_on_another_platform_or_before_the_red_smoke_clears_nothing(self):
+        # Review of fathers#167: a Linux gate in a shared state directory, or a gate that passed the merge before its
+        # smoke went red, says nothing about the red smoke.
+        self.red_lane()
+        tip = self.tip()
+        other = "linux-x64" if results.host_platform() != "linux-x64" else "darwin-arm64"
+        self.gate_receipt(tip, platform=other)
+        self.assertIn("post-merge check is red", self.lane("done", "a", ok=False))
+        self.gate_receipt(tip, finished="2000-01-01T00:00:00Z")
+        self.assertIn("post-merge check is red", self.lane("done", "a", ok=False))
+        # A gate receipt from before receipts named their platform: its results-store entry names it.
+        gate = self.gate_receipt(tip, platform=None)
+        tree = self.git(self.repo, "rev-parse", tip + "^{tree}")
+        self.lane("results", "record", tip, "--full", "--status", "green", "--source", "gate", "--receipt", str(gate),
+                  "--platform", other)
+        self.assertIn("post-merge check is red", self.lane("done", "a", ok=False))
+        self.lane("results", "record", tree, "--full", "--status", "green", "--source", "gate", "--receipt", str(gate))
+        self.lane("done", "a")
+
+    def test_concurrent_rechecks_run_one_at_a_time(self):
+        # Review of fathers#167: a failing second recheck rewrote the receipt a green one left the record pointing at.
+        self.red_lane()
+        hold = self.tmp / "hold-recheck"
+        first = subprocess.Popen([sys.executable, "-m", "lanefather", "recheck", "a"], cwd=self.integration,
+                                 env={**self.env, "FIXTURE_HOLD": f"recheck-a:{hold}"}, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, text=True)
+        self.addCleanup(lambda: first.poll() is None and (first.kill(), first.wait()))
+        self.addCleanup(hold.touch)
+        started = pathlib.Path(f"{hold}.started")
+        deadline = time.monotonic() + 60
+        while not started.exists():
+            # load-tolerant: the first recheck's run starts in about a second.
+            self.assertLess(time.monotonic(), deadline, "the first recheck's run did not start")
+            self.assertIsNone(first.poll())
+            time.sleep(0.05)
+        log = self.tmp / "second.log"
+        with open(log, "w") as out:
+            second = subprocess.Popen([sys.executable, "-m", "lanefather", "recheck", "a"], cwd=self.integration,
+                                      env={**self.env, "FIXTURE_STATUS": "recheck-a:lib-check=failed"}, stdout=out,
+                                      stderr=subprocess.STDOUT, text=True)
+        self.addCleanup(lambda: second.poll() is None and (second.kill(), second.wait()))
+        deadline = time.monotonic() + 60
+        while "waiting for another recheck of a" not in log.read_text():
+            # load-tolerant: the second recheck reaches the lock in about a second.
+            self.assertLess(time.monotonic(), deadline, "the second recheck did not wait for the first")
+            self.assertIsNone(second.poll(), log.read_text())
+            time.sleep(0.05)
+        hold.touch()
+        self.assertEqual(first.wait(timeout=120), 0, first.stdout.read() if first.stdout else "")
+        self.assertEqual(second.wait(timeout=120), 1)
+        self.assertIn("nothing to recheck", log.read_text())
+        receipt = json.loads((self.state / "a.recheck.json").read_text())
+        self.assertEqual(receipt["status"], "green")
+        self.assertEqual(self.record("a")["post_merge"]["receipt"], str(self.state / "a.recheck.json"))
 
     def test_recheck_reruns_the_red_smoke_on_the_integration_tip_and_replaces_it(self):
         self.red_lane()
