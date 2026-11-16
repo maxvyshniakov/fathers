@@ -1,4 +1,5 @@
-"""The supervisor's loop, driven by injected clocks: the TTL, a failing TTL reap backs off, a `gone` entry is revived."""
+"""The supervisor's loop, driven by injected clocks: the TTL, a failing TTL reap backs off, a `gone` entry is
+revived."""
 from __future__ import annotations
 
 import json
