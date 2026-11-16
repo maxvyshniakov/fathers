@@ -13,6 +13,8 @@ lanefather land <id> [--into WORKTREE] [--keep]
 lanefather review <id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane]
 lanefather review --overall <sha> --since <base>
 lanefather done <id>
+lanefather done --finished [--dry-run]    done on every finished lane of the registered projects
+lanefather keep <id> [--off]              auto-done and done --finished leave the lane
 lanefather gc [--dry-run] [--json]         merged idle worktrees and unused branches
 lanefather promote <sha> [--ship] [--no-push] [--install [--deploy HOST]]
 lanefather sync [--drop-local]
@@ -45,6 +47,28 @@ slots) at the rerun's [slot priority](#slot-priorities) (interactive by default)
 `review <id> --fix-lane` starts the fix lane from the branch the lane landed on, which holds its merge, and refuses
 when no branch does; the landed lane keeps its own registration.
 
+### Finishing lanes
+
+A lane is finished when it is landed (or released), its post-merge smoke is green, its review is finished or exempt
+with every finding marked (each panel member's), and it is not kept. Auto-done (fathers#157) runs `done` on a lane
+the moment it becomes finished: at the land of a reviewed or exempt lane, at its clean review, or at `review --mark`
+of its last unmarked finding. `[done] auto = false` turns that off; the lane then says it is finished and waits for
+`done`.
+
+- `lanefather keep ID` keeps a lane, landed or not, from auto-done, `done --finished` and start's disk repair, for a
+  lane whose worktree or scratch is still in use (a packed dependency other worktrees overlay); `keep ID --off`
+  releases it. `land --keep` keeps the lane too. `done ID` still finishes a kept lane.
+- `lanefather done --finished` runs `done` on every finished lane of the projects in the machine's registry, each
+  in its own state directory and configuration, and prints what each removed and freed and why done refused the
+  others. `--dry-run` lists the finished lanes with their sizes (worktree, build directories and scratch), and the
+  landed lanes that are not finished with the reason, and removes nothing.
+- `start` (and `next --start`) under the free-disk minimum first runs `done --finished` over the registry, leaving
+  the projects whose `[done] auto` is false, then reads the disk again. If it is still short, the refusal says what
+  the repair freed. `--force-reason` skips the repair.
+
+None of these skips a refusal of `done`: an uncommitted change, an agent's lock, a process the source does not take
+for left behind or cannot see, a branch not merged, or a missing ticket comment leaves the lane where it is.
+
 `lanefather --help` describes the commands. The [glossary](../GLOSSARY.md) distinguishes lane states, receipts,
 reviews and verification gates.
 
@@ -73,6 +97,7 @@ self-contained configuration in the README for a Repo-Kit consumer.
 | `[slots.priority]` `check`, `post-merge`, `gate`, `rerun`, `perf`, `default` | each run's Slotfather priority; see [slot priorities](#slot-priorities) |
 | `[admission]` `provider` | `legacy` by default; explicit `slotfather` uses the versioned lifetime-admission query, separately from execution jobs. See [rollout contract](../docs/admission.md). |
 | `[admission]` `cap` | this repository's lane cap (fathers#149), a positive whole number. First set wins: `LANEFATHER_CAP`, then `[admission] cap`, then the cap derived from the machine; an invalid `LANEFATHER_CAP` warns and falls back to the next. An exported `LANEFATHER_CAP` overrides every project's cap. The cap counts the planned and active lanes of this repository only; `LANEFATHER_GLOBAL_CAP`, when set, is a ceiling over every project's lanes in the state directory together. A fix lane (`review --fix-lane`) registers outside both (fathers#45); after that it counts like any other lane. |
+| `[done]` `auto` | `true` by default: a lane that becomes finished runs `done` by itself, and start below the disk minimum runs it on finished lanes ([Finishing lanes](#finishing-lanes)) |
 | `[tickets]` | the ticket lifecycle below; every rule is off without it |
 | `[hooks]` `process_scan` | legacy process adapter for live lanes; without it `procs` supplies read-only inspection |
 | `[hooks.project]` | named project policy scripts run by `project-hook NAME -- ARGS` in the installed interpreter |
@@ -271,7 +296,11 @@ The [architecture pass](../docs/architecture-667.md) records the survey, alterna
 
 The standalone process adapter refuses PID-only live stopping until slotfather accepts an expected `(pid, start)`
 identity at the actual signal boundary. Existing configured hooks keep their supported cleanup contract. A missing
-`procs` on an older CLI preserves legacy `done` behavior; failed/unknown inspection retains worktrees.
+`procs` on an older CLI preserves legacy `done` behavior; failed/unknown inspection retains worktrees. An answer
+with pids whose working directory or lease membership is unknown is asked again up to four times, half a second
+apart (fathers#158): short-lived helpers that exited between the scan and the read do not hold a worktree. Unknowns
+that remain refuse `done`, naming each pid with its command (from Slotfather's `unknown`, or `procs --pid` for an
+older Slotfather).
 
 ### State and its versions
 
@@ -352,7 +381,7 @@ absolute path as `dashboard.events.path`. One `journal.ledger` call writes both,
   red post-merge smoke, gate or perf run and a failed promote step.
 
 Kinds: `lane.started`, `lane.adopted`, `claims.added`, `lane.checked`, `landing.reviewed`, `lane.conflict`,
-`lane.landed`, `lane.post_merge`, `lane.released`, `lane.done_refused`, `lane.done`, `process.stopped`,
+`lane.landed`, `lane.post_merge`, `lane.released`, `lane.done_refused`, `lane.done`, `lane.kept`, `process.stopped`,
 `review.started`, `review.kept`, `review.exempted`, `review.finished`, `finding.marked`, `review.marked`,
 `review.handed_over`, `review.ticket_filed`, `gate.finished`, `perf.finished`, `promote.step`, `promote.finished`,
 `sync.finished`, `load.waited`, `landing.lock_taken`, `ticket.marked`, `ticket.skipped`,
