@@ -6,6 +6,16 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Added
 
+- Junkfather is a source (fathers#86): its `junkfather status --json` (versions 1 and 2) is polled like
+  Lanefather's. SLOTS' bottom border sums it up on the right, `3 procs 7 · 1 orphan · 1 expired · 2 unowned` (a
+  narrow border drops unowned, then expired), and `3` or a click on it opens the Processes page: owned entries
+  (running, then orphan, then expired), then the last sweep's unowned processes and resources, each with its state,
+  label, id, owner, lane, age, TTL left and pid, a resource with its kind and id; PROCESS DETAILS with its command,
+  directory, log, owner and whether it lives, keep, mode, resource, and its lease and lane as links; and its
+  Junkfather events under the table. DETAILS lists a request's owned processes (`storybook · running · 1h46m`, or
+  `none owned`), each a link to the page, and LANE DETAILS a lane's. EVENTS words `sweep.finished` from its result.
+  `godfather --once --page processes` prints the page.
+
 - Lanefather is a source (fathers#85): its machine-wide `lanefather status --json` is polled every 5 s (its hint, up
   to 10 s) and soon after one of its events. SLOTS' bottom border sums it up, `2 lanes 3 active · 1 planned ·
   2 reviews · 🔥 gate red` (a narrow border drops planned, then reviews; dimmed while stale), and `2` or a click on it

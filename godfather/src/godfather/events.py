@@ -572,6 +572,15 @@ def junkfather_shown(kind: str, details: dict[str, Any]) -> Optional[Shown]:
                      label=str(details["cmd"]) if details.get("cmd") else None)
     if kind == "hook.failed":
         return Shown("hook fail", ((str(details.get("error") or ""), "bad"),))
+    if kind == "sweep.finished":  # its result: how many it reaped, failed on, found unowned (lists of ids)
+        counts = [f"{len(cast(list[Any], value))} {key}" for key, value in details.items()
+                  if isinstance(value, list) and value]
+        return Shown("swept", ((_words(*counts) or "nothing to do", "dim"),))
+    if kind == "sweep.finished":  # what the sweep did: reaped, reported unowned, its result
+        counts = [f"{details[key]} {word}" for key, word in (("reaped", "reaped"), ("unowned", "unowned"),
+                                                             ("resources", "resources")) if _number(details.get(key))]
+        return Shown("swept", ((_words(*counts, details.get("result") if isinstance(details.get("result"), str)
+                                       else ""), "dim"),))
     return None
 
 

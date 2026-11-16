@@ -5,38 +5,38 @@
 ╰───────────────────────────────────────│                                                                         ┃│                                       │
 ┍━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│  ADDED                                                                  ┃│                                       │
 │                                       │                                                                         ╹│                                       │
-┃  ▶️    lane-644-build-once            │  • Lanefather is a source (fathers#85): its machine-wide lanefather      │░░ 0.9 of 2 cores                      │
-│  ▶️    lane-465-state-definitions-revi│    status --json is polled every 5 s (its hint, up to 10 s) and soon     │ · waited 19m34s · running 35m10s      │
-│  ▶️    desktop                        │    after one of its events. SLOTS' bottom border sums it up, 2 lanes 3   │ 1 processes                           │
-│                                       │    active · 1 planned · 2 reviews · 🔥 gate red (a narrow border drops   │                                       │
-│  ⏸️    prof51                         │    planned, then reviews; dimmed while stale), and 2 or a click on it    │ight/.claude/worktrees/agent-afa3816b  │
-│  ⏸️    lane-555-host-rename-names     │    opens the Lanes page: LANES by project (Straylight · 3 of 4 lanes,    │2                                      │
-│                                       │    an unreadable project's error dimmed) with each lane's state,         │ight/.claude/worktrees/agent-afa3816b  │
-┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    ticket, stage, receipt, review, claims and age; LANE DETAILS with     │2/verify.sh --checks desktop-tests     │
-╭─ SLOTS LOG ─────── label ─────────────│    its ticket and worktree links, the latest log and the leases          │oing --jobs 1                          │
-│                                       │    running for it, each a link back to the request; and its Lanefather   │ight                                   │
-│  11:59:35  ▫       agent-ae72d94beb6f0│    events under the table. DETAILS shows a request's lane as a link      │                                       │
-│  11:58:33  ▫       agent-a1c75285bdf2c│    (710-speech-paste-phase · Straylight) when it joins: by its lane      │d-once                                 │
-│  11:57:15  ▫       agent-a1c75285bdf2c│    and Lanefather state directory, or by its lane and a directory        │ht                                     │
-│  11:55:44  ▪▪      desktop            │    inside that lane's worktree, never by the id alone. 1 shows the       │                                       │
-│  11:55:31  ▫       desktop            │    overview again, Esc goes back where a link came from; 1 2 pages in    │-build-once                            │
-│  11:55:26  ▫       agent-a1c75285bdf2c│    the footer names the keys of the tools present. godfather --once      │e/queue-347                            │
-│  11:55:00  ▫       desktop            │    --page lanes prints the page. lanefather show is asked only where     │ess                                    │
-│  11:54:02  ▫       agent-a1c75285bdf2c│    Lanefather's capabilities advertise it; otherwise a request with no   │ted                                    │
-│  11:52:53  ▫       agent-a1c75285bdf2c│    joined lane says lanefather too old.                                  │rification_plan.py, tools/verify.py,   │
-│  11:52:30  ▫       desktop            │                                                                          │main-module.sh, tools/test-build-      │
-│  11:51:40  ▫       post-merge-456-rena│  • EVENTS rows are selectable (fathers#152): with EVENTS focused, ↑ ↓    │odule.py, tools/app-build.py,          │
-│  11:51:24  ▫       agent-a1c75285bdf2c│    or a click move a row cursor (the ┃ bar QUEUE's selection has) and    │st-app-build.py, tools/cargo-test.py,  │
-│  11:49:34  ▫▫      data-grid          │    DETAILS shows that run or event instead of QUEUE's entry: a run's     │elopment.md, tools/test-cargo-build-   │
-│  11:48:30  ▫       agent-ae72d94beb6f0│    label, slots, wait, priority, run time, outcome and pid with each     │, tools/test-heavy.py,                 │
-│  11:47:21  ▫       agent-a0f998f4c57cd│    mark explained (▲ outlier · ran 1m13s · its run type's p90 52s, ↗     │rgo_build_cache.py                     │
-│  11:47:17  ▫       agent-a0f998f4c57cd│    slower +38% than its run type's p50 and why), another event's tool,   │                                       │
-│  11:47:13  ▫       agent-a0f998f4c57cd│    kind, subject and fields. The cursor on the newest row follows new    │                                       │
-│  11:47:10  ▫       agent-a0f998f4c57cd│    rows; on an older one it stays put and ↑ N new counts what arrived;   │───────────────────────────────────────╯
-│  11:47:07  ▫       agent-a0f998f4c57cd│    Home goes back.                                                       │nleased 0.4 · queue ahead · 2 waiting ─╮
-│  11:47:04  ▫       agent-a0f998f4c57cd│                                                                          │          slots held  avg 4.4/6        │
-│  11:46:08  ▫       post-merge-491-elec│  • Settings has a section per present tool (fathers#87): this            │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
-│  11:45:53  ▫       agent-a1c75285bdf2c│    dashboard's own (Refresh every, Colour theme) first, then             │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
+┃  ▶️    lane-644-build-once            │  • Junkfather is a source (fathers#86): its junkfather status --json     │░░ 0.9 of 2 cores                      │
+│  ▶️    lane-465-state-definitions-revi│    (versions 1 and 2) is polled like Lanefather's. SLOTS' bottom         │ · waited 19m34s · running 35m10s      │
+│  ▶️    desktop                        │    border sums it up on the right, 3 procs 7 · 1 orphan · 1 expired ·    │ 1 processes                           │
+│                                       │    2 unowned (a narrow border drops unowned, then expired), and 3 or a   │                                       │
+│  ⏸️    prof51                         │    click on it opens the Processes page: owned entries (running, then    │ight/.claude/worktrees/agent-afa3816b  │
+│  ⏸️    lane-555-host-rename-names     │    orphan, then expired), then the last sweep's unowned processes and    │2                                      │
+│                                       │    resources, each with its state, label, id, owner, lane, age, TTL      │ight/.claude/worktrees/agent-afa3816b  │
+┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    left and pid, a resource with its kind and id; PROCESS DETAILS with   │2/verify.sh --checks desktop-tests     │
+╭─ SLOTS LOG ─────── label ─────────────│    its command, directory, log, owner and whether it lives, keep,        │oing --jobs 1                          │
+│                                       │    mode, resource, and its lease and lane as links; and its Junkfather   │ight                                   │
+│  11:59:35  ▫       agent-ae72d94beb6f0│    events under the table. DETAILS lists a request's owned processes     │                                       │
+│  11:58:33  ▫       agent-a1c75285bdf2c│    (storybook · running · 1h46m, or none owned), each a link to the      │d-once                                 │
+│  11:57:15  ▫       agent-a1c75285bdf2c│    page, and LANE DETAILS a lane's. EVENTS words sweep.finished from     │ht                                     │
+│  11:55:44  ▪▪      desktop            │    its result. godfather --once --page processes prints the page.        │                                       │
+│  11:55:31  ▫       desktop            │                                                                          │-build-once                            │
+│  11:55:26  ▫       agent-a1c75285bdf2c│  • Lanefather is a source (fathers#85): its machine-wide lanefather      │e/queue-347                            │
+│  11:55:00  ▫       desktop            │    status --json is polled every 5 s (its hint, up to 10 s) and soon     │ess                                    │
+│  11:54:02  ▫       agent-a1c75285bdf2c│    after one of its events. SLOTS' bottom border sums it up, 2 lanes 3   │ted                                    │
+│  11:52:53  ▫       agent-a1c75285bdf2c│    active · 1 planned · 2 reviews · 🔥 gate red (a narrow border drops   │rification_plan.py, tools/verify.py,   │
+│  11:52:30  ▫       desktop            │    planned, then reviews; dimmed while stale), and 2 or a click on it    │main-module.sh, tools/test-build-      │
+│  11:51:40  ▫       post-merge-456-rena│    opens the Lanes page: LANES by project (Straylight · 3 of 4 lanes,    │odule.py, tools/app-build.py,          │
+│  11:51:24  ▫       agent-a1c75285bdf2c│    an unreadable project's error dimmed) with each lane's state,         │st-app-build.py, tools/cargo-test.py,  │
+│  11:49:34  ▫▫      data-grid          │    ticket, stage, receipt, review, claims and age; LANE DETAILS with     │elopment.md, tools/test-cargo-build-   │
+│  11:48:30  ▫       agent-ae72d94beb6f0│    its ticket and worktree links, the latest log and the leases          │, tools/test-heavy.py,                 │
+│  11:47:21  ▫       agent-a0f998f4c57cd│    running for it, each a link back to the request; and its Lanefather   │rgo_build_cache.py                     │
+│  11:47:17  ▫       agent-a0f998f4c57cd│    events under the table. DETAILS shows a request's lane as a link      │                                       │
+│  11:47:13  ▫       agent-a0f998f4c57cd│    (710-speech-paste-phase · Straylight) when it joins: by its lane      │                                       │
+│  11:47:10  ▫       agent-a0f998f4c57cd│    and Lanefather state directory, or by its lane and a directory        │───────────────────────────────────────╯
+│  11:47:07  ▫       agent-a0f998f4c57cd│    inside that lane's worktree, never by the id alone. 1 shows the       │nleased 0.4 · queue ahead · 2 waiting ─╮
+│  11:47:04  ▫       agent-a0f998f4c57cd│    overview again, Esc goes back where a link came from; 1 2 pages in    │          slots held  avg 4.4/6        │
+│  11:46:08  ▫       post-merge-491-elec│    the footer names the keys of the tools present. godfather --once      │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
+│  11:45:53  ▫       agent-a1c75285bdf2c│    --page lanes prints the page. lanefather show is asked only where     │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
 │  11:45:09  ▫       agent-a1c75285bdf2c│                                                                          │░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                                       │                     ←→ tool   ↑↓ scroll   esc close                  10% │          −80s                    now  │
 ╰───────────────────────────────────────╰──────────────────────────────────────────────────────────────────────────╯───────────────────────────────────────╯

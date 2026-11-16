@@ -1,7 +1,7 @@
 """godfather: one terminal dashboard for the tools that share a development machine.
 
   godfather [--interval S]                                         live view: ? lists the keys, q quits
-  godfather --once [--page overview|lanes] [--width N] [--height N] [--color]   one frame as text
+  godfather --once [--page overview|lanes|processes] [--width N] [--height N] [--color]   one frame as text
   godfather events [--source NAME]... [--follow] [--json]          the tools' events, newest last
   godfather --version
 
@@ -30,6 +30,7 @@ from . import news as _news
 from . import sources as _sources
 from . import theme as _theme
 from . import version as _version
+from .adapters import junkfather as _junkfather
 from .adapters import lanefather as _lanefather
 from .adapters import settings as _settings_adapter
 from .adapters import slotfather as _slotfather
@@ -45,7 +46,7 @@ from .views import events as _events_view
 from .views import overview as _overview
 
 USAGE = ("usage: godfather [--interval SECONDS]\n"
-         "       godfather --once [--page overview|lanes] [--width N] [--height N] [--color]\n"
+         "       godfather --once [--page overview|lanes|processes] [--width N] [--height N] [--color]\n"
          "       godfather events [--source NAME]... [--follow] [--json]\n"
          "       godfather --version")
 
@@ -192,7 +193,7 @@ class Screen:
         since = datetime.datetime.fromtimestamp(source.failed_at, datetime.timezone.utc) \
             if source.state == "stale" and source.failed_at is not None else None
         return _state.Tool(name, source.state, source.problem, source.snapshot, since,
-                           _lanefather.actions(source.capabilities), _lanefather.show_supported(source.capabilities))
+                           adapter.actions(source.capabilities), adapter.show_supported(source.capabilities))
 
     def poll_every(self, name: str) -> float:
         """Seconds between a tool's polls: its capabilities' hint clamped to 5–10 (SPEC 9)."""
@@ -288,8 +289,8 @@ def settings_failed(request: _settings_model.Request, failure: BaseException) ->
     return _state.SettingsWritten(request, "failed", None, why)
 
 
-TOOL_ADAPTERS: dict[str, Any] = {"lanefather": _lanefather}
-PAGES = ("overview", "lanes")  # what --page takes  # the other tools polled as sources, by name
+TOOL_ADAPTERS: dict[str, Any] = {"lanefather": _lanefather, "junkfather": _junkfather}
+PAGES = ("overview", "lanes", "processes")  # what --page takes  # the other tools polled as sources, by name
 
 
 def load_details(item: dict[str, Any], lanes: Source | None = None) -> tuple[Any, str | None]:

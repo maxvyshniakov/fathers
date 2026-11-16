@@ -12,7 +12,7 @@
 │  ⏸️    prof51                         │    ← → · f     events: the next log (or click its title)                ┃│ight/.claude/worktrees/agent-afa3816b  │
 │  ⏸️    lane-555-host-rename-names     │    r           events: every event as logged                            ┃│2                                      │
 │                                       │    /           events: filter by text (esc clears)                      ┃│ight/.claude/worktrees/agent-afa3816b  │
-┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    1 2 3       the overview, lanes, processes (tools present)           ╹│2/verify.sh --checks desktop-tests     │
+┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    1 2 3       the overview, lanes, processes (tools present)            │2/verify.sh --checks desktop-tests     │
 ╭─ SLOTS LOG ─────── label ─────────────│    s           settings                                                  │oing --jobs 1                          │
 │                                       │    ?           help                                                      │ight                                   │
 │  11:59:35  ▫       agent-ae72d94beb6f0│    v           what's new (or click Godfather what's new?)               │                                       │
@@ -38,6 +38,6 @@
 │  11:46:08  ▫       post-merge-491-elec│    ⚡  interactive: someone is waiting on it                             │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
 │  11:45:53  ▫       agent-a1c75285bdf2c│    🐌  batch: unattended work, after the rest                            │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
 │  11:45:09  ▫       agent-a1c75285bdf2c│                                                                          │░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
-│                                       │                      ↑↓ scroll   esc close   q quit                  32% │          −80s                    now  │
+│                                       │                      ↑↓ scroll   esc close   q quit                  30% │          −80s                    now  │
 ╰───────────────────────────────────────╰──────────────────────────────────────────────────────────────────────────╯───────────────────────────────────────╯
  Godfather what's new?                            ↑↓ select   tab panel   s settings   ? help   q quit                             updated 11:59:39  ● live

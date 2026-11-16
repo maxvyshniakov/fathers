@@ -16,10 +16,11 @@ from typing import Any, Callable, Optional, cast
 
 from .. import entries as _entries
 from .. import layout as _layout
+from ..adapters import junkfather as _junkfather
 from ..adapters import lanefather as _lanefather
 from ..events import Filter
 from ..layout import Rect
-from ..text import clip, dashboard_text, minutes, text_width, tilde
+from ..text import clip, dashboard_text, minutes, span, text_width, tilde
 from ..tui import Canvas, safe_link
 from ..widgets import Panel, Part, Spec, Table, label_column
 from . import common as _common
@@ -187,10 +188,15 @@ def draw_strip(canvas: Canvas, rect: Rect, model: Optional[Model], source: str, 
     _events.draw_events(canvas, rect, strip, moment, Filter(source))
 
 
+def long(seconds: float) -> str:
+    """An age to the minute, in days past one (`9d`, `2d03h`)."""
+    return minutes(seconds) if seconds < 86400 else span(seconds).removesuffix("00h")
+
+
 def age(moment: Optional[datetime.datetime], since: Any) -> str:
     if moment is None or not isinstance(since, datetime.datetime):
         return "—"
-    return minutes((moment - since).total_seconds())
+    return long((moment - since).total_seconds())
 
 
 def file_url(path: Any) -> str:
@@ -319,3 +325,183 @@ def lane_event_of(row: dict[str, Any], lane: dict[str, Any]) -> bool:
     if subject.get("state_dir"):
         return _lanefather.same_dir(subject["state_dir"], lane["state_dir"])
     return subject.get("project") in (None, lane["project"])
+
+
+# The Processes page (fathers#86)
+
+def procs_summary(tool: Any, marks: _common.Marks) -> list[tuple[str, list[Part]]]:
+    """The procs summary: owned entries running, then orphan, expired and unowned, each only when not zero."""
+    found = _junkfather.summary(tool.snapshot)
+    parts: list[tuple[str, list[Part]]] = [("count", [("3", "key"), (" procs ", "dim"), (str(found["count"]), "text")])]
+    for name, style in (("orphan", "warn"), ("expired", "warn"), ("unowned", "text")):
+        if found[name]:
+            parts.append((name, [(" · ", "dim"), (f"{found[name]} {name}", style)]))
+    return parts
+
+
+PROCESS_COLUMNS: list[Spec] = [("state", "", 2, False, 0), ("label", "label", 0, False, 0), ("id", "id", 8, False, 4),
+                               ("owner", "owner", 16, False, 3), ("lane", "lane", 14, False, 5),
+                               ("age", "age", 6, True, 2), ("ttl", "ttl left", 8, True, 1),
+                               ("pid", "pid", 6, True, 6), ("processes", "processes", 14, False, 7)]
+
+
+def process_values(row: dict[str, Any], marks: _common.Marks, elapsed: float) -> dict[str, Any]:
+    """A PROCESSES row: an owned entry, an unowned process or an unowned resource."""
+    label = (dashboard_text(_junkfather.label_of(row)), "text")
+    if row["kind"] == "unowned":
+        return {"state": (marks.rows["unowned"], "text"), "id": ("", "dim"), "label": label,
+                "owner": (dashboard_text(row["why"]), "warn"), "lane": ("", "dim"),
+                "age": (minutes(row["age"] + elapsed) if row.get("age") is not None else "—", "dim"),
+                "ttl": ("", "dim"), "pid": (str(row["pid"]), "dim"), "processes": ("", "dim")}
+    if row["kind"] == "resource":
+        return {"state": (marks.rows["resource"], "text"), "id": ("", "dim"), "label": label,
+                "owner": (dashboard_text(row["why"]), "warn"), "lane": ("", "dim"),
+                "age": (long(row["age"]) if row.get("age") is not None else "—", "dim"), "ttl": ("", "dim"),
+                "pid": ("", "dim"), "processes": (resource_text(row["resource_kind"], row["id"]), "dim")}
+    resource = row.get("resource")
+    count = row.get("processes")
+    return {"state": (marks.rows.get(row["state"], "·"), "text"), "id": (dashboard_text(row["id"]), "dim"),
+            "label": label, "owner": (dashboard_text(row["owner"]), "dim" if row.get("owner_alive") else "warn"),
+            "lane": (dashboard_text(row.get("lane") or ""), "dim"), "age": (minutes(row["age"] + elapsed), "dim"),
+            "ttl": (_junkfather.ttl_text(row, elapsed), "warn" if row["state"] == "expired" else "text"),
+            "pid": (str(row["pid"] or ""), "dim"),
+            "processes": (resource_text(str(resource.get("kind")), str(resource.get("id"))) if resource
+                          else str(count) if count is not None else "", "dim")}
+
+
+def resource_text(kind: str, ident: str) -> str:
+    """A resource as the page names it: its kind and its id cut short (`simulator 1A2B…`)."""
+    return f"{kind} {_junkfather.short_id(ident, 9)}"
+
+
+def separator(row: dict[str, Any]) -> Part:
+    return ("unowned · the last sweep's", "dim") if row.get("kind") == "separator" else ("", "dim")
+
+
+def process_facts(row: dict[str, Any], model: Optional[Model], lanes: Optional[dict[str, Any]],
+                  elapsed: float) -> list[tuple[str, list[Part], Link]]:
+    """PROCESS DETAILS: an owned entry's command, directory, log, owner and whether it lives, keep, mode, its
+    resource, its TTL, and its lease and lane as links; an unowned process's command and why; an unowned resource's
+    kind, id, name and why (a worktree's branch, repository, age and size)."""
+    facts: list[tuple[str, list[Part], Link]] = [("label", [(dashboard_text(_junkfather.label_of(row)), "bold")],
+                                                  None)]
+    if row["kind"] == "resource":
+        facts += [("kind", [(row["resource_kind"], "text")], None), ("id", [(dashboard_text(row["id"]), "text")], None)]
+        if row.get("name"):
+            facts.append(("name", [(dashboard_text(row["name"]), "text")], None))
+        facts.append(("why", [(dashboard_text(row["why"]), "warn")], None))
+        for name in ("branch", "repo"):
+            if row.get(name):
+                facts.append((name, [(dashboard_text(row[name]), "text")], None))
+        if row.get("age") is not None:
+            facts.append(("idle", [(long(row["age"]), "text")], None))
+        if row.get("size") is not None:
+            facts.append(("size", [(f"{row['size'] / 1e9:.1f} GB", "text")], None))
+        return facts
+    if row["kind"] == "unowned":
+        facts += [("command", [(dashboard_text(row["cmd"]), "dim")], None), ("pid", [(str(row["pid"]), "text")], None),
+                  ("why", [(dashboard_text(row["why"]), "warn")], None)]
+        if row.get("age") is not None:
+            facts.append(("age", [(minutes(row["age"] + elapsed), "text")], None))
+        for name in ("cwd", "root"):
+            if row.get(name):
+                facts.append(("directory" if name == "cwd" else "root", [path_part(row[name])], None))
+        if row.get("alive") is False:
+            facts.append(("alive", [("gone since the sweep", "dim")], None))
+        return facts
+    facts.append(("id", [(dashboard_text(row["id"]), "text")], None))
+    facts.append(("state", [(row["state"] + (f" · {row['phase']}" if row["phase"] != "running" else ""),
+                             "warn" if row["state"] != "running" else "text")], None))
+    facts.append(("ttl left", [(_junkfather.ttl_text(row, elapsed), "text")], None))
+    resource = row.get("resource")
+    if resource:
+        facts += [("resource", [(f"{resource.get('kind')} {dashboard_text(resource.get('id'))}", "text")], None)]
+        if resource.get("name"):
+            facts.append(("name", [(dashboard_text(resource["name"]), "text")], None))
+    if row.get("argv"):
+        facts.append(("command", [(dashboard_text(" ".join(row["argv"])), "dim")], None))
+    if row.get("cwd"):
+        facts.append(("directory", [path_part(row["cwd"])], None))
+    if row.get("log"):
+        facts.append(("log", [path_part(row["log"])], None))
+    alive = row.get("owner_alive")
+    facts.append(("owner", [(dashboard_text(row["owner"]), "text"),
+                            (" · lives" if alive else " · gone" if alive is False else "", "warn" if alive is False
+                             else "dim")], None))
+    for name in ("keep", "mode"):
+        if row.get(name):
+            facts.append((name, [(dashboard_text(row[name]), "text")], None))
+    if row.get("pid"):
+        facts.append(("pid", [(str(row["pid"]) + (f" · {row['processes']} processes" if row.get("processes")
+                                                  else ""), "text")], None))
+    facts.append(("", [], None))
+    items = cast(list[dict[str, Any]], (model or {}).get("holders", []) + (model or {}).get("waiters", []))
+    lease = _junkfather.lease_of(row, items)
+    if lease is not None:
+        facts.append(("lease", [(dashboard_text(items[lease]["label"] or items[lease]["pid"]), "accent")],
+                      ("overview", _entries.entry_ids(items)[lease])))
+    lane = _junkfather.lane_of(row, lanes)
+    if lane is not None:
+        facts.append(("lane", [(dashboard_text(f"{lane['id']} · {lane['project']}"), "accent")],
+                      ("lanes", lane["key"])))
+    elif row.get("lane"):
+        facts.append(("lane", [(dashboard_text(row["lane"]), "dim")], None))
+    return facts
+
+
+def process_links(entries: list[dict[str, Any]], elapsed: float, label: str = "processes") \
+        -> list[tuple[str, list[Part], Link]]:
+    """`processes` rows: each owned entry's label, state and TTL left, a link to the Processes page; `none owned`."""
+    if not entries:
+        return [(label, [("none owned", "dim")], None)]
+    return [(label if number == 0 else "",
+             [(dashboard_text(_junkfather.label_of(entry)), "accent"),
+              (f" · {entry['state']} · {_junkfather.ttl_text(entry, elapsed)}", "dim")], ("processes", entry["key"]))
+            for number, entry in enumerate(entries)]
+
+
+def draw_processes(canvas: Canvas, tool: Any, selected: Optional[int], model: Optional[Model],
+                   lanes: Optional[dict[str, Any]], moment: Optional[datetime.datetime]) -> None:
+    """The Processes page: owned entries, a separator, the last sweep's unowned processes and resources; PROCESS
+    DETAILS for the selection; its Junkfather events."""
+    if tool.state == "unsupported":
+        draw_notice(canvas, "processes", [str(tool.problem),
+                                          "The Processes page needs a Junkfather with `status --json`."])
+        return
+    if tool.snapshot is None:
+        draw_notice(canvas, "processes", [f"Reading Junkfather… {tool.problem or ''}".strip()])
+        return
+    rows = _junkfather.page_rows(tool.snapshot)
+    elapsed = _junkfather.elapsed(tool.snapshot, moment)
+    screen = _layout.page(canvas.width, canvas.height, max(1, len(rows)), "procs")
+    canvas.order = screen.order
+    marks = _common.marks_of(canvas)
+    row = rows[selected] if selected is not None and 0 <= selected < len(rows) else None
+    for name, rect in screen.panels.items():
+        if name == "procs":
+            draw_table(canvas, rect, "procs", "PROCESSES", PROCESS_COLUMNS, rows, selected,
+                       lambda found: process_values(found, marks, elapsed), separator, stale_note(tool))
+        elif name == "details":
+            nothing: list[tuple[str, list[Part], Link]] = [("", [("Nothing owned or reported", "dim")], None)]
+            facts = process_facts(row, model, lanes, elapsed) if row else nothing
+            draw_document(canvas, rect, "PROCESS DETAILS", facts)
+        elif name == "events":
+            draw_strip(canvas, rect, model, "junkfather", "junk", lambda event: row is not None and
+                       process_event_of(event, row), moment)
+    if screen.arrangement == "small":
+        canvas.put(0, 1, "Enlarge the terminal for the Processes page", "dim", max(0, canvas.width - 2))
+    if tool.state == "stale":
+        for line in canvas.cells[:canvas.height - 1]:
+            for cell in line:
+                cell[1] = "dim"
+
+
+def process_event_of(event: dict[str, Any], row: dict[str, Any]) -> bool:
+    """A Junkfather event is the row's when its subject is the entry, the unowned pid or the resource."""
+    subject: dict[str, Any] = event.get("subject") or {}
+    if row["kind"] == "entry":
+        return subject.get("type") == "entry" and subject.get("id") == row["id"]
+    if row["kind"] == "unowned":
+        return subject.get("pid") == row["pid"] or subject.get("id") == str(row["pid"])
+    return subject.get("type") == "resource" and str(subject.get("id")) in (row["id"], f"{row['resource_kind']}:"
+                                                                           f"{row['id']}")

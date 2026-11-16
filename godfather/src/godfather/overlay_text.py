@@ -101,7 +101,11 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
         ("2 lanes", "by project: stage, receipt, review, claims, age"),
         ("▶️ 🗓️ ✅ 💤", "active · planned · landed · parked"),
         ("2 lanes N", "SLOTS' border: lanes active, planned, reviews, 🔥 a red gate"),
-        ("", "A lane in DETAILS, a lease in a lane's, is a link; esc goes back."),
+        ("3 procs", "owned processes and resources, then the last sweep's unowned"),
+        ("▶️ 👻 ⌛", "running · its owner is gone · past its TTL"),
+        ("❔ 📦", "an unowned process · an unowned resource"),
+        ("3 procs N", "SLOTS' border: owned, orphan, expired, unowned"),
+        ("", "A lane, lease or process in DETAILS is a link; esc goes back."),
     ]),
     ("MACHINE", [
         ("load", "the 1-minute load average / cores (not CPU %)"),

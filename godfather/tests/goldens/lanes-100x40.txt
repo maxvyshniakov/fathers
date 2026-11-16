@@ -37,4 +37,4 @@
 │                                                                                                  │
 │                                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
- Godfather what's new?       ↑↓ select   1 2 pages   ? help   q quit       updated 11:59:39  ● live
+ Godfather what's new?      ↑↓ select   1 2 3 pages   ? help   q quit      updated 11:59:39  ● live

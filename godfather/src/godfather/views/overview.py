@@ -21,6 +21,7 @@ from . import events as _events
 from . import machine as _machine
 from . import overlays as _overlays
 from . import pages as _pages
+from ..adapters import junkfather as _junkfather
 from . import queue as _queue
 from . import settings as _settings_view
 from .common import Model
@@ -129,23 +130,36 @@ def draw_panels(canvas: Canvas, model: Model, selected: int, cwd: Optional[str],
             rows = newest_first(model, events_filter or Filter())
             _details.draw_event_detail(canvas, rect, rows[event] if 0 <= event < len(rows) else None, moment)
         elif name == "details":
-            lanes = (tools or {}).get("lanefather")
-            _details.draw_detail(canvas, rect, model, selected, cwd, moment, failure,
-                                 lanes.snapshot if lanes is not None and lanes.readable else None)
+            _details.draw_detail(canvas, rect, model, selected, cwd, moment, failure, readable(tools, "lanefather"),
+                                 readable(tools, "junkfather"))
         elif name == "machine":
             _machine.draw_machine(canvas, rect, model)
     if model.get("stale_since"):  # the last good picture, dimmed, until a snapshot arrives again
         dim_panels(canvas)
 
 
-SUMMARIES = {"lanes": _pages.lanes_summary}  # the summaries in SLOTS' bottom border, by page
+SUMMARIES = {"lanes": _pages.lanes_summary, "processes": _pages.procs_summary}  # SLOTS' bottom border, by page
+
+
+def readable(tools: Optional[dict[str, Any]], name: str) -> Optional[dict[str, Any]]:
+    """A tool's snapshot where it has one to show (dimmed while stale), else None."""
+    tool = (tools or {}).get(name)
+    return cast(dict[str, Any], tool.snapshot) if tool is not None and tool.readable else None
 
 
 def draw_page(canvas: Canvas, page: str, tools: dict[str, Any], row: Optional[int], model: Model,
               moment: Optional[datetime.datetime]) -> None:
     """A page instead of the overview's panels (fathers#85)."""
+    procs = readable(tools, "junkfather")
     if page == "lanes" and "lanefather" in tools:
-        _pages.draw_lanes(canvas, tools["lanefather"], row, model, moment)
+        elapsed = _junkfather.elapsed(procs, moment)
+
+        def extra(lane: dict[str, Any]) -> list[Any]:  # its processes (fathers#86)
+            return _pages.process_links(_junkfather.of_lane(lane, procs), elapsed) if procs is not None else []
+
+        _pages.draw_lanes(canvas, tools["lanefather"], row, model, moment, extra)
+    elif page == "processes" and "junkfather" in tools:
+        _pages.draw_processes(canvas, tools["junkfather"], row, model, readable(tools, "lanefather"), moment)
 
 
 def draw_overlay(canvas: Canvas, overlay: Any, model: Optional[Model], news: Any = None,

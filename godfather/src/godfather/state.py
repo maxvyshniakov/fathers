@@ -16,6 +16,7 @@ from typing import Any, Callable, Optional, Union, cast
 from . import news as _news
 from . import settings_model as _settings
 from . import entries as _entries
+from .adapters import junkfather as _junkfather
 from .adapters import lanefather as _lanefather
 from . import events as _events_view
 from . import layout as _layout
@@ -336,6 +337,8 @@ def page_rows(state: AppState, page: str) -> list[dict[str, Any]]:
     """A page's table rows, from its tool's last good snapshot; a row without a `key` is not selectable."""
     if page == "lanes":
         return _lanefather.page_rows(tool(state, "lanefather").snapshot)
+    if page == "processes":
+        return _junkfather.page_rows(tool(state, "junkfather").snapshot)
     return []
 
 
@@ -350,13 +353,17 @@ def page_index(state: AppState, page: str, rows: Optional[list[dict[str, Any]]] 
 
 
 def linked(state: AppState, page: str) -> Any:
-    """The row of `page` the selected request links to: its lane (fathers#85), None where it has none."""
+    """The row of `page` the selected request links to: its lane (fathers#85), its first owned process
+    (fathers#86); None where it has none."""
     item = selected_item(state)
     if item is None:
         return None
+    lane = _lanefather.lane_of(item, tool(state, "lanefather").snapshot, selected_cwd(state))
     if page == "lanes":
-        lane = _lanefather.lane_of(item, tool(state, "lanefather").snapshot, selected_cwd(state))
         return lane["key"] if lane is not None else None
+    if page == "processes":  # its first owned entry (fathers#86)
+        owned = _junkfather.of_request(item, tool(state, "junkfather").snapshot, lane)
+        return owned[0]["key"] if owned else None
     return None
 
 
