@@ -276,6 +276,8 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
     start as now projected. A head
     whose reserved start passed `reservation_timeout` seconds ago while such leases still hold its slots gives
     way (Plan.dropped): it holds nobody back, keeps its reservation and place, and is the head again once they end.
+    Once it gave way (`head_dropped` on its entry) only leases granted before then let it give way again, and while
+    it does, a request with no run like it in the history is not admitted before it.
     `settings` are the caller's settings.order_settings() (DEFAULTS where not given); `order` overrides theirs. The
     head's start is worked out when it holds no reservation yet, when a request behind it fits, or with
     `reserve_head`."""
@@ -345,6 +347,13 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
         if defers and entry["count"] <= free and _entry.whole_machine(entry, slots):
             found.reason = found.reason or quiet(free, entry)
             continue
+        if entry["count"] <= free and found.dropped and estimate(entry) is None:
+            # A head gave way: a request nobody knows the run of is no backfill against it, or a stream of them
+            # would keep it from its slots for good (fathers#160 review)
+            found.reason = found.reason or (f"{free} of {slots} slots free; {entry.get('label')} has no run like it "
+                                            f"in the history and waits behind {found.dropped[0][0].get('label')}, "
+                                            f"which gave way")
+            continue
         if entry["count"] <= free:
             found.grants.append(entry)
             used += entry["count"]
@@ -377,12 +386,17 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
                 trial = Plan()
                 trial.head = entry
                 reserve(trial, held, slots, used, moment, estimate, fallback, overrun)
-                if trial.known and trial.blocked and (trial.start or moment) > moment:
+                # Once it gave way, only the leases that blocked it then let it give way again: what was granted
+                # since (with an estimate, or by an older client) holds it back no more (fathers#160 review)
+                gave_way = _entry.epoch(entry.get(_entry.HEAD_DROPPED))
+                blockers = [e for e in trial.blocked if gave_way is None
+                            or (_config.seconds(e.get("granted")) or math.inf) < gave_way]
+                if trial.known and blockers and (trial.start or moment) > moment:
                     # Its reserved start passed long ago and leases nobody knows the end of still hold its slots:
                     # it gives way rather than idle them (fathers#160); it keeps its reservation and place.
                     found.head = None
-                    found.dropped.append((entry, trial.blocked))
-                    names = ", ".join(str(e.get("label")) for e in trial.blocked)
+                    found.dropped.append((entry, blockers))
+                    names = ", ".join(str(e.get("label")) for e in blockers)
                     found.reason = found.reason or (
                         f"{free} of {slots} slots free; {entry.get('label')} gave way: its reserved start passed "
                         f"{_config.duration(moment - promised)} ago while leases with no end estimate hold its "

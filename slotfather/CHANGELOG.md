@@ -9,7 +9,8 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 - A head whose reserved start passed while leases with no end estimate hold its slots no longer idles the machine
   (fathers#160): a request that fits the free slots starts when its p90 run ends by the head's projected start,
   and past `reservation_timeout` (`order --reservation-timeout S`, default 30 minutes, 0: never) the head gives
-  way, naming the leases (its waiting line, queue.log, `request.head_dropped`). `status` says `head LABEL blocked
+  way, naming the leases (its waiting line, queue.log, `request.head_dropped`); only leases granted before it
+  gave way let it give way again, and meanwhile a request with no history is not admitted before it. `status` says `head LABEL blocked
   by leases ...; N slots idle`; `status --json` adds `blocked_by`, `idle_slots` and `gave_way` where they apply.
   A `reservation_timeout` other than 30 minutes saved in order.json makes a slotfather before it refuse the file
   and fall back to the window order, as for the earlier knobs (`slotfather order` says so).

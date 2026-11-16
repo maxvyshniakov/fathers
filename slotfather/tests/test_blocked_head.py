@@ -87,17 +87,37 @@ class PlanTests(unittest.TestCase):
     def test_a_head_past_its_promise_by_the_timeout_gives_way_naming_the_leases(self) -> None:
         late = waiter("measure", 8, -9000, reserved=M - 1900)
         unknown = waiter("unknown", 1, -60)
-        found = self.plan([late, unknown], {})
+        install = waiter("install", 1, -30)
+        found = self.plan([late, unknown, install], {"install": 4000})
         self.assertIsNone(found.head)
-        self.assertEqual(["unknown"], [e["label"] for e in found.grants], "nothing holds the idle slots back")
+        self.assertEqual(["install"], [e["label"] for e in found.grants],
+                         "it holds the idle slots back no more; a request with no history is no backfill against it")
         self.assertEqual([("measure", ["lane-a", "lane-b", "lane-c"])],
                          [(e["label"], sorted(b["label"] for b in blockers)) for e, blockers in found.dropped])
         self.assertIn("measure gave way: its reserved start passed 31m40s ago while leases with no end estimate "
                       "hold its slots (lane-a, lane-b, lane-c)", found.reason or "")
-        self.assertEqual([], sf_schedule.reservations([late, unknown], found), "it keeps its promise and place")
+        self.assertEqual([], sf_schedule.reservations([late, unknown, install], found), "it keeps its promise and place")
         kept = self.plan([late, unknown], {}, reservation_timeout=0.0)
         self.assertEqual(("measure", []), (kept.head and kept.head["label"], kept.dropped), "0: never")
         self.assertIsNone(self.plan([late], {}, reservation_timeout=2000.0).dropped or None, "not yet")
+
+    def test_a_head_that_gave_way_is_not_starved_by_new_requests_with_no_history(self) -> None:
+        """fathers#160 review: once it gave way, a stream of requests nobody knows the run of starts nothing past it,
+        and leases granted after it gave way do not let it give way again."""
+        late = waiter("measure", 8, -9000, reserved=M - 1900, head_dropped=M - 600)
+        stream = [waiter(f"new-{n}", 1, -50 + n) for n in range(5)]
+        found = self.plan([late, *stream], {})
+        self.assertEqual(([], ["measure"]), ([e["label"] for e in found.grants], [e["label"] for e, _ in found.dropped]),
+                         "the lanes that blocked it still run: it gives way, and none of the stream starts")
+        self.held = [holder("lane-a", 1, -7200), holder("since", 1, -300)]  # `since` was granted after it gave way
+        still = self.plan([late, *stream], {})
+        self.assertEqual(["lane-a"], [b["label"] for b in still.dropped[0][1]],
+                         "only what blocked it before it gave way counts")
+        self.held = [holder("since", 1, -300), holder("later", 1, -60)]
+        back = self.plan([late, *stream], {})
+        self.assertEqual(("measure", [], []), (back.head and back.head["label"], back.dropped,
+                                               [e["label"] for e in back.grants]),
+                         "only leases granted after it gave way: it is the head again and holds the slots back")
 
 
 class GrantTests(unittest.TestCase):
@@ -140,16 +160,16 @@ class GrantTests(unittest.TestCase):
         with self.queue.running():
             measure = self.queue.entry(90201, "measure", 4, since=-9000, reserved=T0 - 1900)
             self.queue.entry(90203, "unknown", 1, since=-50)
+            self.queue.entry(90204, "install", 1, since=-40)
             reason = self.grant() or ""
             self.assertIn("measure gave way", reason)
             self.assertIn("(lane-a, lane-b)", reason)
-            self.assertEqual("held", self.states()["unknown"]["state"])
+            self.assertEqual(("held", "waiting"), (self.states()["install"]["state"], self.states()["unknown"]["state"]),
+                             "a request with history takes an idle slot; one with none waits behind it")
             entry = json.loads(measure.read_text())
             self.assertEqual((T0, T0 - 1900), (entry["head_dropped"], entry["reserved"]))
-            # what it waits on now: the lanes, and the request with no history that took an idle slot meanwhile
-            self.assertEqual(["lane-a", "lane-b", "unknown"],
-                             [e["label"] for e in self.states()["measure"]["gave_way"]])
-            self.assertIn("gave-way-to=lane-a,lane-b,unknown", "\n".join(sf_query.status_lines(self.queue.directory)))
+            self.assertEqual(["lane-a", "lane-b"], [e["label"] for e in self.states()["measure"]["gave_way"]])
+            self.assertIn("gave-way-to=lane-a,lane-b", "\n".join(sf_query.status_lines(self.queue.directory)))
             self.queue.at(30)
             self.grant()
             events = [json.loads(line) for line in (self.queue.directory / "events.jsonl").read_text().splitlines()]
@@ -161,7 +181,7 @@ class GrantTests(unittest.TestCase):
             self.assertIn("measure (pid 90201) gave way as the head: its reserved start passed 1900 s ago while "
                           "leases with no end estimate hold its slots: lane-a (pid 90101), lane-b (pid 90102)", log)
             # once the leases end its slots are free: it starts, the mark gone
-            for pid in (90101, 90102, 90203):
+            for pid in (90101, 90102, 90204):
                 del self.queue.table[pid]
             self.queue.at(60)
             self.grant()
