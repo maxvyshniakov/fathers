@@ -6,7 +6,7 @@ FAKE_SLOTFATHER_STATE names the state file; every call's argv is appended to FAK
 cores, memory_gib (null: unknown), capacity (null, {"slots": N} or {"mode", "gib_per_slot", "slots"}), order (the
 saved knobs), environment (the SLOTFATHER_* names set), writable, version, snapshot (the status reply to print),
 capabilities (to print instead), fail ({"status": "message"} makes that command fail), sleep ({"status": s}),
-ignore_hangup (true: a call that outlives the dashboard's terminal).
+ignore_hangup (true: a call that outlives the dashboard's terminal), ignore_term (true: one that ignores SIGTERM).
 """
 from __future__ import annotations
 
@@ -323,6 +323,8 @@ def main(argv: list[str]) -> int:
     command = argv[0] if argv else ""
     if state.get("ignore_hangup"):  # a call that outlives the dashboard that ran it, as one under nohup does
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    if state.get("ignore_term"):  # one that also ignores SIGTERM: only SIGKILL ends it
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
     if command in state.get("sleep", {}):
         time.sleep(float(state["sleep"][command]))
     if command in state.get("fail", {}):

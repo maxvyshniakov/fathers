@@ -7,6 +7,7 @@ from __future__ import annotations
 import fcntl
 import importlib.util
 import json
+import os
 import re
 import shutil
 import struct
@@ -112,6 +113,24 @@ class LiveTests(LiveCase):
         self.assertTrue(terminal.group_alive(screen.process.pid), "the call outlived the dashboard")
         screen.stop()
         self.assertFalse(terminal.group_alive(screen.process.pid))
+
+    def test_stopping_kills_a_call_that_ignores_sigterm_and_says_so(self) -> None:
+        screen = self.start(argv=[sys.executable, str(ENTRY), "--interval", "1"])
+        screen.grace = 0.5
+        screen.receive(" QUEUE ")
+        self.fake.update(sleep={"status": 30}, ignore_hangup=True, ignore_term=True)
+
+        def polls() -> int:
+            return sum(1 for argv in self.fake.argv() if argv[:1] == ["status"])
+
+        calls = polls()
+        screen.until(lambda _: polls() > calls, 8, "a status call started")
+        self.assertEqual(0, screen.quit())
+        with self.assertRaisesRegex(AssertionError, "ignored SIGTERM.*; killed"):
+            screen.stop()
+        self.assertFalse(terminal.group_alive(screen.process.pid))
+        with self.assertRaises(OSError):  # the PTY is closed all the same
+            os.fstat(screen.master)
 
     def test_a_resize_redraws_the_whole_screen_in_the_new_layout(self) -> None:
         self.queue(holders=[item("resized", 400)])

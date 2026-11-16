@@ -104,9 +104,9 @@ CONTROLLING = ("import fcntl, os, sys, termios; fcntl.ioctl(0, termios.TIOCSCTTY
                "os.execvp(sys.argv[1], sys.argv[1:])")
 
 
-def terminate(group: int) -> None:
+def terminate(group: int, how: signal.Signals = signal.SIGTERM) -> None:
     with contextlib.suppress(ProcessLookupError, PermissionError):  # EPERM: only zombies left (macOS)
-        os.killpg(group, signal.SIGTERM)
+        os.killpg(group, how)
 
 
 def group_alive(group: int) -> bool:
@@ -135,6 +135,7 @@ class Terminal:
         os.close(slave)
         self.raw = bytearray()
         self.stopped = False
+        self.grace = 10.0  # seconds stop() gives the group to end on SIGTERM before it kills it
         case.addCleanup(self.stop)
 
     def read(self, seconds: float = 0.05) -> None:
@@ -205,16 +206,30 @@ class Terminal:
             return
         self.stopped = True
         group = self.process.pid  # its own session, so its own process group, which its children inherit
-        if self.process.poll() is None:
+        try:
+            if self.process.poll() is None:
+                terminate(group)
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    self.process.wait(timeout=3)
             terminate(group)
-            self.process.wait(timeout=3)
-        terminate(group)
-        deadline = time.monotonic() + 10
+            if not self.drain(group, self.grace):
+                # A member that ignores SIGTERM: killed, so it cannot write into the fake's directory after all
+                terminate(group, signal.SIGKILL)
+                self.process.poll()  # reaps the dashboard itself if it was the one
+                ended = self.drain(group, 3)
+                raise AssertionError(f"process group {group} ignored SIGTERM after its dashboard ended"
+                                     + ("; killed" if ended else "; still running after SIGKILL"))
+        finally:
+            os.close(self.master)
+
+    def drain(self, group: int, seconds: float) -> bool:
+        """Waits, reading the PTY as until() does, for the group to be empty; whether it is."""
+        deadline = time.monotonic() + seconds
         while group_alive(group):
             if time.monotonic() > deadline:
-                raise AssertionError(f"process group {group} still running after its dashboard ended")
-            self.read()  # waits on the PTY, as until() does
-        os.close(self.master)
+                return False
+            self.read()
+        return True
 
 
 class LiveCase(unittest.TestCase):
