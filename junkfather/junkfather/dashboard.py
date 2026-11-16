@@ -61,11 +61,18 @@ class UnownedProcess(TypedDict):
     alive: Optional[bool]
 
 
-class UnownedResource(TypedDict):
+class _UnownedResource(TypedDict):
     kind: Any
     id: Any
     name: Any
     why: Any
+
+
+class UnownedResource(_UnownedResource, total=False):
+    repo: Any  # a worktree's: its main checkout, branch, age (seconds idle) and size (bytes)
+    branch: Any
+    age: Any
+    size: Any
 
 
 class LastSweep(TypedDict):
@@ -133,13 +140,23 @@ def status(store: Store) -> Status:
         unowned.append({"pid": item.get("pid"), "start": item.get("start"), "cmd": item.get("cmd"),
                         "cwd": item.get("cwd"), "root": item.get("root"), "why": item.get("why"),
                         "age": None if started is None else max(0.0, now - started), "alive": alive})
-    resources: List[UnownedResource] = [
-        {"kind": item.get("kind"), "id": item.get("id"), "name": item.get("name"), "why": item.get("why")}
-        for item in map(as_dict, filter(_is_dict, as_list(listed.get("resources"))))]
+    resources: List[UnownedResource] = [resource_row(item)
+                                        for item in map(as_dict, filter(_is_dict, as_list(listed.get("resources"))))]
     return {"v": STATUS_VERSION, "host": _events.host(), "time": _events.now(), "entries": rows(store, table, now),
             "unowned": unowned, "unowned_resources": resources,
             "sweep": {"time": iso(last.get("at")), "result": last.get("result")}, "cpu": last.get("cpu"),
             "errors": [] if table is not None else ["the process table cannot be read"]}
+
+
+def resource_row(item: Dict[str, Any]) -> UnownedResource:
+    """An unowned resource as status shows it: kind, id, name, why, and for a worktree its repo, branch, age and
+    size too."""
+    row: UnownedResource = {"kind": item.get("kind"), "id": item.get("id"), "name": item.get("name"),
+                            "why": item.get("why")}
+    if item.get("kind") == "worktree":
+        row.update({"repo": item.get("repo"), "branch": item.get("branch"), "age": item.get("age"),
+                    "size": item.get("size")})
+    return row
 
 
 def _is_dict(value: Any) -> bool:

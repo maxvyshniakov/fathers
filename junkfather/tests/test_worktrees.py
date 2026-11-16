@@ -8,11 +8,12 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import time
 from typing import Any, Dict, List
 import unittest
 
-from support import Case
+from support import ROOT, Case
 
 import eventcheck
 from junkfather import resources, sweep, worktrees
@@ -130,8 +131,9 @@ class GuardTests(WorktreeCase):
         self.git(self.repo, "fetch", "-q", "origin")
         self.assertIsNone(self.refusal(path))
         items = worktrees.listing(str(self.repo)) or []
-        self.assertEqual("picked", worktrees.branch_to_delete(str(self.repo), "picked", items, str(path)))
-        self.assertIsNone(worktrees.branch_to_delete(str(self.repo), "main", items, str(path)))
+        tip = self.git(self.repo, "rev-parse", "picked").strip()
+        self.assertEqual(("picked", tip), worktrees.branch_tip(str(self.repo), "picked", items, str(path)))
+        self.assertIsNone(worktrees.branch_tip(str(self.repo), "main", items, str(path)))
 
     def test_a_process_inside_keeps_it_and_so_does_the_sweep_being_inside(self):
         path = self.worktree("busy", "busy")
@@ -157,12 +159,90 @@ class GuardTests(WorktreeCase):
         self.assertEqual([], kind.named(["git", "status"], ""))
 
 
+class MoreGuardTests(WorktreeCase):
+    def test_a_merge_with_its_own_resolution_is_not_merged_though_git_cherry_finds_every_patch(self):
+        side = self.worktree("side", "side")
+        self.commit(side, "a.txt")
+        path = self.worktree("merging", "merging")
+        self.git(path, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+        (path / "resolution.txt").write_text("only in the merge")
+        self.git(path, "add", "resolution.txt")
+        self.git(path, "commit", "-q", "--amend", "--no-edit")
+        self.git(self.repo, "cherry-pick", self.git(self.repo, "rev-parse", "side").strip())
+        self.git(self.repo, "push", "-q", "origin", "main")
+        self.git(self.repo, "fetch", "-q", "origin")
+        self.assertNotIn("+", self.git(path, "cherry", "origin/main", "HEAD"))  # what cherry alone would pass
+        self.assertEqual("commits not in origin/main", self.refusal(path))
+        items = worktrees.listing(str(self.repo)) or []
+        self.assertIsNone(worktrees.branch_tip(str(self.repo), "merging", items, str(path)))
+
+    def test_only_the_checked_tip_of_the_branch_is_deleted(self):
+        path = self.worktree("moving", "moving")
+        resource = {"kind": "worktree", "id": str(path), "repo": str(self.repo), "branch": "moving"}
+        steps = worktrees.plan(resource)
+        self.assertEqual("update-ref", steps[1][3])
+        moved = self.commit(path, "late.txt")  # another agent's work lands on the branch after the check
+        outcome = resources.stop(resource, 1, lambda: resources.Snapshot(None).alive(resource), commands=steps)
+        self.assertEqual("stopped", outcome["result"], outcome)
+        self.assertIn("warning", outcome)
+        self.assertEqual(moved, self.git(self.repo, "rev-parse", "moving").strip())
+
+    def test_a_keep_of_any_kind_a_protected_branch_and_a_symbolic_link_keep_it(self):
+        keep_dir = self.worktree("keep-dir", "keep-dir")
+        (keep_dir / ".keep").mkdir()
+        keep_file = self.worktree("keep-file", "keep-file")
+        (keep_file / ".keep").write_text("mine")
+        integrate = self.worktree("integration", "integrate/batch")
+        self.git(self.repo, "branch", "dev", "main")
+        dev = self.tmp / "on-dev"
+        self.git(self.repo, "worktree", "add", "-q", str(dev), "dev")
+        real = self.worktree("real", "real")
+        link = self.tmp / "link"
+        os.symlink(real, link)
+        self.assertIn(self.refusal(keep_dir), (".keep (unreadable)", ".keep: "))
+        self.assertEqual(".keep: mine", self.refusal(keep_file))
+        self.assertEqual("it has integrate/batch checked out", self.refusal(integrate))
+        self.assertEqual("it has dev checked out", self.refusal(dev.resolve()))
+        item = {"path": str(real), "listed": str(link), "branch": "real"}
+        self.assertEqual("missing or a symbolic link", worktrees.refusal(item, str(self.repo), None, None, []))
+
+    def test_lanes_come_from_lanefathers_registry_and_an_unreadable_one_protects_claude_worktrees(self):
+        root = self.tmp / "lanefather"
+        states = self.tmp / "elsewhere" / "lanes"
+        states.mkdir(parents=True)
+        (states / "a.json").write_text(json.dumps({"worktree": str(self.tmp / "wt-a"), "status": "active"}))
+        (states / "b.json").write_text(json.dumps({"worktree": str(self.tmp / "wt-b"), "status": "done"}))
+        root.mkdir()
+        self.assertEqual(([], False), tuple(worktrees.lane_worktrees(str(root))))
+        (root / "projects.json").write_text(json.dumps({"v": 1, "projects": [{"state_dir": str(states)}]}))
+        lanes = worktrees.lane_worktrees(str(root))
+        self.assertEqual(([os.path.realpath(self.tmp / "wt-a")], True), tuple(lanes))
+        blind = worktrees.Lanes([], False)
+        self.assertIsNotNone(blind.holds("/r/.claude/worktrees/agent-1"))
+        self.assertIsNone(blind.holds("/r-wt-feature"))
+        self.assertEqual(([], True), tuple(worktrees.lane_worktrees(str(self.tmp / "absent"))))
+
+    def test_a_process_whose_working_directory_cannot_be_read_counts_as_inside(self):
+        from junkfather import procs
+        path = self.worktree("unknown", "unknown")
+        here = procs.Table.read()
+        child = self.spawn("sleep", "600")
+        self.wait_for(lambda: child.pid in procs.Table.read().procs, what="the child")
+        cwds = {pid: "/" for pid in procs.Table.read().procs}
+        cwds.pop(child.pid)
+        items = worktrees.listing(str(self.repo)) or []
+        item = next(i for i in items if i["path"] == str(path))
+        found = worktrees.refusal(item, str(self.repo), procs.Table.read(), cwds, items)
+        self.assertIn(f"pid {child.pid} (sleep 600; its working directory is unknown)", found or "")
+        self.assertIsNotNone(here)
+
+
 class OwnedTests(WorktreeCase):
     def test_own_resource_then_reap_removes_it_and_its_merged_branch(self):
         path = self.worktree("wt", "feat")
         entry = self.own(path)
-        self.assertEqual({"kind": "worktree", "id": str(path), "repo": str(self.repo), "branch": "feat"},
-                         entry.get("resource"))
+        self.assertEqual({"kind": "worktree", "id": str(path), "repo": str(self.repo), "branch": "feat",
+                          "common": str((self.repo / ".git").resolve())}, entry.get("resource"))
         result = self.cli("reap", "--id", entry["id"])
         self.assertEqual(0, result.returncode, result.stderr + result.stdout)
         self.assertNotIn(str(path), self.listed())
@@ -185,6 +265,29 @@ class OwnedTests(WorktreeCase):
         self.assertEqual("kept: commits not in origin/main", failed["details"]["error"])
         self.assertEqual([], eventcheck.validate(failed, strict=True))
 
+    def test_a_repository_replaced_at_the_same_path_has_nothing_removed(self):
+        path = self.worktree("wt", "feat")
+        entry = self.own(path)
+        saved = json.loads(self.store.path(entry["id"]).read_text())
+        saved["resource"]["common"] = "/elsewhere/.git"
+        self.store.path(entry["id"]).write_text(json.dumps(saved))
+        result = self.cli("reap", "--id", entry["id"])
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("gone", result.stdout)
+        self.assertTrue(path.is_dir())
+        self.assertIn(str(path), self.listed())
+        with self.assertRaises(resources.Refused):
+            worktrees.plan(saved["resource"])
+
+    def test_the_dry_run_runs_the_guards(self):
+        path = self.worktree("wt", "feat")
+        entry = self.own(path)
+        (path / "notes.txt").write_text("unsaved")
+        result = self.cli("reap", "--id", entry["id"], "--dry-run", "--json")
+        (row,) = json.loads(result.stdout)["results"]
+        self.assertEqual("would-fail", row["result"])
+        self.assertIn("uncommitted or untracked changes", row["reason"])
+
     def test_own_kind_worktree_registers_what_git_worktree_add_made(self):
         path = self.tmp / "made"
         result = self.cli("own", "--kind", "worktree", "--ttl", "1h", "--", "git", "-C", str(self.repo), "worktree",
@@ -201,22 +304,36 @@ class OwnedTests(WorktreeCase):
             self.assertIn(why, result.stderr)
 
     def test_the_session_end_removes_a_clean_owned_worktree_and_keeps_a_dirty_one(self):
-        claude = self.fake_claude("s1")
-        env = self.claude_env("s1", claude)
         clean = self.worktree("clean", "clean")
         dirty = self.worktree("dirty", "dirty")
+        claude = self.spawn("sleep", "600", cwd=str(clean))  # the ending session itself works in the worktree
+        self.register_session("s1", claude.pid)
+        env = self.claude_env("s1", claude)
         self.own(clean, env=env)
         entries = {(e.get("resource") or {}).get("id"): e["id"] for e in self.store.entries()}
         result = self.cli("own-resource", "--kind", "worktree", "--id", str(dirty), "--ttl", "1h", env=env)
         self.assertEqual(0, result.returncode, result.stderr)
         (dirty / "notes.txt").write_text("unsaved")
-        self.assertEqual(0, self.hook("SessionEnd", "s1", env=env).returncode)
-        self.wait_for(lambda: not clean.exists(), what="the clean worktree to go")
+        hook = subprocess.run([sys.executable, "-m", "junkfather", "hook"], cwd=str(clean), capture_output=True,
+                              text=True, timeout=60, input=json.dumps({"hook_event_name": "SessionEnd",
+                                                                       "session_id": "s1"}),
+                              env={**env, "PYTHONPATH": str(ROOT)})
+        self.assertEqual(0, hook.returncode, hook.stderr)
+        self.wait_for(lambda: not clean.exists(), what="the clean worktree to go",
+                      seen=lambda: (self.state / "hook.out").read_text() if (self.state / "hook.out").exists()
+                      else json.dumps(self.events())[-2000:])
         dirty_id = next(e["id"] for e in self.store.entries() if (e.get("resource") or {}).get("id") == str(dirty))
         self.wait_for(lambda: any(e["kind"] == "resource.stop_failed" for e in self.events()), what="the refusal")
         self.assertTrue(dirty.is_dir())
         self.assertEqual("running", self.state_of(dirty_id))
         self.assertEqual("reaped", self.state_of(entries[str(clean)]))
+
+    def register_session(self, session: str, pid: int) -> None:
+        from junkfather import procs
+        here = procs.Table.read().get(pid)
+        assert here is not None
+        utc = time.strftime(procs.LSTART, time.gmtime(procs.started_at(here.start)))
+        (self.sessions / f"{pid}.json").write_text(json.dumps({"pid": pid, "sessionId": session, "procStart": utc}))
 
 
 class SweepTests(WorktreeCase):
@@ -228,6 +345,21 @@ class SweepTests(WorktreeCase):
         from junkfather import procs
         table, cwds = procs.Table.read(), procs.working_dirs_or_none(os.getuid())
         return sweep.sweep(self.store, dry_run=dry_run, table=table, cwds=cwds, sessions=[])
+
+    def test_the_removal_reads_processes_again_instead_of_the_sweeps_first_look(self):
+        from junkfather import procs
+        path = self.worktree("late", "late")
+        self.make_idle(path)
+        stale = procs.Table.read()
+        cwds = procs.working_dirs_or_none(os.getuid()) or {}
+        child = self.spawn("sleep", "600", cwd=str(path))  # starts inside after the sweep's first look
+        self.wait_for(lambda: child.pid in procs.Table.read().procs, what="the child")
+        self.make_idle(path)
+        report = sweep.sweep(self.store, table=stale, cwds=cwds, sessions=[])
+        self.assertEqual([], report["worktrees"]["removed"])
+        (item,) = [i for i in report["unowned_resources"] if i["id"] == str(path)]
+        self.assertIn(f"in use by pid {child.pid}", item["why"])
+        self.assertTrue(path.is_dir())
 
     def test_the_dry_run_prints_the_plan_and_changes_nothing(self):
         gone = self.worktree("gone", "gone")
@@ -282,6 +414,9 @@ class SweepTests(WorktreeCase):
         status = json.loads(self.cli("status", "--json", env={**self.env, "JUNKFATHER_REPOS": ""}).stdout)
         self.assertEqual({str(fresh), str(work)},
                          {i["id"] for i in status["unowned_resources"] if i["kind"] == "worktree"})
+        shown = next(i for i in status["unowned_resources"] if i["id"] == str(work))
+        self.assertEqual(("work", str(self.repo), True, True),
+                         (shown["branch"], shown["repo"], isinstance(shown["size"], int), shown["age"] > DAY))
 
 
 if __name__ == "__main__":

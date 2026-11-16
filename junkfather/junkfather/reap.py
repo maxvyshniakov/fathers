@@ -121,7 +121,7 @@ def daemons_started(entry: Entry, table: _procs.Table, found: Optional[List[_pro
     as `members` finds them now); [] at once when no agent-browser program runs."""
     if not any(_browser.is_browser(p) for p in table.procs.values()):
         return []
-    return _browser.Survey(table).daemons_below(found if found is not None else members(entry, table)[0])
+    return _browser.Survey(table, cached=True).daemons_below(found if found is not None else members(entry, table)[0])
 
 
 def stop(targets: List[_procs.Proc], grace: float,

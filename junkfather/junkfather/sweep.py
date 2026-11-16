@@ -204,7 +204,7 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
     report["agent_browser"] = {"leftovers": _browser.clean(survey, now, dry_run),
                                "idle": survey.idle(owned, lease_rule, now)}
     found, unknown = _resources.unowned(snapshot, _resources.owned_keys(store))
-    report["worktrees"] = sweep_worktrees(store, table, cwds or None, now, dry_run, _resources.owned_keys(store))
+    report["worktrees"] = sweep_worktrees(store, table, cwds or None, now, dry_run, _resources.owned_keys(store), grace)
     found += report["worktrees"].pop("kept")
     report["unowned_resources"] = found
     report["unlisted"] = unknown
@@ -215,13 +215,17 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
 
 
 def sweep_worktrees(store: Store, table: _procs.Table, cwds: Optional[Dict[int, str]], now: float, dry_run: bool,
-                    owned: Dict[str, str]) -> Dict[str, Any]:
-    """Every repository's linked worktrees (worktrees.repositories): an unowned one that every guard passes, idle
-    for WORKTREE_IDLE, is removed (`git worktree remove`, then its branch when its content is in the base); the
-    others are reported, except those an entry or a live Lanefather lane owns. `git worktree prune` drops the
-    entries whose folder is gone. A dry run removes and prunes nothing."""
+                    owned: Dict[str, str], grace: float) -> Dict[str, Any]:
+    """Every repository's linked worktrees (worktrees.repositories). One no entry and no live Lanefather lane owns
+    goes through worktrees.plan, the guarded removal an owned worktree's stop uses, with 24 h of quiet required, and
+    resources.stop runs it; the others are reported. A first look with the sweep's process table picks the
+    candidates; plan reads everything again right before. `git worktree prune` drops the entries whose folder is
+    gone. A dry run removes and prunes nothing."""
     found: Dict[str, Any] = {"removed": [], "pruned": [], "kept": [], "notes": []}
     lanes = _worktrees.lane_worktrees()
+    if not lanes.known:
+        found["notes"].append("Lanefather's project registry cannot be read: no worktree under .claude/worktrees is "
+                              "removed")
     # A size is measured (du) when a worktree is first reported, then kept from the last report: du over every
     # kept worktree's node_modules each hour would cost minutes.
     sizes = {str(i.get("key")): i.get("size") for i in map(as_dict, as_list(as_dict(
@@ -233,51 +237,43 @@ def sweep_worktrees(store: Store, table: _procs.Table, cwds: Optional[Dict[int, 
             found["notes"].append(f"{repo}: git cannot list its worktrees")
             continue
         main = str(items[0]["path"])
+        common = _worktrees.common_dir(main)
         for item in items[1:]:
             path = str(item["path"])
-            if item.get("prunable") or not os.path.isdir(path) or f"worktree:{path}" in owned or path in lanes:
+            if item.get("prunable") or not os.path.isdir(path) or f"worktree:{path}" in owned or path in lanes.paths:
                 continue
-            why = _worktrees.refusal(item, main, table, cwds, items, idle=WORKTREE_IDLE, now=now, lanes=lanes)
-            if why is None:  # read again right before removing: act on what git says now
-                items = _worktrees.listing(main) or []
-                current = next((i for i in items if i.get("path") == path), None)
-                why = "it disappeared" if current is None else \
-                    _worktrees.refusal(current, main, table, cwds, items, idle=WORKTREE_IDLE, now=now, lanes=lanes)
             branch = item.get("branch")
-            resource = {"kind": "worktree", "id": path, "repo": main, "branch": branch}
-            if why:
-                key = _resources.key(resource)
+            resource: Dict[str, Any] = {"kind": "worktree", "id": path, "repo": main, "common": common,
+                                        "branch": branch}
+            key = _resources.key(resource)
+            why = _worktrees.refusal(item, main, table, cwds, items, idle=WORKTREE_IDLE, now=now, lanes=lanes)
+            steps: List[List[str]] = []
+            if why is None:
+                try:
+                    steps = _worktrees.plan(resource, idle=WORKTREE_IDLE, now=now, lanes=lanes)
+                except _resources.Refused as refused:
+                    why = str(refused).removeprefix("kept: ")
+            if why is not None:
                 found["kept"].append({**resource, "name": branch, "age": max(0.0, now - _worktrees.activity(path)),
                                       "size": sizes[key] if key in sizes else _worktrees.size(path), "key": key,
                                       "why": f"an unowned worktree, kept: {why}"})
                 continue
-            delete = _worktrees.branch_to_delete(main, branch, items, path)
-            removed: Dict[str, Any] = {**resource, "size": _worktrees.size(path), "delete_branch": delete,
+            removed: Dict[str, Any] = {**resource, "size": _worktrees.size(path),
+                                       "delete_branch": branch if len(steps) > 1 else None,
                                        "result": "would-remove" if dry_run else "removed"}
             if not dry_run:
-                steps = [["git", "-C", main, "worktree", "remove", path]] + \
-                    ([["git", "-C", main, "branch", "-D", delete]] if delete else [])
-                done: List[Dict[str, Any]] = []
-                for index, argv in enumerate(steps):
-                    code, out = _worktrees.git(main, *argv[3:])
-                    done.append({"argv": argv, "exit": code, **({"error": out.strip()[:300]} if code else {})})
-                    if code != 0 and index == 0:
-                        break
-                if done[0]["exit"] != 0:
-                    found["kept"].append({**resource, "name": branch, "key": _resources.key(resource),
-                                          "why": f"an unowned worktree, kept: git worktree remove failed: "
-                                                 f"{done[0].get('error')}"})
+                outcome = _resources.stop(resource, grace, _resources.Snapshot(None).bound(resource), commands=steps)
+                done = outcome["result"] in _reap.STOPPED
+                subject = {"type": "resource", "id": key, "kind": "worktree", **({"label": str(branch)} if branch
+                                                                                 else {})}
+                _resources.stopped_event(store, subject, actor, "unowned, clean, merged and idle", resource, outcome,
+                                         done)
+                if not done:
+                    found["kept"].append({**resource, "name": branch, "key": key,
+                                          "why": f"an unowned worktree, kept: {outcome.get('error')}"})
                     continue
-                warning = "; ".join(str(d["error"]) for d in done[1:] if d.get("error"))
-                subject = {"type": "resource", "id": _resources.key(resource), "kind": "worktree"}
-                if branch:
-                    subject["label"] = str(branch)
-                _events.write(store.root, "resource.stopped", subject, actor,
-                              {"reason": "unowned, clean, merged by content and idle", "result": "stopped",
-                               "resource": resource, "steps": [_resources.step_text(d) for d in done],
-                               **({"warning": warning} if warning else {})}, "warn" if warning else None)
-                if warning:
-                    removed["warning"] = warning
+                if outcome.get("warning"):
+                    removed["warning"] = outcome["warning"]
             found["removed"].append(removed)
         code, out = _worktrees.git(main, "worktree", "prune", "--dry-run", "--verbose", both=True)
         stale = [line.strip() for line in out.splitlines() if line.strip()] if code == 0 else []
@@ -395,7 +391,8 @@ def prune(store: Store, entry: Entry) -> None:
 def text(report: Dict[str, Any], quiet: bool = False) -> str:
     lines: List[str] = []
     for result in report["reaped"]:
-        verb = "would reap" if result["result"] == "would-stop" else "reaped"  # text, not a state
+        verbs = {"would-stop": "would reap", "would-fail": "would keep"}  # text, not a state
+        verb = verbs.get(result["result"], "reaped")  # text, not a state
         lines.append(f"{verb} {result['id']}: "
                      f"{result['reason']} -> {result['result']} (pids {', '.join(map(str, result['pids'])) or '-'})")
     for error in report["errors"]:

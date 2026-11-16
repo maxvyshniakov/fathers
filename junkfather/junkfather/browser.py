@@ -24,6 +24,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import time
 from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Set
 
 from . import cpu as _cpu
@@ -50,14 +51,32 @@ class Session(NamedTuple):
     @property
     def starter(self) -> Optional[int]:
         found = STARTER.search(self.name)
-        return int(found[1]) if found else None
+        return int(found[1]) if found and int(found[1]) > 1 else None  # pid 1 is launchd, never a starter
 
     @property
     def socket(self) -> str:
         return str(next((f for f in self.files if f.suffix == ".sock"), self.files[0].with_suffix(".sock")))
 
 
+_CACHE: Dict[str, Any] = {}
+
+
 def sessions(where: Path) -> Dict[str, Session]:
+    """The session files at the top of `where`, by session name, read again only when the folder changed (a file
+    added or removed changes its mtime; the supervisor asks every 15 s); {} when it does not exist."""
+    try:
+        stamp = os.stat(where).st_mtime_ns
+    except OSError:
+        return {}
+    cached = _CACHE.get(str(where))
+    if cached is not None and cached[0] == stamp and time.time() - cached[2] < 60:
+        return dict(cached[1])
+    found = read_sessions(where)
+    _CACHE[str(where)] = (stamp, found, time.time())
+    return dict(found)
+
+
+def read_sessions(where: Path) -> Dict[str, Session]:
     """The session files at the top of `where`, by session name; {} when it does not exist. Regular files and
     sockets only, never a symbolic link, a directory or a dotfile."""
     grouped: Dict[str, List[Path]] = {}
@@ -133,10 +152,12 @@ class Survey:
 
     def __init__(self, table: _procs.Table, where: Optional[Path] = None,
                  socket_reader: Optional[Callable[[Sequence[int]], Optional[Dict[int, List[str]]]]] = None,
-                 uid: Optional[int] = None):
+                 uid: Optional[int] = None, cached: bool = False):
+        """`cached`: the folder as last read while unchanged (the supervisor's and a reap's look for daemons);
+        the sweep reads it afresh."""
         self.table = table
         self.where = where or directory()
-        self.sessions = sessions(self.where)
+        self.sessions = sessions(self.where) if cached else read_sessions(self.where)
         uid = os.getuid() if uid is None else uid
         named = {s.daemon: s for s in self.sessions.values() if s.daemon is not None}
         candidates = [p for p in table.procs.values() if p.uid == uid and is_browser(p)
@@ -241,19 +262,58 @@ class Survey:
         return found
 
 
-def clean(survey: Survey, now: float, dry_run: bool) -> Dict[str, Any]:
-    """Remove (or, in a dry run, list) the leftover sessions' files. Returns the report part."""
+def still_leftover(session: Session, table: Optional[_procs.Table], now: float) -> Optional[str]:
+    """Read again right before its files go: why the session is no longer a leftover, or None. Any of its files
+    (any suffix) changed within the day, its `.pid` now names a running agent-browser program, or its starting pid
+    runs again: a daemon that started during the sweep keeps its socket and pid file."""
+    if table is None:
+        return "the process table cannot be read"
+    base = session.files[0].with_suffix("")
+    for suffix in SUFFIXES:
+        path = Path(f"{base}{suffix}")
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            return f"{path.name}: {error.strerror or error}"
+        if now - info.st_mtime < BROWSER_LEFTOVER_AGE:
+            return f"{path.name} changed within the day"
+        if suffix == ".pid":
+            try:
+                text = path.read_text().strip()
+            except OSError:
+                return f"{path.name} cannot be read"
+            daemon = table.get(int(text)) if text.isdigit() else None
+            if daemon is not None and is_browser(daemon):
+                return f"its daemon {daemon.pid} runs"
+    if session.starter is not None and session.starter in table.procs:
+        return f"its starting pid {session.starter} runs"
+    return None
+
+
+def clean(survey: Survey, now: float, dry_run: bool,
+          reader: Callable[[], Optional[_procs.Table]] = _procs.read_or_none) -> Dict[str, Any]:
+    """Remove (or, in a dry run, list) the leftover sessions' files. The process table is read again before the
+    removals start, and each session is checked again right before its files go (still_leftover). Returns the
+    report part."""
     found = survey.leftovers(now)
     report: Dict[str, Any] = {"dir": str(survey.where), "sessions": len(survey.sessions), "removed": 0,
                               "files": 0, "bytes": 0, "names": [], "notes": []}
     if survey.unresolved:
         report["notes"].append("an agent-browser daemon's session cannot be told (lsof failed): nothing removed")
+    table = reader() if found else None
     for session in found:
+        why = still_leftover(session, table, now)
+        if why:
+            report["notes"].append(f"{session.name} kept: {why}")
+            continue
         removed = 0
         for path in session.files:
             try:
                 info = path.lstat()
-                if not (stat.S_ISREG(info.st_mode) or stat.S_ISSOCK(info.st_mode)):
+                if not (stat.S_ISREG(info.st_mode) or stat.S_ISSOCK(info.st_mode)) \
+                        or now - info.st_mtime < BROWSER_LEFTOVER_AGE:
                     continue
                 if not dry_run:
                     path.unlink()

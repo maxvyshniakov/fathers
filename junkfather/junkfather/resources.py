@@ -13,12 +13,16 @@ A resource entry is an ordinary entry (owner, TTL, keep, hand-over, `reap`, the 
   tailscale-serve  tailscale serve status --json               tailscale serve --PROTO=PORT [--set-path=P] off --yes
   safari-tp        its main process, by pid and start time     osascript: tell application id ... to quit
   command          --alive ARGV (exit 0 alive, 1 gone)         --stop ARGV
+  worktree         git worktree list (its repository's)        worktrees.plan: git worktree remove, then that tip's ref
 
 A tailscale-serve id is `PROTO:PORT` or `PROTO:PORT/PATH` (`https:6475`, `https:443/docs`, `tcp:5432`); stopping one
-removes that route only. An unowned resource is only reported (by the sweep), never stopped.
+removes that route only. An unowned resource is only reported (by the sweep), never stopped, with one exception: a
+`worktree` no entry owns that passes every guard and was idle for a day is removed by the sweep through the same
+guarded removal an owned one's stop uses (worktrees.plan; owner-approved, fathers#112).
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -91,6 +95,10 @@ class Kind:
 
     def prepare(self, argv: List[str]) -> None:
         """Before `own --kind` runs its command: what the listings that follow need to know of it."""
+
+    def check(self, resource: Mapping[str, Any]) -> Optional[str]:
+        """Why a stop would be refused now, or None: what a dry run reports."""
+        return None
 
     def listing(self, table: Optional[_procs.Table]) -> Listing:
         return None
@@ -323,9 +331,10 @@ class Command(Kind):
 
 
 class Worktree(Kind):
-    """A linked git worktree, by its real path (worktrees.py has the guards). It runs while the path exists and
-    `git worktree list` lists it; its stop is `git worktree remove` (then `git branch -D` when the branch's content
-    is in the base), refused while any guard keeps it. The sweep's own pass reports and removes unowned ones."""
+    """A linked git worktree, by its real path and its repository's common git dir (worktrees.py has the guards). It
+    runs while the path exists and that repository's `git worktree list` lists it; its stop is worktrees.plan, the
+    one guarded removal the sweep uses too: `git worktree remove`, then that branch tip's ref, refused while any
+    guard keeps it. Each `own --kind worktree` works on its own copy of this kind (`prepare` keeps the -C folder)."""
     name = "worktree"
     reports = False
     lists = False
@@ -342,14 +351,21 @@ class Worktree(Kind):
         if items is None:
             return None
         repo = str(items[0]["path"])
-        return {str(i["path"]): {"repo": repo, "branch": i.get("branch")} for i in items if not i.get("main")}
+        common = worktrees.common_dir(repo)
+        return {str(i["path"]): {"repo": repo, "common": common, "branch": i.get("branch")}
+                for i in items if not i.get("main")}
 
     def alive(self, resource: Mapping[str, Any], listed: Listing, table: Optional[_procs.Table]) -> Optional[bool]:
+        """Gone when its repository no longer lists it, or when the repository there is another one (a different
+        common git dir): nothing of the recorded one is left to remove."""
         from . import worktrees
         path = str(resource.get("id"))
         items = worktrees.listing(str(resource.get("repo") or path))
         if items is None:
             return False if not os.path.exists(path) and not os.path.exists(str(resource.get("repo"))) else None
+        recorded = resource.get("common")
+        if recorded and worktrees.common_dir(str(items[0]["path"])) != recorded:
+            return False
         return os.path.isdir(path) and any(i.get("path") == path for i in items)
 
     def resolve(self, given: str, listed: Listing) -> Tuple[Optional[Dict[str, Any]], str]:
@@ -361,25 +377,21 @@ class Worktree(Kind):
             return None, f"{path} is not a git worktree"
         if item.get("main"):
             return None, f"{path} is a repository's main worktree"
-        return {"kind": self.name, "id": path, "repo": str(items[0]["path"]), "branch": item.get("branch")}, ""
+        repo = str(items[0]["path"])
+        return {"kind": self.name, "id": path, "repo": repo, "common": worktrees.common_dir(repo),
+                "branch": item.get("branch")}, ""
 
     def stop(self, resource: Mapping[str, Any], grace: float) -> List[List[str]]:
         from . import worktrees
-        path, repo = str(resource["id"]), str(resource.get("repo") or "")
-        items = worktrees.listing(repo or path)
-        item = next((i for i in items or [] if i.get("path") == path), None)
-        if items is None or item is None:
-            raise Refused("git cannot list the worktree; nothing was removed")
-        repo = str(items[0]["path"])
-        table = _table()
-        why = worktrees.refusal(item, repo, table, _procs.working_dirs_or_none(os.getuid()), items)
-        if why:
-            raise Refused(f"kept: {why}")
-        steps = [["git", "-C", repo, "worktree", "remove", path]]
-        branch = worktrees.branch_to_delete(repo, item.get("branch"), items, path)
-        if branch:
-            steps.append(["git", "-C", repo, "branch", "-D", branch])
-        return steps
+        return worktrees.plan(resource, exclude=as_list(resource.get("_exclude")))
+
+    def check(self, resource: Mapping[str, Any]) -> Optional[str]:
+        from . import worktrees
+        try:
+            worktrees.plan(resource, exclude=as_list(resource.get("_exclude")))
+        except Refused as error:
+            return str(error)
+        return None
 
     def named(self, argv: List[str], out: str) -> List[str]:
         """The path a `git [-C DIR] worktree add [OPTIONS] PATH [COMMIT]` names, made absolute."""
@@ -441,6 +453,10 @@ class Snapshot:
         if kind not in self.listed:
             self.listed[kind] = KINDS[kind].listing(self.table) if kind in KINDS else None
         return self.listed[kind]
+
+    def bound(self, resource: Mapping[str, Any]) -> Callable[[], Optional[bool]]:
+        """`alive` for this one resource, as resources.stop takes it."""
+        return lambda: self.alive(resource)
 
     def alive(self, resource: Mapping[str, Any]) -> Optional[bool]:
         kind = KINDS.get(str(resource.get("kind")))
@@ -535,7 +551,7 @@ def own_wrapped(store: Store, kind: str, argv: List[str], ttl: float, keep: str,
                 owner: Dict[str, Any], remove: bool = False, quiet: bool = False) -> int:
     """`own --kind KIND -- CMD`: run the command that makes the resource, then own what it made. Nothing it made
     already ran before, and only what it names or what newly appeared counts."""
-    found = KINDS[kind]
+    found = copy.copy(KINDS[kind])  # prepare() keeps per-command state: never on the shared instance
     found.prepare(argv)
     table = _table()
     before = found.listing(table)
@@ -617,17 +633,18 @@ def _table() -> Optional[_procs.Table]:
 # Stopping
 
 def stop(resource: Mapping[str, Any], grace: float, alive: Callable[[], Optional[bool]],
-         pause: Callable[[float], None] = time.sleep) -> Dict[str, Any]:
-    """Run the kind's stop commands, then wait up to `grace` seconds (at least 5) for the resource to be gone.
-    Returns {"result": stopped|gone|failed, "steps": [...], "error"}; failed when a step failed, timed out, or the
-    resource still runs (or cannot be told) afterwards."""
+         pause: Callable[[float], None] = time.sleep, commands: Optional[List[List[str]]] = None) -> Dict[str, Any]:
+    """Run the kind's stop commands (or `commands`, already planned and guarded), then wait up to `grace` seconds
+    (at least 5) for the resource to be gone. Returns {"result": stopped|gone|failed, "steps": [...], "error"};
+    failed when a step failed, timed out, or the resource still runs (or cannot be told) afterwards."""
     first = alive()
     if first is False:
         return {"result": "gone", "steps": []}
     if first is None:
         return {"result": "failed", "steps": [], "error": "whether it runs cannot be told; nothing was run"}
     try:
-        commands = KINDS[str(resource.get("kind"))].stop(resource, grace)
+        if commands is None:
+            commands = KINDS[str(resource.get("kind"))].stop(resource, grace)
     except Refused as error:
         return {"result": "failed", "steps": [], "error": str(error)}
     except (KeyError, ValueError, NotImplementedError) as error:
@@ -654,20 +671,50 @@ def stop(resource: Mapping[str, Any], grace: float, alive: Callable[[], Optional
             "error": "it still runs after its stop command" if state else "whether it still runs cannot be told"}
 
 
+def ending_owner(entry: Entry, reason: str, table: Optional[_procs.Table]) -> List[int]:
+    """The processes that do not count as using a resource while its owner's end reaps it: at a SessionEnd the
+    session's process and everything below it, at a SubagentStop the session's process alone (its other work goes
+    on). [] for any other reason."""
+    owner = entry.get("owner") or {}
+    pid = owner.get("pid")
+    if table is None or not isinstance(pid, int) or not table.alive(pid, owner.get("pid_start")):
+        return []
+    if reason.startswith("session-end"):
+        return [pid, *(p.pid for p in table.descendants(pid))]
+    return [pid] if reason.startswith("subagent-stop") else []
+
+
+def stopped_event(store: Store, subject: Dict[str, Any], actor: Optional[Dict[str, Any]], reason: str,
+                  resource: Mapping[str, Any], outcome: Mapping[str, Any], done: bool) -> None:
+    """resource.stopped or resource.stop_failed for one stop's outcome (an entry's reap and the sweep's removal of an
+    unowned worktree)."""
+    _events.write(store.root, "resource.stopped" if done else "resource.stop_failed", subject,
+                  actor or _events.caller(), {"reason": reason, "result": outcome["result"],
+                                              "resource": {k: v for k, v in resource.items() if not k.startswith("_")},
+                                              "steps": [step_text(step) for step in outcome["steps"]],
+                                              **({"error": outcome["error"]} if outcome.get("error") else {}),
+                                              **({"warning": outcome["warning"]} if outcome.get("warning") else {})},
+                  ("warn" if outcome.get("warning") else None) if done else "error")
+
+
 def reap(store: Store, entry: Entry, reason: str, grace: float, dry_run: bool,
          actor: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """End one running resource entry through its kind's stop command (reap.reap hands resource entries here)."""
+    """End one running resource entry through its kind's stop command (reap.reap hands resource entries here). A
+    dry run asks the kind whether its stop would be refused (a worktree's guards)."""
     from . import reap as _reap
-    resource = entry.get("resource") or {}
+    recorded = entry.get("resource") or {}
     entry_id = str(entry["id"])
+    resource: Dict[str, Any] = {**recorded, "_exclude": ending_owner(entry, reason, _table())}
+    kind = KINDS.get(str(resource.get("kind")))
 
     def alive() -> Optional[bool]:
         return Snapshot(_table()).alive(resource)
 
     if dry_run:
         state = alive()
-        return {"id": entry_id, "result": "gone" if state is False else "would-stop", "reason": reason, "pids": [],
-                "how": describe(resource)}
+        refused = kind.check(resource) if kind is not None and state is not False else None
+        return {"id": entry_id, "result": "gone" if state is False else "would-fail" if refused else "would-stop",
+                "reason": f"{reason}; {refused}" if refused else reason, "pids": [], "how": describe(resource)}
     me = _entry.begin_reap(store, entry_id, reason)
     if me is None:
         return {"id": entry_id, "result": "skipped", "reason": "another reaper has it", "pids": [],
@@ -678,12 +725,7 @@ def reap(store: Store, entry: Entry, reason: str, grace: float, dry_run: bool,
     _entry.end_reap(store, entry_id, me, done, {"reason": reason, "result": result, "how": describe(resource),
                                                 "pids": [], "steps": outcome["steps"]},
                     {"reason": reason, "left": [], "error": outcome.get("error"), "steps": outcome["steps"]})
-    _events.write(store.root, "resource.stopped" if done else "resource.stop_failed", subject(entry),
-                  actor or _events.caller(), {"reason": reason, "result": result, "resource": resource,
-                                              "steps": [step_text(step) for step in outcome["steps"]],
-                                              **({"error": outcome["error"]} if outcome.get("error") else {}),
-                                              **({"warning": outcome["warning"]} if outcome.get("warning") else {})},
-                  ("warn" if outcome.get("warning") else None) if done else "error")
+    stopped_event(store, subject(entry), actor, reason, resource, outcome, done)
     return {"id": entry_id, "result": result, "reason": reason if done else f"{reason}; {outcome.get('error')}",
             "pids": [], "how": describe(resource)}
 

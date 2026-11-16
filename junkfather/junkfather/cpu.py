@@ -7,7 +7,8 @@ first rule, in order, that claims it or one of its ancestors:
   lease    a Slotfather lease (`slotfather status --json`): its holder, verified by pid and start time, and the
            tree Slotfather lists for it; with Slotfather missing or not answering this rule is left out, and the
            report says so
-  daemon   an agent-browser daemon launchd adopted, through the session that started it (browser.py, fathers#115)
+  lease    (again) an agent-browser daemon launchd adopted, when a lease's process started its session (browser.py,
+           Survey.rule, fathers#115): its CPU counts for that lease
   session  an agent session (Claude Code, Codex) found among its ancestors (owner.nearest)
 
 What no rule claims is unattributed, reported as the top process trees by CPU (each under its topmost ancestor below

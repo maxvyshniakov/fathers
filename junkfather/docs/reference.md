@@ -68,9 +68,10 @@ A command run with `GODFATHER_ACTOR` set carries `via: "godfather"`.
   ["status", "--json"], versions: [2], poll: 5}, events: {path, versions: [1], kinds}, settings: {versions: [1]},
   actions: ["reap", "extend"], changelog}}`.
 - `junkfather status --json`: `{v: 2, host, time, entries: [the list --json rows of running entries], unowned:
-  [{pid, start, cmd, cwd, root, why, age, alive}] from the last sweep, unowned_resources: [{kind, id, name, why}]
-  from the last sweep, sweep: {time, result}, cpu, errors}`; `cpu` is the last sweep's CPU report (Sweep), `null`
-  before one wrote it. Version 2 adds `cpu` to version 1 and changes nothing else. A resource entry's row has `resource: {kind, id, name}` and
+  [{pid, start, cmd, cwd, root, why, age, alive}] from the last sweep, unowned_resources: [{kind, id, name, why},
+  and for a worktree also repo, branch, age, size] from the last sweep, sweep: {time, result}, cpu, errors}`; `cpu`
+  is the last sweep's CPU report (Sweep), `null` before one wrote it. Version 2 adds `cpu` to version 1 and changes
+  nothing else. A resource entry's row has `resource: {kind, id, name}` and
   `processes: null`. It changes nothing.
 - `junkfather changelog --json [--since VERSION]`: the installed release's CHANGELOG.md for Godfather's what's new
   (`godfather/docs/contracts/changelog.md`): `{v: 1, tool: "junkfather", version, source, entries: [{version, date,
@@ -162,7 +163,7 @@ stops it with argv run without a shell, with a timeout (`STOP_TIMEOUT`, 120 s, p
 | `tailscale-serve` | `PROTO:PORT[/PATH]` (`https:6475`, `https:443/docs`, `tcp:5432`) | `tailscale serve status --json` has that route | `tailscale serve --PROTO=PORT [--set-path=PATH] off --yes`: that route only |
 | `safari-tp` | its main process's pid | that pid runs with its recorded start time | `osascript`: `tell application id "com.apple.SafariTechnologyPreview" to quit`, only while it is the only instance |
 | `command` | a name | `--alive` exits 0 (1: gone; anything else: unknown) | `--stop` |
-| `worktree` | the linked worktree's real path (`resource` also records `repo`, its main checkout, and `branch`) | the path exists and `git worktree list --porcelain` lists it | `git worktree remove PATH` (never `--force` or `rm -rf`), then `git branch -D BRANCH` when the branch's content is in the base; refused while a guard keeps it |
+| `worktree` | the linked worktree's real path (`resource` also records `repo`, its main checkout, `common`, its repository's common git dir, and `branch`) | the path exists and that repository's `git worktree list --porcelain` lists it (another repository at that path: gone) | `git worktree remove PATH` (never `--force` or `rm -rf`), then `git update-ref -d refs/heads/BRANCH SHA` for the tip that was checked; refused while a guard keeps it |
 
 After the stop the resource must be seen gone within the grace (at least 5 s); otherwise, or when a stop command
 fails or times out, the result is `failed`, the entry keeps running with `last_error`, and `resource.stop_failed` is
@@ -170,16 +171,24 @@ written; a later step that fails (`docker rm` after a stop) makes `resource.stop
 reap runs no stop command while whether the resource runs cannot be told: the result is `failed`, and the sweep or
 the next reap tries again.
 
-A worktree's stop runs only when every guard passes, read again right before (`junkfather/worktrees.py`, the same
-guards as Lanefather's gc): not the main worktree, not locked, no `.keep`, not dev, main, master or integrate/*
+A worktree's stop is `worktrees.plan`, the one guarded removal the sweep uses too; it reads everything again right
+before (the git listing, the repository's common git dir, the process table, the working directories) and runs only
+when every guard passes (`junkfather/worktrees.py`; the same observations as Lanefather's gc, copied because
+common/ is not installed with a command, fathers#117): listed by the recorded repository, not the main worktree,
+not locked, not a symbolic link as git lists it, no `.keep` of any kind, not dev, main, master or integrate/*
 checked out, no uncommitted or untracked change, no ignored file outside disposable build output (node_modules,
-.venv, dist, ...), no Git repository or other worktree inside, HEAD merged by content into the base (an ancestor of
-it, or every patch in it by `git cherry`; the base is origin's default branch when there is an origin, else the
-local main or master), no process working in it or naming it, and junkfather not running inside it. A refused stop
-is `resource.stop_failed` with `error: "kept: WHY"`, and the entry keeps running: at its owner's end (SubagentStop,
-SessionEnd) a clean merged worktree is removed and any other is kept and reported. `own --kind worktree -- git
-worktree add ...` owns the path the command names (also with `git -C DIR`); `own-resource --kind worktree --id PATH`
-owns one that exists.
+.venv, dist, ...), HEAD merged into the base (an ancestor of it; or, for a squash or rebase, no merge commit beyond
+the base and every patch in it by `git cherry`, which passes over a merge's own conflict resolution; the base is
+origin's default branch when there is an origin, else the local main or master), no Git repository or other worktree
+inside, no process working in it or naming it and none of this user's still running whose working directory cannot
+be read, and junkfather not running inside it. Not seen: a process that started inside and then changed directory,
+or one that only holds files open there. The branch goes after it only at the tip that was checked: a branch that
+moved meanwhile stays, and the stop is a warning. A refused stop is `resource.stop_failed` with `error: "kept: WHY"`,
+and the entry keeps running. At its owner's end the ending session's own process (and at SessionEnd everything
+below it) does not count as using it, and the hook's detached reaper runs in `/`, so a clean merged worktree is
+removed and any other is kept and reported. `reap --dry-run` runs the guards: `would-fail` and why. `own --kind
+worktree -- git worktree add ...` owns the path the command names (also with `git -C DIR`); `own-resource --kind
+worktree --id PATH` owns one that exists.
 
 A quit by bundle id cannot tell two Safari Technology Preview instances apart, so the stop runs only while the owned
 instance is the only one (same pid and start time); otherwise it fails and every instance keeps running.
@@ -253,13 +262,15 @@ and never stops anything; there is no `--force` for a resource.
 **Worktrees** (`worktrees` in the report and `sweep.json`). The repositories are `$JUNKFATHER_REPOS`
 (colon-separated; empty: none), else every folder in the home folder holding a `.git` directory; each one's linked
 worktrees are looked at, wherever they are. One that a live entry or a Lanefather lane that is not done owns is
-left to its owner. Any other is removed when the worktree guards (Resources) pass and it was idle for 24 hours (its
-folder, HEAD, index and HEAD log unchanged): `git worktree remove`, then its branch when the branch's content is in
-the base, and a `resource.stopped` event whose subject has no `entry`. This is the one place junkfather stops
-something no entry owns. The rest are reported in `unowned_resources` (`kind: "worktree"`, `branch`, `age`, `size`
-in bytes, measured when first reported, and `why`), once each in `unowned.reported`. `git worktree prune` then drops
-the entries whose folder is gone. `removed: [{kind, id, repo, branch, size, delete_branch, result}]`, `pruned`,
-`notes`; `sweep --dry-run` prints the plan (`would remove worktree ...`, `would prune ...`) and changes nothing.
+left to its owner: the lanes are read from the state directories Lanefather's project registry names
+(`projects.json`), and while that registry cannot be read no worktree under `.claude/worktrees/` is removed. Any
+other goes through the same guarded removal as an owned one's stop (`worktrees.plan`, Resources), which also asks
+for 24 hours of quiet (its folder, HEAD, index and HEAD log unchanged), and a `resource.stopped` event whose subject
+has no `entry` follows. This and agent-browser's leftover sessions are the two things junkfather deletes that no
+entry owns (owner-approved). The rest are reported in `unowned_resources` (`kind: "worktree"`, `repo`, `branch`,
+`age`, `size` in bytes, measured when first reported, and `why`; `status --json` shows them too), once each in
+`unowned.reported`. `git worktree prune` then drops the entries whose folder is gone. `removed: [{kind, id, repo,
+common, branch, size, delete_branch, result}]`, `pruned`, `notes`; `sweep --dry-run` prints the plan (`would remove worktree ...`, `would prune ...`) and changes nothing.
 
 **CPU report** (report only; `cpu` in `sweep.json` and in `status --json`). The sweep's one `ps` call reads `%cpu`
 (100 = one core), and each busy process goes to the first rule, in this order, that claims it or one of its
@@ -277,7 +288,10 @@ daemon runs, `.pid`, `.sock`, `.stream`, `.version`; NAME often ends in the pid 
 - Leftovers: a session's files are removed when no agent-browser program runs as the pid its `.pid` names or holds
   its socket, the pid in its name runs no more, and none of its files changed for a day. Subdirectories (the
   downloaded browsers, saved sessions and auth), dotfiles and symbolic links are never touched; an unreadable
-  process table, or a daemon whose session cannot be told (no `.pid` names it and lsof fails), removes nothing.
+  process table, or a daemon whose session cannot be told (no `.pid` names it and lsof fails), removes nothing. Right
+  before a session's files go, the process table having been read again, they are checked again: any of its files
+  changed within the day, its `.pid` naming a running agent-browser program or its starting pid running keeps it
+  (a daemon that started during the sweep keeps its socket and pid file), with a note.
   `leftovers: {dir, sessions, removed, files, bytes, names (the first 50), notes}`; `sweep --dry-run` lists the same
   and removes nothing.
 - Daemons: a daemon detaches and launchd adopts it. It is matched to its session by the `.pid` file that names it,

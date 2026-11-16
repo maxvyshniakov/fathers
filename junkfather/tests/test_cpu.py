@@ -31,7 +31,13 @@ class ParseTests(unittest.TestCase):
         found = procs.parse(line)[4242]
         self.assertEqual((87.5, "", "node server.js --port 3000"), (found.cpu, found.tty, found.cmd))
 
-    def test_a_real_table_reads_cpu_for_every_process(self):
+
+
+class RealCpuTests(Case):
+    def test_a_busy_child_shows_its_cpu(self):
+        child = self.spawn(sys.executable, "-c", "while True: pass")
+        self.wait_for(lambda: (procs.Table.read().get(child.pid) or proc(0)).cpu > 5.0, what="the busy child's cpu",
+                      seen=lambda: str(procs.Table.read().get(child.pid)))
         here = procs.Table.read()
         self.assertTrue(all(isinstance(p.cpu, float) and p.cpu >= 0 for p in here.procs.values()))
 

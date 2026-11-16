@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 import unittest
 
 from support import Case, as_entry, proc, table
@@ -46,6 +46,30 @@ class BrowserCase(Case):
 
 
 class LeftoverTests(BrowserCase):
+    def clean(self, survey: browser.Survey, fresh: Optional[procs.Table] = None) -> Dict[str, Any]:
+        """browser.clean, its second read of the process table being `fresh` (else the survey's own table)."""
+        return browser.clean(survey, self.now, dry_run=False, reader=lambda: fresh or survey.table)
+
+    def test_a_daemon_that_starts_during_the_sweep_keeps_its_session(self):
+        self.session("racing-100")
+        self.session("pid-only-101")
+        survey = self.survey(table(proc(5)))
+        self.assertEqual(["pid-only-101", "racing-100"], [s.name for s in survey.leftovers(self.now)])
+        (self.dir / "racing-100.sock").write_text("")  # the daemon binds its socket after the survey
+        pid_file = self.dir / "pid-only-101.pid"
+        pid_file.write_text("777")
+        os.utime(pid_file, (self.now - 2 * DAY, self.now - 2 * DAY))
+        report = self.clean(survey, fresh=table(proc(5), proc(777, cmd=DAEMON)))
+        self.assertEqual(0, report["removed"], report)
+        self.assertEqual(["pid-only-101 kept: its daemon 777 runs", "racing-100 kept: racing-100.sock changed within "
+                          "the day"], sorted(report["notes"]))
+        self.assertEqual(8, len(os.listdir(self.dir)))
+
+    def test_a_starter_that_runs_again_by_the_removal_keeps_it(self):
+        self.session("late-300")
+        report = self.clean(self.survey(table(proc(5))), fresh=table(proc(300, cmd="bun check.mjs")))
+        self.assertEqual((0, ["late-300 kept: its starting pid 300 runs"]), (report["removed"], report["notes"]))
+
     def test_a_day_old_session_whose_daemon_and_starter_are_gone_is_removed_and_nothing_else(self):
         gone = self.session("menu-dismissal-10752")
         (self.dir / "browsers" / "chrome-149").mkdir(parents=True)
@@ -54,7 +78,7 @@ class LeftoverTests(BrowserCase):
         (self.dir / ".encryption-key").write_text("k")
         (self.dir / "notes.txt").write_text("not a session file")
         os.symlink(self.tmp / "elsewhere", self.dir / "linked.config")
-        report = browser.clean(self.survey(table(proc(5, cmd="sleep 1"))), self.now, dry_run=False)
+        report = self.clean(self.survey(table(proc(5, cmd="sleep 1"))))
         self.assertEqual((1, 3, 30, ["menu-dismissal-10752"]),
                          (report["removed"], report["files"], report["bytes"], report["names"]))
         self.assertFalse(any(p.exists() for p in gone))
@@ -66,13 +90,13 @@ class LeftoverTests(BrowserCase):
         self.session("starter-runs-300")
         self.session("fresh-400", age=3600)
         here = table(proc(200, cmd=DAEMON), proc(300, cmd="bun scripts/check.mjs"))
-        report = browser.clean(self.survey(here), self.now, dry_run=False)
+        report = self.clean(self.survey(here))
         self.assertEqual(0, report["removed"])
         self.assertEqual(12, len(os.listdir(self.dir)))
 
     def test_a_pid_file_naming_another_program_does_not_keep_it(self):
         self.session("reused-100", daemon=200)
-        report = browser.clean(self.survey(table(proc(200, cmd="/usr/sbin/cupsd"))), self.now, dry_run=False)
+        report = self.clean(self.survey(table(proc(200, cmd="/usr/sbin/cupsd"))))
         self.assertEqual((1, 6), (report["removed"], report["files"]))
 
     def test_the_dry_run_lists_and_removes_nothing(self):
@@ -90,7 +114,7 @@ class LeftoverTests(BrowserCase):
         self.session("old-1")
         here = table(proc(900, cmd=DAEMON))  # adopted by launchd, named by no .pid file
         survey = self.survey(here, lsof_fails=True)
-        report = browser.clean(survey, self.now, dry_run=False)
+        report = self.clean(survey)
         self.assertEqual(0, report["removed"])
         self.assertEqual(["an agent-browser daemon's session cannot be told (lsof failed): nothing removed"],
                          report["notes"])
@@ -99,7 +123,7 @@ class LeftoverTests(BrowserCase):
     def test_a_daemon_holding_a_session_socket_keeps_that_session(self):
         self.session("by-socket-77", suffixes=(".config", ".sock"))
         here = table(proc(900, cmd=DAEMON))
-        report = browser.clean(self.survey(here, {900: [str(self.dir / "by-socket-77.sock")]}), self.now, False)
+        report = self.clean(self.survey(here, {900: [str(self.dir / "by-socket-77.sock")]}))
         self.assertEqual(0, report["removed"])
 
 
