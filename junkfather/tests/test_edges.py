@@ -102,16 +102,32 @@ class EdgeTests(Case):
         assert mine is not None
         self.store.save(running(child.pid, mine.start, mine.cmd))
         go = self.tmp / "go"
-        # Each reaper writes its entry 0.2 s after reading it, so without the store's lock both would read
-        # `running` and both would claim the entry.
-        script = (f"import json, os, sys, time; sys.path.insert(0, {str(ROOT)!r})\n"
+        # A barrier instead of a pause: each reaper notes `want-N` as it asks for the store's lock, and its first
+        # save (made under that lock, after it read the entry as running) waits until the other reaper asks too. So
+        # the second always reads while the first holds the lock: with the lock it then reads `reaping` and skips;
+        # without it, both would have read `running` and both would claim the entry.
+        script = (f"import contextlib, json, os, sys, time; sys.path.insert(0, {str(ROOT)!r})\n"
                   "from junkfather import reap, state\n"
-                  "save = state.Store.save\n"
-                  "state.Store.save = lambda self, e: (time.sleep(0.2), save(self, e))[1]\n"
+                  f"tmp, me = {str(self.tmp)!r}, sys.argv[1]\n"
+                  "other = os.path.join(tmp, 'want-' + ('1' if me == '0' else '0'))\n"
+                  "lock, save, saved = state.Store.lock, state.Store.save, []\n"
+                  "@contextlib.contextmanager\n"
+                  "def asking(self, name='lock', blocking=True):\n"
+                  "    if name == 'lock':\n"
+                  "        open(os.path.join(tmp, 'want-' + me), 'a').close()\n"
+                  "    with lock(self, name, blocking) as got:\n"
+                  "        yield got\n"
+                  "def waiting(self, e):\n"
+                  "    deadline = time.monotonic() + 30\n"
+                  "    while not saved and not os.path.exists(other) and time.monotonic() < deadline:\n"
+                  "        time.sleep(0.01)\n"
+                  "    saved.append(True)\n"
+                  "    save(self, e)\n"
+                  "state.Store.lock, state.Store.save = asking, waiting\n"
                   f"while not os.path.exists({str(go)!r}): time.sleep(0.01)\n"
                   f"print(json.dumps(reap.reap(state.Store(), 'jedge', 'race', grace=0.3)))\n")
-        reapers = [subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE, text=True, env=self.env)
-                   for _ in range(2)]
+        reapers = [subprocess.Popen([sys.executable, "-c", script, str(n)], stdout=subprocess.PIPE, text=True,
+                                    env=self.env) for n in range(2)]
         go.touch()
         results = [json.loads(r.communicate(timeout=30)[0]) for r in reapers]
         self.assertEqual([[], [child.pid]], sorted(r["pids"] for r in results), results)
