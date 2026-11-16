@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 from typing import Any
 import unittest
@@ -179,4 +181,34 @@ class DoneWhileHelpersComeAndGoTests(LaneCase):
             output = self.lane("done", "a", process=False)
         self.assertIn("Lane a done", output)
         self.assertFalse(Path(worktree).exists())
+
+    def test_done_on_an_idle_lane_succeeds_while_real_short_lived_processes_come_and_go_elsewhere(self) -> None:
+        # fathers#158 on the real process table: a busy loop elsewhere starts and reaps short-lived children while
+        # done reads the lane's processes through a procs answer built from ps and lsof (fixtures/procs-slotfather).
+        worktree = self.created("a", "lib/a.txt")
+        self.commit(worktree, {"lib/a.txt": "a\n"})
+        self.lane("check", "a")
+        self.lane("land", "a", "--keep")
+        elsewhere = self.tmp / "elsewhere"
+        elsewhere.mkdir()
+        churn = subprocess.Popen(
+            [sys.executable, "-c", "import subprocess, sys\n"
+             "subprocess.run(['true'])\nprint('ready', flush=True)\n"
+             "while True: subprocess.Popen(['true']).wait()"],
+            cwd=elsewhere, stdout=subprocess.PIPE, text=True, start_new_session=True)
+        self.addCleanup(lambda: (churn.kill(), churn.wait()))
+        assert churn.stdout is not None
+        self.assertEqual(churn.stdout.readline().strip(), "ready")
+        source = SlotfatherSource(str(Path(__file__).parent / "fixtures" / "procs-slotfather"))
+        source.pause = 0
+
+        def given(project: Any = None) -> SlotfatherSource:
+            del project
+            return source
+
+        with unittest.mock.patch.object(procs, "source", given):
+            output = self.lane("done", "a", process=False)
+        self.assertIn("Lane a done", output)
+        self.assertFalse(Path(worktree).exists())
+        self.assertIsNone(churn.poll(), "the churn ran throughout")
 

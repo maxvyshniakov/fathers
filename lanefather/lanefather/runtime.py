@@ -11,7 +11,7 @@ import runpy
 import sys
 from typing import Any, cast
 
-from . import __version__, config, events, host
+from . import __version__, config, events
 from .errors import LaneError
 from .project import Project
 
@@ -73,11 +73,21 @@ def dashboard() -> dict[str, Any]:
             'settings': {'versions': [settings.VERSION]}}
 
 
+def minimum_gb(project: config.Config | None = None) -> float:
+    """The free-disk floor start applies in the project the command runs in (fathers#157), else to a project
+    without lanes on this machine."""
+    from . import admission  # admission reads the slot and state modules install.py does not import
+    try:
+        return admission.current_floor(project or config.current()).gb
+    except LaneError:
+        return admission.current_floor(config.Config()).gb
+
+
 def capabilities(args: argparse.Namespace) -> int:
     report = {'v': 1, 'tool': 'lanefather', 'version': __version__, 'state_schema': 1,
               'slotfather_query_versions': [1, 2], 'capabilities': CAPABILITIES, 'dashboard': dashboard(),
-              # The free disk under which start refuses a lane, in decimal GB (fathers#46).
-              'host': {'min_disk_gb': host.MIN_DISK_GB},
+              # The free disk under which start refuses a lane here, in decimal GB (fathers#46, #157).
+              'host': {'min_disk_gb': round(minimum_gb(), 1)},
               'source': installed_identity(Path(__file__).resolve().parent.parent)}
     print(json.dumps(report, sort_keys=True) if args.json else json.dumps(report, indent=2, sort_keys=True))
     return 0
@@ -98,7 +108,7 @@ def project_hook(args: argparse.Namespace) -> int:
     # sets it for the hook and reads it from nowhere.
     minimum = {name: os.environ.get(name) for name in project.config.names('MIN_DISK_GB')}
     try:
-        os.environ.update(dict.fromkeys(minimum, str(host.MIN_DISK_GB)))
+        os.environ.update(dict.fromkeys(minimum, f"{minimum_gb(project.config):g}"))
         sys.argv = [str(path), *arguments]
         os.chdir(root)
         sys.path.insert(0, str(path.parent))

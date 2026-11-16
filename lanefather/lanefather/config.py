@@ -456,11 +456,6 @@ def current() -> Config:
     return _current
 
 
-def chosen() -> Config | None:
-    """The config `use` set or `current` found, None before either: what a caller that switches projects restores."""
-    return _current
-
-
 def use(config: Config | None) -> None:
     """Set the config of this run (the command line's --config); None finds it again on the next use."""
     global _current

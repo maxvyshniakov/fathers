@@ -77,63 +77,81 @@ def fix_parent(record: Record) -> str | None:
     return None
 
 
-def register(record: Record, rules: list[dict[str, Any]], force_reason: str | None, create: bool) -> None:
-    """Enforce the cap, disk, load and claims, save the record and print its brief header."""
+def admit(record: Record, force_reason: str | None, repaired: str | None) -> tuple[admission.Decision, list[str]]:
+    """Under the state lock: the refusals that end start at once (an existing lane, --after), then the cap, disk and
+    load decision and its refusals; a claim overlap raises."""
     prog = config.prog()
     lane_id, lane_claims, after = record["id"], record["claims"], record["after"]
-    # fathers#157: below the disk floor, done on the machine's finished lanes first, outside the state lock that
-    # each done takes; the decision below reads the disk again.
-    free = host.disk_free_gb(config.current())
-    repaired = (done.repair_disk(free, host.MIN_DISK_GB)
-                if free < host.MIN_DISK_GB and not force_reason else None)
-    with state.locked("state"):
-        existing = state.read_json(state.record_path(lane_id))
-        if existing and existing["status"] != "done":
-            raise LaneError(f"lane {lane_id} exists ({existing['status']}); finish it with {prog} done")
-        others = [r for r in state.Store(config.current()).lanes(strict=True) if r["id"] != lane_id]
-        for name in after:
-            if name not in {r["id"] for r in others if r["status"] != "done"}:
-                raise LaneError(f"--after {name}: no lane that is not done by that name")
-        parent = fix_parent(record)
-        decision = admission.evaluate(config.current(), others, record["common_dir"], cap_exempt=parent is not None,
-                                      repaired=repaired)
-        cap, source, info = decision.cap, decision.source, decision.machine
-        if parent is not None:
-            # fathers#45 (a): the fix lane takes its landed parent's place, outside the cap; the record says why.
-            source = record["cap_source"] = f"fix-lane of {parent}"
-        active = list(decision.occupying)
-        refusals = list(decision.refusals)
-        if refusals and not force_reason:
-            raise LaneError("refused:\n- " + "\n- ".join(refusals))
-        for other in active:
-            pairs = [] if other["id"] in after else claims.overlapping(lane_claims, other)
-            if pairs:
-                listed = ", ".join(f"{m} with {t}" for m, t in pairs)
-                raise LaneError(f"claims overlap lane {other['id']} (#{other['ticket']}): {listed}. Run the lanes "
-                                f"in sequence: start this one with --after {other['id']}")
-        Path(record["scratch"][0]).mkdir(exist_ok=True)
-        if refusals:
-            record["overrides"].append({"at": journal.now(), "reason": force_reason, "refusals": refusals})
-            journal.ledger(f"override start {lane_id}: {force_reason} (refusals: {'; '.join(refusals)})",
-                           kind="override", level="warn", lane=record,
-                           details={"command": "start", "reason": force_reason, "refusals": refusals})
-        if create:
-            main = main_checkout(record["common_dir"])
-            path = os.path.join(main, ".claude", "worktrees", f"lane-{lane_id}")
-            git(main, "worktree", "add", "-q", "-b", record["branch"], path, record["base_sha"])
-            record.update(worktree=os.path.realpath(path), status="active")
-        state.save(record)
-        journal.ledger(f"start {lane_id} ticket={record['ticket']} branch={record['branch']} "
-                       f"base={record['base']}@{record['base_sha'][:10]} claims={' '.join(lane_claims)} "
-                       f"after={','.join(after) or '-'} cap={cap} ({source}) {host.host_fields(info)}",
-                       kind="lane.started", lane=record,
-                       details={"status": record["status"], "branch": record["branch"], "base": record["base"],
-                                "base_sha": record["base_sha"], "claims": lane_claims, "after": after,
-                                "worktree": record["worktree"], "cap": cap, "cap_source": source})
+    existing = state.read_json(state.record_path(lane_id))
+    if existing and existing["status"] != "done":
+        raise LaneError(f"lane {lane_id} exists ({existing['status']}); finish it with {prog} done")
+    others = [r for r in state.Store(config.current()).lanes(strict=True) if r["id"] != lane_id]
+    for name in after:
+        if name not in {r["id"] for r in others if r["status"] != "done"}:
+            raise LaneError(f"--after {name}: no lane that is not done by that name")
+    parent = fix_parent(record)
+    decision = admission.evaluate(config.current(), others, record["common_dir"], cap_exempt=parent is not None,
+                                  repaired=repaired)
+    refusals = list(decision.refusals)
+    if refusals and not force_reason and not (decision.disk_short and len(refusals) == 1):
+        raise LaneError("refused:\n- " + "\n- ".join(refusals))
+    for other in decision.occupying:
+        pairs = [] if other["id"] in after else claims.overlapping(lane_claims, other)
+        if pairs:
+            listed = ", ".join(f"{m} with {t}" for m, t in pairs)
+            raise LaneError(f"claims overlap lane {other['id']} (#{other['ticket']}): {listed}. Run the lanes "
+                            f"in sequence: start this one with --after {other['id']}")
+    return decision, refusals
+
+
+def register(record: Record, rules: list[dict[str, Any]], force_reason: str | None, create: bool) -> None:
+    """Enforce the cap, disk, load and claims, save the record and print its brief header. When the disk floor is
+    the only refusal left, start's disk repair runs first (fathers#157), outside the state lock each done takes,
+    and the decision is taken again; `review --fix-lane` registers through here, so it repairs too."""
+    repaired: str | None = None
+    while True:
+        with state.locked("state"):
+            decision, refusals = admit(record, force_reason, repaired)
+            if not refusals or force_reason or repaired is not None:
+                if refusals and not force_reason:
+                    raise LaneError("refused:\n- " + "\n- ".join(refusals))
+                register_admitted(record, decision, refusals, force_reason, create)
+                break
+        repaired = done.repair_disk(decision.machine["disk_free_gb"], decision.floor)
     print(header(record, rules))
     warning = tickets.no_ticket_warning(record)
     if warning:
         print(warning, file=sys.stderr)
+
+
+def register_admitted(record: Record, decision: admission.Decision, refusals: list[str], force_reason: str | None,
+                      create: bool) -> None:
+    """Under the state lock, once admitted: save the record and log the start."""
+    lane_id, lane_claims, after = record["id"], record["claims"], record["after"]
+    cap, source, info = decision.cap, decision.source, decision.machine
+    parent = fix_parent(record)
+    if parent is not None:
+        # fathers#45 (a): the fix lane takes its landed parent's place, outside the cap; the record says why.
+        source = record["cap_source"] = f"fix-lane of {parent}"
+    Path(record["scratch"][0]).mkdir(exist_ok=True)
+    if refusals:
+        record["overrides"].append({"at": journal.now(), "reason": force_reason, "refusals": refusals})
+        journal.ledger(f"override start {lane_id}: {force_reason} (refusals: {'; '.join(refusals)})",
+                       kind="override", level="warn", lane=record,
+                       details={"command": "start", "reason": force_reason, "refusals": refusals})
+    if create:
+        main = main_checkout(record["common_dir"])
+        path = os.path.join(main, ".claude", "worktrees", f"lane-{lane_id}")
+        git(main, "worktree", "add", "-q", "-b", record["branch"], path, record["base_sha"])
+        record.update(worktree=os.path.realpath(path), status="active")
+    state.save(record)
+    journal.ledger(f"start {lane_id} ticket={record['ticket']} branch={record['branch']} "
+                   f"base={record['base']}@{record['base_sha'][:10]} claims={' '.join(lane_claims)} "
+                   f"after={','.join(after) or '-'} cap={cap} ({source}) {host.host_fields(info)}",
+                   kind="lane.started", lane=record,
+                   details={"status": record["status"], "branch": record["branch"], "base": record["base"],
+                            "base_sha": record["base_sha"], "claims": lane_claims, "after": after,
+                            "worktree": record["worktree"], "cap": cap, "cap_source": source})
 
 
 def start(args: Any) -> int:
@@ -233,7 +251,7 @@ def list_lanes(args: Any) -> int:
             print(f"    worktree: {record['worktree']}")
     across = f"{len(decision.everywhere)} of {ceiling[0]} across projects ({ceiling[1]}); " if ceiling else ""
     print(f"{len(decision.occupying)} of {cap} lanes planned or active (cap {source}); {across}"
-          f"{host.host_line(machine)}")
+          f"{host.host_line(machine, decision.floor)}")
     print("slot priorities: " + ", ".join(
         f"{phase} {found['priority']}" + ("" if found["source"] == "built-in" else f" ({found['source']})")
         for phase, found in priorities.items()))

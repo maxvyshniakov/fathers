@@ -11,8 +11,6 @@
     "lanefather/checks.py|pyright|reportUnknownVariableType|Type of \"environment\" is partially unknown\n  Type of \"environment\" is \"Unknown | Any | None\"": 1,
     "lanefather/checks.py|pyright|reportUnknownVariableType|Type of \"failed\" is partially unknown\n  Type of \"failed\" is \"Any | list[Unknown]\"": 1,
     "lanefather/config.py|pyright|reportUnknownVariableType|Return type, \"tuple[Unknown, ...]\", is partially unknown": 1,
-    "lanefather/done.py|pyright|reportUnknownMemberType|Type of \"get\" is partially unknown\n  Type of \"get\" is \"Any | Overload[(key: Unknown, default: None = None, /) -> (Unknown | None), (key: Unknown, default: Unknown, /) -> Unknown, (key: Unknown, default: _T@get, /) -> (Unknown | _T@get)]\"": 1,
-    "lanefather/done.py|pyright|reportUnknownVariableType|Type of \"integration\" is partially unknown\n  Type of \"integration\" is \"Unknown | Any | None\"": 1,
     "lanefather/land.py|pyright|reportUnknownArgumentType|Argument type is partially unknown\n  Argument corresponds to parameter \"iterable\" in function \"all\"\n  Argument type is \"Generator[Unknown | Any, None, None]\"": 1,
     "lanefather/land.py|pyright|reportUnknownArgumentType|Argument type is partially unknown\n  Argument corresponds to parameter \"iterable\" in function \"join\"\n  Argument type is \"Generator[Unknown | Any, None, None]\"": 1,
     "lanefather/land.py|pyright|reportUnknownMemberType|Type of \"get\" is partially unknown\n  Type of \"get\" is \"Any | Overload[(key: Unknown, default: None = None, /) -> (Unknown | None), (key: Unknown, default: Unknown, /) -> Unknown, (key: Unknown, default: _T@get, /) -> (Unknown | _T@get)]\"": 1,

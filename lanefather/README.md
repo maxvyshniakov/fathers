@@ -40,8 +40,9 @@ checks or builds. You can also use protected-branch promotion with your own pre-
 - Authenticated Codex and/or Claude CLIs for automatic AI reviews; `gh` for issue/comment integration.
 - Slotfather when enabling its admission provider or configured execution leases.
 
-Admission is intentionally conservative. The current default disk guard requires **150 GB free on the home
-filesystem**; cap and load checks also apply. This can exclude small disks even for a small repository. See
+Admission is intentionally conservative. The disk guard requires free space on the home filesystem of **40 GB plus
+the lane cap times the largest recent lane** (decimal GB; `LANEFATHER_MIN_DISK_GB` sets it); cap and load checks
+also apply. See
 [admission configuration and override semantics](docs/admission.md) before adoption.
 
 ## Install

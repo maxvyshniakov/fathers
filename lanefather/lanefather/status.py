@@ -25,7 +25,7 @@ import re
 import subprocess
 from typing import Any, cast
 
-from . import admission, config, events, host, journal, registry, review, state
+from . import admission, events, host, journal, registry, review, state
 from .errors import LaneError
 from .gitops import main_checkout
 
@@ -113,18 +113,8 @@ def lane_entry(record: state.Record, directory: Path, repo: str | None, trees: d
         "logs": logs, "outcome": record.get("outcome")}
 
 
-def project_entry(entry: dict[str, Any]) -> dict[str, Any]:
-    directory = Path(entry["state_dir"])
-    configured = entry.get("config")
-    if isinstance(configured, str):
-        if not Path(configured).is_file():
-            raise LaneError(f"config not found at {configured}")
-        project = config.load(Path(configured))
-    else:
-        project = config.Config()
-    if not directory.is_dir():
-        raise LaneError(f"state directory {directory} not found")
-    common = entry.get("common_dir") if isinstance(entry.get("common_dir"), str) else None
+def project_entry(found: registry.Project) -> dict[str, Any]:
+    project, directory, common, configured = found.config, found.directory, found.common, found.configured
     # A state directory several projects share holds each one's lanes: a project reports those of its repository,
     # and a record that names none, as the cap counts it (state.of_project).
     # A record a write cut short cannot say its repository: every project of the directory lists it (fathers#129).
@@ -142,10 +132,9 @@ def project_entry(entry: dict[str, Any]) -> dict[str, Any]:
     trees: dict[str, str] = {}
     for root in sorted(roots):
         trees.update(branch_trees(root))
-    repo = entry.get("repository") if isinstance(entry.get("repository"), str) else None
+    repo = found.repository
     logs = latest_logs(directory, {str(r["id"]) for r in shown})
-    name = journal.project_name(project) if isinstance(configured, str) else entry.get("project") or project.project
-    return {"project": name, "state_dir": str(directory), "config": configured,
+    return {"project": found.name, "state_dir": str(directory), "config": configured,
             "repository": repo, "cap": cap, "cap_source": source,
             "active": sum(1 for r in records if r.get("status") == "active"),
             "planned": sum(1 for r in records if r.get("status") == "planned"),
@@ -157,11 +146,11 @@ def project_entry(entry: dict[str, Any]) -> dict[str, Any]:
 def snapshot() -> dict[str, Any]:
     now = datetime.datetime.now(datetime.UTC)
     projects: list[dict[str, Any]] = []
-    for entry in registry.read():
-        if registry.forgotten(entry, now):
-            continue
+    for entry, found, unreadable in registry.projects():
         try:
-            projects.append(project_entry(entry))
+            if found is None:
+                raise LaneError(unreadable or "unreadable")
+            projects.append(project_entry(found))
         except Exception as error:  # one unreadable project never fails the snapshot
             projects.append({"project": entry.get("project") or Path(entry["state_dir"]).name,
                              "state_dir": entry["state_dir"], "error": str(error).replace("\n", " ")[:500]})

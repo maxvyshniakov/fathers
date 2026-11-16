@@ -84,6 +84,11 @@ class Item:
         return f"pid {self.pid} ({self.command[:100]})" + (f"; {self.reason}" if self.reason else "")
 
 
+def order(pid: Any) -> tuple[int, str]:
+    """Pids in numeric order (99 before 100); anything else after them, as text."""
+    return (pid, "") if isinstance(pid, int) else (2**63, str(pid))
+
+
 class QueryError(Exception):
     unsupported = False
 
@@ -151,7 +156,7 @@ class SlotfatherSource:
                 if isinstance(entry, dict) and "pid" in entry:
                     named = cast(dict[str, Any], entry)
                     commands[named["pid"]] = str(named.get("cmd") or "")
-        for pid in sorted(cwd | lease, key=str):
+        for pid in sorted(cwd | lease, key=order):
             if pid not in commands:
                 try:
                     rows: list[dict[str, Any]] = self._query("--pid", str(pid))["processes"]
@@ -160,7 +165,7 @@ class SlotfatherSource:
                     commands[pid] = "command unknown"
         return [f"pid {pid} ({commands[pid][:100] or 'command unknown'}) "
                 + " and ".join(what for what, held in (("cwd", pid in cwd), ("lease", pid in lease)) if held)
-                + " unknown" for pid in sorted(cwd | lease, key=str)]
+                + " unknown" for pid in sorted(cwd | lease, key=order)]
 
     def sort_for_removal(self, root: str) -> tuple[list[Item], list[str]]:
         try:

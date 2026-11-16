@@ -10,6 +10,7 @@ seconds.
 from __future__ import annotations
 
 import contextlib
+from dataclasses import dataclass
 import os
 from pathlib import Path
 import shutil
@@ -24,7 +25,11 @@ from . import config, journal, slots
 CORES_PER_LANE = 2
 LANE_MEMORY_GB = 4
 MEMORY_RESERVE_GB = 8
-MIN_DISK_GB = 150
+# The free-disk floor under which start refuses a lane (fathers#157): a reserve for the system (swap, APFS
+# snapshots) and the lane cap times the largest lane of recent ones, in decimal GB; LANEFATHER_MIN_DISK_GB sets it.
+DISK_RESERVE_GB = 40.0
+DEFAULT_LANE_PEAK_GB = 3.0
+RECENT_LANES = 20
 LOAD_FACTOR = 1.5
 SMOKE_MAX_JOBS = 3
 FALLBACK_JOBS = 2
@@ -129,6 +134,48 @@ def disk_free_gb(project: config.Config | None = None) -> float:
     return float(disk) if disk else shutil.disk_usage(Path.home()).free / 1e9
 
 
+@dataclass(frozen=True)
+class Floor:
+    """The free disk start needs, in decimal GB, and how it was reached."""
+    gb: float
+    reserve: float = DISK_RESERVE_GB
+    cap: int = 0
+    peak: float = DEFAULT_LANE_PEAK_GB
+    source: str = "derived"
+
+    def words(self) -> str:
+        if self.source != "derived":
+            return f"{self.gb:.0f} GB (10^9; {self.source})"
+        return (f"{self.gb:.0f} GB (10^9) = {self.reserve:.0f} reserve + {self.cap} x {self.peak:.1f} GB "
+                "lane peak")
+
+
+def lane_peak_gb(records: list[dict[str, Any]]) -> float:
+    """The largest lane of the RECENT_LANES last done ones: what done freed of it (worktree, build directories,
+    scratch); DEFAULT_LANE_PEAK_GB before any lane is done."""
+    done = sorted((r for r in records if r.get("status") == "done" and isinstance(r.get("freed_bytes"), int)),
+                  key=lambda r: str(r.get("done") or ""), reverse=True)[:RECENT_LANES]
+    sizes = [r["freed_bytes"] / 1e9 for r in done if r["freed_bytes"] > 0]
+    return max(sizes) if sizes else DEFAULT_LANE_PEAK_GB
+
+
+def disk_floor(project: config.Config, cap: int, records: list[dict[str, Any]]) -> Floor:
+    """The free-disk floor for a repository whose lane cap is `cap`: reserve + cap x lane peak (fathers#157), or
+    LANEFATHER_MIN_DISK_GB; an invalid setting warns and the derived floor applies."""
+    found = project.lookup("MIN_DISK_GB")
+    if found and found[1].strip():
+        try:
+            value = float(found[1])
+        except ValueError:
+            value = -1.0
+        if value > 0 and value != float("inf"):
+            return Floor(value, cap=cap, source=found[0])
+        print(f"lane: warning: {found[0]}={found[1]!r} is not a positive number of GB; the floor is derived",
+              file=sys.stderr)
+    peak = lane_peak_gb(records)
+    return Floor(DISK_RESERVE_GB + cap * peak, DISK_RESERVE_GB, cap, peak)
+
+
 def host(project: config.Config | None = None) -> dict[str, Any]:
     return {"disk_free_gb": disk_free_gb(project),
             "load15": load15(project), "cores": machine_cores(project)}
@@ -144,9 +191,9 @@ def host_fields(info: dict[str, Any]) -> str:
     return f"disk_free_gb={info['disk_free_gb']:.0f} load15={info['load15']:.1f} cores={info['cores']}"
 
 
-def host_line(info: dict[str, Any]) -> str:
+def host_line(info: dict[str, Any], floor: Floor) -> str:
     limit = info["load_limit"] if "load_limit" in info else load_limit(info["cores"])
-    return (f"disk free {info['disk_free_gb']:.0f} GB (minimum {MIN_DISK_GB} GB); load15 {info['load15']:.1f} on "
+    return (f"disk free {info['disk_free_gb']:.0f} GB (minimum {floor.gb:.0f} GB); load15 {info['load15']:.1f} on "
             f"{info['cores']} cores (maximum {limit:.1f})")
 
 

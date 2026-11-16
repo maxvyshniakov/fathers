@@ -33,8 +33,8 @@ from .state import Record
 SEVERITIES = ("P1", "P2", "P3")
 
 
-def mark_help(lane_id: str = "{id}") -> str:
-    return f"{config.prog()} review {lane_id} --mark <n> fixed:<merge>|rejected:<reason>"
+def mark_help(lane_id: str = "{id}", prog: str | None = None) -> str:
+    return f"{prog or config.prog()} review {lane_id} --mark <n> fixed:<merge>|rejected:<reason>"
 
 
 
@@ -61,10 +61,13 @@ def alive(pid: Any) -> bool:
     return True
 
 
-def review_state(label: str) -> tuple[bool, str]:
-    """Whether the review lets promote move dev, and its state in words."""
-    prog = config.prog()
-    receipt = state.read_json(state.receipt_path(label, "review"))
+def review_state(label: str, store: state.Store | None = None) -> tuple[bool, str]:
+    """Whether the review lets promote move dev, and its state in words; of the project `store` holds (fathers#157),
+    by default the current one."""
+    project = store.project if store is not None else config.current()
+    prog = project.command if store is not None else config.prog()
+    receipt = state.read_json(store.receipt_path(label, "review") if store is not None
+                              else state.receipt_path(label, "review"))
     if receipt is None:
         return False, f"no review: run {prog} review {label}"
     status = receipt.get("status")
@@ -79,7 +82,7 @@ def review_state(label: str) -> tuple[bool, str]:
         return False, f"review failed: {receipt.get('error')}; rerun {prog} review {label}"
     findings = receipt.get("findings", [])
     missing = missing_members(receipt)
-    if missing and config.current().review_panel_required:
+    if missing and project.review_panel_required:
         return False, (f"panel member {', '.join(missing)} gave no review ([review] panel_required): "
                        f"{prog} review {label} --force-reason <why> reviews again")
     unmarked = [f for f in findings if not f.get("mark")]
