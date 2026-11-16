@@ -62,7 +62,7 @@ class UnifiedLaneTests(unittest.TestCase):
         self.assertFalse(lines[1][1:-1].strip(),"a blank padding row")
         self.assertIn("active",lines[2])
         self.assertFalse(lines[3][1:-1].strip())
-        self.assertIn("┃  ⏸️    pending",lines[4])
+        self.assertIn("▕  ⏸️    pending",lines[4])
         column=lines[0].index("cpu use/share")+len("cpu use/share")
         self.assertTrue(lines[4][:column].rstrip().endswith("waiting #1"),lines[4])
         self.assertEqual(1,mouse(canvas,("mouse",0,20,4,True),{},0,model))
