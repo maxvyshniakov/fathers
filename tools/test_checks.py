@@ -183,7 +183,6 @@ class WorkflowTests(unittest.TestCase):
                     self.assertEqual(wanted, declared[1])
         self.assertEqual("3.9", floor((WORKFLOWS / "common.yml").read_text()))  # common/ and install.py: 3.9
 
-    @unittest.expectedFailure  # slotfather/pyproject.toml gains it in Slotfather's lane (fathers#120)
     def test_every_package_declares_requires_python(self) -> None:
         for name in checks.PACKAGES:
             text = (ROOT / name / "pyproject.toml").read_text()

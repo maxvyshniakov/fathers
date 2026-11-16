@@ -1,6 +1,7 @@
 [project]
 name = "slotfather"
 version = "0.1.0"  # the newest release in CHANGELOG.md; src/slotfather/version.py VERSION matches it
+requires-python = ">=3.9"  # install.py MIN_PYTHON; CI tests this floor (.github/workflows/slotfather.yml)
 
 [tool.ruff]
 extend = "../tools/ruff.toml"
