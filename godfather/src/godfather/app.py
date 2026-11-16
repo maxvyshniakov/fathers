@@ -49,7 +49,12 @@ USAGE = ("usage: godfather [--interval SECONDS]\n"
 
 
 class UsageError(Exception):
-    pass
+    """A command line Godfather does not take (exit 2, docs/cli.md): the reason, then one line pointing to the help of
+    `command` (None: Godfather's own)."""
+
+    def __init__(self, reason: str, command: str | None = None) -> None:
+        super().__init__(reason)
+        self.command = command
 
 
 # Godfather's own settings (SPEC 22): Refresh every and Colour theme, kept between runs
@@ -512,7 +517,7 @@ def events_command(argv: list[str]) -> int:
     while argv:
         if argv[0] == "--source" and len(argv) > 1:
             if argv[1] not in _sources.TOOLS:
-                raise UsageError(f"--source takes {', '.join(_sources.TOOLS)}, not {argv[1]!r}")
+                raise UsageError(f"--source takes {', '.join(_sources.TOOLS)}, not {argv[1]!r}", "events")
             names, argv = names + [argv[1]], argv[2:]
         elif argv[0] == "--follow":
             follow, argv = True, argv[1:]
@@ -522,7 +527,7 @@ def events_command(argv: list[str]) -> int:
             print(USAGE)
             return 0
         else:
-            raise UsageError(f"events: unknown argument {argv[0]!r}\n{USAGE}")
+            raise UsageError(f"events: unknown argument {argv[0]!r}", "events")
     feed: _events.Feed = _events.Feed()
     tags: dict[str, str] = {}
     for name in [tool for tool in _sources.TOOLS if not names or tool in names]:
@@ -594,7 +599,7 @@ def command(argv: list[str]) -> int:
                 height = int(value)
             argv = argv[2:]
         else:
-            raise UsageError(f"unknown argument {argv[0]!r}\n{USAGE}")
+            raise UsageError(f"unknown argument {argv[0]!r}")
     try:
         interval, theme = starting_choices(interval)
         resolved = _theme.from_environment(mode=theme)  # --once cannot ask the terminal: GODFATHER_TERMINAL_BG/_FG
@@ -618,4 +623,5 @@ def main(argv: list[str] | None = None) -> int:
         return command(list(sys.argv[1:] if argv is None else argv))
     except UsageError as error:
         print(f"godfather: {error}", file=sys.stderr)
+        print(f"Try 'godfather {error.command + ' ' if error.command else ''}--help'.", file=sys.stderr)
         return 2

@@ -42,6 +42,9 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Changed
 
+- A command line Godfather does not take prints one line with the reason and one pointing to the help (`Try
+  'godfather events --help'.`), no longer the whole usage text, as the tools' CLI convention says (docs/cli.md,
+  fathers#154).
 - MACHINE says why nothing is admitted instead of a red `no admission` (fathers#156): `full · 8 of 8 held`,
   `whole machine: <label>` when one request holds every slot, `queue ahead · 2 waiting`, `draining · 6 of 4 held`
   (yellow), `memory short` (red: the one machine problem among them). A full or queued machine is the queue
