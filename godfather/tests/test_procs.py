@@ -19,7 +19,7 @@ from helpers import ROOT
 from test_lanes import STRAYLIGHT, Case, decoded as lanes_decoded, request
 from test_state import entry
 
-from godfather import events, sources, state as state_module
+from godfather import pages, events, sources, state as state_module
 from godfather.adapters import junkfather, lanefather
 
 PROCS = ROOT / "tests" / "fixtures" / "procs"
@@ -108,8 +108,8 @@ class PageTests(Case):
         return request("644-build-once", STRAYLIGHT, pid=10000, label="the-lease")
 
     def picked_proc(self, state: Any) -> Any:
-        rows = state_module.page_rows(state, "processes")
-        index = state_module.page_index(state, "processes")
+        rows = pages.page_rows(state, "processes")
+        index = pages.page_index(state, "processes")
         return rows[index]["key"] if index is not None else None
 
     def test_details_list_the_requests_processes_as_links(self) -> None:
@@ -131,7 +131,7 @@ class PageTests(Case):
         self.assertEqual(("entry", "j5e6f7a"), self.picked_proc(state))
         self.assertIn("PROCESS DETAILS", self.text())
         state = self.keys(state, "G")
-        self.assertEqual("resource", state_module.page_rows(state, "processes")[state_module.page_index(state,
+        self.assertEqual("resource", pages.page_rows(state, "processes")[pages.page_index(state,
                                                                                                        "processes") or 0]["kind"])
         state = self.keys(state, "1")
         self.assertEqual("overview", state.page)
@@ -140,7 +140,7 @@ class PageTests(Case):
 
     def test_the_separator_is_skipped_and_unowned_rows_show_why(self) -> None:
         state = self.keys(self.screen([entry(1)]), "3")
-        rows = state_module.page_rows(state, "processes")
+        rows = pages.page_rows(state, "processes")
         keys = [row.get("key") for row in rows if row.get("key")]
         state = dataclasses.replace(state, picked={"processes": keys[4]})
         state = self.keys(state, "j")

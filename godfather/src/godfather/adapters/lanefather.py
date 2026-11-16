@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Optional, cast
 
 from .. import sources as _sources
+from ..events import dashboard_block
 
 TAG = "lane"
 CAPABILITIES_VERSIONS = (1,)
@@ -23,11 +24,6 @@ DASHBOARD_VERSIONS = (1,)
 SNAPSHOT_VERSIONS = (1,)  # `status --json` versions this Godfather reads
 SHOW_VERSIONS = (1,)  # `show --json` versions this Godfather reads
 LaneKey = tuple[str, str]  # (the project's state directory, the lane id)
-
-
-def dashboard_block(capabilities: Optional[dict[str, Any]]) -> dict[str, Any]:
-    block = (capabilities or {}).get("dashboard")
-    return cast(dict[str, Any], block) if isinstance(block, dict) else {}
 
 
 def unsupported(capabilities: dict[str, Any]) -> Optional[str]:

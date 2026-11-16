@@ -39,6 +39,7 @@ from .adapters import slotfather as _slotfather
 from .adapters.settings import Conflict, ReadOnly, SettingsClient, SettingsError
 from .adapters.slotfather import Unsupported
 from .sources import SnapshotError, Source
+from . import pages as _pages
 from . import reducer as _reducer
 from . import state as _state
 from .tui import Canvas, Jobs, Loader, full_screen, read_keys, suspended
@@ -323,8 +324,7 @@ def settings_failed(request: _settings_model.Request, failure: BaseException) ->
     return _state.SettingsWritten(request, "failed", None, why)
 
 
-TOOL_ADAPTERS: dict[str, Any] = {"lanefather": _lanefather, "junkfather": _junkfather}
-PAGES = ("overview", "lanes", "processes")  # what --page takes  # the other tools polled as sources, by name
+TOOL_ADAPTERS: dict[str, Any] = {"lanefather": _lanefather, "junkfather": _junkfather}  # the other tools, by name
 
 
 def load_details(item: dict[str, Any], lanes: Source | None = None) -> tuple[Any, str | None]:
@@ -634,14 +634,14 @@ def once(width: int | None, height: int | None, colour: bool | None, interval: f
             lanes = screen.tool_sources["lanefather"]
             if _lanefather.lane_of(items[0], lanes.snapshot, cwd) is None:
                 _details.enrich_details(items[0], lanes.capabilities)
-    state = _state.open_page(_state.settle(_state.AppState(model=model, tools=tools), 0.0)[0], page)
+    state = _pages.open_page(_state.settle(_state.AppState(model=model, tools=tools), 0.0)[0], page)
     ascii_only = "utf" not in (sys.stdout.encoding or "").lower()
     size_now = shutil.get_terminal_size((120, 40))
     canvas = Canvas(width or size_now.columns, height or size_now.lines, theme, _common.marks_for(ascii_only))
     canvas.focus = state.focus
     _overview.dashboard_draw(canvas, model, error=error, cwd=cwd, notice=screen.notice(),
                              moment=datetime.datetime.now(datetime.timezone.utc), tools=tools, page=state.page,
-                             page_row=_state.page_index(state, state.page) if state.page != "overview" else None)
+                             page_row=_pages.page_index(state, state.page) if state.page != "overview" else None)
     tty = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
     print(canvas.render(colour if colour is not None else tty, ascii_only))
     return 1 if model is None else 0  # the frame says why: no tool, no contract, or a failed snapshot
@@ -741,8 +741,8 @@ def command(argv: list[str]) -> int:
             print(USAGE)
             return 0
         elif argv[0] == "--page" and len(argv) > 1:
-            if argv[1] not in PAGES:
-                raise UsageError(f"--page takes {', '.join(PAGES)}, not {argv[1]!r}")
+            if argv[1] not in _state.PAGES:
+                raise UsageError(f"--page takes {', '.join(_state.PAGES)}, not {argv[1]!r}")
             page, argv = argv[1], argv[2:]
         elif argv[0] in ("--interval", "--width", "--height") and len(argv) > 1:
             try:

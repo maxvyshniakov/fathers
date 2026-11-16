@@ -6,6 +6,7 @@ from __future__ import annotations
 import dataclasses
 
 from . import modes as _modes
+from . import pages as _pages
 from . import settings_model as _settings
 from .state import (QUIT, ActionDone, AppState, DetailsLoaded, Drawn, Effect, Event, Key, Loaded, ModelFailed, ModelLoaded, Mouse,
                     NewsLoaded, Notice, Refresh, Result, SettingsChecked, SettingsFailed, SettingsOpened,
@@ -64,5 +65,5 @@ def reduce(state: AppState, event: Event, now: float) -> Result:
             state = dataclasses.replace(state, moment=second)
         if isinstance(state.overlay, SettingsOverlay):  # a change that settled is saved, reads come due
             state, effects = settings_event(state, event, now)
-    state, more = settle(state, now)
+    state, more = settle(_pages.leave_absent(state), now)
     return state, effects + more

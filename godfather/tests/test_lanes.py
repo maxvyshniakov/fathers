@@ -22,7 +22,7 @@ import helpers
 from helpers import ROOT
 from test_state import entry, model
 
-from godfather import app, reducer, sources, state as state_module, tui
+from godfather import pages, app, reducer, sources, state as state_module, tui
 from godfather.adapters import lanefather
 from godfather.views import overview
 
@@ -140,7 +140,7 @@ class Case(unittest.TestCase):
 
     def loaded(self, state: Any) -> Any:
         """The selected request's slow facts arrived (no lane from `show`, no holder directory)."""
-        item = state_module.selected_item(state)
+        item = pages.selected_item(state)
         if item is None:
             return state
         key = state_module.details_key(item, state.selection.key)
@@ -174,8 +174,8 @@ class Case(unittest.TestCase):
         raise AssertionError(f"{text!r} is not on screen")
 
     def picked(self, state: Any) -> Any:
-        rows = state_module.page_rows(state, "lanes")
-        index = state_module.page_index(state, "lanes")
+        rows = pages.page_rows(state, "lanes")
+        index = pages.page_index(state, "lanes")
         return rows[index]["key"] if index is not None else None
 
 

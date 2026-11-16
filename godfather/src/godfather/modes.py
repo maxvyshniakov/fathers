@@ -37,10 +37,10 @@ from typing import Any, Callable, Union, cast
 from . import keys as _keys
 from . import layout as _layout
 from . import settings_model as _settings
+from .pages import follow_link, go_back, open_actions, open_page, page_move, page_select
 from .state import (LOAD_NEWS, OPEN_SETTINGS, PAGE_TABLES, QUIT, ActionMenu, AppState, Changelog, Confirm, Effect, Help,
-                    Key, Mouse, Notice, Reason, Result, SettingsOverlay, event_index, event_move, filtered,
-                    follow_link, go_back, items, move, open_actions, open_page, overlay_box, page_move, page_select,
-                    settings_context, settings_result)
+                    Key, Mouse, Notice, Reason, Result, SettingsOverlay, event_index, event_move, filtered, items, move,
+                    overlay_box, settings_context, settings_result)
 from . import events as _events_view
 from . import overlay_text as _overlays
 

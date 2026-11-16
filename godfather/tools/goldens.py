@@ -385,7 +385,7 @@ def render(name: str, theme: str | None) -> str:
     the lanes and the chart's window go in as data, the theme and marks with the canvas, the commit what's new shows as
     an argument. No module is patched (fathers#138); the only thing set from outside is the process environment
     (environment(): the fixture folder, the time zone and the terminal's colours), which is what the tools read."""
-    from godfather import app, entries, events, overlay_text, state, theme as themes, tui
+    from godfather import app, entries, events, overlay_text, pages, state, theme as themes, tui
     from godfather.adapters import slotfather as adapter
     from godfather.views import common, overview
 
@@ -444,13 +444,13 @@ def render(name: str, theme: str | None) -> str:
         elif overlay:
             shown = state.Help()
         tools = {name: screen.load_tool(name) for name in app.TOOL_ADAPTERS}  # the other tools as sources
-        opened = state.open_page(state.settle(state.AppState(model=model, tools=tools), 0.0)[0], page)
+        opened = pages.open_page(state.settle(state.AppState(model=model, tools=tools), 0.0)[0], page)
         canvas = tui.Canvas(width, height, palette, common.marks_for(False))
         canvas.focus = opened.focus if page != "overview" else focus
         overview.dashboard_draw(canvas, model, selected, shown, cwd="~/straylight", news=found, read=read,
                                 moment=moment, events_filter=found_filter, event=event, tools=tools,
                                 page=opened.page,
-                                page_row=state.page_index(opened, opened.page) if opened.page != "overview" else None)
+                                page_row=pages.page_index(opened, opened.page) if opened.page != "overview" else None)
         return canvas.render(theme is not None)
 
 
