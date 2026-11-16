@@ -5,6 +5,7 @@ The fake prints state["snapshot"] for `status --json --full`; snapshot() builds 
 """
 from __future__ import annotations
 
+import contextlib
 import datetime
 import fcntl
 import json
@@ -103,6 +104,21 @@ CONTROLLING = ("import fcntl, os, sys, termios; fcntl.ioctl(0, termios.TIOCSCTTY
                "os.execvp(sys.argv[1], sys.argv[1:])")
 
 
+def terminate(group: int) -> None:
+    with contextlib.suppress(ProcessLookupError, PermissionError):  # EPERM: only zombies left (macOS)
+        os.killpg(group, signal.SIGTERM)
+
+
+def group_alive(group: int) -> bool:
+    """Whether a process of the group still runs. macOS answers EPERM for a group of zombies alone (exited, not yet
+    reaped by launchd): they write nothing more, so the group counts as ended."""
+    try:
+        os.killpg(group, 0)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
 class Terminal:
     """`godfather` (or another argv) running in a PTY of rows x columns; what it wrote, raw and plain."""
 
@@ -118,6 +134,7 @@ class Terminal:
                                         stderr=slave, env=env, start_new_session=True)
         os.close(slave)
         self.raw = bytearray()
+        self.stopped = False
         case.addCleanup(self.stop)
 
     def read(self, seconds: float = 0.05) -> None:
@@ -181,9 +198,22 @@ class Terminal:
         return self.exit_code()
 
     def stop(self) -> None:
+        """Ends it and everything it started, and waits for all of them: a tool call in flight when it quit (the
+        fake tools write their state and argv log) outlives it in its process group, and must not write into the
+        fake's directory while the test's cleanup removes it."""
+        if self.stopped:
+            return
+        self.stopped = True
+        group = self.process.pid  # its own session, so its own process group, which its children inherit
         if self.process.poll() is None:
-            os.killpg(self.process.pid, signal.SIGTERM)
+            terminate(group)
             self.process.wait(timeout=3)
+        terminate(group)
+        deadline = time.monotonic() + 10
+        while group_alive(group):
+            if time.monotonic() > deadline:
+                raise AssertionError(f"process group {group} still running after its dashboard ended")
+            self.read()  # waits on the PTY, as until() does
         os.close(self.master)
 
 
