@@ -81,6 +81,20 @@ class FakeSlotfather:
         self.tmp.cleanup()
 
 
+def lines_within(stream: Any, count: int, seconds: float = 30.0) -> list[str]:
+    """`count` lines from a child's stdout, waited for on a thread up to a functional deadline (a hung reader fails
+    the test instead of hanging the suite); what arrives is the condition, not how fast."""
+    import threading
+
+    found: list[str] = []
+    reader = threading.Thread(target=lambda: found.extend(stream.readline() for _ in range(count)), daemon=True)
+    reader.start()
+    reader.join(seconds)
+    if reader.is_alive():
+        raise AssertionError(f"{count} lines did not arrive within {seconds:g} s; got {found!r}")
+    return found
+
+
 def reload(name: str) -> Any:
     return importlib.reload(importlib.import_module(name))
 
