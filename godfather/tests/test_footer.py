@@ -106,8 +106,9 @@ class FooterTests(unittest.TestCase):
             self.assertNotIn(gone, line)
         keys = dict(self.tool.HELP)["KEYS"]
         terms = [entry[0] for entry in keys if entry[0]]
-        for gone in ("p", "r", "m", "space"):
+        for gone in ("p", "m", "space"):
             self.assertNotIn(gone, terms)
+        self.assertNotIn("refresh", " ".join(entry[1] for entry in keys if len(entry) > 1), "r is EVENTS' raw now")
         self.assertIn("shift+drag", terms, "text is selected with Shift+drag")
 
 

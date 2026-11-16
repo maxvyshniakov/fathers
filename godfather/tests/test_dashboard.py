@@ -280,33 +280,38 @@ class EventDetailTests(unittest.TestCase):
                        reason="owner exited", level="warn"),
                 logged("lease.granted", at("02:06:30"), "live", 104, count=1, waited=60)]
 
-    def draw(self, width: int, events: list[dict[str, Any]] | None = None) -> tuple[Any, list[str]]:
+    def draw(self, width: int, events: list[dict[str, Any]] | None = None, raw: bool = False) -> tuple[Any, list[str]]:
         tool = load_dashboard()
         found = rows_of(self.events() if events is None else events)
         when = found[-1]["when"]  # drawn on the log's day: times read as times on any day
         canvas = tool.Canvas(width, 12)
-        tool.draw_events(canvas, Rect(0, 0, 12, width), {"events": found, "sources": [("slotfather", "slot")]}, when)
+        tool.draw_events(canvas, Rect(0, 0, 12, width), {"events": found, "sources": [("slotfather", "slot")]}, when,
+                         tool.Filter(raw=raw))
         return canvas, canvas.render(False).splitlines()
 
-    def test_slotfather_alone_has_time_slots_label_detail_and_pid(self) -> None:
-        for width in (156, 120, 92, 64):  # wide, the one-column layout's EVENTS beside MACHINE, narrow
+    def test_slotfather_alone_has_time_slots_label_waited_outcome_and_pid(self) -> None:
+        for width in (156, 120, 92):  # wide, the one-column layout's EVENTS beside MACHINE
             with self.subTest(width=width):
                 _, lines = self.draw(width)
                 header = lines[0]
-                places = [header.index(title) for title in ("EVENTS", "slots", "label", "detail", "pid")]
+                self.assertTrue(header.startswith("╭─ SLOTS LOG ─"), "one source: the bare title, nothing to switch")
+                places = [header.index(title) for title in ("SLOTS LOG", "label", "waited", "outcome", "pid")]
                 self.assertEqual(sorted(places), places)
-                for gone in (" source ", " event ", "all sources"):
-                    self.assertNotIn(gone, header, "one source: no source or event column, no filter note")
                 row = next(line for line in lines if " gate " in line)
                 self.assertRegex(row, r"^│  \d\d:\d\d:\d\d +▫ +gate +gave up 15m +103  │$")
-                self.assertEqual(header.index("detail") + len("detail"), row.index("15m") + 3, "right-aligned")
+                self.assertEqual(header.index("outcome") + len("outcome"), row.index("15m") + 3, "right-aligned")
+                build = next(line for line in lines if " build " in line)
+                self.assertRegex(build, r"\d\d:04:00 +▫ +build +wait 3m00s +exit 1 · 4m00s +101", "one row per run")
+                live = next(line for line in lines if " live " in line)
+                self.assertRegex(live, r"▪ +live +wait 1m00s +running 0s +104", "running while it holds its slot")
 
-    def test_a_narrow_panel_drops_pid_then_slots_and_keeps_the_detail(self) -> None:
-        _, lines = self.draw(56)  # 50 inner cells: time 10, slots 5, detail 15, pid 3, gaps 8 would leave 9
-        self.assertEqual(["slots", "label", "detail"], [t for t in ("slots", "label", "detail", "pid") if t in lines[0]])
-        self.assertRegex(next(line for line in lines if " gate " in line), r"▫ +gate +gave up 15m  │$")
+    def test_a_narrow_panel_drops_pid_then_slots_then_the_wait_and_keeps_the_outcome(self) -> None:
+        _, lines = self.draw(64)
+        self.assertNotIn("pid", lines[0])
+        self.assertRegex(next(line for line in lines if " gate " in line), r"gate +gave up 15m  │$")
         _, lines = self.draw(48)
-        self.assertEqual(["label", "detail"], [t for t in ("slots", "label", "detail", "pid") if t in lines[0]])
+        self.assertEqual(["outcome"], [t for t in ("slots", "label", "waited", "outcome", "pid") if t in lines[0]],
+                         "the label's own title gives way to the log's")
         self.assertRegex(next(line for line in lines if " gate " in line), r"\d +gate +gave up 15m")
 
     def test_the_label_takes_the_width_the_other_columns_leave(self) -> None:
@@ -316,13 +321,15 @@ class EventDetailTests(unittest.TestCase):
         label = lines[0].index("label")
         self.assertEqual(label, lines[2].index("lane-710"))
         shown = lines[2][label:].split("  ")[0]
-        self.assertEqual(92 - 6 - 10 - 5 - len("wait 3m00s") - 3 - 8, len(shown), "every cell the others left")
+        # the frame and padding, time, the slots column, waited, outcome, pid and the five gaps
+        self.assertEqual(92 - 6 - 8 - 5 - len("wait 3m00s") - len("running 0s") - 3 - 10, len(shown),
+                         "every cell the others left")
 
     def test_slot_cells_are_filled_when_taken_hollow_when_handed_back_and_never_coloured(self) -> None:
         events = self.events()
         events[1]["details"]["count"] = 20  # verify's grant: wider than the column
-        canvas, lines = self.draw(120, events)
-        column = lines[0].index("slots")
+        canvas, lines = self.draw(120, events, raw=True)  # every event as logged
+        column = lines[2].index("▪")  # the slots column: its label gives way to the title
         expected = {("lease.granted", "build"): "▪", ("lease.released", "build"): "▫", ("request.left", "gate"): "▫",
                     ("lease.reaped", "verify"): "▫▫", ("lease.granted", "verify"): "▪▪▪▪ +16"}
         rows = {(event["kind"], event["subject"]["label"]): 2 + index for index, event in enumerate(events[::-1])}

@@ -447,7 +447,7 @@ class FrameTests(unittest.TestCase):
         self.tool.dashboard_draw(canvas, state)
         offsets: dict[str, int] = {}
         for line in canvas.render(False).splitlines():
-            for title in ("SLOTS", "QUEUE", "EVENTS", "LEASE DETAILS", "MACHINE"):
+            for title in ("SLOTS", "QUEUE", "SLOTS LOG", "LEASE DETAILS", "MACHINE"):
                 at = line.find(f" {title} ")
                 if at >= 0:
                     frame = max(line.rfind("╭", 0, at), 0)

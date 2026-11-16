@@ -13,12 +13,12 @@
 │  ⏸️    lane-555-host-rename-names                ▪       waiting #2          10s   10004  │ │             08f8cf012                                      │
 │                                                                                           │ │  command    ~/straylight/.claude/worktrees/agent-afa3816b  │
 ┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┙ │             08f8cf012/verify.sh --checks desktop-tests     │
-╭─ EVENTS ── lanefather · "710" ────── label ────────────────────────────────────── detail ─╮ │             --keep-going --jobs 1                          │
+╭─ ◂ LANES LOG ▸ ── "710" ───────────────────────────────────────────────── result  ticket ─╮ │             --keep-going --jobs 1                          │
 │                                                                                           │ │  cwd        ~/straylight                                   │
-│  11:57:48   lane  post-merge         710-speech-paste-phase             green · narrowed  │ │                                                            │
-│  11:56:05   lane  landed             710-speech-paste-phase        onto integrate/queue…  │ │  lane       644-build-once                                 │
-│  11:53:40   lane  checked            710-speech-paste-phase             green · 2 suites  │ │  project    Straylight                                     │
-│  11:50:12   lane  started            710-speech-paste-phase        on integrate/queue-3…  │ │  stage      active                                         │
+│  11:57:48  post-merge  710-speech-paste-phase                   green · narrowed    #710  │ │                                                            │
+│  11:56:05  landed      710-speech-paste-phase           onto integrate/queue-347    #710  │ │  lane       644-build-once                                 │
+│  11:53:40  checked     710-speech-paste-phase                   green · 2 suites    #710  │ │  project    Straylight                                     │
+│  11:50:12  started     710-speech-paste-phase       on integrate/queue-347 · 2 …    #710  │ │  stage      active                                         │
 │                                                                                           │ │  branch     lane/644-build-once                            │
 │                                                                                           │ │  base       integrate/queue-347                            │
 │                                                                                           │ │  receipt    in progress                                    │

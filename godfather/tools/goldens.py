@@ -53,6 +53,10 @@ SCREENS = {  # name: (width, height, overlay); what's new's filter after a colon
     # fathers#84: EVENTS with every source, wide, at 100 and at 76 columns; filtered to Lanefather while "710" is typed
     "mixed-156x43": (156, 43, "mixed"), "mixed-100x40": (100, 40, "mixed"), "mixed-76x40": (76, 40, "mixed"),
     "mixed-filter-156x43": (156, 43, "mixed:lanefather:710"),
+    # fathers#152: each log the title switches to, wide and at 100 columns (76 draws no EVENTS)
+    **{f"mixed-{name}-{width}x{height}": (width, height, f"mixed:{tool}")
+       for name, tool in (("lanes", "lanefather"), ("procs", "junkfather"), ("all", "all"))
+       for width, height in ((156, 43), (100, 40))},
 }
 
 

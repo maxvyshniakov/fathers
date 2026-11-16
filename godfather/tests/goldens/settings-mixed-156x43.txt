@@ -13,31 +13,31 @@
 │  ⏸️    lane-555-host-rename-names   │    draining     none                                                        ┃│                                     │
 │                                     │    environment  SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB                     ┃│ht/.claude/worktrees/agent-afa3816b  │
 ┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┃  ▶ Capacity                  ‹ Fixed ›                                      ┃┃verify.sh --checks desktop-tests     │
-╭─ EVENTS ── all sources ────── slots │    Slots                     6                                              ┃│ng --jobs 1                          │
+╭─ ◂ SLOTS LOG ▸ ─── label ───────────│    Slots                     6                                              ┃│ng --jobs 1                          │
 │                                     │    Queue order               Backfill                                       ┃│ht                                   │
-│  11:59:35   slot  released    ▫     │    Backfill margin           3×                                             ┃│                                     │
-│  11:59:20   junk  extended          │    Unknown job runtime       1h                                             ┃│once                                 │
-│  11:59:02   lane  reviewed          │    Overrun estimate          0.5×                                           ┃│                                     │
-│  11:58:33   slot  released    ▫     │    Overtaking stops after    never                                          ┃│                                     │
-│  11:58:10   lane  gate              │    Interactive head start    30m                                            ┃│uild-once                            │
-│  11:57:48   lane  post-merge        │    Batch held back           30m                                            ┃│queue-347                            │
-│  11:57:20   slot  granted     ▪     │    Batch promoted after      30m                                            ┃│s                                    │
-│  11:57:15   slot  released    ▫     │    Normal promoted after     1h                                             ┃│d                                    │
-│  11:57:00   junk  reaped            │    Warn after waiting        30m                                            ┃│fication_plan.py, tools/verify.py,   │
-│  11:56:05   lane  landed            │    Idle when below           0.1 cores                                      ┃│in-module.sh, tools/test-build-      │
-│  11:55:44   slot  granted     ▪▪    │    Idle for                  5m                                              │ule.py, tools/app-build.py,          │
-│  11:55:41   slot  granted     ▪     │    Ask to yield after        2m                                              │-app-build.py, tools/cargo-test.py,  │
-│  11:55:31   slot  released    ▫     │  ──────────────────────────────────────────────────────────────────────────  │opment.md, tools/test-cargo-build-   │
-│  11:55:26   slot  released    ▫     │  LANEFATHER · status read-only, live                                         │tools/test-heavy.py,                 │
-│  11:55:24   slot  granted     ▪     │    settings     /fake/config/lanefather/settings.json                        │o_build_cache.py                     │
-│  11:55:00   slot  released    ▫     │    events       /fake/state/lanefather/events.jsonl                          │                                     │
-│  11:54:54   slot  granted     ▪     │    projects     2 registered in /fake/state/lanefather/projects.json         │                                     │
-│  11:54:20   junk  unowned           │    Review start              Automatic                                       │─────────────────────────────────────╯
-│  11:54:06   slot  granted     ▪     │                                                                              │─────── unleased 0.4 · no admission ─╮
-│  11:54:02   slot  released    ▫     │  ──────────────────────────────────────────────────────────────────────────  │        slots held  avg 4.4/6        │
-│  11:53:54   slot  granted     ▪     │  Shared by every client. Automatic: the lower of the CPU and memory          │9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
-│  11:53:40   lane  checked           │  budgets.                                                                    │normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
-│  11:53:08   slot  granted     ▪     │                                                                              │4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
+│  11:59:35  ▫       agent-ae72d94beb6│    Backfill margin           3×                                             ┃│                                     │
+│  11:58:33  ▫       agent-a1c75285bdf│    Unknown job runtime       1h                                             ┃│once                                 │
+│  11:57:15  ▫       agent-a1c75285bdf│    Overrun estimate          0.5×                                           ┃│                                     │
+│  11:55:44  ▪▪      desktop          │    Overtaking stops after    never                                          ┃│                                     │
+│  11:55:31  ▫       desktop          │    Interactive head start    30m                                            ┃│uild-once                            │
+│  11:55:26  ▫       agent-a1c75285bdf│    Batch held back           30m                                            ┃│queue-347                            │
+│  11:55:00  ▫       desktop          │    Batch promoted after      30m                                            ┃│s                                    │
+│  11:54:02  ▫       agent-a1c75285bdf│    Normal promoted after     1h                                             ┃│d                                    │
+│  11:52:53  ▫       agent-a1c75285bdf│    Warn after waiting        30m                                            ┃│fication_plan.py, tools/verify.py,   │
+│  11:52:30  ▫       desktop          │    Idle when below           0.1 cores                                      ┃│in-module.sh, tools/test-build-      │
+│  11:51:40  ▫       post-merge-456-re│    Idle for                  5m                                              │ule.py, tools/app-build.py,          │
+│  11:51:24  ▫       agent-a1c75285bdf│    Ask to yield after        2m                                              │-app-build.py, tools/cargo-test.py,  │
+│  11:49:34  ▫▫      data-grid        │  ──────────────────────────────────────────────────────────────────────────  │opment.md, tools/test-cargo-build-   │
+│  11:48:30  ▫       agent-ae72d94beb6│  LANEFATHER · status read-only, live                                         │tools/test-heavy.py,                 │
+│  11:47:21  ▫       agent-a0f998f4c57│    settings     /fake/config/lanefather/settings.json                        │o_build_cache.py                     │
+│  11:47:17  ▫       agent-a0f998f4c57│    events       /fake/state/lanefather/events.jsonl                          │                                     │
+│  11:47:13  ▫       agent-a0f998f4c57│    projects     2 registered in /fake/state/lanefather/projects.json         │                                     │
+│  11:47:10  ▫       agent-a0f998f4c57│    Review start              Automatic                                       │─────────────────────────────────────╯
+│  11:47:07  ▫       agent-a0f998f4c57│                                                                              │─────── unleased 0.4 · no admission ─╮
+│  11:47:04  ▫       agent-a0f998f4c57│  ──────────────────────────────────────────────────────────────────────────  │        slots held  avg 4.4/6        │
+│  11:46:08  ▫       post-merge-491-el│  Shared by every client. Automatic: the lower of the CPU and memory          │9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
+│  11:45:53  ▫       agent-a1c75285bdf│  budgets.                                                                    │normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
+│  11:45:09  ▫       agent-a1c75285bdf│                                                                              │4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                                     │           ↑↓ select   ←→ change   enter edit   d reset   esc close           │        −80s                    now  │
 ╰─────────────────────────────────────╰──────────────────────────────────────────────────────────────────────────────╯─────────────────────────────────────╯
  Godfather what's new?                            ↑↓ select   tab panel   s settings   ? help   q quit                             updated 11:59:39  ● live

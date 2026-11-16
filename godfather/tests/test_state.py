@@ -116,13 +116,17 @@ class ModeTableTests(Case):
             "esc": none, "x": none,
             # fathers#84: f cycles EVENTS' sources (one here: nothing to cycle), / opens its text field
             "f": none, "/": ({"events_filter"}, [], lambda state: state.events_filter.editing),
+            # fathers#152: r shows every event as logged
+            "r": ({"events_filter"}, [], lambda state: state.events_filter.raw),
         }
         events = self.start("panel").frame.tables["events"]
         page, last = events["visible"] - 1, events["count"] - events["visible"]
         panel: dict[str, Row] = {**main, "\t": ({"focus"}, [], focus("details")), "back_tab": ({"focus"}, [], focus("requests")),
                  **{key: ({"scroll", "glow"}, [], scrolled(offset)) for key, offset in (
                      ("j", 4), ("down", 4), ("k", 2), ("up", 2), ("page_down", min(last, 3 + page)), ("page_up", 0),
-                     ("g", 0), ("home", 0), ("G", last), ("end", last))}}
+                     ("g", 0), ("home", 0), ("G", last), ("end", last))},
+                 # fathers#152: ← → switch EVENTS' log (one source here: nothing to switch)
+                 "left": none, "h": none, "right": none, "l": none}
         overlay_scroll: dict[str, Row] = {key: ({"overlay", "glow"}, [], overlay("help", scroll=offset))
                           for key, offset in (("j", 4), ("down", 4), ("k", 2), ("up", 2), ("g", 0), ("home", 0),
                                               (" ", 3 + 35), ("page_down", 3 + 35), ("page_up", 0))}

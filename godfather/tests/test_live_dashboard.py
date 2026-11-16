@@ -27,12 +27,12 @@ class OnceTests(LiveCase):
 
     def test_table_headers_share_the_border_and_empty_messages_start_under_them(self) -> None:
         lines = self.snapshot(width=220, height=50).splitlines()
-        for title, message in (("QUEUE", "No requests"), ("EVENTS", "No events logged yet")):
+        for title, message in (("QUEUE", "No requests"), ("SLOTS LOG", "No events logged yet")):
             row = next(i for i, line in enumerate(lines) if title in line)
             self.assertFalse(lines[row + 1][1:lines[row + 1].index("│", 1)].strip(), "a blank padding row first")
             self.assertEqual(lines[row].index(title), lines[row + 2].index(message), "then the message")
             self.assertIn("┍" if title == "QUEUE" else "╭", lines[row], "QUEUE holds the focus (fathers#139)")
-            if title != "EVENTS":
+            if title != "SLOTS LOG":
                 self.assertIn("pid", lines[row], "column names belong on the top border")
 
     def test_small_terminal_fallback_preserves_its_footer(self) -> None:

@@ -31,7 +31,11 @@ FOOTER_HINTS: tuple[Part, ...] = (("↑↓", "select"), ("tab", "panel"), ("s", 
 
 
 def footer_hints(focus: str) -> list[Part]:
-    return [("↑↓", "select" if focus == "requests" else "scroll"), *FOOTER_HINTS[1:]]
+    """The footer's hints; with EVENTS focused, ← → switch its log (fathers#152)."""
+    found: list[Part] = [("↑↓", "select" if focus == "requests" else "scroll")]
+    if focus == "events":
+        found.append(("←→", "log"))
+    return [*found, *FOOTER_HINTS[1:]]
 
 
 WHATS_NEW = "what's new?"

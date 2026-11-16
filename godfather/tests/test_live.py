@@ -321,9 +321,9 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
                 view.dashboard_draw(canvas, sample_model())
                 lines = canvas.render(False).splitlines()
                 machine = next(y for y, line in enumerate(lines) if " MACHINE " in line)
-                self.assertEqual(beside, " EVENTS " in lines[machine], "on MACHINE's row")
+                self.assertEqual(beside, " SLOTS LOG " in lines[machine], "on MACHINE's row")
                 self.assertEqual(beside, "events" in canvas.tables, "a hidden EVENTS is no Tab stop")
-                self.assertTrue(lines[machine].startswith("╭─ EVENTS " if beside else "╭─ MACHINE "),
+                self.assertTrue(lines[machine].startswith("╭─ SLOTS LOG " if beside else "╭─ MACHINE "),
                                 "EVENTS on the left, MACHINE on the right (alone: the whole width)")
                 order = tabs(canvas)
                 expected = ["requests", "details", "events", "requests"] if beside else ["requests", "details",

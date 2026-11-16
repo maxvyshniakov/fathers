@@ -26,7 +26,7 @@ PRIORITY_MARKS = {"interactive": ("⚡", "!"), "batch": ("🐌", "~")}
 # A MACHINE resource's health (owner, 2026-11-12): ok, or critical by the rules that turn its bar red
 HEALTH_MARKS = {"ok": ("🆗", "+"), "hot": ("🔥", "!")}
 # A finished run in EVENTS (fathers#108): an outlier above its run type's p90, or one of a run type turning slower
-RUN_MARKS = {"outlier": ("▲", "^"), "slower": ("↗", "/")}
+RUN_MARKS = {"outlier": ("▲", "^"), "slower": ("↗", "/"), "faster": ("↘", "\\")}
 
 
 class Marks(NamedTuple):

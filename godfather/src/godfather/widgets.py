@@ -276,9 +276,10 @@ class Table:
 # How a narrow main footer gives way (fathers#102): (the hints dropped, the right side's stamp) in order, so `? help`
 # stays while lower hints go, and quit is the last hint left.
 FOOTER_STEPS: tuple[tuple[tuple[str, ...], str], ...] = (
-    ((), "updated"), (("tab",), "updated"), (("tab", "s"), "updated"), (("tab", "s"), "time"),
-    (("tab", "s", "↑↓"), "time"), (("tab", "s", "↑↓"), ""), (("tab", "s", "↑↓", "?"), ""),
-    (("tab", "s", "↑↓", "?", "q"), ""))
+    ((), "updated"), (("←→",), "updated"), (("←→", "tab"), "updated"), (("←→", "tab", "s"), "updated"),
+    (("←→", "tab", "s"), "time"),
+    (("←→", "tab", "s", "↑↓"), "time"), (("←→", "tab", "s", "↑↓"), ""), (("←→", "tab", "s", "↑↓", "?"), ""),
+    (("←→", "tab", "s", "↑↓", "?", "q"), ""))
 FOOTER_PAD = 2  # the least blank cells between the hints and what is left and right of them
 
 

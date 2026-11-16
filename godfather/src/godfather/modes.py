@@ -15,7 +15,9 @@ the state and returns the new state and its effects; a key a mode does not list 
              typed values are not taken as hotkeys
     settings-small Settings too small to show: only Esc, s and q
     filter   EVENTS' text field, opened by `/` (fathers#84): what is typed goes into it, Backspace deletes, Enter
-             keeps the filter, Esc clears it; on the main screen and a panel `f` cycles EVENTS' source filter
+             keeps the filter, Esc clears it; on the main screen and a panel `f` cycles EVENTS' log
+             (SLOTS LOG, LANES LOG, PROCS LOG, ALL LOG), as ← → do while EVENTS has the focus and a click on its
+             title; `r` shows every event as logged instead of one row per run (fathers#152)
 
 A key is a hotkey by its US-QWERTY position (#13) everywhere but while a Settings value is typed. A click on a footer
 hint is that hint's key, in every mode."""
@@ -97,14 +99,36 @@ def events_shown(state: AppState) -> bool:
     return "events" in state.frame.tables
 
 
-def cycle_source(state: AppState, _: str) -> Result:
-    """`f`: EVENTS' source filter, all, then each present source in the order slotfather, lanefather, junkfather."""
+def switch_log(step: int) -> Handler:
+    """EVENTS' log (fathers#152): the next one the title names, SLOTS LOG, LANES LOG, PROCS LOG, then ALL LOG, of
+    the tools present. `f` anywhere EVENTS is drawn, ← → while it has the focus."""
+    def handler(state: AppState, _: str) -> Result:
+        if not events_shown(state):
+            return state, []
+        after = _events_view.cycled(state.model, state.events_filter, step)
+        if after is None:
+            return state, []
+        return filtered(state, dataclasses.replace(state.events_filter, source=after)), []
+    return handler
+
+
+def cycle_source(state: AppState, key: str) -> Result:
+    return switch_log(1)(state, key)
+
+
+def arrows(step: int) -> Handler:
+    """← → on a focused panel: EVENTS switches its log; DETAILS has nothing to switch."""
+    def handler(state: AppState, key: str) -> Result:
+        return switch_log(step)(state, key) if state.focus == "events" else (state, [])
+    return handler
+
+
+def toggle_raw(state: AppState, _: str) -> Result:
+    """`r`: every event as logged, a run's grant and end apart; again, one row per run."""
     if not events_shown(state):
         return state, []
-    names = [None, *(name for name, _ in _events_view.present(state.model))]
-    now = state.events_filter.source
-    after = names[(names.index(now) + 1) % len(names)] if now in names else None
-    return filtered(state, dataclasses.replace(state.events_filter, source=after)), []
+    current = state.events_filter
+    return filtered(state, dataclasses.replace(current, raw=not current.raw)), []
 
 
 def open_filter(state: AppState, _: str) -> Result:
@@ -119,7 +143,7 @@ def type_filter(state: AppState, key: str) -> Result:
     the field, Esc clears it and closes the field; other keys do nothing."""
     current = state.events_filter
     if key == "esc":
-        return filtered(state, _events_view.Filter(current.source)), []
+        return filtered(state, _events_view.Filter(current.source, raw=current.raw)), []
     if key in ("\r", "\n"):
         return dataclasses.replace(state, events_filter=dataclasses.replace(current, editing=False)), []
     if key in ("\x7f", "\x08"):
@@ -134,13 +158,13 @@ def clear_filter(state: AppState, _: str) -> Result:
     leaves it); nothing else happens."""
     if not events_shown(state) or not state.events_filter.text:
         return state, []
-    return filtered(state, _events_view.Filter(state.events_filter.source)), []
+    return filtered(state, _events_view.Filter(state.events_filter.source, raw=state.events_filter.raw)), []
 
 
 FILTER_MAX = 40  # characters EVENTS' text filter takes
 
 MAIN: dict[str, Handler] = {
-    "q": quit_, "Q": quit_, "f": cycle_source, "/": open_filter, "esc": clear_filter,
+    "q": quit_, "Q": quit_, "f": cycle_source, "r": toggle_raw, "/": open_filter, "esc": clear_filter,
     "\t": focus_step(1), "back_tab": focus_step(-1),
     "?": open_help, "v": open_changelog, "s": open_settings,
     "j": select(lambda index, _: index + 1), "down": select(lambda index, _: index + 1),
@@ -149,7 +173,8 @@ MAIN: dict[str, Handler] = {
     "G": select(lambda _, count: count - 1), "end": select(lambda _, count: count - 1),
     "page_down": select(lambda _, count: count - 1),
 }
-PANEL: dict[str, Handler] = {**MAIN, **{key: scroll_panel for key in NAVIGATION}}
+PANEL: dict[str, Handler] = {**MAIN, **{key: scroll_panel for key in NAVIGATION},
+                              "left": arrows(-1), "h": arrows(-1), "right": arrows(1), "l": arrows(1)}
 
 
 # Help and the changelog: each owns its scroll; ? and v switch between them
@@ -406,6 +431,10 @@ def click(state: AppState, event: Mouse, now: float = 0.0) -> Result:
     at = state.frame.version_at
     if code == LEFT and at and event.y == at[0] and at[1] <= event.x < at[2]:
         return open_changelog(state, "")  # the footer's what's new opens it
+    title = state.frame.switch
+    if code == LEFT and title and event.y == title[0] and title[1] <= event.x < title[2]:
+        state, effects = switch_log(1)(state, "")  # EVENTS' title switches its log
+        return dataclasses.replace(state, focus="events"), effects
     if code == LEFT:
         state = dataclasses.replace(state, focus=panel_at(state, event.x, event.y) or state.focus)
     for name, view in reversed(list(state.frame.tables.items())):

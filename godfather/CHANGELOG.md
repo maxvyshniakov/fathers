@@ -42,6 +42,15 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Changed
 
+- EVENTS shows one tool's log at a time (fathers#152): its title is the switch, `◂ SLOTS LOG ▸` (default where
+  Slotfather is present), `LANES LOG`, `PROCS LOG`, then `ALL LOG`, cycled with ← → while EVENTS has the focus, `f`
+  or a click on the title. Each log has its own columns, so labels keep their width: SLOTS LOG time, slots, label,
+  waited, outcome and pid; LANES LOG event, lane, result and ticket; PROCS LOG event, label, detail and pid; ALL LOG
+  a type (`slot run`, `lane checked`, `proc reaped`, in the tool's colour) and one sentence (`sid-kit build · ok 1s
+  · 1 slot`). A Slotfather run is one row, `running 3m` while it holds its slots and how it ended once done; `r`
+  shows every event as logged. A run's trend is a mark on its row (↗ slower, ↘ faster, ▲ outlier), no longer a row
+  that ran across the columns. `/` filters within the log shown; the footer says `←→ log` while EVENTS has the
+  focus, and help lists the keys.
 - Settings: every rule is one length, the list sits two cells in from the frame, durations read `1h`, `30m`,
   `1h30m` (typed still in seconds), and a refused value is said once, under its row, not again in the notes
   (fathers#87).

@@ -388,7 +388,8 @@ class Live:
         canvas = self.canvas(size.columns, size.lines)
         _overview.render(canvas, self.state, now, self.screen.notice())
         self.send(_state.Drawn(_state.Frame(canvas.width, canvas.height, canvas.tables, canvas.version_at,
-                                            tuple(canvas.hint_hits), canvas.order, tuple(canvas.filter_hits))))
+                                            tuple(canvas.hint_hits), canvas.order, tuple(canvas.filter_hits),
+                                            canvas.switch_at)))
         lines = canvas.lines(self.colour, self.ascii_only, place=True)
         # Only rows that changed are written: a second's tick usually touches the clock and a few ages.
         frame = "".join(f"\x1b[{row + 1};1H{line}" for row, line in enumerate(lines)

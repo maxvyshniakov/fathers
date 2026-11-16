@@ -156,7 +156,7 @@ class ParityTests(unittest.TestCase):
         what = ["v", "what's new (or click Godfather what's new?)"]  # fathers#102: the changelog became what's new
         self.assertIn(what, ours["KEYS"])
         ours["KEYS"][ours["KEYS"].index(what)] = ["v", "changelog (or click the version)"]
-        for key in ("f", "/"):  # fathers#84: EVENTS' source and text filters
+        for key in ("← → · f", "r", "/"):  # fathers#84, fathers#152: EVENTS' log, raw and text filter
             ours["KEYS"] = [entry for entry in ours["KEYS"] if entry[0] != key]
         snail = ["🐌", "batch: unattended work, after the rest"]  # owner, 2026-11-12: batch is a snail, not a turtle
         self.assertIn(snail, ours["PRIORITY"])
@@ -165,7 +165,7 @@ class ParityTests(unittest.TestCase):
             if title not in ("EVENTS", "SETTINGS"):  # fathers#87: Settings has a section per tool
                 self.assertEqual(theirs[title], ours[title], title)
         self.assertNotEqual(theirs["EVENTS"], ours["EVENTS"])
-        self.assertIn(["d · D D", "reset one · reset the selected row's section"], ours["SETTINGS"])
+        self.assertIn(["d · D D", "reset one · reset its section"], ours["SETTINGS"])
 
     def test_plain_text_outside_events_is_slotfathers_too(self) -> None:
         old = self.frames["156x43 0 0 0"].split("\n")

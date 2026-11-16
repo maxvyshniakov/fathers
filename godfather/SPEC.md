@@ -105,6 +105,13 @@ full pages one key away.
     - The detail comes from the event itself; Godfather no longer joins `history.jsonl`.
     - `f` cycles the source filter (all, then each present source); `/` edits a text filter matched against kind,
       subject, label and detail; Esc in the field clears it. The active filter shows in EVENTS' top border.
+    - From fathers#152 (owner, 2026-11-16) EVENTS shows one log at a time and its title is the switch: `SLOTS LOG`,
+      `LANES LOG`, `PROCS LOG` for each present tool, then `ALL LOG` (never the default) where there are several;
+      ← → while EVENTS has the focus, `f`, or a click on the title cycle it, `◂ SLOTS LOG ▸` where there is room.
+      Each log has its own columns (SLOTS: time, slots, label, waited, outcome, pid; LANES: time, event, lane,
+      result, ticket; PROCS: time, event, label, detail, pid; ALL: time, type such as `slot run` in the tool's colour,
+      and one sentence). A Slotfather run is one row, `running 3m` until it ends; `r` shows every event as logged. A
+      trend or an outlier is a mark on its run (▲ ↗ ↘), never a row. `/` filters within the log shown.
     - Newest first; it stays on the newest entry while scrolled to the top and counts new ones (`↑ 3 new`) while
       scrolled down, as today. Events with the same time keep their file order.
     - On a narrow panel the pid goes first, then slots, then the source shrinks to a one-cell coloured mark; the

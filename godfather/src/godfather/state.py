@@ -99,6 +99,7 @@ class Frame:
     hints: tuple[tuple[int, int, int, str], ...] = ()
     order: tuple[str, ...] = ("requests",)  # Tab's order, as layout.overview() placed the panels
     filters: tuple[tuple[int, int, int, int], ...] = ()  # what's new's tool filters: (row, from, to, tab)
+    switch: Optional[tuple[int, int, int]] = None  # EVENTS' title, which cycles its log (fathers#152): (row, from, to)
 
     def hint_at(self, x: int, y: int) -> Optional[str]:
         return next((press for row, start, end, press in reversed(self.hints) if row == y and start <= x < end), None)
@@ -380,7 +381,8 @@ def follow_events(state: AppState, events: list[dict[str, Any]]) -> AppState:
     """EVENTS (newest first) after a refresh (#15): at the top it shows the newest; scrolled down, it keeps showing
     the same events as new ones arrive above them and counts those. Only the rows the filter lets through count
     (fathers#84)."""
-    ids = [event_id(event) for event in _events_view.shown_rows({"events": events}, state.events_filter)[::-1]]
+    model = {"events": events, "sources": (state.model or {}).get("sources") or []}
+    ids = [event_id(event) for event in _events_view.shown_rows(model, state.events_filter)[::-1]]
     arrived = ids.index(state.newest) if state.newest in ids else 0
     scroll, fresh = dict(state.scroll), 0
     if scroll.get("events"):
