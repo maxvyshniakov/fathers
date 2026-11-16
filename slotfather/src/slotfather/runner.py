@@ -107,8 +107,8 @@ def run(count: int | str, label: str, argv: list[str], wait: float | None = None
         return int(stop.code or 1)
     if count != "all" and lease.path is not None and not lease.inherited:
         with contextlib.suppress(Exception):  # a hint must never cost the run
-            from . import askuse as _askuse
-            found = _askuse.hint(lease.path.parent.parent, label, lease.count)
+            from . import runtype as _runtype
+            found = _runtype.hint(lease.path.parent.parent, label, lease.count)
             if found:
                 print(f"slot: {found}", file=sys.stderr, flush=True)
     with lease:

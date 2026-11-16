@@ -13,7 +13,7 @@ per group the median and 90th percentile of wait and run, and the cores used per
 seconds times slots. The machine part gives the share of sampled time the one-minute load stood over the cores
 (more runnable threads than cores) and under them, the CPU busy share, and how often a slot's worth of cores sat
 idle. The sweeps (sweep.jsonl, `slotfather sweep`) add what was found and stopped. `asks` compares, per label
-family, the slots asked with the cores used (askuse.py); `--by family` groups by it. `--host HOST` reads the history
+family, the slots asked with the cores used (runtype.py); `--by family` groups by it. `--host HOST` reads the history
 imported from HOST (`slotfather history import HOST`). It only reads; it lives apart from the queue and loads the slotfather beside it.
 """
 from __future__ import annotations
@@ -26,7 +26,6 @@ import time
 from typing import Any, Iterable, cast
 
 
-from . import askuse as _askuse
 from . import runtype as _runtype
 from . import config as _config
 from . import durations as _durations
@@ -279,7 +278,7 @@ def summarize(directory: Path | None = None, since: float | None = None, label: 
         "machine": machine(samples, cores, capacity),
         "fill_slots": round(cores / per_slot, 1) if per_slot else None,
         "sweeps": sweeps(swept),
-        "asks": _askuse.by_family(items, cores / max(1, capacity)),
+        "asks": _runtype.by_family(items, cores / max(1, capacity)),
         "groups": rows,
     }
 

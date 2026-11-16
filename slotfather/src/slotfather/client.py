@@ -16,7 +16,7 @@ from typing import Any, Callable
 
 from . import config as _config
 from . import entry as _entry
-from . import facts as _facts
+from . import labels as _labels
 from . import leases as _leases
 from . import process as _process
 from . import queue as _queue
@@ -201,7 +201,7 @@ def acquire(count: int | str, label: str, command: str = "", out: Any = sys.stde
     except OSError:
         cwd = ""
     _state.require_own(directory, "a lease")
-    git = _facts.git(cwd)  # before the queue lock: git may take a moment in a large repository
+    git = _labels.git(cwd)  # before the queue lock: git may take a moment in a large repository
     path, count = _leases.enqueue(directory, count, table, label, command, cwd, selected_priority, selected_ticket,
                                   meta, naming, session, git, yieldable, wait)
     lease = Lease(count, path, yieldable=yieldable)

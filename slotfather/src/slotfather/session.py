@@ -33,7 +33,7 @@ from . import config as _config
 from . import durations as _durations
 from . import entry as _entry
 from . import events as _events
-from . import facts as _facts
+from . import labels as _labels
 from . import platform as _platform
 from . import process as _process
 from . import queue as _queue
@@ -397,7 +397,7 @@ def run_inside(name: str, argv: list[str], label: str | None = None, meta: dict[
             said = True
         time.sleep(poll)
     try:
-        git = _facts.git(os.getcwd())
+        git = _labels.git(os.getcwd())
     except OSError:
         git = None
     environment: dict[str, str] = {}
