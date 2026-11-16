@@ -254,12 +254,12 @@ def yield_command(argv: list[str]) -> int:
     """`slotfather yield`, from inside a yieldable lease between two steps: yields if asked and returns once the
     lease is held again; returns at once when nothing asked. Exit 0 either way."""
     from . import leases as _leases
-    from . import platform as _platform
+    from . import process as _process
     from . import state as _state
     if argv:
         raise _config.SlotError("yield takes no arguments")
     _state.require_own(_config.state_dir(), "yield")
-    found = _leases.inherited_lease(_platform.processes())
+    found = _leases.inherited_lease(_process.processes())
     if found is None or found[0].parent.parent != _config.state_dir():
         raise _config.SlotError("yield runs inside a lease of this queue (SLOTFATHER_LEASE, or a holder among its ancestors)")
     if not _leases.yield_lease(found[0]):

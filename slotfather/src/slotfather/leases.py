@@ -20,6 +20,7 @@ from . import events as _events
 from . import facts as _facts
 from . import idle as _idle
 from . import platform as _platform
+from . import process as _process
 from . import query as _query
 from . import schedule as _schedule
 from . import state as _state
@@ -32,7 +33,7 @@ _skipping: list[str] = []  # the reason this process last logged a skipped look 
 
 
 def process_table(directory: Path, log: bool = True) -> Table:
-    """platform.processes() for a look that reaps or sweeps the queue at `directory`. When ps gives no table that
+    """process.processes() for a look that reaps or sweeps the queue at `directory`. When ps gives no table that
     can be trusted (config.ProcessTableError, a SlotError) the look reaps nothing and this raises; the caller skips
     that pass (a waiter's next look tries again). With `log`, a look that changes the queue says so in queue.log
     and the event log once per failure streak of this process (`skipped reaping`, reap.skipped), and once when ps
@@ -40,7 +41,7 @@ def process_table(directory: Path, log: bool = True) -> Table:
     must not flood the log a lasting failure fills already (fathers#121 review)."""
     own = _state.foreign_owner(directory) is None
     try:
-        table = _platform.processes()
+        table = _process.processes()
     except _config.ProcessTableError as error:
         if log and own and not _skipping:
             _skipping.append(str(error))
@@ -309,7 +310,7 @@ def reprioritize(target: str, priority: str, directory: Path | None = None,
             raise _config.SlotError(f"no request in the queue has pid or label {target}")
         me = os.geteuid()
         for _, entry in chosen:
-            owner = _platform.process_uid(entry.get("pid"))
+            owner = _process.process_uid(entry.get("pid"))
             if owner != me:
                 raise _config.SlotError(f"{entry.get('label')} (pid {entry.get('pid')}) runs as uid {owner}: only its "
                                         f"owner may change its priority")
@@ -503,7 +504,7 @@ class Lease:
 
 def inherited_lease(table: Table) -> tuple[Path, dict[str, Any], int] | None:
     """The held lease this process runs under, here or in an earlier queue: (path, entry, slots here)."""
-    mine = _platform.ancestors(table, os.getpid())
+    mine = {os.getpid(), *_process.ancestors(_process.parents_of(table), os.getpid())}
     own = _config.setting("LEASE")
     for path, entry in _state.entries(_config.state_dir()):
         mine_now = _entry.phase(entry).name in (_entry.HELD, _entry.YIELDED)  # a yielded lease is still this tree's
@@ -570,7 +571,7 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
     if policy() == "bypass":
         return Lease(_config.total())
     directory = _config.state_dir()
-    table = _platform.processes()
+    table = _process.processes()
     found = inherited(table)
     if found:
         return found
@@ -586,7 +587,7 @@ def acquire(count: int | str, label: str, command: str = "", out=sys.stderr, wai
     with _state.locked(directory):
         # Admission and capacity changes share this lock; resolve all only now (and again at the grant: plan()).
         if session is not None:
-            fresh = _platform.processes()
+            fresh = _process.processes()
             for _, other in _state.entries(directory):
                 spec = other.get("session")
                 same = isinstance(spec, dict) and cast(dict[str, Any], spec).get("name") == session["name"]
@@ -693,7 +694,7 @@ def execute(argv: list[str], environment: dict[str, str], background: bool = Fal
     if marker is not None:
         text = str(marker)
         def carrying(pids: list[int]) -> set[int]:
-            return _platform.carrying(pids, text)
+            return _process.carrying(pids, text)
         watch = _usage.Watch(_usage.TreeUsage(child.pid, time.time() - 1, carrying), marker.parent.parent, entry=marker)
     elif directory is not None:
         watch = _usage.Watch(_usage.TreeUsage(child.pid, time.time() - 1), directory)

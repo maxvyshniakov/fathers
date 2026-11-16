@@ -11,6 +11,7 @@ from slotfather import cli as sf_cli
 from slotfather import config as sf_config
 from slotfather import leases as sf_leases
 from slotfather import platform as sf_platform
+from slotfather import process as sf_process
 from slotfather import usage as sf_usage
 
 
@@ -374,7 +375,7 @@ class LinuxEnvironmentTests(unittest.TestCase):
             (proc / str(pid)).mkdir()
             (proc / str(pid) / "environ").write_bytes(environ.encode())
         with mock.patch.dict(os.environ, clean_environment(SLOTFATHER_PROC=str(proc)), clear=True):
-            self.assertEqual({101}, sf_platform.carrying([101, 102, 103, 104], lease))
+            self.assertEqual({101}, sf_process.carrying([101, 102, 103, 104], lease))
 
     @unittest.skipUnless(LINUX, "Linux /proc")
     def test_a_real_process_carrying_the_lease_is_found(self):
@@ -382,16 +383,16 @@ class LinuxEnvironmentTests(unittest.TestCase):
                                  env={**os.environ, "SLOTFATHER_LEASE": "/probe/lease"})
         self.addCleanup(lambda: (child.kill(), child.wait()))
         with mock.patch.dict(os.environ, clean_environment(), clear=True):
-            self.assertEqual({child.pid}, sf_platform.carrying([child.pid, os.getpid()], "/probe/lease"))
+            self.assertEqual({child.pid}, sf_process.carrying([child.pid, os.getpid()], "/probe/lease"))
 
     @unittest.skipUnless(LINUX, "Linux procps")
     def test_procps_gives_the_tables_the_queue_and_the_sampler_read(self):
         child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
         self.addCleanup(lambda: (child.kill(), child.wait()))
-        table = sf_platform.processes()
+        table = sf_process.processes()
         self.assertEqual(os.getpid(), table[child.pid][0])
         self.assertIsNotNone(sf_platform.started_at(table[child.pid][1]), table[child.pid][1])
-        usage = sf_platform.usage_table()
+        usage = sf_process.usage_table()
         self.assertEqual((os.getpid(), os.getuid()), (usage[child.pid][0], usage[child.pid][2]))
         self.assertGreater(usage[child.pid][3], 0, "resident KB")
         self.assertIsNotNone(sf_platform.proc_cpu_seconds(os.getpid()))

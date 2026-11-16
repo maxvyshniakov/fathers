@@ -16,6 +16,7 @@ from . import config as _config
 from . import entry as _entry
 from . import idle as _idle
 from . import platform as _platform
+from . import process as _process
 from . import state as _state
 
 
@@ -139,7 +140,7 @@ class Watch(threading.Thread):
 
     def observe(self) -> None:
         """One look at the tree. The ps calls run outside the lock, so finish() never waits on a slow ps for it."""
-        moment, table = time.time(), _platform.usage_table()
+        moment, table = time.time(), _process.usage_table()
         with self.lock:
             fresh = self.usage.candidates(table)
         adopted = self.usage.marked(fresh) if fresh else set()

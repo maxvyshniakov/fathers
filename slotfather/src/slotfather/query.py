@@ -6,13 +6,14 @@ import math
 import time
 import sys
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 from . import config as _config
 from . import entry as _entry
 from . import idle as _idle
 from . import leases as _leases
 from . import platform as _platform
+from . import process as _process
 from . import schedule as _schedule
 from . import state as _state
 
@@ -202,7 +203,7 @@ def entry_item(path: Path, entry: dict[str, Any], table: dict[int, tuple[int, st
             "state": entry.get("state"), "count": entry.get("count"), "label": entry.get("label"),
             "pid": entry.get("pid"), "pgid": _platform.process_group(pid), "start": entry.get("start"),
             "since": entry.get("since"), "granted": entry.get("granted"), "cmd": entry.get("cmd"),
-            "cwd": entry.get("cwd"), "meta": _entry.meta_of(entry), "tree": _platform.descendants(table, pid),
+            "cwd": entry.get("cwd"), "meta": _entry.meta_of(entry), "tree": _process.descendants(table, pid),
             "priority": _entry.priority_of(entry), "ticket": _entry.ticket_of(entry),
             "yieldable": bool(entry.get("yieldable")), "yields": int(entry.get("yields") or 0)}
 
@@ -395,24 +396,23 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
     for path, entry, count in earlier:
         legacy.append({"id": path.stem, "lease": str(path), "state": "held", "count": count,
                        "label": entry.get("label"), "pid": entry.get("pid"), "pgid": _platform.process_group(entry.get("pid")),
-                       "tree": _platform.descendants(table, entry.get("pid"))})
+                       "tree": _process.descendants(table, entry.get("pid"))})
     held = held_slots([entry for _, entry in live], [*earlier, *kept], slots)
     # Entries this client does not know, after the others: left alone; a live one's slots count as held (`holds`).
     entries_found += [unknown_item(path, entry, table) for path, entry in strange]
     found = {}
     if pid is not None:
-        from .procs import environment_leases
-        candidates = [item for item in entries_found if pid not in item["tree"]]
-        marked, _ = environment_leases([pid] if pid in table else [], candidates)
-        mine = []
-        for item in entries_found:
-            if pid in item["tree"]:
-                mine.append(dict(item, via="tree"))
-            elif item["lease"] in marked.get(pid, set()):
-                mine.append(dict(item, via="env"))
-        entries_found = mine
-        legacy = [dict(e, via="tree") for e in legacy if pid in e["tree"]]
+        # The one membership rule (process.lease_membership(), fathers#38): `procs` and the sweep decide the same way.
+        both: list[dict[str, Any]] = [*entries_found, *cast(list[dict[str, Any]], legacy)]
+        membership = _process.lease_membership(_process.parents_of(table),
+                                               [_process.Lease(str(item["lease"]), item["pid"]) for item in both], [pid])
+        via = dict(membership.leases.get(pid, []))
+        mine = [(n < len(entries_found), {**item, "via": via[n]}) for n, item in enumerate(both) if n in via]
+        entries_found = [item for current, item in mine if current]
+        legacy = [item for current, item in mine if not current]
         found["query"] = {"pid": pid, "start": table[pid][1] if pid in table else None}
+        if membership.unknown:  # its environment cannot be read: in or out of the leases outside its tree is unknown
+            found["lease_unknown"] = membership.unknown
     return {"v": 2, "slots": slots, "held": held, "free": max(0, slots - held), "draining": draining(held, slots),
             "entries": entries_found,
             "legacy": legacy, **found}

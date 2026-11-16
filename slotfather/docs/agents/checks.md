@@ -30,7 +30,7 @@ remote `slotfather version` and preserve active leases.
 
 Review the issue's behavior and compatibility contract separately from coding standards.
 The architecture is described in [architecture](../architecture.md). Keep command parsing in
-`cli`, filesystem mutation in `state`/`leases`, OS inspection in `platform`, and scheduling
+`cli`, filesystem mutation in `state`/`leases`, OS inspection in `platform`, `ps` and lease membership in `process`, and scheduling
 decisions in `schedule`. No shared mutable execution namespace or wildcard-import coupling.
 
 New process queries must validate process start times, distinguish unavailable inspection

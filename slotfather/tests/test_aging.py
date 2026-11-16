@@ -325,10 +325,10 @@ class ForecastTests(PlanCase):
 
 class SafetyTests(SlotCase):
     def test_only_the_owner_may_reprioritize_and_a_failing_forecast_breaks_nothing(self):
-        from slotfather import leases, platform, query
+        from slotfather import leases, process, query
         pid, start = self.holder()
         cast(Any, self).queue_entry(self.state, pid, start, 1, "theirs", state="waiting")
-        with mock.patch.object(platform, "process_uid", return_value=os.geteuid() + 1), \
+        with mock.patch.object(process, "process_uid", return_value=os.geteuid() + 1), \
                 mock.patch.dict(os.environ, {"SLOTFATHER_DIR": str(self.state), "SLOTFATHER_LEGACY_DIRS": ""}):
             with self.assertRaisesRegex(sf_config.SlotError, "only its owner"):
                 leases.reprioritize(str(pid), "interactive", self.state)

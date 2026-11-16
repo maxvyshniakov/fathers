@@ -7,6 +7,7 @@ from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from slotfather import config as sf_config
 from slotfather import platform as sf_platform
+from slotfather import process as sf_process
 from slotfather import state as sf_state
 from slotfather import usage as sf_usage
 
@@ -156,9 +157,11 @@ class WatchTests(unittest.TestCase):
         return watch
 
     def patch(self, name, value):
-        patcher = mock.patch.object(sf_usage if name == "sample_machine" else sf_platform, name, value)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for module in [sf_usage] if name == "sample_machine" else [sf_platform, sf_process]:
+            if name in vars(module):  # ps runs in process, sysctl in platform (fathers#38)
+                patcher = mock.patch.object(module, name, value)
+                patcher.start()
+                self.addCleanup(patcher.stop)
 
     def test_the_environment_query_runs_outside_the_lock(self):
         held = []
@@ -188,9 +191,9 @@ class WatchTests(unittest.TestCase):
             self.assertEqual(sf_config.PS_TIMEOUT, kwargs.get("timeout"))
             raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
         self.patch("subprocess", mock.Mock(run=stalled, TimeoutExpired=subprocess.TimeoutExpired))
-        self.assertEqual(set(), sf_platform.carrying([1, 2], "/lease"))
+        self.assertEqual(set(), sf_process.carrying([1, 2], "/lease"))
         with self.assertRaises(sf_config.SlotError):
-            sf_platform.usage_table()
+            sf_process.usage_table()
         self.assertIsNone(sf_platform.sysctl("kern.memorystatus_level"))
 
     def test_the_sampler_thread_leaves_signals_to_the_holder(self):
@@ -241,7 +244,7 @@ class RunUsageTests(SlotCase):
         self.addCleanup(probe.wait)
         self.addCleanup(probe.kill)
         time.sleep(0.3)
-        if probe.pid not in sf_platform.carrying([probe.pid], "/probe"):
+        if probe.pid not in sf_process.carrying([probe.pid], "/probe"):
             self.skipTest(f"ps shows no environment for {sys.executable} on this host")
         result = self.tool("run", "--label", "daemon", "--", "sh", "-c", '( "$PY" -c "$BURN" 0.5 & ); sleep 1.5')
         self.assertEqual(0, result.returncode, result.stderr)

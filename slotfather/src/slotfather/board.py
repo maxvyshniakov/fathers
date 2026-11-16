@@ -19,6 +19,7 @@ from typing import Any, cast
 from . import config as _config
 from . import entry as _entry
 from . import platform as _platform
+from . import process as _process
 from . import query as _query
 from . import schedule as _schedule
 from . import state as _state
@@ -64,41 +65,19 @@ def parse_utc(value: object) -> datetime.datetime | None:
 
 
 def process_usage() -> tuple[dict[int, tuple[float, int, str]], dict[int, list[int]]]:
-    """pid -> (CPU percent, resident KB, command name) for every process, and ppid -> its child pids."""
+    """pid -> (CPU percent, resident KB, command name) for every process, and ppid -> its child pids
+    (process.cpu_table()). Raises OSError when ps gives no sample: a failed, cut or empty table is no sample, never
+    zero CPU (fathers#121)."""
     try:
-        result = subprocess.run(["ps", "-axo", "pid=,ppid=,%cpu=,rss=,comm="], capture_output=True, text=True,
-                                timeout=_config.PS_TIMEOUT)
-    except subprocess.TimeoutExpired as error:
-        raise OSError(f"CPU process sample failed: {error}") from None
-    if result.returncode:
-        raise OSError(f"CPU process sample failed: ps exited {result.returncode}")
-    own: dict[int, tuple[float, int, str]] = {}
-    children: dict[int, list[int]] = {}
-    for line in result.stdout.splitlines():
-        parts = line.split(None, 4)
-        if len(parts) == 5 and parts[0].isdigit() and parts[1].isdigit():
-            with contextlib.suppress(ValueError):
-                own[int(parts[0])] = (float(parts[2].replace(",", ".")), int(parts[3]), os.path.basename(parts[4]))
-                children.setdefault(int(parts[1]), []).append(int(parts[0]))
-    if os.getpid() not in own:  # an empty or cut table is no sample (fathers#121)
-        raise OSError(f"CPU process sample failed: ps listed {len(own)} processes and not this one")
-    return own, children
+        return _process.cpu_table()
+    except _process.PsError as error:
+        raise OSError(f"CPU process sample failed: {error.detail}") from None
 
 
 def process_tree(pid: object, own: dict[int, tuple[float, int, str]],
                  children: dict[int, list[int]]) -> list[tuple[int, float, int, str]]:
     """(pid, CPU percent, resident KB, name) for pid and all its descendants: a lease's whole command."""
-    found: list[tuple[int, float, int, str]] = []
-    stack: list[object] = [pid]
-    seen: set[int] = set()
-    while stack:
-        current = stack.pop()
-        if not isinstance(current, int) or current in seen or current not in own:
-            continue
-        seen.add(current)
-        found.append((current, *own[current]))
-        stack.extend(children.get(current, ()))
-    return found
+    return [(member, *own[member]) for member in _process.tree(children, [pid], own.__contains__)]
 
 
 def macos_used_memory(text: str) -> float | None:

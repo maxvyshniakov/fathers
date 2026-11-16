@@ -1,7 +1,8 @@
 """Read-only libproc identities and targeted ps arguments on macOS.
 
 ABI: the macOS SDK's sys/proc_info.h proc_bsdinfo / PROC_PIDTBSDINFO,
-libproc.h proc_pidinfo. Full arguments come only from ps without -E.
+libproc.h proc_pidinfo. Full arguments come only from ps without -E; a
+process's environment from sysctl KERN_PROCARGS2 (environment()).
 Libraries load only when the native adapter is called, so importing this
 module also works on Linux.
 """
@@ -11,12 +12,12 @@ import ctypes
 import errno
 import os
 import stat
-import subprocess
+import struct
 import sys
 import time
 from typing import NamedTuple
 
-from .platform import c_locale
+from . import process as _process
 
 
 class NativeProcess(NamedTuple):
@@ -134,11 +135,9 @@ def argument_processes(pids: set[int]) -> dict[int, str]:
     """One targeted ps snapshot supplies full argv without reading any environment."""
     if not pids:
         return {}
-    argv = ["/bin/ps", "-ww", "-p", ",".join(map(str, sorted(pids))),
-            "-o", "pid=,command="]
     try:
-        answer = subprocess.run(argv, capture_output=True, text=True, timeout=5, env=c_locale())
-    except subprocess.TimeoutExpired as error:
+        answer = _process.arguments(pids)
+    except _process.PsError as error:
         raise OSError(errno.ETIMEDOUT, "ps did not read protected process identities in time") from error
     if answer.returncode not in (0, 1) or answer.returncode and answer.stderr.strip():
         raise OSError(errno.EACCES, "ps could not read protected process identities")
@@ -289,3 +288,42 @@ def children_cpu_seconds(pid: int) -> float | None:
         return (info.ri_child_user_time + info.ri_child_system_time) * scale
     except (OSError, AttributeError):
         return None
+
+
+KERN_PROCARGS2 = (1, 49)  # CTL_KERN, KERN_PROCARGS2: argc, the executable, its arguments, then its environment
+_libc: ctypes.CDLL | None = None
+
+
+def environment(pid: int) -> list[bytes] | None:
+    """The environment of a live process as the kernel gives it (sysctl KERN_PROCARGS2), or None where it cannot be
+    read: another user's process, a process gone, a sysctl that fails, or an empty environment, which is what the
+    kernel gives for an Apple platform binary (its environment is hidden, not absent). Only for checking lease
+    markers: callers never keep or return it."""
+    global _libc
+    if sys.platform != "darwin":
+        return None
+    try:
+        if _libc is None:
+            _libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+        sysctl = _libc.sysctl
+        mib = (ctypes.c_int * 3)(*KERN_PROCARGS2, pid)
+        size = ctypes.c_size_t(0)
+        if sysctl(mib, 3, None, ctypes.byref(size), None, ctypes.c_size_t(0)) != 0 or size.value < 4:
+            return None
+        buffer = ctypes.create_string_buffer(size.value)
+        if sysctl(mib, 3, buffer, ctypes.byref(size), None, ctypes.c_size_t(0)) != 0:
+            return None
+    except (OSError, AttributeError, TypeError, ValueError):
+        return None
+    raw = buffer.raw[:size.value]
+    argc = struct.unpack("=i", raw[:4])[0]
+    _, _, rest = raw[4:].partition(b"\0")  # the executable's path, then NUL padding before the arguments
+    strings = rest.lstrip(b"\0").split(b"\0")
+    if argc < 0 or len(strings) < argc:
+        return None
+    found: list[bytes] = []
+    for item in strings[argc:]:
+        if not item:
+            break
+        found.append(item)
+    return found or None

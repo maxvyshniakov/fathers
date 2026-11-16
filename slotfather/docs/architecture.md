@@ -11,7 +11,8 @@ Definitions: [glossary](../GLOSSARY.md). Naming and wire aliases: [terminology](
 | Module | Owns |
 | --- | --- |
 | `config` | Environment settings, installation defaults, constants and shared errors. |
-| `platform` | macOS/Linux inspection: process identity and ancestry, memory, swap, PSI and cgroups. |
+| `platform` | macOS/Linux inspection: process identity (`same_holder()`), memory, swap, PSI and cgroups. |
+| `process` | The one module that runs `ps`: the process tables with their column sets and failure policy (fathers#121), the tree helpers, the session pattern, lease markers in environments, and `lease_membership()`, the one rule for which lease a process is in (fathers#38). |
 | `state` | Queue locking, atomic files, bounded journals and persisted schema contracts. |
 | `entry` | A queue entry: its persisted fields, the accessors that read them whoever wrote the file, its phase, and the one definition of each transition (new request, grant and resume, yield, priority change, outcome). Pure: callers read and write the files and log. |
 | `schedule` | Queue ranking, backfill, runtime estimates and cooperative-yield decisions. |
@@ -25,7 +26,7 @@ Definitions: [glossary](../GLOSSARY.md). Naming and wire aliases: [terminology](
 | `capabilities` | `capabilities --json`: the dashboard contracts this release supports. |
 | `procs` | Read-only process queries for guards and other tools. |
 | `cli` | Argument validation and command dispatch. |
-| `stats`, `sweep` | Historical analysis and guarded leftover-process cleanup. |
+| `stats`, `sweep` | Historical analysis and guarded leftover-process cleanup: `sweep` is the command, its settings, report and plist; `sweep_plan` the pure classifier and planner on a snapshot; `sweep_os` its adapters (ps, lsof, /proc, launchd, systemd, docker, memory, stopping). |
 
 No module imports terminal code (`termios`, `tty`, `curses`): the dashboard is Godfather's (#28), and `slotfather
 dashboard` only runs `godfather`. `tests/test_godfather.py` checks that admission, status, settings, procs, stats,
