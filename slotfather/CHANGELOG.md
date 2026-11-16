@@ -120,6 +120,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- A request run outside any git repository (a temporary directory, a clean worktree there) no longer gets a
+  run type named after its command (`true · check`, `echo · check`): its run type keys by its label's family,
+  so its runs form one series whatever their command (fathers#106).
 - A process whose environment cannot be read (another user's, an Apple platform binary on macOS, a `/proc` with
   `hidepid`) is unknown, never "not in a lease": while leases are live the sweep spares and reports it (`lease
   unknown` in its reason, `lease_unknown` in `--json`) instead of stopping it, and `status --json --pid` adds
