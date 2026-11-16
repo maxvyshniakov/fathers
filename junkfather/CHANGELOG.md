@@ -36,6 +36,13 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 - An agent-browser daemon that launchd adopted now belongs to the entry whose process started its session: it joins
   the entry's new `daemons` field and is reaped with it. One a Slotfather lease started counts for that lease in the
   CPU report, and one nobody owns that idled for an hour is reported, never stopped.
+- Git worktrees are a resource kind: `junkfather own --kind worktree -- git worktree add ...` or `own-resource
+  --kind worktree --id PATH` owns one, and its owner's end, its TTL or `reap` removes it with `git worktree remove`
+  (and its branch when that branch's content is in the base), only when it is clean, merged by content, holds no
+  ignored file beyond build output, no nested repository and no process; otherwise the stop fails and says why.
+- The hourly sweep removes unowned worktrees of the repositories in the home folder that pass the same guards and
+  were idle for a day, reports the others with branch, age and size in `unowned_resources`, and prunes worktree
+  entries whose folder is gone. Worktrees of live Lanefather lanes are left to Lanefather.
 
 ### Changed
 

@@ -65,7 +65,8 @@ class Case(unittest.TestCase):
         # needs one points these at its own fake.
         isolated = {"JUNKFATHER_STATE": str(self.state), "JUNKFATHER_CLAUDE_SESSIONS": str(self.sessions),
                     "JUNKFATHER_SLOTFATHER": str(self.tmp / "no-slotfather"),
-                    "JUNKFATHER_AGENT_BROWSER": str(self.tmp / "no-agent-browser"), "JUNKFATHER_REPOS": ""}
+                    "JUNKFATHER_AGENT_BROWSER": str(self.tmp / "no-agent-browser"), "JUNKFATHER_REPOS": "",
+                    "JUNKFATHER_LANEFATHER_STATE": str(self.tmp / "no-lanefather")}
         self.env.update(isolated, JUNKFATHER_LANE_RECORDS=str(self.tmp / "no-lanes"), PYTHONDONTWRITEBYTECODE="1")
         for name, value in isolated.items():
             os.environ[name] = value

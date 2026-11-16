@@ -49,7 +49,7 @@ characters. An event follows the change it describes; one that cannot be written
 | `entry.reaped` | entry | `reason`, `result`, `how`, `signals` (`TERM`, `KILL`), `pids` |
 | `entry.reap_failed` (error) | entry | processes outlived SIGKILL; the entry keeps running; `left` |
 | `resource.owned` | resource | `own --kind` or `own-resource`; `resource`, `argv`, `cwd`, `ttl`, `keep` |
-| `resource.stopped` | resource | its stop ran and it is gone (or was gone already); `reason`, `result`, `resource`, `steps` |
+| `resource.stopped` | resource | its stop ran and it is gone (or was gone already); `reason`, `result`, `resource`, `steps`; also the sweep's removal of an unowned worktree (no `entry` in the subject) |
 | `resource.stop_failed` (error) | resource | a stop command failed or timed out, or it still runs; the entry keeps running; `error`, `steps` |
 | `unowned.reported` (warn) | process or resource | a sweep listed it for the first time; a process: `cmd`, `cwd`, `root`, `why`, `start`, `age`; a resource: `kind`, `id`, `name`, `why` |
 | `unowned.reaped` | process | `reap --pid --force`; `cmd`, `start`, `result`, `pids` |
@@ -162,12 +162,24 @@ stops it with argv run without a shell, with a timeout (`STOP_TIMEOUT`, 120 s, p
 | `tailscale-serve` | `PROTO:PORT[/PATH]` (`https:6475`, `https:443/docs`, `tcp:5432`) | `tailscale serve status --json` has that route | `tailscale serve --PROTO=PORT [--set-path=PATH] off --yes`: that route only |
 | `safari-tp` | its main process's pid | that pid runs with its recorded start time | `osascript`: `tell application id "com.apple.SafariTechnologyPreview" to quit`, only while it is the only instance |
 | `command` | a name | `--alive` exits 0 (1: gone; anything else: unknown) | `--stop` |
+| `worktree` | the linked worktree's real path (`resource` also records `repo`, its main checkout, and `branch`) | the path exists and `git worktree list --porcelain` lists it | `git worktree remove PATH` (never `--force` or `rm -rf`), then `git branch -D BRANCH` when the branch's content is in the base; refused while a guard keeps it |
 
 After the stop the resource must be seen gone within the grace (at least 5 s); otherwise, or when a stop command
 fails or times out, the result is `failed`, the entry keeps running with `last_error`, and `resource.stop_failed` is
 written; a later step that fails (`docker rm` after a stop) makes `resource.stopped` a warning with `warning`. A
 reap runs no stop command while whether the resource runs cannot be told: the result is `failed`, and the sweep or
 the next reap tries again.
+
+A worktree's stop runs only when every guard passes, read again right before (`junkfather/worktrees.py`, the same
+guards as Lanefather's gc): not the main worktree, not locked, no `.keep`, not dev, main, master or integrate/*
+checked out, no uncommitted or untracked change, no ignored file outside disposable build output (node_modules,
+.venv, dist, ...), no Git repository or other worktree inside, HEAD merged by content into the base (an ancestor of
+it, or every patch in it by `git cherry`; the base is origin's default branch when there is an origin, else the
+local main or master), no process working in it or naming it, and junkfather not running inside it. A refused stop
+is `resource.stop_failed` with `error: "kept: WHY"`, and the entry keeps running: at its owner's end (SubagentStop,
+SessionEnd) a clean merged worktree is removed and any other is kept and reported. `own --kind worktree -- git
+worktree add ...` owns the path the command names (also with `git -C DIR`); `own-resource --kind worktree --id PATH`
+owns one that exists.
 
 A quit by bundle id cannot tell two Safari Technology Preview instances apart, so the stop runs only while the owned
 instance is the only one (same pid and start time); otherwise it fails and every instance keeps running.
@@ -237,6 +249,17 @@ so it is reported; one item per tree and process group. It also reports booted s
 browser), once each in `unowned.reported`; a kind whose tool is not installed is skipped, and one that cannot be
 listed is noted. A resource entry whose kind says it is gone is marked `gone`. The report goes to `unowned.json`
 and never stops anything; there is no `--force` for a resource.
+
+**Worktrees** (`worktrees` in the report and `sweep.json`). The repositories are `$JUNKFATHER_REPOS`
+(colon-separated; empty: none), else every folder in the home folder holding a `.git` directory; each one's linked
+worktrees are looked at, wherever they are. One that a live entry or a Lanefather lane that is not done owns is
+left to its owner. Any other is removed when the worktree guards (Resources) pass and it was idle for 24 hours (its
+folder, HEAD, index and HEAD log unchanged): `git worktree remove`, then its branch when the branch's content is in
+the base, and a `resource.stopped` event whose subject has no `entry`. This is the one place junkfather stops
+something no entry owns. The rest are reported in `unowned_resources` (`kind: "worktree"`, `branch`, `age`, `size`
+in bytes, measured when first reported, and `why`), once each in `unowned.reported`. `git worktree prune` then drops
+the entries whose folder is gone. `removed: [{kind, id, repo, branch, size, delete_branch, result}]`, `pruned`,
+`notes`; `sweep --dry-run` prints the plan (`would remove worktree ...`, `would prune ...`) and changes nothing.
 
 **CPU report** (report only; `cpu` in `sweep.json` and in `status --json`). The sweep's one `ps` call reads `%cpu`
 (100 = one core), and each busy process goes to the first rule, in this order, that claims it or one of its

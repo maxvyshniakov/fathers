@@ -52,7 +52,12 @@
    "unlisted": [],
    "unowned": [],
    "unowned_resources": [],
-   "v": 1
+   "v": 1,
+   "worktrees": {
+    "notes": [],
+    "pruned": [],
+    "removed": []
+   }
   },
   "sweep": "dry"
  },
@@ -109,7 +114,12 @@
    "unlisted": [],
    "unowned": [],
    "unowned_resources": [],
-   "v": 1
+   "v": 1,
+   "worktrees": {
+    "notes": [],
+    "pruned": [],
+    "removed": []
+   }
   },
   "sweep": "done",
   "text": "cpu: 0.0 cores busy; entry 0.0, session 0.0, unattributed 0.0\n  cpu note: Slotfather leases are left out: slotfather is not installed here\n0 running, 0 reaped, 3 gone, 0 unowned reported, 0 unowned resources"

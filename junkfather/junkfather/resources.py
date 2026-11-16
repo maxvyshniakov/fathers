@@ -48,6 +48,10 @@ STP_MAIN = re.compile(r"Safari Technology Preview\.app/Contents/MacOS/Safari Tec
 Listing = Optional[Dict[str, Dict[str, Any]]]
 
 
+class Refused(ValueError):
+    """A stop a guard refuses (a worktree with work in it): the message says why, and nothing was run."""
+
+
 class Ran:
     """One command's outcome: code None when it could not run or timed out (`error` says which)."""
 
@@ -83,6 +87,10 @@ def run(argv: List[str], timeout: float = RESOURCE_TIMEOUT) -> Ran:
 class Kind:
     name = ""
     reports = True  # whether the sweep reports unowned resources of this kind
+    lists = True  # whether one listing tells every resource's liveness (Snapshot.alive passes it)
+
+    def prepare(self, argv: List[str]) -> None:
+        """Before `own --kind` runs its command: what the listings that follow need to know of it."""
 
     def listing(self, table: Optional[_procs.Table]) -> Listing:
         return None
@@ -301,6 +309,7 @@ class SafariTP(Kind):
 class Command(Kind):
     name = "command"
     reports = False
+    lists = False
 
     def alive(self, resource: Mapping[str, Any], listed: Listing, table: Optional[_procs.Table]) -> Optional[bool]:
         argv = resource.get("alive")
@@ -313,8 +322,108 @@ class Command(Kind):
         return [[str(word) for word in as_list(resource.get("stop"))]]
 
 
-KINDS: Dict[str, Kind] = {k.name: k for k in (Simulator(), Docker(), TailscaleServe(), SafariTP(), Command())}
-WRAPPABLE = ("simulator", "docker", "tailscale-serve", "safari-tp")
+class Worktree(Kind):
+    """A linked git worktree, by its real path (worktrees.py has the guards). It runs while the path exists and
+    `git worktree list` lists it; its stop is `git worktree remove` (then `git branch -D` when the branch's content
+    is in the base), refused while any guard keeps it. The sweep's own pass reports and removes unowned ones."""
+    name = "worktree"
+    reports = False
+    lists = False
+
+    def __init__(self) -> None:
+        self.where: Optional[str] = None
+
+    def prepare(self, argv: List[str]) -> None:
+        self.where = _worktrees_where(argv)
+
+    def listing(self, table: Optional[_procs.Table]) -> Listing:
+        from . import worktrees
+        items = worktrees.listing(self.where or os.getcwd())
+        if items is None:
+            return None
+        repo = str(items[0]["path"])
+        return {str(i["path"]): {"repo": repo, "branch": i.get("branch")} for i in items if not i.get("main")}
+
+    def alive(self, resource: Mapping[str, Any], listed: Listing, table: Optional[_procs.Table]) -> Optional[bool]:
+        from . import worktrees
+        path = str(resource.get("id"))
+        items = worktrees.listing(str(resource.get("repo") or path))
+        if items is None:
+            return False if not os.path.exists(path) and not os.path.exists(str(resource.get("repo"))) else None
+        return os.path.isdir(path) and any(i.get("path") == path for i in items)
+
+    def resolve(self, given: str, listed: Listing) -> Tuple[Optional[Dict[str, Any]], str]:
+        from . import worktrees
+        path = os.path.realpath(os.path.expanduser(given))
+        items = worktrees.listing(path) if os.path.isdir(path) else None
+        item = next((i for i in items or [] if i.get("path") == path), None)
+        if items is None or item is None:
+            return None, f"{path} is not a git worktree"
+        if item.get("main"):
+            return None, f"{path} is a repository's main worktree"
+        return {"kind": self.name, "id": path, "repo": str(items[0]["path"]), "branch": item.get("branch")}, ""
+
+    def stop(self, resource: Mapping[str, Any], grace: float) -> List[List[str]]:
+        from . import worktrees
+        path, repo = str(resource["id"]), str(resource.get("repo") or "")
+        items = worktrees.listing(repo or path)
+        item = next((i for i in items or [] if i.get("path") == path), None)
+        if items is None or item is None:
+            raise Refused("git cannot list the worktree; nothing was removed")
+        repo = str(items[0]["path"])
+        table = _table()
+        why = worktrees.refusal(item, repo, table, _procs.working_dirs_or_none(os.getuid()), items)
+        if why:
+            raise Refused(f"kept: {why}")
+        steps = [["git", "-C", repo, "worktree", "remove", path]]
+        branch = worktrees.branch_to_delete(repo, item.get("branch"), items, path)
+        if branch:
+            steps.append(["git", "-C", repo, "branch", "-D", branch])
+        return steps
+
+    def named(self, argv: List[str], out: str) -> List[str]:
+        """The path a `git [-C DIR] worktree add [OPTIONS] PATH [COMMIT]` names, made absolute."""
+        words = argv[1:] if argv and os.path.basename(argv[0]) == "git" else []
+        if "worktree" not in words:
+            return []
+        rest = words[words.index("worktree") + 1:]
+        if rest[:1] != ["add"]:
+            return []
+        valued = ("-b", "-B", "--reason", "--orphan")
+        index = 1
+        while index < len(rest):
+            word = rest[index]
+            if word == "--":
+                index += 1
+                break
+            if word in valued:
+                index += 2
+                continue
+            if word.startswith("-"):
+                index += 1
+                continue
+            break
+        if index >= len(rest):
+            return []
+        base = _worktrees_where(argv) or os.getcwd()
+        return [os.path.realpath(os.path.join(base, os.path.expanduser(rest[index])))]
+
+
+def _worktrees_where(argv: List[str]) -> Optional[str]:
+    """The folder a `git -C DIR ...` command runs in, or None (the current one)."""
+    words = argv[1:] if argv and os.path.basename(argv[0]) == "git" else []
+    where: Optional[str] = None
+    for index, word in enumerate(words[:-1]):
+        if word == "worktree":
+            break
+        if word == "-C":
+            where = os.path.join(where or os.getcwd(), os.path.expanduser(words[index + 1]))
+    return where
+
+
+KINDS: Dict[str, Kind] = {k.name: k for k in (Simulator(), Docker(), TailscaleServe(), SafariTP(), Command(),
+                                               Worktree())}
+WRAPPABLE = ("simulator", "docker", "tailscale-serve", "safari-tp", "worktree")
 
 
 def key(resource: Mapping[str, Any]) -> str:
@@ -337,7 +446,7 @@ class Snapshot:
         kind = KINDS.get(str(resource.get("kind")))
         if kind is None:
             return None
-        return kind.alive(resource, None if kind.name == "command" else self.listing(kind.name), self.table)
+        return kind.alive(resource, self.listing(kind.name) if kind.lists else None, self.table)
 
 
 def subject(entry: Mapping[str, Any]) -> Dict[str, Any]:
@@ -427,6 +536,7 @@ def own_wrapped(store: Store, kind: str, argv: List[str], ttl: float, keep: str,
     """`own --kind KIND -- CMD`: run the command that makes the resource, then own what it made. Nothing it made
     already ran before, and only what it names or what newly appeared counts."""
     found = KINDS[kind]
+    found.prepare(argv)
     table = _table()
     before = found.listing(table)
     started = time.time()
@@ -518,6 +628,8 @@ def stop(resource: Mapping[str, Any], grace: float, alive: Callable[[], Optional
         return {"result": "failed", "steps": [], "error": "whether it runs cannot be told; nothing was run"}
     try:
         commands = KINDS[str(resource.get("kind"))].stop(resource, grace)
+    except Refused as error:
+        return {"result": "failed", "steps": [], "error": str(error)}
     except (KeyError, ValueError, NotImplementedError) as error:
         return {"result": "failed", "steps": [], "error": f"no stop command: {error}"}
     steps: List[Dict[str, Any]] = []

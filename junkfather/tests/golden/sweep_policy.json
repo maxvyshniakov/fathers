@@ -105,7 +105,12 @@
      "why": "a running tailscale-serve no entry owns"
     }
    ],
-   "v": 1
+   "v": 1,
+   "worktrees": {
+    "notes": [],
+    "pruned": [],
+    "removed": []
+   }
   },
   "text": "unowned pid 600 (age 1221d9h; working directory in /golden/scratch/): node server.js\n  own it: junkfather adopt 600 --ttl 1h   end it: junkfather reap --pid 600 --force\nunowned pid 800 (age 1221d9h; command names a path in /golden/scratch/): /Applications/Browser --profile=/golden/scratch/s1/profile\n  own it: junkfather adopt 800 --ttl 1h   end it: junkfather reap --pid 800 --force\nunowned pid 930 (age 1221d9h; working directory in .claude/worktrees): python3 -m http.server\n  own it: junkfather adopt 930 --ttl 1h   end it: junkfather reap --pid 930 --force\nunowned simulator UDID-FREE (iPad): a running simulator no entry owns\n  own it: junkfather own-resource --kind simulator --id UDID-FREE --ttl 1h\nunowned tailscale-serve https:443: a running tailscale-serve no entry owns\n  own it: junkfather own-resource --kind tailscale-serve --id https:443 --ttl 1h\nnote: docker: cannot be listed, so its unowned resources are not reported\ncpu: 0.0 cores busy; entry 0.0, session 0.0, unattributed 0.0\n  cpu note: Slotfather leases are left out: slotfather is not installed here\n2 running, 0 reaped, 0 gone, 3 unowned reported, 2 unowned resources",
   "unowned.json": {

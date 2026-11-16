@@ -182,10 +182,15 @@ def identities(pids: List[int], command: bool = False) -> Dict[int, Any]:
 
 def working_dirs(uid: int) -> Dict[int, str]:
     """This user's processes' working directories (one lsof call); {} when lsof cannot be asked."""
+    return working_dirs_or_none(uid) or {}
+
+
+def working_dirs_or_none(uid: int) -> Optional[Dict[int, str]]:
+    """This user's processes' working directories (one lsof call); None when lsof cannot be asked or lists none."""
     try:
         text = run(["lsof", "-nP", "-a", "-u", str(uid), "-d", "cwd", "-Fpn"], ok=(0, 1))
     except ProcError:
-        return {}
+        return None
     found: Dict[int, str] = {}
     pid = None
     for line in text.splitlines():
@@ -193,4 +198,4 @@ def working_dirs(uid: int) -> Dict[int, str]:
             pid = int(line[1:])
         elif line.startswith("n") and pid is not None:
             found[pid] = line[1:]
-    return found
+    return found or None
