@@ -107,23 +107,59 @@ class JoinTests(unittest.TestCase):
         self.assertEqual([0], lanefather.leases_of(lane, items))
 
 
+def fake_lanefather(folder: str, lane: str, calls: Path) -> Path:
+    """A `lanefather` in `folder` that records its argv in `calls` and shows `lane` of project `p`."""
+    command = Path(folder) / "lanefather"
+    command.write_text("#!" + sys.executable + "\nimport json,sys\nfrom pathlib import Path\n"
+                       + f"Path({str(calls)!r}).write_text(json.dumps(sys.argv[1:]))\n"
+                       + 'print(json.dumps({"version":1,"id":' + json.dumps(lane) + ',"project":"p","status":"active"}))\n')
+    command.chmod(0o755)
+    return command
+
+
 class ShowTests(unittest.TestCase):
+    """Hermetic: PATH is only the fake's folder, so a lanefather installed on the machine never answers, and the
+    response cache starts empty."""
+
+    def setUp(self) -> None:
+        cache = mock.patch.dict(lanefather._CACHE, clear=True)  # pyright: ignore[reportPrivateUsage]
+        cache.start()
+        self.addCleanup(cache.stop)
+        environ = mock.patch.dict(os.environ)
+        environ.start()
+        self.addCleanup(environ.stop)
+        os.environ.pop("GODFATHER_FIXTURES", None)
+
     def test_show_is_asked_only_of_a_lanefather_that_advertises_it(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             calls = Path(tmp) / "calls"
-            command = Path(tmp) / "lanefather"
-            command.write_text("#!" + sys.executable + "\nimport json,sys\nfrom pathlib import Path\n"
-                               + f"Path({str(calls)!r}).write_text(json.dumps(sys.argv[1:]))\n"
-                               + 'print(json.dumps({"version":1,"id":"shown","project":"p","status":"active"}))\n')
-            command.chmod(0o755)
-            with mock.patch.dict(os.environ, {"PATH": tmp + os.pathsep + os.environ["PATH"]}):
-                os.environ.pop("GODFATHER_FIXTURES", None)
+            fake_lanefather(tmp, "shown", calls)
+            with mock.patch.dict(os.environ, {"PATH": tmp}):
                 context = {"lane": "shown", "lanefather.state": "/project/state"}
                 found = lanefather.fetch(context, "", {"v": 1, "dashboard": {"v": 1}})
                 self.assertEqual({"error": "lanefather too old"}, found)
                 self.assertFalse(calls.exists(), "never queried")
                 found = lanefather.fetch(context, "", {"v": 1, "dashboard": {"v": 1, "show": {"versions": [1]}}})
                 self.assertEqual("p", found.get("project"))
+
+    def test_a_cached_summary_survives_lanefather_leaving_path(self) -> None:
+        # CI run 43841660797: the `not installed` check ran before the cache, so a transient PATH change dropped a
+        # fresh summary; a lanefather in ~/.local/bin hid it on developer machines.
+        shows = {"v": 1, "dashboard": {"v": 1, "show": {"versions": [1]}}}
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = Path(tmp) / "calls"
+            command = fake_lanefather(tmp, "kept", calls)
+            context = {"lane": "kept", "lanefather.state": "/project/state"}
+            with mock.patch.dict(os.environ, {"PATH": tmp}):
+                self.assertEqual("p", lanefather.fetch(context, "", shows).get("project"))
+                command.unlink()
+                calls.unlink()
+                self.assertEqual("p", lanefather.fetch(context, "", shows).get("project"), "lanefather left PATH")
+                self.assertEqual("p", lanefather.fetch(context, "", None).get("project"), "its capabilities went too")
+                self.assertFalse(calls.exists(), "the cached summary asks nothing")
+                self.assertEqual({"error": "lanefather not installed"},
+                                 lanefather.fetch({"lane": "kept", "lanefather.state": "/other/state"}, "", shows),
+                                 "another project has no cached summary to reuse")
 
 
 class Case(unittest.TestCase):

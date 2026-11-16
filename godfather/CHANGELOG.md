@@ -162,6 +162,9 @@ Versions and release rules: [README.md](README.md#versions).
   without a `pid`, a resource without a `kind` and `id`), now leave the last good snapshot with that notice instead of
   being left out quietly. Each tool's snapshot is checked once, when it is decoded, into a typed model.
 
+- A request's lane summary in DETAILS, read from `lanefather show` within the last 5 s, is shown again while
+  `lanefather` is briefly off PATH or its capabilities are not read yet, instead of `lanefather not installed` or
+  `lanefather too old`; a Lanefather that does not advertise `show` is still never asked (fathers#85).
 - `?` and `v` switch between help and the changelog instead of closing one, and keys typed right after `v`
   scroll the changelog (fathers#17).
 - The selection follows its request through reorders, grants and yields; when it ends, the selection moves to its

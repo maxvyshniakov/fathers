@@ -14,6 +14,7 @@ import unittest
 import helpers  # noqa: F401 - src/ on sys.path
 from helpers import mouse
 import view as _view
+from godfather.adapters import lanefather as _lanefather
 from godfather.layout import Rect
 view = _view.current()
 
@@ -96,7 +97,11 @@ class DetailsTests(unittest.TestCase):
         model, _ = example()
         item = model['holders'][0]
         item['context'] = {'lane': 'compiler', 'lanefather.state': '/project/state'}
-        with tempfile.TemporaryDirectory() as tmp:
+        # Hermetic: an empty cache, no fixture mode, and PATH only the fake's folder, so a lanefather installed on
+        # this machine cannot answer once the fake is gone (CI run 43841660797 failed where ~/.local/bin hid it).
+        cache = mock.patch.dict(_lanefather._CACHE, clear=True)  # pyright: ignore[reportPrivateUsage]
+        with tempfile.TemporaryDirectory() as tmp, cache, mock.patch.dict(os.environ):
+            os.environ.pop('GODFATHER_FIXTURES', None)
             command = Path(tmp) / 'lanefather'
             calls = Path(tmp) / 'calls'
             command.write_text('#!' + sys.executable + '\nimport json,sys\n'
@@ -105,17 +110,17 @@ class DetailsTests(unittest.TestCase):
                 + 'print(json.dumps({"version":1,"id":"compiler","project":"source-project","status":"active"}))\n')
             command.chmod(0o755)
             shows = {'v': 1, 'dashboard': {'v': 1, 'show': {'versions': [1]}}}  # fathers#85: show is advertised
-            with mock.patch.dict(os.environ, {'PATH': tmp + os.pathsep + os.environ['PATH']}):
+            with mock.patch.dict(os.environ, {'PATH': tmp}):
                 view.enrich_details(item, shows)
                 self.assertEqual('source-project', item['lane']['project'])
                 self.assertEqual(['show', 'compiler', '--state-dir', '/project/state', '--json'], json.loads(calls.read_text()))
                 command.unlink()
                 view.enrich_details(item, shows)
                 self.assertEqual('source-project', item['lane']['project'], 'unchanged identity should reuse the cached response')
-        item['context'] = {'lane': 'compiler', 'lanefather.state': '/another-project/state'}
-        with mock.patch.dict(os.environ, {'PATH': '/does-not-exist'}):
-            view.enrich_details(item)
-        self.assertIn('error', item['lane'], 'another project must not inherit the cached lane')
+            item['context'] = {'lane': 'compiler', 'lanefather.state': '/another-project/state'}
+            with mock.patch.dict(os.environ, {'PATH': '/does-not-exist'}):
+                view.enrich_details(item)
+            self.assertIn('error', item['lane'], 'another project must not inherit the cached lane')
 
     def test_ticket_urls_cannot_inject_terminal_control_sequences(self) -> None:
         canvas = view.Canvas(40, 3)

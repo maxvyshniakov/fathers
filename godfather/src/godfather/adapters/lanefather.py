@@ -276,16 +276,17 @@ def fetch(context: dict[str, str], cwd: str = "", capabilities: Optional[dict[st
     location = directory or cwd
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', lane) or not Path(location).is_absolute():
         return {'error': 'lane reference missing'}
+    # The command location is not part of identity: an already cached response survives a transient PATH change,
+    # so the cache is read before Lanefather is looked up or its capabilities checked. Reusing it asks nothing.
+    key = (location, lane, 'state-v1' if directory else 'project-v1')
+    cached = _CACHE.get(key)
+    if cached and time.monotonic() - cached[0] < CACHE_SECONDS:
+        return cached[1]
     command = _sources.which('lanefather') or ''
     if not command:
         return {'error': 'lanefather not installed'}
     if not show_supported(capabilities):
         return {'error': TOO_OLD}
-    # The command location is not part of identity: an already cached response survives a transient PATH change.
-    key = (location, lane, 'state-v1' if directory else 'project-v1')
-    cached = _CACHE.get(key)
-    if cached and time.monotonic() - cached[0] < CACHE_SECONDS:
-        return cached[1]
     result: dict[str, Any]
     try:
         reference = ['--state-dir', directory] if directory else ['--project-dir', cwd]
