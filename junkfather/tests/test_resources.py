@@ -146,7 +146,7 @@ class SimulatorTests(ResourceCase):
         self.assertEqual(0, self.cli("own-resource", "--kind", "simulator", "--id", SIM.lower(), "--ttl", "1h",
                                      env=self.env).returncode)
         again = self.cli("own-resource", "--kind", "simulator", "--id", SIM, env=self.env)
-        self.assertEqual(1, again.returncode)
+        self.assertEqual(3, again.returncode, "refused by the current state")
         self.assertIn("already owned", again.stderr)
         self.assertEqual(1, len(self.store.entries()))
 
@@ -334,7 +334,7 @@ class SafariTests(ResourceCase):
     def test_own_resource_never_takes_a_running_instance(self):
         self.spawn(str(self.app), start_new_session=True)
         refused = self.cli("own-resource", "--kind", "safari-tp", "--id", resources.STP_BUNDLE, env=self.env)
-        self.assertEqual(1, refused.returncode)
+        self.assertEqual(2, refused.returncode, "a usage error: own --kind safari-tp launches one")
         self.assertIn("person's own browser", refused.stderr)
         self.assertEqual([], self.store.entries())
 
@@ -353,7 +353,7 @@ class CommandKindTests(ResourceCase):
         self.assertFalse(Path(ROOT / "pwned").exists() or (self.tmp / "pwned").exists())
         gone = self.cli("own-resource", "--kind", "command", "--id", "m", "--alive", f"test -e '{marker}'",
                         "--stop", "true", env=self.env)
-        self.assertEqual(1, gone.returncode)
+        self.assertEqual(6, gone.returncode, "not found")
 
 
 class ProcessOwnUnchangedTests(Case):

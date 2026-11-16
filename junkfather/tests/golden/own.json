@@ -570,7 +570,7 @@
    "--id",
    "<id3>"
   ],
-  "code": 1,
+  "code": 6,
   "err": "",
   "out": "<id3>: unknown (no such entry; pids -)\n"
  }

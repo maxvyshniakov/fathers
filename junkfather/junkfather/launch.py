@@ -30,6 +30,7 @@ from . import owner as _owner
 from . import procs as _procs
 from . import reap as _reap
 from . import safety as _safety
+from .errors import NOT_FOUND, REFUSED, Refused
 from .defaults import DETACH_WAIT, KNOWN_EVERY, POLL, RETRY_FIRST, RETRY_MAX, SIGNAL_GRACE
 from .entry import new as new_entry
 from .release import PACKAGE_ROOT
@@ -296,14 +297,12 @@ def adopt(store: Store, pid: int, ttl: float, keep: str, label: Optional[str], e
     try:
         table = _procs.Table.read()
     except _procs.ProcError as error:
-        print(f"junkfather adopt: {error}", file=sys.stderr)
-        return 1
+        raise Refused(str(error)) from None
     proc = table.get(pid)
     refusal = _safety.adopt_refusal(pid, table, lambda candidate: any(
         e.get("state") == _entry.RUNNING and e.get("pid") == candidate for e in store.entries()))
     if refusal:
-        print(f"junkfather adopt: refusing pid {pid}: {refusal}", file=sys.stderr)
-        return 1
+        raise Refused(f"refusing pid {pid}: {refusal}", NOT_FOUND if proc is None else REFUSED)
     assert proc is not None
     who = _owner.resolve(env, table, os.getcwd(), store, lane=lane, agent=agent, claims=False)
     entry = _entry.adopted(store, new_entry(store, [proc.cmd], ttl, keep, label, who, "adopted", os.getcwd()), proc,

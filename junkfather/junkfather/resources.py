@@ -37,6 +37,7 @@ from . import entry as _entry
 from . import events as _events
 from . import procs as _procs
 from . import safety as _safety
+from . import errors as _errors
 from .defaults import CREATE_TIMEOUT, RESOURCE_TIMEOUT, SETTLE, STOP_TIMEOUT
 from .entry import Entry
 from .state import Store, as_dict, as_list
@@ -514,35 +515,26 @@ def announce(entry: Entry, out: Optional[TextIO] = None) -> None:
 def own_resource(store: Store, kind: str, given: str, ttl: float, keep: str, label: Optional[str],
                  owner: Dict[str, Any], alive: Optional[List[str]] = None, stop: Optional[List[str]] = None,
                  remove: bool = False) -> int:
-    """`own-resource`: record a resource that runs now."""
+    """`own-resource`: record a resource that runs now. cli.py refuses safari-tp and a command kind without --alive
+    and --stop before this runs."""
     found = KINDS[kind]
-    if kind == "safari-tp":
-        print("junkfather own-resource: refusing safari-tp: an instance that runs cannot be told from a person's own "
-              "browser; launch it through junkfather own --kind safari-tp -- open -g -a 'Safari Technology Preview'",
-              file=sys.stderr)
-        return 1
     if kind == "command":
-        if not alive or not stop:
-            print("junkfather own-resource: --kind command needs --alive CMD and --stop CMD", file=sys.stderr)
-            return 2
         resource: Optional[Dict[str, Any]] = {"kind": kind, "id": given, "alive": alive, "stop": stop}
         state = found.alive(resource, None, None)
         if state is not True:
-            print(f"junkfather own-resource: refusing {given}: its --alive command says "
-                  f"{'it is gone' if state is False else 'nothing (exit 0 alive, 1 gone)'}", file=sys.stderr)
-            return 1
+            raise _errors.Refused(f"refusing {given}: its --alive command says "
+                                  f"{'it is gone' if state is False else 'nothing (exit 0 alive, 1 gone)'}",
+                                  _errors.NOT_FOUND if state is False else _errors.FAILED)
     else:
         table = _table()
         resource, why = found.resolve(given, found.listing(table))
         if resource is None:
-            print(f"junkfather own-resource: refusing {given}: {why}", file=sys.stderr)
-            return 1
+            raise _errors.Refused(f"refusing {given}: {why}")
     if remove:
         resource["remove"] = True
     entry, why = record(store, resource, [], ttl, keep, label, owner, os.getcwd())
     if entry is None:
-        print(f"junkfather own-resource: refusing {describe(resource)}: {why}", file=sys.stderr)
-        return 1
+        raise _errors.Refused(f"refusing {describe(resource)}: {why}", _errors.REFUSED)
     announce(entry)
     return 0
 

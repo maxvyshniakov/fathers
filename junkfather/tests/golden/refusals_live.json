@@ -4,8 +4,8 @@
    "adopt",
    "<pid2>"
   ],
-  "code": 1,
-  "err": "junkfather adopt: refusing pid <pid2>: an agent session\n",
+  "code": 3,
+  "err": "junkfather: refusing pid <pid2>: an agent session\n",
   "out": ""
  },
  {
@@ -13,8 +13,8 @@
    "adopt",
    "<pid6>"
   ],
-  "code": 1,
-  "err": "junkfather adopt: refusing pid <pid6>: a process with a terminal (<tty>)\n",
+  "code": 3,
+  "err": "junkfather: refusing pid <pid6>: a process with a terminal (<tty>)\n",
   "out": ""
  },
  {
@@ -22,8 +22,8 @@
    "adopt",
    "<pid3>"
   ],
-  "code": 1,
-  "err": "junkfather adopt: refusing pid <pid3>: its tree holds a terminal's process or an agent session\n",
+  "code": 3,
+  "err": "junkfather: refusing pid <pid3>: its tree holds a terminal's process or an agent session\n",
   "out": ""
  },
  {
@@ -31,8 +31,8 @@
    "adopt",
    "<pid5>"
   ],
-  "code": 1,
-  "err": "junkfather adopt: refusing pid <pid5>: an agent session\n",
+  "code": 3,
+  "err": "junkfather: refusing pid <pid5>: an agent session\n",
   "out": ""
  },
  {
@@ -53,8 +53,8 @@
    "<pid2>",
    "--force"
   ],
-  "code": 1,
-  "err": "junkfather reap: refusing pid <pid2>: not a process junkfather may stop\n",
+  "code": 3,
+  "err": "junkfather: refusing pid <pid2>: not a process junkfather may stop\n",
   "out": ""
  },
  {
@@ -64,8 +64,8 @@
    "<pid3>",
    "--force"
   ],
-  "code": 1,
-  "err": "junkfather reap: refusing pid <pid3>: its tree holds a terminal's process or an agent session\n",
+  "code": 3,
+  "err": "junkfather: refusing pid <pid3>: its tree holds a terminal's process or an agent session\n",
   "out": ""
  },
  {
@@ -75,8 +75,8 @@
    "<pid6>",
    "--force"
   ],
-  "code": 1,
-  "err": "junkfather reap: refusing pid <pid6>: not a process junkfather may stop\n",
+  "code": 3,
+  "err": "junkfather: refusing pid <pid6>: not a process junkfather may stop\n",
   "out": ""
  },
  {
@@ -86,8 +86,8 @@
    "<pid7>",
    "--force"
   ],
-  "code": 1,
-  "err": "junkfather reap: refusing pid <pid7>: an entry owns it now (reap that entry)\n",
+  "code": 3,
+  "err": "junkfather: refusing pid <pid7>: an entry owns it now (reap that entry)\n",
   "out": ""
  },
  {

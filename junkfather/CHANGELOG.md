@@ -46,6 +46,17 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Changed
 
+- The command line follows the CLI convention every tool shares (docs/cli.md, fathers#153). A refusal is one line,
+  `junkfather: <reason>`, on stderr; a usage error adds `Try 'junkfather [COMMAND] --help'.` instead of argparse's
+  usage text, and names the unknown command or option. `junkfather --version` prints what `junkfather version`
+  does, and an unexpected exception prints one `internal error` line (exit 1) with its traceback in
+  `logs/junkfather.log`. Exit codes moved: an entry, pid or `--alive` resource that does not exist exits 6 (it was
+  1), a valid request the current state refuses exits 3 (it was 1: `adopt` or `reap --pid` of a protected or
+  unlisted pid, `hand` or `extend` of an ended entry, an already owned resource), `own-resource --kind safari-tp`
+  exits 2 (it was 1), and `sweep` while another sweep runs exits 75 (it was 0). The prefixes `junkfather adopt:`,
+  `junkfather reap:`, `junkfather hand:`, `junkfather extend:`, `junkfather sweep:`, `junkfather own-resource:` and
+  `junkfather settings:` are now `junkfather:`. Running `junkfather` without a command is a usage error on stderr
+  rather than the help on stdout.
 - A reap no longer signals a leader it refused for a changed command: `known` lists the leader too, and the reap
   found it there again. Its recorded children are still stopped; `reap --force` still takes the leader.
 - The command is now the second factor after pid and start time everywhere a process is signalled. A start time

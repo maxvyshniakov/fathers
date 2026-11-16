@@ -1,6 +1,6 @@
 """Junkfather's command line against the CLI convention (docs/cli.md, common/cliconvention.py; fathers#118).
 
-The cases listed in EXPECTED fail today, each with the ticket that fixes it (fathers#153). Like every test, the
+EXPECTED lists the cases that fail, each with the ticket that fixes it: none since fathers#153. Like every test, the
 commands run with the machine's Slotfather, agent-browser sessions, Lanefather lanes and repositories out of reach:
 `sweep --json` would otherwise remove their leftovers and worktrees.
 """
@@ -28,12 +28,7 @@ TOOL = cliconvention.Tool("junkfather", (sys.executable, "-m", "junkfather"), (
     Command("hand"), Command("extend"), Command("sweep", json=()), Command("settings", json=()), Command("hook"),
     Command("version"),
 ))
-EXPECTED: Dict[str, str] = dict.fromkeys((
-    "version", "unknown command", "unknown option", "own unknown option", "own-resource unknown option",
-    "adopt unknown option", "list unknown option", "status unknown option", "capabilities unknown option",
-    "changelog unknown option", "reap unknown option", "hand unknown option", "extend unknown option",
-    "sweep unknown option", "settings unknown option", "hook unknown option", "version unknown option",
-), "fathers#153")
+EXPECTED: Dict[str, str] = {}  # each case passes (fathers#153 emptied the list)
 
 
 class CLIConvention(cliconvention.conformance(TOOL, expected=EXPECTED)):

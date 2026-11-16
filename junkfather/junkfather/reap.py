@@ -25,7 +25,6 @@ from __future__ import annotations
 import contextlib
 import os
 import signal
-import sys
 import time
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
@@ -35,6 +34,7 @@ from . import events as _events
 from . import procs as _procs
 from . import safety as _safety
 from . import settings as _settings
+from .errors import NOT_FOUND, REFUSED, Refused
 from .procs import command_matches
 from .entry import Entry
 from .state import Store
@@ -256,14 +256,13 @@ def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None
 
 def reap_unowned(store: Store, pid: int, table: _procs.Table, force: bool, reason: str,
                  grace: Optional[float] = None,
-                 dry_run: bool = False, via: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+                 dry_run: bool = False, via: Optional[str] = None) -> List[Dict[str, Any]]:
     """Stop an unowned process: only with `force`, only one the last sweep listed, only when it is still the same
-    process (start time and command) and still unowned (safety.force_refusal). None, after saying why on stderr, when
-    refused; else the one result row."""
+    process (start time and command) and still unowned (safety.force_refusal). The one result row; Refused (exit 6
+    when the pid does not run, else 3) when refused."""
     if not force:
-        print(f"junkfather reap: pid {pid} is not owned; junkfather stops an unowned process only with --force, "
-              "and only one `junkfather sweep` listed", file=sys.stderr)
-        return None
+        raise Refused(f"pid {pid} is not owned; junkfather stops an unowned process only with --force, and only one "
+                      "`junkfather sweep` listed", NOT_FOUND if table.get(pid) is None else REFUSED)
 
     def owned(candidate: int) -> bool:
         return any(candidate in {p.pid for p in members(e, table)[0]} for e in store.entries()
@@ -271,8 +270,7 @@ def reap_unowned(store: Store, pid: int, table: _procs.Table, force: bool, reaso
 
     refused = _safety.force_refusal(pid, table, store, owned)
     if refused:
-        print(f"junkfather reap: refusing pid {pid}: {refused}", file=sys.stderr)
-        return None
+        raise Refused(f"refusing pid {pid}: {refused}", NOT_FOUND if table.get(pid) is None else REFUSED)
     proc = table.get(pid)
     assert proc is not None
     targets = _safety.forced_targets(pid, table)

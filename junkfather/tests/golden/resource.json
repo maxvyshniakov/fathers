@@ -31,8 +31,8 @@
    "--stop",
    "rm <tmp>/marker"
   ],
-  "code": 1,
-  "err": "junkfather own-resource: refusing command web: already owned by <id1>\n",
+  "code": 3,
+  "err": "junkfather: refusing command web: already owned by <id1>\n",
   "out": ""
  },
  {
@@ -351,8 +351,8 @@
    "--stop",
    "rm <tmp>/marker"
   ],
-  "code": 1,
-  "err": "junkfather own-resource: refusing web: its --alive command says it is gone\n",
+  "code": 6,
+  "err": "junkfather: refusing web: its --alive command says it is gone\n",
   "out": ""
  }
 ]
