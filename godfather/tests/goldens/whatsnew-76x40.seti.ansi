@@ -18,22 +18,22 @@
 [0;38;2;90;92;93m││[0m[0m    the screen, kitty keyboard mode included, comes back after), and    [0m[0;38;2;90;92;93m││[0m
 [0;38;2;90;92;93m││[0m[0m    park an active lane with a reason where Lanefather advertises       [0m[0;38;2;90;92;93m││[0m
 [0;38;2;90;92;93m││[0m[0m    park. Reaps and park ask first, naming the target and the exact     [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    command; y runs it, n, Esc or a click outside cancel. The row is    [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    looked for again in a fresh snapshot first and the action dropped   [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    if it changed; the command runs in the background with no shell,    [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    a 30 s timeout and GODFATHER_ACTOR=godfather/<version>; the         [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    footer shows its first stdout line, or its first stderr line in     [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    red, and the source is polled at once. Land, promote, done, sync,   [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    review and sweep are never offered. Under GODFATHER_FIXTURES        [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    actions are recorded, never run.                                    [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m                                                                        [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m  [0m[0;38;2;122;125;125m• [0m[0mJunkfather is a source (fathers#86): its junkfather status --json   [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    (versions 1 and 2) is polled like Lanefather's. SLOTS' bottom       [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m╰│[0m[0m    border sums it up on the right, 3 procs 7 · 1 orphan · 1 expired    [0m[0;38;2;90;92;93m│╯[0m
-[0;38;2;90;92;93m╭│[0m[0m    · 2 unowned (a narrow border drops unowned, then expired), and 3    [0m[0;38;2;90;92;93m│╮[0m
-[0;38;2;90;92;93m││[0m[0m    or a click on it opens the Processes page: owned entries            [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    (running, then orphan, then expired), then the last sweep's         [0m[0;38;2;90;92;93m││[0m
-[0;38;2;90;92;93m││[0m[0m    unowned processes and resources, each with its state, label, id,    [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    command; y runs it, n, Esc or a click outside cancel. The menu      [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    runs nothing until an action is chosen. The row is looked for       [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    again in a fresh snapshot first and the action dropped unless       [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    that row still offers the same action (an expired entry extended    [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    meanwhile, an orphan whose owner came back, a lease no longer       [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    yieldable, a lane no longer active, an unowned pid an owned entry   [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    holds now); an expired entry's reap also passes --expired, a park   [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    the lane's own --state-dir, a reason goes as one --reason=R         [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    argument, an opener is started and not waited for, and the same     [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    action is not started twice while it runs; the command runs in      [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    the background with no shell, a 30 s timeout and                    [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m╰│[0m[0m    GODFATHER_ACTOR=godfather/<version>; the footer shows its first     [0m[0;38;2;90;92;93m│╯[0m
+[0;38;2;90;92;93m╭│[0m[0m    stdout line, or its first stderr line in red, and the source is     [0m[0;38;2;90;92;93m│╮[0m
+[0;38;2;90;92;93m││[0m[0m    polled at once. Land, promote, done, sync, review and sweep are     [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    never offered. Under GODFATHER_FIXTURES actions are recorded,       [0m[0;38;2;90;92;93m││[0m
+[0;38;2;90;92;93m││[0m[0m    never run.                                                          [0m[0;38;2;90;92;93m││[0m
 [0;38;2;90;92;93m││[0m[0m                                                                        [0m[0;38;2;90;92;93m││[0m
 [0;38;2;90;92;93m││[0m[0m                    [0m[0;1m←→[0m[0;38;2;122;125;125m tool[0m[0m   [0m[0;1m↑↓[0m[0;38;2;122;125;125m scroll[0m[0m   [0m[0;1mesc[0m[0;38;2;122;125;125m close[0m[0m                  [0m[0;38;2;122;125;125m8%[0m[0m [0m[0;38;2;90;92;93m││[0m
 [0;38;2;90;92;93m╰╰────────────────────────────────────────────────────────────────────────╯╯[0m

@@ -1,43 +1,43 @@
 ╭─ SLOTS ───────────────────────────────────────────────────── 12 cores · 6 slots (manual) ─╮ ╭─ LEASE DETAILS ────────────────────────────────────────────╮
-│                                       ╭─ HELP ───────────────────────────────────────────────────────────────────╮                                       │
-│  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅│                                                                          │-build-once                            │
-│  lane-644-bui…  lane-465-sta…  desktop│  KEYS                                                                   ┃│· 1 slot                               │
-╰───────────────────────────────────────│                                                                         ┃│                                       │
-┍━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    ↑ ↓         select a row · scroll a panel                            ┃│                                       │
-│                                       │    pgup pgdn   a page                                                   ┃│                                       │
-┃  ▶️    lane-644-build-once            │    home end    first · last row, top · bottom                           ┃│░░ 0.9 of 2 cores                      │
-│  ▶️    lane-465-state-definitions-revi│    tab         next panel, by columns (shift-tab: back)                 ┃│ · waited 19m34s · running 35m10s      │
-│  ▶️    desktop                        │    click       a row, a panel, a footer hint (as its key)               ┃│ 1 processes                           │
-│                                       │    wheel       scroll the panel under the pointer                       ┃│                                       │
-│  ⏸️    prof51                         │    ← → · f     events: the next log (or click its title)                ┃│ight/.claude/worktrees/agent-afa3816b  │
-│  ⏸️    lane-555-host-rename-names     │    r           events: every event as logged                            ┃│2                                      │
-│                                       │    /           events: filter by text (esc clears)                      ┃│ight/.claude/worktrees/agent-afa3816b  │
-┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    1 2 3       the overview, lanes, processes (tools present)            │2/verify.sh --checks desktop-tests     │
-╭─ SLOTS LOG ─────── label ─────────────│    enter · a   the selected row's actions (or right-click it)            │oing --jobs 1                          │
-│                                       │    s           settings                                                  │ight                                   │
-│  11:59:35  ▫       agent-ae72d94beb6f0│    ?           help                                                      │                                       │
-│  11:58:33  ▫       agent-a1c75285bdf2c│    v           what's new (or click Godfather what's new?)               │d-once                                 │
-│  11:57:15  ▫       agent-a1c75285bdf2c│    esc         close an overlay · leave a page                           │ht                                     │
-│  11:55:44  ▪▪      desktop            │    q           quit                                                      │                                       │
-│  11:55:31  ▫       desktop            │    shift+drag  select text                                               │-build-once                            │
-│  11:55:26  ▫       agent-a1c75285bdf2c│    Hotkeys work on any keyboard layout.                                  │e/queue-347                            │
-│  11:55:00  ▫       desktop            │                                                                          │ess                                    │
-│  11:54:02  ▫       agent-a1c75285bdf2c│                                                                          │ted                                    │
-│  11:52:53  ▫       agent-a1c75285bdf2c│  STATES                                                                  │rification_plan.py, tools/verify.py,   │
-│  11:52:30  ▫       desktop            │                                                                          │main-module.sh, tools/test-build-      │
-│  11:51:40  ▫       post-merge-456-rena│    ▶️  running                                                           │odule.py, tools/app-build.py,          │
-│  11:51:24  ▫       agent-a1c75285bdf2c│    ⏸️  waiting                                                           │st-app-build.py, tools/cargo-test.py,  │
-│  11:49:34  ▫▫      data-grid          │    ↩️  yielded, back in the queue                                        │elopment.md, tools/test-cargo-build-   │
-│  11:48:30  ▫       agent-ae72d94beb6f0│    ❓  asked to yield its slots                                          │, tools/test-heavy.py,                 │
-│  11:47:21  ▫       agent-a0f998f4c57cd│    💤  idle: under 0.1 core for 5 min                                    │rgo_build_cache.py                     │
-│  11:47:17  ▫       agent-a0f998f4c57cd│    🔥  above 1.5× its CPU share                                          │                                       │
-│  11:47:13  ▫       agent-a0f998f4c57cd│    👨‍🦳  lease of an older client                                          │                                       │
-│  11:47:10  ▫       agent-a0f998f4c57cd│                                                                          │───────────────────────────────────────╯
-│  11:47:07  ▫       agent-a0f998f4c57cd│                                                                          │nleased 0.4 · queue ahead · 2 waiting ─╮
-│  11:47:04  ▫       agent-a0f998f4c57cd│  PRIORITY                                                                │          slots held  avg 4.4/6        │
-│  11:46:08  ▫       post-merge-491-elec│                                                                          │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
-│  11:45:53  ▫       agent-a1c75285bdf2c│    ⚡  interactive: someone is waiting on it                             │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
-│  11:45:09  ▫       agent-a1c75285bdf2c│                                                                          │░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
-│                                       │                      ↑↓ scroll   esc close   q quit                  30% │          −80s                    now  │
-╰───────────────────────────────────────╰──────────────────────────────────────────────────────────────────────────╯───────────────────────────────────────╯
+│╭─ HELP ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮│
+││                                                                                                                                                        ││
+││  KEYS                                                Normal has no mark.                               ▲ ↗ ↘           outlier · type slower/faster    ││
+╰│    ↑ ↓         select a row · scroll a panel                                                                                                           ││
+┍│    pgup pgdn   a page                              SLOTS                                             PAGES                                             ││
+││    home end    first · last row, top · bottom        One block per slot; the colour is its owner.      2 · 3        lanes · processes (SLOTS'          ││
+┃│    tab         next panel, by columns                Slots budget scheduling, not CPU or memory.                    border)                            ││
+││                (shift-tab: back)                     manual · auto  saved or computed capacity         ▶️ 🗓️ ✅ 💤  active planned landed parked       ││
+││    click       a row, a panel, a footer hint (as     draining N     held above a lowered capacity      👻 ⌛        owner gone · past its TTL          ││
+││                its key)                                                                                ❔ 📦        unowned process · resource         ││
+││    wheel       scroll the panel under the          QUEUE                                               Links in DETAILS open a page.                   ││
+││                pointer                               slots  cells held or asked for                                                                    ││
+││    ← → · f     events: next log (or its title)       cpu    cores used / cores its slots stand for   MACHINE                                           ││
+┕│    r           events: every event as logged                (a soft limit)                             load       the 1-minute load average / cores    ││
+╭│    /           events: text filter (esc clears)      time   running or waiting for                                (not CPU %)                          ││
+││    1 2 3       overview · lanes · processes          pid    lease owner                                mem        the kernel's memory pressure:        ││
+││    enter · a   the row's actions (right-click)       The bar turns red above 1.5× its share and                   normal, warning, critical (Linux:    ││
+││    s           settings                              yellow when idle.                                            used / total)                        ││
+││    ?           help                                  An idle lease that can yield is asked to when     swap       used / total, in GB                  ││
+││    v           what's new (or click Godfather        a request waits for its slots. Nothing is         Admission follows memory pressure, not used     ││
+││                what's new?)                          ever killed.                                      RAM, which the file cache keeps near full.      ││
+││    esc         close an overlay · leave a page                                                         🆗 · 🔥    fine · critical                      ││
+││    q           quit                                DETAILS                                             unleased   demand outside leased work           ││
+││    shift+drag  select text                           start est   when the queue head should start      admission  slots a new request could get now    ││
+││    Hotkeys work on any keyboard layout.              pass until  later work may overtake until         Bars run indigo→red, and turn all red when      ││
+││                                                                  then                                  the resource is critical.                       ││
+││  STATES                                              receipt     the lane's check: green or red,       The chart shows held slots over time, now on    ││
+││    ▶️  running                                                   current or stale                      the right.                                      ││
+││    ⏸️  waiting                                       review      review findings still open                                                            ││
+││    ↩️  yielded, back in the queue                    Estimates, not promises.                        SETTINGS                                          ││
+││    ❓  asked to yield its slots                                                                        ↑ ↓      move through every section             ││
+││    💤  idle: under 0.1 core for 5 min              EVENTS                                              ← →      change the value                       ││
+││    🔥  above 1.5× its CPU share                      One log at a time; ↑↓ pick a run or event         enter    edit · save                            ││
+││    👨‍🦳  lease of an older client                      ▪ · ▫           held · given back, never held     d · D D  reset one · reset its section          │╯
+││                                                      wait · no wait  how long it waited for them       esc      close                                  │╮
+││  PRIORITY                                            ok · exit N     how it ended, how long            A section per tool; status is read-only.        ││
+││    ⚡  interactive: someone is waiting on it         gave up         a waiter stopped waiting          Lower capacity drains; work keeps slots.        ││
+││    🐌  batch: unattended work, after the rest        owner died      it exited; it was reaped          Colour theme: Auto, Terminal or Built-in.       ││
+││                                                                                                                                                        ││
+││                                                             ↑↓ scroll   esc close   q quit                                                             ││
+╰╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯╯
  Godfather what's new?                            ↑↓ select   tab panel   s settings   ? help   q quit                             updated 11:59:39  ● live
