@@ -1,0 +1,13 @@
+╭─ MACHINE ─── whole machine: dg-striped perf JS parity vs CSS parity ─╮
+│                               slots held  avg 8.0/8 · peak 8         │
+│  🆗 load ■■■■■■░░░░░░ 6.3/12                                     ▄▄  │
+│  🆗 mem  ■■■■░░░░░░░░ normal                                     ██  │
+│  🆗 swap ■■■░░░░░░░░░ 0.2/1G                                     ██  │
+│                                                                  ▀▀  │
+│                               −60m                              now  │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+╰──────────────────────────────────────────────────────────────────────╯

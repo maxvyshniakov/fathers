@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING, Any, Optional, cast
 
 from .. import layout as _layout
 from .. import version as _version
-from ..tui import Canvas, clock
+from ..tui import Canvas
+from ..text import clock
 from ..widgets import Footer, Panel, Part
 from . import common as _common
 from . import details as _details

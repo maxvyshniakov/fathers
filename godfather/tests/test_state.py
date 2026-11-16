@@ -13,7 +13,7 @@ import helpers  # noqa: F401 - src/ on sys.path
 import view as _view
 from test_settings import INTERVAL, SAFETY, SLOTS, THEME, PanelCase, Settings, idle
 
-from godfather import settings_model, state as state_module
+from godfather import reducer, settings_model, state as state_module
 
 from godfather.layout import Rect
 
@@ -728,10 +728,10 @@ class SettingsModeTests(PanelCase):
         settings = Settings(self.clock)
         settings.select(SAFETY)
         settings.key("right")
-        state, effects = state_module.reduce(settings.state, state_module.Key("\r"), self.clock.now)
+        state, effects = reducer.reduce(settings.state, state_module.Key("\r"), self.clock.now)
         self.assertEqual([("settings", "set")], [(effect.kind, effect.item.kind) for effect in effects])
         answer = settings.screen.settings_call(effects[0].item)
-        _, effects = state_module.reduce(state, answer, self.clock.now)
+        _, effects = reducer.reduce(state, answer, self.clock.now)
         self.assertIn("load-model", [effect.kind for effect in effects])
 
 

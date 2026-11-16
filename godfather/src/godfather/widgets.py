@@ -5,12 +5,13 @@ dropping, header labels in the border and rows of emoji cells cut to their colum
 it goes comes from layout.py and from these."""
 from __future__ import annotations
 
-from typing import Any, NamedTuple, Optional, Union
+from typing import Any, Optional, Union
 
 from .layout import clamp_scroll, Rect
-from .tui import HINT_GAP, Canvas, hints_width, text_width
+from .text import Part
+from .tui import HINT_GAP, Canvas, hints_width
+from .text import text_width
 
-Part = tuple[str, str]  # (text, style)
 Placed = tuple[str, str, int, int, bool]  # (key, title, x, width, right-aligned)
 Spec = tuple[str, str, int, bool, int]  # (key, title, width (0: the flexible one), right-aligned, drop priority)
 Value = Union[str, Part, list[Part]]
@@ -325,15 +326,3 @@ class Footer:
             if index < len(hints) - 1:
                 x += HINT_GAP
         return x
-
-
-class OverlayView(NamedTuple):
-    """Where a scrollable overlay (help, the changelog) was drawn, and what it shows: the hit-test geometry."""
-    x: int
-    y: int
-    width: int
-    height: int
-    offset: int
-    visible: int
-    total: int
-    name: str = "help"

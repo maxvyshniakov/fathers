@@ -33,6 +33,10 @@
 │    Review start              Automatic                                       │
 │    Rerun waits               55m                                             │
 │    check priority            Batch  env LANEFATHER_PRIORITY_CHECK            │
+│    post-merge priority       Project                                         │
+│    gate priority             Project                                         │
+│    rerun priority            Project                                         │
+│    perf priority             Project                                         │
 │  ──────────────────────────────────────────────────────────────────────────  │
 │  JUNKFATHER · status read-only, live                                         │
 │    settings     /fake/state/junkfather/settings.json                         │
@@ -42,6 +46,9 @@
 │    Sweep every               1h                                              │
 │    Grace before SIGKILL      10s                                             │
 │    State directory           /fake/state/junkfather  read-only               │
+│    Extra scratch roots       –  read-only                                    │
+│    Claude Code sessions      /fake/claude/sessions  read-only                │
+│    Lane records              –  read-only                                    │
 │                                                                              │
 │  ──────────────────────────────────────────────────────────────────────────  │
 │  Shared by every client. Automatic: the lower of the CPU and memory          │

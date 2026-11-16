@@ -129,6 +129,122 @@
          "label": "Batch"
         }
        ]
+      },
+      {
+       "key": "slots.priority.post-merge",
+       "label": "post-merge priority",
+       "type": "choice",
+       "value": "project",
+       "default": "project",
+       "source": "default",
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "The Slotfather priority of this machine's post-merge runs; project follows the project's [slots.priority] and the built-in.",
+       "choices": [
+        {
+         "value": "project",
+         "label": "Project"
+        },
+        {
+         "value": "interactive",
+         "label": "Interactive"
+        },
+        {
+         "value": "normal",
+         "label": "Normal"
+        },
+        {
+         "value": "batch",
+         "label": "Batch"
+        }
+       ]
+      },
+      {
+       "key": "slots.priority.gate",
+       "label": "gate priority",
+       "type": "choice",
+       "value": "project",
+       "default": "project",
+       "source": "default",
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "The Slotfather priority of this machine's gate runs; project follows the project's [slots.priority] and the built-in.",
+       "choices": [
+        {
+         "value": "project",
+         "label": "Project"
+        },
+        {
+         "value": "interactive",
+         "label": "Interactive"
+        },
+        {
+         "value": "normal",
+         "label": "Normal"
+        },
+        {
+         "value": "batch",
+         "label": "Batch"
+        }
+       ]
+      },
+      {
+       "key": "slots.priority.rerun",
+       "label": "rerun priority",
+       "type": "choice",
+       "value": "project",
+       "default": "project",
+       "source": "default",
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "The Slotfather priority of this machine's rerun runs; project follows the project's [slots.priority] and the built-in.",
+       "choices": [
+        {
+         "value": "project",
+         "label": "Project"
+        },
+        {
+         "value": "interactive",
+         "label": "Interactive"
+        },
+        {
+         "value": "normal",
+         "label": "Normal"
+        },
+        {
+         "value": "batch",
+         "label": "Batch"
+        }
+       ]
+      },
+      {
+       "key": "slots.priority.perf",
+       "label": "perf priority",
+       "type": "choice",
+       "value": "project",
+       "default": "project",
+       "source": "default",
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "The Slotfather priority of this machine's perf runs; project follows the project's [slots.priority] and the built-in.",
+       "choices": [
+        {
+         "value": "project",
+         "label": "Project"
+        },
+        {
+         "value": "interactive",
+         "label": "Interactive"
+        },
+        {
+         "value": "normal",
+         "label": "Normal"
+        },
+        {
+         "value": "batch",
+         "label": "Batch"
+        }
+       ]
       }
      ]
     }

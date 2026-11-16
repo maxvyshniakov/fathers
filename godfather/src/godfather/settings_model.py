@@ -14,12 +14,12 @@ from __future__ import annotations
 
 import dataclasses
 import math
-import os
 from dataclasses import dataclass, field
 from typing import Any, Mapping, NamedTuple, Optional, Sequence, cast
 
 from . import layout as _layout
 from . import theme as _theme
+from .text import span, tilde
 
 GODFATHER = "godfather"
 ORDER = ("godfather", "slotfather", "lanefather", "junkfather")  # the sections, top to bottom
@@ -182,21 +182,6 @@ def plural(count: int, word: str) -> str:
     return f"{count} {word}{'' if count == 1 else 's'}"
 
 
-def duration(seconds: Any) -> str:
-    """Seconds as 1h, 30m, 1h30m, 45s, 1d2h; a fraction of a second stays (0.1s)."""
-    if not isinstance(seconds, (int, float)) or isinstance(seconds, bool) or not math.isfinite(seconds) \
-            or seconds < 0:
-        return str(seconds)
-    whole = int(seconds)
-    rest = float(seconds) - whole
-    days, whole = divmod(whole, 86400)
-    hours, whole = divmod(whole, 3600)
-    minutes, secs = divmod(whole, 60)
-    parts = [f"{days}d" if days else "", f"{hours}h" if hours else "", f"{minutes}m" if minutes else "",
-             f"{number(round(secs + rest, 3))}s" if secs or rest else ""]
-    return "".join(parts) or "0s"
-
-
 def argument(value: Any) -> str:
     """A value as `settings set` takes it: 1800, 0.05, fixed."""
     if isinstance(value, bool):
@@ -206,19 +191,13 @@ def argument(value: Any) -> str:
     return str(value)
 
 
-def tilde(text: str) -> str:
-    """A leading path under the home directory, tilde-shortened."""
-    home = os.path.expanduser("~")
-    return "~" + text[len(home):] if text == home or text.startswith(home + os.sep) else text
-
-
 def value_text(row: Row, value: Any) -> str:
     """A value as shown, its unit beside it: 3×, 0.1 cores, 4 GiB, 1h30m, never."""
     kind = row.type
     if kind == "theme":
         return _theme.MODE_LABELS.get(str(value), str(value))
     if kind == "interval":
-        return duration(value)
+        return span(value, compact=True)
     if value is None:
         return "–"
     if kind == "choice":
@@ -231,7 +210,7 @@ def value_text(row: Row, value: Any) -> str:
         if not value and row.schema.get("zero"):
             return str(row.schema["zero"])
         if kind == "duration":
-            return duration(value)
+            return span(value, compact=True)
         unit = str(row.schema.get("unit") or "")
         if not unit or unit.lower() == row.label.lower():
             return number(value)

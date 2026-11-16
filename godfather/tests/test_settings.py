@@ -21,7 +21,8 @@ from unittest import mock
 
 from helpers import FakeSlotfather, FakeTool
 
-from godfather import app, settings_model, state as state_module, tui
+from godfather import app, reducer, settings_model, state as state_module, tui
+from godfather.text import span
 from godfather.views import settings as settings_view
 
 SNAPSHOTS = Path(__file__).resolve().parent / "snapshots"
@@ -97,7 +98,7 @@ class Clock:
 
 
 class Settings:
-    """Settings in an app state, as the live view drives it: keys, clicks and ticks through state.reduce(), every
+    """Settings in an app state, as the live view drives it: keys, clicks and ticks through reducer.reduce(), every
     settings call it asks for carried out at once (app.Screen.settings_call) and its answer sent back."""
 
     def __init__(self, clock: Clock, interval: float = 1.0, theme: str = "auto",
@@ -111,7 +112,7 @@ class Settings:
 
     def send(self, event: Any) -> list[str]:
         """The effects' kinds, the answers' too; each settings call is answered before this returns."""
-        self.state, effects = state_module.reduce(self.state, event, self.clock.now)
+        self.state, effects = reducer.reduce(self.state, event, self.clock.now)
         kinds = [effect.kind for effect in effects]
         for effect in effects:
             if effect.kind == "settings" and self.deferred:
@@ -1003,7 +1004,7 @@ class ModelTests(unittest.TestCase):
     def test_durations(self) -> None:
         for seconds, text in ((3600, "1h"), (1800, "30m"), (5400, "1h30m"), (45, "45s"), (0, "0s"), (0.1, "0.1s"),
                               (90000, "1d1h"), (3601, "1h1s"), (3300, "55m")):
-            self.assertEqual(text, settings_model.duration(seconds), seconds)
+            self.assertEqual(text, span(seconds, compact=True), seconds)
 
     def test_an_unknown_type_is_shown_read_only(self) -> None:
         found = self.section({"key": "a.colour", "label": "Accent", "type": "colour", "value": "#ff0000",

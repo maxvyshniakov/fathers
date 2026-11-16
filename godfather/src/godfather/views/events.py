@@ -20,7 +20,8 @@ import datetime
 from typing import Any, Optional, cast
 
 from ..layout import Rect
-from ..tui import Canvas, clock, span, text_width
+from ..tui import Canvas
+from ..text import clock, span, text_width
 from ..widgets import FLEXIBLE_MIN, FOCUS_FRAME, REST_FRAME, Panel, Part, Spec, Table
 from ..events import ALL, Filter, shown_rows, view_of, views
 from . import common as _common

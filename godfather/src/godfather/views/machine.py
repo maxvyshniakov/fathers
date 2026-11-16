@@ -9,7 +9,8 @@ from typing import Any, NamedTuple, Optional, cast
 from .. import layout as _layout
 from .. import theme as _theme
 from ..layout import Rect
-from ..tui import Canvas, text_width
+from ..tui import Canvas
+from ..text import text_width
 from ..widgets import Panel, Part
 from . import common as _common
 from .common import Model, ramp_bar
@@ -90,33 +91,40 @@ def machine_memory_status(memory: dict[str, Any]) -> Part:
 def machine_note(model: Model) -> list[Part]:
     """MACHINE's top border, on the right (owner, 2026-11-12): the load outside leases and whether the queue admits
     work, and, where it does not, why (fathers#156)."""
-    return [(f"unleased {model['advice']['unleased_load']:.1f}", "status-normal"), (" · ", "dim"), admission_note(model)]
+    return [(f"unleased {model['advice']['unleased_load']:.1f}", "status-normal"), (" · ", "dim"),
+            *admission_note(model)]
 
 
-def admission_note(model: Model) -> Part:
+def admission_note(model: Model) -> list[Part]:
     """What a new request could get now, or why nothing (fathers#156), from the fields Slotfather's model carries:
-    memory short (red: a machine problem), draining after a lowered capacity, one request holding the whole
-    machine (named), the slots all held, or requests waiting ahead. A full or queued machine is the queue working:
-    it reads in the normal colour, never as a fault."""
+    memory short (red: the machine problem, first where there is another reason too), draining after a lowered
+    capacity, one request holding the whole machine (named), the slots all held, or requests waiting ahead. A full
+    or queued machine is the queue working: the normal colour, never a fault. Slotfather admits by slots and memory
+    only; the load limit `lanefather` refuses lanes by is Lanefather's, not this."""
     admission = model.get("admission")
     if admission is None:
-        return "admission: ?", "dim"
+        return [("admission: ?", "dim")]
     if admission:
-        return f"admission: {admission} slots", "status-normal"
+        return [(f"admission: {admission} slots", "status-normal")]
     slots, used = int(model.get("slots") or 0), int(model.get("used") or 0)
-    if model.get("memory_block"):
-        return "memory short", "bad"
-    if int(model.get("draining") or 0):
-        return f"draining · {used} of {slots} held", "warn"
+    found: list[Part] = [("memory short", "bad")] if model.get("memory_block") else []
     holders = cast(list[dict[str, Any]], model.get("holders") or [])
     whole = next((holder for holder in holders if holder.get("kind") == "held" and slots
                   and (holder.get("all") or int(holder.get("count") or 0) >= slots)), None)
-    if whole is not None:
-        return f"whole machine: {whole.get('label') or whole.get('pid') or '?'}", "status-normal"
-    if used >= slots:
-        return f"full · {used} of {slots} held", "status-normal"
     waiting = len(cast(list[Any], model.get("waiters") or []))
-    return (f"queue ahead · {waiting} waiting" if waiting else "no admission"), "status-normal"
+    if int(model.get("draining") or 0):
+        why: Optional[Part] = (f"draining · {used} of {slots} held", "warn")
+    elif whole is not None:
+        why = (f"whole machine: {whole.get('label') or whole.get('pid') or '?'}", "status-normal")
+    elif used >= slots:
+        why = (f"full · {used} of {slots} held", "status-normal")
+    elif waiting and not found:
+        why = (f"queue ahead · {waiting} waiting", "status-normal")
+    else:
+        why = None if found else ("no admission", "status-normal")
+    if why is not None:
+        found += ([(" · ", "dim")] if found else []) + [why]
+    return found
 
 
 class Resource(NamedTuple):

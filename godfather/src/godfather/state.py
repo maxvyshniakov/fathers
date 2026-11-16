@@ -18,8 +18,8 @@ from . import settings_model as _settings
 from . import entries as _entries
 from . import events as _events_view
 from . import overlay_text as _overlays
-from .tui import dashboard_text, hint_at
-from .widgets import OverlayView
+from .overlay_text import OverlayView
+from .text import hint_at
 
 Model = dict[str, Any]
 EntryId = tuple[Any, int]
@@ -519,50 +519,3 @@ def model_loaded(state: AppState, event: ModelLoaded) -> AppState:
         state = dataclasses.replace(state, details={key: value for key, value in state.details.items() if key in keep})
     refresh = Refresh("live") if event.problem is None else Refresh("stale", event.problem)
     return dataclasses.replace(state, model=fresh, refresh=refresh)
-
-
-def reduce(state: AppState, event: Event, now: float) -> Result:
-    """The one reducer: the state after `event` at `now`, and what the app must do."""
-    from . import modes as _modes  # the mode table builds on the transitions above
-
-    effects: list[Effect] = []
-    if isinstance(event, (Key, Mouse)):  # only these scroll: a refresh that moves EVENTS down is no flash
-        old, before, panels = state, offsets(state), offsets(state, False)  # Settings' offset before it moves
-        state, effects = _modes.dispatch(state, event, now)
-        state, marked = closed_news(old, state, QUIT in effects)
-        effects = marked + effects  # saved before the app quits
-        same = overlay_identity(state) == overlay_identity(old)  # an overlay opened or switched is not scrolled
-        moved = scrolled(before if same else panels, offsets(state, same))
-        if moved:
-            state = dataclasses.replace(state, glow={**state.glow, **{name: now for name in moved}})
-    elif isinstance(event, ModelLoaded):
-        state = model_loaded(state, event)
-    elif isinstance(event, ModelFailed):
-        state = dataclasses.replace(state, refresh=Refresh("stale", dashboard_text(event.error)))
-    elif isinstance(event, DetailsLoaded):
-        state = dataclasses.replace(state, details={**state.details, event.key: Loaded(
-            now, event.lane, event.cwd, None if event.error is None else dashboard_text(event.error))})
-    elif isinstance(event, SettingsOpened):
-        context = settings_context(state)
-        requests = [_settings.Request("open")] if event.loading else []
-        state, effects = settings_result(state, _settings.opened(event.sections, context, now, event.loading), context,
-                                         requests)
-    elif isinstance(event, (SettingsSections, SettingsRead, SettingsChecked, SettingsWritten)):
-        state, effects = settings_event(state, event, now)
-    elif isinstance(event, NewsLoaded):
-        state = news_loaded(state, event.news)
-    elif isinstance(event, SettingsFailed):
-        state = dataclasses.replace(state, notice=Notice(dashboard_text(event.error), now))
-    elif isinstance(event, Drawn):
-        focus = state.focus if state.focus == "requests" or state.focus in event.frame.tables else "requests"
-        state = dataclasses.replace(state, frame=event.frame, focus=focus)
-        if isinstance(state.overlay, SettingsOverlay):  # another size: the focused row kept in view
-            state = dataclasses.replace(state, overlay=_settings.place(state.overlay, settings_context(state)))
-    else:
-        second = event.moment.replace(microsecond=0) if event.moment is not None else state.moment
-        if second != state.moment:
-            state = dataclasses.replace(state, moment=second)
-        if isinstance(state.overlay, SettingsOverlay):  # a change that settled is saved, reads come due
-            state, effects = settings_event(state, event, now)
-    state, more = settle(state, now)
-    return state, effects + more

@@ -35,6 +35,7 @@ from .adapters import slotfather as _slotfather
 from .adapters.settings import Conflict, ReadOnly, SettingsClient, SettingsError
 from .adapters.slotfather import Unsupported
 from .sources import SnapshotError, Source
+from . import reducer as _reducer
 from . import state as _state
 from .tui import Canvas, Jobs, Loader, full_screen, read_keys
 from .views import common as _common
@@ -311,7 +312,7 @@ class Live:
     def send(self, event: _state.Event) -> None:
         """One event through the reducer, and its effects carried out; any change is drawn at the next pass."""
         before = self.state
-        self.state, effects = _state.reduce(self.state, event, time.monotonic())
+        self.state, effects = _reducer.reduce(self.state, event, time.monotonic())
         self.dirty = self.dirty or self.state is not before
         for effect in effects:
             self.carry_out(effect)
