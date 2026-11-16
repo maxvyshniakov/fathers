@@ -49,7 +49,8 @@ KINDS: dict[str, str] = {
     "lane.landed": "land merged the lane",
     "lane.post_merge": "the post-merge smoke finished (error when red)",
     "lane.released": "a green smoke freed the lane while its agent still holds the worktree",
-    "lane.done_refused": "done did not run by itself after landing (warn)",
+    "lane.done_refused": "done did not run by itself on a finished lane (warn)",
+    "lane.kept": "keep, or keep --off, changed whether auto-done leaves the lane",
     "lane.done": "done removed the lane's worktree, branches and scratch",
     "process.stopped": "done stopped a process the lane left behind",
     "review.started": "the review started in the background",
@@ -113,15 +114,27 @@ def timestamp(moment: datetime.datetime) -> str:
     return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond // 1000:03d}Z"
 
 
+# The agent sessions a process can run for, the most specific first: a Codex thread started from a Claude Code
+# session inherits CLAUDE_CODE_SESSION_ID, never the other way round (fathers#150 review).
+AGENTS = (("CODEX_THREAD_ID", "codex"), ("CLAUDE_CODE_SESSION_ID", "claude-code"))
+
+
+def agent_session() -> tuple[str, str] | None:
+    """(agent name, session id) of the agent this process runs for, or None."""
+    for variable, name in AGENTS:
+        session = os.environ.get(variable, "").strip()
+        if session:
+            return name, session
+    return None
+
+
 def actor() -> dict[str, Any]:
     """Who causes the event: the agent session this process runs for, else the process. A command Godfather runs
     carries `via: godfather` (GODFATHER_ACTOR is godfather/<version>)."""
     found: dict[str, Any] = {"type": "process", "pid": os.getpid()}
-    for variable, name in (("CLAUDE_CODE_SESSION_ID", "claude-code"), ("CODEX_THREAD_ID", "codex")):
-        session = os.environ.get(variable, "").strip()
-        if session:
-            found.update(type="agent", session=clean(session, 1, 200), name=name)
-            break
+    agent = agent_session()
+    if agent:
+        found.update(type="agent", session=clean(agent[1], 1, 200), name=agent[0])
     via = os.environ.get("GODFATHER_ACTOR", "").split("/", 1)[0].strip()
     if re.fullmatch(r"[a-z][a-z0-9-]{0,31}", via):
         found["via"] = via

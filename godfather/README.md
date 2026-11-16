@@ -10,11 +10,15 @@ processes agents start).
   <img alt="Godfather: Slotfather's dashboard, navigating running and waiting requests" src="assets/dashboard.webp">
 </picture>
 
-**Status: 0.1.0.** The main screen is Slotfather's dashboard, moved here with no visible change but the footer:
-`Godfather what's new?` (`v` or a click) opens one timeline of every tool's changelog, an install from main's
-unreleased entries included, and EVENTS shows each tool's event log in its own columns, its title the switch
-(`◂ SLOTS LOG ▸`: ← →, `f` or a click), one row per Slotfather run, `/` to filter by text. Lanes, processes and row actions come in the next
-slices of [SPEC.md](SPEC.md), each as its tool supports the contract.
+**Status: 0.1.0, with the next release's work on `main`** ([SPEC.md, Status](SPEC.md#status) item by item,
+[CHANGELOG.md](CHANGELOG.md) in full). The overview is Slotfather's dashboard as it moved here: SLOTS, QUEUE,
+DETAILS, EVENTS and MACHINE. SLOTS' bottom border sums up the other tools, `2 lanes 3 active · 2 reviews` and
+`3 procs 7 · 1 orphan`; `2` and `3` (or a click on a summary) open the Lanes and Processes pages, each a table, its
+details and its tool's events. EVENTS shows one tool's log at a time, its title the switch (`◂ SLOTS LOG ▸`: ← →, `f`
+or a click), one row per Slotfather run with trends as marks, its rows selectable into DETAILS, `/` to filter.
+Enter, `a` or a right-click on a row offers the actions its tool advertises (reprioritize, ask to yield, reap,
+extend, open, park), each checked against a fresh snapshot first. Settings (`s`) has a section per tool. MACHINE says
+why admission is closed. `Godfather what's new?` (`v` or a click) opens one timeline of every tool's changelog.
 
 ## Install and run
 
@@ -48,7 +52,8 @@ runs their CLIs. A tool that is not installed simply has no panels; one without 
 | Settings | `<tool> settings --json`, `settings check`, `settings set`, `settings reset`, for each present tool |
 | Events | `events.jsonl` in the tool's state directory, one shared versioned schema |
 
-[docs/contracts/slotfather.md](docs/contracts/slotfather.md) is the exact shape read from Slotfather;
+[docs/contracts/slotfather.md](docs/contracts/slotfather.md) is the exact shape read from Slotfather,
+[docs/contracts/lanefather.md](docs/contracts/lanefather.md) from Lanefather;
 [docs/contracts/changelog.md](docs/contracts/changelog.md) is what every tool answers for what's new.
 The event schema is [docs/events.md](docs/events.md), with a JSON Schema and
 [`common/eventcheck.py`](../common/eventcheck.py), one MIT-licensed standard-library file every tool's tests

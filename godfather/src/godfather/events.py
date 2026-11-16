@@ -22,7 +22,7 @@ import socket
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, BinaryIO, Optional, cast
+from typing import Any, BinaryIO, Mapping, Optional, cast
 
 from . import eventcheck as _eventcheck
 
@@ -572,6 +572,15 @@ def junkfather_shown(kind: str, details: dict[str, Any]) -> Optional[Shown]:
                      label=str(details["cmd"]) if details.get("cmd") else None)
     if kind == "hook.failed":
         return Shown("hook fail", ((str(details.get("error") or ""), "bad"),))
+    if kind == "sweep.finished":  # its result: how many it reaped, failed on, found unowned (lists of ids)
+        counts = [f"{len(cast(list[Any], value))} {key}" for key, value in details.items()
+                  if isinstance(value, list) and value]
+        return Shown("swept", ((_words(*counts) or "nothing to do", "dim"),))
+    if kind == "sweep.finished":  # what the sweep did: reaped, reported unowned, its result
+        counts = [f"{details[key]} {word}" for key, word in (("reaped", "reaped"), ("unowned", "unowned"),
+                                                             ("resources", "resources")) if _number(details.get(key))]
+        return Shown("swept", ((_words(*counts, details.get("result") if isinstance(details.get("result"), str)
+                                       else ""), "dim"),))
     return None
 
 
@@ -609,7 +618,8 @@ def row(event: Event, tag: str) -> dict[str, Any]:
             "label": found.label or subject_label(event), "id": str(event.subject.get("id") or ""),
             "pid": pid if isinstance(pid, int) and not isinstance(pid, bool) else None,
             "detail": list(found.detail), "lease": event.subject.get("lease_id"), "details": event.details,
-            "ticket": event.subject.get("ticket")}
+            "ticket": event.subject.get("ticket"), "subject": event.subject,
+            "level": str(event.data.get("level") or "info")}
 
 
 def identity(event: Event) -> tuple[str, str, int]:
@@ -645,6 +655,7 @@ def rows(events: list[Event], tags: dict[str, str]) -> list[dict[str, Any]]:
             or nearest(_parse_any_time(outlier.details.get("ended")))
         if target is not None:
             target["run"] = "outlier"
+            target["outlier"] = outlier.details  # DETAILS explains the mark (fathers#152)
     others = [item for item in found if item["kind"] != "run.trend"]
     since = min((item["when"] for item in others), default=None)
     kept: list[dict[str, Any]] = []
@@ -702,7 +713,8 @@ def run_row(grant: Optional[dict[str, Any]], end: Optional[dict[str, Any]]) -> d
                  count=int(first.get("count") or last.get("count") or 0), filled=end is None,
                  wait=list(grant.get("detail") or []) if grant else [],
                  detail=list(end.get("detail") or []) if end else [], running=end is None,
-                 label=first.get("label") or last.get("label"))
+                 label=first.get("label") or last.get("label"),
+                 granted=dict(grant.get("details") or {}) if grant else None, ended=end.get("kind") if end else None)
     if end is not None and end.get("run"):
         found["run"] = end["run"]
     return found
@@ -744,7 +756,7 @@ def runs(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 VIEWS = ("slotfather", "lanefather", "junkfather")
 ALL = "all"
-Model = dict[str, Any]
+Model = Mapping[str, Any]  # the overview's model (model.Dashboard), or a strip's events and sources alone
 
 
 @dataclass(frozen=True)
@@ -789,6 +801,11 @@ def cycled(model: Optional[Model], found: Filter, step: int) -> Optional[str]:
     if len(shown) < 2:
         return None
     return shown[(shown.index(view_of(model, found)) + step) % len(shown)]
+
+
+def newest_first(model: Optional[Model], found: Filter) -> list[dict[str, Any]]:
+    """EVENTS' rows as drawn, newest first: what its cursor (fathers#152) moves over."""
+    return shown_rows(model, found)[::-1]
 
 
 def shown_rows(model: Optional[Model], found: Filter) -> list[dict[str, Any]]:

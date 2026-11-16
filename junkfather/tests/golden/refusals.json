@@ -4,8 +4,8 @@
    "adopt",
    "<pid0>"
   ],
-  "code": 1,
-  "err": "junkfather adopt: refusing pid <pid0>: junkfather itself or one of its ancestors\n",
+  "code": 3,
+  "err": "junkfather: refusing pid <pid0>: junkfather itself or one of its ancestors\n",
   "out": ""
  },
  {
@@ -13,8 +13,8 @@
    "adopt",
    "999999"
   ],
-  "code": 1,
-  "err": "junkfather adopt: refusing pid 999999: no such process\n",
+  "code": 6,
+  "err": "junkfather: refusing pid 999999: no such process\n",
   "out": ""
  },
  {
@@ -23,8 +23,8 @@
    "--pid",
    "<pid2>"
   ],
-  "code": 1,
-  "err": "junkfather reap: pid <pid2> is not owned; junkfather stops an unowned process only with --force, and only one `junkfather sweep` listed\n",
+  "code": 3,
+  "err": "junkfather: pid <pid2> is not owned; junkfather stops an unowned process only with --force, and only one `junkfather sweep` listed\n",
   "out": ""
  },
  {
@@ -34,8 +34,8 @@
    "<pid2>",
    "--force"
   ],
-  "code": 1,
-  "err": "junkfather reap: refusing pid <pid2>: the last sweep did not list it (run junkfather sweep)\n",
+  "code": 3,
+  "err": "junkfather: refusing pid <pid2>: the last sweep did not list it (run junkfather sweep)\n",
   "out": ""
  },
  {
@@ -45,8 +45,8 @@
    "<pid2>",
    "--force"
   ],
-  "code": 1,
-  "err": "junkfather reap: refusing pid <pid2>: the pid now belongs to another process (its start time changed)\n",
+  "code": 3,
+  "err": "junkfather: refusing pid <pid2>: the pid now belongs to another process (its start time changed)\n",
   "out": ""
  },
  {
@@ -56,8 +56,8 @@
    "<pid2>",
    "--force"
   ],
-  "code": 1,
-  "err": "junkfather reap: refusing pid <pid2>: the pid now belongs to another process (its command changed)\n",
+  "code": 3,
+  "err": "junkfather: refusing pid <pid2>: the pid now belongs to another process (its command changed)\n",
   "out": ""
  },
  {
@@ -67,8 +67,8 @@
    "<pid0>",
    "--force"
   ],
-  "code": 1,
-  "err": "junkfather reap: refusing pid <pid0>: not a process junkfather may stop\n",
+  "code": 3,
+  "err": "junkfather: refusing pid <pid0>: not a process junkfather may stop\n",
   "out": ""
  },
  {
@@ -78,8 +78,8 @@
    "999999",
    "--force"
   ],
-  "code": 1,
-  "err": "junkfather reap: refusing pid 999999: it no longer runs\n",
+  "code": 6,
+  "err": "junkfather: refusing pid 999999: it no longer runs\n",
   "out": ""
  },
  {
@@ -160,7 +160,7 @@
    "reap"
   ],
   "code": 2,
-  "err": "junkfather: reap takes one of --id, --owner, --lane or --pid\n",
+  "err": "junkfather: reap takes one of --id, --owner, --lane or --pid\nTry 'junkfather reap --help'.\n",
   "out": ""
  },
  {
@@ -172,7 +172,7 @@
    "x"
   ],
   "code": 2,
-  "err": "junkfather: --agent goes with --owner SESSION\n",
+  "err": "junkfather: --agent goes with --owner SESSION\nTry 'junkfather reap --help'.\n",
   "out": ""
  },
  {
@@ -181,7 +181,7 @@
    "--"
   ],
   "code": 2,
-  "err": "junkfather: own needs a command after --\n",
+  "err": "junkfather: own needs a command after --\nTry 'junkfather own --help'.\n",
   "out": ""
  },
  {
@@ -193,7 +193,7 @@
    "true"
   ],
   "code": 2,
-  "err": "junkfather: --log goes with --detach\n",
+  "err": "junkfather: --log goes with --detach\nTry 'junkfather own --help'.\n",
   "out": ""
  },
  {
@@ -204,7 +204,7 @@
    "true"
   ],
   "code": 2,
-  "err": "junkfather: --remove goes with --kind docker\n",
+  "err": "junkfather: --remove goes with --kind docker\nTry 'junkfather own --help'.\n",
   "out": ""
  },
  {
@@ -217,7 +217,7 @@
    "true"
   ],
   "code": 2,
-  "err": "junkfather: --kind runs its command attached: the resource outlives it\n",
+  "err": "junkfather: --kind runs its command attached: the resource outlives it\nTry 'junkfather own --help'.\n",
   "out": ""
  },
  {
@@ -230,7 +230,7 @@
    "--remove"
   ],
   "code": 2,
-  "err": "junkfather: --remove goes with --kind docker\n",
+  "err": "junkfather: --remove goes with --kind docker\nTry 'junkfather own-resource --help'.\n",
   "out": ""
  },
  {
@@ -244,7 +244,7 @@
    "true"
   ],
   "code": 2,
-  "err": "junkfather: --alive and --stop go with --kind command\n",
+  "err": "junkfather: --alive and --stop go with --kind command\nTry 'junkfather own-resource --help'.\n",
   "out": ""
  },
  {
@@ -256,7 +256,7 @@
    "x"
   ],
   "code": 2,
-  "err": "junkfather own-resource: --kind command needs --alive CMD and --stop CMD\n",
+  "err": "junkfather: --kind command needs --alive CMD and --stop CMD, each naming a command\nTry 'junkfather own-resource --help'.\n",
   "out": ""
  },
  {
@@ -267,8 +267,8 @@
    "--id",
    "1"
   ],
-  "code": 1,
-  "err": "junkfather own-resource: refusing safari-tp: an instance that runs cannot be told from a person's own browser; launch it through junkfather own --kind safari-tp -- open -g -a 'Safari Technology Preview'\n",
+  "code": 2,
+  "err": "junkfather: own-resource refuses safari-tp: an instance that runs cannot be told from a person's own browser; launch it through junkfather own --kind safari-tp -- open -g -a 'Safari Technology Preview'\nTry 'junkfather own-resource --help'.\n",
   "out": ""
  },
  {
@@ -279,7 +279,7 @@
    "10"
   ],
   "code": 2,
-  "err": "junkfather: --interval takes 60 seconds or more\n",
+  "err": "junkfather: --interval takes 60 seconds or more\nTry 'junkfather sweep --help'.\n",
   "out": ""
  },
  {
@@ -290,7 +290,7 @@
    "nope"
   ],
   "code": 2,
-  "err": "junkfather: --since takes a version like 0.1.0, not 'nope'\n",
+  "err": "junkfather: --since takes a version like 0.1.0, not 'nope'\nTry 'junkfather changelog --help'.\n",
   "out": ""
  }
 ]

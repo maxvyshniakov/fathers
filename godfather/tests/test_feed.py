@@ -42,7 +42,7 @@ class ReplayTests(unittest.TestCase):
             self.assertEqual(before["verb"] == "granted", after["filled"], "filled cells for a grant, else hollow")
             self.assertTrue("".join(text for text, _ in after["detail"]), f"a result for {after['kind']}")
         self.assertEqual({"lease.granted", "lease.released"}, {row["kind"] for row in rows})
-        self.assertEqual([("slotfather", "slot")], model["sources"])
+        self.assertEqual([("slotfather", "slot")], model.get("sources"))
 
     def test_a_slotfather_whose_capabilities_name_no_log_shows_none_and_says_why(self) -> None:
         import shutil
@@ -63,7 +63,7 @@ class ReplayTests(unittest.TestCase):
             model, _ = app.Screen().load()
         assert model is not None
         self.assertEqual(([], [], "slotfather too old for events"),
-                         (model["events"], model["sources"], model["events_note"]),
+                         (model["events"], model.get("sources"), model.get("events_note")),
                          "no fallback to the snapshot's described events")
 
     def test_a_slotfather_whose_log_has_only_newer_versions_needs_a_newer_godfather(self) -> None:
@@ -84,7 +84,7 @@ class ReplayTests(unittest.TestCase):
 
             model, _ = app.Screen().load()
         assert model is not None
-        self.assertEqual("slotfather's events need a newer godfather", model["events_note"])
+        self.assertEqual("slotfather's events need a newer godfather", model.get("events_note"))
 
     def test_a_rows_identity_survives_reading_its_log_again(self) -> None:
         """fathers#84 review: a Tail made anew numbers lines from one again; `↑ N new` must not take that for new
@@ -182,9 +182,9 @@ class FormatterTests(unittest.TestCase):
     def test_an_unknown_kind_shows_itself_and_its_fields(self) -> None:
         from godfather import events
 
-        found = rows_of([logged("sweep.finished", NOW, source="junkfather", level="error", reaped=2,
-                                errors=["x"], nested={"a": 1})])
-        self.assertEqual(("sweep.finished", [("reaped=2 errors=x", "bad")]), (found[0]["event"], found[0]["detail"]))
+        found = rows_of([logged("cpu.reported", NOW, source="junkfather", level="error", reaped=2,
+                                errors=["x"], nested={"a": 1})])  # sweep.finished has its words now (fathers#86)
+        self.assertEqual(("cpu.reported", [("reaped=2 errors=x", "bad")]), (found[0]["event"], found[0]["detail"]))
         self.assertEqual("reason=x", events.compact({"message": "prose", "reason": "x"}))
         self.assertEqual("prose", events.compact({"message": "prose"}))
 
@@ -408,8 +408,9 @@ class FilterReducerTests(unittest.TestCase):
 
     def test_new_rows_count_only_what_the_log_lets_through_and_a_switch_keeps_the_pin(self) -> None:
         rows = rows_of(mixed(), TAGS)
-        state = self.keys(self.state(rows[:2], scroll=1), "f")  # LANES LOG, scrolled down
-        self.assertEqual("lanefather", state.events_filter.source)
+        state = self.keys(self.state(rows[:2], scroll=1), "f")  # LANES LOG, from its top (fathers#88 review 8)
+        self.assertEqual(("lanefather", None), (state.events_filter.source, state.scroll.get("events")))
+        state = dataclasses.replace(state, scroll={**state.scroll, "events": 1})  # then scrolled down
         later = rows_of(mixed() + [logged("lane.landed", NOW + dt.timedelta(seconds=5), source="lanefather",
                                           ident="710", onto="main"),
                                    logged("entry.owned", NOW + dt.timedelta(seconds=6), "x", 9, source="junkfather")],
@@ -462,16 +463,18 @@ class LiveFilterTests(unittest.TestCase):
             at = screen.mark()
             screen.write("fff")  # PROCS LOG, ALL LOG, back to SLOTS LOG
             screen.receive("◂ SLOTS LOG ▸", since=at)
-            screen.write("\t")  # EVENTS focused, scrolled down one row
-            screen.write("j")
+            screen.write("\t")  # EVENTS focused, scrolled down by the wheel (↑↓ move its cursor, fathers#152)
+            screen.write("\x1b[<65;20;30M")
             at = screen.mark()
             append("lanefather", "lane.checked", 1, "710-speech-paste-phase")
             append("slotfather", "lease.granted", 2, "0000000999-4242", count=1, waited=0)
             screen.receive("↑ 1 new", since=at)  # the run, not the lane row this log hides
             at = screen.mark()
             screen.write("g")
-            screen.until(lambda text: "SLOTS LOG" in text and "↑ 1 new" not in text, what="the count gone at the top",
-                         since=at)
+            # The screen as it stands, every row as last written: only rows that change are written (fathers#143)
+            screen.until(lambda _: any("SLOTS LOG" in row for row in screen.rows().values())
+                         and not any("↑ 1 new" in row for row in screen.rows().values()),
+                         what="the count gone at the top")
             at = screen.mark()
             screen.write("\x1b[C")  # → while EVENTS has the focus: LANES LOG
             screen.receive("◂ LANES LOG ▸", since=at)

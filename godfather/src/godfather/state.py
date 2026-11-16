@@ -11,17 +11,19 @@ from __future__ import annotations
 import dataclasses
 import datetime
 from dataclasses import dataclass, field
-from typing import Any, Optional, Union, cast
+from typing import Any, Mapping, Optional, Union, cast
 
+from . import actions as _actions
 from . import news as _news
 from . import settings_model as _settings
 from . import entries as _entries
 from . import events as _events_view
+from . import layout as _layout
 from . import overlay_text as _overlays
 from .overlay_text import OverlayView
 from .text import hint_at
 
-Model = dict[str, Any]
+from .model import Dashboard as Model  # noqa: E402
 EntryId = tuple[Any, int]
 DetailsKey = tuple[EntryId, str]
 
@@ -30,6 +32,10 @@ DETAILS_RETRY = DETAILS_FRESH  # seconds before a failed load is tried again, it
 NOTICE_SECONDS = 4.0  # how long a notice (a Settings panel that would not open) stays in the footer
 SCROLL_GLOW = 0.28  # seconds a scrolled panel's thumb stays in the foreground after its last scroll: a flash
 PANELS = ("requests", "details", "events")  # the focusable panels
+# The pages (fathers#85, fathers#86): `1` the overview, `2` Lanes, `3` Processes; each page's tool and its table
+PAGES = ("overview", "lanes", "processes")
+PAGE_TOOLS = {"lanes": "lanefather", "processes": "junkfather"}
+PAGE_TABLES = {"overview": "requests", "lanes": "lanes", "processes": "procs"}
 
 
 # The overlays: at most one is open (fathers#17), and each owns its scroll
@@ -52,7 +58,33 @@ class Changelog:
 SettingsOverlay = _settings.Panel  # Settings (fathers#87): its sections, cursor, pending change and answers
 
 
-Overlay = Union[Help, Changelog, SettingsOverlay]
+@dataclass(frozen=True)
+class ActionMenu:
+    """A row's actions (fathers#88): only those its tool advertises and that apply to it now; `cursor` the one Enter
+    picks, none until one is chosen, so a second Enter never runs the first."""
+    actions: tuple[_actions.Action, ...]
+    cursor: Optional[int] = None
+    kind: str = "actions"
+
+
+@dataclass(frozen=True)
+class Reason:
+    """The reason a park asks for first, typed; an empty one cancels."""
+    action: _actions.Action
+    text: str = ""
+    kind: str = "reason"
+
+
+@dataclass(frozen=True)
+class Confirm:
+    """An irreversible action asked first: the action, its target and the exact command; `y` runs it, `n`, Esc or a
+    click outside cancel, nothing is preselected."""
+    action: _actions.Action
+    reason: str = ""
+    kind: str = "confirm"
+
+
+Overlay = Union[Help, Changelog, SettingsOverlay, ActionMenu, Reason, Confirm]
 
 
 @dataclass(frozen=True)
@@ -64,9 +96,11 @@ class Refresh:
 
 @dataclass(frozen=True)
 class Notice:
-    """A passing note in the footer, never the refresh state: a Settings panel that would not open."""
+    """A passing note in the footer, never the refresh state: a Settings panel that would not open, what an action
+    did (`style` ok, or bad for a failure, fathers#88), `no actions`."""
     text: str
     at: float
+    style: str = "bad"
 
 
 @dataclass(frozen=True)
@@ -89,6 +123,32 @@ class Loaded:
 
 
 @dataclass(frozen=True)
+class Tool:
+    """Another tool as a source (fathers#85, fathers#86): absent, unsupported (with why), ok or stale (with why and
+    since when), its last good snapshot as its adapter decoded it, the actions its capabilities advertise, and for
+    Lanefather whether it answers `show --json`."""
+    name: str
+    state: str = "absent"
+    problem: Optional[str] = None
+    snapshot: Optional[Mapping[str, Any]] = None  # model.Lanes or model.Processes
+    stale_since: Optional[datetime.datetime] = None
+    actions: tuple[str, ...] = ()
+    show: bool = False
+
+    @property
+    def present(self) -> bool:
+        return self.state != "absent"
+
+    @property
+    def readable(self) -> bool:
+        """It has a snapshot to show (dimmed while stale)."""
+        return self.state in ("ok", "stale") and self.snapshot is not None
+
+
+Target = tuple[Any, ...]  # where a link goes: (page, row key); ("overview", entry id) selects a request
+
+
+@dataclass(frozen=True)
 class Frame:
     """What the last drawn frame placed, for hit testing and the panel keys: each panel's viewport, the footer's
     version and hints, and the screen's size."""
@@ -100,9 +160,15 @@ class Frame:
     order: tuple[str, ...] = ("requests",)  # Tab's order, as layout.overview() placed the panels
     filters: tuple[tuple[int, int, int, int], ...] = ()  # what's new's tool filters: (row, from, to, tab)
     switch: Optional[tuple[int, int, int]] = None  # EVENTS' title, which cycles its log (fathers#152): (row, from, to)
+    targets: tuple[tuple[int, int, int, Target], ...] = ()  # links to a page's row: (row, from, to, target)
 
     def hint_at(self, x: int, y: int) -> Optional[str]:
         return hint_at(self.hints, x, y)
+
+    def target_at(self, x: int, y: int) -> Optional[Target]:
+        """Where a click on a link (a summary, DETAILS' lane or process row, a page's link back) goes."""
+        return next((target for row, start, end, target in reversed(self.targets) if row == y and start <= x < end),
+                    None)
 
     def filter_at(self, x: int, y: int) -> Optional[int]:
         """The tool filter a click in what's new's top border lands on, None between them."""
@@ -130,6 +196,14 @@ class AppState:
     read: dict[str, str] = field(default_factory=lambda: cast(dict[str, str], {}))  # news.Read: newest read, by tool
     frame: Frame = Frame()
     moment: Optional[datetime.datetime] = None  # the wall-clock second the screen is drawn at (Tick; fathers#138)
+    # A table's selected row other than QUEUE's, by the row's identity: EVENTS' cursor (fathers#152; without one it
+    # is on its newest row, and stays there as new ones arrive) and each page's row (fathers#85)
+    picked: dict[str, Any] = field(default_factory=lambda: cast(dict[str, Any], {}))
+    shows: str = "requests"  # what DETAILS shows: the panel focused last of QUEUE and EVENTS (fathers#152)
+    tools: dict[str, Tool] = field(default_factory=lambda: cast(dict[str, Tool], {}))  # Lanefather, Junkfather
+    page: str = "overview"  # the page shown (PAGES)
+    came_from: tuple[str, ...] = ()  # the pages a link left, Esc goes back through them
+    acting: frozenset[tuple[Any, ...]] = frozenset()  # the actions in flight (action_key()), each started once
 
 
 # Events
@@ -224,6 +298,34 @@ class NewsLoaded:
 
 
 @dataclass(frozen=True)
+class ActionDone:
+    """An action ran (or was dropped): the tool's first stdout line on success, its first stderr line on failure;
+    `key` the action's (action_key()), no longer in flight."""
+    tool: str
+    ok: bool
+    line: str
+    key: tuple[Any, ...] = ()
+
+
+@dataclass(frozen=True)
+class HandOff:
+    """The latest log, checked: the screen is to hand the terminal to the pager (fathers#88)."""
+    action: _actions.Action
+    key: tuple[Any, ...] = ()
+
+
+def action_key(action: _actions.Action) -> tuple[Any, ...]:
+    """What makes an action the same one: its row and its command; one in flight is not started again."""
+    return (*action.identity, action.tool, *action.argv)
+
+
+@dataclass(frozen=True)
+class ToolLoaded:
+    """Another tool's snapshot polled (or why not): its Tool."""
+    tool: Tool
+
+
+@dataclass(frozen=True)
 class Drawn:
     frame: Frame
 
@@ -236,7 +338,7 @@ class Tick:
 
 
 Event = Union[Key, Mouse, ModelLoaded, ModelFailed, DetailsLoaded, SettingsOpened, SettingsSections, SettingsRead,
-              SettingsChecked, SettingsWritten, SettingsFailed, NewsLoaded, Drawn, Tick]
+              SettingsChecked, SettingsWritten, SettingsFailed, NewsLoaded, ToolLoaded, ActionDone, HandOff, Drawn, Tick]
 
 
 # Effects, for the app to carry out
@@ -394,7 +496,7 @@ def follow_events(state: AppState, events: list[dict[str, Any]]) -> AppState:
     ids = [event_id(event) for event in _events_view.shown_rows(model, state.events_filter)[::-1]]
     arrived = ids.index(state.newest) if state.newest in ids else 0
     scroll, fresh = dict(state.scroll), 0
-    if scroll.get("events"):
+    if scroll.get("events") and state.page == "overview":  # a page's strip is another list
         scroll["events"] += arrived
         fresh = state.fresh_events + arrived
     return dataclasses.replace(state, scroll=scroll, fresh_events=fresh, newest=ids[0] if ids else None)
@@ -407,7 +509,59 @@ def filtered(state: AppState, events_filter: _events_view.Filter) -> AppState:
         return state
     rows = _events_view.shown_rows(state.model, events_filter)
     newest = event_id(rows[-1]) if rows else None
-    return dataclasses.replace(state, events_filter=events_filter, newest=newest, fresh_events=0)
+    picked = {name: key for name, key in state.picked.items() if name != "events"}  # another list: its newest
+    scroll = {name: offset for name, offset in state.scroll.items() if name != "events"}  # and the view with it
+    return dataclasses.replace(state, events_filter=events_filter, newest=newest, fresh_events=0, picked=picked,
+                               scroll=scroll)
+
+
+def event_rows(state: AppState) -> list[dict[str, Any]]:
+    """EVENTS' rows as drawn, newest first."""
+    return _events_view.newest_first(state.model, state.events_filter)
+
+
+def event_index(state: AppState, rows: Optional[list[dict[str, Any]]] = None) -> int:
+    """EVENTS' cursor (fathers#152): the row picked while it is shown, else the newest."""
+    rows = event_rows(state) if rows is None else rows
+    picked = state.picked.get("events")
+    if picked is not None:
+        for index, row in enumerate(rows):
+            if event_id(row) == picked:
+                return index
+    return 0
+
+
+def selected_event(state: AppState) -> Optional[dict[str, Any]]:
+    """The event or run DETAILS shows while EVENTS was focused last, None while it shows QUEUE's entry."""
+    if state.shows != "events" or state.model is None:
+        return None
+    rows = event_rows(state)
+    return rows[event_index(state, rows)] if rows else None
+
+
+def event_move(state: AppState, target: int) -> AppState:
+    """EVENTS' cursor to the row at `target` (newest first), kept in range and in view: the scroll follows it, so a
+    scrolled list keeps counting what arrives above (`↑ N new`); the newest row picks nothing, so the cursor stays on
+    the newest as new rows arrive, as the list does at its top."""
+    rows = event_rows(state)
+    if not rows:
+        return state
+    index = min(max(target, 0), len(rows) - 1)
+    picked = {name: key for name, key in state.picked.items() if name != "events"}
+    if index:
+        picked["events"] = event_id(rows[index])
+    view = state.frame.tables.get("events")
+    scroll = dict(state.scroll)
+    if view:
+        visible = max(1, int(view["visible"]))
+        offset = scroll.get("events", int(view["offset"]))
+        offset = index if index < offset else index - visible + 1 if index >= offset + visible else offset
+        scroll["events"] = _layout.clamp_scroll(offset, len(rows), visible)
+    if index == 0:
+        scroll.pop("events", None)
+    if picked == state.picked and scroll == state.scroll:
+        return state
+    return dataclasses.replace(state, picked=picked, scroll=scroll)
 
 
 def event_id(event: dict[str, Any]) -> Any:
@@ -482,6 +636,13 @@ def settle(state: AppState, now: float) -> Result:
         state = dataclasses.replace(state, notice=None)
     if not state.scroll.get("events") and state.fresh_events:
         state = dataclasses.replace(state, fresh_events=0)
+    # DETAILS follows the focused panel (fathers#152): QUEUE's entry or EVENTS' row, whichever was focused last; with
+    # EVENTS not drawn (one column), QUEUE's
+    shows = state.focus if state.focus in ("requests", "events") and state.page == "overview" else state.shows
+    if shows == "events" and state.frame.width and "events" not in state.frame.tables:
+        shows = "requests"
+    if shows != state.shows:
+        state = dataclasses.replace(state, shows=shows)
     known = entries(state)
     found = known[0]
     state = move(state, resolve(state, known), known=known)
@@ -502,9 +663,16 @@ def join_lane(state: AppState, index: int, lane: Any) -> AppState:
     model = cast(Model, state.model)
     holders = len(model["holders"])
     group, position = ("holders", index) if index < holders else ("waiters", index - holders)
-    entries_now = list(model[group])
-    entries_now[position] = dict(entries_now[position], lane=lane)
-    return dataclasses.replace(state, model={**model, group: entries_now})
+    joined = model.copy()
+    entries_now = list(model["holders"] if group == "holders" else model["waiters"])
+    entry = entries_now[position].copy()
+    entry["lane"] = lane
+    entries_now[position] = entry
+    if group == "holders":
+        joined["holders"] = entries_now
+    else:
+        joined["waiters"] = entries_now
+    return dataclasses.replace(state, model=joined)
 
 
 def model_loaded(state: AppState, event: ModelLoaded) -> AppState:
@@ -513,7 +681,7 @@ def model_loaded(state: AppState, event: ModelLoaded) -> AppState:
         colours = dict(state.colours)
         _entries.dashboard_colours(fresh, colours, event.colours)
         state = dataclasses.replace(state, colours=colours, model=fresh)
-        state = follow_events(state, cast(list[dict[str, Any]], fresh["events"]))
+        state = follow_events(state, fresh["events"])
         ids = _entries.entry_ids(items(state))
         keep = {(identity, kind) for identity in ids for kind in ("lease", "request")}
         state = dataclasses.replace(state, details={key: value for key, value in state.details.items() if key in keep})

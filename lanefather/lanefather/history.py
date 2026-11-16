@@ -9,7 +9,8 @@ A line is {"v": 1, "kind", "at", "lane", "phase", "tree", ...}:
 - kind "flake": a check that failed and then passed on the same tree under the same environment: check, failed_at,
   passed_at, how ("rerun-alone" or "later-run"), tests (the failed JUnit test names when the check reported them).
 
-`done` and `gc` leave the history alone; lanefather stats reads it.
+`done` and `gc` leave the history alone; lanefather stats reads it, and the review receipts for its per-reviewer
+totals (fathers#151).
 """
 from __future__ import annotations
 
@@ -158,7 +159,45 @@ def stats(days: float | None = 7, lane: str | None = None) -> dict[str, Any]:
                            p90=round(percentile(seconds, 0.9), 3) if seconds else None,
                            total_seconds=round(sum(seconds), 3)))
     checks.sort(key=lambda r: (-(r["total_seconds"] or 0), r["check"]))
-    return {"v": VERSION, "days": days, "lane": lane, "lines": len(lines), "checks": checks}
+    return {"v": VERSION, "days": days, "lane": lane, "lines": len(lines), "checks": checks,
+            "reviewers": reviewer_totals(days, lane)}
+
+
+def reviewer_totals(days: float | None = 7, lane: str | None = None) -> list[dict[str, Any]]:
+    """Per reviewer (fathers#151), over the finished review receipts of the window (and lane): reviews, failed
+    panel runs, findings by severity and their marks, by review.reviewer_views and review.mark_counts."""
+    from . import review  # review imports checks, which imports this module
+
+    cutoff = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=days)) if days else None
+    table: dict[str, dict[str, Any]] = {}
+    try:
+        paths = sorted(state.state_dir().glob("*.review.json"))
+    except OSError:
+        return []
+    for path in paths:
+        receipt = state.read_json(path)
+        if not receipt or receipt.get("status") != "finished" or (lane is not None and receipt.get("lane") != lane):
+            continue
+        try:
+            if cutoff and parse_time(str(receipt.get("finished"))) < cutoff:
+                continue
+        except ValueError:
+            continue
+        for view in review.reviewer_views(receipt):
+            name = view.get("reviewer")
+            if not isinstance(name, str) or view.get("status") == "skipped":
+                continue
+            row = table.setdefault(name, {"reviewer": name, "models": [], "reviews": 0, "failed": 0,
+                                          **dict.fromkeys(review.mark_counts([]), 0)})
+            if view.get("model") and view["model"] not in row["models"]:
+                row["models"].append(view["model"])
+            if view.get("status") != "finished":
+                row["failed"] += 1
+                continue
+            row["reviews"] += 1
+            for key, count in review.mark_counts(view["findings"]).items():
+                row[key] += count
+    return sorted(table.values(), key=lambda r: r["reviewer"])
 
 
 def command(args: Any) -> int:
@@ -175,4 +214,10 @@ def command(args: Any) -> int:
         p90 = "-" if row["p90"] is None else f"{row['p90']:.1f}s"
         print(f"  {row['check']}: {row['runs']} runs, p50 {p50}, p90 {p90}, {row['failed']} red, "
               f"{row['flakes']} flakes")
+    if report["reviewers"]:
+        print("Reviewers:")
+    for row in report["reviewers"]:
+        print(f"  {row['reviewer']} ({', '.join(row['models'])}): {row['reviews']} reviews, {row['findings']} findings "
+              f"(p1 {row['p1']}, p2 {row['p2']}, p3 {row['p3']}), {row['fixed']} fixed, {row['rejected']} rejected, "
+              f"{row['unmarked']} unmarked" + (f", {row['failed']} failed" if row["failed"] else ""))
     return 0

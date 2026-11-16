@@ -8,6 +8,33 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Lanes finish by themselves (fathers#157). A lane that becomes finished (landed, smoke green, review finished or
+  exempt with every finding marked) runs `done`, as before, unless it is kept; `[done] auto = false` turns that off.
+  `lanefather keep ID [--off]` keeps a lane from it. `lanefather done --finished` runs `done` on every finished lane
+  of the registered projects, and `--dry-run` lists them with their sizes. `start` under the free-disk minimum now
+  runs that first and admits the lane when it freed enough, instead of only refusing. Every refusal of `done` still
+  applies.
+
+- A review panel (fathers#151): `[review] panel = ["sol", "opus"]` runs every listed reviewer at once on the same
+  frozen checkout with the same prompt (its `prompt_sha256` in the receipt), each in its own process, its answer in
+  a private directory until every member finished. The receipt's `panel` keeps each reviewer's model, effort,
+  seconds, status and findings; the one `findings` list numbers them across the panel, so `review --mark N` and the
+  gate work as before. A member whose conditions fail (a used-up Codex week, the implementer's own family) is
+  replaced by the first choice that holds, or skipped when that is already on the panel; one whose run fails keeps
+  the others' answers, and holds the gate only with `[review] panel_required = true`. `review ID --compare` shows
+  who found what and how it was marked; `stats --json` adds per-reviewer totals (`reviewers`). Without `panel`,
+  one reviewer as before. An earlier release refuses the `panel` key: install this one first.
+- The reviewer is chosen by Mastack's `role review --json` when the models file has `bin/role` beside it
+  (fathers#150): its model, effort and skip reasons, printed and kept in the receipt's `role`. The implementer's
+  family comes from the check receipt's new `agent`: `check --agent claude-code|codex`, else the agent session the
+  check runs in, a Codex thread before a Claude Code session. Without `role`, the models file decides.
+- `lanefather review ID --reviewer sol|opus|both`, also with `--overall` (fathers#155): this review runs the named
+  reviewer whatever the Codex limit says, or `both` (the configured panel, else Sol and Opus) into one findings list
+  that `--mark` marks; the receipt's `forced` says it was asked for.
+
+- The reviewer is asked two design questions besides bugs and the standards (does the change fit the structure it
+  lands in or is it bolted on beside it, and does it copy behaviour the repository already has), answered as findings
+  of the new category `design`.
 - The free-disk minimum under which `start` refuses a lane is part of the runtime contract (fathers#46):
   `capabilities --json` reports it as `"host": {"min_disk_gb": 150}` (capability `host.min_disk_gb`), and a
   project hook finds it in `LANEFATHER_MIN_DISK_GB` and `<legacy_env_prefix>MIN_DISK_GB`, next to `DISK_FREE_GB`,
@@ -51,6 +78,11 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Changed
 
+- The review role's `choices` are a priority list (fathers#155): the first whose conditions hold reviews and the next
+  is its fallback, in either direction, so listing Opus first makes Opus the reviewer and Sol its fallback. A Codex
+  choice that names no limit needs 15% of the weekly limit, as before. The single reviewer gets the diff inline in
+  its prompt, as the panel and Opus always did.
+
 - The lane cap counts the planned and active lanes of one repository, not of every project sharing the state directory
   (fathers#149): a lane is never refused, nor held by claims, because of another repository's lanes. A project sets
   its cap with `[admission] cap = N` in `.lanefather.toml`. First set wins: `LANEFATHER_CAP`, then `[admission] cap`,
@@ -88,6 +120,12 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   `--force-reason` overrides and is logged. An unmarked P3 finding still keeps its lane open until it is marked.
 - Lanefather lives in the fathers repository with Slotfather, Junkfather and Godfather: `python3 install.py
   lanefather` from its root installs it, and its documentation links point there.
+
+### Fixed
+
+- `done` no longer refuses a landed lane because short-lived processes elsewhere on the machine came and went during
+  the process query (fathers#158): an answer with unknown pids is asked again up to four times, and a refusal names
+  each pid that stays unknown with its command.
 
 ## 0.1.0+1138486 - 2026-11-12
 

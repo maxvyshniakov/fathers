@@ -1,0 +1,43 @@
+{
+  "about": "fathers#150: the review role of Mastack's models.toml, stand-in weekly Codex limit answers (percent used, rateLimitReachedType), the implementer's family and the reviewer each case must give. Lanefather's own choice (no bin/role) and Mastack's bin/role read the same cases, so the two cannot drift; Mastack's tests are to read this file too.",
+  "table": "schema = 1\n[models.opus]\nid = \"claude-opus-5-5\"\nfamily = \"anthropic\"\ncli = \"claude\"\n[models.sol]\nid = \"gpt-6.1-sol\"\nfamily = \"openai\"\ncli = \"codex\"\n[roles.review]\nchoices = [\n  { model = \"sol\", effort = \"medium\", when = { not_family = true, limit = { codex_weekly = 15 } } },\n  { model = \"opus\", effort = \"medium\", when = { not_family = true } },\n  { model = \"opus\", effort = \"medium\", note = \"same family as the implementer: fresh context only\" },\n]\n",
+  "cases": [
+    {
+      "name": "room on the week",
+      "used": 27,
+      "expect": "sol",
+      "family": "anthropic"
+    },
+    {
+      "name": "exactly the threshold left",
+      "used": 85,
+      "expect": "sol",
+      "family": "anthropic"
+    },
+    {
+      "name": "under the threshold",
+      "used": 86,
+      "expect": "opus",
+      "family": "anthropic"
+    },
+    {
+      "name": "used up",
+      "used": 100,
+      "expect": "opus",
+      "family": "anthropic"
+    },
+    {
+      "name": "limit reached despite room",
+      "used": 10,
+      "reached": "rate_limit_reached",
+      "expect": "opus",
+      "family": "anthropic"
+    },
+    {
+      "name": "an OpenAI implementer gets the other family",
+      "used": 27,
+      "family": "openai",
+      "expect": "opus"
+    }
+  ]
+}

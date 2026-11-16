@@ -1,0 +1,21 @@
+{
+ "moment": "2026-11-04T09:59:39.000Z",
+ "history_window": 60,
+ "lanes": {
+  "[10000, \"2026-11-04T09:04:55+00:00\"]": {
+   "error": "lanefather too old"
+  },
+  "[10001, \"2026-11-04T09:41:05+00:00\"]": {
+   "error": "lanefather too old"
+  },
+  "[10002, \"2026-11-04T09:55:44+00:00\"]": {
+   "error": "lanefather too old"
+  },
+  "[10003, \"2026-11-04T09:36:22+00:00\"]": {
+   "error": "lanefather too old"
+  },
+  "[10004, \"2026-11-04T09:59:29+00:00\"]": {
+   "error": "lanefather too old"
+  }
+ }
+}

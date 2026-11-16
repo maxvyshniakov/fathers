@@ -3,14 +3,18 @@ tunable defined once in defaults.py, and the duration and time formats in text.p
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import re
 from typing import Any, Dict, List, cast
 import unittest
+import unittest.mock
 
 from support import ROOT, Case
 
 from junkfather import changelog, cli, defaults, text
+from junkfather.state import Store
 
 
 class DispatchTests(unittest.TestCase):
@@ -68,8 +72,84 @@ class WithoutJsonTests(Case):
     def test_a_bad_since_is_a_usage_error_either_way(self):
         for extra in ((), ("--json",)):
             result = self.cli("changelog", "--since", "nope", *extra)
-            self.assertEqual((2, "junkfather: --since takes a version like 0.1.0, not 'nope'\n"),
+            self.assertEqual((2, "junkfather: --since takes a version like 0.1.0, not 'nope'\n"
+                                 "Try 'junkfather changelog --help'.\n"),
                              (result.returncode, result.stderr))
+
+
+class ConventionTests(Case):
+    """docs/cli.md beyond what common/cliconvention.py can check without knowing junkfather (fathers#153)."""
+
+    def test_no_command_is_a_usage_error_with_the_help_pointer(self):
+        result = self.cli()
+        self.assertEqual((2, "", "junkfather: no command given\nTry 'junkfather --help'.\n"),
+                         (result.returncode, result.stdout, result.stderr))
+
+    def test_an_unknown_command_is_named(self):
+        result = self.cli("statsu")
+        self.assertEqual((2, "junkfather: unknown command 'statsu'\nTry 'junkfather --help'.\n"),
+                         (result.returncode, result.stderr))
+
+    def test_a_bad_value_names_the_option_and_points_to_the_command_help(self):
+        result = self.cli("extend", "j1", "--ttl", "2w")
+        self.assertEqual(2, result.returncode)
+        self.assertRegex(result.stderr, r"^junkfather: --ttl: .*'2w'.*\nTry 'junkfather extend --help'\.\n$")
+        result = self.cli("reap")
+        self.assertEqual("junkfather: reap takes one of --id, --owner, --lane or --pid\n"
+                         "Try 'junkfather reap --help'.\n", result.stderr)
+
+    def test_the_help_names_every_command_but_the_internal_one(self):
+        shown = self.cli("--help").stdout
+        self.assertNotIn("SUPPRESS", shown)
+        self.assertNotIn("supervise", shown)
+        for command in [c for c in cli.COMMANDS if c != "supervise"]:
+            self.assertRegex(shown, rf"\n    {re.escape(command)}\b", command)
+
+    def test_version_flag_and_command_agree(self):
+        flag, command = self.cli("--version"), self.cli("version")
+        self.assertEqual((0, ""), (flag.returncode, flag.stderr))
+        self.assertRegex(flag.stdout, r"^junkfather \d+\.\d+\.\d+ \(checkout\)\n$")
+        self.assertEqual(flag.stdout, command.stdout)
+
+    def test_hand_and_extend_tell_a_missing_entry_from_a_finished_one(self):
+        for argv in (("hand", "jnosuch", "--to", "s2"), ("extend", "jnosuch", "--ttl", "1h")):
+            result = self.cli(*argv)
+            self.assertEqual((6, "", "junkfather: no entry jnosuch\n"),
+                             (result.returncode, result.stdout, result.stderr), argv)
+        self.assertEqual(0, self.cli("own", "--ttl", "1m", "--quiet", "--", "true").returncode)
+        (entry,) = self.store.entries()
+        for argv in (("hand", entry["id"], "--to", "s2"), ("extend", entry["id"], "--ttl", "1h")):
+            result = self.cli(*argv)
+            self.assertEqual((3, f"junkfather: {entry['id']} is not running (exited)\n"),
+                             (result.returncode, result.stderr), argv)
+
+    def test_a_blank_stop_or_alive_command_is_refused_at_registration(self):
+        for alive, stop in (("true", " "), (" ", "true")):
+            result = self.cli("own-resource", "--kind", "command", "--id", "x", "--alive", alive, "--stop", stop)
+            self.assertEqual((2, "junkfather: --kind command needs --alive CMD and --stop CMD, each naming a command\n"
+                                 "Try 'junkfather own-resource --help'.\n"), (result.returncode, result.stderr))
+        self.assertEqual([], self.store.entries())
+
+    def test_reap_of_a_missing_entry_is_not_found(self):
+        result = self.cli("reap", "--id", "jnosuch")
+        self.assertEqual((6, "", "junkfather: jnosuch: unknown (no such entry; pids -)\n"),
+                         (result.returncode, result.stdout, result.stderr))
+        both = self.cli("reap", "--id", "jnosuch", "--id", "jother", "--json")
+        self.assertEqual((6, "junkfather: jnosuch: unknown (no such entry; pids -) (and 1 more)\n"),
+                         (both.returncode, both.stderr))
+        self.assertEqual(["jnosuch", "jother"], [r["id"] for r in json.loads(both.stdout)["results"]])
+
+    def test_an_unexpected_exception_is_one_line_and_its_traceback_goes_to_the_log(self):
+        def broken(store: Store, args: argparse.Namespace) -> int:
+            raise RuntimeError("boom")
+
+        err = io.StringIO()
+        with unittest.mock.patch.dict(cli.COMMANDS, {"status": broken}), contextlib.redirect_stderr(err):
+            code = cli.main(["status"])
+        self.assertEqual((1, "junkfather: internal error: RuntimeError: boom\n"), (code, err.getvalue()))
+        logged = (self.state / "logs" / "junkfather.log").read_text()
+        self.assertIn("Traceback (most recent call last)", logged)
+        self.assertIn("RuntimeError: boom", logged)
 
 
 class DefaultsTests(unittest.TestCase):

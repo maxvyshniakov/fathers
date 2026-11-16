@@ -23,9 +23,9 @@ from ..layout import Rect
 from ..tui import Canvas
 from ..text import clock, span, text_width
 from ..widgets import FLEXIBLE_MIN, FOCUS_FRAME, REST_FRAME, Panel, Part, Spec, Table
-from ..events import ALL, Filter, shown_rows, view_of, views
+from ..events import ALL, Filter, Model, shown_rows, view_of, views
 from . import common as _common
-from .common import Model, cell_run, cells_width
+from .common import cell_run, cells_width
 
 DETAIL_MIN, DETAIL_MAX = 6, 28  # a detail column's least and greatest width; it grows to its longest value
 EVENT_MAX = 10  # the event column's greatest width
@@ -232,9 +232,10 @@ def row_values(view: str, row: dict[str, Any], marks: _common.Marks, moment: Opt
 
 
 def draw_events(canvas: Canvas, rect: Rect, model: Model, moment: Optional[datetime.datetime] = None,
-                found: Optional[Filter] = None) -> None:
+                found: Optional[Filter] = None, selected: Optional[int] = None) -> None:
     """EVENTS: the log the title names, newest first, in its columns. Scrolled down, what arrived since is counted
-    in its bottom border (Home goes back to it); the text field, while it is open, takes that place."""
+    in its bottom border (Home goes back to it); the text field, while it is open, takes that place. `selected` is
+    the row its cursor is on while DETAILS shows it (fathers#152), marked as QUEUE's selected row is."""
     found = found or Filter()
     view = view_of(model, found)
     rows = shown_rows(model, found)[::-1]
@@ -251,7 +252,7 @@ def draw_events(canvas: Canvas, rect: Rect, model: Model, moment: Optional[datet
     if note:
         border_note(panel, table, note, after)
     skipped = skipped_note(model)
-    offset, visible = panel.viewport(len(rows))
+    offset, visible = panel.viewport(len(rows), selected)
     if found.editing:
         canvas.segments(rect.y + rect.height - 1, rect.x + 2, [(" / ", "key"), (found.text, "text"), ("_ ", "key")],
                         max(0, rect.width - 4))
@@ -263,6 +264,8 @@ def draw_events(canvas: Canvas, rect: Rect, model: Model, moment: Optional[datet
         panel.put(0, "No events match the filter" if found.active() else "No events logged yet", "dim")
     for line, position in panel.rows(offset, visible, len(rows)):
         table.row(canvas, line, panel.inner.x, row_values(view, rows[position], marks, moment, size))
+        if position == selected:
+            panel.mark(line, "text")
 
 
 def switch_title(model: Model, view: str, width: int) -> list[Part]:

@@ -45,7 +45,7 @@ class Store:
     def __init__(self, project: config.Config, directory: Path | None = None):
         """`directory` names the state directory explicitly (the registry's, for status); by default it is the
         environment's LANEFATHER_STATE, else the project's state_dir."""
-        self.directory = directory or Path(os.path.expanduser(project.env("STATE") or project.state_dir))
+        self.directory = directory or _serving or Path(os.path.expanduser(project.env("STATE") or project.state_dir))
 
     def lanes(self, *, strict: bool = False, damaged: list[Path] | None = None) -> list[Record]:
         """The lane records. A record a write cut short raises, so nothing that admits, claims or collects acts on
@@ -78,6 +78,24 @@ class Store:
                     print(waiting, flush=True)
                 fcntl.flock(handle, fcntl.LOCK_EX)
             yield
+
+
+_serving: Path | None = None
+
+
+@contextlib.contextmanager
+def serving(project: config.Config, directory: Path) -> Generator[None]:
+    """Act as another registered project (fathers#157): its configuration is the run's and `directory`, its
+    registered state directory, every Store's, whatever LANEFATHER_STATE says, until the block ends."""
+    global _serving
+    saved = _serving, config.chosen()
+    config.use(project)
+    _serving = directory
+    try:
+        yield
+    finally:
+        _serving = saved[0]
+        config.use(saved[1])
 
 
 def state_dir() -> Path:

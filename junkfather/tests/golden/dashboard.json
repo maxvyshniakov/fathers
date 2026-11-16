@@ -49,7 +49,7 @@
       ],
       "poll": 5,
       "versions": [
-       1
+       2
       ]
      },
      "tag": "junk",
@@ -102,6 +102,7 @@
   "err": "",
   "out": {
    "json": {
+    "cpu": null,
     "entries": [],
     "errors": [],
     "host": "<host>",
@@ -112,7 +113,7 @@
     "time": "<v>",
     "unowned": [],
     "unowned_resources": [],
-    "v": 1
+    "v": 2
    }
   }
  },

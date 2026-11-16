@@ -16,7 +16,7 @@ view = _view.current()
 
 class HelpTests(unittest.TestCase):
     def test_sections_in_order_terms_in_a_column_and_hanging_descriptions(self) -> None:
-        self.assertEqual(["KEYS", "STATES", "PRIORITY", "SLOTS", "QUEUE", "DETAILS", "EVENTS", "MACHINE", "SETTINGS"],
+        self.assertEqual(["KEYS", "STATES", "PRIORITY", "SLOTS", "QUEUE", "DETAILS", "EVENTS", "PAGES", "MACHINE", "SETTINGS"],
                          [title for title, _ in view.HELP])
         lines = view.help_lines(60)
         texts = ["".join(text for text, _ in parts) for parts in lines]
@@ -174,6 +174,7 @@ class ColumnTests(unittest.TestCase):
     it. No unread mark for what's new (owner, 2026-11-13)."""
 
     def test_the_whole_legend_shows_at_156x43_without_scrolling(self) -> None:
+        """fathers#145: with the pages' keys and legend (fathers#85) and the row actions (fathers#88) too."""
         from godfather import overlay_text, tui
         from godfather.views import overlays
 

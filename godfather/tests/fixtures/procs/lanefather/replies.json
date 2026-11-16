@@ -1,0 +1,480 @@
+{
+ "capabilities --json": {
+  "code": 0,
+  "json": {
+   "v": 1,
+   "tool": "lanefather",
+   "version": "0.9.0",
+   "dashboard": {
+    "v": 1,
+    "tag": "lane",
+    "snapshot": {
+     "argv": [
+      "status",
+      "--json"
+     ],
+     "versions": [
+      1
+     ],
+     "poll": 5
+    },
+    "events": {
+     "path": "/fixture/lanefather/events.jsonl",
+     "versions": [
+      1
+     ]
+    },
+    "settings": {
+     "versions": [
+      1
+     ]
+    },
+    "actions": [
+     "park"
+    ]
+   }
+  }
+ },
+ "settings --json": {
+  "code": 0,
+  "json": {
+   "v": 1,
+   "tool": "lanefather",
+   "writable": true,
+   "reason": null,
+   "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+   "status": [
+    {
+     "label": "settings",
+     "value": "/fake/config/lanefather/settings.json"
+    },
+    {
+     "label": "events",
+     "value": "/fake/state/lanefather/events.jsonl"
+    },
+    {
+     "label": "projects",
+     "value": "2 registered in /fake/state/lanefather/projects.json"
+    }
+   ],
+   "sections": [
+    {
+     "id": "review",
+     "title": "Review",
+     "settings": [
+      {
+       "key": "review.start",
+       "label": "Review start",
+       "type": "choice",
+       "value": "auto",
+       "default": "auto",
+       "source": "default",
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "Whether land starts the lane's review in the background; manual waits for lanefather review ID.",
+       "choices": [
+        {
+         "value": "auto",
+         "label": "Automatic"
+        },
+        {
+         "value": "manual",
+         "label": "Manual"
+        }
+       ]
+      },
+      {
+       "key": "rerun.wait",
+       "label": "Rerun waits",
+       "type": "duration",
+       "value": 3300,
+       "default": 3300,
+       "source": "default",
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "How long a red check's rerun waits for its slot lease before its checks stay unclassified.",
+       "min": 1,
+       "max": 86400,
+       "step": 300,
+       "unit": "s"
+      }
+     ]
+    },
+    {
+     "id": "slots",
+     "title": "Slot priorities",
+     "settings": [
+      {
+       "key": "slots.priority.check",
+       "label": "check priority",
+       "type": "choice",
+       "value": "batch",
+       "default": "project",
+       "source": "env LANEFATHER_PRIORITY_CHECK",
+       "writable": false,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "The Slotfather priority of this machine's check runs; project follows the project's [slots.priority] and the built-in.",
+       "choices": [
+        {
+         "value": "project",
+         "label": "Project"
+        },
+        {
+         "value": "interactive",
+         "label": "Interactive"
+        },
+        {
+         "value": "normal",
+         "label": "Normal"
+        },
+        {
+         "value": "batch",
+         "label": "Batch"
+        }
+       ]
+      },
+      {
+       "key": "slots.priority.post-merge",
+       "label": "post-merge priority",
+       "type": "choice",
+       "value": "project",
+       "default": "project",
+       "source": "default",
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "The Slotfather priority of this machine's post-merge runs; project follows the project's [slots.priority] and the built-in.",
+       "choices": [
+        {
+         "value": "project",
+         "label": "Project"
+        },
+        {
+         "value": "interactive",
+         "label": "Interactive"
+        },
+        {
+         "value": "normal",
+         "label": "Normal"
+        },
+        {
+         "value": "batch",
+         "label": "Batch"
+        }
+       ]
+      },
+      {
+       "key": "slots.priority.gate",
+       "label": "gate priority",
+       "type": "choice",
+       "value": "project",
+       "default": "project",
+       "source": "default",
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "The Slotfather priority of this machine's gate runs; project follows the project's [slots.priority] and the built-in.",
+       "choices": [
+        {
+         "value": "project",
+         "label": "Project"
+        },
+        {
+         "value": "interactive",
+         "label": "Interactive"
+        },
+        {
+         "value": "normal",
+         "label": "Normal"
+        },
+        {
+         "value": "batch",
+         "label": "Batch"
+        }
+       ]
+      },
+      {
+       "key": "slots.priority.rerun",
+       "label": "rerun priority",
+       "type": "choice",
+       "value": "project",
+       "default": "project",
+       "source": "default",
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "The Slotfather priority of this machine's rerun runs; project follows the project's [slots.priority] and the built-in.",
+       "choices": [
+        {
+         "value": "project",
+         "label": "Project"
+        },
+        {
+         "value": "interactive",
+         "label": "Interactive"
+        },
+        {
+         "value": "normal",
+         "label": "Normal"
+        },
+        {
+         "value": "batch",
+         "label": "Batch"
+        }
+       ]
+      },
+      {
+       "key": "slots.priority.perf",
+       "label": "perf priority",
+       "type": "choice",
+       "value": "project",
+       "default": "project",
+       "source": "default",
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "The Slotfather priority of this machine's perf runs; project follows the project's [slots.priority] and the built-in.",
+       "choices": [
+        {
+         "value": "project",
+         "label": "Project"
+        },
+        {
+         "value": "interactive",
+         "label": "Interactive"
+        },
+        {
+         "value": "normal",
+         "label": "Normal"
+        },
+        {
+         "value": "batch",
+         "label": "Batch"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "status --json": {
+  "code": 0,
+  "json": {
+   "v": 1,
+   "host": "mbp",
+   "time": "2026-11-04T09:59:39Z",
+   "registry": "/fixture/projects.json",
+   "projects": [
+    {
+     "project": "Straylight",
+     "state_dir": "/fixture/straylight/lanes",
+     "config": "/fixture/straylight/.lanefather.toml",
+     "repository": "maxvyshniakov/straylight",
+     "cap": 4,
+     "cap_source": "derived",
+     "active": 3,
+     "planned": 1,
+     "gate": {
+      "sha": "cedf8b972dd8",
+      "status": "red",
+      "at": "2026-11-04T09:58:10Z"
+     },
+     "lanes": [
+      {
+       "id": "644-build-once",
+       "status": "active",
+       "ticket": {
+        "number": "644",
+        "url": "https://github.com/maxvyshniakov/straylight/issues/644"
+       },
+       "branch": "lane/644-build-once",
+       "base": "integrate/queue-347",
+       "worktree": "/fixture/straylight/worktrees/644-build-once",
+       "claims": [
+        "src/part0/**",
+        "src/part1/**",
+        "src/part2/**",
+        "src/part3/**",
+        "src/part4/**",
+        "src/part5/**",
+        "src/part6/**",
+        "src/part7/**",
+        "src/part8/**",
+        "src/part9/**",
+        "src/part10/**"
+       ],
+       "after": [],
+       "created": "2026-11-04T09:04:00Z",
+       "receipt": {
+        "status": "in progress",
+        "tree_match": null,
+        "path": null
+       },
+       "post_merge": null,
+       "review": {
+        "status": "not started",
+        "open": 0,
+        "findings": 0
+       },
+       "logs": {
+        "check": "/fixture/straylight/lanes/logs/lane-644-build-once-20261104T0950110.log"
+       },
+       "outcome": null
+      },
+      {
+       "id": "710-speech-paste-phase",
+       "status": "active",
+       "ticket": {
+        "number": "710",
+        "url": "https://github.com/maxvyshniakov/straylight/issues/710"
+       },
+       "branch": "lane/710-speech-paste-phase",
+       "base": "integrate/queue-347",
+       "worktree": "/fixture/straylight/worktrees/710-speech-paste-phase",
+       "claims": [
+        "src/part0/**",
+        "src/part1/**"
+       ],
+       "after": [],
+       "created": "2026-11-04T08:12:00Z",
+       "receipt": {
+        "status": "green",
+        "tree_match": true,
+        "path": null
+       },
+       "post_merge": "green",
+       "review": {
+        "status": "running",
+        "open": 2,
+        "findings": 3
+       },
+       "logs": {
+        "check": "/fixture/straylight/lanes/logs/lane-710-speech-paste-phase-20261104T095020.log"
+       },
+       "outcome": null
+      },
+      {
+       "id": "612-overlay-keys",
+       "status": "active",
+       "ticket": {
+        "number": "612",
+        "url": "https://github.com/maxvyshniakov/straylight/issues/612"
+       },
+       "branch": "lane/612-overlay-keys",
+       "base": "integrate/queue-347",
+       "worktree": "/fixture/straylight/worktrees/612-overlay-keys",
+       "claims": [
+        "src/part0/**",
+        "src/part1/**",
+        "src/part2/**",
+        "src/part3/**"
+       ],
+       "after": [],
+       "created": "2026-11-03T16:40:00Z",
+       "receipt": {
+        "status": "red",
+        "tree_match": false,
+        "path": null
+       },
+       "post_merge": null,
+       "review": {
+        "status": "finished",
+        "open": 0,
+        "findings": 1
+       },
+       "logs": {
+        "check": "/fixture/straylight/lanes/logs/lane-612-overlay-keys-20261104T095040.log"
+       },
+       "outcome": null
+      },
+      {
+       "id": "555-host-rename-names",
+       "status": "planned",
+       "ticket": {
+        "number": "555",
+        "url": "https://github.com/maxvyshniakov/straylight/issues/555"
+       },
+       "branch": "lane/555-host-rename-names",
+       "base": "integrate/queue-347",
+       "worktree": "/fixture/straylight/worktrees/555-host-rename-names",
+       "claims": [
+        "src/part0/**"
+       ],
+       "after": [],
+       "created": "2026-11-04T09:50:00Z",
+       "receipt": {
+        "status": "not run",
+        "tree_match": null,
+        "path": null
+       },
+       "post_merge": null,
+       "review": {
+        "status": "not started",
+        "open": 0,
+        "findings": 0
+       },
+       "logs": {
+        "check": "/fixture/straylight/lanes/logs/lane-555-host-rename-names-20261104T095010.log"
+       },
+       "outcome": null
+      }
+     ],
+     "damaged": []
+    },
+    {
+     "project": "data-grid",
+     "state_dir": "/fixture/data-grid/lanes",
+     "config": "/fixture/data-grid/.lanefather.toml",
+     "repository": "maxvyshniakov/data-grid",
+     "cap": 2,
+     "cap_source": "derived",
+     "active": 1,
+     "planned": 0,
+     "gate": {
+      "sha": "0a1b2c3d",
+      "status": "green",
+      "at": "2026-11-04T07:00:00Z"
+     },
+     "lanes": [
+      {
+       "id": "644-build-once",
+       "status": "active",
+       "ticket": {
+        "number": "88",
+        "url": "https://github.com/maxvyshniakov/straylight/issues/88"
+       },
+       "branch": "lane/644-build-once",
+       "base": "integrate/queue-347",
+       "worktree": "/fixture/data-grid/worktrees/644-build-once",
+       "claims": [
+        "src/part0/**",
+        "src/part1/**",
+        "src/part2/**"
+       ],
+       "after": [],
+       "created": "2026-11-04T09:30:00Z",
+       "receipt": {
+        "status": "red",
+        "tree_match": false,
+        "path": null
+       },
+       "post_merge": null,
+       "review": {
+        "status": "not started",
+        "open": 0,
+        "findings": 0
+       },
+       "logs": {
+        "check": "/fixture/straylight/lanes/logs/lane-644-build-once-20261104T095030.log"
+       },
+       "outcome": null
+      }
+     ],
+     "damaged": []
+    },
+    {
+     "project": "sid-kit",
+     "state_dir": "/fixture/sid-kit/lanes",
+     "error": "config not found at /fixture/sid-kit/.lanefather.toml"
+    }
+   ]
+  }
+ }
+}

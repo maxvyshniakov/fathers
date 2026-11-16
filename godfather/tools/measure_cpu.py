@@ -43,8 +43,8 @@ def main() -> int:
     parser.add_argument("--godfather", default="godfather")
     parser.add_argument("--slotfather", default="slotfather dashboard")
     args = parser.parse_args()
-    runs = {}
-    reports = {}
+    runs: dict[str, tuple[subprocess.Popen[bytes], int, int]] = {}
+    reports: dict[str, str] = {}
     for name, command in (("slotfather", args.slotfather), ("godfather", args.godfather)):
         reports[name] = f"/tmp/measure-cpu-{os.getpid()}-{name}.json"
         runs[name] = start(shlex.split(command), reports[name])
@@ -58,7 +58,7 @@ def main() -> int:
                 masters.remove(ready)
     for _, master, _ in runs.values():
         os.write(master, b"q")
-    found = {}
+    found: dict[str, float] = {}
     for name, (process, master, handle) in runs.items():
         end = time.monotonic() + 10
         while process.poll() is None and time.monotonic() < end:

@@ -13,6 +13,11 @@ slotfather run -n 1 --priority batch --label "<task> junkfather lint" -- python3
 slotfather run -n 1 --priority batch --label "<task> junkfather tests" -- python3 -m unittest discover -s tests
 ```
 
+Timing budgets live in `tests/perf/` (fathers#99), which the default discovery does not enter; run them before a
+release, alone on the machine: `slotfather run -n all --priority batch --label "<release> junkfather perf" --
+python3 -m unittest discover -s tests/perf`. Elsewhere a test waits on a condition or an injected clock, never on a
+fixed sleep or an elapsed-time assert (`repo-kit test-hygiene`).
+
 Junkfather has no `tools/type-baseline.json`: every Ruff or Pyright diagnostic fails. For a focused change, run its
 test file first (`python3 -m unittest tests/test_reap.py`). Tests run real child processes in a scratch state
 directory with a fake Claude Code session registry, and must clean up every process they start.
@@ -22,5 +27,9 @@ directory with a fake Claude Code session registry, and must clean up every proc
 - Every signal goes to a pid whose start time was read again just before; a reap never uses a group id without a
   verified leader of that group (docs/reference.md, Ending an entry).
 - Nothing junkfather did not start or adopt is stopped, except `reap --pid --force` on a pid the last sweep listed.
+  The sweep deletes two things no entry owns, both owner-approved: an unowned git worktree that passes every guard
+  of `worktrees.plan` (read again right before) and was idle for a day (fathers#112), and an agent-browser session's
+  files whose daemon and starting pid are gone and that did not change for a day, checked again right before each
+  removal (fathers#115). Any other deletion surface is a review finding.
 - Unknown liveness (unreadable process table, no owner process) never reaps.
 - The hook never prints, blocks or fails: a slow reap runs detached.

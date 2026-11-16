@@ -13,6 +13,7 @@ An entry is one owned process group, `entries/<id>.json` under `$JUNKFATHER_STAT
 | `pid`, `pgid`, `start`, `seen` | the leader: its pid, group, start time (`ps lstart`, C locale) and command as `ps` showed it at launch |
 | `group` | whether the leader leads its own group (true for `own`; for `adopt`, only when pid = pgid) |
 | `known` | `[pid, start]` of every member seen while it ran: what a reap may signal once the leader is gone |
+| `daemons` | `[pid, start, command]` of each detached agent-browser daemon its processes started (Sweep); a reap takes them with their trees |
 | `known_seen` | `[pid, start, command]` for the same members: the command each showed when last seen (absent in entries written before it: those members are checked by pid and start only) |
 | `ttl`, `expires` | seconds, and the epoch at which the entry is reaped whatever its owner |
 | `keep` | `owner`: ends with the agent that started it; `session`: survives a subagent's stop, ends with the session |
@@ -48,7 +49,7 @@ characters. An event follows the change it describes; one that cannot be written
 | `entry.reaped` | entry | `reason`, `result`, `how`, `signals` (`TERM`, `KILL`), `pids` |
 | `entry.reap_failed` (error) | entry | processes outlived SIGKILL; the entry keeps running; `left` |
 | `resource.owned` | resource | `own --kind` or `own-resource`; `resource`, `argv`, `cwd`, `ttl`, `keep` |
-| `resource.stopped` | resource | its stop ran and it is gone (or was gone already); `reason`, `result`, `resource`, `steps` |
+| `resource.stopped` | resource | its stop ran and it is gone (or was gone already); `reason`, `result`, `resource`, `steps`; also the sweep's removal of an unowned worktree (no `entry` in the subject) |
 | `resource.stop_failed` (error) | resource | a stop command failed or timed out, or it still runs; the entry keeps running; `error`, `steps` |
 | `unowned.reported` (warn) | process or resource | a sweep listed it for the first time; a process: `cmd`, `cwd`, `root`, `why`, `start`, `age`; a resource: `kind`, `id`, `name`, `why` |
 | `unowned.reaped` | process | `reap --pid --force`; `cmd`, `start`, `result`, `pids` |
@@ -64,11 +65,13 @@ A command run with `GODFATHER_ACTOR` set carries `via: "godfather"`.
 ## Dashboard contract
 
 - `junkfather capabilities --json`: `{v, tool, version, commit, dashboard: {v: 1, tag: "junk", snapshot: {argv:
-  ["status", "--json"], versions: [1], poll: 5}, events: {path, versions: [1], kinds}, settings: {versions: [1]},
+  ["status", "--json"], versions: [2], poll: 5}, events: {path, versions: [1], kinds}, settings: {versions: [1]},
   actions: ["reap", "extend"], changelog}}`.
-- `junkfather status --json`: `{v: 1, host, time, entries: [the list --json rows of running entries], unowned:
-  [{pid, start, cmd, cwd, root, why, age, alive}] from the last sweep, unowned_resources: [{kind, id, name, why}]
-  from the last sweep, sweep: {time, result}, errors}`. A resource entry's row has `resource: {kind, id, name}` and
+- `junkfather status --json`: `{v: 2, host, time, entries: [the list --json rows of running entries], unowned:
+  [{pid, start, cmd, cwd, root, why, age, alive}] from the last sweep, unowned_resources: [{kind, id, name, why},
+  and for a worktree also repo, branch, age, size] from the last sweep, sweep: {time, result}, cpu, errors}`; `cpu`
+  is the last sweep's CPU report (Sweep), `null` before one wrote it. Version 2 adds `cpu` to version 1 and changes
+  nothing else. A resource entry's row has `resource: {kind, id, name}` and
   `processes: null`. It changes nothing.
 - `junkfather changelog --json [--since VERSION]`: the installed release's CHANGELOG.md for Godfather's what's new
   (`godfather/docs/contracts/changelog.md`): `{v: 1, tool: "junkfather", version, source, entries: [{version, date,
@@ -123,7 +126,8 @@ Slotfather's "another user's queue" (fathers#118) and is not used here.
   or the same program, as `seen` or as `known_seen` last recorded it; `--force` skips the command check, never the
   start time); with a verified leader of its own group, the whole group, which the live leader pins; without one,
   only the `known` members whose start time and command (`known_seen`) still match, never the group id alone, since
-  a group id can be taken again once its last member ends; then the descendants of all of these. A leader refused
+  a group id can be taken again once its last member ends; the agent-browser daemons its processes started
+  (`daemons`, by pid, start time and command, Sweep); then the descendants of all of these. A leader refused
   for its start time or its command is not taken through `known` either, though `known` lists it: its recorded
   members still are. The supervisor records its own child's current command (a launcher such as
   `/usr/bin/python3` execs another program), since a child it has not waited for cannot have had its pid reused. Only
@@ -159,12 +163,32 @@ stops it with argv run without a shell, with a timeout (`STOP_TIMEOUT`, 120 s, p
 | `tailscale-serve` | `PROTO:PORT[/PATH]` (`https:6475`, `https:443/docs`, `tcp:5432`) | `tailscale serve status --json` has that route | `tailscale serve --PROTO=PORT [--set-path=PATH] off --yes`: that route only |
 | `safari-tp` | its main process's pid | that pid runs with its recorded start time | `osascript`: `tell application id "com.apple.SafariTechnologyPreview" to quit`, only while it is the only instance |
 | `command` | a name | `--alive` exits 0 (1: gone; anything else: unknown) | `--stop` |
+| `worktree` | the linked worktree's real path (`resource` also records `repo`, its main checkout, `common`, its repository's common git dir, and `branch`) | the path exists and that repository's `git worktree list --porcelain` lists it (another repository at that path: gone) | `git worktree remove PATH` (never `--force` or `rm -rf`), then `git update-ref -d refs/heads/BRANCH SHA` for the tip that was checked; refused while a guard keeps it |
 
 After the stop the resource must be seen gone within the grace (at least 5 s); otherwise, or when a stop command
 fails or times out, the result is `failed`, the entry keeps running with `last_error`, and `resource.stop_failed` is
 written; a later step that fails (`docker rm` after a stop) makes `resource.stopped` a warning with `warning`. A
 reap runs no stop command while whether the resource runs cannot be told: the result is `failed`, and the sweep or
 the next reap tries again.
+
+A worktree's stop is `worktrees.plan`, the one guarded removal the sweep uses too; it reads everything again right
+before (the git listing, the repository's common git dir, the process table, the working directories) and runs only
+when every guard passes (`junkfather/worktrees.py`; the same observations as Lanefather's gc, copied because
+common/ is not installed with a command, fathers#117): listed by the recorded repository, not the main worktree,
+not locked, not a symbolic link as git lists it, no `.keep` of any kind, not dev, main, master or integrate/*
+checked out, no uncommitted or untracked change, no ignored file outside disposable build output (node_modules,
+.venv, dist, ...), HEAD merged into the base (an ancestor of it; or, for a squash or rebase, no merge commit beyond
+the base and every patch in it by `git cherry`, which passes over a merge's own conflict resolution; the base is
+origin's default branch when there is an origin, else the local main or master), no Git repository or other worktree
+inside, no process working in it or naming it and none of this user's still running whose working directory cannot
+be read, and junkfather not running inside it. Not seen: a process that started inside and then changed directory,
+or one that only holds files open there. The branch goes after it only at the tip that was checked: a branch that
+moved meanwhile stays, and the stop is a warning. A refused stop is `resource.stop_failed` with `error: "kept: WHY"`,
+and the entry keeps running. At its owner's end the ending session's own process (and at SessionEnd everything
+below it) does not count as using it, and the hook's detached reaper runs in `/`, so a clean merged worktree is
+removed and any other is kept and reported. `reap --dry-run` runs the guards: `would-fail` and why. `own --kind
+worktree -- git worktree add ...` owns the path the command names (also with `git -C DIR`); `own-resource --kind
+worktree --id PATH` owns one that exists.
 
 A quit by bundle id cannot tell two Safari Technology Preview instances apart, so the stop runs only while the owned
 instance is the only one (same pid and start time); otherwise it fails and every instance keeps running.
@@ -234,6 +258,72 @@ so it is reported; one item per tree and process group. It also reports booted s
 browser), once each in `unowned.reported`; a kind whose tool is not installed is skipped, and one that cannot be
 listed is noted. A resource entry whose kind says it is gone is marked `gone`. The report goes to `unowned.json`
 and never stops anything; there is no `--force` for a resource.
+
+**Worktrees** (`worktrees` in the report and `sweep.json`). The repositories are `$JUNKFATHER_REPOS`
+(colon-separated; empty: none), else every folder in the home folder holding a `.git` directory; each one's linked
+worktrees are looked at, wherever they are. One that a live entry or a Lanefather lane that is not done owns is
+left to its owner: the lanes are read from the state directories Lanefather's project registry names
+(`projects.json`), and while that registry cannot be read no worktree under `.claude/worktrees/` is removed. Any
+other goes through the same guarded removal as an owned one's stop (`worktrees.plan`, Resources), which also asks
+for 24 hours of quiet (its folder, HEAD, index and HEAD log unchanged), and a `resource.stopped` event whose subject
+has no `entry` follows. This and agent-browser's leftover sessions are the two things junkfather deletes that no
+entry owns (owner-approved). The rest are reported in `unowned_resources` (`kind: "worktree"`, `repo`, `branch`,
+`age`, `size` in bytes, measured when first reported, and `why`; `status --json` shows them too), once each in
+`unowned.reported`. `git worktree prune` then drops the entries whose folder is gone. `removed: [{kind, id, repo,
+common, branch, size, delete_branch, result}]`, `pruned`, `notes`; `sweep --dry-run` prints the plan (`would remove worktree ...`, `would prune ...`) and changes nothing.
+
+**CPU report** (report only; `cpu` in `sweep.json` and in `status --json`). The sweep's one `ps` call reads `%cpu`
+(100 = one core), and each busy process goes to the first rule, in this order, that claims it or one of its
+ancestors: a running entry (its members as a reap finds them); a Slotfather lease from `slotfather status --json`
+(the holder, by pid and start time, and the tree Slotfather lists; `$JUNKFATHER_SLOTFATHER` names another command;
+missing or not answering, the step is left out and a note says so); an agent session among its ancestors. The rest
+is unattributed: `{v: 1, at, cores, attributed: {entry, lease, session: cores}, unattributed, owners: [{kind, id,
+label, cores, processes}] (20 busiest), top: [{pid, start, cmd (120 characters), cwd, uid, cpu, processes}] (the 10
+busiest unattributed trees, each under its topmost ancestor below launchd), notes}`. `%cpu` is ps's own average,
+not a measurement between two sweeps.
+
+**agent-browser** (`agent_browser` in the report and `sweep.json`). agent-browser keeps one set of files per session
+at the top of `~/.agent-browser` (`$JUNKFATHER_AGENT_BROWSER`): `NAME.config`, `.target`, `.engine` and, while its
+daemon runs, `.pid`, `.sock`, `.stream`, `.version`; NAME often ends in the pid of the process that started it.
+- Leftovers: a session's files are removed when no agent-browser program runs as the pid its `.pid` names or holds
+  its socket, the pid in its name runs no more, and none of its files changed for a day. Subdirectories (the
+  downloaded browsers, saved sessions and auth), dotfiles and symbolic links are never touched; an unreadable
+  process table, or a daemon whose session cannot be told (no `.pid` names it and lsof fails), removes nothing. Right
+  before a session's files go, the process table having been read again, they are checked again: any of its files
+  changed within the day, its `.pid` naming a running agent-browser program or its starting pid running keeps it
+  (a daemon that started during the sweep keeps its socket and pid file), with a note.
+  `leftovers: {dir, sessions, removed, files, bytes, names (the first 50), notes}`; `sweep --dry-run` lists the same
+  and removes nothing.
+- Daemons: a daemon detaches and launchd adopts it. It is matched to its session by the `.pid` file that names it,
+  else by the session socket it holds, and so to the process that started the session (the pid in the name, started
+  no later than the daemon). When that process is an entry's member, the daemon joins the entry's `daemons` (`[pid,
+  start, command]`; the sweep, the supervisor's refresh and a reap add it) and is reaped with it (Ending an
+  entry). When it is in a Slotfather lease's tree, the CPU report gives the daemon's tree to that lease;
+  junkfather never stops anything for a lease. A daemon no entry or lease owns, under 1% CPU with its session
+  unchanged for an hour, is listed in `idle: [{pid, start, cmd, session, matched, starter, age, idle, cpu,
+  processes}]`, never stopped.
+
+## Command line
+
+The command line follows [docs/cli.md](../../docs/cli.md); `tests/test_cli_convention.py` checks it. A refusal is one
+line on stderr, `junkfather: <reason>`, with nothing on stdout (`settings --json` still prints its reply); a usage error
+adds `Try 'junkfather [COMMAND] --help'.`. Options are exact: argparse's abbreviations are off. A `reap` whose result is
+a failure or a missing entry says so on stderr, in one line; the other results stay on stdout. cli.py raises
+`errors.Refused` (or `errors.Usage`) and `cli.main` prints it, so no command formats its own refusal. An unexpected
+exception prints `junkfather: internal error: TYPE: MESSAGE` and appends its traceback to `logs/junkfather.log` in the
+state directory.
+
+| Code | When |
+| --- | --- |
+| 0 | done; `reap` and `sweep` also when there was nothing to do |
+| 1 | a reap or a resource's create command failed, the process table could not be read, a resource's kind could not be listed or asked (`docker` missing or failing), `--alive` gave no answer |
+| 2 | usage: an unknown command, option or value, an id that cannot name a resource of its kind (not a UDID, not a serve route, safari-tp without a pid), `own-resource --kind safari-tp`, a blank `--alive` or `--stop` |
+| 3 | refused by the current state: `adopt` or `reap --pid` of a pid junkfather may not take, `hand` or `extend` of an entry that ended, a resource another entry owns, a stopped container, a repository's main worktree, a stale settings `--revision` |
+| 5 | read-only: a settings row the environment sets, a settings file junkfather may not write |
+| 6 | not found: no such entry (`hand`, `extend`, `reap --id`), no such pid (`adopt`, `reap --pid`), no running resource of that id, a folder that is no worktree, `--alive` says the resource is gone |
+| 75 | `sweep` while another sweep holds the lock: try again later |
+
+`own` (attached) and `own --kind` pass the exit status of the command they run through, like `slotfather run`.
 
 ## Boundaries
 

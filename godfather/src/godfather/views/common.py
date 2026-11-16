@@ -12,9 +12,10 @@ from .. import tui as _tui
 from .. import version as _version
 from ..text import text_width
 
+from ..model import Dashboard as Model
+from ..model import Request as Item
+
 Part = tuple[str, str]
-Model = dict[str, Any]
-Item = dict[str, Any]
 
 # A QUEUE row's state (#15), the first column of every row: (emoji, ASCII). A running row shows the first of asked,
 # idle, hot and legacy that applies, else running; a waiting row yielded or waiting.
@@ -27,6 +28,10 @@ PRIORITY_MARKS = {"interactive": ("⚡", "!"), "batch": ("🐌", "~")}
 HEALTH_MARKS = {"ok": ("🆗", "+"), "hot": ("🔥", "!")}
 # A finished run in EVENTS (fathers#108): an outlier above its run type's p90, or one of a run type turning slower
 RUN_MARKS = {"outlier": ("▲", "^"), "slower": ("↗", "/"), "faster": ("↘", "\\")}
+# A lane's status on the Lanes page (fathers#85) and an owned entry's state on the Processes page (fathers#86)
+ROW_MARKS = {"active": ("▶️", ">"), "planned": ("🗓️", "."), "landed": ("✅", "+"), "parked": ("💤", "z"),
+             "conflict": ("💥", "x"), "running": ("▶️", ">"), "orphan": ("👻", "o"), "expired": ("⌛", "x"),
+             "unowned": ("❔", "?"), "resource": ("📦", "#")}
 
 
 class Marks(NamedTuple):
@@ -36,6 +41,7 @@ class Marks(NamedTuple):
     priority: dict[str, str]
     health: dict[str, str]
     run: dict[str, str]
+    rows: dict[str, str]  # a page's row state (ROW_MARKS)
 
 
 def marks_for(ascii_only: bool = False, joined: bool = True) -> Marks:
@@ -46,7 +52,7 @@ def marks_for(ascii_only: bool = False, joined: bool = True) -> Marks:
     state = pick(MARKS)
     if not ascii_only and not joined:
         state["legacy"] = OLD_FALLBACK
-    return Marks(state, pick(PRIORITY_MARKS), pick(HEALTH_MARKS), pick(RUN_MARKS))
+    return Marks(state, pick(PRIORITY_MARKS), pick(HEALTH_MARKS), pick(RUN_MARKS), pick(ROW_MARKS))
 
 
 EMOJI = marks_for()
@@ -94,7 +100,7 @@ def ramp_bar(fraction: float, width: int, critical: bool, track: str) -> list[Pa
 
 def share(item: Item, model: Model) -> tuple[float, float]:
     """(cores the lease's commands use, cores its slots stand for)."""
-    return item["cpu"] / 100, item["count"] * model["cores"] / model["slots"]
+    return (item["cpu"] or 0.0) / 100, item["count"] * model["cores"] / model["slots"]
 
 
 def share_style(item: Item, model: Model) -> str:
@@ -144,15 +150,13 @@ PRIORITIES = ("interactive", "normal", "batch")  # Slotfather's request classes
 META_VALUE_MAX = 200  # the longest ticket Slotfather accepts
 
 
-def priority_of(entry: Item) -> str:
-    """A request's class as Slotfather reads it: normal for anything it does not know."""
-    value = entry.get("priority")
+def priority_of(value: Any) -> str:
+    """A request's class (its `priority` or `served`) as Slotfather reads it: normal for anything it does not know."""
     return value if isinstance(value, str) and value in PRIORITIES else "normal"
 
 
-def ticket_of(entry: Item) -> Union[str, None]:
+def ticket_of(value: Any) -> Union[str, None]:
     """A ticket as Slotfather reads one: short printable text, `#12` as `12`, empty or "none" as no ticket."""
-    value = entry.get("ticket")
     if isinstance(value, int) and not isinstance(value, bool):
         value = str(value)
     if not isinstance(value, str) or len(value) > META_VALUE_MAX or not value.isprintable():
@@ -182,4 +186,4 @@ def expected_run(item: Item) -> Optional[dict[str, Any]]:
 def priority_mark(item: Item, marks: Marks) -> str:
     """⚡ for an interactive request, 🐌 for a batch one (! and ~ in ASCII), nothing for normal: the class it is
     served in, aged (`served`), else the one it asked."""
-    return marks.priority.get(priority_of({"priority": item.get("served") or item.get("priority")}), "")
+    return marks.priority.get(priority_of(item.get("served") or item.get("priority")), "")

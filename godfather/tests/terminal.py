@@ -5,6 +5,7 @@ The fake prints state["snapshot"] for `status --json --full`; snapshot() builds 
 """
 from __future__ import annotations
 
+import contextlib
 import datetime
 import fcntl
 import json
@@ -98,6 +99,26 @@ def environ(fake: FakeSlotfather, **extra: str) -> dict[str, str]:
     return env
 
 
+# Run in the child, after setsid: its stdin, the PTY, becomes its controlling terminal, then the command runs in its place
+CONTROLLING = ("import fcntl, os, sys, termios; fcntl.ioctl(0, termios.TIOCSCTTY, 0); "
+               "os.execvp(sys.argv[1], sys.argv[1:])")
+
+
+def terminate(group: int, how: signal.Signals = signal.SIGTERM) -> None:
+    with contextlib.suppress(ProcessLookupError, PermissionError):  # EPERM: only zombies left (macOS)
+        os.killpg(group, how)
+
+
+def group_alive(group: int) -> bool:
+    """Whether a process of the group still runs. macOS answers EPERM for a group of zombies alone (exited, not yet
+    reaped by launchd): they write nothing more, so the group counts as ended."""
+    try:
+        os.killpg(group, 0)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
 class Terminal:
     """`godfather` (or another argv) running in a PTY of rows x columns; what it wrote, raw and plain."""
 
@@ -107,10 +128,14 @@ class Terminal:
         self.master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
         command = argv if argv is not None else [sys.executable, str(ENTRY), "--interval", "60"]
-        self.process = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave, env=env,
-                                        start_new_session=True)
+        # Its own session with the PTY as its controlling terminal, as a shell starts it: a resize reaches it as
+        # SIGWINCH (fathers#143)
+        self.process = subprocess.Popen([sys.executable, "-c", CONTROLLING, *command], stdin=slave, stdout=slave,
+                                        stderr=slave, env=env, start_new_session=True)
         os.close(slave)
         self.raw = bytearray()
+        self.stopped = False
+        self.grace = 10.0  # seconds stop() gives the group to end on SIGTERM before it kills it
         case.addCleanup(self.stop)
 
     def read(self, seconds: float = 0.05) -> None:
@@ -174,10 +199,37 @@ class Terminal:
         return self.exit_code()
 
     def stop(self) -> None:
-        if self.process.poll() is None:
-            os.killpg(self.process.pid, signal.SIGTERM)
-            self.process.wait(timeout=3)
-        os.close(self.master)
+        """Ends it and everything it started, and waits for all of them: a tool call in flight when it quit (the
+        fake tools write their state and argv log) outlives it in its process group, and must not write into the
+        fake's directory while the test's cleanup removes it."""
+        if self.stopped:
+            return
+        self.stopped = True
+        group = self.process.pid  # its own session, so its own process group, which its children inherit
+        try:
+            if self.process.poll() is None:
+                terminate(group)
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    self.process.wait(timeout=3)
+            terminate(group)
+            if not self.drain(group, self.grace):
+                # A member that ignores SIGTERM: killed, so it cannot write into the fake's directory after all
+                terminate(group, signal.SIGKILL)
+                self.process.poll()  # reaps the dashboard itself if it was the one
+                ended = self.drain(group, 3)
+                raise AssertionError(f"process group {group} ignored SIGTERM after its dashboard ended"
+                                     + ("; killed" if ended else "; still running after SIGKILL"))
+        finally:
+            os.close(self.master)
+
+    def drain(self, group: int, seconds: float) -> bool:
+        """Waits, reading the PTY as until() does, for the group to be empty; whether it is."""
+        deadline = time.monotonic() + seconds
+        while group_alive(group):
+            if time.monotonic() > deadline:
+                return False
+            self.read()
+        return True
 
 
 class LiveCase(unittest.TestCase):

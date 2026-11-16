@@ -1,7 +1,9 @@
 # Godfather spec
 
-Status: agreed plan, not built. Decisions from the owner's grilling session of 2026-11-12; the rest are marked
-**(chosen here)** and can be revisited on the map issue.
+Status: built. Every behaviour item below is in [Status](#status), with the version that shipped it or the open
+ticket that still owes part of it; the changelog has the detail. Decisions from the owner's grilling session of
+2026-11-12; the rest are marked **(chosen here)** and can be revisited on the map issue (fathers#89), and later owner
+decisions are dated where they changed an item.
 
 ## Problem
 
@@ -47,7 +49,8 @@ full pages one key away.
    immutable release under `~/.local/lib/godfather/releases/`, the same pattern as Slotfather: Python 3.9 or later,
    standard library only, the interpreter that ran the installer, refused inside a virtual environment. A reinstall
    replaces the entry point atomically; a running dashboard keeps its release and shows `↻` in the footer.
-2. `godfather` opens the live dashboard in a terminal; without a terminal it prints usage and exits 2.
+2. `godfather` opens the live dashboard in a terminal; without a terminal it says so in one line, points to
+   `godfather --help` and exits 2 (the CLI convention, fathers#154).
    `godfather --once [--page overview|lanes|processes] [--width N] [--height N] [--color]` prints one frame and
    exits, as `slotfather dashboard --once` does today. `--interval S` sets Refresh every for this run.
 3. `slotfather dashboard [ARGS]`, and a bare `slotfather` in a terminal, exec `godfather` with the same arguments
@@ -100,6 +103,8 @@ full pages one key away.
     - `processes`: one row per junkfather entry that belongs to the lease (below), with label, state and TTL left,
       each a link to the Processes page with that entry selected; `none owned` when there are none.
 15. EVENTS becomes one feed of every source (slice 3): columns time, source, event, slots, detail, label and pid.
+    The one feed and its `f` source filter were built (fathers#84) and then replaced by one log at a time
+    (fathers#152, below); the source tag lives on as the ALL log's type.
     - The source is a four-cell tag from the tool's capabilities (`slot`, `lane`, `junk`) in a colour of its own.
     - `slots` is filled only for Slotfather events, as today (`▪` taken, `▫` handed back or never held).
     - The detail comes from the event itself; Godfather no longer joins `history.jsonl`.
@@ -114,6 +119,14 @@ full pages one key away.
       trend or an outlier is a mark on its run (▲ ↗ ↘), never a row. `/` filters within the log shown.
     - Newest first; it stays on the newest entry while scrolled to the top and counts new ones (`↑ 3 new`) while
       scrolled down, as today. Events with the same time keep their file order.
+    - From fathers#152 (owner, 2026-11-16) EVENTS' rows are selectable and DETAILS follows the focused panel: with
+      EVENTS focused, ↑ ↓ (and a click on a row) move a row cursor, the heavy `┃` bar QUEUE's selected row has, and
+      DETAILS shows that run (label, slots, waited, priority, granted, ran, outcome, pid, each mark explained:
+      `▲ outlier · ran 1m13s · its run type's p90 52s`, `↗ slower +38% than its run type's p50` and why) or that
+      event (tool, kind, time, subject, its structured fields); with QUEUE focused it shows QUEUE's entry. Focusing
+      DETAILS keeps what it shows, so it can be scrolled. The cursor on the newest row stays on the newest as rows
+      arrive; on an older row it stays on that row, the scroll follows it and `↑ N new` counts what arrived above;
+      Home goes back to the newest. A filter or log change goes back to the newest too.
     - On a narrow panel the pid goes first, then slots, then the source shrinks to a one-cell coloured mark; the
       label is shortened before any of them.
 
@@ -173,6 +186,43 @@ full pages one key away.
 28. Slotfather keeps writing `queue.log` and `history.jsonl`; Lanefather keeps writing `ledger.log`. The event log
     mirrors them at the same call sites. Retiring the text logs is not part of this plan.
 
+## Status
+
+`built X` is the Godfather version that shipped an item; `Unreleased` is built on `main` and not released yet
+(CHANGELOG.md). A tool's own side names that tool. `planned` links the open ticket that owes the rest.
+`tests/test_spec.py` holds this table to the numbered items above.
+
+| Item | Status |
+| --- | --- |
+| 1 | built 0.1.0 |
+| 2 | built 0.1.0; `--page` Unreleased (fathers#85) |
+| 3 | built in Slotfather, Unreleased (SF-3) |
+| 4 | built 0.1.0 |
+| 5 | built 0.1.0; Lanefather and Junkfather Unreleased (fathers#85, fathers#86) |
+| 6 | built 0.1.0 |
+| 7 | built 0.1.0 |
+| 8 | built 0.1.0 |
+| 9 | built 0.1.0 (Slotfather); Lanefather and Junkfather Unreleased (fathers#85, fathers#86) |
+| 10 | built 0.1.0; the pages' borders Unreleased (fathers#85, fathers#86) |
+| 11 | built 0.1.0 |
+| 12 | built 0.1.0; frames in one synchronized update Unreleased (fathers#143) |
+| 13 | built Unreleased (fathers#85, fathers#86) |
+| 14 | built Unreleased (fathers#85, fathers#86) |
+| 15 | built Unreleased (fathers#84, then fathers#152) |
+| 16 | built Unreleased (fathers#85) |
+| 17 | built Unreleased (fathers#85) |
+| 18 | built Unreleased (fathers#86) |
+| 19 | built Unreleased (fathers#85, fathers#86) |
+| 20 | built 0.1.0 (Slotfather's rows); a section per tool Unreleased (fathers#87) |
+| 21 | built 0.1.0; the other tools Unreleased (fathers#87) |
+| 22 | built 0.1.0 |
+| 23 | built Unreleased (fathers#88) |
+| 24 | built Unreleased (fathers#88) |
+| 25 | built Unreleased (fathers#88); park planned in Lanefather (fathers#57) |
+| 26 | built Unreleased (fathers#88) |
+| 27 | built in the tools: Slotfather Unreleased, Lanefather 0.1.0+1138486, Junkfather 0.1.0 |
+| 28 | built in the tools: Slotfather Unreleased, Lanefather 0.1.0+1138486 |
+
 ## Decisions
 
 ### Package and modules
@@ -188,8 +238,9 @@ Godfather is one Python package, standard library only, Python 3.9+, installed b
   column sharing, scrollbars, overlays (help, changelog, Settings, confirmation, action menu, text field), the footer
   and hint dropping, key reading with the kitty keyboard protocol and layout table, mouse (SGR 1000/1006), full-screen
   setup and restore, the background loader. It knows nothing about any tool.
-- **Layers** (fathers#141): data (keys, theme, version, eventcheck, sources, events, news, entries, adapters, text)
-  → layout (layout, overlay_text, settings_model, state, modes, reducer) → views (tui, widgets, views) → app. A
+- **Layers** (fathers#141): data (keys, theme, version, eventcheck, sources, events, news, entries, adapters, text,
+  actions, model) → layout (layout, overlay_text, settings_model, state, pages, modes, reducer) → views (tui, widgets,
+  views) → app. A
   module imports only its own layer or one below, so the reducer reads no view and no canvas: what EVENTS shows
   (`events.Filter`), the entries' identity (`entries`), the overlays' text and geometry (`overlay_text`), Settings
   (`settings_model`) and the text measures (`text`: widths, durations, which hint a click presses) are below the
@@ -204,13 +255,54 @@ Godfather is one Python package, standard library only, Python 3.9+, installed b
 - **events**: the schema version, the tail reader (inode and offset, rotation to `.1`, partial last lines), the
   merged feed and per-source formatters that turn a kind and its details into the event and detail columns.
 - **eventcheck**: the validator, one file with no imports outside the standard library, meant to be vendored.
-- **adapters**: one per tool; each checks the snapshot versions it supports, turns a snapshot into the render model
-  and computes its border summary and its side of the joins.
+- **adapters**: one per tool; each checks the snapshot versions it supports, turns a snapshot into the typed model
+  of `model` (fathers#142: checked once, there; unknown keys ignored, a missing required one the source's notice)
+  and computes its border summary and its side of the joins; `adapters.settings` is every tool's `settings` CLI.
 - **views**: overview, which composes the moved renderers (queue: SLOTS and QUEUE; details, events, machine),
-  the overlays (help, changelog) and Settings; lanes and processes next.
-- **fixtures**: `GODFATHER_FIXTURES=DIR` replaces discovery and every tool call with recorded capabilities,
-  snapshots, event logs and settings replies, and records the argv of actions instead of running them. Tests,
-  `--once` goldens and the README media use it.
+  the overlays (help, what's new), Settings, and the Lanes and Processes pages.
+- **Fixtures** are a mode of `sources`, not a module: `GODFATHER_FIXTURES=DIR` replaces discovery and every tool call
+  with recorded capabilities, snapshots, event logs and settings replies, and records the argv of actions instead of
+  running them. Tests, `--once` goldens and the README media use it.
+
+Every module under `src/godfather/`, as built (`tests/test_spec.py` holds this table to the tree):
+
+| Module | What it holds |
+| --- | --- |
+| `app` | The command line, the live loop around the state, and the screen's data (`Screen`). |
+| `actions` | Which actions a row offers, their argv, and the re-check against a fresh snapshot. |
+| `entries` | The queue's entries as the screen tells them apart: identity and holder colours. |
+| `eventcheck` | The event schema's validator, `common/eventcheck.py` byte for byte. |
+| `events` | The tools' event logs followed, merged and worded; the capability reader. |
+| `keys` | Hotkeys on any keyboard layout; the kitty keyboard protocol. |
+| `layout` | Where every panel goes, from its declared sizes; the one scroll clamp. |
+| `model` | The typed snapshot model the adapters build and check (fathers#142). |
+| `modes` | The key and mouse table by mode. |
+| `news` | What's new: every tool's `changelog --json`, and what was read. |
+| `overlay_text` | Help and what's new laid out at a width, and where an overlay goes. |
+| `pages` | The pages as the reducer moves through them: each page's rows and its selection. |
+| `reducer` | The one reducer: the state after an event, and the effects. |
+| `settings_model` | Settings as a value: sections, rows, pending values and their transitions. |
+| `sources` | All tool I/O: discovery, the CLIs run with an argv and a timeout, fixture mode. |
+| `state` | The app state in one value, its events, effects and transitions. |
+| `text` | Cell widths, cutting, durations and the hint lookup, with no terminal. |
+| `theme` | Colour tokens from the terminal's own theme, and the three modes. |
+| `tui` | The canvas, key and mouse reading, full-screen setup and the background loaders. |
+| `version` | The running release's identity, the footer's version and the shipped changelog. |
+| `widgets` | `Panel`, `Table` and `Footer`. |
+| `adapters.slotfather` | Slotfather's contract versions and its snapshot decoded into the model. |
+| `adapters.lanefather` | Lanefather's machine-wide snapshot, its border summary and the lane joins. |
+| `adapters.junkfather` | Junkfather's snapshot, its border summary and the entry joins. |
+| `adapters.settings` | Any tool's `settings` CLI: read, check, set and reset. |
+| `adapters.decoding` | One field of a tool's JSON read as its documented type, for every adapter. |
+| `views.common` | Marks, holder colours, bars and cells several panels draw alike. |
+| `views.details` | DETAILS: the selected row's facts, links and marks. |
+| `views.events` | EVENTS: one tool's log at a time, its rows and its switch. |
+| `views.machine` | MACHINE: load, memory and swap, and the chart of held slots. |
+| `views.overlays` | Help and what's new drawn. |
+| `views.overview` | The overview screen, composed from the panels. |
+| `views.pages` | The Lanes and Processes pages and the border summaries that open them. |
+| `views.queue` | SLOTS and QUEUE. |
+| `views.settings` | The Settings overlay drawn from its value. |
 
 ```python
 class Source(Protocol):
@@ -227,6 +319,10 @@ class Source(Protocol):
     def actions(self, row: dict) -> list[Action]: ...     # advertised and applicable
     def run(self, action: Action) -> Result: ...
 ```
+
+That interface is the plan's. As built, `sources.Source` holds discovery, the state and the last good snapshot; the
+event, settings and action calls are `events.Feed`, `adapters.settings.SettingsClient` and `sources.act`, and the
+actions a row offers come from `actions.offered`.
 
 Slotfather keeps building the dashboard's model, because it is scheduler logic (plan, admission, reserved start,
 served class, draining, occupancy); it prints it as JSON. Godfather only renders it. Rejected: Godfather importing
@@ -342,6 +438,9 @@ Every tool answers `<tool> capabilities --json` with an object that has a `dashb
   Slotfather, 5–10 for the others).
 - Missing `events`, `settings`, `actions` or `changelog` means unsupported; the matching feature is hidden for that
   tool.
+- Lanefather adds `"show": {"versions": [1]}` when it answers `show ID --json` (fathers#85); without it Godfather never
+  runs `show`, and a request the status snapshot does not join to a lane says `lanefather too old` in DETAILS
+  ([docs/contracts/lanefather.md](docs/contracts/lanefather.md)).
 - The changelog overlay became what's new (fathers#102, owner 2026-11-12): the footer says `Godfather  what's
   new?`, and the overlay shows one timeline of every tool's changelog, Unreleased entries included, read through
   each tool's `changelog --json` ([docs/contracts/changelog.md](docs/contracts/changelog.md)), not the

@@ -43,7 +43,7 @@ class RefusalTests(Case):
 
     def refused(self, *args: str) -> str:
         result = self.cli(*args)
-        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertEqual(3, result.returncode, "refused by the current state (docs/cli.md): " + result.stderr)
         self.assertEqual("", result.stdout)
         return result.stderr
 
@@ -52,13 +52,13 @@ class RefusalTests(Case):
         other = next((p for p in procs.Table.read().procs.values() if p.uid != os.getuid() and p.pid > 1), None)
         if other is None:
             self.skipTest("no process of another user runs here")
-        self.assertEqual(f"junkfather adopt: refusing pid {other.pid}: another user's process\n",
+        self.assertEqual(f"junkfather: refusing pid {other.pid}: another user's process\n",
                          self.refused("adopt", str(other.pid)))
 
     def test_an_agent_session_is_never_adopted(self):
         agent = self.spawn(str(self.claude), "600", start_new_session=True)
         self.started(agent)
-        self.assertEqual(f"junkfather adopt: refusing pid {agent.pid}: an agent session\n",
+        self.assertEqual(f"junkfather: refusing pid {agent.pid}: an agent session\n",
                          self.refused("adopt", str(agent.pid)))
 
     def test_a_process_with_a_terminal_is_never_adopted(self):
@@ -67,7 +67,7 @@ class RefusalTests(Case):
         self.reap_later(sleeper)
         tty = (procs.Table.read().get(sleeper) or proc(0)).tty
         self.assertTrue(tty, "script gives its command a terminal")
-        self.assertEqual(f"junkfather adopt: refusing pid {sleeper}: a process with a terminal ({tty})\n",
+        self.assertEqual(f"junkfather: refusing pid {sleeper}: a process with a terminal ({tty})\n",
                          self.refused("adopt", str(sleeper)))
 
     def test_a_tree_holding_an_agent_is_neither_adopted_nor_force_stopped(self):
@@ -76,9 +76,9 @@ class RefusalTests(Case):
         below = self.started(shell, below=True)
         self.reap_later(below)
         why = "its tree holds a terminal's process or an agent session"
-        self.assertEqual(f"junkfather adopt: refusing pid {shell.pid}: {why}\n", self.refused("adopt", str(shell.pid)))
+        self.assertEqual(f"junkfather: refusing pid {shell.pid}: {why}\n", self.refused("adopt", str(shell.pid)))
         self.list_unowned(shell.pid)
-        self.assertEqual(f"junkfather reap: refusing pid {shell.pid}: {why}\n",
+        self.assertEqual(f"junkfather: refusing pid {shell.pid}: {why}\n",
                          self.refused("reap", "--pid", str(shell.pid), "--force"))
         self.assertTrue(self.runs(shell.pid) and self.runs(below))
 
@@ -86,7 +86,7 @@ class RefusalTests(Case):
         agent = self.spawn(str(self.claude), "600", start_new_session=True)
         self.started(agent)
         self.list_unowned(agent.pid)
-        self.assertEqual(f"junkfather reap: refusing pid {agent.pid}: not a process junkfather may stop\n",
+        self.assertEqual(f"junkfather: refusing pid {agent.pid}: not a process junkfather may stop\n",
                          self.refused("reap", "--pid", str(agent.pid), "--force"))
         self.assertTrue(self.runs(agent.pid))
 
@@ -97,7 +97,7 @@ class RefusalTests(Case):
         (entry,) = self.store.entries()
         self.store.update(entry["id"], lambda e: e.update(state="reaping"))  # another reaper holds it
         self.list_unowned(child.pid)
-        self.assertEqual(f"junkfather reap: refusing pid {child.pid}: an entry owns it now (reap that entry)\n",
+        self.assertEqual(f"junkfather: refusing pid {child.pid}: an entry owns it now (reap that entry)\n",
                          self.refused("reap", "--pid", str(child.pid), "--force"))
         self.assertTrue(self.runs(child.pid))
 

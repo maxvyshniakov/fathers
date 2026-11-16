@@ -247,7 +247,7 @@ class DecodeTests(unittest.TestCase):
         holder = model["holders"][0]
         self.assertIsInstance(holder["key"], tuple)
         self.assertIsInstance(holder["granted"], datetime.datetime)
-        self.assertTrue(all(isinstance(step, tuple) for step in model["history"]))
+        self.assertEqual({tuple}, {type(step) for step in model["history"]})
         self.assertTrue(all(isinstance(event["when"], datetime.datetime) for event in model["events"]))
 
 

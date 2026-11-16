@@ -13,6 +13,8 @@ lanefather land <id> [--into WORKTREE] [--keep]
 lanefather review <id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane]
 lanefather review --overall <sha> --since <base>
 lanefather done <id>
+lanefather done --finished [--dry-run]    done on every finished lane of the registered projects
+lanefather keep <id> [--off]              auto-done and done --finished leave the lane
 lanefather gc [--dry-run] [--json]         merged idle worktrees and unused branches
 lanefather promote <sha> [--ship] [--no-push] [--install [--deploy HOST]]
 lanefather sync [--drop-local]
@@ -45,6 +47,28 @@ slots) at the rerun's [slot priority](#slot-priorities) (interactive by default)
 `review <id> --fix-lane` starts the fix lane from the branch the lane landed on, which holds its merge, and refuses
 when no branch does; the landed lane keeps its own registration.
 
+### Finishing lanes
+
+A lane is finished when it is landed (or released), its post-merge smoke is green, its review is finished or exempt
+with every finding marked (each panel member's), and it is not kept. Auto-done (fathers#157) runs `done` on a lane
+the moment it becomes finished: at the land of a reviewed or exempt lane, at its clean review, or at `review --mark`
+of its last unmarked finding. `[done] auto = false` turns that off; the lane then says it is finished and waits for
+`done`.
+
+- `lanefather keep ID` keeps a lane, landed or not, from auto-done, `done --finished` and start's disk repair, for a
+  lane whose worktree or scratch is still in use (a packed dependency other worktrees overlay); `keep ID --off`
+  releases it. `land --keep` keeps the lane too. `done ID` still finishes a kept lane.
+- `lanefather done --finished` runs `done` on every finished lane of the projects in the machine's registry, each
+  in its own state directory and configuration, and prints what each removed and freed and why done refused the
+  others. `--dry-run` lists the finished lanes with their sizes (worktree, build directories and scratch), and the
+  landed lanes that are not finished with the reason, and removes nothing.
+- `start` (and `next --start`) under the free-disk minimum first runs `done --finished` over the registry, leaving
+  the projects whose `[done] auto` is false, then reads the disk again. If it is still short, the refusal says what
+  the repair freed. `--force-reason` skips the repair.
+
+None of these skips a refusal of `done`: an uncommitted change, an agent's lock, a process the source does not take
+for left behind or cannot see, a branch not merged, or a missing ticket comment leaves the lane where it is.
+
 `lanefather --help` describes the commands. The [glossary](../GLOSSARY.md) distinguishes lane states, receipts,
 reviews and verification gates.
 
@@ -63,6 +87,7 @@ self-contained configuration in the README for a Repo-Kit consumer.
 | `unclaimed`, `merge_config` | paths no lane claims; `git -c` settings for land's merge |
 | `[checks]` `verify`, `plan_module`, `triage`, `toolchain`, `slot_env` | the check contract below |
 | `[review]` `blocks` | the unmarked review finding severities that hold the batch gate, promote and `findings` (default `["P1", "P2"]`; fathers#109) |
+| `[review]` `panel`, `panel_required` | the review panel (fathers#151): two or more model aliases of the models file that review every lane at once; `panel_required = true` holds the gate while a member gave no answer ([Reviewer configuration](#reviewer-configuration)) |
 | `[checks]` `gate_only` | check-id patterns (fnmatch) the post-merge smoke leaves to the batch gate, such as tooling self-tests (fathers#94); a tree whose plan names whole suites has no check ids to match, so its smoke runs them |
 | `[lane]` `targets`, `cache_partitions` | build directories `done` removes |
 | `[gate]` `stamp_tool`, `stamp_file`, `pre_push_hook` | the verified-tree stamp of the full gate |
@@ -72,6 +97,7 @@ self-contained configuration in the README for a Repo-Kit consumer.
 | `[slots.priority]` `check`, `post-merge`, `gate`, `rerun`, `perf`, `default` | each run's Slotfather priority; see [slot priorities](#slot-priorities) |
 | `[admission]` `provider` | `legacy` by default; explicit `slotfather` uses the versioned lifetime-admission query, separately from execution jobs. See [rollout contract](../docs/admission.md). |
 | `[admission]` `cap` | this repository's lane cap (fathers#149), a positive whole number. First set wins: `LANEFATHER_CAP`, then `[admission] cap`, then the cap derived from the machine; an invalid `LANEFATHER_CAP` warns and falls back to the next. An exported `LANEFATHER_CAP` overrides every project's cap. The cap counts the planned and active lanes of this repository only; `LANEFATHER_GLOBAL_CAP`, when set, is a ceiling over every project's lanes in the state directory together. A fix lane (`review --fix-lane`) registers outside both (fathers#45); after that it counts like any other lane. |
+| `[done]` `auto` | `true` by default: a lane that becomes finished runs `done` by itself, and start below the disk minimum runs it on finished lanes ([Finishing lanes](#finishing-lanes)) |
 | `[tickets]` | the ticket lifecycle below; every rule is off without it |
 | `[hooks]` `process_scan` | legacy process adapter for live lanes; without it `procs` supplies read-only inspection |
 | `[hooks.project]` | named project policy scripts run by `project-hook NAME -- ARGS` in the installed interpreter |
@@ -181,9 +207,9 @@ lease id, also allowed at the report's top level). Lanefather hands each run its
 
 ## Reviewer configuration
 
-Authenticate the reviewer CLIs you intend to use according to their own documentation. The current source
-prefers Codex (`gpt-6.1-sol`, medium effort) when it can determine at least 15% weekly quota remains; otherwise it
-tries Claude (`claude-opus-5-5`, medium effort). A failed or empty Codex run can also fall back to Claude. Quota,
+Authenticate the reviewer CLIs you intend to use according to their own documentation. Without a models file
+Lanefather prefers Codex (`gpt-6.1-sol`, medium effort) when it can determine at least 15% weekly quota remains;
+otherwise it tries Claude (`claude-opus-5-5`, medium effort). A models file's review role sets the order. A failed or empty Codex run can also fall back to Claude. Quota,
 provider availability and account charges remain outside Lanefather.
 
 Set `LANEFATHER_CODEX` and `LANEFATHER_CLAUDE` to explicit executable paths if PATH discovery is unsuitable.
@@ -207,6 +233,55 @@ choices = [
 ]
 ```
 
+`roles.review.choices` is a priority list (fathers#155): the first choice whose conditions hold reviews, and the
+next one that holds (of another model) is its fallback when the run fails or answers empty, in either direction:
+listing Opus first makes Opus the reviewer and Sol its fallback. A choice's conditions: its CLI is there; its
+`when.limit.codex_weekly` share of the weekly Codex limit is left (a Codex choice that names no limit needs 15%,
+so no review runs on credits unread); `when.not_family` holds when the implementer's family is known and differs.
+The receipt's `fallback` says why the first choice did not review (its skip reasons, or the failed run).
+
+With Mastack's `role` command beside the models file (`<models dir>/bin/role`), Lanefather asks `role review
+[--implementer-family F] --json` for the reviewer and uses its model id, effort and skip reasons, printed and kept in
+the receipt's `role` (fathers#150); the choices after role's are its fallbacks. `role` reads the Codex limit with the
+CLI the review runs (`MASTACK_CODEX`) and the same models file (`MASTACK_MODELS`); Lanefather reuses that read. The
+implementer's family is that of the lane's builder as its last `check` recorded it in the receipt's `agent`:
+`check --agent claude-code|codex`, else the agent session the check runs in (`CODEX_THREAD_ID` before
+`CLAUDE_CODE_SESSION_ID`, since a Codex thread started from Claude Code carries both); `claude-code` is anthropic,
+`codex` is openai. Unknown, the flag is left out and `role`'s caution is shown. A `role` that fails or gives no
+choice leaves the choice to the models file.
+
+A review panel runs several reviewers on every lane at once:
+
+```toml
+[review]
+panel = ["sol", "opus"]   # model aliases of the models file
+panel_required = false    # true: a member that should have answered and did not holds the gate
+```
+
+Every member gets the same prompt, with the diff inline, on the same frozen checkout, each in its own process; the
+receipt keeps the prompt's `prompt_sha256`. Answers are written to a private temporary directory and move beside
+the receipt (`reviews/<label>.<reviewer>.md`) only once every member finished, so no member can read another's. A
+member whose conditions fail (any role reports, the Codex limit, `not_family`, its CLI) is replaced by the first
+choice that holds (role's choice when present), or skipped when that one is already on the panel; the reason is in
+its entry, and role's model id and effort are used for the model role chose. A member whose run fails or answers
+empty is kept as `failed` and the others' answers stand. `panel_required` holds the gate on a `failed` member only:
+a member the rules skipped is not missing. The receipt's `panel` lists each member: `member`, `reviewer`, `model`,
+`effort`, `cli`, `status` (`finished`, `failed`, `skipped`), `reason`, `error`, `fallback`, `seconds`, `output` and
+`numbers`, its findings in the one `findings` list, which numbers them across the panel and names each one's
+`reviewer`; `review --mark N` and the gate read that list as before. `review ID --compare` prints each reviewer's
+findings with their marks, and `stats --json` gives per-reviewer totals.
+
+`lanefather review ID --reviewer sol|opus|both` (also with `--overall`) chooses the reviewer of that one review:
+an alias of the models file runs whatever the Codex limit says and with no stand-in (a missing CLI fails it), and
+`both` runs the configured panel (Sol and Opus without one) the same way. Only then does the receipt carry `forced`
+(`{"by": "flag", "reviewers": [...]}`), which `review` shows. `--reviewer` does not combine with `--mark`,
+`--compare` or `--fix-lane`.
+
+Receipts from this release add keys (`agent` in a check receipt; `panel`, `forced`, `role`, `prompt_sha256` and a
+finding's `reviewer` in a review receipt) that an earlier release reads past: it lists, shows, marks and gates them.
+The `[review] panel` and `panel_required` keys of `.lanefather.toml`, though, are refused by an earlier release as
+unknown: install this release before a project sets them.
+
 Use model IDs available to your accounts. Without an explicit file, the loader searches
 `~/.config/mastack/models.toml` and `~/mastack/models.toml`; Mastack is optional, and compiled defaults apply when
 no file is found. An invalid review role emits a warning and uses defaults. Setting a model file does not itself
@@ -225,7 +300,7 @@ disable external review. Set `LANEFATHER_REVIEW_START=manual` during setup to de
 | `host`, `slots`, `procs` | the lane cap and load; the slotfather client; the process source |
 | `plan`, `checks` | the check contract; verify runs, receipts and red-check classification |
 | `gc` | generic worktree/branch retention and collection, with explicit project/state values |
-| `reviewer` | configured reviewer, real CLI adapters, fallback and interpreted answer |
+| `reviewer` | the reviewer choice (conditions, role, ordered fallback), the single review and the panel as one pipeline, real CLI adapters and interpreted answers |
 | `land`, `review`, `done`, `promote` | land and the smoke; the review; finishing a lane; gate, perf, promote, sync |
 | `lanes`, `cli` | start, next, adopt, list; the command line |
 | `registry`, `status`, `settings` | the machine's project registry; the machine-wide status snapshot; machine settings |
@@ -234,7 +309,11 @@ The [architecture pass](../docs/architecture-667.md) records the survey, alterna
 
 The standalone process adapter refuses PID-only live stopping until slotfather accepts an expected `(pid, start)`
 identity at the actual signal boundary. Existing configured hooks keep their supported cleanup contract. A missing
-`procs` on an older CLI preserves legacy `done` behavior; failed/unknown inspection retains worktrees.
+`procs` on an older CLI preserves legacy `done` behavior; failed/unknown inspection retains worktrees. An answer
+with pids whose working directory or lease membership is unknown is asked again up to four times, half a second
+apart (fathers#158): short-lived helpers that exited between the scan and the read do not hold a worktree. Unknowns
+that remain refuse `done`, naming each pid with its command (from Slotfather's `unknown`, or `procs --pid` for an
+older Slotfather).
 
 ### State and its versions
 
@@ -315,7 +394,7 @@ absolute path as `dashboard.events.path`. One `journal.ledger` call writes both,
   red post-merge smoke, gate or perf run and a failed promote step.
 
 Kinds: `lane.started`, `lane.adopted`, `claims.added`, `lane.checked`, `landing.reviewed`, `lane.conflict`,
-`lane.landed`, `lane.post_merge`, `lane.released`, `lane.done_refused`, `lane.done`, `process.stopped`,
+`lane.landed`, `lane.post_merge`, `lane.released`, `lane.done_refused`, `lane.done`, `lane.kept`, `process.stopped`,
 `review.started`, `review.kept`, `review.exempted`, `review.finished`, `finding.marked`, `review.marked`,
 `review.handed_over`, `review.ticket_filed`, `gate.finished`, `perf.finished`, `promote.step`, `promote.finished`,
 `sync.finished`, `load.waited`, `landing.lock_taken`, `ticket.marked`, `ticket.skipped`,

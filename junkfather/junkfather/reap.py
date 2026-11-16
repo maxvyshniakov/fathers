@@ -10,6 +10,8 @@ Which processes belong to an entry:
   the entry runs, with the command `known_seen` recorded for each), never the group id alone: a group id outlives
   its leader and can be taken again. A leader refused for its start time or command is never one of them, though
   `known` lists it;
+- the agent-browser daemons its processes started (`daemons`, pid, start time and command; browser.py), which
+  launchd adopted and so left its tree;
 - the descendants (by parent pid in the same table) of all of these, for the children that left the group.
 
 Never a member: a process with a terminal or an agent session (Claude Code, Codex), nor anything below one (a
@@ -23,15 +25,16 @@ from __future__ import annotations
 import contextlib
 import os
 import signal
-import sys
 import time
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+from . import browser as _browser
 from . import entry as _entry
 from . import events as _events
 from . import procs as _procs
 from . import safety as _safety
 from . import settings as _settings
+from .errors import NOT_FOUND, REFUSED, Refused
 from .procs import command_matches
 from .entry import Entry
 from .state import Store
@@ -90,10 +93,35 @@ def members(entry: Entry, table: _procs.Table, uid: Optional[int] = None, force:
                 found[proc.pid] = proc
         if found:
             how = "known"
+    for item in entry.get("daemons") or []:  # detached daemons its processes started (browser.py)
+        with contextlib.suppress(TypeError, ValueError):
+            pid, start, cmd = item
+            proc = table.get(int(pid))
+            if proc is not None and proc.start == _procs.norm(start) and (force or command_matches(proc.cmd, cmd)):
+                found.setdefault(proc.pid, proc)
+                how = how if how in ("leader", "known") else "daemons"
     for pid in list(found):
         for proc in table.descendants(pid, prune=_safety.unsafe):
             found.setdefault(proc.pid, proc)
     return sorted(_safety.signallable(found.values(), table, uid), key=lambda p: p.pid), how
+
+
+def join_daemons(store: Store, entry: Entry, table: _procs.Table) -> Entry:
+    """Before a reap: the agent-browser daemons the entry's processes started join it (browser.py), so the reap
+    takes them too. The entry as it is now."""
+    found = daemons_started(entry, table)
+    if not found:
+        return entry
+    return _entry.daemons(store, entry["id"], found) or entry
+
+
+def daemons_started(entry: Entry, table: _procs.Table, found: Optional[List[_procs.Proc]] = None
+                    ) -> List[_procs.Proc]:
+    """The agent-browser daemons, not yet the entry's, whose starting process is one of its members (`found`, else
+    as `members` finds them now); [] at once when no agent-browser program runs."""
+    if not any(_browser.is_browser(p) for p in table.procs.values()):
+        return []
+    return _browser.Survey(table, cached=True).daemons_below(found if found is not None else members(entry, table)[0])
 
 
 def stop(targets: List[_procs.Proc], grace: float,
@@ -179,6 +207,8 @@ def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None
                 _events.write(store.root, "entry.reap_failed", _events.subject(entry), actor or _events.caller(),
                               {**unread, "result": "failed", "how": "", "signals": [], "pids": []}, "error")
         return {"id": entry_id, "result": "failed", "reason": f"{reason}; {error}", "pids": [], "how": ""}
+    if not dry_run:
+        entry = join_daemons(store, entry, table)
     targets, how = members(entry, table, force=force)
     if dry_run:
         return {"id": entry_id, "result": "would-stop" if targets else "gone", "reason": reason,
@@ -226,14 +256,13 @@ def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None
 
 def reap_unowned(store: Store, pid: int, table: _procs.Table, force: bool, reason: str,
                  grace: Optional[float] = None,
-                 dry_run: bool = False, via: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+                 dry_run: bool = False, via: Optional[str] = None) -> List[Dict[str, Any]]:
     """Stop an unowned process: only with `force`, only one the last sweep listed, only when it is still the same
-    process (start time and command) and still unowned (safety.force_refusal). None, after saying why on stderr, when
-    refused; else the one result row."""
+    process (start time and command) and still unowned (safety.force_refusal). The one result row; Refused (exit 6
+    when the pid does not run, else 3) when refused."""
     if not force:
-        print(f"junkfather reap: pid {pid} is not owned; junkfather stops an unowned process only with --force, "
-              "and only one `junkfather sweep` listed", file=sys.stderr)
-        return None
+        raise Refused(f"pid {pid} is not owned; junkfather stops an unowned process only with --force, and only one "
+                      "`junkfather sweep` listed", NOT_FOUND if table.get(pid) is None else REFUSED)
 
     def owned(candidate: int) -> bool:
         return any(candidate in {p.pid for p in members(e, table)[0]} for e in store.entries()
@@ -241,8 +270,7 @@ def reap_unowned(store: Store, pid: int, table: _procs.Table, force: bool, reaso
 
     refused = _safety.force_refusal(pid, table, store, owned)
     if refused:
-        print(f"junkfather reap: refusing pid {pid}: {refused}", file=sys.stderr)
-        return None
+        raise Refused(f"refusing pid {pid}: {refused}", NOT_FOUND if table.get(pid) is None else REFUSED)
     proc = table.get(pid)
     assert proc is not None
     targets = _safety.forced_targets(pid, table)

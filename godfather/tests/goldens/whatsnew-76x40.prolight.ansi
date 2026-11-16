@@ -3,38 +3,38 @@
 [0;38;2;150;150;150m││[0m[0m                                                                        [0m[0;38;2;150;150;150m││[0m
 [0;38;2;150;150;150m││[0m[0m  Godfather[0m[0;38;2;112;112;112m · [0m[0;1munreleased[0m[0;38;2;112;112;112m · [0m[0;38;2;31;111;235minstalled 9f600e1[0m[0m                           [0m[0;38;2;112;112;112m┃[0m[0;38;2;150;150;150m││[0m
 [0;38;2;150;150;150m╰│[0m[0m                                                                       [0m[0;38;2;112;112;112m┃[0m[0;38;2;150;150;150m│╯[0m
-[0;38;2;31;111;235m┍[0m[0;38;2;150;150;150m│[0m[0m  [0m[0;38;2;112;112;112mADDED[0m[0m                                                                [0m[0;38;2;112;112;112m┃[0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m┑[0m
-[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m                                                                       [0m[0;38;2;112;112;112m┃[0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
-[0;38;2;255;105;185m┃[0m[0;38;2;150;150;150m│[0m[0m  [0m[0;38;2;112;112;112m• [0m[0mThe footer says Godfather what's new?; a click or v opens what's   [0m[0;38;2;112;112;112m┃[0m[0;38;2;150;150;150m│[0m[0;38;2;255;105;185m┃[0m
-[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    new: one timeline of every tool's changelog, newest first,         [0m[0;38;2;112;112;112m╹[0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
-[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    filtered by tool with ← → or a click on a tool's name. An install   [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
-[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    from main shows its Unreleased entries, which are what it runs,     [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
-[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    under Slotfather · unreleased · installed 81abd86. Closing it       [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
-[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    marks everything read (~/.local/state/godfather/news.json). Each    [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
-[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    tool is asked through its changelog --json; one without it adds     [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
-[0;38;2;31;111;235m┕[0m[0;38;2;150;150;150m│[0m[0m    nothing.[0m[0;38;2;112;112;112m  fathers#102[0m[0m                                               [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m┙[0m
-[0;38;2;150;150;150m╭│[0m[0m                                                                        [0m[0;38;2;150;150;150m│╮[0m
-[0;38;2;150;150;150m││[0m[0m  [0m[0;38;2;112;112;112m• [0m[0mExpected durations from Slotfather's run types (fathers#108): a     [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    running QUEUE row shows 12m / ~18m, its time against the expected   [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    run, in yellow once it is past the p90; a waiting row shows the     [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    run it expects (waiting #1 · ~18m); DETAILS says expected 18m ·     [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    p90 31m · 23 runs. In EVENTS a finished run that was an outlier     [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    ends in ▲ (^ in ASCII) and the run that turned its run type's       [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    trend slower in ↗ (/); each trend change is a row of its own,       [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    Straylight gate · slower +32% · same plan, read from Slotfather's   [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    event log.                                                          [0m[0;38;2;150;150;150m││[0m
+[0;38;2;31;111;235m┍[0m[0;38;2;150;150;150m│[0m[0m  [0m[0;38;2;112;112;112mADDED[0m[0m                                                                [0m[0;38;2;112;112;112m╹[0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m┑[0m
+[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m                                                                        [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
+[0;38;2;255;105;185m┃[0m[0;38;2;150;150;150m│[0m[0m  [0m[0;38;2;112;112;112m• [0m[0mRow actions (fathers#88): Enter, a or a right-click on a QUEUE      [0m[0;38;2;150;150;150m│[0m[0;38;2;255;105;185m┃[0m
+[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    row or a page's row opens its action menu, only the actions its     [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
+[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    tool advertises and that apply to the row now (no actions in the    [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
+[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    footer otherwise): reprioritize a request to another class and      [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
+[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    ask a yieldable lease of a lower class than a waiter to yield       [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
+[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    (slotfather reprioritize|ask-yield PID … --start START); reap an    [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
+[0;38;2;31;111;235m│[0m[0;38;2;150;150;150m│[0m[0m    orphan or expired entry, or an unowned process the sweep reported   [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m│[0m
+[0;38;2;31;111;235m┕[0m[0;38;2;150;150;150m│[0m[0m    (junkfather reap --id … / --pid … --force), and extend a running    [0m[0;38;2;150;150;150m│[0m[0;38;2;31;111;235m┙[0m
+[0;38;2;150;150;150m╭│[0m[0m    entry's TTL by 1 h, 4 h or 1 d; open a lane's ticket or worktree    [0m[0;38;2;150;150;150m│╮[0m
+[0;38;2;150;150;150m││[0m[0m    with the platform opener, its latest log in $PAGER (less -R +G;     [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    the screen, kitty keyboard mode included, comes back after), and    [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    park an active lane with a reason where Lanefather advertises       [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    park. Reaps and park ask first, naming the target and the exact     [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    command; y runs it, n, Esc or a click outside cancel. The menu      [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    runs nothing until an action is chosen. The row is looked for       [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    again in a fresh snapshot first and the action dropped unless       [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    that row still offers the same action (an expired entry extended    [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    meanwhile, an orphan whose owner came back, a lease no longer       [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    yieldable, a lane no longer active, an unowned pid an owned entry   [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    holds now); an expired entry's reap also passes --expired, a park   [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    the lane's own --state-dir, a reason goes as one --reason=R         [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    argument, an opener is started and not waited for, and the same     [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    action is not started twice while it runs; the command runs in      [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    the background with no shell, a 30 s timeout and                    [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m╰│[0m[0m    GODFATHER_ACTOR=godfather/<version>; the footer shows its first     [0m[0;38;2;150;150;150m│╯[0m
+[0;38;2;150;150;150m╭│[0m[0m    stdout line, or its first stderr line in red, and the source is     [0m[0;38;2;150;150;150m│╮[0m
+[0;38;2;150;150;150m││[0m[0m    polled at once. Land, promote, done, sync, review and sweep are     [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    never offered. Under GODFATHER_FIXTURES actions are recorded,       [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m    never run.                                                          [0m[0;38;2;150;150;150m││[0m
 [0;38;2;150;150;150m││[0m[0m                                                                        [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m  [0m[0;38;2;112;112;112mCHANGED[0m[0m                                                               [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m                                                                        [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m  [0m[0;38;2;112;112;112m• [0m[0mScreenshots and the README media come from tools/raster.py,         [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    Godfather's own cell rasterizer, with no browser, terminal or       [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    machine slot: box drawing and blocks are geometry snapped to each   [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m╰│[0m[0m    cell, so rounded corners and joins meet their lines and bars have   [0m[0;38;2;150;150;150m│╯[0m
-[0;38;2;150;150;150m╭│[0m[0m    no seams at fractional cell widths; emoji such as 🆗 are drawn in   [0m[0;38;2;150;150;150m│╮[0m
-[0;38;2;150;150;150m││[0m[0m    colour across their two cells; the same cells give the same         [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m    pixels. tools/screens.mjs and screen-kit are no longer used.        [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m  [0m[0;38;2;112;112;112m  fathers#114[0m[0m                                                         [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m                                                                        [0m[0;38;2;150;150;150m││[0m
-[0;38;2;150;150;150m││[0m[0m                    [0m[0;1m←→[0m[0;38;2;112;112;112m tool[0m[0m   [0m[0;1m↑↓[0m[0;38;2;112;112;112m scroll[0m[0m   [0m[0;1mesc[0m[0;38;2;112;112;112m close[0m[0m                 [0m[0;38;2;112;112;112m16%[0m[0m [0m[0;38;2;150;150;150m││[0m
+[0;38;2;150;150;150m││[0m[0m                    [0m[0;1m←→[0m[0;38;2;112;112;112m tool[0m[0m   [0m[0;1m↑↓[0m[0;38;2;112;112;112m scroll[0m[0m   [0m[0;1mesc[0m[0;38;2;112;112;112m close[0m[0m                  [0m[0;38;2;112;112;112m8%[0m[0m [0m[0;38;2;150;150;150m││[0m
 [0;38;2;150;150;150m╰╰────────────────────────────────────────────────────────────────────────╯╯[0m
 [0m [0m[0;1mGodfather[0m[0;38;2;112;112;112m what's new?[0m[0m     [0m[0;1m↑↓[0m[0;38;2;112;112;112m select[0m[0m   [0m[0;1m?[0m[0;38;2;112;112;112m help[0m[0m   [0m[0;1mq[0m[0;38;2;112;112;112m quit[0m[0m     [0m[0;38;2;112;112;112m11:59:39[0m[0m  [0m[0;38;2;21;128;61m● live[0m[0m [0m

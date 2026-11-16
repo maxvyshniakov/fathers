@@ -7,6 +7,7 @@ from __future__ import annotations
 import fcntl
 import importlib.util
 import json
+import os
 import re
 import shutil
 import struct
@@ -20,7 +21,8 @@ from pathlib import Path
 from typing import Any
 
 from helpers import ROOT
-from terminal import PLAIN, LiveCase, event, item
+import terminal
+from terminal import ENTRY, PLAIN, LiveCase, event, item
 
 
 class LiveTests(LiveCase):
@@ -56,7 +58,7 @@ class LiveTests(LiveCase):
         screen = self.start(rows=20, columns=140)
         screen.until(lambda text: re.search(r"label\s+scroller", text), 10, "the details")
         mark = screen.mark()
-        screen.write(b"\t\t")  # by columns: QUEUE, EVENTS, then DETAILS
+        screen.write(b"\x1b[Z")  # Shift-Tab: by columns back from QUEUE to DETAILS, which still shows QUEUE's entry
         screen.receive("↑↓ scroll", seconds=3, since=mark)
         screen.write(b"\x1b[B\x1b[B")
 
@@ -77,19 +79,58 @@ class LiveTests(LiveCase):
         screen.receive("job39")
         mark = screen.mark()
         screen.write(b"\t")  # EVENTS
-        screen.receive("↑↓ scroll", seconds=3, since=mark)
+        screen.receive("←→ log", seconds=3, since=mark)
         mark = screen.mark()
-        screen.write(b"\x1b[B\x1b[B")
-        screen.until(lambda _: not any("job39" in line for line in screen.rows().values()), 3,
-                     "EVENTS scrolled past the newest")
+        screen.write(b"\x1b[<65;20;25M")  # the wheel scrolls it (its arrows move its cursor, fathers#152)
+
+        def listed(name: str) -> bool:  # a row of EVENTS (DETAILS shows the cursor's row, the newest, by label)
+            return any(re.search(rf"\d\d:\d\d:\d\d\s+\S+\s+{name}\s", line) for line in screen.rows().values())
+
+        screen.until(lambda _: not listed("job39"), 3, "EVENTS scrolled past the newest")
         self.queue(holders=[item("busy", 300)], events=events + [event(n) for n in range(40, 43)])
         mark = screen.mark()
         screen.receive("↑ 3 new", since=mark)
-        self.assertFalse(any("job42" in line for line in screen.rows().values()), "it stays where it was scrolled")
+        self.assertFalse(listed("job42"), "it stays where it was scrolled")
         mark = screen.mark()
         screen.write(b"\x1b[H")  # Home: back to the newest
-        screen.until(lambda _: any("job42" in line for line in screen.rows().values()), 3, "the newest again")
+        screen.until(lambda _: listed("job42"), 3, "the newest again")
         self.assertEqual(0, screen.quit())
+
+    def test_stopping_it_ends_and_waits_for_a_tool_call_still_in_flight(self) -> None:
+        """A tool call outlives the dashboard that quit while it ran, in its process group, and writes into the fake's
+        directory; stop() ends it and waits, so the cleanup that removes that directory never races it (CI: Errno 66,
+        Directory not empty)."""
+        screen = self.start(argv=[sys.executable, str(ENTRY), "--interval", "1"])
+        screen.receive(" QUEUE ")
+        state = self.fake.read()
+        self.fake.update(sleep={**state.get("sleep", {}), "status": 30}, ignore_hangup=True)
+        def polls() -> int:
+            return sum(1 for argv in self.fake.argv() if argv[:1] == ["status"])
+
+        calls = polls()
+        screen.until(lambda _: polls() > calls, 8, "a status call started")
+        self.assertEqual(0, screen.quit())
+        self.assertTrue(terminal.group_alive(screen.process.pid), "the call outlived the dashboard")
+        screen.stop()
+        self.assertFalse(terminal.group_alive(screen.process.pid))
+
+    def test_stopping_kills_a_call_that_ignores_sigterm_and_says_so(self) -> None:
+        screen = self.start(argv=[sys.executable, str(ENTRY), "--interval", "1"])
+        screen.grace = 0.5
+        screen.receive(" QUEUE ")
+        self.fake.update(sleep={"status": 30}, ignore_hangup=True, ignore_term=True)
+
+        def polls() -> int:
+            return sum(1 for argv in self.fake.argv() if argv[:1] == ["status"])
+
+        calls = polls()
+        screen.until(lambda _: polls() > calls, 8, "a status call started")
+        self.assertEqual(0, screen.quit())
+        with self.assertRaisesRegex(AssertionError, "ignored SIGTERM.*; killed"):
+            screen.stop()
+        self.assertFalse(terminal.group_alive(screen.process.pid))
+        with self.assertRaises(OSError):  # the PTY is closed all the same
+            os.fstat(screen.master)
 
     def test_a_resize_redraws_the_whole_screen_in_the_new_layout(self) -> None:
         self.queue(holders=[item("resized", 400)])
