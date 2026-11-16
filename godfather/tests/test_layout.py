@@ -1,6 +1,7 @@
 """The declarative layout (fathers#90): one function places every panel of the overview, the overlays, MACHINE's
 inside and the SLOTS bar. The tables are today's rules, measured on the dashboard before the layout moved: the wide
-arrangement from 110 columns, the one-column one below it with EVENTS beside MACHINE from 83 columns, the small
+arrangement from 110 columns, the one-column one below it with EVENTS full width and MACHINE beside DETAILS under it
+from 83 columns (fathers#169), the small
 screen under 50 columns or 14 rows, MACHINE's chart beside its rows from 62 columns."""
 from __future__ import annotations
 
@@ -49,26 +50,28 @@ class OverviewTests(unittest.TestCase):
                         "details": (0, 94, 13, 62), "machine": (13, 94, 7, 62)}, ("requests", "events", "details")),
         ((110, 14, 8), {"slots": (0, 0, 5, 57), "requests": (5, 0, 5, 57), "machine": (10, 0, 3, 57),
                         "details": (0, 58, 13, 52)}, ("requests", "details")),
-        # one column: QUEUE, DETAILS, then EVENTS beside MACHINE from 83 columns, MACHINE alone below
-        ((109, 40, 1), {"slots": (0, 0, 5, 109), "requests": (5, 0, 5, 109), "details": (10, 0, 18, 109),
-                        "events": (28, 0, 11, 54), "machine": (28, 55, 11, 54)}, ("requests", "details", "events")),
-        ((100, 40, 1), {"slots": (0, 0, 5, 100), "requests": (5, 0, 5, 100), "details": (10, 0, 18, 100),
-                        "events": (28, 0, 11, 50), "machine": (28, 51, 11, 49)}, ("requests", "details", "events")),
-        ((83, 40, 1), {"slots": (0, 0, 5, 83), "requests": (5, 0, 5, 83), "details": (10, 0, 18, 83),
-                       "events": (28, 0, 11, 38), "machine": (28, 39, 11, 44)}, ("requests", "details", "events")),
+        # one column from 83 columns (fathers#169): QUEUE, EVENTS the whole width, then MACHINE on the left and
+        # DETAILS on the right; below 83 QUEUE, DETAILS and MACHINE alone
+        ((109, 40, 1), {"slots": (0, 0, 5, 109), "requests": (5, 0, 5, 109), "events": (10, 0, 18, 109),
+                        "machine": (28, 0, 11, 54), "details": (28, 55, 11, 54)}, ("requests", "events", "details")),
+        ((100, 40, 1), {"slots": (0, 0, 5, 100), "requests": (5, 0, 5, 100), "events": (10, 0, 18, 100),
+                        "machine": (28, 0, 11, 49), "details": (28, 50, 11, 50)}, ("requests", "events", "details")),
+        ((83, 40, 1), {"slots": (0, 0, 5, 83), "requests": (5, 0, 5, 83), "events": (10, 0, 18, 83),
+                       "machine": (28, 0, 11, 44), "details": (28, 45, 11, 38)}, ("requests", "events", "details")),
         ((82, 40, 1), {"slots": (0, 0, 5, 82), "requests": (5, 0, 5, 82), "details": (10, 0, 22, 82),
                        "machine": (32, 0, 7, 82)}, ("requests", "details")),
         ((76, 40, 1), {"slots": (0, 0, 5, 76), "requests": (5, 0, 5, 76), "details": (10, 0, 22, 76),
                        "machine": (32, 0, 7, 76)}, ("requests", "details")),
         ((60, 40, 1), {"slots": (0, 0, 5, 60), "requests": (5, 0, 5, 60), "details": (10, 0, 18, 60),
                        "machine": (28, 0, 11, 60)}, ("requests", "details")),
-        # one column, short: the floors (QUEUE 10, DETAILS 13, the bottom row 6) give way to the minimums
-        ((100, 34, 3), {"slots": (0, 0, 5, 100), "requests": (5, 0, 7, 100), "details": (12, 0, 13, 100),
-                        "events": (25, 0, 8, 50), "machine": (25, 51, 8, 49)}, ("requests", "details", "events")),
-        ((100, 33, 3), {"slots": (0, 0, 5, 100), "requests": (5, 0, 7, 100), "details": (12, 0, 13, 100),
-                        "events": (25, 0, 7, 50), "machine": (25, 51, 7, 49)}, ("requests", "details", "events")),
-        ((100, 30, 12), {"slots": (0, 0, 5, 100), "requests": (5, 0, 13, 100), "details": (18, 0, 5, 100),
-                         "events": (23, 0, 6, 50), "machine": (23, 51, 6, 49)}, ("requests", "details", "events")),
+        # one column, short: the floors (QUEUE 10, the full-width band 13, the bottom row 6) give way to the
+        # minimums; without a bottom row the band is DETAILS'
+        ((100, 34, 3), {"slots": (0, 0, 5, 100), "requests": (5, 0, 7, 100), "events": (12, 0, 13, 100),
+                        "machine": (25, 0, 8, 49), "details": (25, 50, 8, 50)}, ("requests", "events", "details")),
+        ((100, 33, 3), {"slots": (0, 0, 5, 100), "requests": (5, 0, 7, 100), "events": (12, 0, 13, 100),
+                        "machine": (25, 0, 7, 49), "details": (25, 50, 7, 50)}, ("requests", "events", "details")),
+        ((100, 30, 12), {"slots": (0, 0, 5, 100), "requests": (5, 0, 13, 100), "events": (18, 0, 5, 100),
+                         "machine": (23, 0, 6, 49), "details": (23, 50, 6, 50)}, ("requests", "events", "details")),
         ((100, 25, 12), {"slots": (0, 0, 5, 100), "requests": (5, 0, 14, 100), "details": (19, 0, 5, 100)},
          ("requests", "details")),
         ((100, 20, 3), {"slots": (0, 0, 5, 100), "requests": (5, 0, 7, 100), "details": (12, 0, 7, 100)},
@@ -98,7 +101,7 @@ class OverviewTests(unittest.TestCase):
     def test_the_thresholds_in_one_place(self) -> None:
         self.assertEqual((110, 50, 14), (layout.WIDE, layout.SMALL_WIDTH, layout.SMALL_HEIGHT))
         beside = [width for width in range(60, 120) if "events" in layout.overview(width, 40, 1, natural).panels]
-        self.assertEqual(83, beside[0], "EVENTS beside MACHINE from 83 columns")
+        self.assertEqual(83, beside[0], "EVENTS, and MACHINE beside DETAILS, from 83 columns")
         self.assertEqual(62, next(width for width in range(30, 120) if layout.machine_side_by_side(width)))
 
 
@@ -122,6 +125,29 @@ class ShortWideTests(unittest.TestCase):
                     self.assertLessEqual(panels["requests"].height, layout.queue_height(rows), "no padded QUEUE")
                     if not shown:
                         self.assertEqual(height - 1, panels["details"].height, "DETAILS the whole column")
+
+
+class OneColumnTests(unittest.TestCase):
+    """fathers#169: from 83 columns EVENTS takes the full-width band under QUEUE and DETAILS the bottom row's right,
+    beside MACHINE, at the heights the band and the row had before; where the bottom row does not fit, the band is
+    DETAILS'."""
+
+    def test_events_the_band_and_details_beside_machine_under_it(self) -> None:
+        for width in range(83, 110):
+            for rows in (1, 3, 12):
+                for height in range(layout.SMALL_HEIGHT, 70):
+                    with self.subTest(width=width, rows=rows, height=height):
+                        panels = layout.overview(width, height, rows, natural).panels
+                        if "events" not in panels:
+                            self.assertNotIn("machine", panels, "no bottom row: the band is DETAILS'")
+                            continue
+                        events, machine, details = panels["events"], panels["machine"], panels["details"]
+                        self.assertEqual((0, width), (events.x, events.width), "EVENTS the whole width")
+                        self.assertEqual(events.y + events.height, machine.y, "the bottom row under it")
+                        self.assertEqual((machine.y, machine.height), (details.y, details.height), "one row")
+                        self.assertEqual((0, machine.width + 1), (machine.x, details.x), "MACHINE left, DETAILS right")
+                        self.assertEqual(width, machine.width + 1 + details.width)
+                        self.assertEqual(height - 1, details.y + details.height, "down to the footer")
 
 
 class TabOrderTests(unittest.TestCase):

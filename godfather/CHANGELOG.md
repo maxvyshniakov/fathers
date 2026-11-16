@@ -88,6 +88,9 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Changed
 
+- One column from 83 to 109 columns (fathers#169): EVENTS takes the full-width band under QUEUE and the bottom row
+  holds MACHINE on the left and DETAILS on the right, at the band's and the row's heights as before; Tab goes QUEUE,
+  EVENTS, DETAILS. Under 83 columns, or where the bottom row gets no rows, DETAILS keeps the band as before.
 - EVENTS' log switch and the focus frame (fathers#165): the title's arrows are `❮ SLOTS LOG ❯`, a size up from
   `◂ ▸` and one cell wide in every terminal, in the frame's colour (the accent while EVENTS has the focus); the key
   that switches the log (← →, `f`, a click on the title) flashes the arrow on its side as a scroll flashes the

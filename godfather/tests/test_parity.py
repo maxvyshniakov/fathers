@@ -7,7 +7,8 @@ stand-in). Godfather reads that reply in fixture mode, its adapter decodes it, a
 moment. Every cell, character and style, must be identical, emoji and ASCII, wide, one-column and narrow, but the
 footer (its name and version) and the EVENTS panel, whose columns Godfather changed on purpose after the move (time ·
 slots · label · result, owner 2026-11-12), and the focused panel's frame, heavy since fathers#139 (all four sides since fathers#165) with a selected row's markers leaning toward it, and what says the history chart shows slots held
-(fathers#140; chart_title());
+(fathers#140; chart_title()), and from 83 to 109 columns the bottom row (fathers#169): Godfather's MACHINE, on the
+left now, is compared with Slotfather's on the right, and DETAILS, now beside it, is compared at the other sizes;
 help likewise in every section but EVENTS. A missing or unreadable fixture
 fails the test; it never skips.
 """
@@ -77,6 +78,20 @@ def chart_title(canvas: tui.Canvas) -> set[tuple[int, int]]:
     if inside.side:  # both rows are otherwise blank left of the chart: their whole inside
         return {(row, column) for row in (chart.y - 1, chart.y + chart.height) for column in range(x + 1, x + width - 1)}
     return {(top + height - 1, column) for column in range(chart.x - 1, chart.x + 11)}
+
+
+def swapped(canvas: tui.Canvas) -> tuple[set[tuple[int, int]], int, int]:
+    """fathers#169: in one column from 83 columns EVENTS has the band Slotfather's DETAILS had and the bottom row is
+    MACHINE then DETAILS, where Slotfather's was EVENTS then MACHINE at the same rows and MACHINE's width. DETAILS'
+    cells and the gap before them (masked: DETAILS' width changed, so did its wrapping), and how far right Slotfather
+    drew MACHINE (the bottom row's first row and that shift; (set(), 0, 0) for the other layouts)."""
+    details, events = canvas.tables.get("details"), canvas.tables.get("events")
+    if not details or not events or details["x"] == 0 or events["width"] != canvas.width:
+        return set(), 0, 0
+    machine_width = details["x"] - 1
+    masked = {(row, column) for row in range(details["y"], details["y"] + details["height"])
+              for column in range(machine_width, details["x"] + details["width"])}  # the gap between them too
+    return masked, details["y"], canvas.width - machine_width
 
 
 RESTED = {"┏": "╭", "┓": "╮", "┗": "╰", "┛": "╯", "━": "─", "┃": "│"}  # a focused frame as a resting one
@@ -151,11 +166,13 @@ class ParityTests(unittest.TestCase):
                 focused = canvas.tables.get("requests", dict(x=0, y=-1, width=0, height=0))
                 rules = {focused["y"], focused["y"] + focused["height"] - 1}
                 sides = {focused["x"], focused["x"] + focused["width"] - 1}
-                masked |= chart_title(canvas) | admission_note(canvas)
+                moved, bottom, shift = swapped(canvas)
+                masked |= chart_title(canvas) | admission_note(canvas) | moved
                 for row in range(height - 1):
                     for column in range(width):
                         if (row, column) not in masked:
                             cell = canvas.cells[row][column]
+                            theirs = column + shift if shift and row >= bottom else column
                             framed = row in rules and focused["x"] <= column < focused["x"] + focused["width"] or (
                                 column in sides and focused["y"] < row < focused["y"] + focused["height"] - 1
                                 and cell[1] == "accent")
@@ -163,7 +180,7 @@ class ParityTests(unittest.TestCase):
                                 cell = [RESTED.get(str(cell[0]), cell[0]), *cell[1:]]
                             elif column in sides:
                                 cell = [MARKED.get(str(cell[0]), cell[0]), *cell[1:]]
-                            self.assertEqual(expected[row][column], cell, f"{name}: row {row}, column {column}")
+                            self.assertEqual(expected[row][theirs], cell, f"{name}: row {row}, column {column}")
                 if events:  # the same frame and place, other columns
                     for row, column in ((events["y"], events["x"]), (events["y"] + events["height"] - 1,
                                                                      events["x"] + events["width"] - 1)):
