@@ -19,6 +19,7 @@ An entry is one owned process group, `entries/<id>.json` under `$JUNKFATHER_STAT
 | `keep` | `owner`: ends with the agent that started it; `session`: survives a subagent's stop, ends with the session |
 | `owner` | `{kind: claude\|codex\|shell, session, agent, agent_type, pid, pid_start, lane}` |
 | `handed` | each hand-over: `{at, from, to}` |
+| `auto` | `background`: a background Bash call's shell, owned by the PreToolUse hook's rewrite (Background Bash calls); absent otherwise |
 | `supervisor`, `log` | the supervising process (`pid`, `start`) and, detached, the output file |
 | `state` | `starting`, `running`, `reaping`, then `exited` (code in `exit`), `reaped` (`end: {reason, result, how, pids}`), `gone` (ended unseen) or `failed` |
 
@@ -42,7 +43,7 @@ characters. An event follows the change it describes; one that cannot be written
 | Kind | Subject | When; details |
 | --- | --- | --- |
 | `entry.owned` | entry | the command started; `argv`, `cwd`, `ttl`, `keep`, `mode`, `pgid`, `log` |
-| `entry.adopted` | entry | `cmd`, `ttl`, `keep`, `pgid`, `group` |
+| `entry.adopted` | entry | `cmd`, `ttl`, `keep`, `pgid`, `group`; a background call's shell also `auto: "background"`, `tool_use_id` |
 | `entry.exited` | entry | the leader exited and nothing of it remains; `exit` |
 | `entry.extended` | entry | `ttl`, `expires` |
 | `entry.handed` | entry | `from`, `to` (kind, session, agent, lane) |
@@ -98,6 +99,7 @@ junkfather settings reset (KEY | --all) [--revision R] [--json]
 | Key | Default | Range | Used by |
 | --- | --- | --- | --- |
 | `own.default_ttl` | 7200 s | 60 s to 7 days | `own`, `own-resource`, `adopt` without `--ttl` |
+| `own.background_ttl` | 7200 s | 60 s to 7 days | a background Bash call's shell, owned by the hook (Background Bash calls) |
 | `sweep.interval` | 3600 s | 60 s to 1 day, whole seconds | `sweep --plist` without `--interval`; the loaded agent keeps its interval until `install.py --launchd` reloads it |
 | `reap.grace` | 10 s | 1 to 600 s | `reap` without `--grace`, the sweep, the supervisor's TTL reap |
 
@@ -107,7 +109,7 @@ looks the value up when it runs (`settings.value`), so a change applies to the n
 `JUNKFATHER_SCRATCH_ROOTS`, `JUNKFATHER_CLAUDE_SESSIONS` and `JUNKFATHER_LANE_RECORDS` are shown as read-only rows
 (`env.NAME`, `source: "env NAME"` when set). The reply is `{v, tool: "junkfather", writable, reason, revision, status,
 sections: [{id, title, settings: [{key, label, type: "duration", value, default, min, max, step, unit: "s", source,
-writable, revision, description}]}]}`; `revision` is the SHA-256 of the file as read, one for all three settings.
+writable, revision, description}]}]}`; `revision` is the SHA-256 of the file as read, one for all the settings.
 `set` and `reset` reply with the document plus `ok` and `error`.
 
 Exit codes: 0 done, 1 not saved for another reason (a full disk, an I/O error), 2 invalid, 3 conflict (a stale
@@ -146,6 +148,9 @@ Slotfather's "another user's queue" (fathers#118) and is not used here.
   failure of a streak writes `entry.reap_failed`; each failure still updates `last_error`.
 - **Never** a process junkfather did not start or adopt, except `reap --pid PID --force` on a pid the last sweep
   listed as unowned, with the same start time and command and still unowned.
+- **Another entry's**: a background call's shell (`auto: "background"`) leaves out of its reap what another active
+  entry holds, its members and its supervisor with that one's descendants: an attached `junkfather own --keep-for
+  session` that a script ran in the shell keeps running in the shell's group after the subagent's stop.
 - **One policy**: `adopt`, a reap, `reap --pid --force`, the sweep's unowned report and its unowned resources
   decide what they may touch by the same rules (`junkfather/safety.py`).
 
@@ -236,13 +241,51 @@ Codex one when the registry never named it) and ends at its TTL or when swept as
 | Event | junkfather does |
 | --- | --- |
 | `PreToolUse` (Bash, command names junkfather) | writes a claim |
+| `PreToolUse` (Bash, `run_in_background`, a command that does not run junkfather) | writes a claim and answers with the command rewritten to own its shell (Background Bash calls) |
 | `SubagentStop` | reaps the subagent's entries with `keep: owner` |
 | `SessionEnd` | reaps the session's entries (handed ones belong to their new session) |
 | `Stop` | the end of a main-agent turn, not of the session: reaps the session's entries past their TTL |
 
-The hook never prints, never blocks and exits 0; a reap runs in a detached `junkfather reap` so the agent never
-waits for a grace period. Mastack's `hooks/lifecycle.py` dispatches the events and `bash_guard.py` the PreToolUse
-observer (`install.py --mastack`).
+The hook never blocks and exits 0, and prints only the answer to a background call; a reap runs in a detached
+`junkfather reap` so the agent never waits for a grace period. Mastack's `hooks/lifecycle.py` dispatches the events
+and `bash_guard.py` the PreToolUse observer (`install.py --mastack`), whose output is discarded; the background
+rewrite needs the hook registered for Bash in Claude Code's settings itself (`install.py --background`, which
+`--mastack` implies).
+
+### Background Bash calls
+
+A subagent's `run_in_background` Bash call outlives the agent that forgot it (fathers#166: 53 wait loops for six
+hours). So the PreToolUse hook answers such a call with `hookSpecificOutput.updatedInput`: the call's input as it
+came, its command preceded by one line,
+
+```sh
+'/Users/me/.local/bin/junkfather' background toolu_01ABC >/dev/null 2>&1 </dev/null
+<the agent's command, unchanged>
+```
+
+and writes the call's claim (`background: true`, its `description`). Claude Code runs a Bash call in a shell of its
+own process group; the line's junkfather adopts that shell, its parent, as an `adopted` entry with `auto:
+"background"`, the claim's session and subagent (and agent type), `keep: owner`, the TTL of `own.background_ttl`,
+`argv` the agent's command and `label` its description. The agent's command then runs in the same shell: its output,
+exit status and shell state are unchanged, and the line prints nothing. It ends like any entry: `SubagentStop`, the
+session's end, the TTL (the `Stop` hook, the sweep), `reap`. `list` and `status` show the owner with its subagent,
+and rows carry `agent_type` and `auto`.
+
+- Left alone: a foreground call (no `run_in_background: true`), a command that runs junkfather (it owns what it
+  needs, and its claim is the one `own` reads), a call without a session or a tool-use id that may name a file. A
+  command runs junkfather when one of its simple commands has junkfather as its program, by name or path, after
+  assignments and `env`, `exec`, `nohup`, `command`, `time`; `python -m junkfather`; or a command substitution
+  starting with it. One that only names it (`cd ~/fathers/junkfather && make`) is taken over; one that cannot be
+  split (an open quote) counts when it names junkfather at all.
+- `background TOOL_USE_ID` (internal) takes no pid: it adopts only its own parent, once per claim, for a claim the
+  hook wrote for a background call of the same session (`CLAUDE_CODE_SESSION_ID`, when set) within 30 minutes; the
+  rules of `adopt` apply. Without a claim, or when refused, the command runs unowned.
+- The hook gives no permission decision: Claude Code evaluates its permission rules and auto mode against the
+  rewritten command, so the installer allows the line (`Bash(/Users/me/.local/bin/junkfather background:*)` in
+  `permissions.allow` of the same settings file); the agent's own command still needs what it needed. Mastack's `bash_guard.py`, a separate hook run beside this one, judges the agent's command; a deny
+  from it wins (deny > ask > allow), and it never rewrites the input.
+- A shell that `exec`s its last command becomes another program: its leader's command no longer matches, so a reap
+  finds nothing to signal and the TTL leaves it. Claude Code's shell runs `pwd -P` after the command, so it does not.
 
 ## Sweep
 

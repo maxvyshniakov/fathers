@@ -98,11 +98,12 @@ class ConventionTests(Case):
         self.assertEqual("junkfather: reap takes one of --id, --owner, --lane or --pid\n"
                          "Try 'junkfather reap --help'.\n", result.stderr)
 
-    def test_the_help_names_every_command_but_the_internal_one(self):
+    def test_the_help_names_every_command_but_the_internal_ones(self):
         shown = self.cli("--help").stdout
         self.assertNotIn("SUPPRESS", shown)
         self.assertNotIn("supervise", shown)
-        for command in [c for c in cli.COMMANDS if c != "supervise"]:
+        self.assertNotRegex(shown, r"\n    background\b", "the line the hook writes before a background command")
+        for command in [c for c in cli.COMMANDS if c not in ("supervise", "background")]:
             self.assertRegex(shown, rf"\n    {re.escape(command)}\b", command)
 
     def test_version_flag_and_command_agree(self):

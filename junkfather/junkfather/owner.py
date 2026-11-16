@@ -237,14 +237,20 @@ def alive(owner: Owner, table: Optional[_procs.Table],
 
 # Claims
 
+SAFE_NAME = re.compile(r"^[\w.-]{1,128}$")  # a session or tool-use id that may name a claim's file
+
+
 def claim_path(store: Store, session: str, tool_use: str) -> Path:
-    safe = re.compile(r"^[\w.-]{1,128}$")
-    if not (safe.match(session) and safe.match(tool_use)) or session.startswith(".") or tool_use.startswith("."):
+    if not (SAFE_NAME.match(session) and SAFE_NAME.match(tool_use)) or session.startswith(".") \
+            or tool_use.startswith("."):
         raise ValueError("unsafe claim name")
     return store.claims_dir / session / f"{tool_use}.json"
 
 
-def write_claim(store: Store, data: Mapping[str, Any], now: Optional[float] = None) -> Optional[Path]:
+def write_claim(store: Store, data: Mapping[str, Any], now: Optional[float] = None, background: bool = False,
+                description: Optional[str] = None) -> Optional[Path]:
+    """The claim of a Bash call; `background`: one the hook rewrote to own itself (background.py), with the call's
+    description."""
     session, tool_use = data.get("session_id"), data.get("tool_use_id")
     command = as_dict(data.get("tool_input")).get("command")
     if not (isinstance(session, str) and isinstance(tool_use, str) and isinstance(command, str)):
@@ -254,8 +260,11 @@ def write_claim(store: Store, data: Mapping[str, Any], now: Optional[float] = No
     except ValueError:
         return None
     now = time.time() if now is None else now
-    write_atomic(path, {"v": 1, "at": now, "session": session, "agent": data.get("agent_id"),
-                        "agent_type": data.get("agent_type"), "tool_use_id": tool_use, "command": command})
+    claim: Dict[str, Any] = {"v": 1, "at": now, "session": session, "agent": data.get("agent_id"),
+                             "agent_type": data.get("agent_type"), "tool_use_id": tool_use, "command": command}
+    if background:
+        claim.update(background=True, description=description)
+    write_atomic(path, claim)
     prune_claims(store, now)
     return path
 

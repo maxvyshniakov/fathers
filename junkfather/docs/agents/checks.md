@@ -32,4 +32,6 @@ directory with a fake Claude Code session registry, and must clean up every proc
   files whose daemon and starting pid are gone and that did not change for a day, checked again right before each
   removal (fathers#115). Any other deletion surface is a review finding.
 - Unknown liveness (unreadable process table, no owner process) never reaps.
-- The hook never prints, blocks or fails: a slow reap runs detached.
+- The hook never blocks or fails, and prints only its answer to a background Bash call (docs/reference.md, Background
+  Bash calls): a slow reap runs detached. That rewrite adopts only the shell that runs it, and a background shell's
+  reap leaves out what another entry holds.

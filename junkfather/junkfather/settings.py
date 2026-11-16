@@ -1,5 +1,5 @@
 """Junkfather's settings, for Godfather's Settings section and anyone else (godfather/SPEC.md, Settings contract):
-three tunables of defaults.py that a person may change, kept in `settings.json` in the state directory.
+four tunables of defaults.py that a person may change, kept in `settings.json` in the state directory.
 
   junkfather settings [--json]                                  the schema and the current values
   junkfather settings check KEY VALUE [--json]                  validate without saving: {"ok", "error", "preview"}
@@ -7,6 +7,7 @@ three tunables of defaults.py that a person may change, kept in `settings.json` 
   junkfather settings reset (KEY | --all) [--revision R] [--json]
 
   own.default_ttl   the TTL of `own`, `own-resource` and `adopt` without --ttl
+  own.background_ttl  the TTL of a background Bash call's shell, which the PreToolUse hook owns (background.py)
   sweep.interval    the launchd sweep agent's interval (`sweep --plist` without --interval); the loaded agent keeps
                     its interval until it is reloaded (install.py --launchd)
   reap.grace        between SIGTERM and SIGKILL when `reap` has no --grace, for the sweep and the supervisor too
@@ -63,6 +64,10 @@ class Knob(NamedTuple):
 KNOBS: Tuple[Knob, ...] = (
     Knob("own.default_ttl", "own", "Default TTL", defaults.TTL, defaults.TTL_MIN, defaults.TTL_MAX, 300, False,
          "How long own, own-resource and adopt keep what they start when the command gives no --ttl."),
+    Knob("own.background_ttl", "own", "Background command TTL", defaults.BACKGROUND_TTL, defaults.TTL_MIN,
+         defaults.TTL_MAX, 300, False,
+         "How long an agent's background Bash command may run before it is stopped, unless its agent stops "
+         "first."),
     Knob("sweep.interval", "sweep", "Sweep every", defaults.SWEEP_INTERVAL, defaults.SWEEP_INTERVAL_MIN,
          defaults.SWEEP_INTERVAL_MAX, 300, True,
          "The hourly sweep agent's interval; the loaded agent takes a new one when reinstalled "

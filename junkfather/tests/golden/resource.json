@@ -140,7 +140,9 @@
      {
       "age": "<v>",
       "agent": null,
+      "agent_type": null,
       "argv": [],
+      "auto": null,
       "cwd": "<root>",
       "end": null,
       "exit": null,

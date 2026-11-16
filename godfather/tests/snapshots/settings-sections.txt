@@ -44,6 +44,7 @@
 │    state        /fake/state/junkfather                                       │
 │    last sweep   never                                                        │
 │    Default TTL               2h                                              │
+│    Background command TTL    2h                                              │
 │    Sweep every               1h                                              │
 │    Grace before SIGKILL      10s                                             │
 │    State directory           /fake/state/junkfather  read-only               │

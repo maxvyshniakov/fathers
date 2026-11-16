@@ -12,7 +12,8 @@ Which processes belong to an entry:
   `known` lists it;
 - the agent-browser daemons its processes started (`daemons`, pid, start time and command; browser.py), which
   launchd adopted and so left its tree;
-- the descendants (by parent pid in the same table) of all of these, for the children that left the group.
+- the descendants (by parent pid in the same table) of all of these, for the children that left the group;
+- for a background shell's entry (background.py), less what another active entry holds (`targets_of`).
 
 Never a member: a process with a terminal or an agent session (Claude Code, Codex), nor anything below one (a
 tmux server's panes and the agents in them), another user's process, pid 1, junkfather itself or its ancestors.
@@ -104,6 +105,35 @@ def members(entry: Entry, table: _procs.Table, uid: Optional[int] = None, force:
         for proc in table.descendants(pid, prune=_safety.unsafe):
             found.setdefault(proc.pid, proc)
     return sorted(_safety.signallable(found.values(), table, uid), key=lambda p: p.pid), how
+
+
+def targets_of(store: Store, entry: Entry, table: _procs.Table, force: bool = False
+               ) -> Tuple[List[_procs.Proc], str]:
+    """What a reap of the entry signals: its `members`, and for a background shell's entry (background.py) less
+    what another active entry holds, since anything the agent's command started may be owned on its own (an
+    attached `junkfather own --keep-for session` runs in the shell's group)."""
+    found, how = members(entry, table, force=force)
+    if entry.get("auto") and found:
+        held = held_elsewhere(store, entry, table)
+        found = [p for p in found if p.pid not in held]
+    return found, how
+
+
+def held_elsewhere(store: Store, entry: Entry, table: _procs.Table) -> Set[int]:
+    """The pids another active process entry holds: its members, and its supervisor (pid and start time) with
+    that one's descendants."""
+    held: Set[int] = set()
+    for other in store.entries():
+        if other.get("id") == entry.get("id") or other.get("state") not in _entry.ACTIVE \
+                or other.get("mode") == "resource":
+            continue
+        held.update(p.pid for p in members(other, table)[0])
+        supervisor = other.get("supervisor") or {}
+        pid = supervisor.get("pid")
+        if isinstance(pid, int) and table.alive(pid, supervisor.get("start")):
+            held.add(pid)
+            held.update(p.pid for p in table.descendants(pid))
+    return held
 
 
 def join_daemons(store: Store, entry: Entry, table: _procs.Table) -> Entry:
@@ -209,7 +239,7 @@ def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None
         return {"id": entry_id, "result": "failed", "reason": f"{reason}; {error}", "pids": [], "how": ""}
     if not dry_run:
         entry = join_daemons(store, entry, table)
-    targets, how = members(entry, table, force=force)
+    targets, how = targets_of(store, entry, table, force=force)
     if dry_run:
         return {"id": entry_id, "result": "would-stop" if targets else "gone", "reason": reason,
                 "pids": [p.pid for p in targets], "how": how}
@@ -227,7 +257,7 @@ def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None
                 outcome = {"result": "failed", "signalled": [], "left": pids, "error": str(error)}
                 results.append("failed")
                 break
-            targets, _ = members(entry, table, force=force)
+            targets, _ = targets_of(store, entry, table, force=force)
         if not targets:
             break
         pids += [p.pid for p in targets if p.pid not in pids]
