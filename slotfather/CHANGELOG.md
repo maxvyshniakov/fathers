@@ -6,6 +6,11 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- A head whose reserved start passed while leases with no end estimate hold its slots no longer idles the machine
+  (fathers#160): a request that fits the free slots starts when its p90 run ends by the head's projected start,
+  and past `reservation_timeout` (`order --reservation-timeout S`, default 30 minutes, 0: never) the head gives
+  way, naming the leases (its waiting line, queue.log, `request.head_dropped`). `status` says `head LABEL blocked
+  by leases ...; N slots idle`; `status --json` adds `blocked_by`, `idle_slots` and `gave_way` where they apply.
 - `slotfather lock PATH -- COMMAND` runs COMMAND holding a `flock` on PATH; while it waits for the lock, the lease
   it runs under gives up its slots (in its own place, never granted meanwhile) and takes them back before
   COMMAND runs. `status` shows `waiting-for-lock=PATH`, `status --json` and the dashboard block `lock`

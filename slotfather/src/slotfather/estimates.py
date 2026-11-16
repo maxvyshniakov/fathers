@@ -63,6 +63,15 @@ class Estimates:
                       for key, runs in saved.items()}
         return found
 
+    def p90(self, label: str | None, command: str | None) -> float | None:
+        """The 90th percentile (runtype.percentile()) of the closest kind's last runs, as of() finds them; None for
+        a request like nothing before. The bound a request that passes a blocked head runs by (fathers#160)."""
+        for key in self.keys(label, command):
+            recent = self.runs.get(key)
+            if recent:
+                return _runtype.percentile(recent, 90)
+        return None
+
     def of(self, label: str | None, command: str | None) -> float | None:
         for key in self.keys(label, command):
             recent = self.runs.get(key)
@@ -144,4 +153,22 @@ def estimator(directory: Path) -> _schedule.Estimate:
                 if found is not None and found["p50"] is not None and not found["fallback"]:
                     return float(found["p50"])
         return cached_estimates(directory).of(entry.get("label"), entry.get("cmd"))
+    return estimate
+
+
+def p90_estimator(directory: Path) -> _schedule.Estimate:
+    """estimate(entry) of its 90th percentile run (fathers#160): a run type's p90 (runtype.py) where its series
+    knows it, else the history's (Estimates.p90()); a session's own `--expect`; None for a request like nothing
+    before."""
+    def estimate(entry: _schedule.Entry) -> float | None:
+        spec = entry.get("session")
+        expect = cast(dict[str, Any], spec).get("expect") if isinstance(spec, dict) else None
+        if isinstance(expect, (int, float)) and not isinstance(expect, bool) and expect > 0:
+            return float(expect)
+        if _entry.meta_of(entry).get("phase"):
+            with contextlib.suppress(Exception):
+                found = _runtype.expected_of(entry, _runtype.peek(directory))
+                if found is not None and found["p90"] is not None and not found["fallback"]:
+                    return float(found["p90"])
+        return cached_estimates(directory).p90(entry.get("label"), entry.get("cmd"))
     return estimate

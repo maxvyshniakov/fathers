@@ -294,12 +294,13 @@ def grant(directory: Path, table: _queue.Table) -> str | None:
     moment = time.time()
     settings = _settings.order_settings(directory)
     window = _config.overtake_window()
+    p90 = _queue.estimator(directory, p90=True)
     found = _schedule.plan(_schedule.fit(waiters, slots), held, slots, moment, estimate=estimate, other=other,
-                 settings=settings, window=window)
+                 settings=settings, window=window, p90=p90)
     # The head's reservation, kept on its entry so that the next look promises no later start; others hold none.
     # Every client keeps it by the shared settings, whatever its environment (shared_plan()).
     keeper = _schedule.shared_plan(found, waiters, held, slots, moment, estimate, other, settings,
-                                   _settings.order_settings(directory, environment=False), window)
+                                   _settings.order_settings(directory, environment=False), window, p90)
     used = sum(_entry.holds(e, slots) for e in held) + other
     memory = _platform.memory_level() if found.grants else ("normal", None)
     gated = _schedule.memory_gate(found.grants, held, used, memory, settings)
@@ -307,6 +308,22 @@ def grant(directory: Path, table: _queue.Table) -> str | None:
     for entry in _schedule.reservations(waiters, keeper):
         if not any(entry is g for g in starting):  # a grant is written below; one memory holds back keeps its own
             _state.write(paths[id(entry)], entry)
+    gave_way, marked = _schedule.head_drops(waiters, keeper, moment)
+    for entry in marked:
+        if not any(entry is g for g in starting):
+            _state.write(paths[id(entry)], entry)
+    for entry in gave_way:  # its client hears it in its waiting reason; EVENTS and queue.log name the leases
+        blockers = next(b for e, b in keeper.dropped if e is entry)
+        names = ", ".join(f"{b.get('label')} (pid {b.get('pid')})" for b in blockers)
+        late = round(moment - (_entry.reservation(entry) or moment))
+        _events.record(directory, f"{entry.get('label')} (pid {entry.get('pid')}) gave way as the head: its reserved "
+                                  f"start passed {late} s ago while leases with no end estimate hold its slots: "
+                                  f"{names}",
+                       "request.head_dropped", _events.request(entry, paths[id(entry)]),
+                       {"count": entry["count"], "late": late,
+                        "blocked_by": [{"id": paths[id(b)].stem if id(b) in paths else None, "label": b.get("label"),
+                                        "pid": b.get("pid")} for b in blockers]},
+                       _events.actor(kind="tool"), level="warn")
     short = None
     for entry, why in gated:
         if why:

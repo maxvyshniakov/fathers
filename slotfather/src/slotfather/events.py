@@ -7,7 +7,7 @@ Each line is one write on a file opened with O_APPEND and mode 0600; past EVENTS
 events.jsonl.1, replacing the previous one, under an flock on events.lock beside it.
 
 Kinds: lease.granted, lease.released, request.left, lease.reaped, request.reaped, request.reprioritized,
-request.waiting_long, lease.yield_asked, lease.yield_withdrawn, lease.yielded, capacity.changed, order.changed,
+request.waiting_long, request.head_dropped, lease.yield_asked, lease.yield_withdrawn, lease.yielded, capacity.changed, order.changed,
 process.swept, session.run_started, session.run_ended, session.ended, run.outlier, run.trend, reap.skipped,
 reap.resumed.
 """
@@ -107,6 +107,20 @@ class Yielded(TypedDict, total=False):
     yields: int
 
 
+class Blocker(TypedDict):
+    id: Optional[str]
+    label: Optional[str]
+    pid: Optional[int]
+
+
+class HeadDropped(TypedDict):
+    """request.head_dropped (fathers#160): a head gave way, `late` seconds past its reserved start, to the leases
+    with no end estimate that hold its slots."""
+    count: int
+    late: int
+    blocked_by: list[Blocker]
+
+
 class Empty(TypedDict):
     """An event whose subject says it all (lease.yield_withdrawn)."""
 
@@ -167,7 +181,7 @@ class ReapResumed(TypedDict):
 
 Details = Union[Granted, Released, Left, Reaped, Reprioritized, WaitingLong, YieldAsked, Yielded, Empty,
                 CapacityChanged, OrderChanged, Swept, SessionRun, SessionEnded, Outlier, Trend, ReapSkipped,
-                ReapResumed]
+                ReapResumed, HeadDropped]
 
 # The event-kind table: each kind this writer emits, with the shape of its details (godfather/docs/events.md).
 KINDS: dict[str, type] = {
@@ -176,7 +190,7 @@ KINDS: dict[str, type] = {
     "lease.yield_asked": YieldAsked, "lease.yield_withdrawn": Empty, "lease.yielded": Yielded,
     "capacity.changed": CapacityChanged, "order.changed": OrderChanged, "process.swept": Swept,
     "session.run_started": SessionRun, "session.run_ended": SessionRun, "session.ended": SessionEnded,
-    "run.outlier": Outlier, "run.trend": Trend, "reap.skipped": ReapSkipped, "reap.resumed": ReapResumed,
+    "request.head_dropped": HeadDropped, "run.outlier": Outlier, "run.trend": Trend, "reap.skipped": ReapSkipped, "reap.resumed": ReapResumed,
 }
 
 

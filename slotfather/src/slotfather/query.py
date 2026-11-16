@@ -156,18 +156,27 @@ def expected(directory: Path, entries: list[dict[str, Any]], slots: int, other: 
     if not waiters:
         return {}
     estimate = _queue.estimator(directory)
+    p90 = _queue.estimator(directory, p90=True)
     window = _config.overtake_window()
     _schedule.fit(waiters, slots)
-    starts = _schedule.forecast(waiters, held, slots, moment, estimate, other, settings, window) \
+    starts = _schedule.forecast(waiters, held, slots, moment, estimate, other, settings, window, p90) \
         if settings["order"] == "backfill" else {}
     found = _schedule.plan(waiters, held, slots, moment, estimate=estimate, other=other, reserve_head=True,
-                           settings=settings, window=window)
+                           settings=settings, window=window, p90=p90)
     # The order would start these now; memory may hold them back (grant()'s gate), with no start a forecast can tell.
     memory = _platform.memory_level() if found.grants else ("normal", None)
     used = sum(_entry.holds(e, slots) for e in held) + other
     shared = _settings.order_settings(directory, environment=False)  # the queue's rule, not this reader's
     held_back = {id(e): why for e, why in _schedule.memory_gate(found.grants, held, used, memory, shared) if why}
     warn = float(settings.get("warn_wait") or 0)
+    # fathers#160: the slots no request takes now, and the leases with no end estimate a head waits on
+    idle = max(0, slots - used - sum(_entry.holds(e, slots) for e in found.grants))
+    stalled = bool(found.blocked) and found.reserved is not None and moment >= found.reserved  # its promise broke
+    dropped = {id(entry): blockers for entry, blockers in found.dropped}
+
+    def names(leases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [{"label": e.get("label"), "pid": e.get("pid")} for e in leases]
+
     result: dict[int, dict[str, Any]] = {}
     for copy in waiters:
         began = _entry.waiting_since(copy)
@@ -180,7 +189,10 @@ def expected(directory: Path, entries: list[dict[str, Any]], slots: int, other: 
             "est_start": None if id(copy) in held_back else starts.get(id(copy)), "head": is_head,
             "memory_wait": held_back.get(id(copy)),
             "reserved": found.reserved if is_head else None,
-            "waited": waited, "long_wait": bool(warn and waited is not None and waited >= warn)}
+            "waited": waited, "long_wait": bool(warn and waited is not None and waited >= warn),
+            "blocked_by": names(found.blocked) if is_head and stalled else None,
+            "idle": idle if is_head and stalled else None,
+            "gave_way": names(dropped[id(copy)]) if id(copy) in dropped else None}
     return result
 
 
@@ -210,6 +222,7 @@ def status_lines(directory: Path | None = None) -> list[str]:
         tags += waiter_tags(e, expect.get(id(e)))
         lines.append(f"{e['state']}: {e['count']} slot(s) {e.get('label')} pid={e['pid']} since={e['since']}{tags} "
                      f"cmd={e.get('cmd')}")
+    lines += blocked_line([e for _, e in live], expect)
     lines += [f"legacy: {count} slot(s) {e.get('label')} pid={e.get('pid')} (earlier queue {path.parent.parent})"
               for path, e, count in legacy]
     lines += [f"unreadable: queue/{path.name} (empty or not JSON; left in place)"
@@ -284,7 +297,21 @@ def waiter_tags(entry: dict[str, Any], expected: dict[str, Any] | None) -> str:
         tags += f' memory-wait="{expected["memory_wait"]}"'
     if expected["long_wait"]:
         tags += f" long-wait={_config.duration(expected['waited'])}"
+    if expected.get("gave_way"):  # fathers#160
+        tags += " gave-way-to=" + ",".join(str(e["label"]) for e in expected["gave_way"])
     return tags
+
+
+def blocked_line(entries: list[dict[str, Any]], expect: dict[int, dict[str, Any]]) -> list[str]:
+    """`status`' line for a head the leases with no end estimate hold back (fathers#160): "head LABEL blocked by
+    leases X, Y, Z; N slots idle"."""
+    for entry in entries:
+        found = expect.get(id(entry))
+        if found and found.get("blocked_by"):
+            leases = ", ".join(f"{e['label']} (pid {e['pid']})" for e in found["blocked_by"])
+            return [f"head {entry.get('label')} blocked by leases {leases} with no end estimate; "
+                    f"{found['idle']} slot{'' if found['idle'] == 1 else 's'} idle"]
+    return []
 
 
 def long_wait(directory: Path, path: Path) -> str | None:
@@ -427,6 +454,10 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
                     reserved=iso(found["reserved"]) if found else None,
                     waited=None if not found or found["waited"] is None else round(found["waited"]),
                     long_wait=bool(found and found["long_wait"]), memory_wait=found["memory_wait"] if found else None)
+        if found and found.get("blocked_by"):  # fathers#160: added only where a head is blocked
+            item.update(blocked_by=found["blocked_by"], idle_slots=found["idle"])
+        if found and found.get("gave_way"):
+            item["gave_way"] = found["gave_way"]
     legacy: list[dict[str, Any]] = []
     for path, entry, count in earlier:
         legacy.append({"id": path.stem, "lease": str(path), "state": "held", "count": count,

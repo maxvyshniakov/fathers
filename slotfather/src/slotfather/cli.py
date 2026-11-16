@@ -347,14 +347,16 @@ def order_line(found: dict) -> str:
             f"{found['fallback']:g} s, overrun {found['overrun']:g}; interactive {found['interactive']:g} s ahead, "
             f"batch {found['batch']:g} s behind, yield after {found['yield_after']:g} s; idle below "
             f"{found['idle_cpu']:g} cores for {found['idle_after']:g} s; batch ages {ages('aging_batch')}, normal "
-            f"{ages('aging_normal')}; warn after {found['warn_wait']:g} s waiting; memory pressure warning admits "
+            f"{ages('aging_normal')}; warn after {found['warn_wait']:g} s waiting; a blocked head gives way "
+            f"{ages('reservation_timeout')} past its reserved start; memory pressure warning admits "
             f"{'one 1-slot lease at a time' if found['warning_admits'] >= 1 else 'nothing'} "
             f"({'saved' if found['saved'] else 'default'})")
 
 
 def order_command(argv: list[str]) -> int:
     """`slotfather order [backfill|window] [--safety X] [--limit S] [--fallback S] [--overrun X] [--idle-cpu C]
-    [--idle-after S] [--aging-batch S] [--aging-normal S] [--warn-wait S] [--warning-admits 1|0] | reset`; S is
+    [--idle-after S] [--aging-batch S] [--aging-normal S] [--warn-wait S] [--reservation-timeout S]
+    [--warning-admits 1|0] | reset`; S is
     seconds or 30m, 1.5h."""
     from . import durations as _durations
     from . import leases as _leases
@@ -379,7 +381,7 @@ def order_command(argv: list[str]) -> int:
         else:
             raise _config.SlotError(f"order takes backfill or window, --safety, --limit, --fallback, --overrun, "
                             f"--interactive, --batch, --yield-after, --idle-cpu, --idle-after, --aging-batch, "
-                            f"--aging-normal, --warn-wait, --warning-admits, or reset; not {word!r}")
+                            f"--aging-normal, --warn-wait, --reservation-timeout, --warning-admits, or reset; not {word!r}")
     if reset and changes:
         raise _config.SlotError("order reset takes nothing else")
     if changes or reset:

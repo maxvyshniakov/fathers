@@ -68,7 +68,8 @@ QUEUE_ORDERS = ("backfill", "window")  # `slotfather order`; the first is the de
 
 ORDER_DEFAULTS = {"order": "backfill", "safety": 3.0, "limit": 0.0, "fallback": 3600.0, "overrun": 0.5,
                   "interactive": 1800.0, "batch": 1800.0, "yield_after": 120.0, "idle_cpu": 0.1, "idle_after": 300.0,
-                  "aging_batch": 1800.0, "aging_normal": 3600.0, "warn_wait": 1800.0, "warning_admits": 1.0}
+                  "aging_batch": 1800.0, "aging_normal": 3600.0, "warn_wait": 1800.0, "warning_admits": 1.0,
+                  "reservation_timeout": 1800.0}
 
 
 ORDER_KNOBS = {"safety": ("BACKFILL_SAFETY", 1.0, "up"), "limit": ("BACKFILL_LIMIT", 0.0, "limit"),
@@ -87,11 +88,15 @@ ORDER_KNOBS = {"safety": ("BACKFILL_SAFETY", 1.0, "up"), "limit": ("BACKFILL_LIM
                "warn_wait": ("WARN_WAIT", 0.0, "own"),
                # Under memory-pressure warning, 1: one 1-slot lease at a time starts beside running ones; 0: none (the
                # rule before it). A client's environment can only turn it off.
-               "warning_admits": ("WARNING_ADMITS", 0.0, "down")}
+               "warning_admits": ("WARNING_ADMITS", 0.0, "down"),
+               # fathers#160: a head whose reserved start passed this long ago while leases with no end estimate
+               # still hold its slots gives way (schedule.plan()); 0: never. A client's environment can only keep a
+               # head longer: a longer time, or 0.
+               "reservation_timeout": ("RESERVATION_TIMEOUT", 0.0, "delay")}
 
 
 DURATION_KNOBS = ("limit", "fallback", "interactive", "batch", "yield_after", "idle_after", "aging_batch",
-                  "aging_normal", "warn_wait")  # `slotfather order` takes these as 90, 90s, 30m or 1.5h
+                  "aging_normal", "warn_wait", "reservation_timeout")  # `slotfather order` takes these as 90, 90s, 30m or 1.5h
 
 
 WARN_REPEAT = 900  # seconds between a long waiter's repeated "waiting ..." lines once it has waited warn_wait

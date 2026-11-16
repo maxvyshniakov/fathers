@@ -143,6 +143,11 @@ class Plan:
         self.start: float | None = None
         self.reserved: float | None = None
         self.known = True  # False: slots held in an earlier queue, whose ends are unknown, so nothing passes
+        # fathers#160: the held leases the head's start waits on whose end nobody knows (no estimate)
+        self.blocked: list[Entry] = []
+        # fathers#160: waiters that gave way, (entry, the leases that blocked it), past their reserved start by
+        # `reservation_timeout` while such leases held their slots: they hold nobody back
+        self.dropped: list[tuple[Entry, list[Entry]]] = []
 
 
 
@@ -169,6 +174,28 @@ def free_at(count: int, ends: list[tuple[float, int]], have: int, moment: float)
     return have, start
 
 
+def unknown_end(entry: Entry, estimate: Estimate) -> bool:
+    """Whether nobody knows when a held lease ends (fathers#160): the history has no run like it, so its end is the
+    fallback's guess and then the overrun's. A lease past a known estimate is not: its end moves by a known rule."""
+    return estimate(entry) is None
+
+
+def blocking(count: int, held: list[Entry], have: int, slots: int, moment: float, estimate: Estimate,
+             fallback: float, overrun: float) -> list[Entry]:
+    """The leases of `held` whose expected ends free_at() walks to free `count` slots from `have`, that end nobody
+    knows (unknown_end()): what a head waiting for those slots is blocked by."""
+    ends = sorted(((expected_end(e, moment, estimate(e), fallback, overrun), _entry.holds(e, slots), n)
+                   for n, e in enumerate(held)), key=lambda end: (end[0], end[1]))
+    found: list[Entry] = []
+    for _, size, n in ends:
+        if have >= count:
+            break
+        have += size
+        if unknown_end(held[n], estimate):
+            found.append(held[n])
+    return found
+
+
 def reserve(found: Plan, held: list[Entry], slots: int, used: int, moment: float, estimate: Estimate,
             fallback: float, overrun: float) -> int:
     """Sets the head's expected start: when, by the expected ends of what holds slots (`held` and the grants so
@@ -181,6 +208,7 @@ def reserve(found: Plan, held: list[Entry], slots: int, used: int, moment: float
             for entry in held + found.grants]
     have, start = free_at(need, ends, slots - used, moment)
     found.start = start
+    found.blocked = blocking(need, held + found.grants, slots - used, slots, moment, estimate, fallback, overrun)
     if have < need:  # slots held in an earlier queue, whose end is unknown: nothing passes
         found.start, found.known = moment, False
         return 0
@@ -219,7 +247,7 @@ def fit(waiters: list[Entry], slots: int) -> list[Entry]:
 
 def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, order: str | None = None,
          estimate: Estimate | None = None, other: int = 0, reserve_head: bool = False,
-         settings: dict[str, Any] | None = None, window: float = WINDOW) -> Plan:
+         settings: dict[str, Any] | None = None, window: float = WINDOW, p90: Estimate | None = None) -> Plan:
     """Which of `waiters` (queue order) start now beside `held` (entries; `other` slots more held without one) on
     `slots` slots at epoch `moment`. `estimate(entry)` is its expected run in seconds or None (unknown).
 
@@ -242,12 +270,19 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
     and a batch one for the whole machine does not start then; once none waits it is the head as any other.
     A yielded lease whose command waits on a lock (entry.lock_of(), fathers#159) is left out: neither granted nor
     the head until it has the lock.
+    A head whose reserved start has passed while leases whose end nobody knows (Plan.blocked: no estimate;
+    fathers#160) still hold its slots was promised by guesses that failed: a later waiter that fits the free
+    slots also starts when its p90 run (`p90(entry)`, else its expected run, else the fallback) ends by the head's
+    start as now projected. A head
+    whose reserved start passed `reservation_timeout` seconds ago while such leases still hold its slots gives
+    way (Plan.dropped): it holds nobody back, keeps its reservation and place, and is the head again once they end.
     `settings` are the caller's settings.order_settings() (DEFAULTS where not given); `order` overrides theirs. The
     head's start is worked out when it holds no reservation yet, when a request behind it fits, or with
     `reserve_head`."""
     settings = settings or DEFAULTS
     order = order or settings["order"]
     estimate = estimate or no_estimate
+    timeout = float(settings.get("reservation_timeout") or 0)
     waiters = [entry for entry in waiters if _entry.lock_of(entry) is None]  # waiting on a lock: not grantable
     if order == "backfill":
         waiters = ranked(waiters, settings, moment)
@@ -295,6 +330,9 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
                 pass  # ends before the head's reserved start (and before it has waited the limit)
             elif entry["count"] <= extra:
                 extra -= entry["count"]
+            elif found.blocked and found.start is not None and moment >= bound and \
+                    moment + longest(entry, p90, run) <= min(found.start, deadline):
+                pass  # its promise broke on ends nobody knows: what ends by its projected start passes (#160)
             else:
                 continue
             found.grants.append(entry)
@@ -334,6 +372,22 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
                     found.reason = found.reason or (f"{free} of {slots} slots free; {entry.get('label')} gives up at "
                                                     f"{clock}, before they are expected, so requests that fit pass it")
                     continue
+            promised = _entry.reservation(entry)
+            if timeout and promised is not None and moment - promised >= timeout:
+                trial = Plan()
+                trial.head = entry
+                reserve(trial, held, slots, used, moment, estimate, fallback, overrun)
+                if trial.known and trial.blocked and (trial.start or moment) > moment:
+                    # Its reserved start passed long ago and leases nobody knows the end of still hold its slots:
+                    # it gives way rather than idle them (fathers#160); it keeps its reservation and place.
+                    found.head = None
+                    found.dropped.append((entry, trial.blocked))
+                    names = ", ".join(str(e.get("label")) for e in trial.blocked)
+                    found.reason = found.reason or (
+                        f"{free} of {slots} slots free; {entry.get('label')} gave way: its reserved start passed "
+                        f"{_config.duration(moment - promised)} ago while leases with no end estimate hold its "
+                        f"slots ({names})")
+                    continue
             if reserve_head or _entry.reservation(entry) is None:
                 extra = promise()
             else:
@@ -347,8 +401,15 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
     return found
 
 
+def longest(entry: Entry, p90: Estimate | None, run: float) -> float:
+    """How long a request that passes a blocked head may run (fathers#160): its p90 where known, else `run`."""
+    found = p90(entry) if p90 is not None else None
+    return run if found is None else found
+
+
 def shared_plan(found: Plan, waiters: list[Entry], held: list[Entry], slots: int, moment: float, estimate: Estimate,
-                other: int, settings: dict[str, Any], shared: dict[str, Any], window: float = WINDOW) -> Plan:
+                other: int, settings: dict[str, Any], shared: dict[str, Any], window: float = WINDOW,
+                p90: Estimate | None = None) -> Plan:
     """The plan whose head keeps the reservations (reservations()): `found`, a plan by `settings`, when they are the
     shared ones (settings.order_settings(environment=False)), else a plan by the shared settings, so that a client whose
     environment tightens the order (SLOTFATHER_QUEUE=window, an ageing step it lengthens) neither drops nor resets
@@ -357,7 +418,8 @@ def shared_plan(found: Plan, waiters: list[Entry], held: list[Entry], slots: int
         return found
     if shared["order"] != "backfill":
         return Plan()
-    return plan(waiters, held, slots, moment, estimate=estimate, other=other, settings=shared, window=window)
+    return plan(waiters, held, slots, moment, estimate=estimate, other=other, settings=shared, window=window,
+                p90=p90)
 
 
 def reservations(waiters: list[Entry], found: Plan) -> list[Entry]:
@@ -365,8 +427,11 @@ def reservations(waiters: list[Entry], found: Plan) -> list[Entry]:
     is promised (`reserved`), every other waiter none. Returns the entries it changed, which grant() writes; plan()
     reads them at the next look, so the promised start only ever moves earlier while the waiter stays the head."""
     changed: list[Entry] = []
+    dropped = [entry for entry, _ in found.dropped]
     for entry in waiters:
-        want = found.reserved if entry is found.head else None
+        # A head that gave way keeps the start it was promised: its time past it goes on counting (fathers#160)
+        want = found.reserved if entry is found.head else \
+            _entry.reservation(entry) if any(entry is d for d in dropped) else None
         if want is None:
             if "reserved" in entry:
                 entry.pop("reserved")
@@ -375,6 +440,25 @@ def reservations(waiters: list[Entry], found: Plan) -> list[Entry]:
             entry["reserved"] = want
             changed.append(entry)
     return changed
+
+
+def head_drops(waiters: list[Entry], found: Plan, moment: float) -> tuple[list[Entry], list[Entry]]:
+    """Marks on the waiters' entries which gave way (Plan.dropped, fathers#160): `head_dropped`, the moment one
+    first did, so that its client and EVENTS hear of it once; removed when it no longer does. Returns (the entries
+    that gave way just now, the entries it changed), for grant() to record and write."""
+    dropped = [entry for entry, _ in found.dropped]
+    new: list[Entry] = []
+    changed: list[Entry] = []
+    for entry in waiters:
+        if any(entry is d for d in dropped):
+            if _entry.HEAD_DROPPED not in entry:
+                entry[_entry.HEAD_DROPPED] = round(moment, 3)
+                new.append(entry)
+                changed.append(entry)
+        elif _entry.HEAD_DROPPED in entry:
+            entry.pop(_entry.HEAD_DROPPED)
+            changed.append(entry)
+    return new, changed
 
 
 def yield_asks(waiters: list[Entry], held: list[Entry], slots: int, moment: float, estimate: Estimate | None = None,
@@ -506,7 +590,8 @@ FORECAST_LOOKS = 200  # looks a forecast takes at most
 
 
 def forecast(waiters: list[Entry], held: list[Entry], slots: int, moment: float, estimate: Estimate | None = None,
-             other: int = 0, settings: dict[str, Any] | None = None, window: float = WINDOW) -> dict[int, float]:
+             other: int = 0, settings: dict[str, Any] | None = None, window: float = WINDOW,
+             p90: Estimate | None = None) -> dict[int, float]:
     """When each waiter is expected to start if nothing more comes: id(entry) -> epoch seconds, for the waiters a
     forecast reaches. It plays the queue forward as grant() would: each held lease ends when it is expected to
     (expected_end(); an unknown run counts the fallback), each grant runs its expected run, and plan() decides at
@@ -540,7 +625,7 @@ def forecast(waiters: list[Entry], held: list[Entry], slots: int, moment: float,
     kept: list[Entry] = list(running)
     at = moment
     for _ in range(FORECAST_LOOKS):
-        step = plan(queue, running, slots, at, estimate=expected, other=other, settings=fixed, window=window)
+        step = plan(queue, running, slots, at, estimate=expected, other=other, settings=fixed, window=window, p90=p90)
         reservations(queue, step)
         for entry in step.grants:
             found[id(originals[id(entry)])] = at

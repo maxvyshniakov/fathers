@@ -380,6 +380,7 @@ def to_yielded(entry: Record, moment: float, rank: float | None) -> None:
     entry.pop(PRESSED, None)  # back in the queue it is no lease of a warning; its next grant decides
 
 
+HEAD_DROPPED = "head_dropped"  # when a head gave way to leases with no end estimate (fathers#160; epoch seconds)
 LOCK = "lock"  # the path a yielded lease's command waits to lock (fathers#159); granted again once it has it
 
 

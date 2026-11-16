@@ -128,7 +128,7 @@ def run_above(ran: float, p90: Any) -> bool:
     return _runtype.above(ran, p90)
 
 
-def estimator(directory: Path) -> _schedule.Estimate:
+def estimator(directory: Path, p90: bool = False) -> _schedule.Estimate:
     """estimates.estimator(directory), whose module is imported only when plan() first asks for an estimate: `run`
     with nothing ahead of it never does, which keeps the admission path's imports as they were (fathers#35)."""
     loaded: list[_schedule.Estimate] = []
@@ -136,6 +136,6 @@ def estimator(directory: Path) -> _schedule.Estimate:
     def estimate(entry: _schedule.Entry) -> float | None:
         if not loaded:
             from . import estimates as _estimates
-            loaded.append(_estimates.estimator(directory))
+            loaded.append(_estimates.p90_estimator(directory) if p90 else _estimates.estimator(directory))
         return loaded[0](entry)
     return estimate
