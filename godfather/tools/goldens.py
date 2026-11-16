@@ -42,6 +42,7 @@ THEMES = {"seti": ("#111213", "#cacecd"), "prolight": ("#ffffff", "#191919")}  #
 SCREENS = {  # name: (width, height, overlay); what's new's filter after a colon
     "overview-156x43": (156, 43, None), "overview-100x40": (100, 40, None), "overview-76x40": (76, 40, None),
     "overview-156x20": (156, 20, None), "help-156x43": (156, 43, "help"), "settings-156x43": (156, 43, "settings"),
+    "settings-mixed-156x43": (156, 43, "settings:mixed"),  # fathers#87: every tool's section
     "unread-156x43": (156, 43, None), "unread-100x40": (100, 40, None), "unread-76x40": (76, 40, None),
     "whatsnew-156x43": (156, 43, "changelog"), "whatsnew-76x40": (76, 40, "changelog"),
     "whatsnew-godfather-156x43": (156, 43, "changelog:godfather"),
@@ -216,12 +217,16 @@ def write_mixed() -> None:
         line("junkfather", "entry.reaped", "09:57:00", {"type": "entry", "id": "j1c2d3e", "label": "simulator",
                                                          "pid": 87001}, {"reason": "ttl expired", "result": "stopped"}),
         line("junkfather", "entry.extended", "09:59:20", entry, {"ttl": 14400})]
+    tools = load(ROOT / "tests" / "fake_tool.py", "fake_tool")  # each tool's settings as the real one prints them
+    environments = {"lanefather": {"LANEFATHER_PRIORITY_CHECK": "batch"}, "junkfather": {}}
     for tool, tag, log in (("lanefather", "lane", lanes), ("junkfather", "junk", junk)):
         (MIXED / tool).mkdir()
         capabilities = {"v": 1, "tool": tool, "version": "0.9.0", "dashboard": {
             "v": 1, "tag": tag, "snapshot": {"argv": ["status", "--json"], "versions": [1], "poll": 5},
-            "events": {"path": f"/fixture/{tool}/events.jsonl", "versions": [1]}}}
-        (MIXED / tool / "replies.json").write_text(json.dumps({"capabilities --json": {"code": 0, "json": capabilities}},
+            "events": {"path": f"/fixture/{tool}/events.jsonl", "versions": [1]}, "settings": {"versions": [1]}}}
+        settings = tools.document({"tool": tool, "values": {}, "environment": environments[tool], "writable": True})
+        (MIXED / tool / "replies.json").write_text(json.dumps({"capabilities --json": {"code": 0, "json": capabilities},
+                                                               "settings --json": {"code": 0, "json": settings}},
                                                               indent=1) + "\n")
         (MIXED / tool / "events.jsonl").write_text("\n".join(log) + "\n")
 
@@ -263,6 +268,8 @@ def render(name: str, theme: str | None) -> str:
     folder, found_filter = SCENE, None
     if overlay and overlay.startswith("expected"):
         folder, selected, overlay = EXPECTED, int(overlay.partition(":")[2]), None
+    if overlay == "settings:mixed":
+        folder, overlay = MIXED, "settings"
     if overlay and overlay.startswith("mixed"):
         from godfather.views import events as events_view
 
@@ -287,9 +294,10 @@ def render(name: str, theme: str | None) -> str:
         assert moment is not None
         shown: object = None
         if overlay == "settings":
-            settings = screen.settings(1.0, "auto")
-            settings.location = lambda: "~/.local/state/slotfather"  # type: ignore[method-assign]
-            shown = state.SettingsOverlay(settings)
+            from godfather import settings_model
+
+            shown = settings_model.opened(screen.settings_sections(), settings_model.Context(width=width,
+                                                                                             height=height), 0.0)
         elif overlay and overlay.startswith("changelog"):
             tool = overlay.partition(":")[2] or "all"
             shown = state.Changelog(tab=overlays.filters(found).index(tool))

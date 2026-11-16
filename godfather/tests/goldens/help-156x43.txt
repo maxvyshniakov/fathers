@@ -13,7 +13,7 @@
 │  ⏸️    lane-555-host-rename-names     │    /           events: filter by text (enter keeps, esc clears)         ┃│2                                      │
 │                                       │    s           settings                                                 ┃│ight/.claude/worktrees/agent-afa3816b  │
 ┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    ?           help                                                     ┃│2/verify.sh --checks desktop-tests     │
-╭─ EVENTS ──── slots ─ label ───────────│    v           what's new (or click Godfather what's new?)              ┃│oing --jobs 1                          │
+╭─ EVENTS ──── slots ─ label ───────────│    v           what's new (or click Godfather what's new?)              ╹│oing --jobs 1                          │
 │                                       │    esc         close an overlay                                          │ight                                   │
 │  11:59:35    ▫       agent-ae72d94beb6│    q           quit                                                      │                                       │
 │  11:58:33    ▫       agent-a1c75285bdf│    shift+drag  select text                                               │d-once                                 │
@@ -38,6 +38,6 @@
 │  11:51:24    ▫       agent-a1c75285bdf│    Normal has no mark.                                                   │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
 │  11:49:34    ▫▫      data-grid        │                                                                          │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
 │  11:48:31    ▪▪      data-grid        │                                                                          │░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
-│                                       │                      ↑↓ scroll   esc close   q quit                  36% │          −80s                    now  │
+│                                       │                      ↑↓ scroll   esc close   q quit                  35% │          −80s                    now  │
 ╰───────────────────────────────────────╰──────────────────────────────────────────────────────────────────────────╯───────────────────────────────────────╯
  Godfather what's new?                            ↑↓ select   tab panel   s settings   ? help   q quit                             updated 11:59:39  ● live

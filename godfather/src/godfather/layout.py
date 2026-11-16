@@ -266,22 +266,22 @@ def slot_labels(area: Rect, starts: list[int], free: bool) -> tuple[list[tuple[i
 
 
 SETTINGS_WIDTH, SETTINGS_CHROME = 80, 9  # Settings' most columns; frame, padding, the rule, notes and footer rows
-SETTINGS_INSET = 6  # the list two cells in from the frame, two padding cells on the right (the scrollbar in one)
+SETTINGS_INSET = 6  # the frame and two padding cells on each side (the scrollbar in the outer right one)
 SETTINGS_MIN_WIDTH, SETTINGS_MIN_HEIGHT = 30, 12  # below this the panel only says to enlarge the terminal
 
 
 class SettingsBox(NamedTuple):
-    rows: Rect  # the scrolling list, two cells in, two padding cells on the right (the scrollbar in one)
-    notes: Rect  # the rule over the description and what a change did, as wide as the frame allows
+    rows: Rect  # the scrolling list, two cells in from each frame (the scrollbar in the outer right one)
+    notes: Rect  # the rule over the description and what a change did, as wide as the list: every rule one length
     small: bool  # too small to show: only a note to enlarge the terminal
 
 
 def settings(box: Rect) -> SettingsBox:
     """Settings' inside: its list, then a rule and up to three lines of notes, then the footer."""
     y, x, height, width = box
-    inner = max(0, width - 4)
-    return SettingsBox(Rect(y + 2, x + 2, max(0, height - SETTINGS_CHROME), max(0, inner - 2)),
-                       Rect(y + height - 6, x + 2, 4, inner),
+    inner = max(0, width - SETTINGS_INSET)
+    return SettingsBox(Rect(y + 2, x + 3, max(0, height - SETTINGS_CHROME), inner),
+                       Rect(y + height - 6, x + 3, 4, inner),
                        height < SETTINGS_MIN_HEIGHT or width < SETTINGS_MIN_WIDTH)
 
 

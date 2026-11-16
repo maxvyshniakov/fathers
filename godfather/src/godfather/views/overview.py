@@ -19,6 +19,7 @@ from . import events as _events
 from . import machine as _machine
 from . import overlays as _overlays
 from . import queue as _queue
+from . import settings as _settings_view
 from .common import Model
 
 if TYPE_CHECKING:
@@ -54,13 +55,15 @@ def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, ov
                    error: Optional[str] = None, cwd: Optional[str] = None, scroll: Optional[dict[str, int]] = None,
                    notice: Optional[list[str]] = None, message: Optional[str] = None,
                    failure: Optional[str] = None, news: Any = None, read: Optional[dict[str, str]] = None,
-                   moment: Optional[datetime.datetime] = None, events_filter: Optional[_events.Filter] = None) -> None:
+                   moment: Optional[datetime.datetime] = None, events_filter: Optional[_events.Filter] = None,
+                   settings: Any = None) -> None:
     """The whole screen at `moment` (where None, the model's own update time: the screen never reads the clock).
     `overlay` is the one open (state.Help, Changelog or SettingsOverlay); `error` the refresh's
     failure, `message` a passing notice; `notice` stands in for the panels when Slotfather is absent or unsupported;
     `failure` is why the selected request's details did not load. A stale model (`stale_since`) is drawn dimmed, with
     the time it went stale in SLOTS' border. `news` and `read` are what's new and its read versions; `events_filter`
-    EVENTS' source and text filters (fathers#84)."""
+    EVENTS' source and text filters (fathers#84); `settings` what Settings reads beside its panel
+    (settings_model.Context: this dashboard's own settings, the refresh error)."""
     canvas.scroll = scroll if scroll is not None else {}
     if moment is None and model is not None:
         moment = cast(Optional[datetime.datetime], model.get("updated"))
@@ -74,7 +77,7 @@ def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, ov
     if model is not None:
         draw_panels(canvas, model, selected, cwd, failure, cast(datetime.datetime, moment), events_filter)
     if overlay is not None:
-        draw_overlay(canvas, overlay, model, news, read)
+        draw_overlay(canvas, overlay, model, news, read, settings)
 
 
 def draw_panels(canvas: Canvas, model: Model, selected: int, cwd: Optional[str], failure: Optional[str],
@@ -102,10 +105,13 @@ def draw_panels(canvas: Canvas, model: Model, selected: int, cwd: Optional[str],
 
 
 def draw_overlay(canvas: Canvas, overlay: Any, model: Optional[Model], news: Any = None,
-                 read: Optional[dict[str, str]] = None) -> None:
+                 read: Optional[dict[str, str]] = None, settings: Any = None) -> None:
     kind = str(overlay.kind)
     if kind == "settings":
-        overlay.panel.draw(canvas, model)
+        from .. import settings_model as _model
+
+        context = settings if settings is not None else _model.Context()
+        _settings_view.draw(canvas, overlay, context._replace(model=model))
     elif kind == "changelog":
         _overlays.draw_changelog(canvas, int(overlay.tab), int(overlay.scroll), news, read)
     else:
@@ -147,4 +153,4 @@ def render(canvas: Canvas, state: AppState, now: float, notice: Optional[list[st
             cwd, failure = known.cwd, known.error
     dashboard_draw(canvas, state.model, index, state.overlay, state.refresh.error, cwd, state.scroll, notice,
                    state.notice.text if state.notice else None, failure, state.news, state.read, state.moment,
-                   state.events_filter)
+                   state.events_filter, _settings_view.context_of(state, canvas.width, canvas.height))

@@ -1468,11 +1468,33 @@
    "status": [
     {
      "label": "queue",
-     "value": "~/.local/state/slotfather"
+     "value": "~/.local/state/slotfather",
+     "style": "text"
+    },
+    {
+     "label": "slots",
+     "value": "6 total \u00b7 6 free \u00b7 0 held \u00b7 0 waiting",
+     "style": "text"
+    },
+    {
+     "label": "capacity",
+     "value": "6 slots \u00b7 saved, fixed count",
+     "style": "text"
+    },
+    {
+     "label": "budgets",
+     "value": "CPU 4 (12 cores) \u00b7 memory 16 (64 GiB)",
+     "style": "text"
+    },
+    {
+     "label": "draining",
+     "value": "none",
+     "style": "dim"
     },
     {
      "label": "environment",
-     "value": "SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB"
+     "value": "SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB",
+     "style": "dim"
     }
    ],
    "basis": {
@@ -1483,70 +1505,109 @@
     "gib_per_slot": null,
     "memory_slots": 16,
     "slots": 6,
-    "mode": "fixed"
+    "mode": "fixed",
+    "cgroup": null
    },
    "sections": [
     {
      "id": "capacity",
+     "title": "Capacity",
      "settings": [
       {
        "key": "capacity.mode",
+       "label": "Capacity",
        "type": "choice",
        "value": "fixed",
        "default": "automatic",
        "choices": [
         {
-         "value": "automatic"
+         "value": "automatic",
+         "label": "Automatic"
         },
         {
-         "value": "fixed"
+         "value": "fixed",
+         "label": "Fixed"
         },
         {
-         "value": "memory"
+         "value": "memory",
+         "label": "Memory"
         },
         {
-         "value": "lower"
+         "value": "lower",
+         "label": "CPU + memory"
         }
        ],
-       "revision": "sha256:6d35ebcbf4341624177c741954a319029b6e9112a54bb9f6f7c509ffcd671475",
+       "source": "saved",
        "writable": true,
-       "source": "saved"
+       "revision": "sha256:6d35ebcbf4341624177c741954a319029b6e9112a54bb9f6f7c509ffcd671475",
+       "description": "Shared by every client. Automatic: the lower of the CPU and memory budgets."
       },
       {
        "key": "capacity.slots",
+       "label": "Slots",
        "type": "integer",
        "value": 6,
+       "default": null,
        "min": 1,
        "max": 48,
+       "step": 1,
+       "unit": "slots",
+       "source": "saved",
+       "writable": true,
        "revision": "sha256:6d35ebcbf4341624177c741954a319029b6e9112a54bb9f6f7c509ffcd671475",
-       "writable": true
+       "when": {
+        "capacity.mode": [
+         "fixed"
+        ]
+       },
+       "description": "Total slots for every client. Applies at the next grant; a shrink drains."
       },
       {
        "key": "capacity.gib_per_slot",
+       "label": "GiB per slot",
        "type": "number",
-       "value": 4,
+       "value": 4.0,
+       "default": 4.0,
+       "min": 0,
+       "min_exclusive": true,
+       "max": null,
+       "step": 0.5,
+       "unit": "GiB",
+       "source": "saved",
+       "writable": true,
        "revision": "sha256:6d35ebcbf4341624177c741954a319029b6e9112a54bb9f6f7c509ffcd671475",
-       "writable": true
+       "when": {
+        "capacity.mode": [
+         "memory",
+         "lower"
+        ]
+       },
+       "description": "One slot per this many GiB of memory. Applies at the next grant."
       }
      ]
     },
     {
      "id": "order",
+     "title": "Queue order",
      "settings": [
       {
        "key": "order.order",
        "value": "backfill",
        "default": "backfill",
-       "source": "saved",
        "writable": true,
-       "revision": "sha256:order",
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "Backfill lets short work pass; Arrival serves in arrival order.",
+       "source": "default",
+       "label": "Queue order",
        "type": "choice",
        "choices": [
         {
-         "value": "backfill"
+         "value": "backfill",
+         "label": "Backfill"
         },
         {
-         "value": "window"
+         "value": "window",
+         "label": "Arrival"
         }
        ]
       },
@@ -1554,121 +1615,185 @@
        "key": "order.safety",
        "value": 3.0,
        "default": 3.0,
-       "source": "saved",
        "writable": true,
-       "revision": "sha256:order",
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "Multiplier on expected runtimes for backfill; at least 1.",
+       "source": "default",
+       "label": "Backfill margin",
        "type": "number",
-       "min": 1.0
-      },
-      {
-       "key": "order.limit",
-       "value": 0.0,
-       "default": 0.0,
-       "source": "saved",
-       "writable": true,
-       "revision": "sha256:order",
-       "type": "number",
-       "min": 0.0
+       "min": 1.0,
+       "max": null,
+       "step": 0.5,
+       "unit": "\u00d7"
       },
       {
        "key": "order.fallback",
        "value": 3600.0,
        "default": 3600.0,
-       "source": "saved",
        "writable": true,
-       "revision": "sha256:order",
-       "type": "number",
-       "min": 0.0
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "Assumed runtime of work with no history.",
+       "source": "default",
+       "label": "Unknown job runtime",
+       "type": "duration",
+       "min": 0.0,
+       "max": null,
+       "step": 60,
+       "unit": "s"
       },
       {
        "key": "order.overrun",
        "value": 0.5,
        "default": 0.5,
-       "source": "saved",
        "writable": true,
-       "revision": "sha256:order",
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "Remaining runtime as a share of elapsed time once a run overruns.",
+       "source": "default",
+       "label": "Overrun estimate",
        "type": "number",
-       "min": 0.0
+       "min": 0.0,
+       "max": null,
+       "step": 0.1,
+       "unit": "\u00d7"
+      },
+      {
+       "key": "order.limit",
+       "value": 0.0,
+       "default": 0.0,
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "After this a waiting head lets nothing pass; 0: its reserved start alone.",
+       "source": "default",
+       "label": "Overtaking stops after",
+       "type": "duration",
+       "min": 0.0,
+       "max": null,
+       "step": 60,
+       "unit": "s",
+       "zero": "never"
       },
       {
        "key": "order.interactive",
        "value": 1800.0,
        "default": 1800.0,
-       "source": "saved",
        "writable": true,
-       "revision": "sha256:order",
-       "type": "number",
-       "min": 0.0
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "How far interactive requests move ahead; 0: not at all.",
+       "source": "default",
+       "label": "Interactive head start",
+       "type": "duration",
+       "min": 0.0,
+       "max": null,
+       "step": 60,
+       "unit": "s"
       },
       {
        "key": "order.batch",
        "value": 1800.0,
        "default": 1800.0,
-       "source": "saved",
        "writable": true,
-       "revision": "sha256:order",
-       "type": "number",
-       "min": 0.0
-      },
-      {
-       "key": "order.yield_after",
-       "value": 120.0,
-       "default": 120.0,
-       "source": "saved",
-       "writable": true,
-       "revision": "sha256:order",
-       "type": "number",
-       "min": 0.0
-      },
-      {
-       "key": "order.idle_cpu",
-       "value": 0.1,
-       "default": 0.1,
-       "source": "saved",
-       "writable": true,
-       "revision": "sha256:order",
-       "type": "number",
-       "min": 0.0
-      },
-      {
-       "key": "order.idle_after",
-       "value": 300.0,
-       "default": 300.0,
-       "source": "saved",
-       "writable": true,
-       "revision": "sha256:order",
-       "type": "number",
-       "min": 1.0
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "How far batch requests move back; 0: not at all.",
+       "source": "default",
+       "label": "Batch held back",
+       "type": "duration",
+       "min": 0.0,
+       "max": null,
+       "step": 60,
+       "unit": "s"
       },
       {
        "key": "order.aging_batch",
        "value": 1800.0,
        "default": 1800.0,
-       "source": "saved",
        "writable": true,
-       "revision": "sha256:order",
-       "type": "number",
-       "min": 0.0
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "A waiting batch request is served as normal after this; 0: never.",
+       "source": "default",
+       "label": "Batch promoted after",
+       "type": "duration",
+       "min": 0.0,
+       "max": null,
+       "step": 300,
+       "unit": "s",
+       "zero": "never"
       },
       {
        "key": "order.aging_normal",
        "value": 3600.0,
        "default": 3600.0,
-       "source": "saved",
        "writable": true,
-       "revision": "sha256:order",
-       "type": "number",
-       "min": 0.0
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "A waiting normal request is served as interactive after this; 0: never.",
+       "source": "default",
+       "label": "Normal promoted after",
+       "type": "duration",
+       "min": 0.0,
+       "max": null,
+       "step": 300,
+       "unit": "s",
+       "zero": "never"
       },
       {
        "key": "order.warn_wait",
        "value": 1800.0,
        "default": 1800.0,
-       "source": "saved",
        "writable": true,
-       "revision": "sha256:order",
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "A request waiting this long says so and is flagged; 0: never.",
+       "source": "default",
+       "label": "Warn after waiting",
+       "type": "duration",
+       "min": 0.0,
+       "max": null,
+       "step": 300,
+       "unit": "s",
+       "zero": "never"
+      },
+      {
+       "key": "order.idle_cpu",
+       "value": 0.1,
+       "default": 0.1,
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "A lease below this for the idle time is idle (\ud83d\udca4); 0: never.",
+       "source": "default",
+       "label": "Idle when below",
        "type": "number",
-       "min": 0.0
+       "min": 0.0,
+       "max": null,
+       "step": 0.05,
+       "unit": "cores"
+      },
+      {
+       "key": "order.idle_after",
+       "value": 300.0,
+       "default": 300.0,
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "Below the idle cores this long: idle, and asked if it can yield.",
+       "source": "default",
+       "label": "Idle for",
+       "type": "duration",
+       "min": 1.0,
+       "max": null,
+       "step": 60,
+       "unit": "s"
+      },
+      {
+       "key": "order.yield_after",
+       "value": 120.0,
+       "default": 120.0,
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "Before a yieldable holder is asked to yield; 0: nobody is asked.",
+       "source": "default",
+       "label": "Ask to yield after",
+       "type": "duration",
+       "min": 0.0,
+       "max": null,
+       "step": 30,
+       "unit": "s"
       }
      ]
     }

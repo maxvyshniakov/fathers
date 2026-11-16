@@ -81,6 +81,37 @@ class FakeSlotfather:
         self.tmp.cleanup()
 
 
+class FakeTool:
+    """tests/fake_tool.py as `lanefather` or `junkfather` in `bin` (a FakeSlotfather's, so all three are on PATH),
+    its state and argv log beside it: capabilities and the settings CLI, nothing else."""
+
+    def __init__(self, tool: str, bin_dir: Path, **state: Any) -> None:
+        self.tool, self.root = tool, bin_dir.parent
+        self.state = self.root / f"{tool}.json"
+        self.calls = self.root / f"{tool}-calls.jsonl"
+        self.write(dict({"tool": tool, "values": {}, "environment": {}, "writable": True}, **state))
+        command = bin_dir / tool
+        command.write_text(f"#!/bin/sh\nFAKE_TOOL_STATE={self.state} FAKE_TOOL_CALLS={self.calls} "
+                           f"exec {sys.executable} {ROOT / 'tests' / 'fake_tool.py'} \"$@\"\n")
+        command.chmod(0o755)
+
+    def write(self, state: dict[str, Any]) -> None:
+        self.state.write_text(json.dumps(state))
+
+    def read(self) -> dict[str, Any]:
+        return json.loads(self.state.read_text())
+
+    def update(self, **changes: Any) -> None:
+        state = self.read()
+        state.update(changes)
+        self.write(state)
+
+    def argv(self) -> list[list[str]]:
+        if not self.calls.exists():
+            return []
+        return [json.loads(line) for line in self.calls.read_text().splitlines()]
+
+
 def lines_within(stream: Any, count: int, seconds: float = 30.0) -> list[str]:
     """`count` lines from a child's stdout, waited for on a thread up to a functional deadline (a hung reader fails
     the test instead of hanging the suite); what arrives is the condition, not how fast."""

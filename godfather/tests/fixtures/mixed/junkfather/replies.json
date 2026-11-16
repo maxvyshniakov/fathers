@@ -23,8 +23,118 @@
      "versions": [
       1
      ]
+    },
+    "settings": {
+     "versions": [
+      1
+     ]
     }
    }
+  }
+ },
+ "settings --json": {
+  "code": 0,
+  "json": {
+   "v": 1,
+   "tool": "junkfather",
+   "writable": true,
+   "reason": null,
+   "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+   "status": [
+    {
+     "label": "settings",
+     "value": "/fake/state/junkfather/settings.json"
+    },
+    {
+     "label": "state",
+     "value": "/fake/state/junkfather"
+    },
+    {
+     "label": "last sweep",
+     "value": "never"
+    }
+   ],
+   "sections": [
+    {
+     "id": "own",
+     "title": "Owning",
+     "settings": [
+      {
+       "key": "own.default_ttl",
+       "label": "Default TTL",
+       "type": "duration",
+       "value": 7200,
+       "default": 7200,
+       "source": "default",
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "How long own, own-resource and adopt keep what they start when the command gives no --ttl.",
+       "min": 60,
+       "max": 604800,
+       "step": 300,
+       "unit": "s"
+      }
+     ]
+    },
+    {
+     "id": "sweep",
+     "title": "Sweep",
+     "settings": [
+      {
+       "key": "sweep.interval",
+       "label": "Sweep every",
+       "type": "duration",
+       "value": 3600,
+       "default": 3600,
+       "source": "default",
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "The hourly sweep agent's interval; the loaded agent takes a new one when reinstalled (install.py --launchd).",
+       "min": 60,
+       "max": 86400,
+       "step": 300,
+       "unit": "s"
+      }
+     ]
+    },
+    {
+     "id": "reap",
+     "title": "Reaping",
+     "settings": [
+      {
+       "key": "reap.grace",
+       "label": "Grace before SIGKILL",
+       "type": "duration",
+       "value": 10,
+       "default": 10,
+       "source": "default",
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "Between SIGTERM and SIGKILL when reap has no --grace; the sweep and the supervisor use it too.",
+       "min": 1,
+       "max": 600,
+       "step": 1,
+       "unit": "s"
+      }
+     ]
+    },
+    {
+     "id": "environment",
+     "title": "Environment",
+     "settings": [
+      {
+       "key": "env.JUNKFATHER_STATE",
+       "label": "State directory",
+       "type": "text",
+       "value": "/fake/state/junkfather",
+       "default": null,
+       "source": "default",
+       "writable": false,
+       "description": "Where entries, logs, events and these settings live. Set by JUNKFATHER_STATE; read-only here."
+      }
+     ]
+    }
+   ]
   }
  }
 }

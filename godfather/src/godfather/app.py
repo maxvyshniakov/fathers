@@ -6,7 +6,7 @@
   godfather --version
 
 The main screen is Slotfather's dashboard, moved here unchanged: it is drawn from `slotfather status --json --full`
-and Settings goes through `slotfather settings` (docs/contracts/slotfather.md). Everything slow runs in the
+and Settings goes through each present tool's `settings` CLI (SPEC.md, Settings contract). Everything slow runs in the
 background, so a key moves the selection within one frame. A fault here ends the view, never a tool's work.
 """
 from __future__ import annotations
@@ -24,20 +24,22 @@ from pathlib import Path
 from typing import Any, cast
 
 from . import events as _events
+from . import settings_model as _settings_model
 from . import news as _news
 from . import sources as _sources
 from . import theme as _theme
 from . import version as _version
+from .adapters import settings as _settings_adapter
 from .adapters import slotfather as _slotfather
-from .adapters.slotfather import SettingsClient, SettingsError, Unsupported
+from .adapters.settings import Conflict, ReadOnly, SettingsClient, SettingsError
+from .adapters.slotfather import Unsupported
 from .sources import SnapshotError, Source
 from . import state as _state
-from .tui import Canvas, Loader, full_screen, read_keys
+from .tui import Canvas, Jobs, Loader, full_screen, read_keys
 from .views import common as _common
 from .views import details as _details
 from .views import events as _events_view
 from .views import overview as _overview
-from .views import settings as _settings
 
 USAGE = ("usage: godfather [--interval SECONDS]\n"
          "       godfather --once [--page overview] [--width N] [--height N] [--color]\n"
@@ -167,12 +169,71 @@ class Screen:
             return [str(source.problem)]
         return None
 
-    def settings(self, interval: float, theme: str) -> _settings.Settings:
-        client = None
-        if self.source.state in ("ok", "stale") and _slotfather.settings_supported(self.source.capabilities):
-            client = SettingsClient(self.source.executable)
-        return _settings.Settings(interval, theme, client=client, problem=lambda: self.source.problem,
-                                  local_only=client is None, background=True)
+    def sources(self) -> list[Source]:
+        return [self.source, *self.others]
+
+    def settings_client(self, tool: str) -> SettingsClient:
+        source = next((found for found in self.sources() if found.name == tool), None)
+        return SettingsClient(source.executable if source else None, tool)
+
+    def settings_sections(self) -> list[_settings_model.Section]:
+        """Settings as it opens (fathers#87): a section for each present tool, read once now; one without a settings
+        contract this Godfather reads says why in its section, an absent one has none."""
+        found: list[_settings_model.Section] = []
+        for source in self.sources():
+            if source.due():
+                source.discover()
+            name = source.name
+            if source.state == "absent":
+                continue
+            if source.state == "unsupported" or not _settings_adapter.supported(source.capabilities):
+                why = source.problem if source.state == "unsupported" else \
+                    f"{name} {source.version or ''}: no settings contract; update {name}".replace(" :", ":")
+                found.append(_settings_model.Section(name, problem=why, readable=False))
+                continue
+            try:
+                found.append(_settings_model.Section(name, reply=self.settings_client(name).read()))
+            except SettingsError as error:
+                found.append(_settings_model.Section(name, problem=str(error)))
+        return found
+
+    def settings_call(self, request: _settings_model.Request) -> _state.Event:
+        """One settings call for the panel, answered as the event the reducer takes."""
+        client = self.settings_client(request.tool)
+        if request.kind == "read":
+            try:
+                return _state.SettingsRead(request.tool, request.generation, client.read())
+            except SettingsError as error:
+                return _state.SettingsRead(request.tool, request.generation, None, str(error))
+        if request.kind == "check":
+            try:
+                reply = client.check(str(request.key), str(request.value))
+            except SettingsError as error:
+                reply = {"ok": False, "error": str(error), "preview": None}
+            return _state.SettingsChecked(request.tool, str(request.key), str(request.value), request.revision, reply)
+        try:
+            if request.kind == "set":
+                reply = client.set(str(request.key), str(request.value), request.revision)
+            else:
+                reply = client.reset(request.key, request.revision)
+        except Conflict as conflict:
+            return _state.SettingsWritten(request, "conflict", conflict.reply, str(conflict))
+        except ReadOnly as refusal:
+            return _state.SettingsWritten(request, "read-only", None, str(refusal))
+        except SettingsError as error:
+            return _state.SettingsWritten(request, "refused", None, str(error))
+        return _state.SettingsWritten(request, "ok", reply)
+
+
+def settings_failed(request: _settings_model.Request, failure: BaseException) -> _state.Event:
+    """A settings call that raised what settings_call() does not expect: its answer, a failure."""
+    why = str(failure) or type(failure).__name__
+    if request.kind == "read":
+        return _state.SettingsRead(request.tool, request.generation, None, why)
+    if request.kind == "check":
+        return _state.SettingsChecked(request.tool, str(request.key), str(request.value), request.revision,
+                                      {"ok": False, "error": why, "preview": None})
+    return _state.SettingsWritten(request, "failed", None, why)
 
 
 def load_details(item: dict[str, Any]) -> tuple[Any, str | None]:
@@ -217,6 +278,8 @@ class Live:
         self.models = Loader(screen.load, self.wake_write)
         self.details = Loader(load_details, self.wake_write)
         self.news = Loader(load_news, self.wake_write)  # what's new: on start and each time it opens
+        self.settings = Jobs(self.settings_work, self.wake_write)  # Settings' calls, in order (fathers#87)
+        self.asked = 0
         self.fetched = 0.0
 
     def close(self) -> None:
@@ -262,15 +325,22 @@ class Live:
             if current != self.saved:
                 save_choices(*current)
                 self.saved = current
+        elif kind == "settings":
+            self.asked += 1
+            self.settings.request(self.asked, effect.item)
         elif kind == "open-settings":
             try:
-                panel = self.screen.settings(self.state.interval, self.state.theme)
-            except SettingsError as failure:
+                sections = self.screen.settings_sections()
+            except (SettingsError, OSError) as failure:
                 self.send(_state.SettingsFailed(str(failure)))
                 return
-            size = os.get_terminal_size(self.fd_out)
-            panel.draw(self.canvas(size.columns, size.lines), self.state.model)  # its hit-test geometry, before a click
-            self.send(_state.SettingsOpened(panel))
+            self.send(_state.SettingsOpened(tuple(sections)))
+
+    def settings_work(self, request: _settings_model.Request) -> _state.Event:
+        try:
+            return self.screen.settings_call(request)
+        except Exception as failure:  # noqa: BLE001 - a failed call is shown in Settings, never the end of the view
+            return settings_failed(request, failure)
 
     def load_model(self) -> None:
         self.models.request("model")
@@ -284,6 +354,9 @@ class Live:
             else:
                 model, problem = value
                 self.send(_state.ModelLoaded(model, self.theme.holders(), problem))
+        for _, answer, _ in self.settings.take():
+            if answer is not None:
+                self.send(answer)
         for _, value, failure in self.news.take():
             if failure is None:  # a failed load leaves what's new as it was
                 self.send(_state.NewsLoaded(value))

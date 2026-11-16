@@ -16,7 +16,6 @@
     },
     "timing-assert": {
       "godfather/tests/test_live_view.py": 2,
-      "godfather/tests/test_settings.py": 1,
       "godfather/tests/test_theme.py": 2,
       "junkfather/tests/test_lifecycle.py": 1,
       "junkfather/tests/test_resources.py": 1,

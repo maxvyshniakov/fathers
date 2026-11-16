@@ -402,7 +402,10 @@ last sweep (pid, start, command, directory, root, age) and the sweep's last time
   merges, as Slotfather's order settings do today.
 - `check` returns `{"ok": bool, "error": str|null, "preview": str|null}`; the preview carries texts such as
   `will drain 2` or `will start 1 waiting`. Godfather calls it for each pending or typed value.
-- Exit codes: 0 done, 2 invalid (the reply says why), 3 conflict, 4 read-only.
+- Exit codes: 0 done, 2 invalid (the reply says why), 3 conflict, 4 or 5 read-only. Slotfather's 4 is another
+  user's queue and Lanefather's 4 a value it cannot save here; Junkfather says read-only with 5, keeping 4 for
+  Slotfather's meaning (fathers#118, owner 2026-11-13). Godfather takes 4 and 5 alike: nothing saved, the row read
+  again. Any other code is a failure with the tool's message (Junkfather's 1: not saved, a full disk).
 - Lanefather exposes only machine-local settings; values from a project's `.lanefather.toml` or the environment are
   read-only rows with their source.
 

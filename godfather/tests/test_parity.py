@@ -162,9 +162,10 @@ class ParityTests(unittest.TestCase):
         self.assertIn(snail, ours["PRIORITY"])
         ours["PRIORITY"][ours["PRIORITY"].index(snail)] = ["🐢", snail[1]]
         for title in theirs:
-            if title != "EVENTS":
+            if title not in ("EVENTS", "SETTINGS"):  # fathers#87: Settings has a section per tool
                 self.assertEqual(theirs[title], ours[title], title)
         self.assertNotEqual(theirs["EVENTS"], ours["EVENTS"])
+        self.assertIn(["d · D D", "reset one · reset the selected row's section"], ours["SETTINGS"])
 
     def test_plain_text_outside_events_is_slotfathers_too(self) -> None:
         old = self.frames["156x43 0 0 0"].split("\n")

@@ -23,8 +23,116 @@
      "versions": [
       1
      ]
+    },
+    "settings": {
+     "versions": [
+      1
+     ]
     }
    }
+  }
+ },
+ "settings --json": {
+  "code": 0,
+  "json": {
+   "v": 1,
+   "tool": "lanefather",
+   "writable": true,
+   "reason": null,
+   "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+   "status": [
+    {
+     "label": "settings",
+     "value": "/fake/config/lanefather/settings.json"
+    },
+    {
+     "label": "events",
+     "value": "/fake/state/lanefather/events.jsonl"
+    },
+    {
+     "label": "projects",
+     "value": "2 registered in /fake/state/lanefather/projects.json"
+    }
+   ],
+   "sections": [
+    {
+     "id": "review",
+     "title": "Review",
+     "settings": [
+      {
+       "key": "review.start",
+       "label": "Review start",
+       "type": "choice",
+       "value": "auto",
+       "default": "auto",
+       "source": "default",
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "Whether land starts the lane's review in the background; manual waits for lanefather review ID.",
+       "choices": [
+        {
+         "value": "auto",
+         "label": "Automatic"
+        },
+        {
+         "value": "manual",
+         "label": "Manual"
+        }
+       ]
+      },
+      {
+       "key": "rerun.wait",
+       "label": "Rerun waits",
+       "type": "duration",
+       "value": 3300,
+       "default": 3300,
+       "source": "default",
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "How long a red check's rerun waits for its slot lease before its checks stay unclassified.",
+       "min": 1,
+       "max": 86400,
+       "step": 300,
+       "unit": "s"
+      }
+     ]
+    },
+    {
+     "id": "slots",
+     "title": "Slot priorities",
+     "settings": [
+      {
+       "key": "slots.priority.check",
+       "label": "check priority",
+       "type": "choice",
+       "value": "batch",
+       "default": "project",
+       "source": "env LANEFATHER_PRIORITY_CHECK",
+       "writable": false,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "The Slotfather priority of this machine's check runs; project follows the project's [slots.priority] and the built-in.",
+       "choices": [
+        {
+         "value": "project",
+         "label": "Project"
+        },
+        {
+         "value": "interactive",
+         "label": "Interactive"
+        },
+        {
+         "value": "normal",
+         "label": "Normal"
+        },
+        {
+         "value": "batch",
+         "label": "Batch"
+        }
+       ]
+      }
+     ]
+    }
+   ]
   }
  }
 }

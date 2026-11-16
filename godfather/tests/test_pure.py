@@ -98,9 +98,7 @@ class PureRenderingTests(unittest.TestCase):
         self.assertIs(before["holders"], state.model["holders"], "the other group is shared, not copied")
 
     def test_no_view_reads_the_clock_or_a_theme_global(self) -> None:
-        # The Settings panel is a state machine of its own (state.SettingsOverlay), its clock injected and
-        # time.monotonic only by default: no drawing reads it
-        for path in sorted(set(VIEWS.glob("*.py")) - {VIEWS / "settings.py"}):
+        for path in sorted(VIEWS.glob("*.py")):
             text = path.read_text()
             with self.subTest(path.name):
                 self.assertIsNone(re.search(r"^\s*(import time|from time import)", text, re.M))

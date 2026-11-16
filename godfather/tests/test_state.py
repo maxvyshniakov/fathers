@@ -7,11 +7,13 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import unittest
-from typing import Any, Callable, Optional, cast
+from typing import Any, Callable, Optional
 
 import helpers  # noqa: F401 - src/ on sys.path
 import view as _view
-from test_settings import Clock, PanelCase, idle
+from test_settings import INTERVAL, SAFETY, SLOTS, THEME, PanelCase, Settings, idle
+
+from godfather import settings_model, state as state_module
 
 from godfather.layout import Rect
 
@@ -199,65 +201,38 @@ class ModeTableTests(Case):
         self.assertEqual("help", after.overlay.kind)
 
 
-class StubPanel:
-    """A Settings panel that answers every key and click with one action, to drive the Settings mode."""
+class SettingsModeTableTests(PanelCase):
+    """The Settings modes: keys from the mode table, translated to their hotkey unless a value is typed, too small
+    a panel taking only the ways out; and a click on a footer hint is the hint's key there too."""
 
-    def __init__(self, action: str, editing: bool = False, theme: str = "auto", interval: float = 1.0) -> None:
-        self.action, self.editing, self.theme, self.interval = action, editing, theme, interval
-        self.offset, self.pressed = 0, cast(list[Any], [])
+    def test_the_mode_follows_the_panel(self) -> None:
+        from godfather import modes
 
-    def key(self, key: str) -> str:
-        self.pressed.append(key)
-        return self.action
-
-    def mouse(self, event: tuple[str, int, int, int, bool]) -> str:
-        self.pressed.append(event)
-        return self.action
-
-    def tick(self) -> bool:
-        return False
-
-
-class SettingsModeTableTests(Case):
-    """The Settings mode: every key and click goes to the panel, translated to its hotkey unless a value is typed,
-    and its answer does one thing to the app."""
-
-    def test_each_answer_of_the_panel(self) -> None:
-        tool = self.tool
-        cases: list[tuple[str, dict[str, Any], Optional[str], list[str], float, str]] = [
-            # (answer, panel fields, overlay kind after, effects, Refresh every, theme)
-            ("handled", {}, "settings", ["remember"], 1.0, "auto"),
-            ("changed", {}, "settings", ["remember", "load-model"], 1.0, "auto"),
-            ("close", {}, None, ["remember", "repaint"], 1.0, "auto"),
-            ("quit", {}, "settings", ["quit"], 1.0, "auto"),
-            ("handled", {"interval": 2.0}, "settings", ["remember"], 2.0, "auto"),
-            ("handled", {"theme": "builtin"}, "settings", ["apply-theme", "repaint", "remember"], 1.0, "builtin"),
-        ]
-        for answer, fields, kind, effects, interval, theme in cases:
-            for event in (tool.Key("x"), tool.Mouse(0, 5, 5, True)):
-                with self.subTest(answer=answer, fields=fields, event=type(event).__name__):
-                    panel = StubPanel(answer, **fields)
-                    state = dataclasses.replace(self.screen(), overlay=tool.SettingsOverlay(panel))
-                    after, kinds = self.send(state, event)
-                    self.assertEqual(kind, after.overlay.kind if after.overlay else None)
-                    self.assertEqual(effects, kinds)
-                    self.assertEqual((interval, theme), (after.interval, after.theme))
-                    self.assertEqual(1, len(panel.pressed), "the panel got it, once")
+        settings = Settings(self.clock)
+        self.assertEqual("settings", modes.mode(settings.state))
+        settings.select(SAFETY)
+        settings.key("\r")
+        self.assertEqual("settings-edit", modes.mode(settings.state))
+        settings.key("esc")
+        settings.show(width=20, height=8)
+        self.assertEqual("settings-small", modes.mode(settings.state))
 
     def test_keys_are_hotkeys_unless_a_value_is_typed(self) -> None:
-        tool = self.tool
-        for editing, expected in ((False, "s"), (True, "ы")):
-            panel = StubPanel("handled", editing=editing)
-            self.send(dataclasses.replace(self.screen(), overlay=tool.SettingsOverlay(panel)), tool.Key("ы"))
-            self.assertEqual([expected], panel.pressed)
+        settings = Settings(self.clock)
+        settings.select(SAFETY)
+        settings.key("д")  # l: the next value
+        self.assertIsNotNone(settings.panel.pending)
+        settings.key("esc", "\r", "ы")  # typing: ы stays ы, which a number does not take
+        self.assertEqual((True, "3"), (settings.panel.editing, settings.panel.buffer))
 
     def test_a_click_on_a_footer_hint_is_the_hint_key_for_the_panel_too(self) -> None:
-        tool = self.tool
-        state = self.screen()
-        row, start, _, _ = state.frame.hints[0]
-        panel = StubPanel("handled")
-        self.send(dataclasses.replace(state, overlay=tool.SettingsOverlay(panel)), tool.Mouse(0, start, row, True))
-        self.assertEqual([state.frame.hints[0][3]], panel.pressed)
+        settings = Settings(self.clock)
+        canvas = settings.canvas()
+        settings.state = dataclasses.replace(settings.state, frame=dataclasses.replace(
+            settings.state.frame, hints=tuple(canvas.hint_hits)))
+        row, start, _, _ = next(hint for hint in canvas.hint_hits if hint[3] == "esc")
+        self.assertIn("repaint", settings.click(start, row))
+        self.assertIsNone(settings.state.overlay)
 
 
 class MouseTableTests(Case):
@@ -480,14 +455,11 @@ class WhatsNewTests(Case):
 
     def test_s_v_and_a_version_click_while_settings_is_open(self) -> None:
         tool = self.tool
-        panel = tool.Settings(1.0, local_only=True)
         state = self.screen()
         version = state.frame.version_at
-        canvas = tool.Canvas(156, 43)
-        panel.draw(canvas, state.model)
-        state = dataclasses.replace(state, overlay=tool.SettingsOverlay(panel))
+        state = dataclasses.replace(state, overlay=tool.SettingsOverlay())
         after, kinds = self.keys(state, "v")
-        self.assertEqual((state.overlay, ["remember"]), (after.overlay, kinds), "v does nothing in Settings")
+        self.assertEqual((state.overlay, []), (after.overlay, kinds), "v does nothing in Settings")
         after, kinds = self.keys(state, "s")
         self.assertIsNone(after.overlay, "s closes Settings, as Esc does")
         self.assertIn("repaint", kinds)
@@ -636,16 +608,32 @@ class NoticeTests(Case):
         tool = self.tool
 
         class Screen(tool.Screen):
-            def settings(self, interval: float, theme: str) -> Any:
-                raise tool.SettingsError("slotfather settings: capacity.json is unreadable")
+            def settings_sections(self) -> Any:
+                return [settings_model.Section("slotfather", problem="slotfather settings: capacity.json is unreadable")]
+
+        live = tool.Live(0, 1, Screen(), 1.0, "auto")
+        self.addCleanup(live.close)
+        live.state = self.screen()
+        live.send(tool.Key("s"))
+        self.assertEqual("settings", live.state.overlay.kind, "it opens; the section says why (fathers#87)")
+        self.assertEqual("live", live.state.refresh.kind)
+        self.assertIn("capacity.json is unreadable", " ".join(
+            part[1] for line in settings_model.lines(live.state.overlay, state_module.settings_context(live.state))
+            for part in line.parts))
+
+    def test_a_settings_panel_that_will_not_open_is_a_notice(self) -> None:
+        tool = self.tool
+
+        class Screen(tool.Screen):
+            def settings_sections(self) -> Any:
+                raise OSError("too many open files")
 
         live = tool.Live(0, 1, Screen(), 1.0, "auto")
         self.addCleanup(live.close)
         live.state = self.screen()
         live.send(tool.Key("s"))
         self.assertIsNone(live.state.overlay)
-        self.assertEqual("live", live.state.refresh.kind)
-        self.assertIn("unreadable", live.state.notice.text)
+        self.assertIn("too many open files", live.state.notice.text)
 
     def test_a_failed_refresh_is_stale_and_keeps_the_model(self) -> None:
         tool = self.tool
@@ -669,78 +657,65 @@ class FrameTests(Case):
 
 class SettingsModeTests(PanelCase):
     """The Settings mode through the reducer, against the fake Slotfather: the audit's conflict and small-panel
-    cases, and one function for what a Settings action does to the app."""
-
-    def setUp(self) -> None:
-        super().setUp()
-        self.clock = Clock()
-        self.state_module: Any = _view.current()
-
-    def open(self, width: int = 90, height: int = 40) -> tuple[Any, Any]:
-        tool = self.state_module
-        dialog = self.settings.Settings(1.0, clock=self.clock)
-        self.panel(dialog, idle(), width, height)
-        return dialog, tool.AppState(overlay=tool.SettingsOverlay(dialog))
-
-    def send(self, state: Any, event: Any) -> tuple[Any, list[str]]:
-        state, effects = self.state_module.reduce(state, event, self.clock.now)
-        return state, [effect.kind for effect in effects]
+    cases, and what a Settings change does to the app."""
 
     def test_a_conflict_is_said_and_nothing_is_saved_or_reloaded(self) -> None:
-        tool = self.state_module
         self.assertEqual(0, self.tool("slots", "4").returncode)
-        dialog, state = self.open()
-        dialog.focus = "amount"
-        state, _ = self.send(state, tool.Key("right"))  # 5 slots, pending
+        settings = Settings(self.clock)
+        settings.select(SLOTS)
+        settings.key("right")  # 5 slots, pending
         self.assertEqual(0, self.tool("slots", "6").returncode)  # another client, not read yet
-        self.clock.now += self.settings.SETTLE_SECONDS
-        state, kinds = self.send(state, tool.Tick())
+        kinds = settings.tick(0.5)
+        kinds += settings.tick(0.5)
         self.assertNotIn("load-model", kinds, "nothing was saved")
         self.assertEqual({"slots": 6}, self.saved_capacity(), "the other client's change stands")
-        self.assertIsNotNone(state.overlay, "the panel stays open")
-        self.assertIn("changed elsewhere", self.panel(dialog, idle()))
+        self.assertIsNotNone(settings.state.overlay, "the panel stays open")
+        self.assertIn("changed elsewhere", settings.text(idle()))
 
     def test_esc_in_a_small_panel_cancels_first_and_then_closes(self) -> None:
-        tool = self.state_module
         self.assertEqual(0, self.tool("slots", "4").returncode)
-        dialog, state = self.open()
-        dialog.focus = "amount"
-        state, _ = self.send(state, tool.Key("right"))
-        self.panel(dialog, idle(), width=20, height=8)
-        self.assertTrue(dialog.small)
-        state, kinds = self.send(state, tool.Key("esc"))
-        self.assertIsNotNone(state.overlay, "the first Esc cancels the pending change")
-        self.assertIsNone(dialog.pending)
-        state, kinds = self.send(state, tool.Key("esc"))
-        self.assertIsNone(state.overlay)
-        self.assertIn("repaint", kinds)
+        settings = Settings(self.clock)
+        settings.select(SLOTS)
+        settings.key("right")
+        settings.show(width=20, height=8)
+        settings.key("esc")
+        self.assertIsNotNone(settings.state.overlay, "the first Esc cancels the pending change")
+        self.assertIsNone(settings.panel.pending)
+        self.assertIn("repaint", settings.key("esc"))
+        self.assertIsNone(settings.state.overlay)
         self.assertEqual({"slots": 4}, self.saved_capacity())
 
     def test_the_wheel_in_settings_flashes_its_thumb(self) -> None:
-        tool = self.state_module
-        dialog, state = self.open(height=16)  # short enough to scroll
-        x, y, width, height = dialog.bounds
-        state, _ = self.send(state, tool.Mouse(65, x + width // 2, y + height // 2, True))
-        self.assertGreater(dialog.offset, 0)
-        self.assertIn("settings", state.glow)
+        settings = Settings(self.clock, height=16)  # short enough to scroll
+        y, x, height, width = settings.geometry().rect
+        settings.click(x + width // 2, y + height // 2, 65)
+        self.assertGreater(settings.panel.offset, 0)
+        self.assertIn("settings", settings.state.glow)
 
     def test_a_settled_change_and_a_theme_apply_at_once(self) -> None:
-        tool = self.state_module
-        dialog, state = self.open()
-        dialog.focus = "theme"
-        state, kinds = self.send(state, tool.Key("right"))
-        self.assertEqual("auto", state.theme, "pending, not applied")
-        self.clock.now += self.settings.SETTLE_SECONDS
-        state, kinds = self.send(state, tool.Tick())
-        self.assertEqual(str(dialog.theme), state.theme)
-        self.assertEqual(["apply-theme", "repaint", "remember", "load-model"], kinds)
-        dialog.focus = "interval"
-        state, kinds = self.send(state, tool.Key("right"))
-        state, kinds = self.send(state, tool.Key("\r"))
-        self.assertEqual(2.0, state.interval, "Refresh every follows at once")
-        self.assertIn("remember", kinds)
-        state, kinds = self.send(state, tool.Key("q"))
-        self.assertEqual(["quit"], kinds)
+        settings = Settings(self.clock)
+        settings.select(THEME)
+        settings.key("right")
+        self.assertEqual("auto", settings.state.theme, "pending, not applied")
+        kinds = settings.tick(1.0)
+        self.assertEqual("terminal", settings.state.theme)
+        self.assertEqual(["apply-theme", "repaint", "remember"], [kind for kind in kinds if kind != "settings"],
+                         "besides the reads that came due")
+        settings.select(INTERVAL)
+        settings.key("right")
+        self.assertIn("remember", settings.key("\r"))
+        self.assertEqual(2.0, settings.state.interval, "Refresh every follows at once")
+        self.assertEqual(["quit"], settings.key("q"))
+
+    def test_a_tool_save_reloads_the_model_and_its_calls_are_effects(self) -> None:
+        settings = Settings(self.clock)
+        settings.select(SAFETY)
+        settings.key("right")
+        state, effects = state_module.reduce(settings.state, state_module.Key("\r"), self.clock.now)
+        self.assertEqual([("settings", "set")], [(effect.kind, effect.item.kind) for effect in effects])
+        answer = settings.screen.settings_call(effects[0].item)
+        _, effects = state_module.reduce(state, answer, self.clock.now)
+        self.assertIn("load-model", [effect.kind for effect in effects])
 
 
 class RectTests(unittest.TestCase):

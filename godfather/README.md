@@ -45,7 +45,7 @@ runs their CLIs. A tool that is not installed simply has no panels; one without 
 | --- | --- |
 | Discovery | `<tool> capabilities --json` |
 | Snapshot | `slotfather status --json --full`, polled every Refresh every |
-| Settings | `slotfather settings --json`, `settings check`, `settings set`, `settings reset` |
+| Settings | `<tool> settings --json`, `settings check`, `settings set`, `settings reset`, for each present tool |
 | Events | `events.jsonl` in the tool's state directory, one shared versioned schema |
 
 [docs/contracts/slotfather.md](docs/contracts/slotfather.md) is the exact shape read from Slotfather;

@@ -43,7 +43,7 @@ class FakeTerminalTests(LiveCase):
         self.assertIn(theme.SCHEME_ON, screen.raw, "colour-scheme changes are subscribed to")
         screen.write(b"s")  # Settings: its focused row is selected
         light = ("48;2;%d;%d;%dm" % theme.mix(LIGHT_BG, LIGHT_FG, 0.10)).encode()
-        screen.raw_until(lambda data: b"STATUS" in data and light in data, what="the light selection")
+        screen.raw_until(lambda data: b"SLOTFATHER" in data and light in data, what="the light selection")
         self.assertNotIn(b"56;62;74", screen.raw)
         self.assertNotIn(b"38;5;255", screen.raw)
         answered = screen.mark()

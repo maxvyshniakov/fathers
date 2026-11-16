@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,9 +17,11 @@ from unittest import mock
 
 import helpers  # noqa: F401 - src/ on sys.path
 
+import fake_slotfather
+import fake_tool
 from godfather import app, sources
+from godfather.adapters import settings as settings_adapter
 from godfather.adapters import slotfather as adapter
-from godfather.views import settings as settings_view
 
 SIBLING = Path(__file__).resolve().parents[2] / "slotfather" / "slotfather"
 EXECUTABLE = os.environ.get("SLOTFATHER_BIN") or (str(SIBLING) if SIBLING.is_file() else shutil.which("slotfather"))
@@ -53,7 +56,7 @@ class ContractTests(unittest.TestCase):
             # The sibling package is this commit's Slotfather: a broken one fails here instead of skipping.
             self.assertNotEqual(EXECUTABLE, str(SIBLING), f"../slotfather/slotfather capabilities --json: {found!r}")
             self.skipTest("slotfather with capabilities --json and a dashboard block (SF-1) is not installed")
-        self.capabilities = found
+        self.capabilities: dict[str, Any] = found
         patcher = mock.patch.dict(os.environ, environ, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -74,20 +77,121 @@ class ContractTests(unittest.TestCase):
             self.assertNotEqual(EXECUTABLE, str(SIBLING), "../slotfather/slotfather lacks settings (SF-2)")
             self.skipTest("slotfather settings (SF-2) is not installed")
         client = adapter.SettingsClient(sources.which("slotfather"))
-        dialog = settings_view.Settings(1.0, client=client)
-        self.assertEqual("automatic", dialog.mode())
+        reply = client.read()
+        self.assertEqual("automatic", rows(reply)["capacity.mode"]["value"])
         self.assertEqual({"ok": False}, {"ok": client.check("capacity.slots", "0")["ok"]})
         self.assertEqual("Enter a whole number of slots, at least 1.", client.check("capacity.slots", "0")["error"])
         self.assertEqual(6, client.check("capacity.slots", "6").get("slots"))
-        revision = dialog.capacity_bytes
+        revision = rows(reply)["capacity.slots"]["revision"]
         client.set("capacity.slots", "6", revision)
         with self.assertRaises(adapter.Conflict):
             client.set("capacity.slots", "5", revision)
-        dialog.read()
-        self.assertEqual(("fixed", 6), (dialog.mode(), dialog.basis["slots"]))
+        self.assertEqual(("fixed", 6), (rows(client.read())["capacity.mode"]["value"], client.read()["basis"]["slots"]))
         client.reset(None)
-        dialog.read()
-        self.assertEqual("automatic", dialog.mode())
+        self.assertEqual("automatic", rows(client.read())["capacity.mode"]["value"])
+
+    def test_the_fake_settings_reply_is_the_real_one(self) -> None:
+        """tests/fake_slotfather.py prints `settings --json` field for field as this Slotfather does."""
+        if not adapter.settings_supported(self.capabilities):
+            self.skipTest("slotfather settings (SF-2) is not installed")
+        real = adapter.SettingsClient(sources.which("slotfather")).read()
+        fake = fake_slotfather.settings({"cores": 12, "memory_gib": 64, "capacity": None, "order": {},
+                                         "environment": ["SLOTFATHER_CORES", "SLOTFATHER_MEMORY_GIB"],
+                                         "writable": True})
+        assert_same_shape(self, real, fake)
+
+
+def rows(reply: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {row["key"]: row for section in reply["sections"] for row in section["settings"]}
+
+
+SHOWN = ("key", "label", "type", "default", "choices", "min", "max", "step", "unit", "zero", "when", "writable",
+         "min_exclusive", "description")
+
+
+def assert_same_shape(case: unittest.TestCase, real: dict[str, Any], fake: dict[str, Any]) -> None:
+    """The fields Godfather reads, equal in the fake and the real reply; values only by type."""
+    case.assertEqual(sorted(set(real) - {"revision"}), sorted(set(fake) - {"revision"}), "top-level fields")
+    case.assertEqual([section["id"] for section in real["sections"]], [section["id"] for section in fake["sections"]])
+    case.assertEqual(list(rows(real)), list(rows(fake)), "the rows, in order")
+    for key, row in rows(real).items():
+        other = rows(fake)[key]
+        with case.subTest(key=key):
+            case.assertEqual(sorted(row), sorted(other), "the row's fields")
+            for name in SHOWN:
+                if name in row and not (name == "description" and key.startswith("env.")):
+                    case.assertEqual(row[name], other[name], name)
+            case.assertEqual(type(row["value"]), type(other["value"]), "value's type")
+    case.assertEqual([item["label"] for item in real["status"]], [item["label"] for item in fake["status"]])
+
+
+SIBLINGS = Path(__file__).resolve().parents[2]
+
+
+class ToolContractTests(unittest.TestCase):
+    """Lanefather's and Junkfather's real `settings` CLIs, from the sibling checkouts in isolated state: what
+    Godfather's client reads and writes, and that tests/fake_tool.py prints the same rows. Skipped where a sibling
+    is missing or cannot run (Lanefather needs Python 3.11)."""
+
+    def tool(self, name: str) -> tuple[Path, dict[str, str]]:
+        package = SIBLINGS / name
+        if not (package / name / "settings.py").is_file():
+            self.skipTest(f"no {name} checkout beside godfather")
+        tmp = Path(tempfile.mkdtemp(prefix=f"godfather-{name}-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        bin_dir = tmp / "bin"
+        bin_dir.mkdir()
+        python = shutil.which("python3") or sys.executable
+        (bin_dir / name).write_text(f"#!/bin/sh\nPYTHONPATH={package} exec {python} -m {name} \"$@\"\n")
+        (bin_dir / name).chmod(0o755)
+        environ = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp / "home"),
+                   "LANEFATHER_SETTINGS": str(tmp / "lanefather" / "settings.json"),
+                   "JUNKFATHER_STATE": str(tmp / "junkfather"), "XDG_CONFIG_HOME": str(tmp / "config")}
+        (tmp / "home").mkdir()
+        probe = subprocess.run([str(bin_dir / name), "settings", "--json"], capture_output=True, text=True,
+                               env=environ, cwd=tmp, timeout=30)
+        if probe.returncode != 0:
+            self.skipTest(f"{name} settings cannot run here: {probe.stderr.strip().splitlines()[-1:]}")
+        patcher = mock.patch.dict(os.environ, environ, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(tmp)
+        return bin_dir / name, environ
+
+    def check_tool(self, name: str, key: str, value: str, read_only: int) -> None:
+        executable, _ = self.tool(name)
+        client = adapter.SettingsClient(str(executable), name)
+        reply = client.read()
+        fake = fake_tool.document({"tool": name, "values": {}, "environment": {}, "writable": True})
+        self.assertEqual([row for row in rows(fake)], [row for row in rows(reply) if row in rows(fake)],
+                         "the fake's rows are the real ones, in order")
+        for row_key, row in rows(fake).items():
+            for field in ("label", "type", "default", "choices", "min", "max", "step", "unit", "writable"):
+                if field in rows(reply)[row_key]:
+                    self.assertEqual(rows(reply)[row_key][field], row.get(field), f"{row_key} {field}")
+        self.assertTrue(client.check(key, value)["ok"])
+        self.assertFalse(client.check(key, "nonsense")["ok"])
+        revision = rows(reply)[key]["revision"]
+        after = client.set(key, value, revision)
+        self.assertEqual("saved", rows(after)[key]["source"])
+        with self.assertRaises(adapter.Conflict):
+            client.set(key, value, revision)
+        client.reset(None)
+        self.assertEqual("default", rows(client.read())[key]["source"])
+        self.assertIn(read_only, settings_adapter.READ_ONLY)
+
+    def test_lanefather(self) -> None:
+        self.check_tool("lanefather", "rerun.wait", "600", 4)
+
+    def test_junkfather(self) -> None:
+        self.check_tool("junkfather", "reap.grace", "30", 5)
+
+    def test_junkfather_read_only_is_exit_5_and_the_client_says_so(self) -> None:
+        executable, _ = self.tool("junkfather")
+        client = adapter.SettingsClient(str(executable), "junkfather")
+        with self.assertRaises(adapter.ReadOnly):
+            client.set("env.JUNKFATHER_STATE", "/elsewhere")
 
 
 if __name__ == "__main__":

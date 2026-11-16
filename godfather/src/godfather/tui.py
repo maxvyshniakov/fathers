@@ -483,3 +483,43 @@ class Loader:
         with self.lock:
             found, self.results = self.results, []
             return found
+
+
+class Jobs(Loader):
+    """A Loader that runs every request, in the order made (Settings' reads, checks and writes, fathers#87): none
+    replaces another, so a save is never dropped and its answer follows the reads asked before it."""
+
+    def __init__(self, work: Any, wake: int) -> None:
+        super().__init__(work, wake)
+        self.queue: list[tuple[Any, Any]] = []
+
+    def request(self, key: Any, argument: Any = None) -> None:
+        with self.lock:
+            self.queue.append((key, argument))
+            if self.busy:
+                return
+            self.busy = True
+        threading.Thread(target=self.run, daemon=True).start()
+
+    def wants(self, key: Any) -> bool:
+        with self.lock:
+            return self.current == key or any(waiting == key for waiting, _ in self.queue)
+
+    def run(self) -> None:
+        while True:
+            with self.lock:
+                if not self.queue:
+                    self.busy, self.current = False, None
+                    return
+                key, argument = self.queue.pop(0)
+                self.current = key
+            value: Any = None
+            failure: BaseException | None = None
+            try:
+                value = self.work(argument)
+            except Exception as error:  # noqa: BLE001 - a failed call is shown, never the end of the view
+                failure = error
+            with self.lock:
+                self.results.append((key, value, failure))
+            with contextlib.suppress(OSError):
+                os.write(self.wake, b".")

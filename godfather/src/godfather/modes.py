@@ -8,7 +8,12 @@ the state and returns the new state and its effects; a key a mode does not list 
     help     ↑↓ and the page keys scroll; ? and Esc close, v switches to what's new; q quits
     changelog  what's new: the same, v and Esc close, ? switches to help; ←→ and Tab switch its tool filter;
              opening it asks every tool again, closing it marks everything read (state.closed_news())
-    settings the Settings panel's own keys (views/settings.py); typed values are not taken as hotkeys
+    settings ↑↓ move the cursor through every section's rows, ←→ change a value (saved once the keys settle),
+             Enter saves now or edits a number, a digit starts typing one, d resets a row, D twice its section,
+             Esc cancels a pending change, then closes; the page keys and the wheel scroll (settings_model.py)
+    settings-edit  a value typed: digits and a dot, Backspace, Ctrl-U clears, Enter or Tab saves, Esc cancels;
+             typed values are not taken as hotkeys
+    settings-small Settings too small to show: only Esc, s and q
     filter   EVENTS' text field, opened by `/` (fathers#84): what is typed goes into it, Backspace deletes, Enter
              keeps the filter, Esc clears it; on the main screen and a panel `f` cycles EVENTS' source filter
 
@@ -21,8 +26,9 @@ from typing import Any, Callable, Union, cast
 
 from . import keys as _keys
 from . import layout as _layout
+from . import settings_model as _settings
 from .state import (LOAD_NEWS, OPEN_SETTINGS, QUIT, AppState, Changelog, Help, Key, Mouse, Result, SettingsOverlay, filtered,
-                    items, move, overlay_box, settings_effects)
+                    items, move, overlay_box, settings_context, settings_result)
 from .views import events as _events_view
 from .views import overlays as _overlays
 
@@ -179,29 +185,193 @@ CHANGELOG: dict[str, Handler] = {
 }
 
 
-def settings_key(state: AppState, key: str) -> Result:
-    """Every key goes to the Settings panel, which answers close, quit, changed or handled."""
-    panel = cast(SettingsOverlay, state.overlay).panel
-    return settings_effects(state, str(panel.key(key)))
+# Settings (fathers#87): its keys act on the panel value through settings_model
+
+Transition = Callable[[_settings.Panel, _settings.Context, str, float], _settings.Result]
+SettingsHandler = Callable[[AppState, str, float], Result]
+
+
+def on_panel(transition: Transition) -> SettingsHandler:
+    def handler(state: AppState, key: str, now: float) -> Result:
+        panel, context, requests = transition(cast(SettingsOverlay, state.overlay), settings_context(state), key, now)
+        return settings_result(state, panel, context, requests)
+    return handler
+
+
+def keep(change: Callable[[_settings.Panel, _settings.Context, str, float], _settings.Panel]) -> Transition:
+    def transition(panel: _settings.Panel, context: _settings.Context, key: str, now: float) -> _settings.Result:
+        return change(panel, context, key, now), context, []
+    return transition
+
+
+def settings_escape(panel: _settings.Panel, context: _settings.Context, _: str, now: float) -> _settings.Result:
+    """Esc or s: a pending change is cancelled first, and said; then Settings closes."""
+    if panel.pending is not None:
+        return _settings.cancel_pending(panel, context, now), context, []
+    return panel, context, [_settings.Request("close")]
+
+
+def settings_quit(panel: _settings.Panel, context: _settings.Context, _: str, __: float) -> _settings.Result:
+    return panel, context, [_settings.Request("quit")]
+
+
+def settings_enter(panel: _settings.Panel, context: _settings.Context, key: str, now: float) -> _settings.Result:
+    """Enter saves a pending change now; on a choice it (and Space) picks the next value, on a number it edits."""
+    row = _settings.focused(panel, context)
+    if panel.pending is not None and key != " ":
+        return _settings.commit_pending(panel, context, now)
+    if row is not None and row.type in ("choice", "theme", "boolean"):
+        return _settings.step(panel, context, 1, now)
+    return _settings.begin(panel, context), context, []
+
+
+def settings_digit(panel: _settings.Panel, context: _settings.Context, key: str, _: float) -> _settings.Result:
+    return _settings.begin(panel, context, key), context, []
+
+
+def settings_reset_all(panel: _settings.Panel, context: _settings.Context, _: str, now: float) -> _settings.Result:
+    """D: once, it asks; again within the flash, the selected row's section is reset."""
+    if panel.armed is not None and now - panel.armed < _settings.FLASH_SECONDS:
+        return _settings.reset_section(panel, context, now)
+    return _settings.arm(panel, now), context, []
+
+
+def settings_step(direction: int) -> Transition:
+    return lambda panel, context, _, now: _settings.step(panel, context, direction, now)
+
+
+def settings_move(count: int) -> Transition:
+    return lambda panel, context, _, now: _settings.move(panel, context, count, now)
+
+
+def settings_edge(last: bool) -> Transition:
+    return lambda panel, context, _, now: _settings.edge(panel, context, last, now)
+
+
+def settings_page(direction: int) -> Transition:
+    return keep(lambda panel, context, _, __: _settings.page(panel, context, direction))
+
+
+def edit_cancel(panel: _settings.Panel, context: _settings.Context, _: str, now: float) -> _settings.Result:
+    return _settings.say(_settings.replace(panel, editing=False), "Edit cancelled · nothing was saved", "dim",
+                         now), context, []
+
+
+def edit_commit(panel: _settings.Panel, context: _settings.Context, key: str, now: float) -> _settings.Result:
+    """Enter saves the typed value; Tab saves it and moves on. One refused stays in the field."""
+    panel, context, requests, saved = _settings.commit_typed(panel, context, now)
+    if saved and key == "\t":
+        panel, context, more = _settings.move(panel, context, 1, now)
+        requests += more
+    return panel, context, requests
+
+
+def edit_type(panel: _settings.Panel, _: _settings.Context, key: str, __: float) -> _settings.Panel:
+    if key in ("\x7f", "\b"):
+        text = "" if panel.replace else panel.buffer[:-1]
+    elif key == "\x15":  # Ctrl-U clears the field
+        text = ""
+    elif len(panel.buffer) < 16 or panel.replace:
+        text = key if panel.replace else panel.buffer + key
+    else:
+        return panel
+    return _settings.replace(panel, buffer=text, replace=False)
+
+
+DIGITS = tuple("0123456789.")
+SETTINGS: dict[str, SettingsHandler] = {
+    "esc": on_panel(settings_escape), "s": on_panel(settings_escape),
+    "q": on_panel(settings_quit), "Q": on_panel(settings_quit),
+    **{key: on_panel(settings_move(1)) for key in ("down", "j", "\t")},
+    **{key: on_panel(settings_move(-1)) for key in ("up", "k", "back_tab")},
+    "home": on_panel(settings_edge(False)), "g": on_panel(settings_edge(False)),
+    "end": on_panel(settings_edge(True)), "G": on_panel(settings_edge(True)),
+    **{key: on_panel(settings_step(-1)) for key in ("left", "h", "-")},
+    **{key: on_panel(settings_step(1)) for key in ("right", "l", "+")},
+    "\r": on_panel(settings_enter), "\n": on_panel(settings_enter), " ": on_panel(settings_enter),
+    **{key: on_panel(settings_digit) for key in DIGITS},
+    "d": on_panel(lambda panel, context, _, now: _settings.reset_row(panel, context, now)),
+    "D": on_panel(settings_reset_all),
+    "page_up": on_panel(settings_page(-1)), "page_down": on_panel(settings_page(1)),
+}
+SETTINGS_EDIT: dict[str, SettingsHandler] = {
+    "esc": on_panel(edit_cancel),
+    **{key: on_panel(edit_commit) for key in ("\r", "\n", "\t")},
+    **{key: on_panel(keep(edit_type)) for key in ("\x7f", "\b", "\x15", *DIGITS)},
+}
+SETTINGS_SMALL: dict[str, SettingsHandler] = {
+    "esc": on_panel(settings_escape), "s": on_panel(settings_escape),
+    "q": on_panel(settings_quit), "Q": on_panel(settings_quit),
+}
+SETTINGS_TABLE: dict[str, dict[str, SettingsHandler]] = {
+    "settings": SETTINGS, "settings-edit": SETTINGS_EDIT, "settings-small": SETTINGS_SMALL}
+
+
+def settings_press(state: AppState, key: str, now: float) -> Result:
+    """A key in Settings, from its mode's table; any key but D withdraws the reset question."""
+    panel = cast(SettingsOverlay, state.overlay)
+    which = mode(state)
+    if which == "settings" and panel.armed is not None and key != "D":
+        state = dataclasses.replace(state, overlay=_settings.replace(panel, armed=None, flash=None))
+    handler = SETTINGS_TABLE[which].get(key)
+    return handler(state, key, now) if handler else (state, [])
+
+
+def settings_click(state: AppState, event: Mouse, now: float) -> Result:
+    """A click selects a row, a click on the selected one changes or edits it, a click outside closes (as Esc
+    does) unless a value is typed or pending; the wheel scrolls."""
+    panel = cast(SettingsOverlay, state.overlay)
+    context = settings_context(state)
+    view = _settings.geometry(panel, context)
+    y, x, height, width = view.rect
+    code = event.button & ~28
+    if not (x <= event.x < x + width and y <= event.y < y + height):
+        if event.pressed and code == LEFT and not panel.editing and panel.pending is None:
+            return settings_result(state, panel, context, [_settings.Request("close")])
+        return state, []
+    if _settings.small(panel, context) or not event.pressed or not (x < event.x < x + width - 1
+                                                             and y < event.y < y + height - 1):
+        return state, []
+    if code in (WHEEL_UP, WHEEL_DOWN):
+        panel = _settings.scroll(panel, context, WHEEL if code == WHEEL_DOWN else -WHEEL)
+        return settings_result(state, panel, context, [])
+    if code != LEFT:
+        return state, []
+    target = next((focus for focus, row in view.hits() if row == event.y), None)
+    if target is None:
+        return state, []
+    if target != panel.focus:
+        return settings_result(state, *_settings.move_to(panel, context, target, now, cancel_edit=True))
+    if panel.editing:
+        return state, []
+    row = _settings.focused(panel, context)
+    return settings_press(state, " " if row is not None and row.type in ("choice", "theme", "boolean") else "\r",
+                          now)
 
 
 TABLE: dict[str, dict[str, Handler]] = {"main": MAIN, "panel": PANEL, "help": HELP, "changelog": CHANGELOG}
 
 
 def mode(state: AppState) -> str:
-    """The mode keys are read in: the open overlay, else the main screen by its focus."""
-    if state.overlay is not None:
-        return state.overlay.kind
+    """The mode keys are read in: the open overlay (Settings by whether a value is typed or it is too small to
+    show), else the main screen by its focus."""
+    overlay = state.overlay
+    if isinstance(overlay, SettingsOverlay):
+        if _settings.small(overlay, settings_context(state)):
+            return "settings-small"
+        return "settings-edit" if overlay.editing else "settings"
+    if overlay is not None:
+        return overlay.kind
     if state.events_filter.editing:
         return "filter"
     return "main" if state.focus == "requests" else "panel"
 
 
-def press(state: AppState, key: str) -> Result:
+def press(state: AppState, key: str, now: float = 0.0) -> Result:
     """A key in the current mode: a hotkey by its US-QWERTY position (#13) unless a Settings value is typed."""
     overlay = state.overlay
     if isinstance(overlay, SettingsOverlay):
-        return settings_key(state, key if overlay.panel.editing else _keys.hotkey(key))
+        return settings_press(state, key if overlay.editing else _keys.hotkey(key), now)
     if overlay is None and state.events_filter.editing:  # typed text stays as typed
         return type_filter(state, key)
     key = _keys.hotkey(key)
@@ -210,15 +380,14 @@ def press(state: AppState, key: str) -> Result:
 
 # The mouse
 
-def click(state: AppState, event: Mouse) -> Result:
+def click(state: AppState, event: Mouse, now: float = 0.0) -> Result:
     """The mouse in the current mode. In an overlay the wheel scrolls it, a click on one of what's new's tool filters
     shows that tool and a click outside closes it; on the main
     screen the footer's `Godfather what's new?` opens what's new, a click focuses the panel it lands in and selects a QUEUE row,
     and the wheel scrolls the panel under the pointer. Shift+drag stays the terminal's own selection."""
     overlay, code = state.overlay, event.button & ~28  # Shift / Alt / Ctrl do not change the button
     if isinstance(overlay, SettingsOverlay):
-        return settings_effects(state, str(overlay.panel.mouse(("mouse", event.button, event.x, event.y,
-                                                                event.pressed))))
+        return settings_click(state, event, now)
     if overlay is not None:
         view = overlay_box(state, overlay)
         inside = view.x <= event.x < view.x + view.width and view.y <= event.y < view.y + view.height
@@ -268,12 +437,12 @@ def panel_at(state: AppState, x: int, y: int) -> Union[str, None]:
     return None
 
 
-def dispatch(state: AppState, event: Union[Key, Mouse]) -> Result:
-    """A key or a mouse event: a click on a footer hint is the hint's key."""
+def dispatch(state: AppState, event: Union[Key, Mouse], now: float = 0.0) -> Result:
+    """A key or a mouse event at `now` (Settings times its changes): a click on a footer hint is the hint's key."""
     if isinstance(event, Mouse):
         hint = state.frame.hint_at(event.x, event.y) if event.pressed and event.button & ~28 == LEFT else None
         if hint is None:
-            return click(state, event)
-        return press(state, hint)
-    return press(state, event.key)
+            return click(state, event, now)
+        return press(state, hint, now)
+    return press(state, event.key, now)
 

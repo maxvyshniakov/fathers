@@ -152,14 +152,13 @@ class HintClickTests(unittest.TestCase):
         from unittest import mock
 
         from helpers import FakeSlotfather
-        from godfather.views import settings as dashboard_settings
+        from test_settings import Clock, Settings
         fake = FakeSlotfather()
         self.addCleanup(fake.close)
         with mock.patch.dict(os.environ, fake.environ()):
-            dialog = dashboard_settings.Settings(1.0)
-            canvas = self.tool.Canvas(100, 44)
-            dialog.draw(canvas, None)
-        _, y, _, height = dialog.bounds
+            settings = Settings(Clock(), width=100, height=44)
+            canvas = settings.canvas()
+        y, _, height, _ = settings.geometry().rect
         found = self.targets(canvas, y + height - 2, ["↑↓ select", "←→ change", "enter edit", "d reset", "esc close"])
         self.assertEqual(["up", "down"], found["↑↓ select"][:2])
         self.assertEqual(["left", "right"], found["←→ change"][:2])

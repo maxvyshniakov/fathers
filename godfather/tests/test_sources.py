@@ -18,7 +18,8 @@ from helpers import ROOT, FakeSlotfather
 
 from godfather import app, sources, tui
 from godfather.adapters import slotfather as adapter
-from godfather.views import common, overlays, overview, settings_draw
+from godfather import settings_model
+from godfather.views import common, overlays, overview
 
 SCENE = ROOT / "tests" / "fixtures" / "scene"
 
@@ -75,8 +76,11 @@ class AbsentTests(FixtureCase):
         shutil.rmtree(self.root / "slotfather")
         screen = app.Screen()
         screen.load()
-        dialog = screen.settings(1.0, "auto")
-        self.assertEqual(["interval", "theme"], dialog.fields())
+        context = settings_model.Context(width=100, height=40)
+        panel = settings_model.opened(screen.settings_sections(), context, 0.0)
+        self.assertEqual([("godfather", "interval"), ("godfather", "theme")],
+                         [row.focus for row in settings_model.selectable(panel, context)])
+        self.assertEqual(["godfather"], settings_model.tools(panel), "no section for an absent tool")
 
 
 class UnsupportedTests(FixtureCase):
@@ -120,9 +124,10 @@ class FailingTests(FixtureCase):
         self.assertEqual({"dim"}, {cell[1] for row in self.canvas.cells[:-1] for cell in row if cell[0].strip()},
                          "every panel dimmed")
         self.assertEqual("stale", screen.source.state)
-        dialog = screen.settings(1.0, "auto")
+        context = settings_model.Context(problem=screen.source.problem, width=100, height=40)
+        panel = settings_model.opened(screen.settings_sections(), context, 0.0)
         self.assertIn("slotfather: queue unreadable", "\n".join(
-            "".join(part[1] for part in row.parts) for row in settings_draw.status_rows(dialog, None)))
+            "".join(part[1] for part in line.parts) for line in settings_model.lines(panel, context)))
         self.reply("status --json --full", replies(SCENE)["status --json --full"])
         text = self.frame(screen)
         self.assertNotIn("stale", text, "a good snapshot ends it")

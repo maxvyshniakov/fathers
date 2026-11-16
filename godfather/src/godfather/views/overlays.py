@@ -106,10 +106,12 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
         ("", "The chart shows held slots over time, now on the right."),
     ]),
     ("SETTINGS", [
+        ("↑ ↓", "move through every section's settings"),
         ("← →", "change the value"),
         ("enter", "edit · save"),
-        ("d · D D", "reset one · reset all"),
+        ("d · D D", "reset one · reset the selected row's section"),
         ("esc", "close"),
+        ("", "One section per present tool, after this dashboard's own; its status rows are read-only."),
         ("", "A lower capacity drains: running work keeps its slots."),
         ("", "Colours follow the terminal theme; Colour theme picks Auto, Terminal or Built-in."),
     ]),
