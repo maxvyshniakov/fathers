@@ -30,6 +30,7 @@ from . import owner as _owner
 from . import procs as _procs
 from . import reap as _reap
 from . import safety as _safety
+from .errors import NOT_FOUND, REFUSED, Refused
 from .defaults import DETACH_WAIT, KNOWN_EVERY, POLL, RETRY_FIRST, RETRY_MAX, SIGNAL_GRACE
 from .entry import new as new_entry
 from .release import PACKAGE_ROOT
@@ -95,15 +96,16 @@ def record_child(store: Store, entry_id: str, child: subprocess.Popen[bytes], su
 class Supervisor:
     """Waits on the leader, enforces the TTL, keeps `known` fresh, and stops the group on a signal. A TTL reap that
     fails is tried again after a capped backoff (retry_delay), and only the first failure of a streak is an event.
-    Tests inject `clock` (monotonic), `pause` and `reaper`."""
+    Tests inject `clock` (monotonic: the backoff and the refresh of `known`), `wall` (epoch seconds: the TTL against
+    the entry's `expires`), `pause` and `reaper`."""
 
     def __init__(self, store: Store, entry_id: str, child: subprocess.Popen[bytes], quiet: bool = False,
                  attached: bool = True, catcher: Optional["Catcher"] = None,
                  clock: Callable[[], float] = time.monotonic, pause: Callable[[float], None] = time.sleep,
-                 reaper: Optional[Callable[..., Dict[str, Any]]] = None):
+                 reaper: Optional[Callable[..., Dict[str, Any]]] = None, wall: Callable[[], float] = time.time):
         self.store, self.id, self.child, self.quiet, self.attached = store, entry_id, child, quiet, attached
         self.catcher = catcher or Catcher()
-        self.clock, self.pause, self.reaper = clock, pause, reaper or _reap.reap
+        self.clock, self.wall, self.pause, self.reaper = clock, wall, pause, reaper or _reap.reap
 
     def say(self, text: str) -> None:
         if not self.quiet:
@@ -140,7 +142,7 @@ class Supervisor:
                 if entry is not None and entry.get("state") == _entry.REAPED:
                     self.say(f"{self.id} reaped ({(entry.get('end') or {}).get('reason')})")
                 return status(code)
-            if entry.get("state") == _entry.RUNNING and time.time() >= float(entry.get("expires") or 0) \
+            if entry.get("state") == _entry.RUNNING and self.wall() >= float(entry.get("expires") or 0) \
                     and self.clock() >= retry_at:
                 result = self.reaper(self.store, self.id, "ttl expired", actor=_events.tool("supervisor"),
                                      report_failure=not failures)
@@ -296,14 +298,12 @@ def adopt(store: Store, pid: int, ttl: float, keep: str, label: Optional[str], e
     try:
         table = _procs.Table.read()
     except _procs.ProcError as error:
-        print(f"junkfather adopt: {error}", file=sys.stderr)
-        return 1
+        raise Refused(str(error)) from None
     proc = table.get(pid)
     refusal = _safety.adopt_refusal(pid, table, lambda candidate: any(
         e.get("state") == _entry.RUNNING and e.get("pid") == candidate for e in store.entries()))
     if refusal:
-        print(f"junkfather adopt: refusing pid {pid}: {refusal}", file=sys.stderr)
-        return 1
+        raise Refused(f"refusing pid {pid}: {refusal}", NOT_FOUND if proc is None else REFUSED)
     assert proc is not None
     who = _owner.resolve(env, table, os.getcwd(), store, lane=lane, agent=agent, claims=False)
     entry = _entry.adopted(store, new_entry(store, [proc.cmd], ttl, keep, label, who, "adopted", os.getcwd()), proc,

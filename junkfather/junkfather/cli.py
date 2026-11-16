@@ -19,9 +19,11 @@ them when their owner ends or their TTL passes.
   junkfather settings [--json] | settings check KEY VALUE | settings set KEY VALUE [--revision R]
                       | settings reset (KEY | --all) [--revision R]     (own.default_ttl, sweep.interval, reap.grace)
   junkfather hook            (Claude Code / Codex lifecycle hook: JSON on stdin)
-  junkfather version
+  junkfather version | --version
 
 Durations take seconds or 90s, 30m, 2h, 1d; without --ttl, --grace or --interval the setting applies (settings).
+Exit codes (docs/cli.md): 0 done, 1 failed, 2 usage, 3 refused by the current state, 5 read-only, 6 not found;
+own passes its command's status through.
 State: $JUNKFATHER_STATE (default ~/.local/state/junkfather).
 See README.md for how agents launch through it and docs/reference.md for the rules.
 """
@@ -33,13 +35,15 @@ import os
 import shlex
 import sys
 import time
-from typing import Any, Callable, Dict, List, Mapping, Optional
+import traceback
+from typing import Any, Callable, ClassVar, Dict, List, Mapping, NoReturn, Optional
 
 from . import __version__
 from . import changelog as _changelog
 from . import dashboard as _dashboard
 from . import defaults
 from . import entry as _entry
+from . import errors
 from . import events as _events
 from . import hook as _hook
 from . import launch as _launch
@@ -50,18 +54,57 @@ from . import reap as _reap
 from . import resources as _resources
 from . import settings as _settings
 from . import sweep as _sweep
+from .errors import NOT_FOUND, REFUSED, Refused, Usage
 from .state import Store
 from .text import duration, seconds
 
 
-class Usage(Exception):
-    pass
+class Parser(argparse.ArgumentParser):
+    """argparse with docs/cli.md's errors: error() raises a usage error, and main prints its one line and the pointer
+    to the help of the command whose parser refused it. Options are exact (no abbreviations), and a word that names
+    no option of the parser is reported before a missing required argument."""
+
+    given: ClassVar[List[str]] = []  # the command line main parses (main sets it)
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault("allow_abbrev", False)
+        super().__init__(*args, **kwargs)
+
+    def error(self, message: str) -> NoReturn:
+        command = " ".join(self.prog.split()[1:]) or None
+        unknown = self.unknown_option()
+        if unknown is not None:
+            raise Usage(f"unknown option {unknown}", command)
+        raise Usage(message[len("argument "):] if message.startswith("argument ") else message, command)
+
+    def unknown_option(self) -> Optional[str]:
+        """The first word of this parser's part of the command line (after its command's name) that looks like an
+        option and names none in argparse's own table, up to `--`; the value of an option that takes one is
+        skipped."""
+        table: Dict[str, argparse.Action] = self._option_string_actions  # pyright: ignore[reportPrivateUsage]
+        words, name = Parser.given, self.prog.split()[1:]
+        if name and name[0] in words:
+            words = words[words.index(name[0]) + 1:]
+        skip = False
+        for word in words:
+            if skip:
+                skip = False
+                continue
+            if word == "--":
+                return None
+            if not word.startswith("-") or word == "-" or word[1:2].isdigit():
+                continue
+            action = table.get(word.split("=", 1)[0])
+            if action is None:
+                return word.split("=", 1)[0]
+            skip = "=" not in word and action.nargs != 0
+        return None
 
 
-def parser() -> argparse.ArgumentParser:
-    top = argparse.ArgumentParser(prog="junkfather", description=__doc__,
-                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    sub = top.add_subparsers(dest="command")
+def parser() -> Parser:
+    top = Parser(prog="junkfather", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    top.add_argument("--version", action="store_true", help="print junkfather's version and exit")
+    sub = top.add_subparsers(dest="command", metavar="COMMAND")
 
     def ownership(p: argparse.ArgumentParser) -> None:
         p.add_argument("--ttl", type=seconds,
@@ -154,23 +197,49 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
 
     sub.add_parser("hook", help="the agent lifecycle hook (JSON on stdin)")
-    p = sub.add_parser("supervise", help=argparse.SUPPRESS)
+    p = sub.add_parser("supervise")  # internal (launch.py runs it): no help, so the help does not list it
     p.add_argument("id")
-    sub.add_parser("version")
+    sub.add_parser("version", help="print junkfather's version")
     return top
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    args = parser().parse_args(argv)
-    handler = COMMANDS.get(args.command or "")
-    if handler is None:
-        parser().print_help()
-        return 2
+    """Parse, dispatch through COMMANDS and turn every refusal into docs/cli.md's one line and exit code."""
+    words = list(sys.argv[1:] if argv is None else argv)
+    command: Optional[str] = None
     try:
+        if words and not words[0].startswith("-") and words[0] not in COMMANDS:
+            raise Usage(f"unknown command {words[0]!r}")
+        Parser.given = words
+        args, extra = parser().parse_known_args(words)
+        command = args.command
+        if extra:
+            raise Usage(f"unknown option {extra[0]}" if extra[0].startswith("-") else
+                        f"unexpected argument {extra[0]!r}", command)
+        if args.version:
+            return version_command(Store(), args)
+        handler = COMMANDS.get(command or "")
+        if handler is None:
+            raise Usage("no command given")
         return handler(Store(), args)
-    except Usage as error:
-        print(f"junkfather: {error}", file=sys.stderr)
-        return 2
+    except Refused as error:
+        return errors.refuse(error, command)
+    except Exception as error:  # noqa: BLE001 - one line on the terminal, the traceback in the log (docs/cli.md)
+        logged(words)
+        errors.say(f"internal error: {type(error).__name__}: {error}")
+        return errors.FAILED
+
+
+def logged(words: List[str]) -> None:
+    """The traceback of the exception being handled, appended to logs/junkfather.log; never raises."""
+    try:
+        logs = Store().logs_dir
+        logs.mkdir(parents=True, exist_ok=True)
+        with open(logs / "junkfather.log", "a", encoding="utf-8") as log:
+            log.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S%z')} junkfather {shlex.join(words)}\n"
+                      f"{traceback.format_exc()}\n")
+    except OSError:
+        pass
 
 
 def show(data: Mapping[str, Any]) -> None:
@@ -209,11 +278,17 @@ def own_resource_command(store: Store, args: argparse.Namespace) -> int:
         raise Usage("--remove goes with --kind docker")
     if (args.alive or args.stop) and args.kind != "command":
         raise Usage("--alive and --stop go with --kind command")
+    if args.kind == "safari-tp":
+        raise Usage("own-resource refuses safari-tp: an instance that runs cannot be told from a person's own "
+                    "browser; launch it through junkfather own --kind safari-tp -- open -g -a 'Safari Technology "
+                    "Preview'")
     try:
         alive = shlex.split(args.alive) if args.alive else None
         stop = shlex.split(args.stop) if args.stop else None
     except ValueError as error:
         raise Usage(f"--alive/--stop: {error}") from None
+    if args.kind == "command" and not (alive and stop):  # after the split: --stop ' ' is no command either
+        raise Usage("--kind command needs --alive CMD and --stop CMD, each naming a command")
     ttl = ttl_of(store, args)
     who = _owner.resolve(os.environ, _procs.read_or_none(), os.getcwd(), store, ["own-resource", args.resource_id],
                          args.lane, args.agent)
@@ -287,13 +362,11 @@ def reap_command(store: Store, args: argparse.Namespace) -> int:
     if args.pid is not None:
         table = _procs.read_or_none()
         if table is None:
-            print("junkfather reap: the process table cannot be read", file=sys.stderr)
-            return 1
+            raise Refused("the process table cannot be read")
     selected, results = _reap.select(store, args.id, args.owner, args.agent, args.lane, table, args.pid)
     if table is not None and not selected:
-        unowned = _reap.reap_unowned(store, args.pid, table, args.force, args.reason, args.grace, args.dry_run,
-                                     args.via)
-        return 1 if unowned is None else report(unowned, args)
+        return report(_reap.reap_unowned(store, args.pid, table, args.force, args.reason, args.grace, args.dry_run,
+                                         args.via), args)
     if args.expired:
         selected = [e for e in selected if now >= float(e.get("expires") or 0)]
     for entry in selected:
@@ -304,23 +377,44 @@ def reap_command(store: Store, args: argparse.Namespace) -> int:
 
 
 def report(results: List[Dict[str, Any]], args: argparse.Namespace) -> int:
+    """The results; exit 1 when a reap failed, else 6 when an --id named no entry."""
+    failed = [r for r in results if r["result"] == "failed"]
+    missing = [r for r in results if r["result"] == "unknown"]
+    bad = failed or missing
     if args.json:
         show({"v": 1, "results": results})
     elif not args.quiet:
-        print(_reap.results_text(results))
-    return 1 if any(r["result"] in ("failed", "unknown") for r in results) else 0
+        rest = [r for r in results if r not in bad]
+        if rest or not bad:  # "nothing to reap" when there were no results at all
+            print(_reap.results_text(rest))
+    if bad:  # why on stderr, in one line (docs/cli.md); the rest of the results stay on stdout
+        more = f" (and {len(bad) - 1} more)" if len(bad) > 1 else ""
+        errors.say(_reap.results_text(bad[:1]) + more)
+    if failed:
+        return errors.FAILED
+    return NOT_FOUND if missing else 0
+
+
+def open_entry(store: Store, entry_id: str) -> None:
+    """Refused unless `entry_id` names an entry that runs or starts: 6 when there is none, 3 when it ended."""
+    entry = store.load(entry_id)
+    if entry is None:
+        raise Refused(f"no entry {entry_id}", NOT_FOUND)
+    if entry.get("state") not in _entry.OPEN:
+        raise Refused(f"{entry_id} is not running ({entry.get('state')})", REFUSED)
 
 
 def hand_command(store: Store, args: argparse.Namespace) -> int:
+    open_entry(store, args.id)
     target, warning = _owner.hand_target(args.to, os.environ, _procs.read_or_none(), os.getcwd())
     if target is None:
         raise Usage(warning)
     if warning:
-        print(f"junkfather hand: {warning}", file=sys.stderr)
+        errors.say(warning)
     moved = _entry.handed(store, args.id, target)
-    if moved is None or not moved[1]:
-        print(f"junkfather hand: no running entry {args.id}", file=sys.stderr)
-        return 1
+    if moved is None:
+        open_entry(store, args.id)  # it ended or went meanwhile: say which
+        raise Refused(f"{args.id} is not running")
     (entry, before), owner = moved, moved[0].get("owner") or {}
     _events.write(store.root, "entry.handed", _events.subject(entry), _events.caller(),
                   {"from": {k: before.get(k) for k in ("kind", "session", "agent", "lane")},
@@ -330,10 +424,11 @@ def hand_command(store: Store, args: argparse.Namespace) -> int:
 
 
 def extend_command(store: Store, args: argparse.Namespace) -> int:
+    open_entry(store, args.id)
     entry = _entry.extended(store, args.id, args.ttl)
     if entry is None:
-        print(f"junkfather extend: no running entry {args.id}", file=sys.stderr)
-        return 1
+        open_entry(store, args.id)  # it ended or went meanwhile: say which
+        raise Refused(f"{args.id} is not running")
     _events.write(store.root, "entry.extended", _events.subject(entry), _events.caller(),
                   {"ttl": args.ttl, "expires": entry.get("expires")})
     print(f"junkfather: {args.id} now ends in {duration(args.ttl)} at the latest")
@@ -351,8 +446,7 @@ def sweep_command(store: Store, args: argparse.Namespace) -> int:
         return 0
     with store.lock("sweep.lock", blocking=False) as got:
         if not got:
-            print("junkfather sweep: another sweep is running", file=sys.stderr)
-            return 0
+            raise Refused("another sweep is running; try again when it ends", errors.TEMPORARY)
         result = _sweep.sweep(store, dry_run=args.dry_run)
     if args.json:
         show(result)

@@ -37,6 +37,7 @@ from . import entry as _entry
 from . import events as _events
 from . import procs as _procs
 from . import safety as _safety
+from . import errors as _errors
 from .defaults import CREATE_TIMEOUT, RESOURCE_TIMEOUT, SETTLE, STOP_TIMEOUT
 from .entry import Entry
 from .state import Store, as_dict, as_list
@@ -108,11 +109,15 @@ class Kind:
             return None
         return str(resource.get("id")) in listed
 
-    def resolve(self, given: str, listed: Listing) -> Tuple[Optional[Dict[str, Any]], str]:
-        """The resource record for an id given on the command line, or None and why not."""
-        if listed is not None and given in listed:
-            return {"kind": self.name, "id": given, **listed[given]}, ""
-        return None, f"no running {self.name} {given}"
+    def resolve(self, given: str, listed: Listing) -> Dict[str, Any]:
+        """The resource record for an id given on the command line. Refused when there is none, with docs/cli.md's
+        code: 2 (errors.Usage) for an id that cannot name one, 6 when none runs, 3 when the state refuses it, 1
+        when it cannot be told."""
+        if listed is None:
+            raise _errors.Refused(f"the running {self.name}s cannot be listed")
+        if given in listed:
+            return {"kind": self.name, "id": given, **listed[given]}
+        raise _errors.Refused(f"no running {self.name} {given}", _errors.NOT_FOUND)
 
     def stop(self, resource: Mapping[str, Any], grace: float) -> List[List[str]]:
         raise NotImplementedError
@@ -141,9 +146,10 @@ class Simulator(Kind):
                     found[udid] = {"name": device.get("name"), "runtime": runtime.rsplit(".", 1)[-1]}
         return found
 
-    def resolve(self, given: str, listed: Listing) -> Tuple[Optional[Dict[str, Any]], str]:
+    def resolve(self, given: str, listed: Listing) -> Dict[str, Any]:
         if not UDID.match(given):
-            return None, f"not a simulator UDID: {given!r} (xcrun simctl list devices shows them)"
+            raise _errors.Usage(f"not a simulator UDID: {given!r} (xcrun simctl list devices shows them)",
+                                "own-resource")
         return super().resolve(given.upper(), listed)
 
     def stop(self, resource: Mapping[str, Any], grace: float) -> List[List[str]]:
@@ -168,19 +174,20 @@ class Docker(Kind):
                                    "image": parts[2] if len(parts) > 2 else None}
         return found
 
-    def resolve(self, given: str, listed: Listing) -> Tuple[Optional[Dict[str, Any]], str]:
+    def resolve(self, given: str, listed: Listing) -> Dict[str, Any]:
         ran = run(["docker", "inspect", "--type", "container", "--format", "{{.Id}}\t{{.Name}}", given])
-        if ran.code != 0:
-            return None, f"docker inspect {given}: {ran.why()}"
+        if ran.code != 0:  # None: docker could not run; else it answered that there is no such container
+            raise _errors.Refused(f"docker inspect {given}: {ran.why()}",
+                                  _errors.FAILED if ran.code is None else _errors.NOT_FOUND)
         full, _, name = ran.out.strip().partition("\t")
         if not CONTAINER.match(full):
-            return None, f"docker inspect {given} gave no container id"
+            raise _errors.Refused(f"docker inspect {given} gave no container id")
         if listed is None:
-            return None, "running containers cannot be listed (docker ps failed)"
+            raise _errors.Refused("running containers cannot be listed (docker ps failed)")
         if full not in listed:
-            return None, f"container {given} is not running"
+            raise _errors.Refused(f"container {given} is not running", _errors.REFUSED)
         return {"kind": self.name, "id": full, "name": name.lstrip("/") or None,
-                **({"image": listed[full].get("image")} if listed else {})}, ""
+                **({"image": listed[full].get("image")} if listed else {})}
 
     def stop(self, resource: Mapping[str, Any], grace: float) -> List[List[str]]:
         steps = [["docker", "stop", "-t", str(int(max(1, grace))), str(resource["id"])]]
@@ -208,9 +215,10 @@ class TailscaleServe(Kind):
             return None
         return routes(as_dict(data)) if isinstance(data, dict) else None
 
-    def resolve(self, given: str, listed: Listing) -> Tuple[Optional[Dict[str, Any]], str]:
+    def resolve(self, given: str, listed: Listing) -> Dict[str, Any]:
         if not ROUTE.match(given):
-            return None, f"not a serve route: {given!r} (PROTO:PORT or PROTO:PORT/PATH, like https:6475)"
+            raise _errors.Usage(f"not a serve route: {given!r} (PROTO:PORT or PROTO:PORT/PATH, like https:6475)",
+                                "own-resource")
         return super().resolve(given, listed)
 
     def stop(self, resource: Mapping[str, Any], grace: float) -> List[List[str]]:
@@ -293,13 +301,13 @@ class SafariTP(Kind):
             return None
         return table.alive(resource.get("pid"), resource.get("start"))
 
-    def resolve(self, given: str, listed: Listing) -> Tuple[Optional[Dict[str, Any]], str]:
+    def resolve(self, given: str, listed: Listing) -> Dict[str, Any]:
         if listed is not None and given in (STP_BUNDLE, "safari-tp"):
             if len(listed) != 1:
-                return None, f"{len(listed)} instances run; name one by its pid"
+                raise _errors.Usage(f"{len(listed)} instances run; name one by its pid", "own-resource")
             given = next(iter(listed))
         if not given.isdigit():
-            return None, f"safari-tp takes --id PID (of its main process) or {STP_BUNDLE}"
+            raise _errors.Usage(f"safari-tp takes --id PID (of its main process) or {STP_BUNDLE}", "own-resource")
         return super().resolve(given, listed)
 
     def stop(self, resource: Mapping[str, Any], grace: float) -> List[List[str]]:
@@ -368,18 +376,18 @@ class Worktree(Kind):
             return False
         return os.path.isdir(path) and any(i.get("path") == path for i in items)
 
-    def resolve(self, given: str, listed: Listing) -> Tuple[Optional[Dict[str, Any]], str]:
+    def resolve(self, given: str, listed: Listing) -> Dict[str, Any]:
         from . import worktrees
         path = os.path.realpath(os.path.expanduser(given))
         items = worktrees.listing(path) if os.path.isdir(path) else None
         item = next((i for i in items or [] if i.get("path") == path), None)
         if items is None or item is None:
-            return None, f"{path} is not a git worktree"
+            raise _errors.Refused(f"{path} is not a git worktree", _errors.NOT_FOUND)
         if item.get("main"):
-            return None, f"{path} is a repository's main worktree"
+            raise _errors.Refused(f"{path} is a repository's main worktree", _errors.REFUSED)
         repo = str(items[0]["path"])
         return {"kind": self.name, "id": path, "repo": repo, "common": worktrees.common_dir(repo),
-                "branch": item.get("branch")}, ""
+                "branch": item.get("branch")}
 
     def stop(self, resource: Mapping[str, Any], grace: float) -> List[List[str]]:
         from . import worktrees
@@ -514,35 +522,29 @@ def announce(entry: Entry, out: Optional[TextIO] = None) -> None:
 def own_resource(store: Store, kind: str, given: str, ttl: float, keep: str, label: Optional[str],
                  owner: Dict[str, Any], alive: Optional[List[str]] = None, stop: Optional[List[str]] = None,
                  remove: bool = False) -> int:
-    """`own-resource`: record a resource that runs now."""
+    """`own-resource`: record a resource that runs now. cli.py refuses safari-tp and a command kind without --alive
+    and --stop before this runs."""
     found = KINDS[kind]
-    if kind == "safari-tp":
-        print("junkfather own-resource: refusing safari-tp: an instance that runs cannot be told from a person's own "
-              "browser; launch it through junkfather own --kind safari-tp -- open -g -a 'Safari Technology Preview'",
-              file=sys.stderr)
-        return 1
     if kind == "command":
-        if not alive or not stop:
-            print("junkfather own-resource: --kind command needs --alive CMD and --stop CMD", file=sys.stderr)
-            return 2
         resource: Optional[Dict[str, Any]] = {"kind": kind, "id": given, "alive": alive, "stop": stop}
         state = found.alive(resource, None, None)
         if state is not True:
-            print(f"junkfather own-resource: refusing {given}: its --alive command says "
-                  f"{'it is gone' if state is False else 'nothing (exit 0 alive, 1 gone)'}", file=sys.stderr)
-            return 1
+            raise _errors.Refused(f"refusing {given}: its --alive command says "
+                                  f"{'it is gone' if state is False else 'nothing (exit 0 alive, 1 gone)'}",
+                                  _errors.NOT_FOUND if state is False else _errors.FAILED)
     else:
         table = _table()
-        resource, why = found.resolve(given, found.listing(table))
-        if resource is None:
-            print(f"junkfather own-resource: refusing {given}: {why}", file=sys.stderr)
-            return 1
+        try:
+            resource = found.resolve(given, found.listing(table))
+        except _errors.Usage as error:
+            raise _errors.Usage(f"refusing {given}: {error}", error.command) from None
+        except _errors.Refused as error:
+            raise _errors.Refused(f"refusing {given}: {error}", error.code) from None
     if remove:
         resource["remove"] = True
     entry, why = record(store, resource, [], ttl, keep, label, owner, os.getcwd())
     if entry is None:
-        print(f"junkfather own-resource: refusing {describe(resource)}: {why}", file=sys.stderr)
-        return 1
+        raise _errors.Refused(f"refusing {describe(resource)}: {why}", _errors.REFUSED)
     announce(entry)
     return 0
 

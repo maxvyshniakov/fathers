@@ -303,6 +303,28 @@ daemon runs, `.pid`, `.sock`, `.stream`, `.version`; NAME often ends in the pid 
   unchanged for an hour, is listed in `idle: [{pid, start, cmd, session, matched, starter, age, idle, cpu,
   processes}]`, never stopped.
 
+## Command line
+
+The command line follows [docs/cli.md](../../docs/cli.md); `tests/test_cli_convention.py` checks it. A refusal is one
+line on stderr, `junkfather: <reason>`, with nothing on stdout (`settings --json` still prints its reply); a usage error
+adds `Try 'junkfather [COMMAND] --help'.`. Options are exact: argparse's abbreviations are off. A `reap` whose result is
+a failure or a missing entry says so on stderr, in one line; the other results stay on stdout. cli.py raises
+`errors.Refused` (or `errors.Usage`) and `cli.main` prints it, so no command formats its own refusal. An unexpected
+exception prints `junkfather: internal error: TYPE: MESSAGE` and appends its traceback to `logs/junkfather.log` in the
+state directory.
+
+| Code | When |
+| --- | --- |
+| 0 | done; `reap` and `sweep` also when there was nothing to do |
+| 1 | a reap or a resource's create command failed, the process table could not be read, a resource's kind could not be listed or asked (`docker` missing or failing), `--alive` gave no answer |
+| 2 | usage: an unknown command, option or value, an id that cannot name a resource of its kind (not a UDID, not a serve route, safari-tp without a pid), `own-resource --kind safari-tp`, a blank `--alive` or `--stop` |
+| 3 | refused by the current state: `adopt` or `reap --pid` of a pid junkfather may not take, `hand` or `extend` of an entry that ended, a resource another entry owns, a stopped container, a repository's main worktree, a stale settings `--revision` |
+| 5 | read-only: a settings row the environment sets, a settings file junkfather may not write |
+| 6 | not found: no such entry (`hand`, `extend`, `reap --id`), no such pid (`adopt`, `reap --pid`), no running resource of that id, a folder that is no worktree, `--alive` says the resource is gone |
+| 75 | `sweep` while another sweep holds the lock: try again later |
+
+`own` (attached) and `own --kind` pass the exit status of the command they run through, like `slotfather run`.
+
 ## Boundaries
 
 On 2026-11-10 Slotfather's sweep took machine-wide hygiene for processes and disk. junkfather now takes the process

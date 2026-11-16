@@ -570,8 +570,8 @@
    "--id",
    "<id3>"
   ],
-  "code": 1,
-  "err": "",
-  "out": "<id3>: unknown (no such entry; pids -)\n"
+  "code": 6,
+  "err": "junkfather: <id3>: unknown (no such entry; pids -)\n",
+  "out": ""
  }
 ]

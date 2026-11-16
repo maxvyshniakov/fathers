@@ -13,6 +13,11 @@ slotfather run -n 1 --priority batch --label "<task> junkfather lint" -- python3
 slotfather run -n 1 --priority batch --label "<task> junkfather tests" -- python3 -m unittest discover -s tests
 ```
 
+Timing budgets live in `tests/perf/` (fathers#99), which the default discovery does not enter; run them before a
+release, alone on the machine: `slotfather run -n all --priority batch --label "<release> junkfather perf" --
+python3 -m unittest discover -s tests/perf`. Elsewhere a test waits on a condition or an injected clock, never on a
+fixed sleep or an elapsed-time assert (`repo-kit test-hygiene`).
+
 Junkfather has no `tools/type-baseline.json`: every Ruff or Pyright diagnostic fails. For a focused change, run its
 test file first (`python3 -m unittest tests/test_reap.py`). Tests run real child processes in a scratch state
 directory with a fake Claude Code session registry, and must clean up every process they start.

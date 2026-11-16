@@ -33,6 +33,7 @@ import sys
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from . import defaults
+from .errors import Refused, refuse
 from .state import Store, as_dict, read_json, state_dir
 from .text import UNITS, duration, iso
 
@@ -263,11 +264,12 @@ def write(store: Store, change: Dict[str, Optional[float]], expected: Optional[s
 
 
 def reply(found: Dict[str, Any], as_json: bool, code: int = 0) -> int:
+    """The reply on stdout (JSON, or text for people); a refusal also says why on stderr the way docs/cli.md asks."""
+    if found.get("error"):
+        refuse(Refused(found["error"], code), "settings")
     if as_json:
         print(json.dumps(found, sort_keys=True))
         return code
-    if found.get("error"):
-        print(f"junkfather settings: {found['error']}", file=sys.stderr)
     if "sections" in found:
         for section in found["sections"]:
             print(section["title"])

@@ -17,8 +17,8 @@
    "adopt",
    "<pid2>"
   ],
-  "code": 1,
-  "err": "junkfather adopt: refusing pid <pid2>: already owned\n",
+  "code": 3,
+  "err": "junkfather: refusing pid <pid2>: already owned\n",
   "out": ""
  },
  {
@@ -151,7 +151,7 @@
    "nobody"
   ],
   "code": 0,
-  "err": "junkfather hand: no live Claude Code session nobody in the registry; the entry ends at its TTL or when swept as orphaned if that session never shows up\n",
+  "err": "junkfather: no live Claude Code session nobody in the registry; the entry ends at its TTL or when swept as orphaned if that session never shows up\n",
   "out": "junkfather: <id1> now belongs to codex nobody\n"
  },
  {
@@ -173,7 +173,7 @@
    "self"
   ],
   "code": 2,
-  "err": "junkfather: --to self needs an agent session (CLAUDE_CODE_SESSION_ID or CODEX_THREAD_ID)\n",
+  "err": "junkfather: --to self needs an agent session (CLAUDE_CODE_SESSION_ID or CODEX_THREAD_ID)\nTry 'junkfather hand --help'.\n",
   "out": ""
  },
  {
@@ -183,8 +183,8 @@
    "--to",
    "s2"
   ],
-  "code": 1,
-  "err": "junkfather hand: no running entry <id2>\n",
+  "code": 6,
+  "err": "junkfather: no entry <id2>\n",
   "out": ""
  },
  {
@@ -194,8 +194,8 @@
    "--ttl",
    "1h"
   ],
-  "code": 1,
-  "err": "junkfather extend: no running entry <id2>\n",
+  "code": 6,
+  "err": "junkfather: no entry <id2>\n",
   "out": ""
  },
  {
@@ -930,8 +930,8 @@
    "--ttl",
    "1h"
   ],
-  "code": 1,
-  "err": "junkfather extend: no running entry <id1>\n",
+  "code": 3,
+  "err": "junkfather: <id1> is not running (reaped)\n",
   "out": ""
  },
  {
@@ -941,8 +941,8 @@
    "--to",
    "s2"
   ],
-  "code": 1,
-  "err": "junkfather hand: no running entry <id1>\n",
+  "code": 3,
+  "err": "junkfather: <id1> is not running (reaped)\n",
   "out": ""
  }
 ]

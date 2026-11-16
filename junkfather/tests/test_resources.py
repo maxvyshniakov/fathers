@@ -140,24 +140,27 @@ class SimulatorTests(ResourceCase):
 
     def test_own_resource_refuses_what_does_not_run_or_is_owned(self):
         refused = self.cli("own-resource", "--kind", "simulator", "--id", SIM, env=self.env)
-        self.assertEqual(1, refused.returncode)
+        self.assertEqual(6, refused.returncode, "not found: " + refused.stderr)
+        malformed = self.cli("own-resource", "--kind", "simulator", "--id", "not-a-udid", env=self.env)
+        self.assertEqual((2, "Try 'junkfather own-resource --help'."),
+                         (malformed.returncode, malformed.stderr.splitlines()[-1]), malformed.stderr)
         self.assertIn("no running simulator", refused.stderr)
         self.change_fake(sims={SIM: {"name": "iPhone 18 Pro", "state": "Booted"}})
         self.assertEqual(0, self.cli("own-resource", "--kind", "simulator", "--id", SIM.lower(), "--ttl", "1h",
                                      env=self.env).returncode)
         again = self.cli("own-resource", "--kind", "simulator", "--id", SIM, env=self.env)
-        self.assertEqual(1, again.returncode)
+        self.assertEqual(3, again.returncode, "refused by the current state")
         self.assertIn("already owned", again.stderr)
         self.assertEqual(1, len(self.store.entries()))
 
     def test_sweep_marks_gone_reaps_expired_and_leaves_unknown_alone(self):
         gone = self.own("--kind", "simulator", "--", "xcrun", "simctl", "boot", SIM)
-        expired = self.own("--kind", "simulator", "--ttl", "1s", "--", "xcrun", "simctl", "boot", OTHER_SIM)
+        expired = self.own("--kind", "simulator", "--ttl", "1h", "--", "xcrun", "simctl", "boot", OTHER_SIM)
+        self.store.update(expired["id"], lambda e: e.update(expires=time.time() - 1))  # its TTL passed
         state = self.fake_state()
         state["sims"][SIM]["state"] = "Shutdown"  # shut down by hand
         state["fail"] = [["xcrun", "simctl", "list"]]
         self.fake.write_text(json.dumps(state))
-        time.sleep(1.2)
         unknown = json.loads(self.cli("sweep", "--json", env=self.env).stdout)
         self.assertEqual(([], []), (unknown["reaped"], unknown["gone"]), "unknown liveness changes nothing")
         self.assertTrue(any("cannot be told" in note for note in unknown["notes"]))
@@ -199,7 +202,8 @@ class DockerTests(ResourceCase):
         result = self.cli("own-resource", "--kind", "docker", "--id", "box0", env=self.env)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(ident, plain(self.store.entries()[-1])["resource"]["id"])
-        self.assertEqual(1, self.cli("own-resource", "--kind", "docker", "--id", "nope", env=self.env).returncode)
+        self.assertEqual(6, self.cli("own-resource", "--kind", "docker", "--id", "nope", env=self.env).returncode,
+                         "docker inspect answered: no such container")
 
     def test_a_failed_rm_after_a_stop_is_a_warning_not_a_silent_success(self):
         entry = self.own("--kind", "docker", "--remove", "--", "docker", "run", "-d", "nginx")
@@ -334,7 +338,7 @@ class SafariTests(ResourceCase):
     def test_own_resource_never_takes_a_running_instance(self):
         self.spawn(str(self.app), start_new_session=True)
         refused = self.cli("own-resource", "--kind", "safari-tp", "--id", resources.STP_BUNDLE, env=self.env)
-        self.assertEqual(1, refused.returncode)
+        self.assertEqual(2, refused.returncode, "a usage error: own --kind safari-tp launches one")
         self.assertIn("person's own browser", refused.stderr)
         self.assertEqual([], self.store.entries())
 
@@ -353,7 +357,7 @@ class CommandKindTests(ResourceCase):
         self.assertFalse(Path(ROOT / "pwned").exists() or (self.tmp / "pwned").exists())
         gone = self.cli("own-resource", "--kind", "command", "--id", "m", "--alive", f"test -e '{marker}'",
                         "--stop", "true", env=self.env)
-        self.assertEqual(1, gone.returncode)
+        self.assertEqual(6, gone.returncode, "not found")
 
 
 class ProcessOwnUnchangedTests(Case):
@@ -380,12 +384,10 @@ class EventKindsTests(ResourceCase):
         original = resources.STOP_TIMEOUT
         resources.STOP_TIMEOUT = 0.5
         try:
-            started = time.monotonic()
             outcome = resources.stop({"kind": "command", "id": "x", "stop": ["sleep", "30"]}, 0.5, lambda: True,
                                      pause=lambda _s: None)
         finally:
             resources.STOP_TIMEOUT = original
         self.assertEqual("failed", outcome["result"])
-        self.assertIn("did not answer", outcome["error"])
-        self.assertLess(time.monotonic() - started, 10)
+        self.assertIn("did not answer", outcome["error"])  # `sleep 30` exits 0: only the timeout says this
 
