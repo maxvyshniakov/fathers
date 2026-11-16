@@ -4,11 +4,14 @@ and the whole screen written again only on resize, a theme change or Ctrl-L, nev
 test's: sixty idle seconds pass in sixty steps, no wall-clock time."""
 from __future__ import annotations
 
+import contextlib
 import datetime
 import os
 import re
+import select as selector
 import signal
 import tempfile
+import threading
 import unittest
 from typing import Any
 from unittest import mock
@@ -54,7 +57,10 @@ class FrameTests(Case):
             def notice(self) -> None:  # Slotfather found: the overview, not the list of tools looked for
                 return None
 
-        self.live: Any = tool.Live(0, self.out, Screen(), 1.0, "auto")
+        keys, self.typist = os.pipe()  # keys that never come: the loop waits on them, as on a quiet terminal
+        self.addCleanup(os.close, keys)
+        self.addCleanup(os.close, self.typist)
+        self.live: Any = tool.Live(keys, self.out, Screen(), 1.0, "auto")
         self.addCleanup(self.live.close)
         self.live.state = self.screen()
         size = mock.patch.object(tool, "terminal_size", self.terminal_size)
@@ -119,11 +125,37 @@ class FrameTests(Case):
         self.assertNotIn(b"\x1b[2J", self.stream()[mark:], "the size is not polled")
         with self.live.resizes():
             os.kill(os.getpid(), signal.SIGWINCH)
-            self.live.read(0)  # the handler's byte wakes the loop
         self.live.draw()
         last = frames(self.stream()[mark:])[-1]
         self.assertTrue(last.startswith(b"\x1b[2J"), "cleared, then drawn, in one update")
         self.assertEqual(set(range(1, 41)), rows(last))
+
+    def test_a_waiting_loop_wakes_on_sigwinch(self) -> None:
+        """The loop blocked on keys and its wake pipe returns when SIGWINCH comes, through the handler's byte: the
+        wait is bounded (10 s) and what woke it is read from select's answer, not from a clock."""
+        woke: list[list[int]] = []
+        select = selector.select
+
+        def watched(read: list[int], write: list[int], error: list[int], wait: float) -> Any:
+            found = select(read, write, error, wait)
+            woke.append(found[0])
+            return found
+
+        sender = threading.Thread(target=os.kill, args=(os.getpid(), signal.SIGWINCH))
+        with self.live.resizes(), mock.patch.object(selector, "select", watched):
+            sender.start()
+            self.live.read(10)
+        sender.join()
+        self.assertEqual([[self.live.wake_read]], woke, "woken by the handler's byte, once")
+        self.assertTrue(self.live.resized)
+
+    def test_a_full_wake_pipe_never_blocks_the_handler(self) -> None:
+        self.assertFalse(os.get_blocking(self.live.wake_write))
+        with contextlib.suppress(BlockingIOError):
+            while True:
+                os.write(self.live.wake_write, b"x" * 4096)
+        self.live.on_resize()  # returns: the loop is woken already
+        self.assertTrue(self.live.resized)
 
     def test_resizes_puts_the_previous_handler_back(self) -> None:
         before = signal.getsignal(signal.SIGWINCH)

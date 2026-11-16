@@ -385,6 +385,8 @@ class Live:
         self.glowing: set[str] = set()  # the thumbs drawn in the foreground
         self.dirty, self.done = True, False
         self.wake_read, self.wake_write = os.pipe()
+        # The signal handler writes here too: a full pipe must not block it (the loop is woken already)
+        os.set_blocking(self.wake_write, False)
         # Everything slow runs in the background, so a key moves the selection within one frame (#15)
         self.models = Loader(screen.load, self.wake_write)
         self.details = Loader(screen.load_details, self.wake_write)
