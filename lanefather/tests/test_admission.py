@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import time
+from typing import Any
 import unittest
 from unittest.mock import patch
 
@@ -60,6 +61,33 @@ print(json.dumps(answer))
         self.assertEqual(6, json.loads(self.lane("list", "--json"))["cap"])
         self.assertIn("cap=6", (self.state / "ledger.log").read_text())
 
+
+    # fathers#163: the floor capabilities and the settings row report derives from the cap start applies.
+
+    def floor_report(self) -> tuple[float, dict[str, Any]]:
+        capabilities = json.loads(self.lane("capabilities", "--json"))["host"]["min_disk_gb"]
+        settings = json.loads(self.lane("settings", "--json"))
+        row = next(item for section in settings["sections"] for item in section["settings"]
+                   if item["key"] == "host.min_disk_gb")
+        return capabilities, row
+
+    def test_the_reported_floor_derives_from_the_providers_cap_as_start_does(self):
+        self.provider()  # Slotfather's cap is 6; the local formula gives 3 (49 GB)
+        gb, row = self.floor_report()
+        self.assertEqual((gb, row["effective"]), (58, 58))
+        self.assertIn("auto: 58 GB (10^9) = 40 reserve + 6 x 3.0 GB lane peak", row["description"])
+        self.env["LANEFATHER_DISK_FREE_GB"] = "55"
+        self.assertIn("under the floor of 58 GB (10^9) = 40 reserve + 6 x 3.0 GB lane peak",
+                      self.start("first", "src/**", ok=False))
+
+    def test_without_the_providers_answer_the_row_says_the_cap_is_unknown(self):
+        self.provider()
+        self.env["ADMISSION_PATCH"] = json.dumps({"available": False})
+        gb, row = self.floor_report()
+        self.assertEqual(gb, 49, "the local cap's floor stands in for the number")
+        self.assertNotIn("effective", row, "no applied floor is claimed")
+        self.assertIn("auto: cap unknown (lifetime admission unavailable", row["description"])
+        self.assertIn("local cap 3 gives 49 GB (10^9) = 40 reserve + 3 x 3.0 GB lane peak", row["description"])
 
     def test_corrupt_registry_cannot_be_bypassed_with_force(self):
         self.state.mkdir(parents=True)

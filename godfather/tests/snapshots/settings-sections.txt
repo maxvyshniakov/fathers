@@ -37,6 +37,7 @@
 │    gate priority             Project                                         │
 │    rerun priority            Project                                         │
 │    perf priority             Project                                         │
+│    Free disk floor           auto  effective here: 49 GB                     │
 │  ──────────────────────────────────────────────────────────────────────────  │
 │  JUNKFATHER · status read-only, live                                         │
 │    settings     /fake/state/junkfather/settings.json                         │

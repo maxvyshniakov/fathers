@@ -149,8 +149,10 @@ class FreeDiskMinimumTests(unittest.TestCase):
 
         from lanefather import host, runtime
         out = io.StringIO()
-        # A state directory of its own: no lane of the machine's sets the lane peak.
-        with contextlib.redirect_stdout(out), patch.dict(os.environ, {'LANEFATHER_STATE': str(self.tmp / 'state')}):
+        # A state directory and machine settings of its own: no lane of the machine's sets the lane peak, and no
+        # saved host.min_disk_gb the floor.
+        isolated = {'LANEFATHER_STATE': str(self.tmp / 'state'), 'LANEFATHER_SETTINGS': str(self.tmp / 'settings.json')}
+        with contextlib.redirect_stdout(out), patch.dict(os.environ, isolated):
             self.assertEqual(runtime.capabilities(argparse.Namespace(json=True)), 0)
             expected = round(runtime.minimum_gb(), 1)
         report = json.loads(out.getvalue())
@@ -175,7 +177,8 @@ class FreeDiskMinimumTests(unittest.TestCase):
                                  'shared_env = ["DISK_FREE_GB"]\n[hooks.project]\npolicy = "policy.py"\n')
         clean = {k: v for k, v in os.environ.items() if not k.endswith(('MIN_DISK_GB', 'DISK_FREE_GB'))}
         with patch.dict(os.environ, {**clean, 'STRAYLIGHT_LANE_DISK_FREE_GB': '500',
-                                     'LANEFATHER_STATE': str(self.tmp / 'state')}, clear=True), \
+                                     'LANEFATHER_STATE': str(self.tmp / 'state'),
+                                     'LANEFATHER_SETTINGS': str(self.tmp / 'settings.json')}, clear=True), \
                 patch('lanefather.config.current', return_value=config.load(configuration)):
             self.assertEqual(runtime.project_hook(argparse.Namespace(name='policy', arguments=[])), 0)
             # fathers#157: the floor derived for the project, as start applies it.
