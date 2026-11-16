@@ -14,6 +14,14 @@ the state and returns the new state and its effects; a key a mode does not list 
     settings-edit  a value typed: digits and a dot, Backspace, Ctrl-U clears, Enter or Tab saves, Esc cancels;
              typed values are not taken as hotkeys
     settings-small Settings too small to show: only Esc, s and q
+    page     a page's table focused (fathers#85: Lanes on `2`, Processes on `3`): ↑↓ and the page keys move its
+             selection over the rows that can be selected; Esc goes back where a link came from, else to the
+             overview; `1` `2` `3` switch pages on the main screen and every page; Tab moves the focus
+    page-panel  a page's DETAILS or EVENTS strip focused: the same, but ↑↓ and the page keys scroll it
+    actions  a row's action menu (fathers#88), opened by Enter, `a` or a right-click on QUEUE's or a page's row:
+             ↑↓ move, Enter picks, Esc closes, q quits; a click picks, a click outside closes
+    reason   the reason a park asks for: what is typed, Backspace, Enter goes on (empty cancels), Esc cancels
+    confirm  an irreversible action: `y` runs it, `n` or Esc cancels; nothing is preselected
     filter   EVENTS' text field, opened by `/` (fathers#84): what is typed goes into it, Backspace deletes, Enter
              keeps the filter, Esc clears it; on the main screen and a panel `f` cycles EVENTS' log
              (SLOTS LOG, LANES LOG, PROCS LOG, ALL LOG), as ← → do while EVENTS has the focus and a click on its
@@ -29,15 +37,17 @@ from typing import Any, Callable, Union, cast
 from . import keys as _keys
 from . import layout as _layout
 from . import settings_model as _settings
-from .state import (LOAD_NEWS, OPEN_SETTINGS, QUIT, AppState, Changelog, Help, Key, Mouse, Result, SettingsOverlay, filtered,
-                    items, move, overlay_box, settings_context, settings_result)
+from .state import (LOAD_NEWS, OPEN_SETTINGS, PAGE_TABLES, QUIT, ActionMenu, AppState, Changelog, Confirm, Effect, Help,
+                    Key, Mouse, Notice, Reason, Result, SettingsOverlay, event_index, event_move, filtered,
+                    follow_link, go_back, items, move, open_actions, open_page, overlay_box, page_move, page_select,
+                    settings_context, settings_result)
 from . import events as _events_view
 from . import overlay_text as _overlays
 
 Handler = Callable[[AppState, str], Result]
 NAVIGATION = ("up", "k", "down", "j", "page_up", "page_down", "home", "g", "end", "G")
 WHEEL = 3  # rows a wheel step scrolls
-LEFT, WHEEL_UP, WHEEL_DOWN = 0, 64, 65
+LEFT, RIGHT, WHEEL_UP, WHEEL_DOWN = 0, 2, 64, 65
 
 
 def same(state: AppState, _: str) -> Result:
@@ -52,11 +62,11 @@ def quit_(state: AppState, _: str) -> Result:
 
 def focus_step(step: int) -> Handler:
     """Tab and Shift-Tab: the next panel drawn, by columns, in the order the layout placed them (layout.tab_order());
-    a focus whose panel is no longer drawn starts again from QUEUE."""
+    a focus whose panel is no longer drawn starts again from QUEUE (on a page, from its table)."""
     def handler(state: AppState, _: str) -> Result:
         order = state.frame.order
         if state.focus not in order:
-            return dataclasses.replace(state, focus="requests"), []
+            return dataclasses.replace(state, focus=PAGE_TABLES[state.page]), []
         return dataclasses.replace(state, focus=order[(order.index(state.focus) + step) % len(order)]), []
     return handler
 
@@ -82,11 +92,17 @@ def open_settings(state: AppState, _: str) -> Result:
 
 
 def scroll_panel(state: AppState, key: str) -> Result:
-    """A navigation key on the focused DETAILS or EVENTS: a line, a page, the top or the bottom (#15), from the
-    viewport the last frame drew; nothing to scroll (still loading, empty) takes the key all the same."""
+    """A navigation key on the focused DETAILS: a line, a page, the top or the bottom (#15), from the viewport the
+    last frame drew; nothing to scroll (still loading, empty) takes the key all the same. On EVENTS it moves the
+    row cursor (fathers#152), which the scroll follows; Home goes back to the newest."""
     view = state.frame.tables.get(state.focus)
     if not view:
         return state, []
+    if state.focus == "events" and state.page == "overview":  # a page's strip only scrolls
+        index, page = event_index(state), max(1, int(view["visible"]) - 1)
+        moves = {"up": -1, "k": -1, "down": 1, "j": 1, "page_up": -page, "page_down": page}
+        target = 0 if key in ("home", "g") else int(view["count"]) - 1 if key in ("end", "G") else index + moves[key]
+        return event_move(state, target), []
     visible, count = int(view["visible"]), int(view["count"])
     last = _layout.last_offset(count, visible)
     offset = state.scroll.get(state.focus, int(view["offset"]))
@@ -164,6 +180,27 @@ def clear_filter(state: AppState, _: str) -> Result:
 
 FILTER_MAX = 40  # characters EVENTS' text filter takes
 
+
+def go_page(page: str) -> Handler:
+    """`1` `2` `3`: the overview, Lanes, Processes; a page whose tool is absent does nothing (fathers#85)."""
+    def handler(state: AppState, _: str) -> Result:
+        return open_page(state, page), []
+    return handler
+
+
+def back(state: AppState, _: str) -> Result:
+    return go_back(state), []
+
+
+def page_select_key(target: Callable[[int, int], int]) -> Handler:
+    """↑↓ and the page keys on a page's table: its selection moves over the rows that can be selected."""
+    def handler(state: AppState, _: str) -> Result:
+        return page_move(state, state.page, target), []
+    return handler
+
+
+PAGE_KEYS: dict[str, Handler] = {"1": go_page("overview"), "2": go_page("lanes"), "3": go_page("processes")}
+
 MAIN: dict[str, Handler] = {
     "q": quit_, "Q": quit_, "f": cycle_source, "r": toggle_raw, "/": open_filter, "esc": clear_filter,
     "\t": focus_step(1), "back_tab": focus_step(-1),
@@ -172,10 +209,20 @@ MAIN: dict[str, Handler] = {
     "k": select(lambda index, _: index - 1), "up": select(lambda index, _: index - 1),
     "g": select(lambda _, __: 0), "home": select(lambda _, __: 0), "page_up": select(lambda _, __: 0),
     "G": select(lambda _, count: count - 1), "end": select(lambda _, count: count - 1),
-    "page_down": select(lambda _, count: count - 1),
+    "page_down": select(lambda _, count: count - 1), **PAGE_KEYS,
 }
 PANEL: dict[str, Handler] = {**MAIN, **{key: scroll_panel for key in NAVIGATION},
                               "left": arrows(-1), "h": arrows(-1), "right": arrows(1), "l": arrows(1)}
+PAGE: dict[str, Handler] = {
+    "q": quit_, "Q": quit_, "esc": back, "\t": focus_step(1), "back_tab": focus_step(-1),
+    "?": open_help, "v": open_changelog, "s": open_settings, **PAGE_KEYS,
+    "j": page_select_key(lambda index, _: index + 1), "down": page_select_key(lambda index, _: index + 1),
+    "k": page_select_key(lambda index, _: index - 1), "up": page_select_key(lambda index, _: index - 1),
+    "g": page_select_key(lambda _, __: 0), "home": page_select_key(lambda _, __: 0),
+    "page_up": page_select_key(lambda _, __: 0), "G": page_select_key(lambda _, count: count - 1),
+    "end": page_select_key(lambda _, count: count - 1), "page_down": page_select_key(lambda _, count: count - 1),
+}
+PAGE_PANEL: dict[str, Handler] = {**PAGE, **{key: scroll_panel for key in NAVIGATION}}
 
 
 # Help and the changelog: each owns its scroll; ? and v switch between them
@@ -376,7 +423,8 @@ def settings_click(state: AppState, event: Mouse, now: float) -> Result:
                           now)
 
 
-TABLE: dict[str, dict[str, Handler]] = {"main": MAIN, "panel": PANEL, "help": HELP, "changelog": CHANGELOG}
+TABLE: dict[str, dict[str, Handler]] = {"main": MAIN, "panel": PANEL, "help": HELP, "changelog": CHANGELOG,
+                                        "page": PAGE, "page-panel": PAGE_PANEL}
 
 
 def mode(state: AppState) -> str:
@@ -388,10 +436,73 @@ def mode(state: AppState) -> str:
             return "settings-small"
         return "settings-edit" if overlay.editing else "settings"
     if overlay is not None:
-        return overlay.kind
+        return str(overlay.kind)
+    if state.page != "overview":
+        return "page" if state.focus == PAGE_TABLES[state.page] else "page-panel"
     if state.events_filter.editing:
         return "filter"
     return "main" if state.focus == "requests" else "panel"
+
+
+REASON_MAX = 120  # characters a park reason takes
+
+
+def pick(state: AppState, menu: ActionMenu, now: float) -> Result:
+    """The menu's action picked: a park asks its reason first, a confirmed one asks, any other runs now."""
+    action = menu.actions[menu.cursor]
+    if action.reason:
+        return dataclasses.replace(state, overlay=Reason(action)), []
+    if action.confirm:
+        return dataclasses.replace(state, overlay=Confirm(action)), []
+    return run_action(state, action, "", now)
+
+
+def run_action(state: AppState, action: Any, reason: str, now: float) -> Result:
+    """The action handed to the app, which checks the row in a fresh snapshot and runs it in the background."""
+    return dataclasses.replace(state, overlay=None, notice=Notice(f"{action.name}…", now, "dim")), [
+        Effect("action", item=(action, reason))]
+
+
+def cancelled(state: AppState, now: float, why: str = "nothing run") -> Result:
+    return dataclasses.replace(state, overlay=None, notice=Notice(why, now, "dim")), []
+
+
+def action_press(state: AppState, key: str, now: float) -> Result:
+    """A key in the action menu, the reason field or the confirmation (fathers#88)."""
+    overlay = state.overlay
+    if isinstance(overlay, ActionMenu):
+        hot = _keys.hotkey(key)
+        if hot in ("q", "Q"):
+            return state, [QUIT]
+        if hot == "esc":
+            return cancelled(state, now)
+        if hot in ("up", "k", "down", "j", "home", "g", "end", "G"):
+            last = len(overlay.actions) - 1
+            cursor = {"up": overlay.cursor - 1, "k": overlay.cursor - 1, "down": overlay.cursor + 1,
+                      "j": overlay.cursor + 1, "home": 0, "g": 0, "end": last, "G": last}[hot]
+            return dataclasses.replace(state, overlay=dataclasses.replace(overlay, cursor=min(max(cursor, 0), last))), []
+        if hot in ("\r", "\n", " "):
+            return pick(state, overlay, now)
+        return state, []
+    if isinstance(overlay, Reason):  # typed text stays as typed
+        if key == "esc":
+            return cancelled(state, now)
+        if key in ("\r", "\n"):
+            if not overlay.text.strip():
+                return cancelled(state, now, "no reason: nothing run")
+            return dataclasses.replace(state, overlay=Confirm(overlay.action, overlay.text.strip())), []
+        if key in ("\x7f", "\x08"):
+            return dataclasses.replace(state, overlay=dataclasses.replace(overlay, text=overlay.text[:-1])), []
+        if len(key) == 1 and key.isprintable() and len(overlay.text) < REASON_MAX:
+            return dataclasses.replace(state, overlay=dataclasses.replace(overlay, text=overlay.text + key)), []
+        return state, []
+    assert isinstance(overlay, Confirm)
+    hot = _keys.hotkey(key)
+    if hot in ("y", "Y"):
+        return run_action(state, overlay.action, overlay.reason, now)
+    if hot in ("n", "N", "esc"):
+        return cancelled(state, now)
+    return state, []
 
 
 def press(state: AppState, key: str, now: float) -> Result:
@@ -399,7 +510,11 @@ def press(state: AppState, key: str, now: float) -> Result:
     overlay = state.overlay
     if isinstance(overlay, SettingsOverlay):
         return settings_press(state, key if overlay.editing else _keys.hotkey(key), now)
-    if overlay is None and state.events_filter.editing:  # typed text stays as typed
+    if isinstance(overlay, (ActionMenu, Reason, Confirm)):
+        return action_press(state, key, now)
+    if overlay is None and _keys.hotkey(key) in ("\r", "\n", "a") and mode(state) in ("main", "page"):
+        return open_actions(state, now), []  # a row's actions (fathers#88)
+    if overlay is None and state.page == "overview" and state.events_filter.editing:  # typed text stays as typed
         return type_filter(state, key)
     key = _keys.hotkey(key)
     return TABLE[mode(state)].get(key, same)(state, key)
@@ -415,6 +530,21 @@ def click(state: AppState, event: Mouse, now: float) -> Result:
     overlay, code = state.overlay, event.button & ~28  # Shift / Alt / Ctrl do not change the button
     if isinstance(overlay, SettingsOverlay):
         return settings_click(state, event, now)
+    if isinstance(overlay, (ActionMenu, Reason, Confirm)):
+        if not event.pressed or code != LEFT:
+            return state, []
+        box = _overlays.action_box(overlay, state.frame.width, state.frame.height)
+        if not (box.x <= event.x < box.x + box.width and box.y <= event.y < box.y + box.height):
+            return cancelled(state, now)
+        row = event.y - (box.y + 2)
+        if isinstance(overlay, ActionMenu) and 0 <= row < len(overlay.actions):
+            return pick(state, dataclasses.replace(overlay, cursor=row), now)
+        return state, []
+    if overlay is None and event.pressed and code == RIGHT:  # a right-click on a row: select it, then its actions
+        selected, effects = click(state, Mouse(LEFT, event.x, event.y, True), now)
+        if selected.overlay is None and mode(selected) in ("main", "page"):
+            return open_actions(selected, now), effects
+        return selected, effects
     if overlay is not None:
         view = overlay_box(state, overlay)
         inside = view.x <= event.x < view.x + view.width and view.y <= event.y < view.y + view.height
@@ -433,6 +563,9 @@ def click(state: AppState, event: Mouse, now: float) -> Result:
     at = state.frame.version_at
     if code == LEFT and at and event.y == at[0] and at[1] <= event.x < at[2]:
         return open_changelog(state, "")  # the footer's what's new opens it
+    target = state.frame.target_at(event.x, event.y) if code == LEFT else None
+    if target is not None:  # a link: a summary, DETAILS' lane or process row, a page's link back
+        return follow_link(state, target), []
     title = state.frame.switch
     if code == LEFT and title and event.y == title[0] and title[1] <= event.x < title[2]:
         state, effects = switch_log(1)(state, "")  # EVENTS' title switches its log
@@ -451,10 +584,14 @@ def click(state: AppState, event: Mouse, now: float) -> Result:
         if code == LEFT and 0 <= row < min(int(view["visible"]), int(view["count"]) - int(view["offset"])):
             position = int(view["offset"]) + row
             row_items = cast(Union[list[Any], None], view.get("row_items"))
+            if name in ("lanes", "procs") and row_items is not None and row_items[position] is not None:
+                return page_select(state, state.page, int(row_items[position])), []
             if row_items is not None and row_items[position] is not None:
                 return move(state, int(row_items[position])), []
             if row_items is None and view.get("base") is not None:
                 return move(state, int(view["base"]) + position), []
+            if name == "events" and state.page == "overview":  # the cursor on it, DETAILS shows it (fathers#152)
+                return event_move(state, position), []
         return state, []
     return state, []
 

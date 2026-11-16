@@ -98,6 +98,35 @@ def run(tool: str, argv: list[str], timeout: float, executable: Optional[str] = 
     return Reply(result.returncode, result.stdout, result.stderr)
 
 
+ACTION_TIMEOUT = 30.0  # seconds an action may take (SPEC 24)
+
+
+def act(tool: str, argv: list[str], actor: str, executable: Optional[str] = None) -> Reply:
+    """A row action (fathers#88): `tool ARGV...` (or, with no tool, ARGV as it is: the platform opener) with no
+    shell, a 30 s timeout and GODFATHER_ACTOR in its environment. Under GODFATHER_FIXTURES it is recorded with its
+    actor, never run, and answered from DIR/<tool>/replies.json where a reply is recorded (else it succeeds)."""
+    root = fixtures()
+    if root is not None:
+        with _lock:
+            line = [tool, *argv] if tool else list(argv)
+            recorded.append(line)
+            record = os.environ.get("GODFATHER_FIXTURES_RECORD")
+            if record:
+                with contextlib.suppress(OSError), open(record, "a", encoding="utf-8") as handle:
+                    handle.write(json.dumps({"argv": line, "env": {"GODFATHER_ACTOR": actor}}) + "\n")
+        found = _fixture_reply(root, tool, argv) if tool else Reply(127, "", "")
+        return found if found.code != 127 else Reply(0, f"recorded: {' '.join(line)}", "")
+    command = [executable or shutil.which(tool) or tool, *argv] if tool else list(argv)
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=ACTION_TIMEOUT,
+                                stdin=subprocess.DEVNULL, env=dict(os.environ, NO_COLOR="1", GODFATHER_ACTOR=actor))
+    except subprocess.TimeoutExpired:
+        return Reply(124, "", f"{' '.join(command[:2])} took longer than {ACTION_TIMEOUT:g} s")
+    except OSError as error:
+        return Reply(126, "", f"cannot run {command[0]}: {error.strerror or error}")
+    return Reply(result.returncode, result.stdout, result.stderr)
+
+
 def run_json(tool: str, argv: list[str], timeout: float, executable: Optional[str] = None) -> tuple[int, Any, str]:
     """run() with its stdout read as JSON: (code, object or None, the first stderr line or why it is not JSON)."""
     reply = run(tool, argv, timeout, executable)

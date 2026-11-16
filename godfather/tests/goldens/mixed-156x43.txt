@@ -40,4 +40,4 @@
 │  11:45:09  ▫       agent-a1c75285bdf2cd615             wait 2m43s          ok 10s  21181  │ │  🆗 swap ■■■■■■■■■░░░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                                                                                           │ │                               −80s                    now  │
 ╰───────────────────────────────────────────────────────────────────────────────────────────╯ ╰────────────────────────────────────────────────────────────╯
- Godfather what's new?                            ↑↓ select   tab panel   s settings   ? help   q quit                             updated 11:59:39  ● live
+ Godfather what's new?                     ↑↓ select   tab panel   1 2 3 pages   s settings   ? help   q quit                      updated 11:59:39  ● live

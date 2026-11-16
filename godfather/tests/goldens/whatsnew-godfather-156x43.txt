@@ -5,39 +5,39 @@
 ╰───────────────────────────────────────│                                                                         ┃│                                       │
 ┍━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│  ADDED                                                                  ┃│                                       │
 │                                       │                                                                         ┃│                                       │
-┃  ▶️    lane-644-build-once            │  • The footer says Godfather what's new?; a click or v opens what's     ┃│░░ 0.9 of 2 cores                      │
-│  ▶️    lane-465-state-definitions-revi│    new: one timeline of every tool's changelog, newest first, filtered  ┃│ · waited 19m34s · running 35m10s      │
-│  ▶️    desktop                        │    by tool with ← → or a click on a tool's name. An install from main   ┃│ 1 processes                           │
-│                                       │    shows its Unreleased entries, which are what it runs, under          ┃│                                       │
-│  ⏸️    prof51                         │    Slotfather · unreleased · installed 81abd86. Closing it marks        ┃│ight/.claude/worktrees/agent-afa3816b  │
-│  ⏸️    lane-555-host-rename-names     │    everything read (~/.local/state/godfather/news.json). Each tool is   ┃│2                                      │
-│                                       │    asked through its changelog --json; one without it adds nothing.     ╹│ight/.claude/worktrees/agent-afa3816b  │
-┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    fathers#102                                                           │2/verify.sh --checks desktop-tests     │
-╭─ SLOTS LOG ─────── label ─────────────│                                                                          │oing --jobs 1                          │
-│                                       │  • Expected durations from Slotfather's run types (fathers#108): a       │ight                                   │
-│  11:59:35  ▫       agent-ae72d94beb6f0│    running QUEUE row shows 12m / ~18m, its time against the expected     │                                       │
-│  11:58:33  ▫       agent-a1c75285bdf2c│    run, in yellow once it is past the p90; a waiting row shows the run   │d-once                                 │
-│  11:57:15  ▫       agent-a1c75285bdf2c│    it expects (waiting #1 · ~18m); DETAILS says expected 18m · p90 31m   │ht                                     │
-│  11:55:44  ▪▪      desktop            │    · 23 runs. In EVENTS a finished run that was an outlier ends in ▲     │                                       │
-│  11:55:31  ▫       desktop            │    (^ in ASCII) and the run that turned its run type's trend slower in   │-build-once                            │
-│  11:55:26  ▫       agent-a1c75285bdf2c│    ↗ (/); each trend change is a row of its own, Straylight gate ·       │e/queue-347                            │
-│  11:55:00  ▫       desktop            │    slower +32% · same plan, read from Slotfather's event log.            │ess                                    │
-│  11:54:02  ▫       agent-a1c75285bdf2c│                                                                          │ted                                    │
-│  11:52:53  ▫       agent-a1c75285bdf2c│  CHANGED                                                                 │rification_plan.py, tools/verify.py,   │
-│  11:52:30  ▫       desktop            │                                                                          │main-module.sh, tools/test-build-      │
-│  11:51:40  ▫       post-merge-456-rena│  • Screenshots and the README media come from tools/raster.py,           │odule.py, tools/app-build.py,          │
-│  11:51:24  ▫       agent-a1c75285bdf2c│    Godfather's own cell rasterizer, with no browser, terminal or         │st-app-build.py, tools/cargo-test.py,  │
-│  11:49:34  ▫▫      data-grid          │    machine slot: box drawing and blocks are geometry snapped to each     │elopment.md, tools/test-cargo-build-   │
-│  11:48:30  ▫       agent-ae72d94beb6f0│    cell, so rounded corners and joins meet their lines and bars have     │, tools/test-heavy.py,                 │
-│  11:47:21  ▫       agent-a0f998f4c57cd│    no seams at fractional cell widths; emoji such as 🆗 are drawn in     │rgo_build_cache.py                     │
-│  11:47:17  ▫       agent-a0f998f4c57cd│    colour across their two cells; the same cells give the same pixels.   │                                       │
-│  11:47:13  ▫       agent-a0f998f4c57cd│    tools/screens.mjs and screen-kit are no longer used.  fathers#114     │                                       │
-│  11:47:10  ▫       agent-a0f998f4c57cd│                                                                          │───────────────────────────────────────╯
-│  11:47:07  ▫       agent-a0f998f4c57cd│  • what's new? in the footer has one muted style, the key hints',        │nleased 0.4 · queue ahead · 2 waiting ─╮
-│  11:47:04  ▫       agent-a0f998f4c57cd│    whether or not anything is unread, and one space after Godfather;     │          slots held  avg 4.4/6        │
-│  11:46:08  ▫       post-merge-491-elec│    what's new itself still marks unread entries (owner, 2026-11-13).     │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
-│  11:45:53  ▫       agent-a1c75285bdf2c│                                                                          │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
+┃  ▶️    lane-644-build-once            │  • Row actions (fathers#88): Enter, a or a right-click on a QUEUE row    │░░ 0.9 of 2 cores                      │
+│  ▶️    lane-465-state-definitions-revi│    or a page's row opens its action menu, only the actions its tool      │ · waited 19m34s · running 35m10s      │
+│  ▶️    desktop                        │    advertises and that apply to the row now (no actions in the footer    │ 1 processes                           │
+│                                       │    otherwise): reprioritize a request to another class and ask a         │                                       │
+│  ⏸️    prof51                         │    yieldable lease of a lower class than a waiter to yield (slotfather   │ight/.claude/worktrees/agent-afa3816b  │
+│  ⏸️    lane-555-host-rename-names     │    reprioritize|ask-yield PID … --start START); reap an orphan or        │2                                      │
+│                                       │    expired entry, or an unowned process the sweep reported (junkfather   │ight/.claude/worktrees/agent-afa3816b  │
+┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    reap --id … / --pid … --force), and extend a running entry's TTL by   │2/verify.sh --checks desktop-tests     │
+╭─ SLOTS LOG ─────── label ─────────────│    1 h, 4 h or 1 d; open a lane's ticket or worktree with the platform   │oing --jobs 1                          │
+│                                       │    opener, its latest log in $PAGER (less -R +G; the screen, kitty       │ight                                   │
+│  11:59:35  ▫       agent-ae72d94beb6f0│    keyboard mode included, comes back after), and park an active lane    │                                       │
+│  11:58:33  ▫       agent-a1c75285bdf2c│    with a reason where Lanefather advertises park. Reaps and park ask    │d-once                                 │
+│  11:57:15  ▫       agent-a1c75285bdf2c│    first, naming the target and the exact command; y runs it, n, Esc     │ht                                     │
+│  11:55:44  ▪▪      desktop            │    or a click outside cancel. The row is looked for again in a fresh     │                                       │
+│  11:55:31  ▫       desktop            │    snapshot first and the action dropped if it changed; the command      │-build-once                            │
+│  11:55:26  ▫       agent-a1c75285bdf2c│    runs in the background with no shell, a 30 s timeout and              │e/queue-347                            │
+│  11:55:00  ▫       desktop            │    GODFATHER_ACTOR=godfather/<version>; the footer shows its first       │ess                                    │
+│  11:54:02  ▫       agent-a1c75285bdf2c│    stdout line, or its first stderr line in red, and the source is       │ted                                    │
+│  11:52:53  ▫       agent-a1c75285bdf2c│    polled at once. Land, promote, done, sync, review and sweep are       │rification_plan.py, tools/verify.py,   │
+│  11:52:30  ▫       desktop            │    never offered. Under GODFATHER_FIXTURES actions are recorded, never   │main-module.sh, tools/test-build-      │
+│  11:51:40  ▫       post-merge-456-rena│    run.                                                                  │odule.py, tools/app-build.py,          │
+│  11:51:24  ▫       agent-a1c75285bdf2c│                                                                          │st-app-build.py, tools/cargo-test.py,  │
+│  11:49:34  ▫▫      data-grid          │  • Junkfather is a source (fathers#86): its junkfather status --json     │elopment.md, tools/test-cargo-build-   │
+│  11:48:30  ▫       agent-ae72d94beb6f0│    (versions 1 and 2) is polled like Lanefather's. SLOTS' bottom         │, tools/test-heavy.py,                 │
+│  11:47:21  ▫       agent-a0f998f4c57cd│    border sums it up on the right, 3 procs 7 · 1 orphan · 1 expired ·    │rgo_build_cache.py                     │
+│  11:47:17  ▫       agent-a0f998f4c57cd│    2 unowned (a narrow border drops unowned, then expired), and 3 or a   │                                       │
+│  11:47:13  ▫       agent-a0f998f4c57cd│    click on it opens the Processes page: owned entries (running, then    │                                       │
+│  11:47:10  ▫       agent-a0f998f4c57cd│    orphan, then expired), then the last sweep's unowned processes and    │───────────────────────────────────────╯
+│  11:47:07  ▫       agent-a0f998f4c57cd│    resources, each with its state, label, id, owner, lane, age, TTL      │nleased 0.4 · queue ahead · 2 waiting ─╮
+│  11:47:04  ▫       agent-a0f998f4c57cd│    left and pid, a resource with its kind and id; PROCESS DETAILS with   │          slots held  avg 4.4/6        │
+│  11:46:08  ▫       post-merge-491-elec│    its command, directory, log, owner and whether it lives, keep,        │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
+│  11:45:53  ▫       agent-a1c75285bdf2c│    mode, resource, and its lease and lane as links; and its Junkfather   │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
 │  11:45:09  ▫       agent-a1c75285bdf2c│                                                                          │░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
-│                                       │                     ←→ tool   ↑↓ scroll   esc close                  29% │          −80s                    now  │
+│                                       │                     ←→ tool   ↑↓ scroll   esc close                  12% │          −80s                    now  │
 ╰───────────────────────────────────────╰──────────────────────────────────────────────────────────────────────────╯───────────────────────────────────────╯
  Godfather what's new?                            ↑↓ select   tab panel   s settings   ? help   q quit                             updated 11:59:39  ● live

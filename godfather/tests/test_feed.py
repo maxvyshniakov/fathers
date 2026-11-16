@@ -182,9 +182,9 @@ class FormatterTests(unittest.TestCase):
     def test_an_unknown_kind_shows_itself_and_its_fields(self) -> None:
         from godfather import events
 
-        found = rows_of([logged("sweep.finished", NOW, source="junkfather", level="error", reaped=2,
-                                errors=["x"], nested={"a": 1})])
-        self.assertEqual(("sweep.finished", [("reaped=2 errors=x", "bad")]), (found[0]["event"], found[0]["detail"]))
+        found = rows_of([logged("cpu.reported", NOW, source="junkfather", level="error", reaped=2,
+                                errors=["x"], nested={"a": 1})])  # sweep.finished has its words now (fathers#86)
+        self.assertEqual(("cpu.reported", [("reaped=2 errors=x", "bad")]), (found[0]["event"], found[0]["detail"]))
         self.assertEqual("reason=x", events.compact({"message": "prose", "reason": "x"}))
         self.assertEqual("prose", events.compact({"message": "prose"}))
 
@@ -462,8 +462,8 @@ class LiveFilterTests(unittest.TestCase):
             at = screen.mark()
             screen.write("fff")  # PROCS LOG, ALL LOG, back to SLOTS LOG
             screen.receive("◂ SLOTS LOG ▸", since=at)
-            screen.write("\t")  # EVENTS focused, scrolled down one row
-            screen.write("j")
+            screen.write("\t")  # EVENTS focused, scrolled down by the wheel (↑↓ move its cursor, fathers#152)
+            screen.write("\x1b[<65;20;30M")
             at = screen.mark()
             append("lanefather", "lane.checked", 1, "710-speech-paste-phase")
             append("slotfather", "lease.granted", 2, "0000000999-4242", count=1, waited=0)

@@ -1,7 +1,7 @@
 """godfather: one terminal dashboard for the tools that share a development machine.
 
   godfather [--interval S]                                         live view: ? lists the keys, q quits
-  godfather --once [--page overview] [--width N] [--height N] [--color]   one frame as text
+  godfather --once [--page overview|lanes|processes] [--width N] [--height N] [--color]   one frame as text
   godfather events [--source NAME]... [--follow] [--json]          the tools' events, newest last
   godfather --version
 
@@ -18,11 +18,13 @@ import math
 import os
 import select
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any, cast
 
+from . import actions as _actions
 from . import entries as _entries
 from . import events as _events
 from . import settings_model as _settings_model
@@ -30,6 +32,8 @@ from . import news as _news
 from . import sources as _sources
 from . import theme as _theme
 from . import version as _version
+from .adapters import junkfather as _junkfather
+from .adapters import lanefather as _lanefather
 from .adapters import settings as _settings_adapter
 from .adapters import slotfather as _slotfather
 from .adapters.settings import Conflict, ReadOnly, SettingsClient, SettingsError
@@ -37,14 +41,14 @@ from .adapters.slotfather import Unsupported
 from .sources import SnapshotError, Source
 from . import reducer as _reducer
 from . import state as _state
-from .tui import Canvas, Jobs, Loader, full_screen, read_keys
+from .tui import Canvas, Jobs, Loader, full_screen, read_keys, suspended
 from .views import common as _common
 from .views import details as _details
 from .views import events as _events_view
 from .views import overview as _overview
 
 USAGE = ("usage: godfather [--interval SECONDS]\n"
-         "       godfather --once [--page overview] [--width N] [--height N] [--color]\n"
+         "       godfather --once [--page overview|lanes|processes] [--width N] [--height N] [--color]\n"
          "       godfather events [--source NAME]... [--follow] [--json]\n"
          "       godfather --version")
 
@@ -118,6 +122,9 @@ class Screen:
         self.settings_found = [Source(name, _settings_adapter.Contract(name)) for name in _sources.TOOLS]
         self.rows: list[dict[str, Any]] = []
         self.followed: tuple[tuple[str, str], ...] = ()
+        # The other tools as sources (fathers#85): each polled on its own worker, on Source objects of its own
+        self.tool_sources = {name: Source(name, adapter) for name, adapter in TOOL_ADAPTERS.items()}
+        self.fresh: set[str] = set()  # the sources whose log gained a line in the last load: polled again soon
 
     def follow(self) -> tuple[tuple[str, str], ...]:
         """Every present source with an event log followed, the others not: (name, tag) each, in TOOLS order."""
@@ -135,7 +142,9 @@ class Screen:
         """EVENTS' rows from every followed log, built again only when a log gained a line or a source came or
         went."""
         followed = self.follow()
-        if self.feed.poll() or followed != self.followed:
+        polled = self.feed.poll()
+        self.fresh = {event.source for event in polled}
+        if polled or followed != self.followed:
             self.followed = followed
             self.rows = _events.rows(self.feed.events(), dict(followed))
         return self.rows
@@ -159,6 +168,8 @@ class Screen:
         model["events"] = self.events()
         model["sources"] = list(self.followed)
         model["events_skipped"] = self.feed.skipped()
+        model["fresh_sources"] = sorted(self.fresh)  # an event polls its source at once, debounced (SPEC 9)
+        model["actions"] = list(_actions.offered(_lanefather.dashboard_block(source.capabilities).get("actions")))
         if not _events.log_path(source.capabilities):  # no event log of a version this Godfather reads: why
             named = isinstance(_events.dashboard_block(source.capabilities).get("events"), dict)
             model["events_note"] = _events_view.TOO_NEW if named else _events_view.TOO_OLD
@@ -167,6 +178,68 @@ class Screen:
         if source.state == "stale" and source.failed_at is not None:
             model["stale_since"] = datetime.datetime.fromtimestamp(source.failed_at, datetime.timezone.utc)
         return model, source.problem if source.state == "stale" else None
+
+    def load_tool(self, name: str) -> _state.Tool:
+        """Another tool's snapshot, polled once (discovery first when it is due): its Tool for the reducer."""
+        source = self.tool_sources[name]
+        if source.due():
+            source.discover()
+        adapter = TOOL_ADAPTERS[name]
+        if source.state == "absent":
+            return _state.Tool(name)
+        if source.state == "unsupported":
+            return _state.Tool(name, "unsupported", source.problem)
+        try:
+            source.took(adapter.decode(source.poll()), None)
+        except SnapshotError as error:
+            source.took(None, str(error))
+        since = datetime.datetime.fromtimestamp(source.failed_at, datetime.timezone.utc) \
+            if source.state == "stale" and source.failed_at is not None else None
+        return _state.Tool(name, source.state, source.problem, source.snapshot, since,
+                           adapter.actions(source.capabilities), adapter.show_supported(source.capabilities))
+
+    def recheck(self, action: _actions.Action) -> bool:
+        """The row an action was offered for, looked for again in a fresh snapshot of its source (SPEC 23, step 3)."""
+        page = action.identity[0] if action.identity else ""
+        try:
+            if page == "overview":
+                if self.source.due():
+                    self.source.discover()
+                return _actions.still(action, _slotfather.decode(self.source.poll()))
+            name = "junkfather" if page == "processes" else "lanefather"
+            source = self.tool_sources[name]
+            if source.due():
+                source.discover()
+            return _actions.still(action, TOOL_ADAPTERS[name].decode(source.poll()))
+        except (SnapshotError, Unsupported):
+            return False
+
+    def act(self, action: _actions.Action, reason: str) -> _state.ActionDone:
+        """An action: the row checked again, then the command run (30 s, GODFATHER_ACTOR); the tool's first stdout
+        line on success, its first stderr line on failure, never a retry."""
+        if not self.recheck(action):
+            return _state.ActionDone(action.tool, False, f"{action.name}: the row changed or is gone; nothing run")
+        executable = self.source.executable if action.tool == "slotfather" else \
+            self.tool_sources[action.tool].executable if action.tool in self.tool_sources else None
+        argv = list(action.command(reason)[1:] if action.tool else action.command(reason))
+        reply = _sources.act(action.tool, argv, f"godfather/{_version.VERSION}", executable)
+        first = next((line for line in (reply.stdout if reply.code == 0 else reply.stderr).splitlines()
+                      if line.strip()), "")
+        if reply.code != 0:
+            return _state.ActionDone(action.tool, False, first or f"{action.shown(reason)} exited {reply.code}")
+        return _state.ActionDone(action.tool, True, first or f"{action.name}: done")
+
+    def poll_every(self, name: str) -> float:
+        """Seconds between a tool's polls: its capabilities' hint clamped to 5–10 (SPEC 9)."""
+        snapshot: Any = _lanefather.dashboard_block(self.tool_sources[name].capabilities).get("snapshot")
+        hint: Any = cast(dict[str, Any], snapshot).get("poll") if isinstance(snapshot, dict) else None
+        return float(min(10, max(5, hint))) if isinstance(hint, (int, float)) and not isinstance(hint, bool) else 5.0
+
+    def load_details(self, item: dict[str, Any]) -> tuple[Any, str | None]:
+        """A request's slow facts, off the main thread (#15): its holder's directory (lsof or /proc) and, where
+        Lanefather's status snapshot does not join it to a lane, its lane from `lanefather show` when Lanefather
+        advertises it (fathers#85). GODFATHER_DETAILS_DELAY, a test seam, adds seconds first."""
+        return load_details(item, self.tool_sources["lanefather"])
 
     def notice(self) -> list[str] | None:
         """What the screen says instead of the overview: the tools looked for, or why Slotfather is unsupported."""
@@ -250,16 +323,23 @@ def settings_failed(request: _settings_model.Request, failure: BaseException) ->
     return _state.SettingsWritten(request, "failed", None, why)
 
 
-def load_details(item: dict[str, Any]) -> tuple[Any, str | None]:
-    """A request's slow facts, off the main thread (#15): its lane (a lanefather call) and its holder's directory (lsof
-    or /proc). GODFATHER_DETAILS_DELAY, a test seam, adds seconds first."""
+TOOL_ADAPTERS: dict[str, Any] = {"lanefather": _lanefather, "junkfather": _junkfather}
+PAGES = ("overview", "lanes", "processes")  # what --page takes  # the other tools polled as sources, by name
+
+
+def load_details(item: dict[str, Any], lanes: Source | None = None) -> tuple[Any, str | None]:
+    """A request's slow facts, off the main thread (#15): its holder's directory (lsof or /proc) and its lane from
+    `lanefather show` where Lanefather's status snapshot (`lanes`, its source) does not join it already.
+    GODFATHER_DETAILS_DELAY, a test seam, adds seconds first."""
     with contextlib.suppress(ValueError):
         delay = float(os.environ.get("GODFATHER_DETAILS_DELAY") or 0)
         if delay > 0:
             time.sleep(delay)
     found = dict(item)
-    _details.enrich_details(found)  # the lane, through the same seam --once and the demo use
     cwd = _sources.process_cwd(item["pid"]) if item.get("kind") != "waiting" else None
+    snapshot = lanes.snapshot if lanes is not None else None
+    if _lanefather.lane_of(found, snapshot, cwd) is None:
+        _details.enrich_details(found, lanes.capabilities if lanes is not None else None)
     return found.get("lane"), cwd
 
 
@@ -290,9 +370,14 @@ class Live:
         self.wake_read, self.wake_write = os.pipe()
         # Everything slow runs in the background, so a key moves the selection within one frame (#15)
         self.models = Loader(screen.load, self.wake_write)
-        self.details = Loader(load_details, self.wake_write)
+        self.details = Loader(screen.load_details, self.wake_write)
+        # Lanefather's snapshot (fathers#85) on a worker of its own, every 5–10 s and soon after one of its events
+        self.tools = {name: Loader(screen.load_tool, self.wake_write) for name in TOOL_ADAPTERS}
+        self.tool_fetched = {name: -math.inf for name in TOOL_ADAPTERS}
+        self.tool_due: dict[str, float] = {}  # an event's poll, debounced: when it runs
         self.news = Loader(load_news, self.wake_write)  # what's new: on start and each time it opens
         self.settings = Jobs(self.settings_work, self.wake_write)  # Settings' calls, in order (fathers#87)
+        self.acting = Jobs(self.action_work, self.wake_write)  # row actions, in order, in the background (fathers#88)
         self.asked = 0
         self.fetched = 0.0
 
@@ -342,8 +427,41 @@ class Live:
         elif kind == "settings":
             self.asked += 1
             self.settings.request(self.asked, effect.item)
+        elif kind == "action":
+            action, reason = effect.item
+            if action.kind == "pager":  # the terminal is the pager's until it quits
+                self.send(self.page_file(action))
+            else:
+                self.asked += 1
+                self.acting.request(self.asked, (action, reason))
+        elif kind == "poll":
+            if effect.key == "slotfather":
+                self.load_model()
+            elif effect.key in self.tools:
+                self.tool_due[effect.key] = time.monotonic()
         elif kind == "open-settings":  # at once; the tools' sections come from Settings' worker (fathers#87 review)
             self.send(_state.SettingsOpened((), loading=True))
+
+    def action_work(self, job: tuple[_actions.Action, str]) -> _state.Event:
+        try:
+            return self.screen.act(*job)
+        except Exception as failure:  # noqa: BLE001 - a failed action is a footer line, never the end of the view
+            return _state.ActionDone(job[0].tool, False, str(failure) or type(failure).__name__)
+
+    def page_file(self, action: _actions.Action) -> _state.Event:
+        """The latest log in $PAGER, the screen handed over and taken back (kitty keyboard mode too). Under
+        GODFATHER_FIXTURES the pager's argv is recorded, never run."""
+        command = list(action.command())
+        if _sources.fixtures() is not None:
+            _sources.act("", command, f"godfather/{_version.VERSION}")
+            return _state.ActionDone("", True, f"recorded: {' '.join(command)}")
+        with suspended(self.fd_in, self.fd_out, self.answers):
+            try:
+                code = subprocess.call(command)
+            except OSError as error:
+                return _state.ActionDone("", False, f"cannot run {command[0]}: {error.strerror or error}")
+        self.shown, self.dirty = [], True
+        return _state.ActionDone("", code == 0, "" if code == 0 else f"{command[0]} exited {code}")
 
     def settings_work(self, request: _settings_model.Request) -> _state.Event:
         try:
@@ -357,12 +475,29 @@ class Live:
 
     def take(self) -> None:
         """What the loaders finished, and the clock: a model polled every Refresh every."""
+        now = time.monotonic()
         for _, value, failure in self.models.take():
             if failure is not None:
                 self.send(_state.ModelFailed(str(failure)))
             else:
                 model, problem = value
+                fresh = cast(dict[str, Any], model or {}).get("fresh_sources")
+                for name in cast(list[str], fresh or []):
+                    if name in self.tools:
+                        self.tool_due[name] = now + TOOL_DEBOUNCE
                 self.send(_state.ModelLoaded(model, self.theme.holders(), problem))
+        for name, loader in self.tools.items():
+            for _, tool, failure in loader.take():
+                self.send(_state.ToolLoaded(tool if failure is None else _state.Tool(name, "stale", str(failure))))
+            due = self.tool_due.get(name)
+            if (now - self.tool_fetched[name] >= self.screen.poll_every(name) or (due is not None and now >= due)) \
+                    and not loader.wants(name):
+                self.tool_due.pop(name, None)
+                self.tool_fetched[name] = now
+                loader.request(name, name)
+        for _, answer, _ in self.acting.take():
+            if answer is not None:
+                self.send(answer)
         for _, answer, _ in self.settings.take():
             if answer is not None:
                 self.send(answer)
@@ -398,7 +533,7 @@ class Live:
         _overview.render(canvas, self.state, now, self.screen.notice())
         self.send(_state.Drawn(_state.Frame(canvas.width, canvas.height, canvas.tables, canvas.version_at,
                                             tuple(canvas.hint_hits), canvas.order, tuple(canvas.filter_hits),
-                                            canvas.switch_at)))
+                                            canvas.switch_at, tuple(canvas.targets))))
         lines = canvas.lines(self.colour, self.ascii_only, place=True)
         # Only rows that changed are written: a second's tick usually touches the clock and a few ages.
         frame = "".join(f"\x1b[{row + 1};1H{line}" for row, line in enumerate(lines)
@@ -412,7 +547,7 @@ class Live:
     def loading(self) -> bool:
         """The selected request's details are loading: the spinner turns at ten frames a second."""
         found = _state.items(self.state)
-        if not found:
+        if not found or self.state.shows == "events":  # DETAILS shows an event (fathers#152): nothing loads
             return False
         item = found[self.state.selection.index]
         return _state.details_key(item, cast(Any, self.state.selection.key)) not in self.state.details
@@ -447,6 +582,9 @@ class Live:
                 self.read(0.1 if loading else 0.25)
 
 
+TOOL_DEBOUNCE = 0.25  # seconds after a tool's event before its snapshot is polled (SPEC 9)
+
+
 def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE, screen: Screen | None = None) -> None:
     live = Live(sys.stdin.fileno(), sys.stdout.fileno(), screen or Screen(), interval, theme)
     try:
@@ -479,23 +617,31 @@ def theme_reports(reports: list[str], answers: _theme.Answers, fd_out: int) -> b
 
 
 def once(width: int | None, height: int | None, colour: bool | None, interval: float,
-         theme: _theme.Theme | None = None) -> int:
-    """One frame of the overview, as `slotfather dashboard --once` printed it, in `theme`."""
+         theme: _theme.Theme | None = None, page: str = "overview") -> int:
+    """One frame of the overview, as `slotfather dashboard --once` printed it, in `theme`; or of a page (fathers#85),
+    with the row the first request links to selected, else its first row. A page whose tool is absent is the
+    overview, as its key would leave it."""
     theme = theme if theme is not None else _theme.from_environment()
     screen = Screen()
     model, error = screen.load()
     items = cast(list[dict[str, Any]], (model["holders"] + model["waiters"]) if model else [])
+    tools = {name: screen.load_tool(name) for name in TOOL_ADAPTERS}
     cwd = None
     if model:
         _entries.dashboard_colours(model, {}, theme.holders())
         if items:
-            _details.enrich_details(items[0])
             cwd = _sources.process_cwd(items[0]["pid"]) if items[0]["kind"] != "waiting" else None
+            lanes = screen.tool_sources["lanefather"]
+            if _lanefather.lane_of(items[0], lanes.snapshot, cwd) is None:
+                _details.enrich_details(items[0], lanes.capabilities)
+    state = _state.open_page(_state.settle(_state.AppState(model=model, tools=tools), 0.0)[0], page)
     ascii_only = "utf" not in (sys.stdout.encoding or "").lower()
     size_now = shutil.get_terminal_size((120, 40))
     canvas = Canvas(width or size_now.columns, height or size_now.lines, theme, _common.marks_for(ascii_only))
+    canvas.focus = state.focus
     _overview.dashboard_draw(canvas, model, error=error, cwd=cwd, notice=screen.notice(),
-                             moment=datetime.datetime.now(datetime.timezone.utc))
+                             moment=datetime.datetime.now(datetime.timezone.utc), tools=tools, page=state.page,
+                             page_row=_state.page_index(state, state.page) if state.page != "overview" else None)
     tty = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
     print(canvas.render(colour if colour is not None else tty, ascii_only))
     return 1 if model is None else 0  # the frame says why: no tool, no contract, or a failed snapshot
@@ -582,7 +728,7 @@ def command(argv: list[str]) -> int:
     if argv[:1] == ["events"]:
         return events_command(argv[1:])
     argv = split_options(argv)
-    interval, run_once, colour, width, height = None, False, None, None, None
+    interval, run_once, colour, width, height, page = None, False, None, None, None, "overview"
     while argv:
         if argv[0] == "--once":
             run_once, argv = True, argv[1:]
@@ -595,9 +741,9 @@ def command(argv: list[str]) -> int:
             print(USAGE)
             return 0
         elif argv[0] == "--page" and len(argv) > 1:
-            if argv[1] != "overview":
-                raise UsageError(f"--page {argv[1]}: only the overview has a page in this godfather")
-            argv = argv[2:]
+            if argv[1] not in PAGES:
+                raise UsageError(f"--page takes {', '.join(PAGES)}, not {argv[1]!r}")
+            page, argv = argv[1], argv[2:]
         elif argv[0] in ("--interval", "--width", "--height") and len(argv) > 1:
             try:
                 value = float(argv[1])
@@ -622,7 +768,7 @@ def command(argv: list[str]) -> int:
     except ValueError as error:
         raise UsageError(str(error)) from None
     if run_once:
-        return once(width, height, colour, interval, resolved)
+        return once(width, height, colour, interval, resolved, page)
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         print("godfather: the live view needs an interactive terminal; --once prints one frame", file=sys.stderr)
         print("Try 'godfather --help'.", file=sys.stderr)

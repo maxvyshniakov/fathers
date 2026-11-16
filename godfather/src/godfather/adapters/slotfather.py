@@ -119,6 +119,8 @@ def _item(raw: Any, entries: Optional[dict[tuple[Any, Any], list[dict[str, Any]]
     item["overrun"] = item.get("overrun", entry.get("overrun")) is True and item["expected"] is not None
     # Identity (fathers#21, fathers#101): the lease id, else, from an older Slotfather, [pid, since]
     item["key"] = item["lease_id"] or old
+    start: Any = item.get("start", entry.get("start"))  # the holder's process start, which an action passes back
+    item["start"] = start if isinstance(start, str) and start else None
     tree = raw.get("tree") or []
     if not isinstance(tree, list) or not all(isinstance(row, list) and len(row) == 4 for row in tree):
         raise Unsupported("a request's process tree is not [[pid, cpu, rss, name]]")

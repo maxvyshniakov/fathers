@@ -163,13 +163,18 @@ class ParityTests(unittest.TestCase):
         self.assertGreaterEqual(compared, 25)
 
     def test_help_is_slotfathers_in_every_section_but_events(self) -> None:
-        ours = {title: [list(entry) for entry in entries] for title, entries in overlay_text.HELP}
+        ours = {title: [list(entry) for entry in entries] for title, entries in overlay_text.HELP
+                if title != "PAGES"}  # fathers#85: the pages are Godfather's own
         theirs = {title: entries for title, entries in self.help}
         self.assertEqual(list(theirs), list(ours), "the same sections in the same order")
         what = ["v", "what's new (or click Godfather what's new?)"]  # fathers#102: the changelog became what's new
         self.assertIn(what, ours["KEYS"])
         ours["KEYS"][ours["KEYS"].index(what)] = ["v", "changelog (or click the version)"]
-        for key in ("← → · f", "r", "/"):  # fathers#84, fathers#152: EVENTS' log, raw and text filter
+        esc = ["esc", "close an overlay · leave a page"]  # fathers#85: Esc leaves a page too
+        self.assertIn(esc, ours["KEYS"])
+        ours["KEYS"][ours["KEYS"].index(esc)] = ["esc", "close an overlay"]
+        # fathers#84, #152: EVENTS' log, raw, text filter; #85: pages; #88: row actions
+        for key in ("← → · f", "r", "/", "1 2 3", "enter · a"):
             ours["KEYS"] = [entry for entry in ours["KEYS"] if entry[0] != key]
         snail = ["🐌", "batch: unattended work, after the rest"]  # owner, 2026-11-12: batch is a snail, not a turtle
         self.assertIn(snail, ours["PRIORITY"])

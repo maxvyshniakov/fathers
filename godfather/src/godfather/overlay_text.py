@@ -44,10 +44,12 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
         ("← → · f", "events: the next log (or click its title)"),
         ("r", "events: every event as logged"),
         ("/", "events: filter by text (esc clears)"),
+        ("1 2 3", "the overview, lanes, processes (tools present)"),
+        ("enter · a", "the selected row's actions (or right-click it)"),
         ("s", "settings"),
         ("?", "help"),
         ("v", "what's new (or click Godfather what's new?)"),
-        ("esc", "close an overlay"),
+        ("esc", "close an overlay · leave a page"),
         ("q", "quit"),
         ("shift+drag", "select text"),
         ("", "Hotkeys work on any keyboard layout."),
@@ -88,13 +90,23 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
         ("", "Estimates, not promises."),
     ]),
     ("EVENTS", [
-        ("", "One tool's log at a time, one row per run."),
+        ("", "One log at a time; ↑↓ pick a run or event"),
         ("▪ · ▫", "slots held · handed back, or never held"),
         ("wait · no wait", "how long it waited for them"),
         ("ok · exit N", "how a lease ended, and how long it ran"),
         ("gave up", "a waiter stopped waiting, after so long"),
         ("owner died", "its process exited; Slotfather reaped the entry"),
         ("▲ ↗ ↘", "an outlier run · its run type got slower · faster"),
+    ]),
+    ("PAGES", [
+        ("2 lanes", "by project: stage, receipt, review, claims, age"),
+        ("▶️ 🗓️ ✅ 💤", "active · planned · landed · parked"),
+        ("2 lanes N", "SLOTS' border: lanes active, planned, reviews, 🔥 a red gate"),
+        ("3 procs", "owned processes and resources, then the last sweep's unowned"),
+        ("▶️ 👻 ⌛", "running · its owner is gone · past its TTL"),
+        ("❔ 📦", "an unowned process · an unowned resource"),
+        ("3 procs N", "SLOTS' border: owned, orphan, expired, unowned"),
+        ("", "A lane, lease or process in DETAILS is a link; esc goes back."),
     ]),
     ("MACHINE", [
         ("load", "the 1-minute load average / cores (not CPU %)"),
@@ -364,3 +376,44 @@ def overlay_view(kind: str, width: int, height: int, offset: int = 0, tab: int =
     return OverlayView(box.x, box.y, box.width, box.height, offset, visible, len(lines), kind), lines, title, shown
 
 
+
+
+# A row's actions (fathers#88): the menu, a park's reason and the confirmation, their lines and where they go
+
+ACTION_WIDTH, ACTION_CHROME = 76, 5  # the most columns; the frame, a blank row above and below, the footer
+
+
+def action_lines(overlay: Any) -> list[Line]:
+    """What the action menu, the reason field or the confirmation says, line by line (the menu: one per action, in
+    the order the cursor moves)."""
+    kind = getattr(overlay, "kind", "")
+    if kind == "actions":
+        return [[(action.name, "text")] for action in overlay.actions]
+    action = overlay.action
+    target: list[Line] = [[(f"{name:<9}", "dim"), (value, "text")] for name, value in action.target]
+    if kind == "reason":
+        return [[("Why park it? An empty reason cancels.", "dim")], [], *target, [],
+                [("reason   ", "dim"), (overlay.text, "text"), ("_", "key")]]
+    command = action.shown(overlay.reason)
+    return [*target, *([[("reason   ", "dim"), (overlay.reason, "text")]] if overlay.reason else []), [],
+            [("runs     ", "dim"), (command, "accent")]]
+
+
+def action_box(overlay: Any, width: int, height: int) -> _layout.Rect:
+    return _layout.centred(width, height, ACTION_WIDTH, len(action_lines(overlay)), ACTION_CHROME)
+
+
+def action_title(overlay: Any) -> str:
+    kind = getattr(overlay, "kind", "")
+    if kind == "actions":
+        return "ACTIONS"
+    return str(overlay.action.name).upper()
+
+
+def action_hints(overlay: Any) -> list[Part]:
+    kind = getattr(overlay, "kind", "")
+    if kind == "actions":
+        return [("↑↓", "choose"), ("enter", "run"), ("esc", "close")]
+    if kind == "reason":
+        return [("enter", "next"), ("esc", "cancel")]
+    return [("y", "run it"), ("n", "cancel"), ("esc", "cancel")]
