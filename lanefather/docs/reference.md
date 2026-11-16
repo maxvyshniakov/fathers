@@ -104,14 +104,16 @@ lane as before. A lane or project that cannot be read or finished is reported as
   cleared by a later green run on the same integration branch, on a commit that holds the lane's merge and that
   the integration worktree's HEAD holds: the batch gate there (its `promote-<sha>.gate.json`, the full gate), or
   another lane's green post-merge smoke that ran each check the red smoke ran on its own tree (a result it took
-  from another tree, such as the lane's receipt or the previous tip, does not count; a smoke receipt naming a
-  platform must name the red smoke's). `done` and `done --finished` look for that evidence themselves, nothing
+  from another tree, such as the lane's receipt or the previous tip, does not count). The run must have finished
+  after the red smoke and on its platform (a gate's platform comes from its receipt, or for an older receipt from
+  its results-store entry). `done` and `done --finished` look for that evidence themselves, nothing
   runs, and the oldest receipt that clears the smoke is named in the ledger (`lane.done`, details
   `post_merge_cleared_by`) and in the record (`post_merge.cleared_by`).
 - `lanefather recheck ID` reruns the checks the red smoke ran on the integration tip, in a smoke checkout, when the
   tip holds the merge. Green, its receipt `<id>.recheck.json` replaces the red result in the record (the red
   receipt stays), the lane's issue is marked as after a green land, and the lane is finished as land would have
-  finished it; red, the lane stays red (`lane.rechecked`, error when red).
+  finished it; red, the lane stays red (`lane.rechecked`, error when red). Rechecks of one lane run one at a
+  time: a second waits, then finds the lane green and has nothing to recheck.
 
 `lanefather --help` describes the commands. The [glossary](../GLOSSARY.md) distinguishes lane states, receipts,
 reviews and verification gates.

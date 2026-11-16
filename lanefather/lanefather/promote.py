@@ -150,6 +150,7 @@ def run_batch_gate(cwd: str, common: str, sha: str, jobs: int | None) -> None:
     module = plan.module(path)
     state.write_json(state.state_dir() / f"{label}.gate.json", {
         "version": 1, "lane": label, "sha": sha, "tree": git(cwd, "rev-parse", sha + "^{tree}"), "full": True,
+        "platform": result_store.host_platform(),
         "suites": list(getattr(module, "SUITES", ())), "jobs": jobs, "jobs_decision": decision, "exit": status,
         "seconds": seconds,
         "status": "green" if green else "red", "failed_checks": failed, "triage": triaged, "verified_tree": stamp,

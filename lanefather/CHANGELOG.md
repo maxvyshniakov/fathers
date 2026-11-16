@@ -8,16 +8,17 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
-- Two routine cleanups without `--force-reason` (fathers#167). `lanefather drop ID` removes a planned or active
-  lane that adds nothing to its base (no commits beyond it, its tree already the base's, or commits that change
-  nothing) and whose worktree has no uncommitted or untracked changes, with `done`'s cleanup; it refuses a lane
-  with work and has no override. `done` no longer refuses a landed lane whose red post-merge smoke a later green
-  run on the same integration branch cleared: the batch gate, or another lane's smoke that ran each check the red
-  one ran, on a commit holding the merge; the ledger and the record (`post_merge.cleared_by`) name that receipt,
-  and `done --finished` counts such a lane as finished. `lanefather recheck ID` reruns the red smoke's checks on
-  the integration tip; green, it replaces the red result and finishes the lane as land would. New event kinds
-  `lane.dropped` and `lane.rechecked`; capabilities `lane.drop` and `post_merge.cleared`. An older Lanefather
-  reads a dropped lane as done and a rechecked one as green.
+- Two routine cleanups without `--force-reason` (fathers#167). `lanefather drop ID` removes a planned or active lane
+  that adds nothing to its base (no commits beyond it, its tree already the base's, or commits that change nothing)
+  and whose worktree has no uncommitted or untracked changes, with `done`'s cleanup; it refuses a lane with work and
+  has no override. `done` no longer refuses a landed lane whose red post-merge smoke a later green run on the same
+  integration branch cleared: the batch gate, or another lane's smoke that ran each check the red one ran, on a commit
+  holding the merge, finished after the red smoke on its platform; the ledger and the record (`post_merge.cleared_by`)
+  name that receipt, and `done --finished` counts such a lane as finished. `lanefather recheck ID` reruns the red
+  smoke's checks on the integration tip, one recheck of a lane at a time; green, it replaces the red result and
+  finishes the lane as land would. The batch gate's receipt names its `platform`. New event kinds `lane.dropped` and
+  `lane.rechecked`; capabilities `lane.drop` and `post_merge.cleared`. An older Lanefather reads a dropped lane as
+  done and a rechecked one as green.
 
 - The free-disk floor is a machine setting (fathers#163): `lanefather settings set host.min_disk_gb 150` (decimal
   GB) or `auto` (the default, the derived 40 GB reserve + lane cap x lane peak). `LANEFATHER_MIN_DISK_GB` still wins
