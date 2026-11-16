@@ -9,7 +9,7 @@ from typing import Any
 import unittest
 import unittest.mock
 
-from support import ROOT  # noqa: F401  # pyright: ignore[reportUnusedImport]
+from support import LaneCase
 
 from lanefather import config, procs, slots
 from lanefather.procs import SlotfatherSource
@@ -22,11 +22,23 @@ args = sys.argv[1:]
 with (root / "calls.jsonl").open("a") as f: f.write(json.dumps(args)+"\\n")
 if args[0] == "procs":
     rows = data["initial"]
+    answer = {k: data.get(k, []) for k in ("cwd_unknown", "lease_unknown")}
+    if "unknown" in data: answer["unknown"] = data["unknown"]
     if "--cwd" in args:
         cwd = args[args.index("--cwd") + 1]
         rows = [p for p in rows if p.get("cwd") == cwd or str(p.get("cwd", "")).startswith(cwd + "/")]
-    print(json.dumps({"v": data.get("v",1), "cwd_unknown": data.get("cwd_unknown",[]),
-                      "lease_unknown": data.get("lease_unknown",[]), "processes": rows}))
+        # "rounds": what successive --cwd queries report unknown, the last one repeating (fathers#158).
+        counter = root / "cwd-queries"
+        count = int(counter.read_text()) if counter.exists() else 0
+        counter.write_text(str(count + 1))
+        if data.get("rounds"):
+            answer = data["rounds"][min(count, len(data["rounds"]) - 1)]
+            answer = dict(answer, **{k: answer.get(k, []) for k in ("cwd_unknown", "lease_unknown")})
+    elif "--pid" in args:
+        pid = int(args[args.index("--pid") + 1])
+        rows = [p for p in rows if p.get("pid") == pid]
+        answer = {"cwd_unknown": [], "lease_unknown": []}
+    print(json.dumps({"v": data.get("v",1), **answer, "processes": rows}))
 else:
     if "--live" in args: raise SystemExit("fixture forbids PID-only live stopping")
     print(json.dumps({"v": data.get("sweep_v", data.get("v", 1)), "items": [dict(p, action="would-stop")
@@ -46,6 +58,7 @@ class ProcessSourceTests(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
         self.source = SlotfatherSource(str(program))
+        self.source.pause = 0
         self.process: dict[str, Any] = {"pid": 1234, "start": "one", "cmd": "runner", "cwd": "/work/lane"}
 
     def answer(self, **extra: Any) -> None:
@@ -111,3 +124,59 @@ class ProcessSourceTests(unittest.TestCase):
         stopping, held = self.source.sort_for_removal("/work/lane")
         self.assertEqual(stopping, [])
         self.assertTrue(held)
+
+    def cwd_queries(self) -> int:
+        return int((self.root / "cwd-queries").read_text())
+
+    def test_unknowns_that_come_and_go_are_asked_again_and_an_idle_worktree_is_free(self) -> None:
+        # fathers#158: three queries for one idle worktree reported [16067], then other helpers, then nothing.
+        self.answer(initial=[dict(self.process, cwd="/elsewhere")], offers=[],
+                    rounds=[{"cwd_unknown": [16067]}, {"cwd_unknown": [15891, 16016], "lease_unknown": [16110]}, {}])
+        self.assertEqual(self.source.sort_for_removal("/work/lane"), ([], []))
+        self.assertEqual(self.cwd_queries(), 3)
+
+    def test_a_process_still_unknown_after_the_retries_holds_and_is_named(self) -> None:
+        # The newer Slotfather names each unknown pid with its command (`unknown`).
+        self.answer(rounds=[{"cwd_unknown": [4242], "unknown": [
+            {"pid": 4242, "start": "s", "cmd": "node server.js", "cwd_unknown": True, "lease_unknown": False}]}])
+        stopping, held = self.source.sort_for_removal("/work/lane")
+        self.assertEqual(stopping, [])
+        self.assertEqual(len(held), 1)
+        self.assertIn("unknown after 5 queries", held[0])
+        self.assertIn("pid 4242 (node server.js) cwd unknown", held[0])
+        self.assertEqual(self.cwd_queries(), 5)
+
+    def test_an_older_slotfather_s_unknown_pid_is_named_through_procs_pid(self) -> None:
+        self.answer(initial=[self.process, {"pid": 777, "start": "t", "cmd": "cargo build", "cwd": "/x"}],
+                    rounds=[{"lease_unknown": [1234], "cwd_unknown": [777, 999]}])
+        _, held = self.source.sort_for_removal("/work/lane")
+        self.assertIn("pid 777 (cargo build) cwd unknown", held[0])
+        self.assertIn("pid 999 (exited) cwd unknown", held[0])
+        self.assertIn("pid 1234 (runner) lease unknown", held[0])
+
+
+class DoneWhileHelpersComeAndGoTests(LaneCase):
+    """fathers#158: done on an idle landed lane goes through while other short-lived processes come and go."""
+
+    def test_done_on_an_idle_landed_lane_succeeds_while_unknowns_come_and_go(self) -> None:
+        worktree = self.created("a", "lib/a.txt")
+        self.commit(worktree, {"lib/a.txt": "a\n"})
+        self.lane("check", "a")
+        self.lane("land", "a", "--keep")
+        program = self.tmp / "procs-slotfather"
+        program.write_text(SCRIPT)
+        program.chmod(0o755)
+        (self.tmp / "answer.json").write_text(json.dumps({
+            "initial": [], "offers": [], "rounds": [{"cwd_unknown": [16067]}, {"lease_unknown": [15891]}, {}]}))
+        self.env["PROCESS_FIXTURE"] = str(self.tmp)
+        source = SlotfatherSource(str(program))
+        source.pause = 0
+        def given(project: Any = None) -> SlotfatherSource:
+            del project
+            return source
+
+        with unittest.mock.patch.object(procs, "source", given):
+            output = self.lane("done", "a", process=False)
+        self.assertIn("Lane a done", output)
+        self.assertFalse(Path(worktree).exists())
+

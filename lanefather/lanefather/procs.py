@@ -22,6 +22,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import time
 from typing import Any, Protocol, cast
 
 from . import config, slots
@@ -91,6 +92,9 @@ class SlotfatherSource:
     """Read-only process observations through versioned CLI contracts; identity-bound stopping is unavailable."""
 
     NAME = "slotfather sweep"
+    # fathers#158: how often an answer with unknown pids is asked again, and the pause before each.
+    retries = 4
+    pause = 0.5
 
     def __init__(self, command: str):
         self.command = command
@@ -121,11 +125,46 @@ class SlotfatherSource:
             raise QueryError("incomplete process query")
         return data
 
+    def _settled(self, root: str) -> dict[str, Any]:
+        """`procs --cwd root` until one answer has no unknown pid (fathers#158): on a busy machine short-lived
+        helpers (lsof, git, a shell) exit between the scan and the read of their working directory. An answer that
+        still has unknowns after the retries refuses, naming each pid and its command."""
+        query = self._query("--cwd", root)
+        for _ in range(self.retries):
+            if not query["cwd_unknown"] and not query["lease_unknown"]:
+                return query
+            time.sleep(self.pause)
+            query = self._query("--cwd", root)
+        if not query["cwd_unknown"] and not query["lease_unknown"]:
+            return query
+        raise QueryError(f"working-directory or lease membership is unknown after {self.retries + 1} queries: "
+                         + "; ".join(self._unknowns(query)))
+
+    def _unknowns(self, query: dict[str, Any]) -> list[str]:
+        """Each unknown pid of an answer with its command and what is unknown. A Slotfather that names them
+        (`unknown`, fathers#158) is read as it is; for an older one, `procs --pid` asks for each command."""
+        cwd, lease = set(query["cwd_unknown"]), set(query["lease_unknown"])
+        given: Any = query.get("unknown")
+        commands: dict[Any, str] = {}
+        if isinstance(given, list):
+            for entry in cast(list[Any], given):
+                if isinstance(entry, dict) and "pid" in entry:
+                    named = cast(dict[str, Any], entry)
+                    commands[named["pid"]] = str(named.get("cmd") or "")
+        for pid in sorted(cwd | lease, key=str):
+            if pid not in commands:
+                try:
+                    rows: list[dict[str, Any]] = self._query("--pid", str(pid))["processes"]
+                    commands[pid] = str(rows[0].get("cmd", "")) if rows else "exited"
+                except (QueryError, KeyError, TypeError, IndexError):
+                    commands[pid] = "command unknown"
+        return [f"pid {pid} ({commands[pid][:100] or 'command unknown'}) "
+                + " and ".join(what for what, held in (("cwd", pid in cwd), ("lease", pid in lease)) if held)
+                + " unknown" for pid in sorted(cwd | lease, key=str)]
+
     def sort_for_removal(self, root: str) -> tuple[list[Item], list[str]]:
         try:
-            query = self._query("--cwd", root)
-            if query["cwd_unknown"] or query["lease_unknown"]:
-                raise QueryError("working-directory or lease membership is unknown")
+            query = self._settled(root)
             processes: list[dict[str, Any]] = query["processes"]
             # --cwd intentionally excludes command-line-only references: those still retain a worktree.
             named = self._query()["processes"]

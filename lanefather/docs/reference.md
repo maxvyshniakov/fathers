@@ -296,7 +296,11 @@ The [architecture pass](../docs/architecture-667.md) records the survey, alterna
 
 The standalone process adapter refuses PID-only live stopping until slotfather accepts an expected `(pid, start)`
 identity at the actual signal boundary. Existing configured hooks keep their supported cleanup contract. A missing
-`procs` on an older CLI preserves legacy `done` behavior; failed/unknown inspection retains worktrees.
+`procs` on an older CLI preserves legacy `done` behavior; failed/unknown inspection retains worktrees. An answer
+with pids whose working directory or lease membership is unknown is asked again up to four times, half a second
+apart (fathers#158): short-lived helpers that exited between the scan and the read do not hold a worktree. Unknowns
+that remain refuse `done`, naming each pid with its command (from Slotfather's `unknown`, or `procs --pid` for an
+older Slotfather).
 
 ### State and its versions
 

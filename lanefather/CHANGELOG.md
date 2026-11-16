@@ -115,6 +115,12 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 - Lanefather lives in the fathers repository with Slotfather, Junkfather and Godfather: `python3 install.py
   lanefather` from its root installs it, and its documentation links point there.
 
+### Fixed
+
+- `done` no longer refuses a landed lane because short-lived processes elsewhere on the machine came and went during
+  the process query (fathers#158): an answer with unknown pids is asked again up to four times, and a refusal names
+  each pid that stays unknown with its command.
+
 ## 0.1.0+1138486 - 2026-11-12
 
 ### Added
