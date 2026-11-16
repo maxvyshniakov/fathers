@@ -13,7 +13,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Mapping, cast
 from unittest import mock
 
 from helpers import ROOT
@@ -23,6 +23,7 @@ from test_state import entry
 
 from godfather import actions, app, reducer, sources, state as state_module
 from godfather.adapters import junkfather, lanefather
+from godfather.model import Lane, Processes
 
 START = "Tue Nov  4 09:00:00 2026"
 
@@ -59,7 +60,7 @@ class RequestTests(unittest.TestCase):
 
 
 class ProcessTests(unittest.TestCase):
-    def row(self, ident: str) -> dict[str, Any]:
+    def row(self, ident: str) -> Mapping[str, Any]:
         found = junkfather.find(procs_decoded(), ("entry", ident))
         assert found is not None
         return found
@@ -90,7 +91,7 @@ class ProcessTests(unittest.TestCase):
 
 
 class LaneTests(unittest.TestCase):
-    def lane(self, ident: str = "710-speech-paste-phase") -> dict[str, Any]:
+    def lane(self, ident: str = "710-speech-paste-phase") -> Lane:
         found = lanefather.find(lanes_decoded(), (STRAYLIGHT, ident))
         assert found is not None
         return found
@@ -250,7 +251,7 @@ class RunTests(FixtureCase):
 class RecheckTests(unittest.TestCase):
     """fathers#88 review: an action runs only on a row still in the state it needs, rebuilt from a fresh snapshot."""
 
-    def snapshot(self, **changes: Any) -> dict[str, Any]:
+    def snapshot(self, **changes: Any) -> Processes:
         raw = json.loads((PROCS / "junkfather" / "replies.json").read_text())["status --json"]["json"]
         for ident, fields in changes.items():
             for row in raw["entries"]:

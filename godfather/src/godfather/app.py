@@ -39,6 +39,7 @@ from .adapters import settings as _settings_adapter
 from .adapters import slotfather as _slotfather
 from .adapters.settings import Conflict, ReadOnly, SettingsClient, SettingsError
 from .adapters.slotfather import Unsupported
+from .model import Dashboard
 from .sources import SnapshotError, Source
 from . import pages as _pages
 from . import reducer as _reducer
@@ -154,7 +155,7 @@ class Screen:
             self.rows = _events.rows(self.feed.events(), dict(followed))
         return self.rows
 
-    def load(self, _: Any = None) -> tuple[dict[str, Any] | None, str | None]:
+    def load(self, _: Any = None) -> tuple[Dashboard | None, str | None]:
         """(the model to draw, the refresh error for the footer); discovery first when it is due."""
         source = self.source
         if source.due():
@@ -167,7 +168,8 @@ class Screen:
             source.took(None, str(error))
         if source.snapshot is None:
             return None, source.problem
-        model = dict(source.snapshot, installed=_version.installed_source())
+        model = cast(Dashboard, dict(source.snapshot))  # decode() made it (fathers#142); a copy to add this load's
+        model["installed"] = _version.installed_source()
         # EVENTS (fathers#84): every source's log, never the snapshot's described events; a Slotfather whose
         # capabilities name no log shows none and says why
         model["events"] = self.events()
@@ -179,8 +181,9 @@ class Screen:
         if not _events.log_path(source.capabilities):  # no event log of a version this Godfather reads: why
             named = isinstance(_events.dashboard_block(source.capabilities).get("events"), dict)
             model["events_note"] = _events_view.TOO_NEW if named else _events_view.TOO_OLD
-        for name in ("holders", "waiters"):  # this frame's colours and lanes stay off the cached snapshot
-            model[name] = [dict(item) for item in source.snapshot[name]]
+        # This frame's colours and lanes stay off the cached snapshot
+        model["holders"] = [item.copy() for item in model["holders"]]
+        model["waiters"] = [item.copy() for item in model["waiters"]]
         if source.state == "stale" and source.failed_at is not None:
             model["stale_since"] = datetime.datetime.fromtimestamp(source.failed_at, datetime.timezone.utc)
         return model, source.problem if source.state == "stale" else None

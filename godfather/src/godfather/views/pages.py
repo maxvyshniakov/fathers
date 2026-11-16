@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional, cast
+from typing import Any, Callable, Mapping, Optional, Sequence, cast
 
 from .. import entries as _entries
 from .. import layout as _layout
@@ -32,6 +32,8 @@ Link = Optional[tuple[Any, ...]]  # a document row's target, or none
 PAGE_KEYS = {"lanes": "2", "processes": "3"}
 TITLES = {"lanes": "LANES", "processes": "PROCESSES"}
 TOOL_NAMES = {"lanes": "Lanefather", "processes": "Junkfather"}
+
+Row = Mapping[str, Any]  # a table row: a decoded lane or entry (model.py), or a project or separator row
 
 
 # The summaries in SLOTS' bottom border (SPEC 13)
@@ -116,9 +118,9 @@ PAGE_TABLE = {"lanes": "lanes", "processes": "procs"}
 MARK = 4  # a row's state mark and the gap after it
 
 
-def draw_table(canvas: Canvas, rect: Rect, name: str, title: str, spec: list[Spec], rows: list[dict[str, Any]],
-               selected: Optional[int], values: Callable[[dict[str, Any]], dict[str, Any]],
-               heading: Callable[[dict[str, Any]], Part], note: str = "") -> None:
+def draw_table(canvas: Canvas, rect: Rect, name: str, title: str, spec: list[Spec], rows: Sequence[Row],
+               selected: Optional[int], values: Callable[[Row], dict[str, Any]],
+               heading: Callable[[Row], Part], note: str = "") -> None:
     """A page's table: its columns in the top border, a heading row for each unselectable row (a project, a
     separator), the selected row marked as QUEUE's is; clicks reach rows through row_items."""
     panel = Panel(canvas, rect, name)
@@ -187,7 +189,7 @@ LANE_COLUMNS: list[Spec] = [("state", "", 2, False, 0), ("lane", "lane", 0, Fals
                             ("age", "age", 6, True, 1)]
 
 
-def lane_values(row: dict[str, Any], marks: _common.Marks, moment: Optional[datetime.datetime]) -> dict[str, Any]:
+def lane_values(row: Row, marks: _common.Marks, moment: Optional[datetime.datetime]) -> dict[str, Any]:
     ticket = row["ticket"].get("number")
     receipt = row["receipt"]["status"]
     review = row["review"]
@@ -199,7 +201,7 @@ def lane_values(row: dict[str, Any], marks: _common.Marks, moment: Optional[date
             "claims": (str(len(row["claims"])), "dim"), "age": (age(moment, row.get("created")), "dim")}
 
 
-def project_heading(row: dict[str, Any]) -> Part:
+def project_heading(row: Row) -> Part:
     if row.get("error"):
         return f"{row['project']} · {dashboard_text(row['error'])}", "dim"
     of = f"{row['active']} of {row['cap']} lanes" if row.get("cap") is not None else \
@@ -207,7 +209,7 @@ def project_heading(row: dict[str, Any]) -> Part:
     return f"{row['project']} · {of}", "bold"
 
 
-def lane_facts(lane: dict[str, Any], model: Optional[Model], extra: list[tuple[str, list[Part], Link]]) \
+def lane_facts(lane: Row, model: Optional[Model], extra: list[tuple[str, list[Part], Link]]) \
         -> list[tuple[str, list[Part], Link]]:
     """LANE DETAILS: project, ticket, branch and base, worktree, claims, after, receipt, review, the latest log, and
     the leases that run for it, each a link back to the overview."""
@@ -249,7 +251,7 @@ def lane_facts(lane: dict[str, Any], model: Optional[Model], extra: list[tuple[s
 
 
 def draw_lanes(canvas: Canvas, tool: Any, selected: Optional[int], model: Optional[Model],
-               moment: Optional[datetime.datetime], extra: Callable[[dict[str, Any]], list[Any]] = lambda _: []) -> None:
+               moment: Optional[datetime.datetime], extra: Callable[[Row], list[Any]] = lambda _: []) -> None:
     """The Lanes page: LANES grouped by project, LANE DETAILS for the selected lane, its Lanefather events."""
     if tool.state == "unsupported":
         draw_notice(canvas, "lanes", [str(tool.problem), "The Lanes page needs a Lanefather with `status --json`."])
@@ -282,7 +284,7 @@ def draw_lanes(canvas: Canvas, tool: Any, selected: Optional[int], model: Option
                 cell[1] = "dim"
 
 
-def lane_event_of(row: dict[str, Any], lane: dict[str, Any]) -> bool:
+def lane_event_of(row: dict[str, Any], lane: Row) -> bool:
     """A Lanefather event is the lane's when its subject is the lane's id in the lane's project: by the state
     directory it names, else by the project's name; never by the id alone where the event names another project."""
     subject: dict[str, Any] = row.get("subject") or {}
@@ -311,7 +313,7 @@ PROCESS_COLUMNS: list[Spec] = [("state", "", 2, False, 0), ("label", "label", 0,
                                ("pid", "pid", 6, True, 6), ("processes", "processes", 14, False, 7)]
 
 
-def process_values(row: dict[str, Any], marks: _common.Marks, elapsed: float) -> dict[str, Any]:
+def process_values(row: Row, marks: _common.Marks, elapsed: float) -> dict[str, Any]:
     """A PROCESSES row: an owned entry, an unowned process or an unowned resource."""
     label = (dashboard_text(_junkfather.label_of(row)), "text")
     if row["kind"] == "unowned":
@@ -340,11 +342,11 @@ def resource_text(kind: str, ident: str) -> str:
     return f"{kind} {_junkfather.short_id(ident, 9)}"
 
 
-def separator(row: dict[str, Any]) -> Part:
+def separator(row: Row) -> Part:
     return ("unowned · the last sweep's", "dim") if row.get("kind") == "separator" else ("", "dim")
 
 
-def process_facts(row: dict[str, Any], model: Optional[Model], lanes: Optional[dict[str, Any]],
+def process_facts(row: Row, model: Optional[Model], lanes: Optional[dict[str, Any]],
                   elapsed: float) -> list[tuple[str, list[Part], Link]]:
     """PROCESS DETAILS: an owned entry's command, directory, log, owner and whether it lives, keep, mode, its
     resource, its TTL, and its lease and lane as links; an unowned process's command and why; an unowned resource's
@@ -415,7 +417,7 @@ def process_facts(row: dict[str, Any], model: Optional[Model], lanes: Optional[d
     return facts
 
 
-def process_links(entries: list[dict[str, Any]], elapsed: float, label: str = "processes") \
+def process_links(entries: Sequence[Row], elapsed: float, label: str = "processes") \
         -> list[tuple[str, list[Part], Link]]:
     """`processes` rows: each owned entry's label, state and TTL left, a link to the Processes page; `none owned`."""
     if not entries:
@@ -462,7 +464,7 @@ def draw_processes(canvas: Canvas, tool: Any, selected: Optional[int], model: Op
                 cell[1] = "dim"
 
 
-def process_event_of(event: dict[str, Any], row: dict[str, Any]) -> bool:
+def process_event_of(event: dict[str, Any], row: Row) -> bool:
     """A Junkfather event is the row's when its subject is the entry, the unowned pid or the resource."""
     subject: dict[str, Any] = event.get("subject") or {}
     if row["kind"] == "entry":

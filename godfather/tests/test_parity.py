@@ -27,6 +27,7 @@ from helpers import ROOT, timezone
 from godfather import app, entries, layout, overlay_text, sources, state, tui
 from godfather.adapters import slotfather as adapter
 from godfather.layout import Rect
+from godfather.model import Dashboard
 from godfather.views import common, overview
 
 
@@ -103,7 +104,7 @@ class ParityTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.theme = app._theme.from_environment(environ={})
 
-    def model(self) -> dict[str, Any]:
+    def model(self) -> Dashboard:
         model, error = app.Screen().load()
         self.assertIsNone(error)
         assert model is not None

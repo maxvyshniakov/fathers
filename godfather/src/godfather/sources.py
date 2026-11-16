@@ -21,7 +21,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any, NamedTuple, Optional
+from typing import Any, Mapping, NamedTuple, Optional, cast
 
 TOOLS = ("slotfather", "lanefather", "junkfather")  # the names Godfather looks for (SPEC: built in)
 CAPABILITIES_TIMEOUT = 2.0
@@ -59,11 +59,13 @@ def _fixture_reply(root: Path, tool: str, argv: list[str]) -> Reply:
         replies = json.loads((root / tool / "replies.json").read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         return Reply(127, "", f"{tool}: no fixture replies ({error})")
-    found = replies.get(" ".join(argv)) if isinstance(replies, dict) else None
+    recorded_replies: dict[str, Any] = cast(dict[str, Any], replies) if isinstance(replies, dict) else {}
+    found: Any = recorded_replies.get(" ".join(argv))
     if not isinstance(found, dict):
         return Reply(127, "", f"{tool}: no fixture for {' '.join(argv)}")
-    stdout = json.dumps(found["json"]) if "json" in found else str(found.get("stdout", ""))
-    return Reply(int(found.get("code", 0)), stdout, str(found.get("stderr", "")))
+    reply = cast(dict[str, Any], found)
+    stdout = json.dumps(reply["json"]) if "json" in reply else str(reply.get("stdout", ""))
+    return Reply(int(reply.get("code", 0)), stdout, str(reply.get("stderr", "")))
 
 
 def is_write(argv: list[str]) -> bool:
@@ -190,7 +192,7 @@ class Source:
         self.executable: Optional[str] = None
         self.resolved: Optional[str] = None
         self.version: Optional[str] = None
-        self.snapshot: Optional[dict[str, Any]] = None
+        self.snapshot: Optional[Mapping[str, Any]] = None  # its adapter's model (model.py)
         self.snapshot_at: Optional[float] = None  # time.time() of the last good snapshot
         self.failed_at: Optional[float] = None  # time.time() of the first failure since it
         self.checked = -float("inf")
@@ -239,7 +241,7 @@ class Source:
             self.problem = f"{self.name}: no dashboard contract ({why}); " \
                            f"update {self.name}"
             return
-        self.version = str(value.get("version") or "?")
+        self.version = str(cast(dict[str, Any], value).get("version") or "?")
         why = self.adapter.unsupported(value)
         if why:
             self.capabilities, self.state, self.problem = None, "unsupported", f"{self.name} {self.version}: {why}"
@@ -249,9 +251,10 @@ class Source:
             self.state, self.problem = "ok", None
 
     def snapshot_argv(self) -> list[str]:
-        block = (self.capabilities or {}).get("dashboard") or {}
-        argv = (block.get("snapshot") or {}).get("argv")
-        return [str(part) for part in argv] if isinstance(argv, list) else []
+        block: Any = (self.capabilities or {}).get("dashboard")
+        snapshot: Any = cast(dict[str, Any], block).get("snapshot") if isinstance(block, dict) else None
+        argv: Any = cast(dict[str, Any], snapshot).get("argv") if isinstance(snapshot, dict) else None
+        return [str(part) for part in cast(list[Any], argv)] if isinstance(argv, list) else []
 
     def poll(self) -> Any:
         """The snapshot command once, decoded: the adapter's model. Raises SnapshotError with why it failed."""
@@ -262,7 +265,7 @@ class Source:
             raise SnapshotError(problem or f"{self.name} {' '.join(self.snapshot_argv())} printed nothing")
         return value
 
-    def took(self, value: Optional[dict[str, Any]], failure: Optional[str]) -> None:
+    def took(self, value: Optional[Mapping[str, Any]], failure: Optional[str]) -> None:
         """A snapshot result: a good one replaces the last, a failure leaves it and marks the source stale."""
         if failure is None and value is not None:
             self.snapshot, self.snapshot_at, self.failed_at = value, time.time(), None

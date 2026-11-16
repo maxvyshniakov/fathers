@@ -154,6 +154,11 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Fixed
 
+- A Slotfather snapshot missing a request's `pid`, `kind`, `count`, `procs`, `yields` or `rss`, or one of the
+  dashboard block's required fields, is now the source's notice (`a request has no pid; update slotfather`) instead of
+  ending the view with a KeyError (fathers#142); unknown keys are still ignored and optional ones defaulted. Each
+  tool's snapshot is checked once, when it is decoded, into a typed model.
+
 - `?` and `v` switch between help and the changelog instead of closing one, and keys typed right after `v`
   scroll the changelog (fathers#17).
 - The selection follows its request through reorders, grants and yields; when it ends, the selection moves to its

@@ -42,7 +42,7 @@ class ReplayTests(unittest.TestCase):
             self.assertEqual(before["verb"] == "granted", after["filled"], "filled cells for a grant, else hollow")
             self.assertTrue("".join(text for text, _ in after["detail"]), f"a result for {after['kind']}")
         self.assertEqual({"lease.granted", "lease.released"}, {row["kind"] for row in rows})
-        self.assertEqual([("slotfather", "slot")], model["sources"])
+        self.assertEqual([("slotfather", "slot")], model.get("sources"))
 
     def test_a_slotfather_whose_capabilities_name_no_log_shows_none_and_says_why(self) -> None:
         import shutil
@@ -63,7 +63,7 @@ class ReplayTests(unittest.TestCase):
             model, _ = app.Screen().load()
         assert model is not None
         self.assertEqual(([], [], "slotfather too old for events"),
-                         (model["events"], model["sources"], model["events_note"]),
+                         (model["events"], model.get("sources"), model.get("events_note")),
                          "no fallback to the snapshot's described events")
 
     def test_a_slotfather_whose_log_has_only_newer_versions_needs_a_newer_godfather(self) -> None:
@@ -84,7 +84,7 @@ class ReplayTests(unittest.TestCase):
 
             model, _ = app.Screen().load()
         assert model is not None
-        self.assertEqual("slotfather's events need a newer godfather", model["events_note"])
+        self.assertEqual("slotfather's events need a newer godfather", model.get("events_note"))
 
     def test_a_rows_identity_survives_reading_its_log_again(self) -> None:
         """fathers#84 review: a Tail made anew numbers lines from one again; `↑ N new` must not take that for new

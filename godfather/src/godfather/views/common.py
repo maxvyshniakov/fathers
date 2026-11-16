@@ -13,7 +13,7 @@ from .. import version as _version
 from ..text import text_width
 
 Part = tuple[str, str]
-Model = dict[str, Any]
+from ..model import Dashboard as Model  # noqa: E402
 Item = dict[str, Any]
 
 # A QUEUE row's state (#15), the first column of every row: (emoji, ASCII). A running row shows the first of asked,

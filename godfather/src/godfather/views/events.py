@@ -23,9 +23,9 @@ from ..layout import Rect
 from ..tui import Canvas
 from ..text import clock, span, text_width
 from ..widgets import FLEXIBLE_MIN, FOCUS_FRAME, REST_FRAME, Panel, Part, Spec, Table
-from ..events import ALL, Filter, shown_rows, view_of, views
+from ..events import ALL, Filter, Model, shown_rows, view_of, views
 from . import common as _common
-from .common import Model, cell_run, cells_width
+from .common import cell_run, cells_width
 
 DETAIL_MIN, DETAIL_MAX = 6, 28  # a detail column's least and greatest width; it grows to its longest value
 EVENT_MAX = 10  # the event column's greatest width

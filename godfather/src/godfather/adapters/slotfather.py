@@ -10,6 +10,8 @@ from __future__ import annotations
 import datetime
 from typing import Any, Optional, cast
 
+from ..model import (DASHBOARD_REQUIRED, REQUEST_REQUIRED, Dashboard, Expected, HistoryStep, Request, TreeRow,
+                     missing)
 from . import settings as _settings
 
 TAG = "slot"
@@ -23,17 +25,26 @@ class Unsupported(ValueError):
     """A snapshot this Godfather cannot read: an unknown version, or not the documented shape."""
 
 
+def _object(value: Any) -> dict[str, Any]:
+    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
+
+
+def _list(value: Any) -> list[Any]:
+    return cast(list[Any], value) if isinstance(value, list) else []
+
+
 def unsupported(capabilities: dict[str, Any]) -> Optional[str]:
     """Why a capabilities answer names no contract this Godfather reads, None when it names one."""
-    block = capabilities.get("dashboard")
+    block: Any = capabilities.get("dashboard")
     if capabilities.get("v") not in CAPABILITIES_VERSIONS or not isinstance(block, dict):
         return "no dashboard contract; update slotfather"
-    snapshot = block.get("snapshot")
-    if block.get("v") not in DASHBOARD_VERSIONS or not isinstance(snapshot, dict) \
-            or not isinstance(snapshot.get("argv"), list) or not snapshot["argv"]:
+    dashboard = _object(block)
+    snapshot: Any = dashboard.get("snapshot")
+    if dashboard.get("v") not in DASHBOARD_VERSIONS or not isinstance(snapshot, dict) \
+            or not _list(_object(snapshot).get("argv")):
         return "no dashboard contract; update slotfather"
-    versions = snapshot.get("versions")
-    if not isinstance(versions, list) or not any(v in SNAPSHOT_VERSIONS for v in versions):
+    versions: Any = _object(snapshot).get("versions")
+    if not isinstance(versions, list) or not any(v in SNAPSHOT_VERSIONS for v in _list(versions)):
         return "needs a newer godfather"
     return None
 
@@ -43,8 +54,7 @@ def settings_supported(capabilities: Optional[dict[str, Any]]) -> bool:
 
 
 def changelog(capabilities: Optional[dict[str, Any]]) -> Optional[str]:
-    block = (capabilities or {}).get("dashboard") or {}
-    path = block.get("changelog") if isinstance(block, dict) else None
+    path: Any = _object((capabilities or {}).get("dashboard")).get("changelog")
     return path if isinstance(path, str) and path.startswith("/") else None
 
 
@@ -75,125 +85,164 @@ def _number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def expected_of(raw: Any) -> Optional[dict[str, Any]]:
+def _whole(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _text(value: Any, default: str = "") -> str:
+    return value if isinstance(value, str) else default
+
+
+def _optional_text(value: Any) -> Optional[str]:
+    return value if isinstance(value, str) and value else None
+
+
+def expected_of(raw: Any) -> Optional[Expected]:
     """A status entry's `expected` (fathers#106) when it is the documented shape: `key`, `p50` and `p90` seconds and
     `runs`, `fallback`; None for null or anything else."""
-    if not isinstance(raw, dict):
-        return None
-    value = cast(dict[str, Any], raw)
-    if not _number(value.get("p50")) or not _number(value.get("p90")) \
-            or not isinstance(value.get("runs"), int) or isinstance(value.get("runs"), bool):
+    value = _object(raw)
+    if not _number(value.get("p50")) or not _number(value.get("p90")) or not _whole(value.get("runs")):
         return None
     return {"key": str(value.get("key") or ""), "p50": float(value["p50"]), "p90": float(value["p90"]),
             "runs": int(value["runs"]), "fallback": bool(value.get("fallback"))}
 
 
-def _entries(snapshot: dict[str, Any]) -> dict[tuple[Any, Any], list[dict[str, Any]]]:
+Entries = dict[tuple[Any, Any], list[dict[str, Any]]]
+
+
+def _entries(snapshot: dict[str, Any]) -> Entries:
     """`status --json`'s entries by the dashboard rows' old key, [pid, since], each key's in the order given: the rows
     take their `lease_id`, `expected` and `overrun` from them (the dashboard block does not carry them)."""
-    found: dict[tuple[Any, Any], list[dict[str, Any]]] = {}
-    entries: Any = snapshot.get("entries")
-    for raw in cast(list[Any], entries) if isinstance(entries, list) else []:
+    found: Entries = {}
+    for raw in _list(snapshot.get("entries")):
         if isinstance(raw, dict):
-            entry = cast(dict[str, Any], raw)
+            entry = _object(raw)
             found.setdefault((entry.get("pid"), entry.get("since")), []).append(entry)
     return found
 
 
-def _item(raw: Any, entries: Optional[dict[tuple[Any, Any], list[dict[str, Any]]]] = None) -> dict[str, Any]:
+def _tree(raw: Any) -> list[TreeRow]:
+    rows = _list(raw)
+    if not all(isinstance(row, list) and len(_list(row)) == 4 for row in rows):
+        raise Unsupported("a request's process tree is not [[pid, cpu, rss, name]]")
+    return [tuple(_list(row)) for row in rows]
+
+
+def _item(raw: Any, entries: Optional[Entries] = None) -> Request:
+    """One request, checked once (fathers#142): its required keys present and numbers, the rest defaulted."""
     if not isinstance(raw, dict):
         raise Unsupported("a request is not an object")
-    item: dict[str, Any] = dict(cast(dict[str, Any], raw))
-    for key in TIMES:
-        item[key] = parse_time(item.get(key))
-    given: Any = item.get("key")
-    old: tuple[Any, ...] = tuple(cast(list[Any], given)) if isinstance(given, list) else (item.get("pid"),
-                                                                                          item.get("since"))
+    given = _object(raw)
+    lacking = missing(given, REQUEST_REQUIRED)
+    if lacking is not None:
+        raise Unsupported(f"a request has no {lacking}; update slotfather")
+    for name in ("count", "pid", "procs", "yields", "rss"):
+        if not _number(given[name]):
+            raise Unsupported(f"a request's {name} is not a number")
+    if given.get("cpu") is not None and not _number(given["cpu"]):
+        raise Unsupported("a request's cpu is not a number")
+    old: tuple[Any, ...] = tuple(_list(given["key"])) if isinstance(given.get("key"), list) else (
+        given["pid"], given.get("since"))
     # The entry's facts in `status --json` (fathers#101, fathers#106): the first not yet taken with this row's old key
     same = (entries or {}).get((old[0], old[1]) if len(old) == 2 else (None, None)) \
-        if item.get("kind") != "legacy" else None
+        if given["kind"] != "legacy" else None
     entry: dict[str, Any] = same.pop(0) if same else {}
-    lease: Any = item.get("lease_id", entry.get("lease_id"))
-    item["lease_id"] = lease if isinstance(lease, str) and lease else None
-    item["expected"] = expected_of(item.get("expected", entry.get("expected")))
-    item["overrun"] = item.get("overrun", entry.get("overrun")) is True and item["expected"] is not None
-    # Identity (fathers#21, fathers#101): the lease id, else, from an older Slotfather, [pid, since]
-    item["key"] = item["lease_id"] or old
-    start: Any = item.get("start", entry.get("start"))  # the holder's process start, which an action passes back
-    item["start"] = start if isinstance(start, str) and start else None
-    tree = raw.get("tree") or []
-    if not isinstance(tree, list) or not all(isinstance(row, list) and len(row) == 4 for row in tree):
-        raise Unsupported("a request's process tree is not [[pid, cpu, rss, name]]")
-    item["tree"] = [tuple(row) for row in tree]
-    for name in ("cpu", "rss", "procs", "count", "yields"):
-        if not isinstance(item.get(name, 0), (int, float, type(None))):
-            raise Unsupported(f"a request's {name} is not a number")
-    item.setdefault("context", {})
-    item.setdefault("meta", "")
-    item.setdefault("cmd", "")
-    item.setdefault("queue", "")
-    item.setdefault("label", "")
-    item.setdefault("asked", "")
-    item["style"] = "text" if item.get("kind") == "waiting" else "legacy"  # holder colours: the app's
+    lease: Any = given.get("lease_id", entry.get("lease_id"))
+    lease_id = lease if isinstance(lease, str) and lease else None
+    expected = expected_of(given.get("expected", entry.get("expected")))
+    start: Any = given.get("start", entry.get("start"))  # the holder's process start, which an action passes back
+    item: Request = {
+        # Identity (fathers#21, fathers#101): the lease id, else, from an older Slotfather, [pid, since]
+        "key": lease_id or old, "kind": str(given["kind"]), "count": int(given["count"]), "pid": int(given["pid"]),
+        "procs": int(given["procs"]), "yields": int(given["yields"]), "rss": int(given["rss"]),
+        "cpu": float(given["cpu"]) if given.get("cpu") is not None else None, "tree": _tree(given.get("tree")),
+        "queue": _text(given.get("queue")), "label": _text(given.get("label")), "cmd": _text(given.get("cmd")),
+        "meta": _text(given.get("meta")), "workdir": _text(given.get("workdir")), "asked": _text(given.get("asked")),
+        "context": _object(given.get("context")), "priority": _text(given.get("priority"), "normal") or "normal",
+        "since": parse_time(given.get("since")), "granted": parse_time(given.get("granted")),
+        "asked_at": parse_time(given.get("asked_at")), "idle_since": parse_time(given.get("idle_since")),
+        "est_start": parse_time(given.get("est_start")), "lease_id": lease_id, "expected": expected,
+        "overrun": given.get("overrun", entry.get("overrun")) is True and expected is not None,
+        "start": start if isinstance(start, str) and start else None,
+        "style": "text" if given["kind"] == "waiting" else "legacy"}  # holder colours: the app's
+    for name in ("ticket", "served", "reprioritized"):
+        if name in given:
+            item[name] = _optional_text(given[name])
+    if _whole(given.get("uid")):
+        item["uid"] = int(given["uid"])
+    for flag in ("yieldable", "passable", "all"):
+        if flag in given:
+            item[flag] = given[flag] is True
     return item
 
 
-def decode(snapshot: Any) -> dict[str, Any]:
+def _history(raw: Any) -> list[HistoryStep]:
+    history: list[HistoryStep] = []
+    for value in _list(raw):
+        step = _list(value)
+        start, end = parse_time(step[0]), parse_time(step[1])
+        if start is None or end is None or not _number(step[2]):
+            raise Unsupported("a history step is not [start, end, slots]")
+        history.append((start, end, int(step[2])))
+    return history
+
+
+def decode(snapshot: Any) -> Dashboard:
     """The overview's model from one `status --json --full` reply; Unsupported when its version is unknown or it
-    is not the documented shape (the last good model then stays on screen, stale)."""
+    is not the documented shape (the last good model then stays on screen, stale). Checked here, once: unknown keys
+    are ignored, a missing required one is this notice (fathers#142)."""
     if not isinstance(snapshot, dict):
         raise Unsupported("the snapshot is not a JSON object")
-    if snapshot.get("v") not in SNAPSHOT_VERSIONS:
-        raise Unsupported(f"status --json version {snapshot.get('v')!r}; needs a newer godfather")
-    block = snapshot.get("dashboard")
-    if not isinstance(block, dict):
+    found = _object(snapshot)
+    if found.get("v") not in SNAPSHOT_VERSIONS:
+        raise Unsupported(f"status --json version {found.get('v')!r}; needs a newer godfather")
+    if not isinstance(found.get("dashboard"), dict):
         raise Unsupported("status --json --full has no dashboard block; update slotfather")
+    block = _object(found["dashboard"])
     if block.get("v") not in DASHBOARD_VERSIONS:
         raise Unsupported(f"dashboard block version {block.get('v')!r}; needs a newer godfather")
-    model = dict(block)
+    lacking = missing(block, DASHBOARD_REQUIRED)
+    if lacking is not None:
+        raise Unsupported(f"dashboard.{lacking} is missing; update slotfather")
     try:
-        entries = _entries(cast(dict[str, Any], snapshot))
-        model["holders"] = [_item(raw, entries) for raw in block.get("holders") or []]
-        model["waiters"] = [_item(raw, entries) for raw in block.get("waiters") or []]
-        model["events"] = []  # EVENTS reads the event logs (fathers#84); the block's described events are not read
-        history = []
-        for step in block.get("history") or []:
-            start, end = parse_time(step[0]), parse_time(step[1])
-            if start is None or end is None or not isinstance(step[2], (int, float)):
-                raise Unsupported("a history step is not [start, end, slots]")
-            history.append((start, end, int(step[2])))
-        model["history"] = history
-        for name in ("start", "reserved"):
-            model[name] = parse_time(block.get(name))
-        model["updated"] = parse_time(block.get("updated")) or parse_time(snapshot.get("time")) \
-            or datetime.datetime.now(datetime.timezone.utc)
-        averages = block.get("averages")
-        model["averages"] = tuple(float(value) for value in averages) if isinstance(averages, list) else (0.0, 0.0, 0.0)
-        if not isinstance(model.get("overtake_window"), (int, float)) or isinstance(model["overtake_window"], bool):
-            raise Unsupported("dashboard.overtake_window is not a number of seconds")
-        for name in ("slots", "cores", "used", "free"):
-            if not isinstance(model.get(name), int) or isinstance(model.get(name), bool):
-                raise Unsupported(f"dashboard.{name} is not a whole number")
-        if model["slots"] < 1 or model["cores"] < 1:
-            raise Unsupported("dashboard.slots and dashboard.cores must be at least 1")
-        if not isinstance(model.setdefault("basis", {}), dict):
-            raise Unsupported("dashboard.basis is not an object")
-        for name in ("advice", "memory"):
-            if not isinstance(model.get(name), dict):
-                raise Unsupported(f"dashboard.{name} is not an object")
+        entries = _entries(found)
+        holders = [_item(raw, entries) for raw in _list(block.get("holders"))]
+        waiters = [_item(raw, entries) for raw in _list(block.get("waiters"))]
+        history = _history(block.get("history"))
+        averages = tuple(float(value) for value in _list(block.get("averages"))) or (0.0, 0.0, 0.0)
     except (TypeError, IndexError, KeyError, AttributeError, ValueError) as error:
         if isinstance(error, Unsupported):
             raise
         raise Unsupported(f"malformed dashboard block ({error})") from None
-    model.setdefault("draining", 0)
-    model.setdefault("order", "window")
-    model.setdefault("limit", 0)
-    model.setdefault("admission", None)
-    model.setdefault("memory_block", None)
-    model.setdefault("saved", False)
-    model.setdefault("directory", "")
-    model["host"] = snapshot.get("host")
-    return model
+    if not _number(block["overtake_window"]):
+        raise Unsupported("dashboard.overtake_window is not a number of seconds")
+    for name in ("slots", "cores", "used", "free"):
+        if not _whole(block[name]):
+            raise Unsupported(f"dashboard.{name} is not a whole number")
+    if block["slots"] < 1 or block["cores"] < 1:
+        raise Unsupported("dashboard.slots and dashboard.cores must be at least 1")
+    if not isinstance(block.get("basis", {}), dict):
+        raise Unsupported("dashboard.basis is not an object")
+    for name in ("advice", "memory"):
+        if not isinstance(block[name], dict):
+            raise Unsupported(f"dashboard.{name} is not an object")
+    admission: Any = block.get("admission")
+    limit: Any = block.get("limit")
+    draining: Any = block.get("draining")
+    return {
+        "v": int(block["v"]), "directory": _text(block.get("directory")), "slots": int(block["slots"]),
+        "cores": int(block["cores"]), "saved": block.get("saved") is True, "basis": _object(block.get("basis")),
+        "averages": averages, "draining": int(draining) if _whole(draining) else 0, "advice": _object(block["advice"]),
+        "holders": holders, "waiters": waiters, "used": int(block["used"]), "free": int(block["free"]),
+        "memory_block": _optional_text(block.get("memory_block")),
+        "admission": int(admission) if _whole(admission) else None,
+        "order": _text(block.get("order"), "window") or "window", "start": parse_time(block.get("start")),
+        "reserved": parse_time(block.get("reserved")), "limit": float(limit) if _number(limit) else 0,
+        "memory": _object(block["memory"]), "history": history,
+        "events": [],  # EVENTS reads the event logs (fathers#84); the block's described events are not read
+        "updated": parse_time(block.get("updated")) or parse_time(found.get("time"))
+        or datetime.datetime.now(datetime.timezone.utc),
+        "overtake_window": float(block["overtake_window"]), "host": _optional_text(found.get("host"))}
 
 
 # Settings go through the tools' shared contract (adapters/settings.py); these names stay importable from here

@@ -19,8 +19,11 @@ import sys
 import time
 import types
 from pathlib import Path
-from typing import Any, Callable, Union
+from typing import TYPE_CHECKING, Any, Callable, Union, cast
 from unittest import mock
+
+if TYPE_CHECKING:
+    from godfather.model import Dashboard
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -110,8 +113,8 @@ def load_scene(advance: bool = False, elapsed: Callable[[], float] | None = None
         return fresh
 
     class Scene(app.Screen):
-        def load(self, _: Any = None) -> tuple[dict[str, Any] | None, str | None]:
-            return sample(), None
+        def load(self, _: Any = None) -> tuple[Dashboard | None, str | None]:
+            return cast("Dashboard", sample()), None
 
         def notice(self) -> list[str] | None:
             return None
@@ -292,7 +295,7 @@ def main() -> None:
     if args.once:
         canvas = tui.Canvas(args.width, args.height, theme.from_environment())  # GODFATHER_THEME, _TERMINAL_BG/_FG
         found, read = app.scene_news
-        overview.dashboard_draw(canvas, model, cwd="~/straylight", news=found, read=read)
+        overview.dashboard_draw(canvas, cast("Dashboard", model), cwd="~/straylight", news=found, read=read)
         print(canvas.render(True))
     else:
         app.dashboard_live(1, screen=app.Scene())

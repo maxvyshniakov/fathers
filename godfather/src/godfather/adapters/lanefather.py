@@ -13,17 +13,18 @@ import posixpath
 import re
 import time
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, Mapping, Optional, cast
 
 from .. import sources as _sources
 from ..events import dashboard_block
+from ..model import Gate, Lane, Lanes, Project
 
 TAG = "lane"
 CAPABILITIES_VERSIONS = (1,)
 DASHBOARD_VERSIONS = (1,)
 SNAPSHOT_VERSIONS = (1,)  # `status --json` versions this Godfather reads
 SHOW_VERSIONS = (1,)  # `show --json` versions this Godfather reads
-LaneKey = tuple[str, str]  # (the project's state directory, the lane id)
+Decoded = Optional[Mapping[str, Any]]  # a decoded snapshot as the screen keeps it (Lanes), or none
 
 
 def unsupported(capabilities: dict[str, Any]) -> Optional[str]:
@@ -83,7 +84,7 @@ def parse_time(value: Any) -> Optional[datetime.datetime]:
     return None
 
 
-def _lane(raw: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
+def _lane(raw: dict[str, Any], project: Project) -> Lane:
     ticket, receipt, review = _object(raw.get("ticket")), _object(raw.get("receipt")), _object(raw.get("review"))
     logs = {str(phase): str(path) for phase, path in _object(raw.get("logs")).items() if isinstance(path, str)}
     return {
@@ -104,7 +105,7 @@ def _lane(raw: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
         "logs": logs, "outcome": raw.get("outcome")}
 
 
-def decode(snapshot: Any) -> dict[str, Any]:
+def decode(snapshot: Any) -> Lanes:
     """`lanefather status --json` as the Lanes page reads it: {"time", "projects": [...]}, each project with its lanes
     (their `key`, project and state directory set), or its `error`. SnapshotError for another version or shape."""
     if not isinstance(snapshot, dict):
@@ -115,58 +116,59 @@ def decode(snapshot: Any) -> dict[str, Any]:
     projects: Any = found.get("projects")
     if not isinstance(projects, list):
         raise _sources.SnapshotError("lanefather status --json has no projects list")
-    decoded: list[dict[str, Any]] = []
+    decoded: list[Project] = []
     for raw in cast(list[Any], projects):
         item = _object(raw)
         state_dir = _text(item.get("state_dir"))
         if state_dir is None:
             continue
         name = _text(item.get("project")) or posixpath.basename(state_dir.rstrip("/")) or state_dir
-        project: dict[str, Any] = {"project": name, "state_dir": state_dir, "repository": _text(item.get("repository"))}
+        project: Project = {"project": name, "state_dir": state_dir, "repository": _text(item.get("repository")),
+                            "lanes": []}
         if "error" in item:
             project["error"] = str(item.get("error") or "unreadable")
-            project["lanes"] = []
             decoded.append(project)
             continue
         gate = _object(item.get("gate"))
-        project.update(cap=item.get("cap") if isinstance(item.get("cap"), int) else None,
-                       active=_int(item.get("active")), planned=_int(item.get("planned")),
-                       gate={"status": _text(gate.get("status")), "sha": _text(gate.get("sha")),
-                             "at": parse_time(gate.get("at"))} if gate else None)
+        cap: Any = item.get("cap")
+        found_gate: Optional[Gate] = {"status": _text(gate.get("status")), "sha": _text(gate.get("sha")),
+                                      "at": parse_time(gate.get("at"))} if gate else None
+        project.update(cap=cap if isinstance(cap, int) else None, active=_int(item.get("active")),
+                       planned=_int(item.get("planned")), gate=found_gate)
         project["lanes"] = [_lane(_object(lane), project) for lane in cast(list[Any], item.get("lanes") or [])
                             if isinstance(lane, dict) and isinstance(cast(dict[str, Any], lane).get("id"), str)]
         decoded.append(project)
     return {"time": parse_time(found.get("time")), "projects": decoded}
 
 
-def projects(decoded: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The decoded snapshot's projects, readable or not."""
-    return cast(list[dict[str, Any]], (decoded or {}).get("projects") or [])
+def projects(decoded: Decoded) -> list[Project]:
+    """The decoded snapshot's projects, readable or not (decode() checked them)."""
+    return cast(list[Project], (decoded or {}).get("projects") or [])
 
 
-def lanes(decoded: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
+def lanes(decoded: Decoded) -> list[Lane]:
     """Every lane of every readable project, in the snapshot's order."""
-    return [lane for project in projects(decoded) for lane in cast(list[dict[str, Any]], project["lanes"])]
+    return [lane for project in projects(decoded) for lane in project["lanes"]]
 
 
-def find(decoded: Optional[dict[str, Any]], key: Any) -> Optional[dict[str, Any]]:
+def find(decoded: Decoded, key: Any) -> Optional[Lane]:
     return next((lane for lane in lanes(decoded) if lane["key"] == tuple(key or ())), None)
 
 
-def reviewing(lane: dict[str, Any]) -> bool:
+def reviewing(lane: Lane) -> bool:
     """A lane whose review runs or has findings not resolved yet."""
     return lane["review"]["status"] == "running" or lane["review"]["open"] > 0
 
 
-def summary(decoded: Optional[dict[str, Any]]) -> dict[str, Any]:
+def summary(decoded: Decoded) -> dict[str, Any]:
     """The lanes summary in SLOTS' bottom border: lanes active and planned, reviews, and whether any project's newest
     batch gate is red."""
     readable = [project for project in projects(decoded) if "error" not in project]
     found = lanes(decoded)
-    return {"active": sum(int(project["active"]) for project in readable),
-            "planned": sum(int(project["planned"]) for project in readable),
+    return {"active": sum(project.get("active", 0) for project in readable),
+            "planned": sum(project.get("planned", 0) for project in readable),
             "reviews": sum(1 for lane in found if reviewing(lane)),
-            "red": any(_object(project.get("gate")).get("status") == "red" for project in readable)}
+            "red": any((project.get("gate") or {}).get("status") == "red" for project in readable)}
 
 
 # The joins (SPEC 19): never by a lane id alone across projects
@@ -184,8 +186,7 @@ def inside(path: Any, root: Any) -> bool:
     return path == root or path.startswith(root.rstrip("/") + "/")
 
 
-def lane_of(item: dict[str, Any], decoded: Optional[dict[str, Any]], cwd: Optional[str] = None) \
-        -> Optional[dict[str, Any]]:
+def lane_of(item: Mapping[str, Any], decoded: Decoded, cwd: Optional[str] = None) -> Optional[Lane]:
     """The lane a request runs for: its `meta.lane` in the project whose state directory its `meta.lanefather.state`
     names; with only `meta.lane`, the lane of that id whose worktree holds the request's directory (its working
     directory, else the holder's `cwd`). None otherwise."""
@@ -200,10 +201,10 @@ def lane_of(item: dict[str, Any], decoded: Optional[dict[str, Any]], cwd: Option
     return next((lane for lane in candidates if inside(directory, lane["worktree"])), None)
 
 
-def leases_of(lane: dict[str, Any], items: list[dict[str, Any]]) -> list[int]:
+def leases_of(lane: Mapping[str, Any], items: list[dict[str, Any]]) -> list[int]:
     """The requests (their indexes) that run for `lane`, by the same join."""
     found: list[int] = []
-    decoded = {"projects": [{"lanes": [lane]}]}
+    decoded: Mapping[str, Any] = {"projects": [{"lanes": [lane]}]}
     for index, item in enumerate(items):
         joined = lane_of(item, decoded)
         if joined is not None and joined["key"] == lane["key"]:
@@ -213,34 +214,34 @@ def leases_of(lane: dict[str, Any], items: list[dict[str, Any]]) -> list[int]:
 
 # The Lanes page's rows
 
-def page_rows(decoded: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
+def page_rows(decoded: Decoded) -> list[Mapping[str, Any]]:
     """LANES' rows: each project an unselectable row (`Straylight · 3 of 4 lanes`, or its error), its lanes under it."""
-    found: list[dict[str, Any]] = []
+    found: list[Mapping[str, Any]] = []
     for project in projects(decoded):
         found.append({"kind": "project", "project": project["project"], "state_dir": project["state_dir"],
                       "error": project.get("error"), "active": project.get("active", 0), "cap": project.get("cap"),
                       "count": len(project["lanes"])})
-        found += [dict(lane, kind="lane") for lane in cast(list[dict[str, Any]], project["lanes"])]
+        found += [dict(lane, kind="lane") for lane in project["lanes"]]
     return found
 
 
-def stage(lane: dict[str, Any]) -> str:
+def stage(lane: Mapping[str, Any]) -> str:
     """Where a lane is: its status, and after a landing its post-merge check."""
     return lane["status"] + (f" · post-merge {lane['post_merge']}" if lane.get("post_merge") else "")
 
 
-def receipt_text(lane: dict[str, Any]) -> str:
+def receipt_text(lane: Mapping[str, Any]) -> str:
     receipt = lane["receipt"]
     match = receipt.get("tree_match")
     return receipt["status"] + (" · stale" if match is False else " · current" if match else "")
 
 
-def review_text(lane: dict[str, Any]) -> str:
+def review_text(lane: Mapping[str, Any]) -> str:
     review = lane["review"]
     return review["status"] + (f" · {review['open']} open" if review["open"] else "")
 
 
-def latest_log(lane: dict[str, Any]) -> Optional[tuple[str, str]]:
+def latest_log(lane: Mapping[str, Any]) -> Optional[tuple[str, str]]:
     """The newest run log Lanefather lists for the lane: (phase, path), by its file name's time stamp."""
     logs: dict[str, str] = lane.get("logs") or {}
     if not logs:
@@ -248,7 +249,7 @@ def latest_log(lane: dict[str, Any]) -> Optional[tuple[str, str]]:
     return max(logs.items(), key=lambda pair: (Path(pair[1]).name.rsplit("-", 1)[-1], pair[0]))
 
 
-def as_summary(lane: dict[str, Any]) -> dict[str, Any]:
+def as_summary(lane: Mapping[str, Any]) -> dict[str, Any]:
     """A status lane in the shape of `show --json`, which DETAILS' lane facts read."""
     receipt, review = lane["receipt"], lane["review"]
     ticket = lane["ticket"]

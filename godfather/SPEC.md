@@ -239,7 +239,7 @@ Godfather is one Python package, standard library only, Python 3.9+, installed b
   and hint dropping, key reading with the kitty keyboard protocol and layout table, mouse (SGR 1000/1006), full-screen
   setup and restore, the background loader. It knows nothing about any tool.
 - **Layers** (fathers#141): data (keys, theme, version, eventcheck, sources, events, news, entries, adapters, text,
-  actions) → layout (layout, overlay_text, settings_model, state, pages, modes, reducer) → views (tui, widgets,
+  actions, model) → layout (layout, overlay_text, settings_model, state, pages, modes, reducer) → views (tui, widgets,
   views) → app. A
   module imports only its own layer or one below, so the reducer reads no view and no canvas: what EVENTS shows
   (`events.Filter`), the entries' identity (`entries`), the overlays' text and geometry (`overlay_text`), Settings
@@ -255,7 +255,8 @@ Godfather is one Python package, standard library only, Python 3.9+, installed b
 - **events**: the schema version, the tail reader (inode and offset, rotation to `.1`, partial last lines), the
   merged feed and per-source formatters that turn a kind and its details into the event and detail columns.
 - **eventcheck**: the validator, one file with no imports outside the standard library, meant to be vendored.
-- **adapters**: one per tool; each checks the snapshot versions it supports, turns a snapshot into the render model
+- **adapters**: one per tool; each checks the snapshot versions it supports, turns a snapshot into the typed model
+  of `model` (fathers#142: checked once, there; unknown keys ignored, a missing required one the source's notice)
   and computes its border summary and its side of the joins; `adapters.settings` is every tool's `settings` CLI.
 - **views**: overview, which composes the moved renderers (queue: SLOTS and QUEUE; details, events, machine),
   the overlays (help, what's new), Settings, and the Lanes and Processes pages.
@@ -274,6 +275,7 @@ Every module under `src/godfather/`, as built (`tests/test_spec.py` holds this t
 | `events` | The tools' event logs followed, merged and worded; the capability reader. |
 | `keys` | Hotkeys on any keyboard layout; the kitty keyboard protocol. |
 | `layout` | Where every panel goes, from its declared sizes; the one scroll clamp. |
+| `model` | The typed snapshot model the adapters build and check (fathers#142). |
 | `modes` | The key and mouse table by mode. |
 | `news` | What's new: every tool's `changelog --json`, and what was read. |
 | `overlay_text` | Help and what's new laid out at a width, and where an overlay goes. |

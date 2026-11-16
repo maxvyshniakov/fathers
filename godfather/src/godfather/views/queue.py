@@ -54,7 +54,7 @@ def free_slot(width: int, free: str) -> str:
 
 def slots_note(model: Model) -> str:
     """SLOTS' top border: cores and slots, how capacity is set, what drains and since when the picture is stale."""
-    stale = cast(Optional[datetime.datetime], model.get("stale_since"))
+    stale = model.get("stale_since")
     drain = model.get("draining")
     return (f"{model['cores']} cores · {model['slots']} slots " + ("(manual)" if model["saved"] else "(auto)")
             + (f" · draining {drain}" if drain else "")

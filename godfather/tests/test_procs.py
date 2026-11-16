@@ -21,6 +21,7 @@ from test_state import entry
 
 from godfather import pages, events, sources, state as state_module
 from godfather.adapters import junkfather, lanefather
+from godfather.model import Processes
 
 PROCS = ROOT / "tests" / "fixtures" / "procs"
 
@@ -29,7 +30,7 @@ def snapshot() -> dict[str, Any]:
     return json.loads((PROCS / "junkfather" / "replies.json").read_text())["status --json"]["json"]
 
 
-def decoded() -> dict[str, Any]:
+def decoded() -> Processes:
     return junkfather.decode(snapshot())
 
 
@@ -238,8 +239,8 @@ class ContractTests(unittest.TestCase):
         if owned.returncode != 0:
             self.skipTest(f"junkfather own-resource refused here: {owned.stderr.strip().splitlines()[-1:]}")
         found = junkfather.decode(json.loads(run("status", "--json").stdout))
-        resource = next(row for row in found["entries"] if row["resource"])
-        self.assertEqual(("command", "fixture-1"), (resource["resource"]["kind"], resource["resource"]["id"]))
+        held = next(row["resource"] for row in found["entries"] if row["resource"])
+        self.assertEqual(("command", "fixture-1"), (held["kind"], held["id"]))
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ from unittest import mock
 from helpers import FakeSlotfather, FakeTool
 
 from godfather import app, reducer, settings_model, state as state_module, tui
+from godfather.model import Dashboard
 from godfather.text import span
 from godfather.views import settings as settings_view
 
@@ -106,7 +107,7 @@ class Settings:
         self.clock, self.screen = clock, app.Screen()
         self.deferred = False  # True: settings calls wait in `waiting` until answer() (a slow tool, the live worker)
         self.waiting: list[Any] = []
-        self.state = state_module.AppState(interval=interval, theme=theme, model=model or idle(),
+        self.state = state_module.AppState(interval=interval, theme=theme, model=cast(Dashboard, model or idle()),
                                            frame=state_module.Frame(width, height))
         self.send(state_module.SettingsOpened(tuple(self.screen.settings_sections())))
 

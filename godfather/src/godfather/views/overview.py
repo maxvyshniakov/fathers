@@ -7,7 +7,7 @@ decodes from `slotfather status --json --full` (docs/contracts/slotfather.md) on
 from __future__ import annotations
 
 import datetime
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, Mapping, Optional, cast
 
 from .. import layout as _layout
 from .. import version as _version
@@ -154,7 +154,7 @@ def draw_page(canvas: Canvas, page: str, tools: dict[str, Any], row: Optional[in
     if page == "lanes" and "lanefather" in tools:
         elapsed = _junkfather.elapsed(procs, moment)
 
-        def extra(lane: dict[str, Any]) -> list[Any]:  # its processes (fathers#86)
+        def extra(lane: Mapping[str, Any]) -> list[Any]:  # its processes (fathers#86)
             return _pages.process_links(_junkfather.of_lane(lane, procs), elapsed) if procs is not None else []
 
         _pages.draw_lanes(canvas, tools["lanefather"], row, model, moment, extra)

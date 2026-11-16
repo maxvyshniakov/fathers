@@ -108,6 +108,17 @@ entry:
 
 A row that carries `lease_id`, `expected`, `overrun` or `start` itself is read from the row first.
 
+### What the adapter requires (fathers#142)
+
+The adapter checks the reply once, when it decodes it into `model.Dashboard` and `model.Request`
+(`src/godfather/model.py`). Unknown keys are ignored. A missing optional key takes its default: strings `""`,
+`context` `{}`, `priority` `normal`, times, `ticket`, `served` and `reprioritized` null, flags false. A missing
+or null required key is the source's notice, as an unknown version is, never an error at draw time:
+`a request has no pid; update slotfather` for a request's `kind`, `count`, `pid`, `procs`, `yields` or `rss`, and
+`dashboard.slots is missing; update slotfather` for the block's `slots`, `cores`, `used`, `free`, `advice`,
+`memory` or `overtake_window`. The last good snapshot then stays on screen, stale, with the reason in the footer
+and Settings' STATUS; with none yet, the screen says it.
+
 ### Row actions (fathers#88)
 
 `capabilities --json`'s `actions` list what QUEUE offers: `reprioritize` (`slotfather reprioritize PID CLASS --start

@@ -6,7 +6,7 @@ the state and the adapters, never a view."""
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Callable, Optional, cast
+from typing import Any, Callable, Mapping, Optional, cast
 
 from . import actions as _actions
 from .adapters import junkfather as _junkfather
@@ -61,7 +61,7 @@ def selected_cwd(state: AppState) -> Optional[str]:
     return known.cwd if known is not None else None
 
 
-def page_rows(state: AppState, page: str) -> list[dict[str, Any]]:
+def page_rows(state: AppState, page: str) -> list[Mapping[str, Any]]:
     """A page's table rows, from its tool's last good snapshot; a row without a `key` is not selectable."""
     if page == "lanes":
         return _lanefather.page_rows(tool(state, "lanefather").snapshot)
@@ -70,7 +70,7 @@ def page_rows(state: AppState, page: str) -> list[dict[str, Any]]:
     return []
 
 
-def page_index(state: AppState, page: str, rows: Optional[list[dict[str, Any]]] = None) -> Optional[int]:
+def page_index(state: AppState, page: str, rows: Optional[list[Mapping[str, Any]]] = None) -> Optional[int]:
     """The selected row of a page: the one picked while it is there, else the first selectable one."""
     rows = page_rows(state, page) if rows is None else rows
     keys = [row.get("key") for row in rows]

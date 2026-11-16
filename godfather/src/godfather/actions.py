@@ -20,7 +20,7 @@ import os
 import shlex
 import sys
 from dataclasses import dataclass
-from typing import Any, Optional, cast
+from typing import Any, Mapping, Optional, cast
 
 from .adapters import junkfather as _junkfather
 from .adapters import lanefather as _lanefather
@@ -112,7 +112,7 @@ def for_request(item: dict[str, Any], waiters: list[dict[str, Any]], advertised:
     return found
 
 
-def for_process(row: dict[str, Any], advertised: Any) -> list[Action]:
+def for_process(row: Mapping[str, Any], advertised: Any) -> list[Action]:
     """PROCESSES: reap an orphan or expired entry, or an unowned process the last sweep reported (confirmed); extend
     a running entry's TTL. A running entry whose owner lives is never reaped from here."""
     tools = offered(advertised)
@@ -141,7 +141,7 @@ def for_process(row: dict[str, Any], advertised: Any) -> list[Action]:
                    identity=identity) for words, ttl in EXTEND]
 
 
-def for_lane(lane: dict[str, Any], advertised: Any) -> list[Action]:
+def for_lane(lane: Mapping[str, Any], advertised: Any) -> list[Action]:
     """LANES: open its ticket, latest log or worktree (no owner command); park an active lane, with a reason
     (confirmed), where Lanefather advertises park."""
     found: list[Action] = []
@@ -167,7 +167,7 @@ def for_lane(lane: dict[str, Any], advertised: Any) -> list[Action]:
 EVERY = frozenset({"reprioritize", "ask-yield", "reap", "extend", "park"})  # a re-check rebuilds any of them
 
 
-def revalidate(action: Action, snapshot: Optional[dict[str, Any]], uid: Optional[int] = None) -> Optional[Action]:
+def revalidate(action: Action, snapshot: Optional[Mapping[str, Any]], uid: Optional[int] = None) -> Optional[Action]:
     """The action as the row offers it now, in a fresh snapshot of its source, or None (SPEC 23, step 3): the row is
     found by its identity (a request by key, pid and start; an entry, unowned process or resource by key; a lane by
     project and id), its actions are built again from the fresh row and one with the same name and arguments must be
