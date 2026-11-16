@@ -135,9 +135,10 @@ class FixLaneCapTests(LaneCase):
 
     def test_disk_still_refuses_a_fix_lane(self):
         self.landed_with_findings()
-        self.env["LANEFATHER_DISK_FREE_GB"] = "120"
+        # Under the derived floor (fathers#157): 40 GB reserve + the cap times a 3 GB lane peak.
+        self.env["LANEFATHER_DISK_FREE_GB"] = "20"
         output = self.lane("review", "a", "--fix-lane", ok=False)
-        self.assertIn("free disk is 120", output)
+        self.assertIn("free disk is 20 GB (10^9)", output)
         self.assertNotIn("lanes are planned or active", output)
         self.assertFalse((self.state / "a-review-fixes.json").exists())
 
