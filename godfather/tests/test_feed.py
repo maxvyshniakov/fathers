@@ -471,8 +471,10 @@ class LiveFilterTests(unittest.TestCase):
             screen.receive("↑ 1 new", since=at)  # the run, not the lane row this log hides
             at = screen.mark()
             screen.write("g")
-            screen.until(lambda text: "SLOTS LOG" in text and "↑ 1 new" not in text, what="the count gone at the top",
-                         since=at)
+            # The screen as it stands, every row as last written: only rows that change are written (fathers#143)
+            screen.until(lambda _: any("SLOTS LOG" in row for row in screen.rows().values())
+                         and not any("↑ 1 new" in row for row in screen.rows().values()),
+                         what="the count gone at the top")
             at = screen.mark()
             screen.write("\x1b[C")  # → while EVENTS has the focus: LANES LOG
             screen.receive("◂ LANES LOG ▸", since=at)
