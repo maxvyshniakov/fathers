@@ -138,7 +138,8 @@ def fix_parent_review(lane_id: str, common: str, refusal: str) -> dict[str, Any]
     parent = state.read_json(state.record_path(lane_id))
     if parent is None:
         raise LaneError(f"{refusal}: no lane by that name")
-    if parent.get("status") not in state.LANDED or not (parent.get("landed") or {}).get("merge"):
+    landed: dict[str, Any] = parent.get("landed") or {}
+    if parent.get("status") not in state.LANDED or not landed.get("merge"):
         raise LaneError(f"{refusal}: lane {lane_id} is {parent.get('status')}, not landed; a fix lane fixes the "
                         "review findings of landed lanes")
     if parent.get("common_dir") != common:

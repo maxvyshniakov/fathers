@@ -51,6 +51,14 @@ A file that does not end in a newline is a problem (a torn or partial last write
 The tools in this repository import the one file from `common/`, so a new schema rule reaches every tool's tests at
 once. A project outside this repository copies the file unchanged and records its SHA-256 beside the copy.
 
+## Slotfather lock and reservation events
+
+| Kind | Details |
+| --- | --- |
+| `lease.yielded` | When a lease gives up its slots while waiting for a lock, `lock` is the path and `to.id` is null. `to.label` describes the lock. A yield to another request carries that request's id and label. |
+| `lease.lock_ended` | `lock` is the path. `why` is `took`, `stopped`, `resumed` (work resumed under the lease), or `gone` (the waiter died). `yielded` records whether the lease gave up its slots, and `waited` is its wait in seconds if known, otherwise null. |
+| `request.head_dropped` | The head gave way after its reserved start. `count` is the slots requested, `late` is seconds past the reservation, and `blocked_by` lists the leases with no end estimate by `id`, `label` and `pid` (each may be null). |
+
 ## Reading (Godfather)
 
 `godfather.events` follows each tool's log, at the path its capabilities give under `dashboard.events` (a version

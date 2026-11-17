@@ -6,6 +6,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- The Settings panel and `slotfather settings --json` expose the timeout for a head blocked by leases with no end
+  estimate. Changes that older clients cannot read show a compatibility warning. (fathers#178)
+
 - A head whose reserved start passed while leases with no end estimate hold its slots no longer idles the machine
   (fathers#160): a request that fits the free slots starts when its p90 run ends by the head's projected start,
   and past `reservation_timeout` (`order --reservation-timeout S`, default 30 minutes, 0: never) the head gives

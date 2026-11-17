@@ -150,6 +150,21 @@ def capacity_change(argv: list[str], note: Callable[[str], None] | None = None) 
 
 # Order
 
+def order_extension_keys(saved: dict[str, Any]) -> list[str]:
+    """Non-default keys that older Slotfather releases may reject in order.json."""
+    return [key for key, default in _config.ORDER_DEFAULTS.items()
+            if key not in _config.ORDER_BASE + ("limit",) and saved.get(key, default) != default]
+
+
+def order_compatibility(keys: list[str], *, historical: bool = False) -> str:
+    warning = f"Older Slotfather clients may use Arrival order. New keys in order.json: {', '.join(keys)}."
+    if historical:
+        warning += (" Releases 3e3a621 and earlier know no classes. Releases before ageing know no aging or warn "
+                    "settings. Releases before the memory warning allowance know no warning_admits. Releases before "
+                    "fathers#160 know no reservation_timeout. An unknown key makes their looks use the window order.")
+    return warning
+
+
 def order_settings(directory: Path | None = None, environment: bool = True) -> dict[str, Any]:
     """The queue's order and backfill settings: order.json beside the queue (`slotfather order`), else
     ORDER_DEFAULTS, with "saved" saying which. A client's environment only tightens them: SLOTFATHER_QUEUE=window

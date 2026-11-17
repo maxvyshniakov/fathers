@@ -135,6 +135,8 @@ def slot_values(row: dict[str, Any], marks: _common.Marks, moment: Optional[date
         label, result = trend_words(row)
     else:
         waited, result = [(str(row.get("event") or ""), "dim")], event_result(row)
+    if row.get("slot_detail"):
+        result = [cast(Part, row["slot_detail"]), *mark_of(row, marks)]
     return {"slots": event_cells(row, size) if size else "", "label": label, "waited": waited, "outcome": result,
             "pid": (str(row.get("pid") or ""), "dim")}
 

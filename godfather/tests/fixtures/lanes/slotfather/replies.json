@@ -1701,6 +1701,22 @@
        "zero": "never"
       },
       {
+       "key": "order.reservation_timeout",
+       "value": 1800.0,
+       "default": 1800.0,
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "After this long past its reserved start, a blocked head gives way while keeping its reservation and place. Zero disables the timeout.",
+       "source": "default",
+       "label": "Reservation timeout",
+       "max": null,
+       "min": 0.0,
+       "step": 300,
+       "type": "duration",
+       "unit": "s",
+       "zero": "never"
+      },
+      {
        "key": "order.idle_cpu",
        "value": 0.1,
        "default": 0.1,

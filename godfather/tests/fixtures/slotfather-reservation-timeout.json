@@ -1,0 +1,12 @@
+{
+  "default": 1800.0,
+  "description": "After this long past its reserved start, a blocked head gives way while keeping its reservation and place. Zero disables the timeout.",
+  "key": "order.reservation_timeout",
+  "label": "Reservation timeout",
+  "max": null,
+  "min": 0.0,
+  "step": 300,
+  "type": "duration",
+  "unit": "s",
+  "zero": "never"
+}

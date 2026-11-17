@@ -39,14 +39,15 @@ KNOBS = {"safety": ("Backfill margin", 0.5), "limit": ("Overtaking stops after",
          "interactive": ("Interactive head start", 60), "batch": ("Batch held back", 60),
          "yield_after": ("Ask to yield after", 30), "idle_cpu": ("Idle when below", 0.05),
          "idle_after": ("Idle for", 60), "aging_batch": ("Batch promoted after", 300),
-         "aging_normal": ("Normal promoted after", 300), "warn_wait": ("Warn after waiting", 300)}
+         "aging_normal": ("Normal promoted after", 300), "warn_wait": ("Warn after waiting", 300),
+         "reservation_timeout": ("Reservation timeout", 300)}
 UNITS = {"safety": "×", "overrun": "×", "limit": " s", "fallback": " s", "interactive": " s", "batch": " s",
          "yield_after": " s", "idle_after": " s", "idle_cpu": " cores", "interval": " s", "aging_batch": " s",
-         "aging_normal": " s", "warn_wait": " s"}
+         "aging_normal": " s", "warn_wait": " s", "reservation_timeout": " s"}
 # The queue's settings in the panel's order (one flat list, owner, 2026-11-11)
 ORDER_FIELDS = ("order", "safety", "fallback", "overrun", "limit", "interactive", "batch", "aging_batch",
-                "aging_normal", "warn_wait", "idle_cpu", "idle_after", "yield_after")
-NEVER = ("limit", "aging_batch", "aging_normal", "warn_wait")  # 0 is off: shown as "never"
+                "aging_normal", "warn_wait", "reservation_timeout", "idle_cpu", "idle_after", "yield_after")
+NEVER = ("limit", "aging_batch", "aging_normal", "warn_wait", "reservation_timeout")  # 0 is off: shown as "never"
 DESCRIPTIONS = {
     "mode": "Shared by every client. Automatic: the lower of the CPU and memory budgets.",
     "amount.fixed": "Total slots for every client. Applies at the next grant; a shrink drains.",
@@ -61,6 +62,8 @@ DESCRIPTIONS = {
     "aging_batch": "A waiting batch request is served as normal after this; 0: never.",
     "aging_normal": "A waiting normal request is served as interactive after this; 0: never.",
     "warn_wait": "A request waiting this long says so and is flagged; 0: never.",
+    "reservation_timeout": "After this long past its reserved start, a blocked head gives way while keeping "
+                           "its reservation and place. Zero disables the timeout.",
     "yield_after": "Before a yieldable holder is asked to yield; 0: nobody is asked.",
     "idle_cpu": "A lease below this for the idle time is idle (💤); 0: never.",
     "idle_after": "Below the idle cores this long: idle, and asked if it can yield.",
@@ -249,7 +252,7 @@ class Reading:
             return self.basis["slots"]
         return self.basis["gib_per_slot"] or _config.AUTO_GIB_PER_SLOT
 
-    def knob_row(self, key: str, writable: bool) -> dict[str, Any]:
+    def knob_row(self, key: str, writable: bool, newer_keys: list[str]) -> dict[str, Any]:
         name = _config.ORDER_KNOBS[key][0] if key != "order" else "QUEUE"
         row: dict[str, Any] = {"key": f"order.{key}", "value": self.saved[key], "default": _config.ORDER_DEFAULTS[key],
                                "writable": writable, "revision": revision(self.files["order.json"]),
@@ -262,6 +265,8 @@ class Reading:
                        min=_config.ORDER_KNOBS[key][1], max=None, step=KNOBS[key][1], unit=UNITS[key].strip())
             if key in NEVER:
                 row["zero"] = "never"
+        if key in newer_keys:
+            row["warning"] = _settings.order_compatibility([key])
         row["source"] = "saved" if key in self.stored else "default"
         if self.effective[key] != self.saved[key]:
             row.update(effective=self.effective[key], source=f"env SLOTFATHER_{name}")
@@ -287,13 +292,16 @@ class Reading:
              "step": 0.5, "unit": "GiB", "source": source, "writable": writable, "revision": token,
              "when": {"capacity.mode": ["memory", "lower"]}, "description": DESCRIPTIONS["amount.memory"]}]
         basis = filled_basis(self.basis)
+        newer_keys = _settings.order_extension_keys(self.saved)
+        status = status_rows(basis, self.queue)
+        if newer_keys:
+            status.append(("compatibility", _settings.order_compatibility(newer_keys), "warn"))
         return {"v": VERSION, "tool": "slotfather", "writable": writable, "reason": reason,
-                "status": [{"label": label, "value": value, "style": style}
-                           for label, value, style in status_rows(basis, self.queue)],
+                "status": [{"label": label, "value": value, "style": style} for label, value, style in status],
                 "basis": basis,
                 "sections": [{"id": "capacity", "title": "Capacity", "settings": capacity},
                              {"id": "order", "title": "Queue order",
-                              "settings": [self.knob_row(key, writable) for key in ORDER_FIELDS]}]}
+                              "settings": [self.knob_row(key, writable, newer_keys) for key in ORDER_FIELDS]}]}
 
 
 class Invalid(_config.SlotError):

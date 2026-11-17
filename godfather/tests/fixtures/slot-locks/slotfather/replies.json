@@ -1,0 +1,57 @@
+{
+  "capabilities --json": {
+    "code": 0,
+    "json": {
+      "v": 1,
+      "tool": "slotfather",
+      "version": "0.2.0",
+      "dashboard": {
+        "v": 1,
+        "tag": "slot",
+        "snapshot": {
+          "argv": [
+            "status",
+            "--json",
+            "--full"
+          ],
+          "versions": [
+            2
+          ],
+          "poll": 1
+        },
+        "events": {
+          "path": "/fixture/events.jsonl",
+          "versions": [
+            1
+          ]
+        }
+      }
+    }
+  },
+  "status --json --full": {
+    "code": 0,
+    "json": {
+      "v": 2,
+      "host": "mbp",
+      "time": "2026-11-04T09:59:39Z",
+      "slots": 8,
+      "free": 8,
+      "held": 0,
+      "dashboard": {
+        "v": 1,
+        "slots": 8,
+        "cores": 12,
+        "used": 0,
+        "free": 8,
+        "holders": [],
+        "waiters": [],
+        "advice": {
+          "unleased_load": 0
+        },
+        "memory": {},
+        "overtake_window": 0,
+        "history": []
+      }
+    }
+  }
+}

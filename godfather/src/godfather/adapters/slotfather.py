@@ -154,6 +154,9 @@ def _item(raw: Any, entries: Optional[Entries] = None) -> Request:
     for name in ("ticket", "served", "reprioritized"):
         if name in given:
             item[name] = _decoding.text(given[name])
+    lock = _decoding.text(given.get("lock"))
+    if lock is not None:
+        item["lock"] = lock
     if _decoding.is_whole(given.get("uid")):
         item["uid"] = int(given["uid"])
     for flag in ("yieldable", "passable", "all"):

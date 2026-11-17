@@ -138,8 +138,29 @@ def mixed() -> list[dict[str, Any]]:
 
 
 class FormatterTests(unittest.TestCase):
-    """Lanefather's and junkfather's kinds from their structured fields (their writers: lanefather/lanefather/*.py
-    journal.ledger(details=...), junkfather/junkfather/*.py events.write())."""
+    """Tool event kinds rendered from their structured fields."""
+
+    def test_slotfather_lock_and_blocked_head_events(self) -> None:
+        lock = "/tmp/cache.lock"
+        cases = [
+            ("lease.yielded", {"count": 1, "to": {"id": None}, "lock": lock},
+             "yielded", ("waiting for /tmp/cache.lock", "dim")),
+            ("lease.lock_ended", {"lock": lock, "why": "took", "yielded": True, "waited": 12},
+             "lock ended", ("took /tmp/cache.lock · 12s", "dim")),
+            ("lease.lock_ended", {"lock": lock, "why": "stopped", "yielded": False, "waited": None},
+             "lock ended", ("stopped waiting for /tmp/cache.lock", "dim")),
+            ("lease.lock_ended", {"lock": lock, "why": "resumed", "yielded": False, "waited": None},
+             "lock ended", ("work resumed while waiting for /tmp/cache.lock", "dim")),
+            ("lease.lock_ended", {"lock": lock, "why": "gone", "yielded": True, "waited": None},
+             "lock ended", ("waiter gone · /tmp/cache.lock", "dim")),
+            ("request.head_dropped", {"count": 8, "late": 1800,
+                                      "blocked_by": [{"id": None, "label": "build", "pid": 42}]},
+             "gave way", ("blocked 30m · build", "warn")),
+        ]
+        for kind, details, name, description in cases:
+            with self.subTest(kind=kind, details=details):
+                row, = rows_of([dict(logged(kind, NOW, "check", 1), details=details)])
+                self.assertEqual((name, description), (row["event"], row["detail"][0]))
 
     def test_lanefather_kinds(self) -> None:
         from godfather import events
@@ -210,6 +231,26 @@ class LogViewTests(unittest.TestCase):
 
     def body(self, lines: list[str]) -> list[str]:
         return [line for line in lines[2:-1] if line.strip("│ ")]
+
+    def test_slots_log_keeps_the_lock_basename_and_blocker_in_view(self) -> None:
+        lock = "/tmp/build-cache/a-repository/compiled-assets/cache.lock"
+        events = [
+            logged("lease.yielded", NOW, "linux build", 112, count=1, lock=lock, to={"id": None}),
+            logged("lease.lock_ended", NOW, "linux build", 112, lock=lock, why="resumed", waited=12),
+            logged("request.head_dropped", NOW, "all-slots test", 113, count=8, late=1800,
+                   blocked_by=[{"label": "compiler checks", "id": "128", "pid": 450},
+                               {"label": "package link", "id": "129", "pid": 451}]),
+        ]
+        rows = rows_of(events, TAGS)
+        _, lines = self.draw(120, rows=rows)
+        rendered = "\n".join(lines)
+        self.assertIn("lock cache.lock", rendered)
+        self.assertIn("resumed cache.lock", rendered)
+        self.assertIn("by compiler checks", rendered)
+        for row, full_text in ((rows[1], lock), (rows[2], "compiler checks, package link")):
+            detail = self.tool.Canvas(100, 15)
+            self.tool.draw_event_detail(detail, Rect(0, 0, 15, 100), row, NOW)
+            self.assertIn(full_text, detail.render(False))
 
     def test_slots_log_is_the_default_one_row_per_run_its_title_the_switch(self) -> None:
         canvas, lines = self.draw(120)
