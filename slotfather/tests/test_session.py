@@ -18,8 +18,8 @@ from unittest import mock
 
 from test_slotfather import TOOL, WORK, SlotCase
 
-from slotfather import leases as sf_leases
-from slotfather import process as sf_process
+from slotfather import state as sf_state
+from slotfather.session import read_uses, uses_path
 
 
 class SessionTests(SlotCase):
@@ -129,22 +129,37 @@ class SessionTests(SlotCase):
         self.assertEqual(f"{lease} 4", result.stdout.splitlines()[0])
         self.assertEqual(0, self.inside("perf", "x", "sh", "-c", "exit 3").returncode - 3, "its exit status")
 
+    def lock_holder(self, lock: str) -> subprocess.Popen[str]:
+        holder = self.spawn([TOOL, "lock", lock, "--", "sh", "-c", WORK, "work", "holder"])
+        self.started("holder")
+        return holder
+
+    def lock_waiter(self, lock: str) -> subprocess.Popen[str]:
+        waiting = self.inside("perf", "locked", TOOL, "lock", lock, "--", "sh", "-c", WORK, "work", "locked",
+                              background=True)
+        def marked() -> bool:
+            current: dict[str, Any] = self.session("perf") or {}
+            return current.get("lock") == lock
+
+        self.wait_for(marked, "the session to wait on its lock")
+        return waiting
+
+    def wait_for_lock_end(self, why: str) -> None:
+        self.wait_for(
+            lambda: any(event["kind"] == "lease.lock_ended" and event["details"]["why"] == why
+                        for event in self.events_of()), f"the lock wait to end with {why}")
+
     def test_new_session_work_resumes_a_lease_yielded_for_a_lock(self) -> None:
+        lock = str(self.tmp / "cache.lock")
+        holder = self.lock_holder(lock)
         self.start("perf", "--idle", "60")
-        lease_path = _Path(self.session("perf")["lease"])
-        # Seed only the yielded state through the queue transaction. An actual lock waiter needs the detached
-        # session membership check (fathers#183), which is outside the shared waiter's responsibility here.
-        with mock.patch.dict(os.environ, self.env, clear=True):
-            me = os.getpid()
-            self.assertEqual("yielded", sf_leases.yield_for_lock(
-                lease_path, str(self.tmp / "cache.lock"), (me, sf_process.processes()[me][1]), idle=True))
+        waiting = self.lock_waiter(lock)
+        self.assertEqual("yielded", self.session("perf")["phase"])
         other = self.request("other", 1)
         self.started("other")
 
         arriving = self.inside("perf", "arriving", background=True)
-        self.wait_for(
-            lambda: any(event["kind"] == "lease.lock_ended" and event["details"]["why"] == "resumed"
-                        for event in self.events_of()), "the new run to resume the session")
+        self.wait_for_lock_end("resumed")
         self.assertEqual("waiting", self.session("perf")["state"], "the other holder still has a slot")
         self.assertNotIn("start arriving", self.events())
         self.release("other")
@@ -152,9 +167,75 @@ class SessionTests(SlotCase):
         lease = self.session("perf")
         self.assertEqual("held", lease["state"])
         self.assertNotIn("lock", lease)
-        self.release("arriving")
-        for process in (arriving, other):
+        self.assertNotIn("start locked", self.events(), "the original command still waits for the external lock")
+        for label in ("arriving", "holder", "locked"):
+            self.release(label)
+        for process in (arriving, other, holder, waiting):
             self.finish(process)
+
+    def record_run(self, **identity: Any) -> None:
+        lease_path = _Path(self.session("perf")["lease"])
+        with mock.patch.dict(os.environ, self.env, clear=True), sf_state.editing(lease_path):
+            uses = read_uses(lease_path)
+            assert uses is not None
+            uses["active"][str(os.getpid())] = identity
+            sf_state.write(uses_path(lease_path), uses)
+
+    def test_session_lock_yields_past_a_stale_run_and_waits_for_its_slots_back(self) -> None:
+        lock = str(self.tmp / "cache.lock")
+        holder = self.lock_holder(lock)
+        self.start("perf", "--idle", "60")
+        # The PID is live and the stored identity belongs to a previous process.
+        self.record_run(start="Sat Jan  1 00:00:00 2000", started=946684800)
+        waiting = self.lock_waiter(lock)
+        self.assertEqual("yielded", self.session("perf")["phase"])
+        other = self.request("other", 1)
+        self.started("other")
+
+        self.release("holder")
+        self.wait_for_lock_end("took")
+        self.assertEqual("waiting", self.session("perf")["state"])
+        self.assertNotIn("start locked", self.events(), "taking the lock alone must not start the command")
+        self.release("other")
+        self.started("locked")
+        self.assertEqual("held", self.session("perf")["state"])
+        self.release("locked")
+        for process in (holder, other, waiting):
+            self.finish(process)
+
+    def test_session_lock_keeps_slots_for_a_live_sibling_run(self) -> None:
+        lock = str(self.tmp / "cache.lock")
+        holder = self.lock_holder(lock)
+        self.start("perf", "--idle", "60")
+        busy = self.inside("perf", "busy", background=True)
+        self.started("busy")
+        waiting = self.lock_waiter(lock)
+
+        lease = self.session("perf")
+        self.assertEqual("held", lease["phase"])
+        self.assertEqual(2, len(lease["session"]["active"]))
+        self.assertFalse(any(event["kind"] == "lease.yielded" for event in self.events_of()))
+        self.release("holder")
+        self.started("locked")
+        self.assertEqual("held", self.session("perf")["state"])
+        for label in ("locked", "busy"):
+            self.release(label)
+        for process in (holder, waiting, busy):
+            self.finish(process)
+
+    def test_session_lock_keeps_slots_when_an_active_identity_is_unknown(self) -> None:
+        lock = str(self.tmp / "cache.lock")
+        holder = self.lock_holder(lock)
+        self.start("perf", "--idle", "60")
+        self.record_run(start="", started=None)
+        waiting = self.lock_waiter(lock)
+
+        self.assertEqual("held", self.session("perf")["phase"])
+        self.release("holder")
+        self.started("locked")
+        self.release("locked")
+        self.finish(holder)
+        self.finish(waiting)
 
     def test_an_idle_session_releases_itself(self):
         self.start("perf", "--idle", "1")

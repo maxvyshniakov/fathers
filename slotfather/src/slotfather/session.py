@@ -34,6 +34,7 @@ from . import durations as _durations
 from . import entry as _entry
 from . import events as _events
 from . import labels as _labels
+from . import lineage as _lineage
 from . import platform as _platform
 from . import process as _process
 from . import query as _query
@@ -275,25 +276,59 @@ class Holder:
         return 0
 
 
-def prune(uses: dict[str, Any], table: dict[int, tuple[int, str]] | None, moment: float) -> bool:
-    """Drops active runs whose process is gone (a `run --session` killed before it could say it ended); with
-    `table`, also those whose pid now belongs to another process. Returns whether any went."""
+def active_pid(key: str) -> int | None:
+    try:
+        pid = int(key)
+    except ValueError:
+        return None
+    return pid if key.isdecimal() and pid > 1 else None
+
+
+def run_alive(pid: int, run: dict[str, Any], table: _queue.Table | None) -> bool | None:
+    """Whether the run still has its process identity. None keeps work whose identity cannot be confirmed."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OverflowError):
+        return None
+    if table is None:
+        return True
+    process = table.get(pid)
+    if process is None:
+        return None
+    start, started = run.get("start"), run.get("started")
+    dated = isinstance(start, str) and bool(start.strip()) and bool(process[1].strip())
+    if not dated and (type(started) is not int or _platform.start_epoch(pid) is None):
+        return None
+    return _platform.same_holder(start, started, pid, process[1])
+
+
+def idle_for_lock(path: Path, caller: int, table: _queue.Table) -> bool:
+    """Under the queue lock, only the lock caller's active session run may still use the lease."""
+    uses = read_uses(path)
+    active = uses.get("active") if uses is not None else None
+    if not isinstance(active, dict):
+        return False
+    running: list[int] = []
+    for key, values in cast(dict[str, Any], active).items():
+        pid = active_pid(key)
+        if pid is None:
+            return False
+        alive = run_alive(pid, mapping(values), table)
+        if alive is None:
+            return False
+        if alive:
+            running.append(pid)
+    mine = {caller, *_lineage.ancestors(_lineage.parents_of(table), caller)}
+    return len(running) == 1 and running[0] in mine and not _queue.other_work(table, running[0], caller)
+
+
+def prune(uses: dict[str, Any], table: _queue.Table | None, moment: float) -> bool:
+    """Drops runs whose process is gone or has a different identity. Keeps those that cannot be checked yet."""
     active = mapping(uses.get("active"))
-    gone: list[str] = []
-    for pid, value in active.items():
-        run = mapping(value)
-        try:
-            os.kill(int(pid), 0)
-            alive = True
-        except ProcessLookupError:
-            alive = False
-        except (PermissionError, ValueError):
-            alive = True
-        if alive and table is not None:
-            alive = int(pid) in table and _platform.same_holder(run.get("start") or "", run.get("started"), int(pid),
-                                                               table[int(pid)][1])
-        if not alive:
-            gone.append(pid)
+    gone = [key for key, value in active.items()
+            if (pid := active_pid(key)) is not None and run_alive(pid, mapping(value), table) is False]
     for pid in gone:
         active.pop(pid, None)
     if gone:

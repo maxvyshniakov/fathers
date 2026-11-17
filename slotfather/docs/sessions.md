@@ -29,3 +29,10 @@ slotfather session stop perf-640                                    # or let it 
 - The history has one line for the session (no line per run), with the summed CPU and peak memory of its runs and
   `session`: `name`, `idle`, `runs`, `busy`, `ended_by` (`idle` or `stopped`; a reaped session has none). Events:
   `session.run_started`, `session.run_ended` and `session.ended` beside the lease's own (see [api](api.md)).
+
+### Waiting on a lock
+
+When a session run blocks in `slotfather lock`, Slotfather checks the identities of its active runs under the queue
+lock. A sole run can give up its slots while blocked and waits for the lease to hold them again before it starts its
+command. The session keeps its slots when another run or another process in the same run still needs them, or when
+membership cannot be determined. A newly arriving run can request the slots back while the first run waits.

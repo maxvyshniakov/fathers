@@ -244,6 +244,14 @@ def yield_for_lock(path: Path, lock: str, owner: tuple[int, str], idle: bool) ->
             return None
         if not _entry.is_held(entry):
             return None
+        if isinstance(entry.get("session"), dict):
+            from .session import idle_for_lock
+
+            idle = False
+            with contextlib.suppress(_config.ProcessTableError):
+                table = _queue.process_table(directory)
+                idle = (same_process(table, *owner) and _platform.alive(entry, table)
+                        and idle_for_lock(path, owner[0], table))
         if not idle:
             _entry.to_lock_noted(entry, lock, owner)
             _state.write(path, entry)

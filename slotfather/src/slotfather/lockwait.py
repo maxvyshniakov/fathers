@@ -27,7 +27,6 @@ from . import entry as _entry
 
 USAGE = "usage: slotfather lock PATH -- COMMAND..."
 SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
-HELPERS = ("ps", "lsof")  # what Slotfather itself runs for a moment in a lease's tree: no work of the lease's
 
 
 class Stopped(Exception):
@@ -92,21 +91,17 @@ def enclosing() -> tuple[Path, tuple[int, str], bool] | None:
     """The held lease of this queue this process runs under, with this process's identity and whether nothing else
     runs under it (no process in its holder's tree but this one and its ancestors); None when there is none (none,
     an earlier queue's, or one that waits already)."""
-    from . import lineage as _lineage
     from . import process as _process
     from . import queue as _queue
     table = _process.processes()
     found = _queue.inherited_lease(table)
     if found is None or found[0].parent.parent != _config.state_dir() or not _entry.is_held(found[1]):
         return None
+    path, entry, _ = found
     me = os.getpid()
-    parents = _lineage.parents_of(table)
-    mine = {*_lineage.ancestors(parents, me), *_lineage.descendants(table, me)}  # this one, its ps, its ancestors
-    others = [pid for pid in _lineage.descendants(table, found[1].get("pid")) if pid not in mine]
-    if others:  # the holder's own sampler runs ps now and then: no work of the lease's
-        names = _process.names(others)
-        others = [pid for pid in others if names.get(pid, "?") not in HELPERS]
-    return found[0], (me, table[me][1] if me in table else ""), not others
+    # Sessions verify their detached runs in the yield transaction, under the lock that registers their runs.
+    idle = not isinstance(entry.get("session"), dict) and not _queue.other_work(table, entry.get("pid"), me)
+    return path, (me, table[me][1] if me in table else ""), idle
 
 
 def wait(handle: int, path: Path) -> None:
