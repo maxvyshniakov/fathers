@@ -6,6 +6,9 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Added
 
+- Settings lets you edit the reservation timeout when Slotfather advertises it. It shows when older Slotfather
+  clients may use Arrival order after a change. (fathers#178)
+
 - Row actions (fathers#88): Enter, `a` or a right-click on a QUEUE row or a page's row opens its action menu, only
   the actions its tool advertises and that apply to the row now (`no actions` in the footer otherwise): reprioritize
   a request to another class and ask a yieldable lease of a lower class than a waiter to yield (`slotfather

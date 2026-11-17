@@ -387,14 +387,9 @@ def order_command(argv: list[str]) -> int:
     if changes or reset:
         _settings.configure({"order.json": None if reset else changes}, granted=_leases.grant_now)
     saved = _settings.order_settings(directory, environment=False)
-    moved = [k for k in _config.ORDER_DEFAULTS if k not in _config.ORDER_BASE + ("limit",)
-             and saved[k] != _config.ORDER_DEFAULTS[k]]  # every slotfather knows `limit`
+    moved = _settings.order_extension_keys(saved)
     if (changes or reset) and moved:
-        print(f"slotfather: note: order.json now holds {', '.join(moved)}, which an older slotfather may not know "
-              f"(3e3a621 and older know no classes, those before ageing no aging or warn settings, those before "
-              f"the memory warning allowance no warning_admits, those before fathers#160 no "
-              f"reservation_timeout): their looks fall "
-              f"back to the window order until they are updated", file=sys.stderr)
+        print(f"slotfather: note: {_settings.order_compatibility(moved)}", file=sys.stderr)
     print(order_line(_settings.order_settings(directory)))
     return 0
 
