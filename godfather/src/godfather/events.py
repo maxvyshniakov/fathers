@@ -420,6 +420,7 @@ class Shown:
     count: int = 0
     filled: bool = False
     label: Optional[str] = None  # where the subject's label or id says less (an unowned process: its command)
+    slot_detail: Optional[Part] = None  # a short outcome for SLOTS LOG's fixed-width column
 
 
 def slotfather_shown(kind: str, details: dict[str, Any]) -> Optional[Shown]:
@@ -462,7 +463,9 @@ def slotfather_shown(kind: str, details: dict[str, Any]) -> Optional[Shown]:
                 if name:
                     names.append(str(name))
         blocked = f"blocked {_minutes(details.get('late'))}".strip()
-        return Shown("gave way", ((_words(blocked, ", ".join(names)), "warn"),), count)
+        short = f"by {names[0]}" if names else blocked
+        return Shown("gave way", ((_words(blocked, ", ".join(names)), "warn"),), count,
+                     slot_detail=(short, "warn"))
     if kind == "lease.yield_asked":
         return Shown("asked", ((_words("for " + str(_field(details, "for", "label") or "?"),
                                       "by hand" if details.get("by_hand") else ""), "dim"),))
@@ -471,7 +474,8 @@ def slotfather_shown(kind: str, details: dict[str, Any]) -> Optional[Shown]:
     if kind == "lease.yielded":
         lock = details.get("lock")
         words = f"waiting for {lock}" if lock else f"to {_field(details, 'to', 'label') or '?'}"
-        return Shown("yielded", ((words, "dim"),), count)
+        short = (f"lock {str(lock).rsplit('/', 1)[-1]}", "dim") if lock else None
+        return Shown("yielded", ((words, "dim"),), count, slot_detail=short)
     if kind == "lease.lock_ended":
         lock = details.get("lock") or "lock"
         why = details.get("why")
@@ -481,7 +485,10 @@ def slotfather_shown(kind: str, details: dict[str, Any]) -> Optional[Shown]:
             action = {"took": "took", "stopped": "stopped waiting for", "resumed": "work resumed while waiting for"}
             verb = action.get(why, "wait ended for") if isinstance(why, str) else "wait ended for"
             words = f"{verb} {lock}"
-        return Shown("lock ended", ((_words(words, _span(details.get("waited"))), "dim"),))
+        short = why if why in ("took", "stopped", "resumed", "gone") else "ended"
+        name = str(lock).rsplit("/", 1)[-1]
+        return Shown("lock ended", ((_words(words, _span(details.get("waited"))), "dim"),),
+                     slot_detail=(f"{short} {name}", "dim"))
     if kind == "capacity.changed":
         return Shown("capacity", ((_words(f"{details.get('slots')} slots" if details.get("slots") else "",
                                           details.get("mode")), "dim"),))
@@ -641,7 +648,7 @@ def row(event: Event, tag: str) -> dict[str, Any]:
             "kind": event.kind, "event": found.event, "count": found.count, "filled": found.filled,
             "label": found.label or subject_label(event), "id": str(event.subject.get("id") or ""),
             "pid": pid if isinstance(pid, int) and not isinstance(pid, bool) else None,
-            "detail": list(found.detail), "lease": event.subject.get("lease_id"), "details": event.details,
+            "detail": list(found.detail), "slot_detail": found.slot_detail, "lease": event.subject.get("lease_id"), "details": event.details,
             "ticket": event.subject.get("ticket"), "subject": event.subject,
             "level": str(event.data.get("level") or "info")}
 

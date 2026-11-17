@@ -9,9 +9,8 @@ Versions and release rules: [README.md](README.md#versions).
 - Settings lets you edit the reservation timeout when Slotfather advertises it. It shows when older Slotfather
   clients may use Arrival order after a change. (fathers#178)
 
-- EVENTS describes Slotfather's lock waits and blocked head reservations. LEASE DETAILS shows the lock path and
-  whether the lease still holds slots, and Settings displays the reservation timeout when Slotfather provides it.
-  (fathers#162)
+- EVENTS describes Slotfather's lock waits and blocked head reservations. LEASE DETAILS wraps long lock paths
+  and shows whether the lease holds slots. Lock waiters are excluded from admission rank. (fathers#162)
 
 - Row actions (fathers#88): Enter, `a` or a right-click on a QUEUE row or a page's row opens its action menu, only
   the actions its tool advertises and that apply to the row now (`no actions` in the footer otherwise): reprioritize
