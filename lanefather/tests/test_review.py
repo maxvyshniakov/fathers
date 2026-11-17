@@ -346,7 +346,7 @@ class ReviewGateTests(ReviewGateCase):
         # An older checkout could register the bad parent; land still reviews its changes.
         old = dict(self.record("old-fix"), review_fix_of="dropped")
         (self.state / "old-fix.json").write_text(json.dumps(old))
-        self.commit(worktree, {"calls/main.txt": "foo\nold fix\n"})
+        self.commit(worktree, {"calls/old-fix.txt": "foo\n"})
         self.lane("check", "old-fix")
         self.assertIn("review not started", self.lane("land", "old-fix"))
         self.assertFalse((self.state / "old-fix.review.json").exists())
