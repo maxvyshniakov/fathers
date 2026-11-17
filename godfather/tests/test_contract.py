@@ -90,6 +90,10 @@ class ContractTests(unittest.TestCase):
         self.assertEqual("automatic", rows(client.read())["capacity.mode"]["value"])
 
     def test_settings_draw_the_live_reservation_timeout(self) -> None:
+        if not adapter.settings_supported(self.capabilities):
+            self.assertNotEqual(EXECUTABLE, str(SIBLING), "the sibling Slotfather must support settings")
+            self.skipTest("installed Slotfather has no supported settings contract")
+
         from godfather import settings_model, tui
         from godfather.views import settings
 
