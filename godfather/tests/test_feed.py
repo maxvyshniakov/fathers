@@ -138,8 +138,29 @@ def mixed() -> list[dict[str, Any]]:
 
 
 class FormatterTests(unittest.TestCase):
-    """Lanefather's and junkfather's kinds from their structured fields (their writers: lanefather/lanefather/*.py
-    journal.ledger(details=...), junkfather/junkfather/*.py events.write())."""
+    """Tool event kinds rendered from their structured fields."""
+
+    def test_slotfather_lock_and_blocked_head_events(self) -> None:
+        lock = "/tmp/cache.lock"
+        cases = [
+            ("lease.yielded", {"count": 1, "to": {"id": None}, "lock": lock},
+             "yielded", ("waiting for /tmp/cache.lock", "dim")),
+            ("lease.lock_ended", {"lock": lock, "why": "took", "yielded": True, "waited": 12},
+             "lock ended", ("took /tmp/cache.lock · 12s", "dim")),
+            ("lease.lock_ended", {"lock": lock, "why": "stopped", "yielded": False, "waited": None},
+             "lock ended", ("stopped waiting for /tmp/cache.lock", "dim")),
+            ("lease.lock_ended", {"lock": lock, "why": "resumed", "yielded": False, "waited": None},
+             "lock ended", ("work resumed while waiting for /tmp/cache.lock", "dim")),
+            ("lease.lock_ended", {"lock": lock, "why": "gone", "yielded": True, "waited": None},
+             "lock ended", ("waiter gone · /tmp/cache.lock", "dim")),
+            ("request.head_dropped", {"count": 8, "late": 1800,
+                                      "blocked_by": [{"id": None, "label": "build", "pid": 42}]},
+             "gave way", ("blocked 30m · build", "warn")),
+        ]
+        for kind, details, name, description in cases:
+            with self.subTest(kind=kind, details=details):
+                row, = rows_of([logged(kind, NOW, "check", 1, **details)])
+                self.assertEqual((name, description), (row["event"], row["detail"][0]))
 
     def test_lanefather_kinds(self) -> None:
         from godfather import events

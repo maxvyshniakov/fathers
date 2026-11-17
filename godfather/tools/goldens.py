@@ -507,6 +507,27 @@ def admission_screen(name: str, theme: str | None) -> str:
         return canvas.render(theme is not None)
 
 
+def slot_lock_log(theme: str | None) -> str:
+    """SLOTS LOG with a yielded lock waiter and a blocked head (fathers#162)."""
+    from godfather import events, theme as themes, tui
+    from godfather.layout import Rect
+    from godfather.views import common
+    from godfather.views.events import draw_events
+
+    with environment(theme):
+        feed = events.Feed("mbp")
+        try:
+            feed.follow("slotfather", str(ROOT / "tests" / "fixtures" / "slot-locks.jsonl"))
+            feed.poll()
+            rows = events.rows(feed.events(), {"slotfather": "slot"})
+        finally:
+            feed.close()
+        palette = themes.from_environment()
+        canvas = tui.Canvas(88, 7, palette, common.marks_for(False))
+        draw_events(canvas, Rect(0, 0, 7, 88), {"events": rows, "sources": [("slotfather", "slot")]})
+        return canvas.render(theme is not None)
+
+
 def goldens() -> dict[str, str]:
     found = {}
     for name in SCREENS:
@@ -517,6 +538,9 @@ def goldens() -> dict[str, str]:
         found[f"admission-{name}-72x13.txt"] = admission_screen(name, None) + "\n"
         for theme in THEMES:
             found[f"admission-{name}-72x13.{theme}.ansi"] = admission_screen(name, theme) + "\n"
+    found["slot-lock-log-88x7.txt"] = slot_lock_log(None) + "\n"
+    for theme in THEMES:
+        found[f"slot-lock-log-88x7.{theme}.ansi"] = slot_lock_log(theme) + "\n"
     return found
 
 

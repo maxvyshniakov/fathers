@@ -41,9 +41,10 @@ def detail_ticket(item: Item, lane: dict[str, Any]) -> tuple[str, str]:
 
 
 def detail_title(item: Optional[Item]) -> str:
-    """The title follows the selection: a request whose lease holds slots has LEASE DETAILS; a waiting or yielded
-    one, holding none, REQUEST DETAILS."""
-    return "LEASE DETAILS" if item is not None and item["kind"] != "waiting" else "REQUEST DETAILS"
+    """A request holding slots or waiting on a lock under a lease has LEASE DETAILS."""
+    if item is not None and (item["kind"] != "waiting" or item.get("lock")):
+        return "LEASE DETAILS"
+    return "REQUEST DETAILS"
 
 
 def queue_policy(model: Model, moment: Optional[datetime.datetime] = None) -> dict[str, str]:
@@ -76,12 +77,19 @@ def request_facts(item: Item, model: Model, position: int, moment: datetime.date
     lane: dict[str, Any] = item.get("lane") or {}
     context: dict[str, str] = item.get("context") or {}
     ticket_text, ticket_url = detail_ticket(item, lane)
-    if item["kind"] == "waiting":
+    lock = item.get("lock")
+    if lock:
+        slots = f"{item['count']} slot{'s' if item['count'] != 1 else ''}"
+        disposition = "released" if item["kind"] == "waiting" else "held"
+        heading = f"waiting-for-lock · {slots} {disposition}"
+    elif item["kind"] == "waiting":
         heading = f"waiting · #{position + 1} · wants {item['count']}"
     else:
         heading = (("earlier queue" if item["kind"] == "legacy" else "running")
                    + f" · {item['count']} slot{'s' if item['count'] != 1 else ''}")
     facts: list[Fact] = [("label", [(item["label"] or "(no label)", "bold")]), ("status", [(heading, "text")])]
+    if lock:
+        facts.append(("lock", [(dashboard_text(lock), "text")]))
     priority = priority_of(item.get("served") or item.get("priority"))
     mark = priority_mark(item, marks)
     asked = priority_of(item.get("priority"))
@@ -94,7 +102,9 @@ def request_facts(item: Item, model: Model, position: int, moment: datetime.date
                        ("on", "run on"), ("session", "session")):
         if context.get(key):
             facts.append((label, [(dashboard_text(context[key]), "dim" if key in ("sha", "session") else "text")]))
-    if item["kind"] == "waiting":
+    if item["kind"] == "waiting" and lock:
+        facts.extend(expected_facts(item))
+    elif item["kind"] == "waiting":
         since = item["since"]
         facts.append(("queued", [(f"{clock(since, moment)} · waiting "
                                   f"{span((moment - since).total_seconds()) if since else '?'}", "text")]))

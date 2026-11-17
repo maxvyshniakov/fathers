@@ -1,0 +1,7 @@
+╭─ SLOTS LOG ───────── label ──────────────────────── waited╶╴outcome ─────────── pid ─╮
+│                                                                                      │
+│  11:58:00  ▫▫▫▫▫▫▫▫  whole-machine perf           gave way  blocked 30m · lint  402  │
+│  11:56:12            linux check                lock ended  took /tmp/l · 12s   401  │
+│  11:56:00  ▫         linux check                   no wait  waiting for /tmp/l  401  │
+│                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
