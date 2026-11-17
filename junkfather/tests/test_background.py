@@ -184,6 +184,7 @@ class BackgroundTests(Case):
         self.assertEqual("agent-a", explicit["owner"]["agent"])
 
         def run_reaper(argv: List[str]) -> None:
+            argv[argv.index("--reason") + 1] += " (turn ended to await the call)"
             result = subprocess.run(argv, cwd=ROOT, env=self.session_env, capture_output=True, text=True, timeout=60)
             self.assertEqual(0, result.returncode, result.stderr)
 
@@ -196,6 +197,35 @@ class BackgroundTests(Case):
         manual = self.cli("reap", "--owner", "s1", "--agent", "agent-a", "--dry-run", "--json", env=self.session_env)
         self.assertEqual(0, manual.returncode, manual.stderr)
         self.assertEqual([auto["id"]], [r["id"] for r in json.loads(manual.stdout)["results"]])
+
+    def test_a_subagent_turn_spares_the_background_call_below_an_explicit_runner(self):
+        command = self.rewritten(call("sleep 600; :"))
+        runner = self.own_detached(self.session_env, "--agent", "agent-a", "--ttl", "1h", argv=(
+            sys.executable, "-c", "import subprocess, sys; subprocess.run(sys.argv[1:], start_new_session=True)",
+            "/bin/sh", "-c", 'eval "$1"', "sh", command,
+        ))
+        self.wait_for(lambda: any(e.get("auto") == "background" for e in self.store.entries()),
+                      what="the nested background entry")
+        (auto,) = [plain(e) for e in self.store.entries() if e.get("auto") == "background"]
+        self.addCleanup(self.end_group, auto["pid"], auto["start"])
+        nested_shell = procs.Table.read().get(auto["pid"])
+        assert nested_shell is not None
+        self.assertEqual(runner["pid"], nested_shell.ppid)
+        self.wait_for(lambda: any(p.cmd == "sleep 600" for p in procs.Table.read().descendants(auto["pid"])),
+                      what="the background command to run")
+        (child,) = [p.pid for p in procs.Table.read().descendants(auto["pid"]) if p.cmd == "sleep 600"]
+
+        self.hook("SubagentStop", "s1", env=self.session_env, agent_id="agent-a")
+        self.wait_for(lambda: self.state_of(runner["id"]) == "reaped", what="the explicit runner reaped")
+        self.assertFalse(self.runs(runner["pid"]))
+        self.assertEqual("running", self.state_of(auto["id"]))
+        self.assertTrue(self.runs(auto["pid"]), "the background shell outlives its runner")
+        self.assertTrue(self.runs(child), "so does its command")
+
+        self.hook("SessionEnd", "s1", env=self.session_env, reason="other")
+        self.wait_for(lambda: self.state_of(auto["id"]) == "reaped", what="session end to reap the background call")
+        self.assertFalse(self.runs(auto["pid"]))
+        self.assertFalse(self.runs(child))
 
     def test_the_command_runs_and_exits_as_it_would_without_junkfather(self):
         shell = self.run_as_claude(self.rewritten(call("echo out; echo err >&2; (exit 3)")))

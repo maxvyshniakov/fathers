@@ -36,6 +36,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, TextIO, Tuple
 from . import entry as _entry
 from . import events as _events
 from . import procs as _procs
+from . import reap as _reap
 from . import safety as _safety
 from . import errors as _errors
 from .defaults import CREATE_TIMEOUT, RESOURCE_TIMEOUT, SETTLE, STOP_TIMEOUT
@@ -682,17 +683,17 @@ def stop(resource: Mapping[str, Any], grace: float, alive: Callable[[], Optional
             "error": "it still runs after its stop command" if state else "whether it still runs cannot be told"}
 
 
-def ending_owner(entry: Entry, reason: str, table: Optional[_procs.Table]) -> List[int]:
+def ending_owner(entry: Entry, lifecycle: Optional[_reap.Lifecycle], table: Optional[_procs.Table]) -> List[int]:
     """The processes that do not count as using a resource while its owner's end reaps it: at a SessionEnd the
     session's process and everything below it, at a SubagentStop the session's process alone (its other work goes
-    on). [] for any other reason."""
+    on). [] outside those lifecycle events."""
     owner = entry.get("owner") or {}
     pid = owner.get("pid")
     if table is None or not isinstance(pid, int) or not table.alive(pid, owner.get("pid_start")):
         return []
-    if reason.startswith("session-end"):
+    if lifecycle == _reap.Lifecycle.SESSION_END:
         return [pid, *(p.pid for p in table.descendants(pid))]
-    return [pid] if reason.startswith("subagent-stop") else []
+    return [pid] if lifecycle == _reap.Lifecycle.SUBAGENT_STOP else []
 
 
 def stopped_event(store: Store, subject: Dict[str, Any], actor: Optional[Dict[str, Any]], reason: str,
@@ -709,13 +710,12 @@ def stopped_event(store: Store, subject: Dict[str, Any], actor: Optional[Dict[st
 
 
 def reap(store: Store, entry: Entry, reason: str, grace: float, dry_run: bool,
-         actor: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+         actor: Optional[Dict[str, Any]], *, lifecycle: Optional[_reap.Lifecycle] = None) -> Dict[str, Any]:
     """End one running resource entry through its kind's stop command (reap.reap hands resource entries here). A
     dry run asks the kind whether its stop would be refused (a worktree's guards)."""
-    from . import reap as _reap
     recorded = entry.get("resource") or {}
     entry_id = str(entry["id"])
-    resource: Dict[str, Any] = {**recorded, "_exclude": ending_owner(entry, reason, _table())}
+    resource: Dict[str, Any] = {**recorded, "_exclude": ending_owner(entry, lifecycle, _table())}
     kind = KINDS.get(str(resource.get("kind")))
 
     def alive() -> Optional[bool]:

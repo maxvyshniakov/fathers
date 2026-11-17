@@ -144,6 +144,7 @@ def parser() -> Parser:
     p.add_argument("--json", action="store_true")
     p.add_argument("--quiet", action="store_true")
     p.add_argument("--via", help=argparse.SUPPRESS)
+    p.add_argument("--lifecycle", type=_reap.Lifecycle, help=argparse.SUPPRESS)
 
     p = sub.add_parser("hand", help="hand an entry over to another session")
     p.add_argument("id")
@@ -331,16 +332,18 @@ def reap_command(store: Store, args: argparse.Namespace) -> int:
         raise Usage("reap takes one of --id, --owner, --lane or --pid")
     if args.agent and not args.owner:
         raise Usage("--agent goes with --owner SESSION")
+    lifecycle: Optional[_reap.Lifecycle] = args.lifecycle
+    if lifecycle is not None and (args.via != "hook" or not args.owner
+                                  or bool(args.agent) != (lifecycle == _reap.Lifecycle.SUBAGENT_STOP)):
+        raise Usage("--lifecycle requires the hook owner selector for that event")
     now = time.time()
     table = None
     if args.pid is not None:
         table = _procs.read_or_none()
         if table is None:
             raise Refused("the process table cannot be read")
-    # SubagentStop can end a turn while an auto-owned Bash call is still running.
-    exclude_auto = _background.AUTO if args.via == "hook" and args.reason == _hook.SUBAGENT_STOP else None
     selected, results = _reap.select(store, args.id, args.owner, args.agent, args.lane, table, args.pid,
-                                     exclude_auto=exclude_auto)
+                                     lifecycle=lifecycle)
     if table is not None and not selected:
         return report(_reap.reap_unowned(store, args.pid, table, args.force, args.reason, args.grace, args.dry_run,
                                          args.via), args)
@@ -349,7 +352,8 @@ def reap_command(store: Store, args: argparse.Namespace) -> int:
     for entry in selected:
         results.append(_reap.reap(store, entry["id"], args.reason, grace=args.grace, dry_run=args.dry_run,
                                   force=bool(args.id) and args.force,
-                                  actor=_events.tool(args.via) if args.via else None))
+                                  actor=_events.tool(args.via) if args.via else None,
+                                  lifecycle=lifecycle))
     return report(results, args)
 
 
