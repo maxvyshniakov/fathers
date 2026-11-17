@@ -159,7 +159,7 @@ class FormatterTests(unittest.TestCase):
         ]
         for kind, details, name, description in cases:
             with self.subTest(kind=kind, details=details):
-                row, = rows_of([logged(kind, NOW, "check", 1, **details)])
+                row, = rows_of([dict(logged(kind, NOW, "check", 1), details=details)])
                 self.assertEqual((name, description), (row["event"], row["detail"][0]))
 
     def test_lanefather_kinds(self) -> None:
