@@ -62,7 +62,8 @@ DESCRIPTIONS = {
     "aging_batch": "A waiting batch request is served as normal after this; 0: never.",
     "aging_normal": "A waiting normal request is served as interactive after this; 0: never.",
     "warn_wait": "A request waiting this long says so and is flagged; 0: never.",
-    "reservation_timeout": "How long a head blocked by leases with no end estimate keeps its reservation. Zero means never.",
+    "reservation_timeout": "After this long past its reserved start, a blocked head gives way while keeping "
+                           "its reservation and place. Zero disables the timeout.",
     "yield_after": "Before a yieldable holder is asked to yield; 0: nobody is asked.",
     "idle_cpu": "A lease below this for the idle time is idle (💤); 0: never.",
     "idle_after": "Below the idle cores this long: idle, and asked if it can yield.",
@@ -251,7 +252,7 @@ class Reading:
             return self.basis["slots"]
         return self.basis["gib_per_slot"] or _config.AUTO_GIB_PER_SLOT
 
-    def knob_row(self, key: str, writable: bool) -> dict[str, Any]:
+    def knob_row(self, key: str, writable: bool, newer_keys: list[str]) -> dict[str, Any]:
         name = _config.ORDER_KNOBS[key][0] if key != "order" else "QUEUE"
         row: dict[str, Any] = {"key": f"order.{key}", "value": self.saved[key], "default": _config.ORDER_DEFAULTS[key],
                                "writable": writable, "revision": revision(self.files["order.json"]),
@@ -264,6 +265,8 @@ class Reading:
                        min=_config.ORDER_KNOBS[key][1], max=None, step=KNOBS[key][1], unit=UNITS[key].strip())
             if key in NEVER:
                 row["zero"] = "never"
+        if key in newer_keys:
+            row["warning"] = _settings.order_compatibility([key])
         row["source"] = "saved" if key in self.stored else "default"
         if self.effective[key] != self.saved[key]:
             row.update(effective=self.effective[key], source=f"env SLOTFATHER_{name}")
@@ -289,13 +292,16 @@ class Reading:
              "step": 0.5, "unit": "GiB", "source": source, "writable": writable, "revision": token,
              "when": {"capacity.mode": ["memory", "lower"]}, "description": DESCRIPTIONS["amount.memory"]}]
         basis = filled_basis(self.basis)
+        newer_keys = _settings.order_extension_keys(self.saved)
+        status = status_rows(basis, self.queue)
+        if newer_keys:
+            status.append(("compatibility", _settings.order_compatibility(newer_keys), "warn"))
         return {"v": VERSION, "tool": "slotfather", "writable": writable, "reason": reason,
-                "status": [{"label": label, "value": value, "style": style}
-                           for label, value, style in status_rows(basis, self.queue)],
+                "status": [{"label": label, "value": value, "style": style} for label, value, style in status],
                 "basis": basis,
                 "sections": [{"id": "capacity", "title": "Capacity", "settings": capacity},
                              {"id": "order", "title": "Queue order",
-                              "settings": [self.knob_row(key, writable) for key in ORDER_FIELDS]}]}
+                              "settings": [self.knob_row(key, writable, newer_keys) for key in ORDER_FIELDS]}]}
 
 
 class Invalid(_config.SlotError):
