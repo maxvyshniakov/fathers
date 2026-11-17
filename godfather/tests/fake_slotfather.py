@@ -22,10 +22,10 @@ from typing import Any, cast
 CORES_PER_SLOT, AUTO_GIB_PER_SLOT, CAPACITY_PER_CORE = 3, 4.0, 4
 ORDER_DEFAULTS = {"order": "backfill", "safety": 3.0, "limit": 0.0, "fallback": 3600.0, "overrun": 0.5,
                   "interactive": 1800.0, "batch": 1800.0, "yield_after": 120.0, "idle_cpu": 0.1, "idle_after": 300.0,
-                  "aging_batch": 1800.0, "aging_normal": 3600.0, "warn_wait": 1800.0}
+                  "aging_batch": 1800.0, "aging_normal": 3600.0, "warn_wait": 1800.0, "reservation_timeout": 1800.0}
 MINIMUMS = {"safety": 1.0, "limit": 0.0, "fallback": 0.0, "overrun": 0.0, "interactive": 0.0, "batch": 0.0,
             "yield_after": 0.0, "idle_cpu": 0.0, "idle_after": 1.0, "aging_batch": 0.0, "aging_normal": 0.0,
-            "warn_wait": 0.0}
+            "warn_wait": 0.0, "reservation_timeout": 0.0}
 MODES = ("automatic", "fixed", "memory", "lower")
 UNKNOWN = "the machine's memory is unknown here; save a count instead (slotfather slots N)"
 PATH = os.environ.get("FAKE_SLOTFATHER_STATE", "")
@@ -144,11 +144,13 @@ KNOBS = {"safety": ("Backfill margin", 0.5, "number", "×"), "fallback": ("Unkno
          "batch": ("Batch held back", 60, "duration", "s"),
          "aging_batch": ("Batch promoted after", 300, "duration", "s"),
          "aging_normal": ("Normal promoted after", 300, "duration", "s"),
-         "warn_wait": ("Warn after waiting", 300, "duration", "s"), "idle_cpu": ("Idle when below", 0.05, "number", "cores"),
+         "warn_wait": ("Warn after waiting", 300, "duration", "s"),
+         "reservation_timeout": ("Reservation timeout", 300, "duration", "s"),
+         "idle_cpu": ("Idle when below", 0.05, "number", "cores"),
          "idle_after": ("Idle for", 60, "duration", "s"), "yield_after": ("Ask to yield after", 30, "duration", "s")}
-NEVER = ("limit", "aging_batch", "aging_normal", "warn_wait")
+NEVER = ("limit", "aging_batch", "aging_normal", "warn_wait", "reservation_timeout")
 ORDER_FIELDS = ("order", "safety", "fallback", "overrun", "limit", "interactive", "batch", "aging_batch",
-                "aging_normal", "warn_wait", "idle_cpu", "idle_after", "yield_after")  # the panel's order
+                "aging_normal", "warn_wait", "reservation_timeout", "idle_cpu", "idle_after", "yield_after")  # the panel's order
 DESCRIPTIONS = {
     "mode": "Shared by every client. Automatic: the lower of the CPU and memory budgets.",
     "amount.fixed": "Total slots for every client. Applies at the next grant; a shrink drains.",
@@ -163,6 +165,7 @@ DESCRIPTIONS = {
     "aging_batch": "A waiting batch request is served as normal after this; 0: never.",
     "aging_normal": "A waiting normal request is served as interactive after this; 0: never.",
     "warn_wait": "A request waiting this long says so and is flagged; 0: never.",
+    "reservation_timeout": "How long a head blocked by leases with no end estimate keeps its reservation. Zero means never.",
     "yield_after": "Before a yieldable holder is asked to yield; 0: nobody is asked.",
     "idle_cpu": "A lease below this for the idle time is idle (💤); 0: never.",
     "idle_after": "Below the idle cores this long: idle, and asked if it can yield.",
