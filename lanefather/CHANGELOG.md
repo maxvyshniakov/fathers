@@ -122,6 +122,10 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Changed
 
+- `land` holds for unmarked P1/P2 findings from other finished reviews in this repository. It prints each
+  finding's mark commands and the fix-round path, reports P3 findings as warnings and logs `--force-reason`
+  overrides. A fix lane can pass its own valid parents. `list` ends with the pending review summary (fathers#177).
+
 - Lane registration prints a load advisory when load15 exceeds the threshold and still honors the lane cap, claims,
   dependencies and disk floor. High load also leaves `Project.readiness` available for a lane that can register.
   Execution waits for capacity through the project's Slotfather adapter. Capability `lane.load_advisory`

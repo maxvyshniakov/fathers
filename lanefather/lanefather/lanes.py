@@ -255,7 +255,8 @@ def receipt_state(record: Record) -> str:
 
 
 def list_lanes(args: Any) -> int:
-    records = state.Store(config.current()).lanes(strict=True)
+    store = state.Store(config.current())
+    records = store.lanes(strict=True)
     shown = [r for r in records if args.all or r["status"] != "done"]
     decision = admission.evaluate(config.current(), records, admission.running_common(config.current()))
     cap, source, machine = decision.cap, decision.source, decision.machine
@@ -287,4 +288,9 @@ def list_lanes(args: Any) -> int:
     if git_ok(os.getcwd(), "rev-parse", "--git-dir"):
         for line in promote.ahead_lines(os.getcwd()):
             print(line)
+    pending = list(review.unmarked_reviews(records, store))
+    label = "review" if len(pending) == 1 else "reviews"
+    references = [f"{lane['id']}#{finding['n']}" for lane, findings in pending for finding in findings]
+    summary = f"{len(pending)} finished {label} with unmarked findings"
+    print(f"{summary}: {', '.join(references)}" if references else summary)
     return 0

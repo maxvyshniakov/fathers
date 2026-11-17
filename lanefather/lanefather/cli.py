@@ -211,8 +211,8 @@ def parser() -> Parser:
                    help=f"give up after S seconds (default {wait.DEFAULT_TIMEOUT:g})")
     p.add_argument("--json", action="store_true", help="the version-1 reply: lane, for, status, reached, waited")
     p.set_defaults(run=wait.command)
-    p = add(root, commands, "land", "After a current green receipt: merge, start the review, run the post-merge smoke, "
-            "finish the lane (lanefather.land).")
+    p = add(root, commands, "land", "After a current green receipt: merge, start the review and run the post-merge "
+            "smoke. Earlier finished reviews with unmarked P1/P2 findings hold the merge (fathers#177).")
     p.add_argument("id")
     p.add_argument("--into", help="integration worktree (default: the worktree on the lane's base branch)")
     p.add_argument("-m", "--message")
@@ -221,7 +221,7 @@ def parser() -> Parser:
                         "(default: slotfather advise --max 3)")
     p.add_argument("--keep", action="store_true",
                    help="leave the landed lane for done (another lane needs its artifacts)")
-    p.add_argument("--force-reason", help="land without a current green receipt; logged")
+    p.add_argument("--force-reason", help="override a missing green receipt or a review hold, with a logged reason")
     p.add_argument("--wait", type=float, default=120, metavar="SECONDS", help="wait this long for the landing lock")
     p.set_defaults(run=land.land)
     p = add(root, commands, "review", "The lane's one independent review (Sol, or Opus when Codex is low; or the "

@@ -70,6 +70,17 @@ parent's ID in the string `review_fix_of` for older Lanefather versions. The com
 A lane started with `--fix-of` has its own worktree, counts toward the cap like any lane, and runs its own check
 plan even with one parent. `start` warns when an id that reads `review-fixes` names no parent.
 
+### Review findings before landing
+
+`land` refuses if another lane in the same repository has a finished review with an unmarked P1 or P2 finding
+(fathers#177). The refusal gives the exact commands to mark each finding and shows how to start the fix round.
+Unmarked P3 findings are printed as warnings. A running or missing review can finish alongside later lands.
+A fix lane may land while its valid parents have unmarked findings. A finished review of an unrelated lane can
+still hold the merge. When several landed reviews need a fix, the refusal suggests one batch with `--fix-of`.
+`--force-reason` logs the reason and the blocking findings in the override record.
+The text output from `list` ends with the count of finished reviews with unmarked findings and their
+`lane#number` references. The separate batch gate uses its configured `[review] blocks` severities.
+
 ### Finishing lanes
 
 A lane is finished when it is landed (or released), its post-merge smoke is green, its review is finished or exempt

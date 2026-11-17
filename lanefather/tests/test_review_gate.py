@@ -2,12 +2,64 @@
 states and severities, the override, and the `findings` command a publish (Repo-Kit's release:publish) calls."""
 from __future__ import annotations
 
+from itertools import product
 import json
 import os
+from pathlib import Path
+import tempfile
 from typing import Any
 import unittest
 
 from support import LaneCase
+
+from lanefather import config, review, state
+
+
+class LandingGateTableTests(unittest.TestCase):
+    def setUp(self):
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory(prefix="lane-landing-findings-")))
+        self.store = state.Store(config.Config(), directory)
+        self.target: state.Record = {"id": "target", "status": "active", "common_dir": "/repo/.git"}
+
+    def test_other_lanes_marks_severity_review_status_and_repository(self):
+        # An open finding of an active lane reviewed before landing still belongs to this repository.
+        self.store.save(self.target)
+        state.write_json(self.store.receipt_path("target", "review"),
+                         {"status": "finished", "findings": [{"n": 1, "severity": "P1"}]})
+        marks: tuple[dict[str, str] | None, ...] = (
+            None, {"kind": "fixed", "merge": "fix"}, {"kind": "rejected", "reason": "out of scope"})
+        for mark, severity, status, same_repo in product(marks, ("P1", "P2", "P3"), ("running", "finished"),
+                                                        (False, True)):
+            with self.subTest(mark=mark, severity=severity, status=status, same_repo=same_repo):
+                common = self.target["common_dir"] if same_repo else "/different/.git"
+                self.store.save({"id": "a", "status": "active", "common_dir": common})
+                finding = {"n": 1, "severity": severity, "mark": mark}
+                state.write_json(self.store.receipt_path("a", "review"), {"status": status, "findings": [finding]})
+                blockers, warnings = review.landing_findings(self.target, self.store)
+                visible = mark is None and status == "finished" and same_repo
+                self.assertEqual([lane["id"] for lane, _ in blockers], ["a"] if visible and severity != "P3" else [])
+                self.assertEqual([lane["id"] for lane, _ in warnings], ["a"] if visible and severity == "P3" else [])
+
+    def test_the_fix_suggestion_combines_landed_blockers(self):
+        landed = [dict(self.target, id=lane_id, status="landed", landed={"merge": "merge"}, ticket="12")
+                  for lane_id in ("a", "b")]
+        commands = review.fix_round_commands(landed)
+        self.assertEqual(commands, ["lanefather start <fix-id> --fix-of a,b --ticket <ticket> --claims <paths> --create"])
+        commands = review.fix_round_commands(landed, alongside=["current"])
+        self.assertIn("--fix-of current,a,b ", commands[0])
+
+    def test_only_a_valid_named_parent_can_pass_its_own_findings(self):
+        for lane_id in ("parent", "unrelated", "unlanded"):
+            parent = dict(self.target, id=lane_id)
+            if lane_id != "unlanded":
+                parent.update(status="landed", landed={"merge": "merge"})
+            self.store.save(parent)
+            state.write_json(self.store.receipt_path(lane_id, "review"),
+                             {"status": "finished", "findings": [{"n": 1, "severity": "P2"}]})
+        fix = dict(self.target, review_fix_of="parent", review_fix_of_all=["parent", "unlanded"])
+        blockers, warnings = review.landing_findings(fix, self.store)
+        self.assertEqual([record["id"] for record, _ in blockers], ["unlanded", "unrelated"])
+        self.assertEqual(warnings, [])
 
 
 class ReviewGateTableTests(LaneCase):
