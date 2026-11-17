@@ -19,7 +19,7 @@ from typing import Any, Mapping, NamedTuple, Optional, Sequence, cast
 
 from . import layout as _layout
 from . import theme as _theme
-from .text import span, tilde
+from .text import dashboard_text, span, tilde
 
 GODFATHER = "godfather"
 ORDER = ("godfather", "slotfather", "lanefather", "junkfather")  # the sections, top to bottom
@@ -415,6 +415,9 @@ def status_lines(panel: Panel, context: Context, found: Section) -> list[Line]:
     environment = next((item for item in items if item.get("label") == "environment"), None)
     if environment and environment.get("value"):
         lines.append(line("environment", str(environment["value"]), "dim"))
+    compatibility = next((item.get("value") for item in items if item.get("label") == "compatibility"), None)
+    if isinstance(compatibility, str) and compatibility:
+        lines.append(line("clients", dashboard_text(compatibility), "warn"))
     if context.problem:  # the Slotfather snapshot is stale: why, from the source
         lines.append(line("slotfather", context.problem, "bad"))
     return lines
@@ -449,6 +452,9 @@ def row_lines(panel: Panel, context: Context, row: Row, value_column: int) -> li
             parts.append((after, why, "dim"))
         elif "effective" in row.schema and row.schema["effective"] != row.value:
             parts.append((after, f"effective here: {value_text(row, row.schema['effective'])}", "dim"))
+    warning = row.schema.get("warning")
+    if selected and isinstance(warning, str) and warning:
+        notes.append((dashboard_text(warning), "warn"))
     refusal = panel.refusal
     if refusal is not None and (refusal.tool, refusal.key) == row.focus or refusal is not None and selected \
             and refusal.tool == row.tool and row_of(panel, context, (refusal.tool, refusal.key)) is None:

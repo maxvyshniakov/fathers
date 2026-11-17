@@ -13,7 +13,7 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   Slotfather requests its slots back and waits for the grant before starting the command. (fathers#161)
 
 - The Settings panel and `slotfather settings --json` expose the timeout for a head blocked by leases with no end
-  estimate. (fathers#178)
+  estimate. Changes that older clients cannot read show a compatibility warning. (fathers#178)
 
 - A head whose reserved start passed while leases with no end estimate hold its slots no longer idles the machine
   (fathers#160): a request that fits the free slots starts when its p90 run ends by the head's projected start,
