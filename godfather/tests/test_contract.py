@@ -98,13 +98,15 @@ class ContractTests(unittest.TestCase):
         if key not in rows(client.read()):
             self.assertNotEqual(EXECUTABLE, str(SIBLING), "the sibling Slotfather must publish the setting")
             self.skipTest("installed Slotfather has no reservation timeout setting")
-        client.set(key, "12m")
         screen = app.Screen()
         context = settings_model.Context(width=90, height=45)
-        panel = settings_model.opened(screen.settings_sections(), context, 0.0)
-        canvas = tui.Canvas(90, 45)
-        settings.draw(canvas, panel, context)
-        self.assertRegex(canvas.render(False), r"Reservation timeout +12m")
+        for value, shown in (("12m", "12m"), ("0", "never")):
+            with self.subTest(value=value):
+                client.set(key, value)
+                panel = settings_model.opened(screen.settings_sections(), context, 0.0)
+                canvas = tui.Canvas(90, 45)
+                settings.draw(canvas, panel, context)
+                self.assertRegex(canvas.render(False), rf"Reservation timeout +{shown}")
 
     def test_the_fake_settings_reply_is_the_real_one(self) -> None:
         """tests/fake_slotfather.py prints `settings --json` field for field as this Slotfather does."""
