@@ -182,6 +182,7 @@ Keys Godfather 0.1.0 edits, and the panel row each is shown as:
 | `capacity.slots` | Slots (mode `fixed`) | integer, at least 1, at most 4 per core |
 | `capacity.gib_per_slot` | GiB per slot (modes `memory`, `lower`) | number, more than 0 |
 | `order.order` | Queue order | choice: `backfill`, `window` |
+| `order.reservation_timeout` | Reservation timeout | duration in seconds, zero displays as `never` |
 | `order.safety`, `order.fallback`, `order.overrun`, `order.limit`, `order.interactive`, `order.batch`, `order.aging_batch`, `order.aging_normal`, `order.warn_wait`, `order.idle_cpu`, `order.idle_after`, `order.yield_after` | the knob rows | number or duration (seconds) |
 
 `settings --json` replies with SPEC.md's settings object. Godfather reads, per setting: `key`, `value` (the saved
@@ -189,7 +190,8 @@ value, the environment ignored), `effective` (the value here when the environmen
 equal), `default`, `writable`, `source` and `revision`; and at the top level `writable`, `reason`, `status` (rows
 of `label`, `value` and an optional `style`), plus `basis`, `settings.capacity_basis()` as is, with `memory_slots`
 and `memory_gib` filled in by the automatic rule when the saved mode does not compute them (today's panel does that
-for Fixed).
+for Fixed). The reservation timeout is counted from the head's reserved start. The provider's optional per-setting
+`warning` appears under the selected row and its `compatibility` status warning appears in the Slotfather section.
 
 - `capacity.mode` set to `fixed` keeps the current slot count; to `memory` or `lower`, the current GiB per slot
   (or the automatic default). `capacity.slots` saves Fixed with that count; `capacity.gib_per_slot` saves the

@@ -59,8 +59,17 @@ class SettingsCliTests(SlotCase):
         saved = self.settings("set", key, "0", "--revision", row["revision"])
         self.assertEqual("Saved · Reservation timeout never", saved["message"])
         self.assertEqual(0, rows(saved)[key]["value"])
+        warning = rows(saved)[key]["warning"]
+        self.assertIn("Older Slotfather clients may use Arrival order", warning)
+        self.assertIn("reservation_timeout", warning)
+        self.assertEqual(warning, next(item["value"] for item in saved["status"]
+                                       if item["label"] == "compatibility"))
+        self.assertEqual(warning, rows(self.settings())[key]["warning"])
+        self.assertIn(warning, self.tool("order", "--reservation-timeout", "0").stderr)
         reset = self.settings("reset", key, "--revision", rows(saved)[key]["revision"])
         self.assertEqual((row["default"], "default"), (rows(reset)[key]["value"], rows(reset)[key]["source"]))
+        self.assertNotIn("warning", rows(reset)[key])
+        self.assertFalse(any(item["label"] == "compatibility" for item in reset["status"]))
 
     def test_the_environment_tightening_a_value_is_its_effective_value_and_source(self) -> None:
         found = rows(self.settings(SLOTFATHER_BACKFILL_SAFETY="5"))["order.safety"]

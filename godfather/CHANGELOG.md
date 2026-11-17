@@ -6,6 +6,9 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Added
 
+- Settings lets you edit the reservation timeout when Slotfather advertises it. It shows when older Slotfather
+  clients may use Arrival order after a change. (fathers#178)
+
 - EVENTS describes Slotfather's lock waits and blocked head reservations. LEASE DETAILS wraps long lock paths
   and shows whether the lease holds slots. Lock waiters are excluded from admission rank. (fathers#162)
 
