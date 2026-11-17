@@ -32,7 +32,10 @@ slotfather session stop perf-640                                    # or let it 
 
 ### Waiting on a lock
 
-When a session run blocks in `slotfather lock`, Slotfather checks the identities of its active runs under the queue
-lock. A sole run can give up its slots while blocked and waits for the lease to hold them again before it starts its
-command. The session keeps its slots when another run or another process in the same run still needs them, or when
-membership cannot be determined. A newly arriving run can request the slots back while the first run waits.
+When a session runs `slotfather lock` as its foreground command, Slotfather checks the identities of its active runs
+under the queue lock. A sole run can give up its slots while blocked. For a shell command that only prepares the
+lock invocation, use `exec slotfather lock` so the lock becomes the session run's foreground command.
+The session keeps its slots while a sibling run stays active, when process membership is uncertain, or when a shell
+can continue independently of the lock waiter. It reconsiders a noted lock wait when a sibling finishes or is found
+gone. A newly arriving run can request the slots back while the first run waits. A lock command starts its work only
+once the lock and the session's slots are both held.

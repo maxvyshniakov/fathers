@@ -34,8 +34,7 @@ from . import durations as _durations
 from . import entry as _entry
 from . import events as _events
 from . import labels as _labels
-from . import lineage as _lineage
-from . import platform as _platform
+from . import leases as _leases
 from . import process as _process
 from . import query as _query
 from . import queue as _queue
@@ -53,32 +52,11 @@ def mapping(value: object) -> dict[str, Any]:
     return cast(dict[str, Any], value) if isinstance(value, dict) else {}
 
 
-def uses_path(entry_path: Path) -> Path:
-    return entry_path.with_suffix(".session")
-
-
-def read_uses(entry_path: Path) -> dict[str, Any] | None:
-    try:
-        found: object = json.loads(uses_path(entry_path).read_text())
-    except (OSError, ValueError):
-        return None
-    return cast(dict[str, Any], found) if isinstance(found, dict) else None
-
-
-def name_of(entry: dict[str, Any]) -> str | None:
-    found = mapping(entry.get("session")).get("name")
-    return found if isinstance(found, str) else None
-
-
-def find(live: list[tuple[Path, dict[str, Any]]], name: str) -> tuple[Path, dict[str, Any]] | None:
-    return next(((p, e) for p, e in live if name_of(e) == name), None)
-
-
 def view(path: Path, entry: dict[str, Any]) -> dict[str, Any]:
     """`status --json`'s `session` of an entry: its name, idle timeout, expected run, whether it stops, its runs so
     far, the busy seconds and the active runs (pid, label, cmd, since), and when it was last used."""
     spec = mapping(entry.get("session"))
-    uses = read_uses(path) or {}
+    uses = _state.session_uses(path) or {}
     active = mapping(uses.get("active"))
     return {"name": spec.get("name"), "idle": spec.get("idle"), "expect": spec.get("expect"),
             "stopping": bool(spec.get("stopping")), "runs": int(uses.get("runs") or 0),
@@ -149,7 +127,7 @@ def start(argv: list[str]) -> int:
     _state.require_own(directory, "a session")
     if _queue.inherited_lease(_process.processes()) is not None:
         raise _config.SlotError("a session cannot start inside a lease: it would wait for the slots its caller holds")
-    found = find(_query.look(directory, log=True).found, spec["name"])
+    found = _queue.named_session(_query.look(directory, log=True).found, spec["name"])
     if found is not None:
         raise _config.SlotError(f"session {spec['name']} exists (pid {found[1].get('pid')}, {found[1].get('state')})")
     env = {k: v for k, v in os.environ.items() if k not in ("SLOTFATHER_LEASE", "SLOTFATHER_COUNT", "SLOTFATHER_YIELD")}
@@ -166,11 +144,10 @@ def start(argv: list[str]) -> int:
     for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(signum, give_up)
     for line in holder.stdout:
-        if line.strip() == READY:
+        message, _, count = line.strip().partition(" ")
+        if message == READY and count.isdecimal():
             holder.stdout.close()
             idle = _config.duration(spec["idle"])
-            held = find(_query.look(directory).found, spec["name"])
-            count = held[1].get("count") if held else "?"
             print(f"slot: session {spec['name']} holds {count} slot(s) (holder pid {holder.pid}); run work with "
                   f"`slotfather run --session {spec['name']} -- COMMAND`; it ends after {idle} without a run or at "
                   f"`slotfather session stop {spec['name']}`", flush=True)
@@ -219,12 +196,12 @@ class Holder:
         with _state.editing(lease.path) as entry:
             if entry is None:
                 return 1
-            _state.write(uses_path(lease.path), {"active": {}, "runs": 0, "busy": 0.0, "cpu": 0.0,
-                                                 "rss_peak_mb": 0.0, "last_use": round(began, 3)})
+            _state.write(_state.session_path(lease.path), {"active": {}, "runs": 0, "busy": 0.0, "cpu": 0.0,
+                                                          "rss_peak_mb": 0.0, "last_use": round(began, 3)})
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         with contextlib.suppress(OSError):  # whoever started it may be gone: the session holds all the same
-            print(READY, flush=True)
+            print(f"{READY} {lease.count}", flush=True)
         with open(os.devnull, "w") as quiet:  # whoever started it has stopped reading
             os.dup2(quiet.fileno(), 1)
             os.dup2(quiet.fileno(), 2)
@@ -246,14 +223,17 @@ class Holder:
             with _state.editing(path) as entry:
                 if entry is None:
                     return 1  # the lease vanished (removed by hand): nothing is left to release
-                uses = read_uses(path) or {"active": {}, "runs": 0, "busy": 0.0, "cpu": 0.0, "last_use": began}
+                uses = _state.session_uses(path) or {"active": {}, "runs": 0, "busy": 0.0, "cpu": 0.0, "last_use": began}
                 moment = time.time()
-                if prune(uses, table, moment):
-                    _state.write(uses_path(path), uses)
+                pruned_runs = prune(uses, table, moment)
+                if pruned_runs:
+                    _state.write(_state.session_path(path), uses)
                 if self.stop_asked and not entry["session"].get("stopping"):
                     entry["session"]["stopping"] = True
                     _state.write(path, entry)
                 if uses.get("active"):
+                    if pruned_runs:
+                        _leases.session_run_ended(directory, entry)
                     continue
                 reason = "stopped" if self.stop_asked else \
                     "idle" if moment - float(uses.get("last_use") or began) >= idle else None
@@ -262,7 +242,7 @@ class Holder:
                 entry["session"].update(stopping=True, runs=int(uses.get("runs") or 0),
                                         busy=round(float(uses.get("busy") or 0), 1), ended_by=reason)
                 _state.write(path, entry)
-                uses_path(path).unlink(missing_ok=True)
+                _state.session_path(path).unlink(missing_ok=True)
                 _events.record(directory, None, "session.ended", _events.request(entry, path),
                              {"reason": reason, "runs": entry["session"]["runs"], "busy": entry["session"]["busy"],
                               "held": round(moment - began)}, _events.holder(entry))
@@ -276,59 +256,14 @@ class Holder:
         return 0
 
 
-def active_pid(key: str) -> int | None:
-    try:
-        pid = int(key)
-    except ValueError:
-        return None
-    return pid if key.isdecimal() and pid > 1 else None
-
-
-def run_alive(pid: int, run: dict[str, Any], table: _queue.Table | None) -> bool | None:
-    """Whether the run still has its process identity. None keeps work whose identity cannot be confirmed."""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except (PermissionError, OverflowError):
-        return None
-    if table is None:
-        return True
-    process = table.get(pid)
-    if process is None:
-        return None
-    start, started = run.get("start"), run.get("started")
-    dated = isinstance(start, str) and bool(start.strip()) and bool(process[1].strip())
-    if not dated and (type(started) is not int or _platform.start_epoch(pid) is None):
-        return None
-    return _platform.same_holder(start, started, pid, process[1])
-
-
-def idle_for_lock(path: Path, caller: int, table: _queue.Table) -> bool:
-    """Under the queue lock, only the lock caller's active session run may still use the lease."""
-    uses = read_uses(path)
-    active = uses.get("active") if uses is not None else None
-    if not isinstance(active, dict):
-        return False
-    running: list[int] = []
-    for key, values in cast(dict[str, Any], active).items():
-        pid = active_pid(key)
-        if pid is None:
-            return False
-        alive = run_alive(pid, mapping(values), table)
-        if alive is None:
-            return False
-        if alive:
-            running.append(pid)
-    mine = {caller, *_lineage.ancestors(_lineage.parents_of(table), caller)}
-    return len(running) == 1 and running[0] in mine and not _queue.other_work(table, running[0], caller)
-
-
 def prune(uses: dict[str, Any], table: _queue.Table | None, moment: float) -> bool:
     """Drops runs whose process is gone or has a different identity. Keeps those that cannot be checked yet."""
     active = mapping(uses.get("active"))
-    gone = [key for key, value in active.items()
-            if (pid := active_pid(key)) is not None and run_alive(pid, mapping(value), table) is False]
+    gone: list[str] = []
+    for key, value in active.items():
+        pid, identity = _process.run_pid(key), mapping(value)
+        if pid is not None and _process.run_alive(pid, identity.get("start"), identity.get("started"), table) is False:
+            gone.append(key)
     for pid in gone:
         active.pop(pid, None)
     if gone:
@@ -354,11 +289,11 @@ def stop(argv: list[str]) -> int:
     directory = _config.state_dir()
     _state.require_own(directory, "a session stop")
     with _query.looking(directory, log=True) as look:
-        found = find(look.found, name)
+        found = _queue.named_session(look.found, name)
         if found is None:
             raise _config.SlotError(f"no session {name} in this queue")
         path, entry = found
-        require_holder(name, entry)
+        _leases.require_session_owner(name, entry)
         os.kill(int(entry["pid"]), signal.SIGTERM)
     said = False
     deadline = time.monotonic() + STOP_WAIT
@@ -395,21 +330,9 @@ def command(argv: list[str]) -> int:
     raise _config.SlotError("session takes start --label NAME [...] or stop NAME")
 
 
-def require_holder(name: str, entry: dict[str, Any]) -> None:
-    if _process.process_uid(entry.get("pid")) != os.geteuid():
-        raise _config.SlotError(f"session {name} (pid {entry.get('pid')}) is another user's")
-
-
-def require_accepting(name: str, entry: dict[str, Any]) -> None:
-    if entry["session"].get("stopping"):
-        raise _config.SlotError(f"session {name} is stopping: it starts no more runs")
-
-
 def register_run(directory: Path, name: str, argv: list[str], label: str | None) -> tuple[Path, dict[str, Any]]:
     """Wait for a session and register this run under the lock that confirms the session still holds its slots."""
-    me = os.getpid()
     said = False
-    missing = f"no session {name} in this queue (slotfather session start --label {name})"
 
     def waiting(_reason: str | None) -> None:
         nonlocal said
@@ -420,28 +343,9 @@ def register_run(directory: Path, name: str, argv: list[str], label: str | None)
 
     cmd = _events.command(" ".join(argv))
 
-    def claim(path: Path, entry: dict[str, Any], table: _queue.Table) -> dict[str, Any] | None:
-        require_holder(name, entry)
-        require_accepting(name, entry)
-        uses = read_uses(path) if _entry.is_held(entry) else None
-        if uses is None:
-            return None
-        uses.setdefault("active", {})[str(me)] = {"start": table.get(me, (0, ""))[1],
-                                                  "started": _platform.start_epoch(me), "label": label,
-                                                  "cmd": cmd, "since": _config.now()}
-        _state.write(uses_path(path), uses)
-        _events.record(directory, None, "session.run_started", _events.request(entry, path),
-                       {"session": name, "run": {"pid": me, "label": label, "cmd": cmd}})
-        return entry
-
     def locate() -> tuple[Path, dict[str, Any] | None] | None:
         try:
-            with _query.looking(directory, log=True) as look:
-                found = find(look.found, name)
-                if found is None:
-                    raise _config.SlotError(missing)
-                path, entry = found
-                return path, claim(path, entry, look.table)
+            return _leases.claim_session_run(directory, name, label, cmd)
         except _config.ProcessTableError:
             return None  # no table to trust. The next check tries again.
 
@@ -452,16 +356,13 @@ def register_run(directory: Path, name: str, argv: list[str], label: str | None)
         return path, entry
 
     def admit(current: dict[str, Any]) -> dict[str, Any] | None:
-        require_accepting(name, current)
+        _leases.require_session_accepting(name, current)
         if not _entry.is_held(current):
             _client.resume_lock_yield(path, current)
             return None
         try:
-            with _query.looking(directory, log=True) as look:
-                found = find(look.found, name)
-                if found is None or found[0] != path:
-                    raise _config.SlotError(missing)
-                return claim(path, found[1], look.table)
+            _, admitted = _leases.claim_session_run(directory, name, label, cmd, expected=path)
+            return admitted
         except _config.ProcessTableError:
             return None
 
@@ -487,8 +388,8 @@ def run_inside(name: str, argv: list[str], label: str | None = None, meta: dict[
         status, usage = _runner.execute(argv, environment, _client.policy() == "background", directory=directory)
     finally:
         ran = time.monotonic() - began
-        with _state.editing(path):
-            uses = read_uses(path)
+        with _state.editing(path) as current:
+            uses = _state.session_uses(path)
             if uses is not None:
                 mapping(uses.get("active")).pop(str(me), None)
                 uses.update(runs=int(uses.get("runs") or 0) + 1, busy=round(float(uses.get("busy") or 0) + ran, 2),
@@ -496,7 +397,7 @@ def run_inside(name: str, argv: list[str], label: str | None = None, meta: dict[
                 if usage:
                     uses["cpu"] = round(float(uses.get("cpu") or 0) + float(usage.get("cpu") or 0), 2)
                     uses["rss_peak_mb"] = max(float(uses.get("rss_peak_mb") or 0), float(usage.get("rss_peak_mb") or 0))
-                _state.write(uses_path(path), uses)
+                _state.write(_state.session_path(path), uses)
             run: dict[str, Any] = {"pid": me, "label": label, "exit": status, "ran": round(ran, 2),
                                    "cpu": (usage or {}).get("cpu")}
             if meta:
@@ -504,4 +405,6 @@ def run_inside(name: str, argv: list[str], label: str | None = None, meta: dict[
             if git:
                 run["git"] = git  # the tree this run checked
             _events.record(directory, None, "session.run_ended", _events.request(entry, path), {"session": name, "run": run})
+            if current is not None:
+                _leases.session_run_ended(directory, current)
     return status

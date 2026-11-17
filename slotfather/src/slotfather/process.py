@@ -17,7 +17,7 @@ import contextlib
 import os
 import subprocess
 import sys
-from typing import Callable, Iterable, Mapping, NamedTuple, Sequence
+from typing import Callable, Iterable, Mapping, NamedTuple, Sequence, cast
 
 from . import config as _config
 from . import lineage as _lineage
@@ -213,6 +213,81 @@ def commands(pids: Iterable[int], timeout: float = 5) -> dict[int, str]:
         if number.isdigit() and command.strip():
             found[int(number)] = command.strip()
     return found
+
+
+def run_pid(key: str) -> int | None:
+    try:
+        pid = int(key)
+    except ValueError:
+        return None
+    return pid if key.isdecimal() and pid > 1 else None
+
+
+def present(pid: int) -> bool | None:
+    """Whether the kernel still knows the pid, which may be a zombie."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OverflowError):
+        return None
+    return True
+
+
+def run_alive(pid: int, start: object, started: object, table: Mapping[int, tuple[int, str]] | None) -> bool | None:
+    """True for the same live run, False for an exit or proven reuse, None if it cannot be checked."""
+    known = present(pid)
+    if known is not True or table is None:
+        return False if known is False else None
+    current = table.get(pid)
+    if current is None:
+        # A live-only table omits zombies as well as processes it could not inspect.
+        try:
+            targeted = starts([pid], strict=True).get(pid)
+        except PsError:
+            return None
+        return False if targeted is not None and targeted[1] else None
+    return _platform.verified_holder(start, started, pid, current[1])
+
+
+def other_work(table: dict[int, tuple[int, str]], root: object, caller: int) -> bool:
+    """Whether a process tree has work beside the caller, its ancestors or its children."""
+    parents = _lineage.parents_of(table)
+    mine = {*_lineage.ancestors(parents, caller), *_lineage.descendants(table, caller)}
+    others = [pid for pid in _lineage.descendants(table, root) if pid not in mine]
+    return work_remains(others)
+
+
+def work_remains(pids: list[int]) -> bool:
+    programs = names(pids)
+    return any(programs.get(pid) not in ("ps", "lsof") for pid in pids)
+
+
+def session_lock_idle(active: object, caller: int, table: dict[int, tuple[int, str]]) -> bool:
+    """Only the registered runner's direct command can prove it blocks that runner's foreground work."""
+    current = table.get(caller)
+    if current is None or not isinstance(active, dict):
+        return False
+    runner = current[0]
+    if str(runner) not in active:
+        return False
+    running: list[int] = []
+    for key, identity in cast(dict[str, object], active).items():
+        pid = run_pid(key)
+        if pid is None or not isinstance(identity, dict):
+            return False
+        found = cast(Mapping[str, object], identity)
+        alive = run_alive(pid, found.get("start"), found.get("started"), table)
+        if alive is None:
+            return False
+        if alive:
+            running.append(pid)
+    if running != [runner]:
+        return False
+    # A shell may have started work before exec'ing the lock. Such work is now descended from the lock caller.
+    others = [pid for pid in _lineage.descendants(table, runner)
+              if pid not in (runner, caller) and present(pid) is not False]
+    return not work_remains(others)
 
 
 def arguments(pids: Iterable[int], timeout: float = 5) -> subprocess.CompletedProcess[str]:

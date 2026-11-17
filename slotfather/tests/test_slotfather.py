@@ -96,9 +96,11 @@ class SlotCase(unittest.TestCase):
             time.sleep(0.05)
         self.fail(f"timed out waiting for {what}; events {self.events()}; status:\n{self.status()}")
 
-    def output_line(self, process, timeout=20):
-        ready, _, _ = select.select([process.stdout], [], [], timeout)
-        return process.stdout.readline() if ready else ""
+    def output_line(self, process: subprocess.Popen[str], timeout: float = 20) -> str:
+        output = process.stdout
+        assert output is not None
+        ready, _, _ = select.select([output], [], [], timeout)
+        return output.readline() if ready else ""
 
     def started(self, label: str) -> None:
         self.wait_for(lambda: f"start {label}" in self.events(), f"{label} to start")
@@ -499,6 +501,29 @@ class StaleLeaseTests(SlotCase):
         self.assertNotIn("impatient", self.status())
         self.release("holder")
         self.finish(holder)
+
+    def test_grant_during_slow_queue_output_wins_over_timeout(self) -> None:
+        holder = self.request("holder", "all")
+        self.started("holder")
+        case = self
+        now = 10.0
+
+        class SlowOutput(io.StringIO):
+            def write(self, message: str) -> int:
+                nonlocal now
+                if message.startswith("slot: impatient waits"):
+                    case.release("holder")
+                    case.finish(holder)  # the release grants the waiter before its clock crosses the deadline
+                    now += 1.0
+                return super().write(message)
+
+        with (patch.dict(os.environ, self.env, clear=True),
+              patch.object(client, "time", SimpleNamespace(monotonic=lambda: now))):
+            lease = client.acquire(1, "impatient", wait=0.3, out=SlowOutput())
+            try:
+                self.assertIn("held: 1 slot(s) impatient", self.status())
+            finally:
+                lease.release()
 
 
 class PollingTests(SlotCase):

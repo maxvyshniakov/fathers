@@ -6,11 +6,15 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
-- A detached measurement session can yield its slots while its only active run waits on a lock. A busy sibling
-  run or uncertain membership keeps the slots reserved. (fathers#183)
+- A detached measurement session can yield its slots while its only active run waits on a foreground lock.
+  Slots stay held for a background lock, a busy sibling or uncertain membership. Slotfather reconsiders a
+  recorded wait when a sibling finishes, and a lock command waits for a grant before starting work. (fathers#183)
 
 - A command joining a measurement session uses the ordinary lease wait. If the session yielded for a lock,
   Slotfather requests its slots back and waits for the grant before starting the command. (fathers#161)
+
+- Session startup acknowledges the holder's grant even if process inspection fails afterward. A grant obtained
+  while a waiter prints queue details is recognized before reporting its timeout. (fathers#161)
 
 - The Settings panel and `slotfather settings --json` expose the timeout for a head blocked by leases with no end
   estimate. Changes that older clients cannot read show a compatibility warning. (fathers#178)

@@ -104,9 +104,7 @@ def looking(directory: Path | None = None, processes: Callable[[], Table] | None
     meanwhile counts for the next look. The process table is also read under the lock; status --pid can supply
     a native one. A look changing the queue sets `log` so failed process reads appear in its event log."""
     directory = directory or _config.state_dir()
-    with _state.locked(directory):
-        table = processes() if processes is not None else _queue.process_table(directory, log=log)
-        found = _queue.reap(directory, table)
+    with _queue.looking(directory, processes, log) as (table, found):
         basis: dict[str, Any] = _settings.capacity_basis()
         requests = {path.stem: _state.asked(path) for path, _ in found}
         strange = tuple(_state.unknown(directory))

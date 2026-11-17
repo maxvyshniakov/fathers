@@ -59,7 +59,7 @@ def wait_until(ready: Callable[[], T | None], *, refresh: Callable[[], str | Non
             said = waiting
         now = time.monotonic()
         if deadline is not None and now >= deadline:
-            return None
+            return ready()  # another process could have granted the request while we reported its wait
         pause = poll if refresh is None else min(poll, max(0.0, look - now))
         time.sleep(pause if deadline is None else min(pause, deadline - now))
 

@@ -82,25 +82,27 @@ def resume() -> None:
     from . import process as _process
     from . import queue as _queue
     found = _queue.inherited_lease(_process.processes())
-    if found is not None and _entry.lock_of(found[1]) is not None and not _entry.is_held(found[1]):
+    if (found is not None and found[0].parent.parent == _config.state_dir() and not _entry.is_held(found[1])
+            and (_entry.lock_of(found[1]) is not None or isinstance(found[1].get("session"), dict))):
         _client.resume_lock_yield(found[0], found[1])
         _client.held_again(found[0])
 
 
 def enclosing() -> tuple[Path, tuple[int, str], bool] | None:
-    """The held lease of this queue this process runs under, with this process's identity and whether nothing else
-    runs under it (no process in its holder's tree but this one and its ancestors); None when there is none (none,
-    an earlier queue's, or one that waits already)."""
+    """This queue's enclosing held lease or yielded session, the caller's identity and its plain-lease idleness."""
     from . import process as _process
     from . import queue as _queue
     table = _process.processes()
     found = _queue.inherited_lease(table)
-    if found is None or found[0].parent.parent != _config.state_dir() or not _entry.is_held(found[1]):
+    if found is None or found[0].parent.parent != _config.state_dir():
         return None
     path, entry, _ = found
+    session = isinstance(entry.get("session"), dict)
+    if not _entry.is_held(entry) and not session:
+        return None
     me = os.getpid()
     # Sessions verify their detached runs in the yield transaction, under the lock that registers their runs.
-    idle = not isinstance(entry.get("session"), dict) and not _queue.other_work(table, entry.get("pid"), me)
+    idle = not session and not _process.other_work(table, entry.get("pid"), me)
     return path, (me, table[me][1] if me in table else ""), idle
 
 
@@ -109,7 +111,14 @@ def wait(handle: int, path: Path) -> None:
     from . import client as _client
     from . import leases as _leases
     found = enclosing()
-    lease = found[0] if found is not None else None
+
+    def resume_waiter(why: str) -> None:
+        if found is not None:
+            lease, owner, _ = found
+            _leases.lock_taken(lease, why, lock=str(path), owner=owner)
+            _client.resume_lock_yield(lease, _client.read(lease))
+            _client.held_again(lease)
+
     try:
         outcome = None
         if found is not None:
@@ -118,18 +127,14 @@ def wait(handle: int, path: Path) -> None:
                 "noted": "; this lease keeps its slots: other work runs under it"}.get(outcome or "", "")
         print(f"slot: waiting for lock {path}{note}", file=sys.stderr, flush=True)
         fcntl.flock(handle, fcntl.LOCK_EX)
-        if lease is not None:
-            if outcome == "yielded":
-                print(f"slot: took lock {path}; waiting for this lease's slots again", file=sys.stderr, flush=True)
-            _leases.lock_taken(lease, "took")
-            _client.held_again(lease)
-            if outcome == "yielded":
-                print("slot: holding the slots again", file=sys.stderr, flush=True)
+        if outcome == "yielded":
+            print(f"slot: took lock {path}; waiting for this lease's slots again", file=sys.stderr, flush=True)
+        resume_waiter("took")
+        if outcome == "yielded":
+            print("slot: holding the slots again", file=sys.stderr, flush=True)
     except Stopped:
         # A second signal ends this at once (the default handlers); a mark it leaves is cleared by the next look
         for number in SIGNALS:
             signal.signal(number, signal.SIG_DFL if number != signal.SIGINT else signal.default_int_handler)
-        if lease is not None:  # whatever runs next under the lease runs on its slots: wait until they are held
-            _leases.lock_taken(lease, "stopped")
-            _client.held_again(lease)
+        resume_waiter("stopped")  # whatever runs next under the lease runs on its slots
         raise

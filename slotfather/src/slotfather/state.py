@@ -95,6 +95,15 @@ def read_entry(path: Path) -> dict[str, Any] | None:
     return cast(dict[str, Any], entry) if isinstance(entry, dict) else None
 
 
+def session_path(path: Path) -> Path:
+    """A session's run records beside its lease entry."""
+    return path.with_suffix(".session")
+
+
+def session_uses(path: Path) -> dict[str, Any] | None:
+    return read_entry(session_path(path))
+
+
 @contextlib.contextmanager
 def editing(path: Path) -> Iterator[dict[str, Any] | None]:
     """Read the current entry while holding the queue lock for its transaction."""
