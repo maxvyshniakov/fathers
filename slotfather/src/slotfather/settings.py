@@ -156,8 +156,13 @@ def order_extension_keys(saved: dict[str, Any]) -> list[str]:
             if key not in _config.ORDER_BASE + ("limit",) and saved.get(key, default) != default]
 
 
-def order_compatibility(keys: list[str]) -> str:
-    return f"Older Slotfather clients may use Arrival order. New keys in order.json: {', '.join(keys)}."
+def order_compatibility(keys: list[str], *, historical: bool = False) -> str:
+    warning = f"Older Slotfather clients may use Arrival order. New keys in order.json: {', '.join(keys)}."
+    if historical:
+        warning += (" Releases 3e3a621 and earlier know no classes. Releases before ageing know no aging or warn "
+                    "settings. Releases before the memory warning allowance know no warning_admits. Releases before "
+                    "fathers#160 know no reservation_timeout. An unknown key makes their looks use the window order.")
+    return warning
 
 
 def order_settings(directory: Path | None = None, environment: bool = True) -> dict[str, Any]:

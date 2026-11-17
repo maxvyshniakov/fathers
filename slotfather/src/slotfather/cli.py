@@ -389,7 +389,7 @@ def order_command(argv: list[str]) -> int:
     saved = _settings.order_settings(directory, environment=False)
     moved = _settings.order_extension_keys(saved)
     if (changes or reset) and moved:
-        print(f"slotfather: note: {_settings.order_compatibility(moved)}", file=sys.stderr)
+        print(f"slotfather: note: {_settings.order_compatibility(moved, historical=True)}", file=sys.stderr)
     print(order_line(_settings.order_settings(directory)))
     return 0
 
