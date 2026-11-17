@@ -337,7 +337,10 @@ def reap_command(store: Store, args: argparse.Namespace) -> int:
         table = _procs.read_or_none()
         if table is None:
             raise Refused("the process table cannot be read")
-    selected, results = _reap.select(store, args.id, args.owner, args.agent, args.lane, table, args.pid)
+    # SubagentStop can end a turn while an auto-owned Bash call is still running.
+    exclude_auto = _background.AUTO if args.via == "hook" and args.reason == _hook.SUBAGENT_STOP else None
+    selected, results = _reap.select(store, args.id, args.owner, args.agent, args.lane, table, args.pid,
+                                     exclude_auto=exclude_auto)
     if table is not None and not selected:
         return report(_reap.reap_unowned(store, args.pid, table, args.force, args.reason, args.grace, args.dry_run,
                                          args.via), args)
