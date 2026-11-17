@@ -307,18 +307,26 @@ class ReviewGateTests(ReviewGateCase):
         self.lane("review", "a")
         self.landed("b", "lib/b.txt", "b\n")
         self.lane("review", "b")
-        output = self.start("review-fixes-r3", "calls/**", extra=("--fix-of", "a,b", "--create"))
+        output = self.start("review-fixes-r3", "calls/**",
+                            extra=("--base", self.tip(), "--fix-of", "a,b", "--create"))
         self.assertNotIn("names no parent", output)
         fix = self.record("review-fixes-r3")
-        self.assertEqual(fix["review_fix_of"], ["a", "b"])
+        self.assertEqual(fix["review_fix_of"], "a", "the old check reads this as one lane ID")
+        self.assertEqual(fix["review_fix_of_all"], ["a", "b"])
+        # A live record from the release that first introduced --fix-of stays usable and is normalized on write.
+        old = dict(fix, review_fix_of=fix["review_fix_of_all"])
+        del old["review_fix_of_all"]
+        (self.state / "review-fixes-r3.json").write_text(json.dumps(old))
         self.commit(fix["worktree"], {"calls/main.txt": "foo\nbaz\n"}, "fix(review): call baz")
         self.lane("check", "review-fixes-r3", cwd=fix["worktree"])
-        output = self.lane("land", "review-fixes-r3")
+        output = self.lane("land", "review-fixes-r3", "--into", str(self.integration))
         receipt = self.review("review-fixes-r3")
         self.assertEqual(receipt["status"], "exempt")
         self.assertIn("the fix round of the reviews of a and b", receipt["exempt"])
         self.assertEqual(sum(1 for c in self.codex_calls() if c[2] == "exec"), 2, "nobody reviews the fix")
         self.assertIn("Lane review-fixes-r3 done", output)
+        self.assertEqual(self.record("review-fixes-r3")["review_fix_of"], "a")
+        self.assertEqual(self.record("review-fixes-r3")["review_fix_of_all"], ["a", "b"])
         kinds = [json.loads(line)["kind"] for line in self.events.read_text().splitlines()]
         self.assertIn("review.exempted", kinds)
         merge = self.record("review-fixes-r3")["landed"]["merge"]
@@ -328,11 +336,48 @@ class ReviewGateTests(ReviewGateCase):
             self.assertEqual(self.record(parent)["status"], "done")
         self.lane("promote", self.tip(), "--no-push", "--wait", "0")
 
-    def test_start_names_fix_parents_and_warns_a_fix_lane_that_names_none(self):
+    def test_a_dropped_lane_cannot_be_a_fix_parent(self):
+        self.start("dropped", "lib/**")
+        self.lane("drop", "dropped")
+        output = self.start("fix", "lib/**", extra=("--fix-of", "dropped"), ok=False)
+        self.assertIn("lane dropped is done, not landed", output)
+
+        worktree = self.created("old-fix", "calls/**")
+        # An older checkout could register the bad parent; land still reviews its changes.
+        old = dict(self.record("old-fix"), review_fix_of="dropped")
+        (self.state / "old-fix.json").write_text(json.dumps(old))
+        self.commit(worktree, {"calls/main.txt": "foo\n"})
+        self.lane("check", "old-fix")
+        self.assertIn("review not started", self.lane("land", "old-fix"))
+        self.assertFalse((self.state / "old-fix.review.json").exists())
+
+    def test_fix_registration_requires_finished_reviews_with_unmarked_findings(self):
         self.landed("a", "lib/api.txt", "foo\nbaz\n")
-        self.start("a-fixes", "calls/**", extra=("--fix-of", "a"))
+        for review_state in ("missing", "clean", "fully-marked"):
+            with self.subTest(review_state):
+                if review_state == "clean":
+                    self.review_text.write_text(NO_FINDINGS)
+                    self.lane("review", "a")
+                elif review_state == "fully-marked":
+                    self.review_text.write_text(TWO_FINDINGS)
+                    self.lane("review", "a", "--force-reason", "repeat with findings")
+                    self.lane("review", "a", "--mark", "1", "rejected:done", "--mark", "2", "rejected:done")
+                output = self.start(f"fix-{review_state}", "calls/**", extra=("--fix-of", "a"), ok=False)
+                self.assertIn("lane a has no finished review with unmarked findings", output)
+
+    def test_start_names_fix_parents_and_warns_a_fix_lane_that_names_none(self):
+        self.review_text.write_text(TWO_FINDINGS)
+        self.landed("a", "lib/api.txt", "foo\nbaz\n")
+        self.lane("review", "a")
+        self.start("a-fixes", "calls/**", extra=("--fix-of", "a", "--create"))
         # One parent keeps the string an older Lanefather reads.
         self.assertEqual(self.record("a-fixes")["review_fix_of"], "a")
+        self.assertEqual(self.record("a-fixes")["review_fix_of_all"], ["a"])
+        worktree = self.record("a-fixes")["worktree"]
+        self.commit(worktree, {"calls/main.txt": "foo\nbaz\n"})
+        self.lane("check", "a-fixes", cwd=worktree)
+        receipt = json.loads((self.state / "a-fixes.receipt.json").read_text())
+        self.assertNotIn("fix_of", receipt, "start --fix-of runs its own plan with one parent too")
         output = self.start("review-fixes-r4", "docs/**")
         self.assertIn("lanefather: warning: review-fixes-r4 looks like a fix lane but names no parent", output)
         self.assertIn("--fix-of", output)

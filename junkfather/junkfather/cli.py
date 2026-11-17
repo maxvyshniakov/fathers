@@ -36,7 +36,9 @@ import shlex
 import sys
 import time
 import traceback
-from typing import Any, Callable, ClassVar, Dict, List, Mapping, NoReturn, Optional
+from typing import Any, Callable, Dict, List, Mapping, NoReturn, Optional
+
+from fathers_common.cli import UsageParser
 
 from . import __version__
 from . import background as _background
@@ -60,46 +62,16 @@ from .state import Store
 from .text import duration, seconds
 
 
-class Parser(argparse.ArgumentParser):
-    """argparse with docs/cli.md's errors: error() raises a usage error, and main prints its one line and the pointer
-    to the help of the command whose parser refused it. Options are exact (no abbreviations), and a word that names
-    no option of the parser is reported before a missing required argument."""
-
-    given: ClassVar[List[str]] = []  # the command line main parses (main sets it)
+class Parser(UsageParser):
+    """Keep exact option names and route usage errors through the same refusal as the command handlers."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         kwargs.setdefault("allow_abbrev", False)
         super().__init__(*args, **kwargs)
 
-    def error(self, message: str) -> NoReturn:
+    def usage_error(self, message: str) -> NoReturn:
         command = " ".join(self.prog.split()[1:]) or None
-        unknown = self.unknown_option()
-        if unknown is not None:
-            raise Usage(f"unknown option {unknown}", command)
         raise Usage(message[len("argument "):] if message.startswith("argument ") else message, command)
-
-    def unknown_option(self) -> Optional[str]:
-        """The first word of this parser's part of the command line (after its command's name) that looks like an
-        option and names none in argparse's own table, up to `--`; the value of an option that takes one is
-        skipped."""
-        table: Dict[str, argparse.Action] = self._option_string_actions  # pyright: ignore[reportPrivateUsage]
-        words, name = Parser.given, self.prog.split()[1:]
-        if name and name[0] in words:
-            words = words[words.index(name[0]) + 1:]
-        skip = False
-        for word in words:
-            if skip:
-                skip = False
-                continue
-            if word == "--":
-                return None
-            if not word.startswith("-") or word == "-" or word[1:2].isdigit():
-                continue
-            action = table.get(word.split("=", 1)[0])
-            if action is None:
-                return word.split("=", 1)[0]
-            skip = "=" not in word and action.nargs != 0
-        return None
 
 
 def parser() -> Parser:
@@ -213,7 +185,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         if words and not words[0].startswith("-") and words[0] not in COMMANDS:
             raise Usage(f"unknown command {words[0]!r}")
-        Parser.given = words
         args, extra = parser().parse_known_args(words)
         command = args.command
         if extra:

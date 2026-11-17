@@ -29,6 +29,7 @@ from lanefather.state import atomic_write  # noqa: E402
 MIN_PYTHON = (3, 11)
 KEEP_RELEASES = 3
 SOURCE = Path(__file__).resolve().parent
+COMMON = SOURCE.parent / "common" / "fathers_common"
 LAUNCHER = """#!{python}
 # lanefather's command (install.py): the release share/current points at, on the interpreter it was installed for.
 import sys
@@ -64,7 +65,7 @@ def commit() -> str:
     if head.returncode:
         raise InstallError("install from a committed Git checkout, not an unversioned source directory")
     changed = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all", "--",
-                              "lanefather", "hooks", "install.py", "CHANGELOG.md"], cwd=SOURCE,
+                              "lanefather", "hooks", "install.py", "CHANGELOG.md", str(COMMON)], cwd=SOURCE,
                           capture_output=True, text=True, env=environment)
     if changed.returncode:
         raise InstallError("cannot inspect shipping inputs; the installed release was not changed")
@@ -93,6 +94,7 @@ def install(share: Path, bin_dir: Path, python: str) -> Path:
     shutil.rmtree(pending, ignore_errors=True)
     shutil.copytree(SOURCE / "lanefather", pending / "lanefather",
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    shutil.copytree(COMMON, pending / COMMON.name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     shutil.copytree(SOURCE / "hooks", pending / "hooks")
     # `lanefather changelog --json` reads the release's own changelog (fathers#104); a source without one ships none
     # and the command answers source null.

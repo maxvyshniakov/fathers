@@ -17,17 +17,19 @@ class RuntimeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix='lanefather-runtime-'))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
-        self.source = self.tmp / 'source'
+        self.source = self.tmp / 'source' / 'lanefather'
         shutil.copytree(ROOT / 'lanefather', self.source / 'lanefather',
                         ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
         shutil.copytree(ROOT / 'hooks', self.source / 'hooks')
+        shutil.copytree(ROOT.parent / 'common/fathers_common', self.source.parent / 'common/fathers_common',
+                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
         shutil.copy2(ROOT / 'install.py', self.source / 'install.py')
         self.env = {key: value for key, value in os.environ.items()
                     if not key.startswith(('GIT_', 'LANEFATHER_', 'STRAYLIGHT_')) and key != 'PYTHONPATH'}
-        self.git('init', '-q', '-b', 'codex/runtime')
+        self.git('init', '-q', '-b', 'codex/runtime', str(self.source.parent))
         self.git('config', 'user.email', 'runtime@example.invalid')
         self.git('config', 'user.name', 'Runtime test')
-        self.git('add', '.')
+        self.git('add', '.', '../common')
         self.git('commit', '-qm', 'runtime source')
         self.head = self.git('rev-parse', 'HEAD').strip()
         self.install()
@@ -69,7 +71,7 @@ class RuntimeTests(unittest.TestCase):
         identity = (package.stat().st_ino, package.read_bytes())
         self.install()
         self.assertEqual((package.stat().st_ino, package.read_bytes()), identity)
-        for relative in ['lanefather/cli.py', 'hooks/reference-transaction']:
+        for relative in ['lanefather/cli.py', 'hooks/reference-transaction', 'fathers_common/cli.py']:
             with self.subTest(relative=relative):
                 path = self.release / relative
                 before = path.read_bytes()

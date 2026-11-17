@@ -84,6 +84,10 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 - junkfather lives in the `fathers` repository: install it with `python3 install.py junkfather` from a `fathers`
   checkout.
 
+### Fixed
+
+- Usage errors name an unknown option even when it follows an option with a missing value (fathers#175).
+
 ## 0.1.0 - 2026-11-12
 
 ### Added

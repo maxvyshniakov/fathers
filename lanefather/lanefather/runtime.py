@@ -26,7 +26,7 @@ DASHBOARD = 1
 
 def shipping_files(root: Path) -> dict[str, str]:
     files: dict[str, str] = {}
-    for directory in ('lanefather', 'hooks'):
+    for directory in ('lanefather', 'hooks', 'fathers_common'):
         for path in sorted((root / directory).rglob('*')):
             if not path.is_file() or '__pycache__' in path.parts or path.suffix == '.pyc':
                 continue
