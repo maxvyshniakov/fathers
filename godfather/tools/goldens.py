@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 SCENE = ROOT / "tests" / "fixtures" / "scene"
 EXPECTED = ROOT / "tests" / "fixtures" / "expected"  # the scene with expected runs, outliers and trends (fathers#108)
+LOCKS = ROOT / "tests" / "fixtures" / "slot-locks"  # Slotfather's lock and head reservation log (fathers#162)
 MIXED = ROOT / "tests" / "fixtures" / "mixed"  # the scene with Lanefather's and junkfather's event logs (fathers#84)
 LANES = ROOT / "tests" / "fixtures" / "lanes"  # mixed, with Lanefather's status snapshot (fathers#85)
 PROCS = ROOT / "tests" / "fixtures" / "procs"  # lanes, with Junkfather's status snapshot (fathers#86)
@@ -42,6 +43,7 @@ GOLDENS = ROOT / "tests" / "goldens"
 COMMIT = "9f600e1c0ffee"  # Godfather's own install commit in what's new, so a commit changes no golden
 THEMES = {"seti": ("#111213", "#cacecd"), "prolight": ("#ffffff", "#191919")}  # tools/raster.py THEMES
 SCREENS = {  # name: (width, height, overlay); what's new's filter after a colon
+    "slot-lock-log-120x7": (120, 7, "slot-locks"),
     "overview-156x43": (156, 43, None), "overview-100x40": (100, 40, None), "overview-76x40": (76, 40, None),
     "overview-156x20": (156, 20, None),
     "overview-100x30": (100, 30, None),  # fathers#169: one column short of rows, the bottom row given way first
@@ -424,6 +426,9 @@ def render(name: str, theme: str | None) -> str:
         folder, selected, overlay = EXPECTED, int(overlay.partition(":")[2]) if event is None else 0, None
     if overlay == "settings:mixed":
         folder, overlay = MIXED, "settings"
+    lock_log = overlay == "slot-locks"
+    if lock_log:
+        folder, overlay = LOCKS, None
     page = "overview"
     if overlay and overlay.startswith("lanes:"):  # fathers#85
         folder, page, overlay = LANES, "lanes" if overlay == "lanes:page" else "overview", None
@@ -449,6 +454,16 @@ def render(name: str, theme: str | None) -> str:
         model["history_window"] = scene["history_window"]
         moment = adapter.parse_time(scene["moment"])
         assert moment is not None
+        if lock_log:
+            from godfather.layout import Rect
+            from godfather.views.events import draw_events
+
+            canvas = tui.Canvas(width, height, palette, common.marks_for(False))
+            try:
+                draw_events(canvas, Rect(0, 0, height, width), model, moment)
+                return canvas.render(theme is not None)
+            finally:
+                screen.feed.close()
         shown: object = None
         if overlay == "settings":
             from godfather import settings_model

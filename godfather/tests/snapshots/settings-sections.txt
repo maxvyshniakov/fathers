@@ -22,6 +22,7 @@
 │    Batch promoted after      30m                                             │
 │    Normal promoted after     1h                                              │
 │    Warn after waiting        30m                                             │
+│    Reservation timeout       30m                                             │
 │    Idle when below           0.1 cores                                       │
 │    Idle for                  5m                                              │
 │    Ask to yield after        2m                                              │

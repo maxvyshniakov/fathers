@@ -33,8 +33,8 @@ class SettingsCliTests(SlotCase):
                          (document["v"], document["tool"], document["writable"], document["reason"]))
         self.assertEqual(["capacity.mode", "capacity.slots", "capacity.gib_per_slot", "order.order", "order.safety",
                           "order.fallback", "order.overrun", "order.limit", "order.interactive", "order.batch",
-                          "order.aging_batch", "order.aging_normal", "order.warn_wait", "order.idle_cpu",
-                          "order.idle_after", "order.yield_after"], list(rows(document)))
+                          "order.aging_batch", "order.aging_normal", "order.warn_wait", "order.reservation_timeout",
+                          "order.idle_cpu", "order.idle_after", "order.yield_after"], list(rows(document)))
         status = {row["label"]: row["value"] for row in document["status"]}
         self.assertEqual("4 total · 4 free · 0 held · 0 waiting", status["slots"])
         self.assertEqual("4 slots · automatic, lower of the two budgets", status["capacity"])
@@ -47,6 +47,29 @@ class SettingsCliTests(SlotCase):
         self.assertEqual(("duration", 1800.0, 1800.0, "never", "s", "default"),
                          (warn["type"], warn["value"], warn["default"], warn["zero"], warn["unit"], warn["source"]))
         self.assertEqual(4, document["basis"]["slots"])
+
+    def test_reservation_timeout_uses_the_order_setting(self) -> None:
+        key = "order.reservation_timeout"
+        self.assertEqual(0, self.tool("order", "--reservation-timeout", "12m").returncode)
+        row = rows(self.settings())[key]
+        self.assertEqual(("duration", 720.0, "saved", "never"), (row["type"], row["value"], row["source"], row["zero"]))
+        self.assertTrue(self.settings("check", key, "2m30s")["ok"])
+        self.assertFalse(self.settings("check", key, "-1", code=2)["ok"])
+        self.assertEqual(720.0, rows(self.settings())[key]["value"], "checking never saves")
+        saved = self.settings("set", key, "0", "--revision", row["revision"])
+        self.assertEqual("Saved · Reservation timeout never", saved["message"])
+        self.assertEqual(0, rows(saved)[key]["value"])
+        warning = rows(saved)[key]["warning"]
+        self.assertIn("Older Slotfather clients may use Arrival order", warning)
+        self.assertIn("reservation_timeout", warning)
+        self.assertEqual(warning, next(item["value"] for item in saved["status"]
+                                       if item["label"] == "compatibility"))
+        self.assertEqual(warning, rows(self.settings())[key]["warning"])
+        self.assertIn(warning, self.tool("order", "--reservation-timeout", "0").stderr)
+        reset = self.settings("reset", key, "--revision", rows(saved)[key]["revision"])
+        self.assertEqual((row["default"], "default"), (rows(reset)[key]["value"], rows(reset)[key]["source"]))
+        self.assertNotIn("warning", rows(reset)[key])
+        self.assertFalse(any(item["label"] == "compatibility" for item in reset["status"]))
 
     def test_the_environment_tightening_a_value_is_its_effective_value_and_source(self) -> None:
         found = rows(self.settings(SLOTFATHER_BACKFILL_SAFETY="5"))["order.safety"]

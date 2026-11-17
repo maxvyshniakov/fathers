@@ -14,18 +14,24 @@ import hashlib
 import json
 import math
 import os
+from pathlib import Path
+import re
 import signal
 import sys
 import time
 from typing import Any, cast
 
 CORES_PER_SLOT, AUTO_GIB_PER_SLOT, CAPACITY_PER_CORE = 3, 4.0, 4
+# From the default row of the real `slotfather settings --json` in an isolated queue. Per-read fields belong below.
+RESERVATION = cast(dict[str, Any], json.loads(
+    (Path(__file__).parent / "fixtures" / "slotfather-reservation-timeout.json").read_text()))
 ORDER_DEFAULTS = {"order": "backfill", "safety": 3.0, "limit": 0.0, "fallback": 3600.0, "overrun": 0.5,
                   "interactive": 1800.0, "batch": 1800.0, "yield_after": 120.0, "idle_cpu": 0.1, "idle_after": 300.0,
-                  "aging_batch": 1800.0, "aging_normal": 3600.0, "warn_wait": 1800.0}
+                  "aging_batch": 1800.0, "aging_normal": 3600.0, "warn_wait": 1800.0,
+                  "reservation_timeout": float(RESERVATION["default"])}
 MINIMUMS = {"safety": 1.0, "limit": 0.0, "fallback": 0.0, "overrun": 0.0, "interactive": 0.0, "batch": 0.0,
             "yield_after": 0.0, "idle_cpu": 0.0, "idle_after": 1.0, "aging_batch": 0.0, "aging_normal": 0.0,
-            "warn_wait": 0.0}
+            "warn_wait": 0.0, "reservation_timeout": float(RESERVATION["min"])}
 MODES = ("automatic", "fixed", "memory", "lower")
 UNKNOWN = "the machine's memory is unknown here; save a count instead (slotfather slots N)"
 PATH = os.environ.get("FAKE_SLOTFATHER_STATE", "")
@@ -98,6 +104,21 @@ def number(text: str) -> float:
     return value
 
 
+def duration(text: str) -> float:
+    """The fake's duration values: ordered hour, minute and second terms, with the last unit optional."""
+    terms = re.split(r"([hms])", text.strip())
+    parts = list(zip(terms[::2], terms[1::2]))
+    if terms[-1].strip():
+        parts.append((terms[-1], "s"))
+    units = [unit for _, unit in parts]
+    if not parts or units != [unit for unit in "hms" if unit in units]:
+        return math.nan
+    if any(not re.fullmatch(r"\d+(?:\.\d+)?", value.strip()) for value, _ in parts):
+        return math.nan
+    seconds = {"h": 3600, "m": 60, "s": 1}
+    return sum(float(value) * seconds[unit] for value, unit in parts)
+
+
 def validate(state: dict[str, Any], key: str, text: str) -> tuple[Any, dict[str, Any] | None]:
     """(value, the capacity it saves for a capacity key); ValueError with the panel's wording."""
     current = basis(state)
@@ -128,7 +149,8 @@ def validate(state: dict[str, Any], key: str, text: str) -> tuple[Any, dict[str,
         return text, None
     if name not in MINIMUMS:
         raise KeyError(key)
-    value = number(text)
+    kind = RESERVATION["type"] if name == "reservation_timeout" else KNOBS[name][2]
+    value = duration(text) if kind == "duration" else number(text)
     if not math.isfinite(value):
         raise ValueError("Enter a number.")
     if value < MINIMUMS[name]:
@@ -144,11 +166,12 @@ KNOBS = {"safety": ("Backfill margin", 0.5, "number", "×"), "fallback": ("Unkno
          "batch": ("Batch held back", 60, "duration", "s"),
          "aging_batch": ("Batch promoted after", 300, "duration", "s"),
          "aging_normal": ("Normal promoted after", 300, "duration", "s"),
-         "warn_wait": ("Warn after waiting", 300, "duration", "s"), "idle_cpu": ("Idle when below", 0.05, "number", "cores"),
+         "warn_wait": ("Warn after waiting", 300, "duration", "s"),
+         "idle_cpu": ("Idle when below", 0.05, "number", "cores"),
          "idle_after": ("Idle for", 60, "duration", "s"), "yield_after": ("Ask to yield after", 30, "duration", "s")}
 NEVER = ("limit", "aging_batch", "aging_normal", "warn_wait")
 ORDER_FIELDS = ("order", "safety", "fallback", "overrun", "limit", "interactive", "batch", "aging_batch",
-                "aging_normal", "warn_wait", "idle_cpu", "idle_after", "yield_after")  # the panel's order
+                "aging_normal", "warn_wait", "reservation_timeout", "idle_cpu", "idle_after", "yield_after")  # the panel's order
 DESCRIPTIONS = {
     "mode": "Shared by every client. Automatic: the lower of the CPU and memory budgets.",
     "amount.fixed": "Total slots for every client. Applies at the next grant; a shrink drains.",
@@ -199,13 +222,15 @@ def settings(state: dict[str, Any]) -> dict[str, Any]:
         default = ORDER_DEFAULTS[name]
         value = state["order"].get(name, default)
         row: dict[str, Any] = {"key": "order." + name, "value": value, "default": default,
-                               "writable": writable, "revision": order_rev, "description": DESCRIPTIONS[name],
+                               "writable": writable, "revision": order_rev, "description": DESCRIPTIONS.get(name, ""),
                                "source": "saved" if name in state["order"] else "default"}
         if name == "order":
             row.update(label="Queue order", type="choice",
                        choices=[{"value": "backfill", "label": "Backfill"}, {"value": "window", "label": "Arrival"}])
             if effective_order in ("backfill", "window") and effective_order != value:
                 row.update(effective=effective_order, source="env SLOTFATHER_QUEUE")
+        elif name == "reservation_timeout":
+            row.update(RESERVATION)
         else:
             label, step, kind, unit = KNOBS[name]
             row.update(label=label, type=kind, min=MINIMUMS[name], max=None, step=step, unit=unit)

@@ -117,12 +117,15 @@ slotfather settings reset (KEY | --all) [--revision R] --json
 - Keys, in the panel's order: `capacity.mode` (`automatic`, `fixed`, `memory`, `lower`), `capacity.slots` (saves
   Fixed with that count), `capacity.gib_per_slot` (saves the current memory mode with that amount; refused in
   another mode), `order.order` (`backfill`, `window`) and `order.KNOB` for `safety`, `fallback`, `overrun`,
-  `limit`, `interactive`, `batch`, `aging_batch`, `aging_normal`, `warn_wait`, `idle_cpu`, `idle_after`,
-  `yield_after`. `when` says under which capacity mode a row is shown. A mode set alone keeps the current
+  `limit`, `interactive`, `batch`, `aging_batch`, `aging_normal`, `warn_wait`, `reservation_timeout`, `idle_cpu`,
+  `idle_after`, `yield_after`. `when` says under which capacity mode a row is shown. A mode set alone keeps the current
   slots (Fixed) or GiB per slot (the automatic 4 GiB when there is none).
 - `value` is the saved value, the environment ignored; `effective`, present only when this environment tightens it,
   is the value that applies here, and `source` then names the variable (else `saved` or `default`). Durations are
-  seconds; `set` and `check` also take `90s`, `30m`, `1.5h`. `zero` names what 0 means.
+  seconds. `set` and `check` also take `90s`, `30m`, `1.5h` or `2m30s`. `zero` names what 0 means.
+  `order.reservation_timeout` measures how long a blocked head waits past its reserved start before it gives way.
+  Zero disables the timeout. A saved setting unavailable to older clients adds a `warning` to its row and a
+  `compatibility` row to `status`, explaining that those clients may use Arrival order.
 - `basis` is the capacity basis with the memory budget filled in by the automatic rule where Fixed does not
   work it out, as STATUS' budgets row shows it.
 - `revision` is opaque: one token for the three capacity keys (capacity.json), one for the order keys

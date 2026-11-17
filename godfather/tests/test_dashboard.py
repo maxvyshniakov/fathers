@@ -21,6 +21,7 @@ def judged(memory: dict[str, Any]) -> dict[str, Any]:
 
 
 import datetime
+import json
 import os
 import re
 import unittest
@@ -447,6 +448,31 @@ class MouseInputTests(unittest.TestCase):
 
 
 class DetailLayoutTests(unittest.TestCase):
+    def test_lock_wait_in_details_distinguishes_held_and_yielded_slots(self) -> None:
+        from godfather.adapters import slotfather
+
+        tool = load_dashboard()
+        fixture = ROOT / "tests" / "fixtures" / "scene" / "slotfather" / "replies.json"
+        snapshot = json.loads(fixture.read_text())["status --json --full"]["json"]
+        path = "/tmp/build/" + "workspace-segment/" * 6 + "cache.lock"
+        first_waiter = len(snapshot["dashboard"]["holders"])
+        for selected, queue, disposition in ((0, "holders", "held"), (first_waiter, "waiters", "released")):
+            with self.subTest(queue=queue):
+                entry = snapshot["dashboard"][queue][0]
+                entry["lock"] = path
+                model = slotfather.decode(snapshot)
+                canvas = tool.Canvas(90, 24)
+                tool.draw_detail(canvas, Rect(0, 0, 24, 90), model, selected, None, model["updated"])
+                lines = canvas.render(False).splitlines()
+                self.assertIn("LEASE DETAILS", lines[0])
+                status = next(line for line in lines if "waiting-for-lock" in line)
+                self.assertIn(disposition, status)
+                if queue == "waiters":
+                    self.assertIn("waiting-for-lock · slots released", status)
+                self.assertTrue(any("lock" in line and "/tmp/build/" in line for line in lines))
+                self.assertTrue(any("cache.lock" in line for line in lines))
+                entry.pop("lock")
+
     def test_waiting_facts_share_one_value_column_with_two_spaces_after_the_longest_label(self) -> None:
         tool = load_dashboard()
         moment = datetime.datetime(2026, 11, 5, 10).astimezone()
@@ -513,6 +539,26 @@ class DetailLayoutTests(unittest.TestCase):
 
 
 class QueuePolicyTests(unittest.TestCase):
+    def test_lock_waiter_does_not_count_ahead_in_the_admission_queue(self) -> None:
+        tool = load_dashboard()
+        now = datetime.datetime(2026, 11, 5, 10).astimezone()
+        waiting = dict(pid=12, kind="waiting", style="text", cmd="work", queue="", tree=[], since=now)
+        model = dict(
+            holders=[], waiters=[dict(waiting, label="lock waiter", count=8, lock="/tmp/cache.lock"),
+                                 dict(waiting, label="head", count=3), dict(waiting, label="next", count=1)],
+            free=1, used=3, slots=4, memory_block=None, order="backfill",
+            start=now + datetime.timedelta(minutes=30), reserved=now + datetime.timedelta(minutes=20),
+            limit=1200,
+        )
+        head = tool.Canvas(90, 24)
+        tool.draw_detail(head, Rect(0, 0, 24, 90), model, 1, None, now)
+        self.assertIn("waiting · #1 · wants 3", head.render(False))
+        self.assertRegex(head.render(False), r"reserved +10:20:00")
+        second = tool.Canvas(90, 24)
+        tool.draw_detail(second, Rect(0, 0, 24, 90), model, 2, None, now)
+        self.assertIn("waiting · #2 · wants 1", second.render(False))
+        self.assertRegex(second.render(False), r"ahead +1 request · 3 slots")
+
     def test_backfill_policy_is_structured_as_deadlines_not_a_sentence(self):
         tool = load_dashboard()
         since = datetime.datetime(2026, 11, 5, 10).astimezone()

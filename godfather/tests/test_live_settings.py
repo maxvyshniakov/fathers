@@ -60,9 +60,11 @@ class SectionFlowTests(LiveCase):
         mark = screen.mark()
         screen.write(b"s")
         screen.receive("LANEFATHER", "JUNKFATHER", "Rerun waits", since=mark)
-        # Capacity is selected: Slotfather's 13 order rows, Lanefather's Review start, then its Rerun waits
+        row, line = next((row, line) for row, line in screen.rows().items() if "Rerun waits" in line)
         mark = screen.mark()
-        screen.write(b"j" * 15)
+        screen.click(line.index("Rerun waits") + 1, row)
+        screen.receive("▶ Rerun waits", since=mark)
+        mark = screen.mark()
         screen.write(b"\x1b[C")  # Rerun waits 10m -> 15m, saved once the keys settle
         screen.receive("Saved · Rerun waits 15m", since=mark)
         self.assertEqual({"rerun.wait": 900}, self.lane.read()["values"])

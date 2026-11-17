@@ -89,8 +89,33 @@ class ContractTests(unittest.TestCase):
         client.reset(None)
         self.assertEqual("automatic", rows(client.read())["capacity.mode"]["value"])
 
+    def test_settings_draw_the_live_reservation_timeout(self) -> None:
+        if not adapter.settings_supported(self.capabilities):
+            self.assertNotEqual(EXECUTABLE, str(SIBLING), "the sibling Slotfather must support settings")
+            self.skipTest("installed Slotfather has no supported settings contract")
+
+        from godfather import settings_model, tui
+        from godfather.views import settings
+
+        client = adapter.SettingsClient(sources.which("slotfather"))
+        key = "order.reservation_timeout"
+        if key not in rows(client.read()):
+            self.assertNotEqual(EXECUTABLE, str(SIBLING), "the sibling Slotfather must publish the setting")
+            self.skipTest("installed Slotfather has no reservation timeout setting")
+        screen = app.Screen()
+        context = settings_model.Context(width=90, height=45)
+        for value, shown in (("12m", "12m"), ("0", "never")):
+            with self.subTest(value=value):
+                client.set(key, value)
+                panel = settings_model.opened(screen.settings_sections(), context, 0.0)
+                canvas = tui.Canvas(90, 45)
+                settings.draw(canvas, panel, context)
+                self.assertRegex(canvas.render(False), rf"Reservation timeout +{shown}")
+
     def test_the_fake_settings_reply_is_the_real_one(self) -> None:
-        """tests/fake_slotfather.py prints `settings --json` field for field as this Slotfather does."""
+        """Exact parity applies to the sibling checkout. External clients use the v1 behavioral checks above."""
+        if EXECUTABLE != str(SIBLING):
+            self.skipTest("the fixture describes the sibling Slotfather settings")
         if not adapter.settings_supported(self.capabilities):
             self.skipTest("slotfather settings (SF-2) is not installed")
         real = adapter.SettingsClient(sources.which("slotfather")).read()
@@ -98,6 +123,30 @@ class ContractTests(unittest.TestCase):
                                          "environment": ["SLOTFATHER_CORES", "SLOTFATHER_MEMORY_GIB"],
                                          "writable": True})
         assert_same_shape(self, real, fake)
+
+
+    def test_reservation_timeout_warning_from_real_provider_reaches_selected_row(self) -> None:
+        from godfather import settings_model, tui
+        from godfather.views import settings
+
+        client = adapter.SettingsClient(sources.which("slotfather"))
+        key = "order.reservation_timeout"
+        if key not in rows(client.read()):
+            self.assertNotEqual(EXECUTABLE, str(SIBLING), "the sibling must publish the setting")
+            self.skipTest("the installed provider predates this setting")
+        self.assertEqual(150, rows(client.set(key, "2m30s"))[key]["value"])
+        fake, _ = fake_slotfather.validate({"cores": 12, "memory_gib": 64, "capacity": None}, key, "2m30s")
+        self.assertEqual(150, fake)
+        reply = client.set(key, "0")
+        self.assertIn("Older Slotfather clients may use Arrival order", rows(reply)[key]["warning"])
+        context = settings_model.Context(width=90, height=32)
+        panel = settings_model.opened([settings_model.Section("slotfather", reply)], context, 0.0)
+        panel, _, _ = settings_model.move_to(panel, context, ("slotfather", key), 0.0)
+        canvas = tui.Canvas(90, 32)
+        settings.draw(canvas, panel, context)
+        lines = canvas.render(False).splitlines()
+        selected = next(index for index, line in enumerate(lines) if "▶ Reservation timeout" in line)
+        self.assertIn("Older Slotfather clients may use Arrival order", lines[selected + 1])
 
 
 def rows(reply: dict[str, Any]) -> dict[str, dict[str, Any]]:

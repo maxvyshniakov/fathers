@@ -24,15 +24,15 @@
 │  11:55:00  ▫       desktop          │    Batch promoted after      30m                                             │s                                    │
 │  11:54:02  ▫       agent-a1c75285bdf│    Normal promoted after     1h                                              │d                                    │
 │  11:52:53  ▫       agent-a1c75285bdf│    Warn after waiting        30m                                             │fication_plan.py, tools/verify.py,   │
-│  11:52:30  ▫       desktop          │    Idle when below           0.1 cores                                       │in-module.sh, tools/test-build-      │
-│  11:51:40  ▫       post-merge-456-re│    Idle for                  5m                                              │ule.py, tools/app-build.py,          │
-│  11:51:24  ▫       agent-a1c75285bdf│    Ask to yield after        2m                                              │-app-build.py, tools/cargo-test.py,  │
-│  11:49:34  ▫▫      data-grid        │  ──────────────────────────────────────────────────────────────────────────  │opment.md, tools/test-cargo-build-   │
-│  11:48:30  ▫       agent-ae72d94beb6│  LANEFATHER · status read-only, live                                         │tools/test-heavy.py,                 │
-│  11:47:21  ▫       agent-a0f998f4c57│    settings     /fake/config/lanefather/settings.json                        │o_build_cache.py                     │
-│  11:47:17  ▫       agent-a0f998f4c57│    events       /fake/state/lanefather/events.jsonl                          │                                     │
-│  11:47:13  ▫       agent-a0f998f4c57│    projects     2 registered in /fake/state/lanefather/projects.json         │                                     │
-│  11:47:10  ▫       agent-a0f998f4c57│    Review start              Automatic                                       │─────────────────────────────────────╯
+│  11:52:30  ▫       desktop          │    Reservation timeout       30m                                             │in-module.sh, tools/test-build-      │
+│  11:51:40  ▫       post-merge-456-re│    Idle when below           0.1 cores                                       │ule.py, tools/app-build.py,          │
+│  11:51:24  ▫       agent-a1c75285bdf│    Idle for                  5m                                              │-app-build.py, tools/cargo-test.py,  │
+│  11:49:34  ▫▫      data-grid        │    Ask to yield after        2m                                              │opment.md, tools/test-cargo-build-   │
+│  11:48:30  ▫       agent-ae72d94beb6│  ──────────────────────────────────────────────────────────────────────────  │tools/test-heavy.py,                 │
+│  11:47:21  ▫       agent-a0f998f4c57│  LANEFATHER · status read-only, live                                         │o_build_cache.py                     │
+│  11:47:17  ▫       agent-a0f998f4c57│    settings     /fake/config/lanefather/settings.json                        │                                     │
+│  11:47:13  ▫       agent-a0f998f4c57│    events       /fake/state/lanefather/events.jsonl                          │                                     │
+│  11:47:10  ▫       agent-a0f998f4c57│    projects     2 registered in /fake/state/lanefather/projects.json         │─────────────────────────────────────╯
 │  11:47:07  ▫       agent-a0f998f4c57│                                                                              │eased 0.4 · queue ahead · 2 waiting ─╮
 │  11:47:04  ▫       agent-a0f998f4c57│  ──────────────────────────────────────────────────────────────────────────  │        slots held  avg 4.4/6        │
 │  11:46:08  ▫       post-merge-491-el│  Shared by every client. Automatic: the lower of the CPU and memory          │9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
