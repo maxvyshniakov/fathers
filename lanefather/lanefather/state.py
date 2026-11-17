@@ -188,18 +188,39 @@ def migrate(record: Record) -> Record:
                         "update lanefather")
     # A record from before #577 may lack the key; a planned lane's is null until adopt.
     record.setdefault("worktree", None)
+    if isinstance(record.get("review_fix_of"), list):
+        # A brief schema-1 format put the batch in the legacy string field. Normalize it on the next write.
+        parents = fix_parents(record)
+        if parents:
+            set_fix_parents(record, parents, batch=True)
     return record
 
 
+def batch_fix(record: Record) -> bool:
+    return "review_fix_of_all" in record or isinstance(record.get("review_fix_of"), list)
+
+
 def fix_parents(record: Record) -> list[str]:
-    """The lanes whose review findings a fix lane fixes: `review_fix_of` is one id (review --fix-lane, start
-    --fix-of with one lane, and every record from before fathers#174) or a list of ids (start --fix-of A,B)."""
-    named: Any = record.get("review_fix_of")
+    """Read a hand-over or batch, including the list written by early batch checkouts."""
+    named: Any = record.get("review_fix_of_all", record.get("review_fix_of"))
     if isinstance(named, str):
         return [named] if named else []
     if isinstance(named, list):
         return [str(n) for n in named if isinstance(n, str) and n]  # pyright: ignore[reportUnknownVariableType]
     return []
+
+
+def hand_over_parent(record: Record) -> str | None:
+    parents = fix_parents(record)
+    return parents[0] if len(parents) == 1 and not batch_fix(record) and ID.match(parents[0]) else None
+
+
+def set_fix_parents(record: Record, parents: list[str], *, batch: bool) -> None:
+    if parents:
+        # Older checks read this key as a lane ID, even if the current lane has a literal-SHA base.
+        record["review_fix_of"] = parents[0]
+        if batch:
+            record["review_fix_of_all"] = parents
 
 
 def load(lane_id: str) -> Record:

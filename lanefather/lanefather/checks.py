@@ -631,12 +631,10 @@ def integration_refs(record: Record, worktree: str) -> list[str]:
 
 
 def fix_parent(record: Record) -> dict[str, Any] | None:
-    """The receipt of the lane a review-fix lane fixes, when it has per-check results; None otherwise. A batch fix
-    lane of several lanes (start --fix-of A,B) runs its own plan, as any lane."""
-    parents = state.fix_parents(record)
-    if len(parents) != 1 or not state.ID.match(parents[0]):
+    """The original lane's per-check receipt for a hand-over. A lane from start --fix-of runs its own plan."""
+    parent = state.hand_over_parent(record)
+    if parent is None:
         return None
-    parent = parents[0]
     receipt = state.read_json(state.receipt_path(parent))
     if not receipt or receipt.get("selection") is None or receipt.get("check_results") is None:
         return None

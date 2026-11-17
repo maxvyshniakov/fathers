@@ -2,6 +2,8 @@
 a misused command's usage and example, `wait` for a lane's state, and the next commands start and adopt print."""
 from __future__ import annotations
 
+from contextlib import redirect_stderr
+import io
 import json
 import os
 from pathlib import Path
@@ -62,6 +64,23 @@ class HelpTests(unittest.TestCase):
         self.assertEqual(done.returncode, 2)
         self.assertIn("--for", done.stderr.splitlines()[0])
         self.assertIn("Usage: lanefather wait <id> --for registered|landed|done", done.stderr.splitlines()[1])
+
+    def test_land_accepts_dashes_at_the_start_of_quoted_option_values(self):
+        from lanefather import cli
+
+        args = cli.parse(["land", "x", "-m", "- fix things", "--force-reason", "-1 flaky"])
+        self.assertEqual((args.message, args.force_reason), ("- fix things", "-1 flaky"))
+
+    def test_unknown_options_keep_the_help_pointer_of_the_parser_that_owns_them(self):
+        from lanefather import cli
+
+        for argv, help_for in ((["--unknown", "list"], "lanefather"), (["start", "--unknown"], "lanefather start")):
+            with self.subTest(argv=argv):
+                with redirect_stderr(io.StringIO()) as error, self.assertRaises(SystemExit) as raised:
+                    cli.parse(argv)
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn("lanefather: unknown option '--unknown'", error.getvalue())
+                self.assertIn(f"Try '{help_for} --help'.", error.getvalue())
 
 
 class WaitTests(LaneCase):

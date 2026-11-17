@@ -1,5 +1,5 @@
 {
-  "include": ["eventcheck.py", "cliconvention.py", "tests", "../install.py"],
+  "include": ["eventcheck.py", "cliconvention.py", "fathers_common", "tests", "../install.py"],
   "pythonVersion": "3.9",
   "typeCheckingMode": "strict"
 }

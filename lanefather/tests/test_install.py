@@ -57,19 +57,21 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(len(list(releases.iterdir())), 3)
 
     def test_uncommitted_shipping_inputs_are_refused_before_current_or_launcher_changes(self):
-        source = self.tmp / "source"
+        source = self.tmp / "source" / "lanefather"
         shutil.copytree(ROOT / "lanefather", source / "lanefather",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         shutil.copytree(ROOT / "hooks", source / "hooks")
+        shutil.copytree(ROOT.parent / "common/fathers_common", source.parent / "common/fathers_common",
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         shutil.copy2(ROOT / "install.py", source / "install.py")
         clean_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
         def git(*args: str):
             result = subprocess.run(["git", "-C", str(source), *args], text=True, capture_output=True, env=clean_env)
             self.assertEqual(result.returncode, 0, result.stderr)
-        git("init", "-q", "-b", "codex/source")
+        git("init", "-q", "-b", "codex/source", str(source.parent))
         git("config", "user.email", "install@example.invalid")
         git("config", "user.name", "Install test")
-        git("add", ".")
+        git("add", ".", "../common")
         git("commit", "-qm", "source")
         command = [sys.executable, str(source / "install.py"), "--bin", str(self.tmp / "bin"),
                    "--share", str(self.tmp / "share")]
@@ -79,9 +81,10 @@ class InstallTests(unittest.TestCase):
         launcher = self.tmp / "bin" / "lanefather"
         before = (current.readlink(), launcher.read_bytes(), sorted((self.tmp / "share" / "releases").iterdir()))
         decoy = self.tmp / "decoy"
-        shutil.copytree(source, decoy)
+        shutil.copytree(source.parent, decoy)
         hook_env = {**clean_env, "GIT_DIR": str(decoy / ".git"), "GIT_WORK_TREE": str(decoy)}
-        for relative in ["lanefather/__init__.py", "hooks/reference-transaction", "install.py", "lanefather/untracked.py"]:
+        for relative in ["lanefather/__init__.py", "hooks/reference-transaction", "install.py",
+                         "lanefather/untracked.py", "../common/fathers_common/cli.py"]:
             with self.subTest(relative=relative):
                 path = source / relative
                 original = path.read_bytes() if path.exists() else None

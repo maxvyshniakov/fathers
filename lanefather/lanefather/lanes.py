@@ -56,7 +56,8 @@ def next_lines(record: Record) -> list[str]:
 
 
 def prepare(cwd: Any, lane_id: str, ticket: str, lane_claims: list[str], base: str | None, after: list[str],
-            branch: str | None = None, scratch: Iterable[str] = ()) -> tuple[Record, list[dict[str, Any]]]:
+            branch: str | None = None, scratch: Iterable[str] = (), *, parents: list[str] | None = None,
+            batch_fix: bool = False) -> tuple[Record, list[dict[str, Any]]]:
     """The record start registers, and the rules its claims touch; nothing is written."""
     state.record_path(lane_id)
     for claim in lane_claims:
@@ -75,13 +76,14 @@ def prepare(cwd: Any, lane_id: str, ticket: str, lane_claims: list[str], base: s
         # The record key keeps the name older tools/lane checkouts read (#648).
         "cargo_targets": worktrees.lane_targets(lane_id), "overrides": [],
         "rules": [rule["name"] for rule in rules]}
+    state.set_fix_parents(record, parents or [], batch=batch_fix)
     return record, rules
 
 
 def fix_parent(record: Record) -> str | None:
     """The landed lane whose kept worktree a fix lane (review --fix-lane) takes over, else None."""
-    parent_id = record.get("review_fix_of")
-    if not isinstance(parent_id, str) or not state.ID.match(parent_id):
+    parent_id = state.hand_over_parent(record)
+    if parent_id is None:
         return None
     parent = state.read_json(state.record_path(parent_id))
     if (parent and parent.get("status") in ("landed", "released") and parent.get("worktree")
@@ -102,6 +104,9 @@ def admit(record: Record, force_reason: str | None, repaired: str | None) -> tup
     for name in after:
         if name not in {r["id"] for r in others if r["status"] != "done"}:
             raise LaneError(f"--after {name}: no lane that is not done by that name")
+    for fix_id in state.fix_parents(record):
+        prefix = f"--fix-of {fix_id}" if state.batch_fix(record) else "hand-over refused"
+        review.fix_parent_review(fix_id, record["common_dir"], prefix)
     parent = fix_parent(record)
     decision = admission.evaluate(config.current(), others, record["common_dir"], cap_exempt=parent is not None,
                                   repaired=repaired)
@@ -167,27 +172,12 @@ def register_admitted(record: Record, decision: admission.Decision, refusals: li
                             "worktree": record["worktree"], "cap": cap, "cap_source": source})
 
 
-def fix_of(given: list[str] | None) -> list[str]:
-    """start --fix-of: the landed lanes whose review findings a batch fix lane fixes (fathers#174), each once."""
-    parents = list(dict.fromkeys(name for value in given or () for name in value.replace(",", " ").split()))
-    for parent in parents:
-        record = state.read_json(state.record_path(parent))
-        if record is None:
-            raise LaneError(f"--fix-of {parent}: no lane by that name")
-        if record.get("status") not in state.LANDED:
-            raise LaneError(f"--fix-of {parent}: lane {parent} is {record.get('status')}, not landed; a fix lane "
-                            "fixes the review findings of landed lanes")
-    return parents
-
-
 def start(args: Any) -> int:
     lane_claims = [c for claim in args.claims for c in claim.split()]
-    parents = fix_of(getattr(args, "fix_of", None))
+    given = getattr(args, "fix_of", None) or ()
+    parents = list(dict.fromkeys(name for value in given for name in value.replace(",", " ").split()))
     record, rules = prepare(os.getcwd(), args.id, args.ticket, lane_claims, args.base, args.after, args.branch,
-                            args.scratch)
-    if parents:
-        # One parent keeps the string every Lanefather reads; several are a list (fathers#174).
-        record["review_fix_of"] = parents[0] if len(parents) == 1 else parents
+                            args.scratch, parents=parents, batch_fix=True)
     register(record, rules, args.force_reason, args.create)
     if not parents and "review-fixes" in args.id:
         print(f"{config.prog()}: warning: {args.id} looks like a fix lane but names no parent, so its land starts "

@@ -63,11 +63,12 @@ slots) at the rerun's [slot priority](#slot-priorities) (interactive by default)
 when no branch does; the landed lane keeps its own registration.
 
 A fix lane is exempt from review at land (`review.exempted`): the one `review <id> --fix-lane` registers for one
-lane, and a batch fix lane started with `start <id> --fix-of A,B,C` for the findings of several landed lanes
-(fathers#174). The record names its parents in `review_fix_of`: one id as a string, as before, several as a list.
-Mark each parent's findings with the fix lane's merge (`review A --mark N fixed:<fix lane id>`). A batch fix lane has
-its own worktree, counts toward the cap like any lane, and runs its own check plan; `start` warns when an id that
-reads `review-fixes` names no parent.
+lane, and a batch fix lane started with `start <id> --fix-of A,B,C` for the findings of one or more landed lanes
+(fathers#174). Each parent needs a finished review with at least one unmarked finding. The record keeps the first
+parent's ID in the string `review_fix_of` for older Lanefather versions. The complete batch is in
+`review_fix_of_all`. Mark each parent's findings with the fix lane's merge (`review A --mark N fixed:<fix lane id>`).
+A lane started with `--fix-of` has its own worktree, counts toward the cap like any lane, and runs its own check
+plan even with one parent. `start` warns when an id that reads `review-fixes` names no parent.
 
 ### Finishing lanes
 

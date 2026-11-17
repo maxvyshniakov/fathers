@@ -94,6 +94,9 @@ class ConventionTests(Case):
         result = self.cli("extend", "j1", "--ttl", "2w")
         self.assertEqual(2, result.returncode)
         self.assertRegex(result.stderr, r"^junkfather: --ttl: .*'2w'.*\nTry 'junkfather extend --help'\.\n$")
+        result = self.cli("extend", "j1", "--ttl", "--unknown")
+        self.assertEqual((2, "junkfather: unknown option --unknown\nTry 'junkfather extend --help'.\n"),
+                         (result.returncode, result.stderr))
         result = self.cli("reap")
         self.assertEqual("junkfather: reap takes one of --id, --owner, --lane or --pid\n"
                          "Try 'junkfather reap --help'.\n", result.stderr)
