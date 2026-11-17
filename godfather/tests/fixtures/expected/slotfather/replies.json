@@ -1751,6 +1751,22 @@
        "zero": "never"
       },
       {
+       "key": "order.reservation_timeout",
+       "value": 1800.0,
+       "default": 1800.0,
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "How long a head blocked by leases with no end estimate keeps its reservation. Zero means never.",
+       "source": "default",
+       "label": "Reservation timeout",
+       "type": "duration",
+       "min": 0.0,
+       "max": null,
+       "step": 300,
+       "unit": "s",
+       "zero": "never"
+      },
+      {
        "key": "order.idle_cpu",
        "value": 0.1,
        "default": 0.1,
