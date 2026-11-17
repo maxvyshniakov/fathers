@@ -122,6 +122,11 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Changed
 
+- Lane registration prints a load advisory when load15 exceeds the threshold and still honors the lane cap, claims,
+  dependencies and disk floor. High load also leaves `Project.readiness` available for a lane that can register.
+  Execution waits for capacity through the project's Slotfather adapter. Capability `lane.load_advisory`
+  (fathers#172).
+
 - `lanefather --help` fits one screen (fathers#175): one line per command, the details and an example in
   `lanefather <command> --help`. A usage error is two lines, as docs/cli.md asks: `lanefather: <reason>`, then
   the command's usage, one example and `Try 'lanefather <command> --help'.`; an unknown option is named before a

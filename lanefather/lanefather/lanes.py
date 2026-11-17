@@ -93,8 +93,7 @@ def fix_parent(record: Record) -> str | None:
 
 
 def admit(record: Record, force_reason: str | None, repaired: str | None) -> tuple[admission.Decision, list[str]]:
-    """Under the state lock: the refusals that end start at once (an existing lane, --after), then the cap, disk and
-    load decision and its refusals; a claim overlap raises."""
+    """Under the state lock: the existing-lane, dependency, cap, disk and claim rules for registration."""
     prog = config.prog()
     lane_id, lane_claims, after = record["id"], record["claims"], record["after"]
     existing = state.read_json(state.record_path(lane_id))
@@ -123,7 +122,7 @@ def admit(record: Record, force_reason: str | None, repaired: str | None) -> tup
 
 
 def register(record: Record, rules: list[dict[str, Any]], force_reason: str | None, create: bool) -> None:
-    """Enforce the cap, disk, load and claims, save the record and print its brief header. When the disk floor is
+    """Enforce the cap, disk and claims, save the record and print its brief header. When the disk floor is
     the only refusal left, start's disk repair runs first (fathers#157), outside the state lock each done takes,
     and the decision is taken again; `review --fix-lane` registers through here, so it repairs too."""
     repaired: str | None = None
@@ -137,6 +136,10 @@ def register(record: Record, rules: list[dict[str, Any]], force_reason: str | No
                 break
         repaired = done.repair_disk(decision.machine["disk_free_gb"], decision.floor)
     print(header(record, rules))
+    machine = decision.machine
+    if machine["load15"] > machine["load_limit"]:
+        print(f"lane: load15 is {machine['load15']:.1f}, above the advisory limit of {machine['load_limit']:.1f}. "
+              "Checks may wait for a Slotfather slot.", file=sys.stderr)
     warning = tickets.no_ticket_warning(record)
     if warning:
         print(warning, file=sys.stderr)

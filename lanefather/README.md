@@ -42,9 +42,8 @@ checks or builds. You can also use protected-branch promotion with your own pre-
 
 Admission is intentionally conservative. The disk guard requires free space on the home filesystem of **40 GB plus
 the lane cap times the largest recent lane** (decimal GB; the machine setting `host.min_disk_gb` in
-`lanefather settings`, or `LANEFATHER_MIN_DISK_GB` above it, sets it); cap and load checks
-also apply. See
-[admission configuration and override semantics](docs/admission.md) before adoption.
+`lanefather settings`, or `LANEFATHER_MIN_DISK_GB` above it, sets it). Registration also enforces the cap.
+High load prints an advisory. See [admission configuration and override semantics](docs/admission.md).
 
 ## Install
 
@@ -163,9 +162,9 @@ state compatibility does not make a different executable satisfy an old exact-so
 
 ## Lifetime admission
 
-The opt-in Slotfather provider supplies lifetime cap/load advice to registration, `next`, `list` and
-`Project.readiness`. Lanefather retains Store counting/locking, claims, dependencies, disk policy and lifecycle.
-The stateless query does not reserve execution slots, and execution `advise.jobs` is not a lane cap.
+The opt-in Slotfather provider supplies the registration cap and advisory load readings to `start`, `next`,
+`list` and `Project.readiness`. Lanefather counts and locks Store records and enforces claims, dependencies and
+the disk floor. Projects use Slotfather execution slots for checks, smoke and gates through their verify adapter.
 [Contract, failure handling and rollout](docs/admission.md)
 
 ## More detail

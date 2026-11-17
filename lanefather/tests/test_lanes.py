@@ -12,7 +12,7 @@ from support import LaneCase, load_lane
 
 
 class StartTests(LaneCase):
-    """B4 start: caps, disk, load and path claims."""
+    """B4 start: caps, disk, path claims and load advice."""
 
     def test_header_names_ticket_branch_claims_and_report_contract(self):
         header = self.start("tool", "tools/lane", "tools/test-lane.py")
@@ -67,14 +67,18 @@ class StartTests(LaneCase):
         self.env["LANEFATHER_CAP"] = ""
         self.assertNotIn("LANEFATHER_CAP", self.lane("list"), "an empty value is the default")
 
-    def test_low_disk_or_high_load_is_refused(self):
+    def test_low_disk_refuses_registration_and_high_load_is_advisory(self):
         self.env["LANEFATHER_DISK_FREE_GB"] = "20"
         # The derived floor (fathers#157): 40 GB reserve + a cap of 3 x the 3 GB lane peak of no done lane yet.
         self.assertIn("under the floor of 49 GB (10^9) = 40 reserve + 3 x 3.0 GB lane peak",
                       self.start("disk", "a/**", ok=False))
         self.env["LANEFATHER_DISK_FREE_GB"] = "500"
         self.env["LANEFATHER_LOAD15"] = "9.1"
-        self.assertIn("load15 is 9.1, above 1.5x6 cores", self.start("load", "a/**", ok=False))
+        output = self.start("load", "a/**", extra=("--create",))
+        self.assertIn("load15 is 9.1, above the advisory limit of 9.0", output)
+        self.assertIn("Checks may wait for a Slotfather slot.", output)
+        self.assertEqual(self.record("load")["status"], "active")
+        self.assertEqual(self.record("load")["overrides"], [])
 
     def test_overlapping_claims_are_refused_naming_the_holder(self):
         # Replay: #401 held desktop/src/states/** while another lane edited StatesPage's directory.
