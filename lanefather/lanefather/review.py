@@ -801,7 +801,8 @@ def fix_round_commands(records: Iterable[Record], alongside: Iterable[str] = ())
     lines: list[str] = []
     landed: list[Record] = []
     for record in records:
-        if (record.get("landed") or {}).get("merge"):
+        landing: dict[str, Any] = record.get("landed") or {}
+        if landing.get("merge"):
             landed.append(record)
         else:
             lines.append(f"Apply the fix on {record['branch']} and mark {record['id']}'s findings before another land.")
