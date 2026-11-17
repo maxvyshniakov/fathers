@@ -14,8 +14,8 @@ subagent's with the TTL of `own.background_ttl`, a main-session call's with none
 forks a watcher (`watch`) that follows the shell, so an `exec` and what the shell leaves in its group stay the
 entry's. Then the agent's command runs in that same shell, so its output, exit status and shell state are what they
 would have been: the line prints nothing, and its failure (no junkfather, no claim) only leaves the command unowned.
-Its end is any entry's: the subagent's stop (`SubagentStop`), the session's end, the TTL (the `Stop` hook, the
-sweep), `reap`.
+A `SubagentStop` can be the end of a turn while the call is still running. Lifecycle cleanup waits for the
+session's end or the TTL (the `Stop` hook, the sweep). An explicit `reap` can still stop it.
 
 Left alone: a foreground call, a call that is one explicit `junkfather own`, `own-resource` or `adopt`
 (`owns_itself`: it owns what it starts, and the claim is the one `own` reads), a call without a session or a tool-use
@@ -161,9 +161,9 @@ def take_claim(store: Store, tool_use: str, session: Optional[str], now: float) 
 def adopt(store: Store, tool_use: str, env: Mapping[str, str], now: Optional[float] = None,
           watcher: Optional[Callable[[Store, Dict[str, Any]], None]] = None) -> int:
     """`junkfather background TOOL_USE_ID`: own the shell that runs this junkfather (its parent) for the call the
-    claim names, and leave a watcher on it (`start_watcher`). A subagent's call ends with the subagent or its TTL
-    (own.background_ttl); a main-session call has no TTL and ends with the session. Prints nothing; Refused when
-    there is nothing it may own."""
+    claim names, and leave a watcher on it (`start_watcher`). A subagent's call keeps running through turn ends
+    until the session ends or its TTL expires (own.background_ttl). A main-session call has no TTL and ends with
+    the session. Prints nothing. Raises Refused when there is nothing it may own."""
     now = time.time() if now is None else now
     parent = os.getppid()
     claim = take_claim(store, tool_use, env.get("CLAUDE_CODE_SESSION_ID") or None, now)
