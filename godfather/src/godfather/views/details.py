@@ -11,7 +11,7 @@ from ..adapters import junkfather as _junkfather
 from ..adapters import lanefather as _lanefather
 from ..layout import Rect
 from ..tui import SPINNER, Canvas, safe_link
-from ..text import clip, clock, dashboard_text, megabytes, minutes, short, span, text_width, tilde
+from ..text import clip, clock, clusters, cluster_width, dashboard_text, megabytes, minutes, short, span, text_width, tilde
 from ..widgets import Panel, Part, Table, label_column
 from .common import (Item, Marks, Model, bar, expected_run, marks_of, meta_text, priority_mark, priority_of, share,
                      share_style, ticket_of)
@@ -49,11 +49,8 @@ def detail_title(item: Optional[Item]) -> str:
 
 def queue_policy(model: Model, moment: Optional[datetime.datetime] = None) -> dict[str, str]:
     """Admission estimates and deadlines for the head, exposed as table fields; times off `moment`'s day say it."""
-    waiters = model["waiters"]
-    if not waiters:
-        return {}
-    head = waiters[0]
-    if head["count"] <= model["free"]:
+    head = next((item for item in model["waiters"] if not item.get("lock")), None)
+    if head is None or head["count"] <= model["free"]:
         return {}
     fields: dict[str, str] = {}
     since = head.get("since")
@@ -78,12 +75,14 @@ def request_facts(item: Item, model: Model, position: int, moment: datetime.date
     context: dict[str, str] = item.get("context") or {}
     ticket_text, ticket_url = detail_ticket(item, lane)
     lock = item.get("lock")
+    waiting = item["kind"] == "waiting"
+    ahead = [other for other in model["waiters"][:position] if not other.get("lock")] if waiting and not lock else []
     if lock:
         slots = f"{item['count']} slot{'s' if item['count'] != 1 else ''}"
-        disposition = "released" if item["kind"] == "waiting" else "held"
-        heading = f"waiting-for-lock · {slots} {disposition}"
-    elif item["kind"] == "waiting":
-        heading = f"waiting · #{position + 1} · wants {item['count']}"
+        disposition = "slots released" if waiting else f"{slots} held"
+        heading = f"waiting-for-lock · {disposition}"
+    elif waiting:
+        heading = f"waiting · #{len(ahead) + 1} · wants {item['count']}"
     else:
         heading = (("earlier queue" if item["kind"] == "legacy" else "running")
                    + f" · {item['count']} slot{'s' if item['count'] != 1 else ''}")
@@ -108,15 +107,14 @@ def request_facts(item: Item, model: Model, position: int, moment: datetime.date
         since = item["since"]
         facts.append(("queued", [(f"{clock(since, moment)} · waiting "
                                   f"{span((moment - since).total_seconds()) if since else '?'}", "text")]))
-        if position == 0:
+        if not ahead:
             facts.append(("free", [(f"{model['free']} of {model['slots']} slots", "text")]))
             facts.extend((name, [(value, "text")]) for name, value in queue_policy(model, moment).items())
             if model["used"] and model["memory_block"]:
                 facts.append(("blocked", [(model["memory_block"], "warn")]))
         else:
-            waiters = model["waiters"]
-            facts.append(("ahead", [(f"{position} requests · {sum(w['count'] for w in waiters[:position])} slots",
-                                     "text")]))
+            requests = "request" if len(ahead) == 1 else "requests"
+            facts.append(("ahead", [(f"{len(ahead)} {requests} · {sum(w['count'] for w in ahead)} slots", "text")]))
             if item.get("est_start") is not None:  # schedule.forecast(): if nothing more comes
                 facts.append(("start est", [(clock(item["est_start"], moment), "text")]))
         facts.extend(expected_facts(item))
@@ -195,6 +193,26 @@ def lane_facts(context: dict[str, str], lane: dict[str, Any], value_width: int) 
     return facts
 
 
+def lock_path_lines(path: str, width: int) -> list[str]:
+    """Wrap the entire path in terminal cells and keep a filename together whenever it fits."""
+    if text_width(path) <= width:
+        return [path]
+    folder, separator, name = path.rpartition("/")
+    lines: list[str] = []
+    for part in (folder + separator, name):
+        line, used = "", 0
+        for glyph in clusters(part):
+            cells = cluster_width(glyph)
+            if line and used + cells > width:
+                lines.append(line)
+                line, used = "", 0
+            line += glyph
+            used += cells
+        if line:
+            lines.append(line)
+    return lines
+
+
 def draw_detail(canvas: Canvas, rect: Rect, model: Model, selected: int, cwd: Optional[str],
                 moment: datetime.datetime, failure: Optional[str] = None,
                 lanes: Optional[dict[str, Any]] = None, procs: Optional[dict[str, Any]] = None) -> None:
@@ -222,6 +240,12 @@ def draw_detail(canvas: Canvas, rect: Rect, model: Model, selected: int, cwd: Op
                           canvas.theme.track)
     inner = panel.inner.width
     label_width, value_width = label_column([*(name for name, _ in facts), "command", "meta", "cwd"], inner)
+    if item.get("lock"):
+        row = next(index for index, (name, _) in enumerate(facts) if name == "lock")
+        path = facts[row][1][0][0]
+        lines = lock_path_lines(path, value_width)
+        facts[row:row + 1] = [("lock" if index == 0 else "", [(line, "text")])
+                              for index, line in enumerate(lines)]
     where = clip_start(tilde(item["queue"] or cwd or ""), value_width)
     worktree_rows: set[int] = set()
     worktree_url = ""
