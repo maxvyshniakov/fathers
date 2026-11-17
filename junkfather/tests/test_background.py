@@ -1,7 +1,7 @@
 """A background Bash command owned on its own (fathers#166): the PreToolUse hook rewrites a `run_in_background` call
-so that its shell adopts itself before the agent's command runs, a subagent's stop or the TTL reaps it, and a
-foreground call is left alone. End to end through the hook fixture with real processes, the shell started the way
-Claude Code starts a Bash call: a group of its own running `eval '<command>' && pwd -P`."""
+so that its shell adopts itself before the agent's command runs, survives a subagent turn, and is reaped at the
+TTL or session end. A foreground call is left alone. The hook fixture runs the shell as Claude Code runs a Bash
+call: in a process group of its own, running `eval '<command>' && pwd -P`."""
 from __future__ import annotations
 
 import json
@@ -146,7 +146,7 @@ class BackgroundTests(Case):
         (entry,) = map(plain, self.store.entries())
         return entry
 
-    def test_a_subagents_background_command_is_listed_as_its_own_and_ends_with_its_stop(self):
+    def test_a_subagents_background_call_survives_its_turn_and_ends_with_the_session(self):
         shell = self.run_as_claude(self.rewritten(call("echo started; sleep 600")))
         entry = self.adopted()
         sleeper = self.runs_600(shell, below=True)
@@ -164,11 +164,38 @@ class BackgroundTests(Case):
         self.hook("SubagentStop", "s1", env=self.session_env, agent_id="agent-b")
         self.assertEqual("running", self.state_of(entry["id"]), "another subagent's stop")
         self.hook("SubagentStop", "s1", env=self.session_env, agent_id="agent-a")
-        self.wait_for(lambda: self.state_of(entry["id"]) == "reaped", what="the subagent's stop to reap it")
+        self.assertFalse((self.state / "hook.out").exists(), "the turn did not start a reap")
+        self.assertEqual("running", self.state_of(entry["id"]))
+        self.assertTrue(self.runs(sleeper))
+        self.hook("SessionEnd", "s1", env=self.session_env, reason="other")
+        self.wait_for(lambda: self.state_of(entry["id"]) == "reaped", what="the session end to reap it")
         self.assertIsNotNone(shell.wait(10))
         self.assertFalse(self.runs(sleeper))
         out, _ = shell.communicate()
         self.assertEqual(b"started\n", out, "the agent sees its command's output and nothing of junkfather's")
+
+    def test_a_subagent_turn_reaps_explicit_ownership_and_spares_its_background_call(self):
+        shell = self.run_as_claude(self.rewritten(call("sleep 600")))
+        auto = self.adopted()
+        sleeper = self.runs_600(shell, below=True)
+        claim = call("junkfather own --detach --ttl 1h -- sleep 601", background_=False, tool_use="toolu_explicit")
+        hook.handle(claim, self.store)
+        explicit = self.own_detached(self.session_env, "--ttl", "1h", argv=("sleep", "601"))
+        self.assertEqual("agent-a", explicit["owner"]["agent"])
+
+        def run_reaper(argv: List[str]) -> None:
+            result = subprocess.run(argv, cwd=ROOT, env=self.session_env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(0, result.returncode, result.stderr)
+
+        hook.handle({"hook_event_name": "SubagentStop", "session_id": "s1", "agent_id": "agent-a"}, self.store,
+                    spawn=run_reaper)
+        self.assertEqual("reaped", self.state_of(explicit["id"]))
+        self.assertFalse(self.runs(explicit["pid"]))
+        self.assertEqual("running", self.state_of(auto["id"]))
+        self.assertTrue(self.runs(sleeper))
+        manual = self.cli("reap", "--owner", "s1", "--agent", "agent-a", "--dry-run", "--json", env=self.session_env)
+        self.assertEqual(0, manual.returncode, manual.stderr)
+        self.assertEqual([auto["id"]], [r["id"] for r in json.loads(manual.stdout)["results"]])
 
     def test_the_command_runs_and_exits_as_it_would_without_junkfather(self):
         shell = self.run_as_claude(self.rewritten(call("echo out; echo err >&2; (exit 3)")))
@@ -177,12 +204,14 @@ class BackgroundTests(Case):
         (entry,) = map(plain, self.store.entries())
         self.assertEqual(("agent-a", shell.pid), (entry["owner"]["agent"], entry["pid"]))
 
-    def test_its_ttl_reaps_it_when_the_subagent_never_stops(self):
+    def test_its_ttl_reaps_it_after_the_subagent_turn(self):
         self.cli("settings", "set", "own.background_ttl", "30m")
         shell = self.run_as_claude(self.rewritten(call("sleep 600")))
         entry = self.adopted()
         self.assertEqual(1800, entry["ttl"], "the own.background_ttl setting")
         self.store.update(entry["id"], lambda e: e.update(expires=time.time() - 1))  # its TTL passed
+        self.hook("SubagentStop", "s1", env=self.session_env, agent_id="agent-a")
+        self.assertFalse((self.state / "hook.out").exists(), "the turn left expiry to the sweep")
         swept = json.loads(self.cli("sweep", "--json").stdout)
         self.assertEqual([(entry["id"], "ttl expired")], [(r["id"], r["reason"]) for r in swept["reaped"]])
         self.assertIsNotNone(shell.wait(10))
@@ -205,7 +234,7 @@ class BackgroundTests(Case):
 
     def test_its_reap_leaves_what_another_entry_owns_inside_it(self):
         """A script in the background shell runs an attached `junkfather own --keep-for session`: that entry
-        survives the subagent's stop, though its junkfather runs in the shell's group."""
+        survives a reap of the auto-owned entry, though its junkfather runs in the shell's group."""
         env = {**self.session_env, "JF": f"{sys.executable} -m junkfather", "PYTHONPATH": str(ROOT)}
         shell = self.run_as_claude(self.rewritten(call("$JF own --keep-for session --ttl 1h -- sleep 601")), env)
         self.wait_for(lambda: len([e for e in self.store.entries() if e.get("state") == "running"]) == 2,
@@ -214,8 +243,8 @@ class BackgroundTests(Case):
         self.assertEqual(("background", "session"), (auto["auto"], kept["keep"]))
         self.assertEqual(shell.pid, procs.Table.read().get(kept["supervisor"]["pid"]).pgid,  # type: ignore[union-attr]
                          "the attached junkfather is in the shell's group")
-        self.hook("SubagentStop", "s1", env=self.session_env, agent_id="agent-a")
-        self.wait_for(lambda: self.state_of(auto["id"]) == "reaped", what="the background entry reaped")
+        self.assertEqual(0, self.cli("reap", "--id", auto["id"], env=self.session_env).returncode)
+        self.assertEqual("reaped", self.state_of(auto["id"]))
         self.assertEqual("running", self.state_of(kept["id"]))
         self.assertTrue(self.runs(kept["pid"]))
         self.assertTrue(self.runs(kept["supervisor"]["pid"]))
@@ -248,21 +277,21 @@ class BackgroundTests(Case):
 
     def test_what_the_command_leaves_or_execs_is_still_its_own(self):
         """`exec` turns the shell into another program; `&` leaves a child once the shell exits. The watcher records
-        both, by the kernel's word (kqueue) or by looking every few seconds (poll), so the stop still ends them."""
+        both, by the kernel's word (kqueue) or by looking every few seconds (poll), so session end still reaps them."""
         precise = [mode for mode, here in (("kqueue", hasattr(select, "kqueue")), ("pidfd", hasattr(os, "pidfd_open")))
                    if here]
         cases = [(mode, command) for mode in precise for command in ("exec sleep 600", "sleep 600 &")]
         for n, (mode, command) in enumerate([*cases, ("poll", "exec sleep 600")]):  # poll sees no exit as it happens
             with self.subTest(mode=mode, command=command):
-                self.stopped_with_its_agent(mode, f"agent-{mode}-{n}", command)
+                self.reaped_at_session_end(mode, f"agent-{mode}-{n}", command)
 
     def test_a_child_left_behind_that_execs_later_is_still_its_own(self):
         """The shell leaves `(sleep 1; exec sleep 600) &` and exits; a second later the child becomes `sleep 600`.
-        The watcher keeps watching what it recorded, so the stop still knows it."""
+        The watcher keeps watching what it recorded, so session end still reaps it."""
         modes = [m for m, here in (("kqueue", hasattr(select, "kqueue")), ("pidfd", hasattr(os, "pidfd_open"))) if here]
         for n, mode in enumerate(modes):
             with self.subTest(mode=mode):
-                self.stopped_with_its_agent(mode, f"agent-late-{n}", "(sleep 1; exec sleep 600) &")
+                self.reaped_at_session_end(mode, f"agent-late-{n}", "(sleep 1; exec sleep 600) &")
 
     def test_an_entry_adopted_inside_the_shell_is_reaped_by_its_own_reap(self):
         shell = self.run_as_claude(self.rewritten(call("sleep 600; :")))
@@ -275,7 +304,7 @@ class BackgroundTests(Case):
         self.wait_for(lambda: not self.runs(child), what="the inner entry's own reap to end its process")
         self.assertEqual("reaped", self.state_of(inner["id"]))
 
-    def stopped_with_its_agent(self, mode: str, agent: str, command: str) -> None:
+    def reaped_at_session_end(self, mode: str, agent: str, command: str) -> None:
         env = {**self.session_env, "JUNKFATHER_WATCH": mode}
         shell = self.run_as_claude(self.rewritten(call(command, agent=agent, tool_use=f"toolu_{agent}")), env)
         self.wait_for(lambda: any(e.get("owner", {}).get("agent") == agent and e.get("supervisor")
@@ -290,8 +319,8 @@ class BackgroundTests(Case):
         self.wait_for(sleepers, what="the watcher to record the sleep", seen=lambda: str(self.loaded(entry["id"])))
         (sleeper,) = sleepers()
         self.assertTrue(self.runs(sleeper))
-        self.hook("SubagentStop", "s1", env=self.session_env, agent_id=agent)
-        self.wait_for(lambda: self.state_of(entry["id"]) == "reaped", what="the stop to reap it",
+        self.hook("SessionEnd", "s1", env=self.session_env, reason="other")
+        self.wait_for(lambda: self.state_of(entry["id"]) == "reaped", what="session end to reap it",
                       seen=lambda: str(self.loaded(entry["id"])))
         self.wait_for(lambda: not self.runs(sleeper), what="the sleep to end",
                       seen=lambda: f"{self.loaded(entry['id'])}\n{procs.Table.read().get(sleeper)}")

@@ -120,10 +120,9 @@ Slotfather's "another user's queue" (fathers#118) and is not used here.
 
 ## Ending an entry
 
-- **Who ends it**: its owner's end (the `SubagentStop` hook for a subagent's entries with `keep: owner`, the
-  `SessionEnd` hook for all of a session's), its TTL (the supervisor on the spot, the `Stop` hook at the end of a
-  turn, the sweep), the sweep when the owner's session is gone, a signal to an attached junkfather, or
-  `junkfather reap`.
+- **Who ends it**: its owner's end (the `SubagentStop` hook for a subagent's explicit entries with `keep: owner`,
+  the `SessionEnd` hook for all of a session's), its TTL (the supervisor, the `Stop` hook at the end of a turn,
+  or the sweep), the sweep when the owner's session is gone, a signal to an attached junkfather, or `junkfather reap`.
 - **Which processes**: the leader when its pid still has the recorded start time and command (same command line,
   or the same program, as `seen` or as `known_seen` last recorded it; `--force` skips the command check, never the
   start time); with a verified leader of its own group, the whole group, which the live leader pins; without one,
@@ -245,7 +244,7 @@ Codex one when the registry never named it) and ends at its TTL or when swept as
 | --- | --- |
 | `PreToolUse` (Bash, command names junkfather) | writes a claim |
 | `PreToolUse` (Bash, `run_in_background`, not one explicit `junkfather own`/`own-resource`/`adopt`) | writes a claim and answers with the command rewritten to own its shell (Background Bash calls) |
-| `SubagentStop` | reaps the subagent's entries with `keep: owner` |
+| `SubagentStop` | reaps the subagent's explicitly owned entries with `keep: owner`. Auto-owned background calls survive the turn. |
 | `SessionEnd` | reaps the session's entries (handed ones belong to their new session) |
 | `Stop` | the end of a main-agent turn, not of the session: reaps the session's entries past their TTL |
 
@@ -271,8 +270,10 @@ leads its own process group; the line's junkfather adopts that shell, its parent
 command and `label` its description. A subagent's call has the TTL of `own.background_ttl`; a main-session call has
 none (`no_ttl: true`, `expires` a hundred years on, which older readers take as not expired) and ends with the
 session. The agent's command then runs in the same shell: its output, exit status and shell state are unchanged, and
-the line prints nothing. It ends like any entry: `SubagentStop`, `SessionEnd`, the TTL (the `Stop` hook, the sweep),
-the sweep when the session is gone, `reap`. `list` and `status` show the owner with its subagent; rows carry
+the line prints nothing. `SubagentStop` fires at the end of a turn, including a turn that ends to wait for this call.
+The entry survives it. Cleanup happens at `SessionEnd`, at the TTL (the `Stop` hook or the sweep), or when the
+sweep finds the session is gone. An explicit `reap` can still stop the entry.
+`list` and `status` show the owner with its subagent; rows carry
 `agent_type`, `auto` and `no_ttl`.
 
 - **The watcher**: the line also forks a watcher, the entry's `supervisor`, and waits until it watches the shell

@@ -5,7 +5,7 @@ event's JSON on stdin; Mastack's hook dispatcher runs this for the events it is 
                 `own` learns which subagent ran it (owner.py); a Bash call with `run_in_background` that is not
                 one explicit `junkfather own`: answer with the command rewritten to own its shell first
                 (background.py), the one thing the hook prints
-  SubagentStop  reap what that subagent owns, except entries kept for the session
+  SubagentStop  reap the subagent's explicit ownership, except entries kept for the session
   SessionEnd    reap everything the session owns that was not handed to another session
   Stop          (end of a main-agent turn, not of the session) reap the session's entries whose TTL passed
 
@@ -24,7 +24,10 @@ from typing import Any, Callable, Dict, List, Optional
 from . import background as _background
 from . import entry as _entry
 from . import owner as _owner
+from . import reap as _reap
 from .state import Store, as_dict, as_list
+
+SUBAGENT_STOP = "subagent-stop"
 
 
 def plan(data: Dict[str, Any], store: Store, now: Optional[float] = None) -> Optional[List[str]]:
@@ -39,9 +42,10 @@ def plan(data: Dict[str, Any], store: Store, now: Optional[float] = None) -> Opt
         agent = data.get("agent_id")
         if not isinstance(agent, str) or not agent:
             return None
-        if not any((e.get("owner") or {}).get("agent") == agent and e.get("keep") == "owner" for e in running):
+        if not any(_reap.matches_owner(e, session, agent, exclude_auto=_background.AUTO) for e in running):
             return None
-        return ["reap", "--owner", session, "--agent", agent, "--reason", "subagent-stop", "--quiet", "--via", "hook"]
+        return ["reap", "--owner", session, "--agent", agent, "--reason", SUBAGENT_STOP, "--quiet",
+                "--via", "hook"]
     if event == "SessionEnd":
         if not running:
             return None

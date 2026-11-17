@@ -11,9 +11,9 @@ from junkfather import hook
 
 class PlanTests(Case):
     def entry(self, entry_id: str, agent: Optional[str] = None, keep: str = "owner", session: str = "s1",
-              expires: Optional[float] = None, state: str = "running") -> None:
+              expires: Optional[float] = None, state: str = "running", auto: Optional[str] = None) -> None:
         self.store.save(as_entry({"id": entry_id, "state": state, "keep": keep, "created": time.time(),
-                         "expires": expires or time.time() + 3600,
+                         "expires": expires or time.time() + 3600, "auto": auto,
                          "owner": {"kind": "claude", "session": session, "agent": agent}}))
 
     def test_subagent_stop_reaps_only_when_that_agent_owns_something_not_kept(self):
@@ -25,6 +25,11 @@ class PlanTests(Case):
                           "hook"],
                          hook.plan({"hook_event_name": "SubagentStop", "session_id": "s1", "agent_id": "a1"},
                                    self.store))
+
+    def test_a_subagent_turn_with_only_auto_owned_background_tasks_starts_no_reap(self):
+        self.entry("j1", agent="a1", auto="background")
+        self.assertIsNone(hook.plan({"hook_event_name": "SubagentStop", "session_id": "s1", "agent_id": "a1"},
+                                    self.store))
 
     def test_session_end_reaps_the_sessions_entries(self):
         self.entry("j1", session="s2")

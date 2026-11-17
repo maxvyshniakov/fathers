@@ -10,8 +10,8 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   through Mastack's lifecycle rewriters, `junkfather hook` for `run_in_background` Bash calls, with the permission
   rule `Bash(<bin>/junkfather background:*)` for the one line it puts before the agent's command; that line adopts
   the call's shell and leaves a watcher on it. The agent's command, its output and its exit status stay as they
-  were. A subagent's call ends with its stop (`SubagentStop`) or its TTL, the new `own.background_ttl` setting (2 h);
-  a main-session call has no TTL and ends with the session. What the command `exec`s or leaves behind (`sleep 600 &`)
+  were. A subagent's call has a TTL set by `own.background_ttl` (2 h by default). A main-session call has no TTL.
+  Both are cleaned up when the session ends. What the command `exec`s or leaves behind (`sleep 600 &`)
   is still its own. Only a call that is one explicit `junkfather own`, `own-resource` or `adopt` is left alone;
   `junkfather list; until ...; done` is owned. `list` and `status` show the owning subagent, and their rows gain
   `agent_type`, `auto` and `no_ttl`. On macOS `--mastack` also loads the sweep agent, as `--launchd` does.
@@ -83,6 +83,11 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   the old file and no temp file, and one whose directory cannot be synced reports the error.
 - junkfather lives in the `fathers` repository: install it with `python3 install.py junkfather` from a `fathers`
   checkout.
+
+### Fixed
+
+- Auto-owned background Bash calls survive `SubagentStop`, which fires even when a subagent ends its turn to wait
+  for the call. TTL and session-end cleanup still apply (fathers#176).
 
 ## 0.1.0 - 2026-11-12
 
