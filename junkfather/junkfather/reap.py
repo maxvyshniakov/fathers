@@ -346,19 +346,21 @@ def reap_unowned(store: Store, pid: int, table: _procs.Table, force: bool, reaso
              "how": "unowned, forced"}]
 
 
-def matches_owner(entry: Entry, owner: str, agent: Optional[str]) -> bool:
+def matches_owner(entry: Entry, owner: str, agent: Optional[str], *, exclude_auto: Optional[str] = None) -> bool:
     """`reap --owner OWNER [--agent AGENT]`: a session's entries (not those handed away), or a subagent's entries
-    not kept for the session."""
+    not kept for the session. The SubagentStop hook also excludes its auto-owned background calls."""
     who = entry.get("owner") or {}
     if agent:
-        return who.get("session") == owner and who.get("agent") == agent and entry.get("keep") == "owner"
+        return (who.get("session") == owner and who.get("agent") == agent and entry.get("keep") == "owner"
+                and (exclude_auto is None or entry.get("auto") != exclude_auto))
     if who.get("session") == owner:
         return True
     return who.get("agent") == owner and entry.get("keep") == "owner"
 
 
 def select(store: Store, ids: List[str], owner: Optional[str], agent: Optional[str], lane: Optional[str],
-           table: Optional[_procs.Table] = None, pid: Optional[int] = None) -> Tuple[List[Entry], List[Dict[str, Any]]]:
+           table: Optional[_procs.Table] = None, pid: Optional[int] = None, *, exclude_auto: Optional[str] = None
+           ) -> Tuple[List[Entry], List[Dict[str, Any]]]:
     """The running or starting entries one `reap` selector names (--id, --owner, --lane, or --pid with `table`),
     and a result row for each id given that names no such entry."""
     running = [e for e in store.entries() if e.get("state") in _entry.OPEN]
@@ -372,7 +374,7 @@ def select(store: Store, ids: List[str], owner: Optional[str], agent: Optional[s
                             "how": ""})
         return [e for e in running if e["id"] in ids], missing
     if owner:
-        return [e for e in running if matches_owner(e, owner, agent)], missing
+        return [e for e in running if matches_owner(e, owner, agent, exclude_auto=exclude_auto)], missing
     if lane:
         return [e for e in running if (e.get("owner") or {}).get("lane") == lane], missing
     assert table is not None
