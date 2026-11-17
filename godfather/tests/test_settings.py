@@ -425,13 +425,14 @@ class KeyTests(PanelCase):
         settings = self.open()
         self.assertEqual([INTERVAL, THEME, MODE] + [("slotfather", "order." + name) for name in (
             "order", "safety", "fallback", "overrun", "limit", "interactive", "batch", "aging_batch",
-            "aging_normal", "warn_wait", "idle_cpu", "idle_after", "yield_after")],
+            "aging_normal", "warn_wait", "reservation_timeout", "idle_cpu", "idle_after", "yield_after")],
             [row.focus for row in settings_model.selectable(settings.panel, settings.context())])
         text = settings.text(idle(), height=60)
         for label, value in (("Capacity", "Automatic"), ("Queue order", "Backfill"), ("Backfill margin", "3×"),
                              ("Overrun estimate", "0.5×"), ("Batch held back", "30m"),
                              ("Batch promoted after", "30m"), ("Warn after waiting", "30m"),
-                             ("Idle when below", "0.1 cores"), ("Colour theme", "Auto")):
+                             ("Reservation timeout", "30m"), ("Idle when below", "0.1 cores"),
+                             ("Colour theme", "Auto")):
             self.assertRegex(text, rf"{re.escape(label)} +(‹ )?{re.escape(value)}")
         self.assertNotRegex(text, r"\((s|cores)\)", "no units in the labels")
         self.assertLess(text.index("GODFATHER"), text.index("SLOTFATHER"), "this dashboard's section first")

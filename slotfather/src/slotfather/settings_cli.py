@@ -39,14 +39,15 @@ KNOBS = {"safety": ("Backfill margin", 0.5), "limit": ("Overtaking stops after",
          "interactive": ("Interactive head start", 60), "batch": ("Batch held back", 60),
          "yield_after": ("Ask to yield after", 30), "idle_cpu": ("Idle when below", 0.05),
          "idle_after": ("Idle for", 60), "aging_batch": ("Batch promoted after", 300),
-         "aging_normal": ("Normal promoted after", 300), "warn_wait": ("Warn after waiting", 300)}
+         "aging_normal": ("Normal promoted after", 300), "warn_wait": ("Warn after waiting", 300),
+         "reservation_timeout": ("Reservation timeout", 300)}
 UNITS = {"safety": "×", "overrun": "×", "limit": " s", "fallback": " s", "interactive": " s", "batch": " s",
          "yield_after": " s", "idle_after": " s", "idle_cpu": " cores", "interval": " s", "aging_batch": " s",
-         "aging_normal": " s", "warn_wait": " s"}
+         "aging_normal": " s", "warn_wait": " s", "reservation_timeout": " s"}
 # The queue's settings in the panel's order (one flat list, owner, 2026-11-11)
 ORDER_FIELDS = ("order", "safety", "fallback", "overrun", "limit", "interactive", "batch", "aging_batch",
-                "aging_normal", "warn_wait", "idle_cpu", "idle_after", "yield_after")
-NEVER = ("limit", "aging_batch", "aging_normal", "warn_wait")  # 0 is off: shown as "never"
+                "aging_normal", "warn_wait", "reservation_timeout", "idle_cpu", "idle_after", "yield_after")
+NEVER = ("limit", "aging_batch", "aging_normal", "warn_wait", "reservation_timeout")  # 0 is off: shown as "never"
 DESCRIPTIONS = {
     "mode": "Shared by every client. Automatic: the lower of the CPU and memory budgets.",
     "amount.fixed": "Total slots for every client. Applies at the next grant; a shrink drains.",
@@ -61,6 +62,7 @@ DESCRIPTIONS = {
     "aging_batch": "A waiting batch request is served as normal after this; 0: never.",
     "aging_normal": "A waiting normal request is served as interactive after this; 0: never.",
     "warn_wait": "A request waiting this long says so and is flagged; 0: never.",
+    "reservation_timeout": "How long a head blocked by leases with no end estimate keeps its reservation. Zero means never.",
     "yield_after": "Before a yieldable holder is asked to yield; 0: nobody is asked.",
     "idle_cpu": "A lease below this for the idle time is idle (💤); 0: never.",
     "idle_after": "Below the idle cores this long: idle, and asked if it can yield.",
