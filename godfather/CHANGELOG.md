@@ -6,6 +6,10 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Added
 
+- EVENTS describes Slotfather's lock waits and blocked head reservations. LEASE DETAILS shows the lock path and
+  whether the lease still holds slots, and Settings displays the reservation timeout when Slotfather provides it.
+  (fathers#162)
+
 - Row actions (fathers#88): Enter, `a` or a right-click on a QUEUE row or a page's row opens its action menu, only
   the actions its tool advertises and that apply to the row now (`no actions` in the footer otherwise): reprioritize
   a request to another class and ask a yieldable lease of a lower class than a waiter to yield (`slotfather

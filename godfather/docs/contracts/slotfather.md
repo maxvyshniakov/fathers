@@ -72,6 +72,7 @@ item:
   rss                int           KB
   tree               [[pid, cpu, rss_kb, name]]  sorted by cpu, highest first
   queue, label, cmd, meta, workdir, asked          str (already dashboard_text()-cleaned)
+  lock               str          optional, the path this lease is waiting for, empty when it has no lock wait
   context            object        config.meta_of(entry)
   priority           str           config.priority_of(entry)
   ticket             str | null    config.ticket_of(entry)
@@ -142,7 +143,10 @@ from prose:
 | `lease.reaped`, `request.reaped` | `count`, `ran`, `waited`, `reason` | `owner died · 12m`, red for a lease, yellow for a waiter |
 | `request.reprioritized` | `from`, `to` | `batch → interactive` |
 | `request.waiting_long` | `waited` | `waiting 45m` (yellow) |
-| `lease.yield_asked`, `lease.yielded`, `lease.yield_withdrawn` | `for.label`, `to.label`, `count` | `for prof51`, `to prof51` |
+| `lease.yield_asked`, `lease.yield_withdrawn` | `for.label` | `for prof51`, `yield not needed` |
+| `lease.yielded` | `count`, `to.label`, `lock` | `to prof51`, or `waiting for /tmp/l` |
+| `lease.lock_ended` | `lock`, `why`, `waited` | `took /tmp/l · 12s` |
+| `request.head_dropped` | `count`, `late`, `blocked_by` | `blocked 30m · lint` (yellow) |
 | `capacity.changed`, `order.changed`, `reap.skipped` | `slots`, `mode`, `saved`, `reason` | `8 slots · fixed`, `reset` |
 | any other | its details | the kind, then `key=value` pairs |
 
