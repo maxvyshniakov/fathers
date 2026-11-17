@@ -145,11 +145,9 @@ def yield_lease(path: Path) -> tuple[dict[str, Any], dict[str, Any]] | None:
     changing nothing but a stale request, when nothing asked. Its client then waits to be held again
     (client.yield_now())."""
     directory = path.parent.parent
-    with _state.locked(directory):
-        try:
-            entry = json.loads(path.read_text())
-        except (OSError, ValueError):
-            raise _config.SlotError("the lease vanished from the queue") from None
+    with _state.editing(path) as entry:
+        if entry is None:
+            raise _config.SlotError("the lease vanished from the queue")
         request = _state.asked(path)
         if not _entry.is_held(entry) or request is None:
             return None
@@ -241,10 +239,8 @@ def yield_for_lock(path: Path, lock: str, owner: tuple[int, str], idle: bool) ->
     queue grants at once: "yielded". Otherwise other work runs on its slots: it keeps them and only says what it
     waits for (entry.to_lock_noted()): "noted". None, changing nothing, when the lease is not held."""
     directory = path.parent.parent
-    with _state.locked(directory):
-        try:
-            entry = json.loads(path.read_text())
-        except (OSError, ValueError):
+    with _state.editing(path) as entry:
+        if entry is None:
             return None
         if not _entry.is_held(entry):
             return None
@@ -269,11 +265,9 @@ def lock_taken(path: Path, why: str = "took") -> None:
     under the lease): the mark goes, recorded in queue.log and EVENTS (`lease.lock_ended`); a yielded lease is then
     an ordinary yielded lease in its place, which its client waits to be granted again (client.held_again())."""
     directory = path.parent.parent
-    with _state.locked(directory):
-        try:
-            entry = json.loads(path.read_text())
-        except (OSError, ValueError):
-            raise _config.SlotError("the lease vanished from the queue") from None
+    with _state.editing(path) as entry:
+        if entry is None:
+            raise _config.SlotError("the lease vanished from the queue")
         ended(directory, path, entry, why)
 
 

@@ -14,8 +14,12 @@ import subprocess
 import time
 import unittest
 from typing import Any
+from unittest import mock
 
 from test_slotfather import TOOL, WORK, SlotCase
+
+from slotfather import leases as sf_leases
+from slotfather import process as sf_process
 
 
 class SessionTests(SlotCase):
@@ -124,6 +128,33 @@ class SessionTests(SlotCase):
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertEqual(f"{lease} 4", result.stdout.splitlines()[0])
         self.assertEqual(0, self.inside("perf", "x", "sh", "-c", "exit 3").returncode - 3, "its exit status")
+
+    def test_new_session_work_resumes_a_lease_yielded_for_a_lock(self) -> None:
+        self.start("perf", "--idle", "60")
+        lease_path = _Path(self.session("perf")["lease"])
+        # Seed only the yielded state through the queue transaction. An actual lock waiter needs the detached
+        # session membership check (fathers#183), which is outside the shared waiter's responsibility here.
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            me = os.getpid()
+            self.assertEqual("yielded", sf_leases.yield_for_lock(
+                lease_path, str(self.tmp / "cache.lock"), (me, sf_process.processes()[me][1]), idle=True))
+        other = self.request("other", 1)
+        self.started("other")
+
+        arriving = self.inside("perf", "arriving", background=True)
+        self.wait_for(
+            lambda: any(event["kind"] == "lease.lock_ended" and event["details"]["why"] == "resumed"
+                        for event in self.events_of()), "the new run to resume the session")
+        self.assertEqual("waiting", self.session("perf")["state"], "the other holder still has a slot")
+        self.assertNotIn("start arriving", self.events())
+        self.release("other")
+        self.started("arriving")
+        lease = self.session("perf")
+        self.assertEqual("held", lease["state"])
+        self.assertNotIn("lock", lease)
+        self.release("arriving")
+        for process in (arriving, other):
+            self.finish(process)
 
     def test_an_idle_session_releases_itself(self):
         self.start("perf", "--idle", "1")

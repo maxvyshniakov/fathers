@@ -6,6 +6,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- A command joining a measurement session uses the ordinary lease wait. If the session yielded for a lock,
+  Slotfather requests its slots back and waits for the grant before starting the command. (fathers#161)
+
 - The Settings panel and `slotfather settings --json` expose the timeout for a head blocked by leases with no end
   estimate. (fathers#178)
 
