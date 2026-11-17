@@ -62,6 +62,7 @@ class _Request(TypedDict):
 class Request(_Request, total=False):
     """A QUEUE row: a running lease or a waiting request."""
     ticket: Optional[str]
+    lock: str  # the lock this lease waits on, if any
     served: Optional[str]
     reprioritized: Optional[str]
     yieldable: bool

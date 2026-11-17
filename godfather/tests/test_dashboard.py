@@ -21,6 +21,7 @@ def judged(memory: dict[str, Any]) -> dict[str, Any]:
 
 
 import datetime
+import json
 import os
 import re
 import unittest
@@ -447,6 +448,27 @@ class MouseInputTests(unittest.TestCase):
 
 
 class DetailLayoutTests(unittest.TestCase):
+    def test_lock_wait_in_details_distinguishes_held_and_yielded_slots(self) -> None:
+        from godfather.adapters import slotfather
+
+        tool = load_dashboard()
+        fixture = ROOT / "tests" / "fixtures" / "scene" / "slotfather" / "replies.json"
+        snapshot = json.loads(fixture.read_text())["status --json --full"]["json"]
+        path = "/tmp/build/cache.lock"
+        first_waiter = len(snapshot["dashboard"]["holders"])
+        for selected, queue, disposition in ((0, "holders", "held"), (first_waiter, "waiters", "released")):
+            with self.subTest(queue=queue):
+                entry = snapshot["dashboard"][queue][0]
+                entry["lock"] = path
+                model = slotfather.decode(snapshot)
+                canvas = tool.Canvas(90, 24)
+                tool.draw_detail(canvas, Rect(0, 0, 24, 90), model, selected, None, model["updated"])
+                lines = canvas.render(False).splitlines()
+                self.assertIn("LEASE DETAILS", lines[0])
+                self.assertTrue(any("waiting-for-lock" in line and disposition in line for line in lines))
+                self.assertTrue(any("lock" in line and path in line for line in lines))
+                entry.pop("lock")
+
     def test_waiting_facts_share_one_value_column_with_two_spaces_after_the_longest_label(self) -> None:
         tool = load_dashboard()
         moment = datetime.datetime(2026, 11, 5, 10).astimezone()
