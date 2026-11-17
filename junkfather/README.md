@@ -32,9 +32,9 @@ Copy this into an agent brief:
 > - Need more time: `junkfather extend <id> --ttl 1h`. See what you own: `junkfather list`.
 > - A process you started without junkfather: `junkfather adopt <pid> --ttl 1h`.
 > - Never `kill` a process junkfather lists; use `junkfather reap --id <id>`.
-> - A `run_in_background` Bash call is owned for you: a subagent's ends when it stops or after 2 h
->   (`own.background_ttl`), the main session's when the session ends. Something that must outlive you goes through
->   `junkfather own --keep-for session` instead.
+> - When the background rewriter is enabled, a `run_in_background` Bash call is owned for you. A subagent's
+>   call survives turn ends. Session end reaps it, and the Stop hook or sweep reaps it after its TTL passes
+>   (`own.background_ttl`, 2 h by default). A main-session call has no TTL and is reaped at session end.
 >
 > Something that outlives the command that made it (a booted simulator, a `docker run -d` container, a
 > `tailscale serve --bg` route, a Safari Technology Preview opened with `open -g`): put `--kind` before `--`, and

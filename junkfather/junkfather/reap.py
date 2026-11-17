@@ -24,6 +24,7 @@ reap as `failed` and the entry keeps running.
 from __future__ import annotations
 
 import contextlib
+from enum import Enum
 import os
 import signal
 import time
@@ -42,6 +43,13 @@ from .state import Store
 
 ROUNDS = 3  # reads of the entry's members: a process forked during the grace period is found by the next one
 STOPPED = ("stopped", "killed", "gone")
+
+
+class Lifecycle(str, Enum):
+    """The hook event that scopes a detached reap. Its reason string is for reporting."""
+
+    SUBAGENT_STOP = "SubagentStop"
+    SESSION_END = "SessionEnd"
 
 
 def seen_commands(entry: Entry) -> Dict[Tuple[int, str], str]:
@@ -117,17 +125,21 @@ def holds(entry: Entry, table: _procs.Table, force: bool = False, ours: bool = F
     return found, how
 
 
-def targets_of(store: Store, entry: Entry, table: _procs.Table, force: bool = False
+def targets_of(store: Store, entry: Entry, table: _procs.Table, force: bool = False, *, protect_background: bool = False
                ) -> Tuple[List[_procs.Proc], str]:
     """What a reap of the entry signals: its `members`, and for an adopted entry (`adopt`, a background call's
     shell) less what another active entry holds more firmly (`claimed_elsewhere`): what runs in an adopted shell
     may be owned on its own (an attached `junkfather own --keep-for session` runs in the shell's group), and an
-    entry adopted inside another one's shell is still reaped by its own reap."""
+    entry adopted inside another one's shell is still reaped by its own reap. A subagent turn protects every
+    auto-owned background call, even when it runs under an explicit entry being reaped."""
     found, how = members(entry, table, force=force)
     if entry.get("mode") == "adopted" and found:
         mine, _ = holds(entry, table, force)
         theirs = claimed_elsewhere(store, entry, table)
         found = [p for p in found if not outranked(mine.get(p.pid, (p, BELOW))[1], theirs.get(p.pid))]
+    if protect_background and found:
+        protected = claimed_elsewhere(store, entry, table, background_only=True)
+        found = [p for p in found if p.pid not in protected]
     return found, how
 
 
@@ -137,7 +149,8 @@ def outranked(level: int, other: Optional[Tuple[int, bool]]) -> bool:
     return other is not None and (other[0] > level or (other[0] == level and other[1]))
 
 
-def claimed_elsewhere(store: Store, entry: Entry, table: _procs.Table) -> Dict[int, Tuple[int, bool]]:
+def claimed_elsewhere(store: Store, entry: Entry, table: _procs.Table, *, background_only: bool = False
+                      ) -> Dict[int, Tuple[int, bool]]:
     """pid -> (the firmest hold another active process entry has on it, whether that entry is newer than `entry`):
     its `holds`, and its live supervisor (pid and start time) held DIRECT with its descendants BELOW."""
     claimed: Dict[int, Tuple[int, bool]] = {}
@@ -150,8 +163,11 @@ def claimed_elsewhere(store: Store, entry: Entry, table: _procs.Table) -> Dict[i
         if other.get("id") == entry.get("id") or other.get("state") not in _entry.ACTIVE \
                 or other.get("mode") == "resource":
             continue
+        if background_only and other.get("auto") != _entry.AUTO_BACKGROUND:
+            continue
         newer = float(other.get("created") or 0) > created
-        for pid, (_, level) in holds(other, table)[0].items():
+        # For exclusion only, protect a process that exec'd since its watcher last recorded the command.
+        for pid, (_, level) in holds(other, table, force=background_only)[0].items():
             claim(pid, level, newer)
         supervisor = other.get("supervisor") or {}
         pid = supervisor.get("pid")
@@ -232,7 +248,7 @@ Stopper = Callable[[List[_procs.Proc], float], Dict[str, Any]]  # stop(), or a t
 def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None, dry_run: bool = False,
          force: bool = False, table: Optional[_procs.Table] = None, stopper: Optional[Stopper] = None,
          actor: Optional[Dict[str, Any]] = None, reader: Optional[Callable[[], _procs.Table]] = None,
-         report_failure: bool = True) -> Dict[str, Any]:
+         report_failure: bool = True, *, lifecycle: Optional[Lifecycle] = None) -> Dict[str, Any]:
     """End one running entry. Returns {"id", "result", "reason", "pids", "how"}; result "skipped" when the entry
     is not running (someone else reaped it, it exited, it is still starting), "would-stop" in a dry run. `table`
     serves the first read only; every later round reads the machine again (`reader`). `report_failure` False: a
@@ -248,7 +264,7 @@ def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None
             return {"id": entry_id, "result": "skipped", "reason": f"already {entry.get('state')}", "pids": [],
                     "how": ""}
         from . import resources
-        return resources.reap(store, entry, reason, grace, dry_run, actor)
+        return resources.reap(store, entry, reason, grace, dry_run, actor, lifecycle=lifecycle)
     if entry.get("state") == _entry.STARTING or (entry.get("state") == _entry.RUNNING and not entry.get("pid")):
         return {"id": entry_id, "result": "skipped", "reason": "still starting", "pids": [], "how": ""}
     if entry.get("state") != _entry.RUNNING:
@@ -265,7 +281,8 @@ def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None
         return {"id": entry_id, "result": "failed", "reason": f"{reason}; {error}", "pids": [], "how": ""}
     if not dry_run:
         entry = join_daemons(store, entry, table)
-    targets, how = targets_of(store, entry, table, force=force)
+    protect_background = lifecycle == Lifecycle.SUBAGENT_STOP
+    targets, how = targets_of(store, entry, table, force=force, protect_background=protect_background)
     if dry_run:
         return {"id": entry_id, "result": "would-stop" if targets else "gone", "reason": reason,
                 "pids": [p.pid for p in targets], "how": how}
@@ -278,7 +295,7 @@ def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None
     pids: List[int] = []
     outcome: Dict[str, Any] = {"result": "gone", "signalled": [], "left": []}
     results: List[str] = []
-    targets, how = targets_of(store, entry, table, force=force)
+    targets, how = targets_of(store, entry, table, force=force, protect_background=protect_background)
     for round_ in range(ROUNDS):
         if round_:
             try:
@@ -287,7 +304,7 @@ def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None
                 outcome = {"result": "failed", "signalled": [], "left": pids, "error": str(error)}
                 results.append("failed")
                 break
-            targets, _ = targets_of(store, entry, table, force=force)
+            targets, _ = targets_of(store, entry, table, force=force, protect_background=protect_background)
         if not targets:
             break
         pids += [p.pid for p in targets if p.pid not in pids]
@@ -346,20 +363,20 @@ def reap_unowned(store: Store, pid: int, table: _procs.Table, force: bool, reaso
              "how": "unowned, forced"}]
 
 
-def matches_owner(entry: Entry, owner: str, agent: Optional[str], *, exclude_auto: Optional[str] = None) -> bool:
+def matches_owner(entry: Entry, owner: str, agent: Optional[str], *, lifecycle: Optional[Lifecycle] = None) -> bool:
     """`reap --owner OWNER [--agent AGENT]`: a session's entries (not those handed away), or a subagent's entries
     not kept for the session. The SubagentStop hook also excludes its auto-owned background calls."""
     who = entry.get("owner") or {}
     if agent:
         return (who.get("session") == owner and who.get("agent") == agent and entry.get("keep") == "owner"
-                and (exclude_auto is None or entry.get("auto") != exclude_auto))
+                and (lifecycle != Lifecycle.SUBAGENT_STOP or entry.get("auto") != _entry.AUTO_BACKGROUND))
     if who.get("session") == owner:
         return True
     return who.get("agent") == owner and entry.get("keep") == "owner"
 
 
 def select(store: Store, ids: List[str], owner: Optional[str], agent: Optional[str], lane: Optional[str],
-           table: Optional[_procs.Table] = None, pid: Optional[int] = None, *, exclude_auto: Optional[str] = None
+           table: Optional[_procs.Table] = None, pid: Optional[int] = None, *, lifecycle: Optional[Lifecycle] = None
            ) -> Tuple[List[Entry], List[Dict[str, Any]]]:
     """The running or starting entries one `reap` selector names (--id, --owner, --lane, or --pid with `table`),
     and a result row for each id given that names no such entry."""
@@ -374,7 +391,7 @@ def select(store: Store, ids: List[str], owner: Optional[str], agent: Optional[s
                             "how": ""})
         return [e for e in running if e["id"] in ids], missing
     if owner:
-        return [e for e in running if matches_owner(e, owner, agent, exclude_auto=exclude_auto)], missing
+        return [e for e in running if matches_owner(e, owner, agent, lifecycle=lifecycle)], missing
     if lane:
         return [e for e in running if (e.get("owner") or {}).get("lane") == lane], missing
     assert table is not None

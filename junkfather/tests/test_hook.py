@@ -21,8 +21,8 @@ class PlanTests(Case):
         self.assertIsNone(hook.plan({"hook_event_name": "SubagentStop", "session_id": "s1", "agent_id": "a1"},
                                     self.store))
         self.entry("j2", agent="a1")
-        self.assertEqual(["reap", "--owner", "s1", "--agent", "a1", "--reason", "subagent-stop", "--quiet", "--via",
-                          "hook"],
+        self.assertEqual(["reap", "--owner", "s1", "--agent", "a1", "--lifecycle", "SubagentStop",
+                          "--reason", "subagent-stop", "--quiet", "--via", "hook"],
                          hook.plan({"hook_event_name": "SubagentStop", "session_id": "s1", "agent_id": "a1"},
                                    self.store))
 

@@ -86,8 +86,8 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
-- Auto-owned background Bash calls survive `SubagentStop`, which fires even when a subagent ends its turn to wait
-  for the call. TTL and session-end cleanup still apply (fathers#176).
+- Auto-owned background Bash calls survive `SubagentStop`, even when the hook reaps an explicitly owned runner
+  that started them. TTL and session-end cleanup still apply (fathers#176).
 - Usage errors name an unknown option even when it follows an option with a missing value (fathers#175).
 
 ## 0.1.0 - 2026-11-12

@@ -27,8 +27,6 @@ from . import owner as _owner
 from . import reap as _reap
 from .state import Store, as_dict, as_list
 
-SUBAGENT_STOP = "subagent-stop"
-
 
 def plan(data: Dict[str, Any], store: Store, now: Optional[float] = None) -> Optional[List[str]]:
     """The reap arguments this event calls for, or None when there is nothing of its owner to reap."""
@@ -38,19 +36,20 @@ def plan(data: Dict[str, Any], store: Store, now: Optional[float] = None) -> Opt
         return None
     running = [e for e in store.entries() if e.get("state") == _entry.RUNNING
                and (e.get("owner") or {}).get("session") == session]
-    if event == "SubagentStop":
+    if event == _reap.Lifecycle.SUBAGENT_STOP:
         agent = data.get("agent_id")
         if not isinstance(agent, str) or not agent:
             return None
-        if not any(_reap.matches_owner(e, session, agent, exclude_auto=_background.AUTO) for e in running):
+        lifecycle = _reap.Lifecycle.SUBAGENT_STOP
+        if not any(_reap.matches_owner(e, session, agent, lifecycle=lifecycle) for e in running):
             return None
-        return ["reap", "--owner", session, "--agent", agent, "--reason", SUBAGENT_STOP, "--quiet",
-                "--via", "hook"]
-    if event == "SessionEnd":
+        return ["reap", "--owner", session, "--agent", agent, "--lifecycle", lifecycle.value,
+                "--reason", "subagent-stop", "--quiet", "--via", "hook"]
+    if event == _reap.Lifecycle.SESSION_END:
         if not running:
             return None
-        return ["reap", "--owner", session, "--reason", f"session-end ({data.get('reason') or '?'})", "--quiet",
-                "--via", "hook"]
+        return ["reap", "--owner", session, "--lifecycle", _reap.Lifecycle.SESSION_END.value,
+                "--reason", f"session-end ({data.get('reason') or '?'})", "--quiet", "--via", "hook"]
     if event == "Stop":
         if not any(now >= float(e.get("expires") or 0) for e in running):
             return None

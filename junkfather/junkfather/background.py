@@ -51,7 +51,6 @@ from .entry import Entry
 from .state import Store, as_dict, read_json, write_atomic
 
 VERB = "background"
-AUTO = "background"  # entry["auto"] of what this module adopts
 QUIET = " >/dev/null 2>&1 </dev/null"
 
 
@@ -179,7 +178,7 @@ def adopt(store: Store, tool_use: str, env: Mapping[str, str], now: Optional[flo
     from .launch import adopt_process
     entry = adopt_process(store, parent, table, ttl, "owner", claim.get("description") or None, who,
                           argv=[command] if isinstance(command, str) else None, own_parent=True,
-                          extra={"auto": AUTO, "tool_use_id": tool_use, **({} if who.get("agent") else
+                          extra={"auto": _entry.AUTO_BACKGROUND, "tool_use_id": tool_use, **({} if who.get("agent") else
                                                                             {"no_ttl": True})}, now=now)
     (watcher or start_watcher)(store, dict(entry))
     return 0

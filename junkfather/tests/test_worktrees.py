@@ -312,6 +312,11 @@ class OwnedTests(WorktreeCase):
         env = self.claude_env("s1", claude)
         self.own(clean, env=env)
         entries = {(e.get("resource") or {}).get("id"): e["id"] for e in self.store.entries()}
+        manual = self.cli("reap", "--id", entries[str(clean)], "--reason", "session-end (operator note)",
+                          "--dry-run", "--json", env=env)
+        self.assertEqual(0, manual.returncode, manual.stderr)
+        (row,) = json.loads(manual.stdout)["results"]
+        self.assertEqual("would-fail", row["result"], "manual reaps still honor the process using the worktree")
         result = self.cli("own-resource", "--kind", "worktree", "--id", str(dirty), "--ttl", "1h", env=env)
         self.assertEqual(0, result.returncode, result.stderr)
         (dirty / "notes.txt").write_text("unsaved")

@@ -16,7 +16,7 @@ An entry is one owned process group, `entries/<id>.json` under `$JUNKFATHER_STAT
 | `daemons` | `[pid, start, command]` of each detached agent-browser daemon its processes started (Sweep); a reap takes them with their trees |
 | `known_seen` | `[pid, start, command]` for the same members: the command each showed when last seen (absent in entries written before it: those members are checked by pid and start only) |
 | `ttl`, `expires` | seconds, and the epoch at which the entry is reaped whatever its owner |
-| `keep` | `owner`: ends with the agent that started it; `session`: survives a subagent's stop, ends with the session |
+| `keep` | For explicit ownership, `owner` cleans up at the subagent's stop and `session` lasts until session end. Auto-owned background shells carry `owner` and survive subagent turns. |
 | `owner` | `{kind: claude\|codex\|shell, session, agent, agent_type, pid, pid_start, lane}` |
 | `handed` | each hand-over: `{at, from, to}` |
 | `auto` | `background`: a background Bash call's shell, owned by the PreToolUse hook's rewrite (Background Bash calls); absent otherwise |
@@ -271,8 +271,9 @@ command and `label` its description. A subagent's call has the TTL of `own.backg
 none (`no_ttl: true`, `expires` a hundred years on, which older readers take as not expired) and ends with the
 session. The agent's command then runs in the same shell: its output, exit status and shell state are unchanged, and
 the line prints nothing. `SubagentStop` fires at the end of a turn, including a turn that ends to wait for this call.
-The entry survives it. Cleanup happens at `SessionEnd`, at the TTL (the `Stop` hook or the sweep), or when the
-sweep finds the session is gone. An explicit `reap` can still stop the entry.
+The entry survives it, including when it runs inside an explicit entry being reaped on that turn. Cleanup happens
+at `SessionEnd`, at the TTL (the `Stop` hook or the sweep), or when the sweep finds the session is gone. An
+explicit `reap` can still stop the entry.
 `list` and `status` show the owner with its subagent; rows carry
 `agent_type`, `auto` and `no_ttl`.
 
@@ -394,7 +395,7 @@ Slotfather or Lanefather yet.
 | Moves to junkfather | Stays |
 | --- | --- |
 | Ownership of agent-started long-lived processes: who started it, until when | Slotfather sweep's `removed`, `orphan` and `dev-server` classes, as the net for processes started without junkfather |
-| Ending them at their owner's end (SubagentStop, SessionEnd) and at their TTL | Slotfather's lease guard, `procs`, containers, memory report and self-matching waits |
+| Ending them at session end or TTL, and ending explicit `keep: owner` entries at subagent turn end | Slotfather's lease guard, `procs`, containers, memory report and self-matching waits |
 | Orphan detection by owner session (registry, recorded process) instead of by process kind and age | Lanefather `done`/`gc` asking `slotfather sweep --pid` (via the project's `process_scan`) before removing a worktree |
 | Reporting unowned scratchpad and worktree processes (the Firefox case, which no Slotfather class matched) | Straylight's janitor (scratchpads, disk, Docker listing) and lane-stop hook |
 

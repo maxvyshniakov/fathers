@@ -71,6 +71,7 @@ EXITED = "exited"
 REAPED = "reaped"
 GONE = "gone"
 FAILED = "failed"
+AUTO_BACKGROUND = "background"
 
 STATES = (STARTING, RUNNING, REAPING, EXITED, REAPED, GONE, FAILED)
 LIVE = (RUNNING, REAPING)  # a resource is held: no second entry may own it
