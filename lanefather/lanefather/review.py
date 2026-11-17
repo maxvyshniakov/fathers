@@ -133,8 +133,32 @@ def documentation_only(paths: list[str]) -> bool:
                for p in paths)
 
 
+def fix_parent_review(lane_id: str, common: str, refusal: str) -> dict[str, Any]:
+    """A landed lane in this repository with a finished review and an open finding."""
+    parent = state.read_json(state.record_path(lane_id))
+    if parent is None:
+        raise LaneError(f"{refusal}: no lane by that name")
+    landed: dict[str, Any] = parent.get("landed") or {}
+    if parent.get("status") not in state.LANDED or not landed.get("merge"):
+        raise LaneError(f"{refusal}: lane {lane_id} is {parent.get('status')}, not landed; a fix lane fixes the "
+                        "review findings of landed lanes")
+    if parent.get("common_dir") != common:
+        raise LaneError(f"{refusal}: lane {lane_id} is from another repository")
+    receipt = state.read_json(state.receipt_path(lane_id, "review"))
+    if (not receipt or receipt.get("status") != "finished"
+            or not any(not finding.get("mark") for finding in receipt.get("findings") or ())):
+        raise LaneError(f"{refusal}: lane {lane_id} has no finished review with unmarked findings")
+    return receipt
+
+
 def review_exemption(record: Record) -> str | None:
     parents = state.fix_parents(record)
+    try:
+        for parent in parents:
+            fix_parent_review(parent, record["common_dir"], "review exemption refused")
+    except LaneError:
+        # Older checkouts could register a fix without validating the parent. Review those lanes normally.
+        parents = []
     if len(parents) == 1:
         return f"the fix round of {parents[0]}'s review, which nobody reviews again"
     if parents:
@@ -588,17 +612,16 @@ def hand_over(args: Any) -> int:
     review of its own."""
     prog = config.prog()
     record = state.load(args.id)
-    receipt = state.read_json(state.receipt_path(args.id, "review"))
-    if not receipt or receipt.get("status") != "finished" or not receipt.get("findings"):
-        raise LaneError(f"hand-over refused: lane {args.id} has no finished review with findings")
+    receipt = fix_parent_review(args.id, record["common_dir"], "hand-over refused")
     if record["status"] not in ("landed", "released") or not record.get("worktree") or not os.path.isdir(
             record["worktree"]):
         raise LaneError(f"hand-over refused: lane {args.id} is {record['status']} and has no worktree to hand over")
     fix_id = f"{args.id}-review-fixes"
     main = main_checkout(record["common_dir"])
     fix_paths, held = fix_claims(receipt, fix_id, record["common_dir"])
-    fix, rules = lanes.prepare(main, fix_id, record["ticket"], fix_paths, fix_base(record, main), [])
-    fix.update(review_fix_of=args.id, worktree=record["worktree"])
+    fix, rules = lanes.prepare(main, fix_id, record["ticket"], fix_paths, fix_base(record, main), [],
+                               parents=[args.id])
+    fix["worktree"] = record["worktree"]
     lanes.register(fix, rules, args.force_reason, False)
     for line in held:
         print(f"lane: {line}")

@@ -9,12 +9,13 @@ replaces it), receipts beside it, and every action and override in ledger.log. R
 from __future__ import annotations
 
 import argparse
-from collections.abc import Sequence
 from pathlib import Path
 import re
 import sys
 import textwrap
 from typing import Any, NoReturn
+
+from fathers_common.cli import UsageParser
 
 from . import (
     __version__,
@@ -113,7 +114,7 @@ COMMANDS: dict[str, Command] = {
 WIDTH = 78
 
 
-class Parser(argparse.ArgumentParser):
+class Parser(UsageParser):
     """An argparse parser whose usage errors follow docs/cli.md: `<tool>: <reason>` and one more line; for a command,
     that line gives its usage, one example and the pointer to its --help, so an agent recovers without a help turn
     (fathers#175)."""
@@ -123,7 +124,7 @@ class Parser(argparse.ArgumentParser):
         self.row, self.tool = row, tool
         self.children: dict[str, Parser] = {}
 
-    def error(self, message: str) -> NoReturn:
+    def usage_error(self, message: str) -> NoReturn:
         unknown = re.match(r"argument <command>: invalid choice: '?([^' ]+)'?", message)
         if unknown:
             message = f"unknown command '{unknown.group(1)}'"
@@ -134,31 +135,8 @@ class Parser(argparse.ArgumentParser):
             pointer = f"Usage: {self.prog} {self.row.usage}.{example} Try '{self.prog} --help'."
         self.exit(2, f"{self.tool}: {message}\n{pointer}\n")
 
-    def unknown_option(self, words: Sequence[str], *, until_command: bool = False) -> str | None:
-        """The first option among `words` this parser does not take (argparse would name it only after a missing
-        argument); `until_command` stops at the first word that is not an option, the command."""
-        expects_value = False
-        for word in words:
-            if word == "--":
-                return None
-            if expects_value:
-                expects_value = False
-                continue
-            if not word.startswith("-") or word == "-" or re.fullmatch(r"-\d+(\.\d+)?", word):
-                if until_command:
-                    return None
-                continue
-            name = word.split("=", 1)[0]
-            if not word.startswith("--") and len(word) > 2:
-                name = word[:2]  # -mMESSAGE: a short option and its value
-            action = self._option_string_actions.get(name)
-            if action is None and name.startswith("--"):
-                matches = [o for o in self._option_string_actions if o.startswith(name)]
-                action = self._option_string_actions[matches[0]] if len(matches) == 1 else None
-            if action is None:
-                return name
-            expects_value = until_command and "=" not in word and action.nargs != 0
-        return None
+    def option_name(self, name: str) -> str:
+        return repr(name)
 
 
 def add(root: Parser, commands: Any, name: str, details: str = "") -> Parser:
@@ -167,6 +145,7 @@ def add(root: Parser, commands: Any, name: str, details: str = "") -> Parser:
     prog = config.prog()
     text = row.summary[0].upper() + row.summary[1:] + "." + (" " + details if details else "")
     child: Parser = commands.add_parser(name, help=row.summary, row=row, tool=prog, prog=f"{prog} {name}",
+                                        parent=root,
                                         usage=f"%(prog)s {row.usage}", description=textwrap.fill(text, WIDTH),
                                         epilog=f"example: {prog} {name} {row.example}".rstrip(),
                                         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -416,20 +395,12 @@ def config_option(argv: list[str]) -> str | None:
 def parse(argv: list[str]) -> argparse.Namespace:
     """The arguments, or a usage error (exit 2) that names the word it refuses, before any missing argument."""
     root = parser()
-    unknown = root.unknown_option(argv, until_command=True)
-    if unknown:
-        root.error(f"unknown option '{unknown}'")
-    position = next((i for i, word in enumerate(argv) if word in COMMANDS
-                     and (i == 0 or argv[i - 1] != "--config")), None)
-    if position is not None:
-        chosen = command_parser(root, argv[position])
-        # project-hook passes what follows the hook's name to the hook.
-        unknown = chosen.unknown_option(argv[position + 1:], until_command=argv[position] == "project-hook")
-        if unknown:
-            chosen.error(f"unknown option '{unknown}'")
     args, extra = root.parse_known_args(argv)
     if extra:
-        command_parser(root, args.command).error(f"unrecognized arguments: {' '.join(extra)}")
+        chosen = command_parser(root, args.command)
+        if chosen.rejects_option(extra[0]):
+            chosen.unknown_option(extra[0])
+        chosen.usage_error(f"unrecognized arguments: {' '.join(extra)}")
     return args
 
 

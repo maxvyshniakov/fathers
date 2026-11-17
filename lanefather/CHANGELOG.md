@@ -17,9 +17,12 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 - A batch fix lane is exempt from review (fathers#174): `lanefather start ID --fix-of A,B,C` names the landed lanes
   whose review findings it fixes, and its land records `review.exempted` instead of starting a review, as for a
   `review --fix-lane` lane; `review A --mark N fixed:ID` marks the parents' findings with its merge as before.
-  `start` warns when an id that reads `review-fixes` names no parent. The record keeps `review_fix_of` a string for
-  one parent and makes it a list for several; an older Lanefather's land exempts such a lane too.
-  `review --fix-lane` stays one lane: it hands over that lane's worktree.
+  Each parent must have landed and have a finished review with unmarked findings. A lane started with `--fix-of`
+  runs its own check plan even with one parent. `start` warns when an id that reads `review-fixes` names no parent.
+  The record keeps the first parent's ID in the string `review_fix_of` for older installs and lists every batch
+  parent in `review_fix_of_all`. Older Lanefather versions treat the first parent as a single-parent fix.
+  Existing list-valued records are normalized when saved by this version.
+  `review --fix-lane` hands over one lane's worktree.
 
 - Two routine cleanups without `--force-reason` (fathers#167). `lanefather drop ID` removes a planned or active lane
   that adds nothing to its base (no commits beyond it, its tree already the base's, or commits that change nothing)
@@ -174,6 +177,9 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   lanefather` from its root installs it, and its documentation links point there.
 
 ### Fixed
+
+- Usage errors follow argparse's handling of option values. A quoted merge message or force reason starting with
+  a dash works again (fathers#175).
 
 - `done` no longer refuses a landed lane because short-lived processes elsewhere on the machine came and went during
   the process query (fathers#158): an answer with unknown pids is asked again up to four times, and a refusal names

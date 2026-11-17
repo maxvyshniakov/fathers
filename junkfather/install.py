@@ -35,6 +35,7 @@ sys.dont_write_bytecode = True
 MIN_PYTHON = (3, 9)
 KEEP_RELEASES = 3
 SOURCE = Path(__file__).resolve().parent
+COMMON = SOURCE.parent / "common" / "fathers_common"
 LAUNCHER = """#!{python}
 # junkfather's command (install.py): the release share/current points at, on the interpreter it was installed for.
 import sys
@@ -70,7 +71,7 @@ def commit() -> str:
     if head.returncode:
         raise InstallError("install from a committed Git checkout")
     changed = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all", "--", "junkfather",
-                              "install.py"], cwd=SOURCE, capture_output=True, text=True, env=environment)
+                              "install.py", str(COMMON)], cwd=SOURCE, capture_output=True, text=True, env=environment)
     if changed.returncode or changed.stdout.strip():
         raise InstallError("uncommitted shipping inputs: commit them before installing; nothing was changed")
     return head.stdout.strip()
@@ -99,6 +100,7 @@ def install(share: Path, bin_dir: Path, python: str) -> Path:
         shutil.rmtree(pending, ignore_errors=True)
         shutil.copytree(SOURCE / "junkfather", pending / "junkfather",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        shutil.copytree(COMMON, pending / COMMON.name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         shutil.copy2(SOURCE / "CHANGELOG.md", pending / "CHANGELOG.md")
         (pending / "junkfather" / "COMMIT").write_text(built + "\n")
         pending.rename(release)
