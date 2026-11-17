@@ -21,7 +21,7 @@ Definitions: [glossary](../GLOSSARY.md). Naming and wire aliases: [terminology](
 | `runtype` | Expected durations per run type (fathers#106) with their own cache, outliers and trends; `kind()` and `family()`, the command kind and label family the estimates key requests by. |
 | `queue` | The queue as stored, read (fathers#36): the process table a look is judged on, reaping, the earlier queues' holders, unknown live entries, the lease this process runs under, and the lazy estimator. |
 | `leases` | The queue's transactions (fathers#37), each short and under the lock: a new request (`enqueue()`), `grant()`, yield requests, yields (also for a lock: `yield_for_lock()`, `lock_taken()`), `reprioritize()` and `release()`. |
-| `client` | The waiting client: `Lease`, `acquire()`, `held_again()` and `yield_now()`, one wait loop (`wait_held()`) with the poll settings read once. The library's entry point. |
+| `client` | The waiting client: `Lease`, `acquire()`, `held_again()` and `yield_now()`, one wait loop (`wait_until()`) with the poll settings read once. Requests share `wait_held()`, including runs joining a measurement session. The library's entry point. |
 | `runner` | The command runner: `execute()` (environment, SIGTERM/SIGHUP forwarding, wait4, the usage `Watch`) and `run()`, `slotfather run`. |
 | `lockwait` | `slotfather lock PATH -- COMMAND` (fathers#159): an flock whose wait gives the enclosing lease's slots up. |
 | `usage` | Process-tree accounting and machine sampling while work runs. |

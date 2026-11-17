@@ -1,18 +1,16 @@
 """The waiting client (fathers#37): a request's lease (Lease), acquire() that queues it and waits for its grant,
-held_again() that waits for a yielded lease to be granted again, and yield_now(); both waits are one loop
-(wait_held()), with the poll settings read once (config.poll_settings()). The queue transactions they make are
-`leases`'; the command runner is `runner`."""
+held_again() that waits for a yielded lease to be granted again, and yield_now(). Their waits share wait_until(),
+which reads config.poll_settings() once. The queue transactions live in `leases` and the command runner in `runner`."""
 from __future__ import annotations
 
 import contextlib
-import json
 import os
 from pathlib import Path
 import signal
 import sys
 import threading
 import time
-from typing import Any, Callable
+from typing import Any, Callable, TypeVar
 
 from . import config as _config
 from . import entry as _entry
@@ -24,58 +22,91 @@ from . import settings as _settings
 from . import state as _state
 
 
+T = TypeVar("T")
+
+
 def read(path: Path) -> dict[str, Any]:
     """The request's entry as written (whole, by rename: no lock needed); SlotError when it is gone."""
-    try:
-        current = json.loads(path.read_text())
-        current["state"]
-    except (OSError, ValueError, KeyError, TypeError):
-        raise _config.SlotError("the lease vanished from the queue") from None
+    current = _state.read_entry(path)
+    if current is None or "state" not in current:
+        raise _config.SlotError("the lease vanished from the queue")
     return current
+
+
+def wait_until(ready: Callable[[], T | None], *, refresh: Callable[[], str | None] | None = None,
+               deadline: float | None = None, between: Callable[[str | None], None] | None = None,
+               changed: Callable[[str | None], None] | None = None, back_off: bool = False,
+               polling: tuple[float, float] | None = None) -> T | None:
+    """Poll a readiness check. Queue refreshes grow apart while the reason stays the same. A waiter can report
+    or give up between checks. A deadline bounds pauses and returns None if it comes first."""
+    poll, poll_max = polling or _config.poll_settings()
+    said, interval, look, waiting = None, poll, 0.0, None
+    while True:
+        if refresh is not None and time.monotonic() >= look:
+            waiting = refresh()
+            interval = min(interval * 1.5, poll_max) if back_off or waiting == said else poll
+            look = time.monotonic() + interval
+        found = ready()
+        if found is not None:
+            return found
+        if deadline is not None and time.monotonic() >= deadline:
+            return None
+        if between is not None:
+            between(waiting)
+        if not back_off and waiting != said:
+            if changed is not None:
+                changed(waiting)
+            said = waiting
+        now = time.monotonic()
+        if deadline is not None and now >= deadline:
+            return None
+        pause = poll if refresh is None else min(poll, max(0.0, look - now))
+        time.sleep(pause if deadline is None else min(pause, deadline - now))
 
 
 def wait_held(path: Path, again: bool = False, deadline: float | None = None,
               between: Callable[[str | None], None] | None = None,
-              changed: Callable[[str | None], None] | None = None) -> dict[str, Any]:
-    """Waits until the request at `path` is held and returns its entry: the one waiter loop. It checks its own
-    entry every SLOTFATHER_POLL seconds and looks over the queue (a grant under the lock, which runs ps) less often
-    while the reason it waits stays the same, up to SLOTFATHER_POLL_MAX; a release grants at once, so only reaping
-    a crashed holder and memory recovering wait for a look. A look without a process table to trust reaps and
-    grants nothing, and the request keeps its place. `again`: a yielded lease (held_again()), settled under the lock
-    (a lease an older client granted is resumed there) and its looks growing apart whatever they say. Otherwise
-    `between(reason)` runs after each check that finds it waiting (it may raise to give up; `deadline` bounds the
-    pauses) and `changed(reason)` when the reason it waits for changed."""
+              changed: Callable[[str | None], None] | None = None, *,
+              admit: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
+              timeout_error: Callable[[str | None], _config.SlotTimeout] | None = None) -> dict[str, Any]:
+    """Wait for the request to hold its slots. Queue refreshes grant and reap only with a trusted process table.
+    A yielded lease is settled under the lock, including one an older client granted. A session run supplies
+    `admit` so observing a hold and recording the run can be rechecked together. On expiry, `timeout_error`
+    can include the most recent queue reason in the caller's diagnostic."""
     directory = path.parent.parent
-    poll, poll_max = _config.poll_settings()
-    said, interval, look, waiting = None, poll, 0.0, None
-    while True:
-        if time.monotonic() >= look:
-            with _state.locked(directory):
-                with contextlib.suppress(_config.SlotError if again else _config.ProcessTableError):
-                    waiting = _leases.grant(directory, _queue.process_table(directory))
-                if again:
-                    entry = read(path)
-                    if _entry.is_held(entry):
-                        if "yielded_at" in entry:  # an older client granted it
-                            _entry.resume(entry)
-                            _state.write(path, entry)
-                        return entry
-            interval = min(interval * 1.5, poll_max) if again or waiting == said else poll
-            look = time.monotonic() + interval
+    reason = None
+
+    def refresh() -> str | None:
+        nonlocal reason
+        with _state.locked(directory):
+            with contextlib.suppress(_config.SlotError if again else _config.ProcessTableError):
+                reason = _leases.grant(directory, _queue.process_table(directory))
+        return reason
+
+    def ready() -> dict[str, Any] | None:
         current = read(path)
-        if _entry.is_held(current):
-            if again:
-                look = 0.0  # held: settle it under the lock at once
-                continue
+        if admit is not None:
+            return admit(current)
+        if not _entry.is_held(current):
+            return None
+        if not again:
             return current
-        if between is not None:
-            between(waiting)
-        if not again and waiting != said:
-            if changed is not None:
-                changed(waiting)
-            said = waiting
-        pause = min(poll, max(0.0, look - time.monotonic()))
-        time.sleep(pause if deadline is None else max(0.0, min(pause, deadline - time.monotonic())))
+        with _state.editing(path) as latest:
+            if latest is None:
+                raise _config.SlotError("the lease vanished from the queue")
+            if not _entry.is_held(latest):
+                return None
+            if "yielded_at" in latest:  # an older client granted it
+                _entry.resume(latest)
+                _state.write(path, latest)
+            return latest
+
+    found = wait_until(ready, refresh=refresh, deadline=deadline, between=between, changed=changed, back_off=again)
+    if found is None:
+        if timeout_error is not None:
+            raise timeout_error(reason)
+        raise _config.SlotTimeout("the lease did not get its slots before the deadline")
+    return found
 
 
 def held_again(path: Path) -> None:
@@ -213,9 +244,11 @@ def acquire(count: int | str, label: str, command: str = "", out: Any = sys.stde
     warned: list[float] = []  # when it last said it waits long (WARN_REPEAT)
     said: list[str | None] = [None]  # the reason it last said it waits for
 
-    def between(waiting: str | None) -> None:
-        if deadline is not None and time.monotonic() >= deadline:
-            raise _config.SlotTimeout(f"no {count} slot(s) within {wait:g} s: {waiting or 'earlier requests first'}")
+    def timeout_error(waiting: str | None) -> _config.SlotTimeout:
+        assert wait is not None  # a deadline exists only for a bounded wait
+        return _config.SlotTimeout(f"no {count} slot(s) within {wait:g} s: {waiting or 'earlier requests first'}")
+
+    def between(_waiting: str | None) -> None:
         warn = float(_settings.order_settings(directory).get("warn_wait") or 0)
         if warn and time.monotonic() - queued >= warn and (not warned or
                                                           time.monotonic() - warned[-1] >= _config.WARN_REPEAT):
@@ -239,7 +272,7 @@ def acquire(count: int | str, label: str, command: str = "", out: Any = sys.stde
         said[0] = waiting
 
     try:
-        current = wait_held(path, deadline=deadline, between=between, changed=changed)
+        current = wait_held(path, deadline=deadline, between=between, changed=changed, timeout_error=timeout_error)
         if isinstance(current.get("count"), int) and current["count"] >= 1:
             count = lease.count = current["count"]  # the capacity changed while it waited (plan())
         if said[0]:

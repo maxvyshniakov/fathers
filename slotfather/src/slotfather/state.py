@@ -86,15 +86,28 @@ def locked(directory: Path):
         yield
 
 
+def read_entry(path: Path) -> dict[str, Any] | None:
+    """An entry as stored, read whole by rename. Missing or invalid JSON has no entry."""
+    try:
+        entry: object = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    return cast(dict[str, Any], entry) if isinstance(entry, dict) else None
+
+
+@contextlib.contextmanager
+def editing(path: Path) -> Iterator[dict[str, Any] | None]:
+    """Read the current entry while holding the queue lock for its transaction."""
+    with locked(path.parent.parent):
+        yield read_entry(path)
+
+
 def entries(directory: Path) -> list[tuple[Path, dict[str, Any]]]:
     found: list[tuple[Path, dict[str, Any]]] = []
     for path in sorted((directory / "queue").glob("*.json")):
-        try:
-            entry = json.loads(path.read_text())
-        except (OSError, ValueError):
-            continue
-        if isinstance(entry, dict) and isinstance(entry.get("count"), int):
-            found.append((path, cast(dict[str, Any], entry)))
+        entry = read_entry(path)
+        if entry is not None and isinstance(entry.get("count"), int):
+            found.append((path, entry))
     return found
 
 

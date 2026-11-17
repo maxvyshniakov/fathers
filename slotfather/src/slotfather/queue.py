@@ -149,6 +149,15 @@ def inherited_lease(table: Table) -> tuple[Path, dict[str, Any], int] | None:
     return None
 
 
+def other_work(table: Table, root: object, caller: int) -> bool:
+    """Whether a process tree has work beside the caller, its ancestors or its children."""
+    parents = _lineage.parents_of(table)
+    mine = {*_lineage.ancestors(parents, caller), *_lineage.descendants(table, caller)}
+    others = [pid for pid in _lineage.descendants(table, root) if pid not in mine]
+    names = _process.names(others)
+    return any(names.get(pid) not in ("ps", "lsof") for pid in others)
+
+
 def run_above(ran: float, p90: Any) -> bool:
     """runtype.above(), for state.record(): loaded only when a run is judged, never on admission."""
     from . import runtype as _runtype

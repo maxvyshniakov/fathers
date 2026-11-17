@@ -6,7 +6,7 @@ import math
 import time
 import sys
 from pathlib import Path
-from typing import Any, Callable, NamedTuple
+from typing import Any, Callable, Iterator, NamedTuple
 
 from . import config as _config
 from . import entry as _entry
@@ -92,10 +92,17 @@ Table = dict[int, tuple[int, str]]
 
 
 def look(directory: Path | None = None, processes: Callable[[], Table] | None = None, log: bool = False) -> Look:
-    """Look at the queue once, under its lock, as a plan reads it: a capacity saved meanwhile counts for the next
-    look, never for half of this one. `processes` reads the process table under the lock (default
-    queue.process_table(); `status --json --pid` passes its native one); `log`: a look that reaps for a change
-    (the sweep's) says so when ps fails (queue.process_table())."""
+    """One look at the queue under its lock. See looking() for readers that also change queue state."""
+    with looking(directory, processes, log) as found:
+        return found
+
+
+@contextlib.contextmanager
+def looking(directory: Path | None = None, processes: Callable[[], Table] | None = None,
+            log: bool = False) -> Iterator[Look]:
+    """Look at the queue under its lock and keep it through the caller's read or transaction. A capacity saved
+    meanwhile counts for the next look. The process table is also read under the lock; status --pid can supply
+    a native one. A look changing the queue sets `log` so failed process reads appear in its event log."""
     directory = directory or _config.state_dir()
     with _state.locked(directory):
         table = processes() if processes is not None else _queue.process_table(directory, log=log)
@@ -108,10 +115,10 @@ def look(directory: Path | None = None, processes: Callable[[], Table] | None = 
         marked = idle_of(directory, found)
         legacy = _queue.legacy_holders(table)
         settings = _settings.order_settings(directory)
-    live = [dict(entry, idle_since=marked.get(id(entry))) if _entry.is_held(entry) else entry
-            for _, entry in found]
-    return Look(directory, table, found, live, basis, legacy, requests, strange, kept, settings,
-                _queue.estimator(directory))
+        live = [dict(entry, idle_since=marked.get(id(entry))) if _entry.is_held(entry) else entry
+                for _, entry in found]
+        yield Look(directory, table, found, live, basis, legacy, requests, strange, kept, settings,
+                   _queue.estimator(directory))
 
 
 def locked_snapshot(directory: Path | None = None) -> tuple[list[dict[str, Any]], list[tuple[Path, dict[str, Any], int]],
