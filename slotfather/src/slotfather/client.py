@@ -49,6 +49,8 @@ def wait_until(ready: Callable[[], T | None], *, refresh: Callable[[], str | Non
         found = ready()
         if found is not None:
             return found
+        if deadline is not None and time.monotonic() >= deadline:
+            return None
         if between is not None:
             between(waiting)
         if not back_off and waiting != said:
@@ -65,10 +67,12 @@ def wait_until(ready: Callable[[], T | None], *, refresh: Callable[[], str | Non
 def wait_held(path: Path, again: bool = False, deadline: float | None = None,
               between: Callable[[str | None], None] | None = None,
               changed: Callable[[str | None], None] | None = None, *,
-              admit: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None) -> dict[str, Any]:
+              admit: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
+              timeout_error: Callable[[str | None], _config.SlotTimeout] | None = None) -> dict[str, Any]:
     """Wait for the request to hold its slots. Queue refreshes grant and reap only with a trusted process table.
     A yielded lease is settled under the lock, including one an older client granted. A session run supplies
-    `admit` so observing a hold and recording the run can be rechecked together."""
+    `admit` so observing a hold and recording the run can be rechecked together. On expiry, `timeout_error`
+    can include the most recent queue reason in the caller's diagnostic."""
     directory = path.parent.parent
     reason = None
 
@@ -99,6 +103,8 @@ def wait_held(path: Path, again: bool = False, deadline: float | None = None,
 
     found = wait_until(ready, refresh=refresh, deadline=deadline, between=between, changed=changed, back_off=again)
     if found is None:
+        if timeout_error is not None:
+            raise timeout_error(reason)
         raise _config.SlotTimeout("the lease did not get its slots before the deadline")
     return found
 
@@ -238,9 +244,11 @@ def acquire(count: int | str, label: str, command: str = "", out: Any = sys.stde
     warned: list[float] = []  # when it last said it waits long (WARN_REPEAT)
     said: list[str | None] = [None]  # the reason it last said it waits for
 
-    def between(waiting: str | None) -> None:
-        if deadline is not None and time.monotonic() >= deadline:
-            raise _config.SlotTimeout(f"no {count} slot(s) within {wait:g} s: {waiting or 'earlier requests first'}")
+    def timeout_error(waiting: str | None) -> _config.SlotTimeout:
+        assert wait is not None  # a deadline exists only for a bounded wait
+        return _config.SlotTimeout(f"no {count} slot(s) within {wait:g} s: {waiting or 'earlier requests first'}")
+
+    def between(_waiting: str | None) -> None:
         warn = float(_settings.order_settings(directory).get("warn_wait") or 0)
         if warn and time.monotonic() - queued >= warn and (not warned or
                                                           time.monotonic() - warned[-1] >= _config.WARN_REPEAT):
@@ -264,7 +272,7 @@ def acquire(count: int | str, label: str, command: str = "", out: Any = sys.stde
         said[0] = waiting
 
     try:
-        current = wait_held(path, deadline=deadline, between=between, changed=changed)
+        current = wait_held(path, deadline=deadline, between=between, changed=changed, timeout_error=timeout_error)
         if isinstance(current.get("count"), int) and current["count"] >= 1:
             count = lease.count = current["count"]  # the capacity changed while it waited (plan())
         if said[0]:

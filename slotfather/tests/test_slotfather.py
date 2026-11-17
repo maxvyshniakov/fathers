@@ -8,12 +8,14 @@ from __future__ import annotations
 import sys as _path_sys
 from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
+from slotfather import client, config, query
 from slotfather import platform as sf_platform
 
 
 import importlib.machinery
 import importlib.util
 import fcntl
+import io
 import json
 import os
 import pathlib
@@ -25,7 +27,9 @@ import sys
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
 from typing import Any, Callable
+from unittest.mock import patch
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 TOOL = str(ROOT / "slotfather")
@@ -471,6 +475,27 @@ class StaleLeaseTests(SlotCase):
         result = self.tool("run", "-n", "1", "--label", "impatient", "--wait", "0.3", "--", "true")
         self.assertEqual(75, result.returncode, result.stdout + result.stderr)
         self.assertIn("no 1 slot(s) within 0.3 s", result.stderr)
+        self.assertNotIn("impatient", self.status())
+        self.release("holder")
+        self.finish(holder)
+
+    def test_timeout_during_queue_display_keeps_the_acquire_diagnostic(self) -> None:
+        holder = self.request("holder", "all")
+        self.started("holder")
+        now = 10.0
+        output = io.StringIO()
+
+        def show_queue(_directory: pathlib.Path) -> list[str]:
+            nonlocal now
+            now += 1.0  # the display takes longer than the entire wait budget
+            return []
+
+        with (patch.dict(os.environ, self.env, clear=True),
+              patch.object(client, "time", SimpleNamespace(monotonic=lambda: now)),
+              patch.object(query, "status_lines", side_effect=show_queue)):
+            with self.assertRaisesRegex(config.SlotTimeout, r"no 1 slot\(s\) within 0\.3 s: 0 of 4 slots free"):
+                client.acquire(1, "impatient", wait=0.3, out=output)
+        self.assertIn("impatient waits", output.getvalue())
         self.assertNotIn("impatient", self.status())
         self.release("holder")
         self.finish(holder)
