@@ -7,6 +7,7 @@ from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[2] / "common"))
 import eventcheck  # common/eventcheck.py, the shared event validator
 
+import fcntl
 import json
 import os
 import signal
@@ -19,7 +20,7 @@ from unittest import mock
 from test_slotfather import TOOL, WORK, SlotCase
 
 from slotfather import state as sf_state
-from slotfather.session import read_uses, uses_path
+from slotfather import process as sf_process
 
 
 class SessionTests(SlotCase):
@@ -72,6 +73,32 @@ class SessionTests(SlotCase):
         path = self.state / "events.jsonl"
         self.assertEqual([], eventcheck.validate_file(str(path), strict=True))
         return [json.loads(line) for line in path.read_text().splitlines()]
+
+    def test_start_acknowledges_a_grant_without_another_process_table(self) -> None:
+        tools = self.tmp / "tools"
+        tools.mkdir()
+        ps = tools / "ps"
+        ps.write_text('''#!/bin/sh
+if [ "$PPID" = "$SESSION_STARTER" ] && [ "$1" = -axo ] && [ "$2" = pid=,ppid=,stat=,lstart= ]; then
+    if [ -f "$PS_COUNT.second" ]; then
+        echo 'fixture: process inspection became unavailable' >&2
+        exit 9
+    fi
+    if [ -f "$PS_COUNT.first" ]; then touch "$PS_COUNT.second"; else touch "$PS_COUNT.first"; fi
+fi
+exec /bin/ps "$@"
+''')
+        ps.chmod(0o755)
+        self.addCleanup(self.kill_sessions)
+        result = subprocess.run(["sh", "-c", 'export SESSION_STARTER=$$; exec "$@"', "starter", TOOL,
+                                 "session", "start", "--label", "perf", "-n", "2"],
+                                env={**self.env, "PATH": f"{tools}:{self.env['PATH']}",
+                                     "PS_COUNT": str(self.tmp / "starter-ps")}, capture_output=True,
+                                text=True, timeout=20)
+        self.assertEqual(self.session("perf").get("count"), 2)
+        self.assertTrue((self.tmp / "starter-ps.second").exists())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("session perf holds 2 slot(s)", result.stdout)
 
     def test_a_session_drains_once_holds_between_runs_and_stop_releases_it(self):
         early = self.request("early", 1)
@@ -134,8 +161,8 @@ class SessionTests(SlotCase):
         self.started("holder")
         return holder
 
-    def lock_waiter(self, lock: str) -> subprocess.Popen[str]:
-        waiting = self.inside("perf", "locked", TOOL, "lock", lock, "--", "sh", "-c", WORK, "work", "locked",
+    def lock_waiter(self, lock: str, label: str = "locked") -> subprocess.Popen[str]:
+        waiting = self.inside("perf", label, TOOL, "lock", lock, "--", "sh", "-c", WORK, "work", label,
                               background=True)
         def marked() -> bool:
             current: dict[str, Any] = self.session("perf") or {}
@@ -173,13 +200,13 @@ class SessionTests(SlotCase):
         for process in (arriving, other, holder, waiting):
             self.finish(process)
 
-    def record_run(self, **identity: Any) -> None:
+    def record_run(self, pid: int | None = None, **identity: Any) -> None:
         lease_path = _Path(self.session("perf")["lease"])
         with mock.patch.dict(os.environ, self.env, clear=True), sf_state.editing(lease_path):
-            uses = read_uses(lease_path)
+            uses = sf_state.session_uses(lease_path)
             assert uses is not None
-            uses["active"][str(os.getpid())] = identity
-            sf_state.write(uses_path(lease_path), uses)
+            uses["active"][str(os.getpid() if pid is None else pid)] = identity
+            sf_state.write(sf_state.session_path(lease_path), uses)
 
     def test_session_lock_yields_past_a_stale_run_and_waits_for_its_slots_back(self) -> None:
         lock = str(self.tmp / "cache.lock")
@@ -215,19 +242,26 @@ class SessionTests(SlotCase):
         self.assertEqual("held", lease["phase"])
         self.assertEqual(2, len(lease["session"]["active"]))
         self.assertFalse(any(event["kind"] == "lease.yielded" for event in self.events_of()))
+        other = self.request("other", 1)
+        self.release("busy")
+        self.finish(busy)
+        self.started("other")  # the external holder deliberately still owns the flock
+        self.assertEqual("yielded", self.session("perf")["phase"])
         self.release("holder")
+        self.wait_for_lock_end("took")
+        self.assertNotIn("start locked", self.events())
+        self.release("other")
         self.started("locked")
         self.assertEqual("held", self.session("perf")["state"])
-        for label in ("locked", "busy"):
-            self.release(label)
-        for process in (holder, waiting, busy):
+        self.release("locked")
+        for process in (holder, waiting, other):
             self.finish(process)
 
     def test_session_lock_keeps_slots_when_an_active_identity_is_unknown(self) -> None:
         lock = str(self.tmp / "cache.lock")
         holder = self.lock_holder(lock)
         self.start("perf", "--idle", "60")
-        self.record_run(start="", started=None)
+        self.record_run(start="unparseable identity", started=None)
         waiting = self.lock_waiter(lock)
 
         self.assertEqual("held", self.session("perf")["phase"])
@@ -236,6 +270,108 @@ class SessionTests(SlotCase):
         self.release("locked")
         self.finish(holder)
         self.finish(waiting)
+
+    def test_zombie_run_does_not_pin_a_session_lock_wait(self) -> None:
+        lock = str(self.tmp / "cache.lock")
+        holder = self.lock_holder(lock)
+        self.start("perf", "--idle", "60")
+        zombie = self.spawn(["true"])
+        self.wait_for(lambda: sf_process.starts([zombie.pid]).get(zombie.pid, ("", False))[1],
+                      "the exited child to remain an unreaped zombie")
+        self.record_run(zombie.pid, start=sf_process.starts([zombie.pid])[zombie.pid][0])
+        waiting = self.lock_waiter(lock)
+        self.assertEqual("yielded", self.session("perf")["phase"])
+        self.release("holder")
+        self.started("locked")
+        self.release("locked")
+        for process in (holder, waiting, zombie):
+            self.finish(process)
+
+    def test_background_lock_does_not_yield_for_its_shell(self) -> None:
+        lock = str(self.tmp / "cache.lock")
+        holder = self.lock_holder(lock)
+        self.start("perf", "--idle", "60")
+        pipe = self.tmp / "shell-input"
+        os.mkfifo(pipe)
+        command = '''"$1" lock "$2" -- true &
+reader=$!
+exec 3< "$3"
+echo 'start shell' >> "$LOG"
+read -r ignored <&3
+echo 'end shell' >> "$LOG"
+wait "$reader"'''
+        # Opening both ends lets the shell block in read without a helper process.
+        handle = os.open(pipe, os.O_RDWR)
+        self.addCleanup(os.close, handle)
+        process = self.inside("perf", "shell", "sh", "-c", command, "shell", TOOL, lock, str(pipe), background=True)
+        self.started("shell")
+        self.wait_for(lambda: self.session("perf").get("lock") == lock, "the background lock to be noted")
+        self.assertEqual("held", self.session("perf")["phase"])
+        os.write(handle, b"work\n")
+        self.wait_for(lambda: "end shell" in self.events(), "the shell to keep running while its lock waits")
+        self.release("holder")
+        self.finish(holder)
+        self.finish(process)
+
+    def test_exec_lock_keeps_slots_for_work_the_shell_already_started(self) -> None:
+        lock = str(self.tmp / "cache.lock")
+        holder = self.lock_holder(lock)
+        self.start("perf", "--idle", "60")
+        command = 'sh -c "$1" work child & exec "$2" lock "$3" -- true'
+        process = self.inside("perf", "shell", "sh", "-c", command, "shell", WORK, TOOL, lock, background=True)
+        self.started("child")
+        self.wait_for(lambda: self.session("perf").get("lock") == lock, "the exec lock to be noted")
+        self.assertEqual("held", self.session("perf")["phase"])
+        self.release("child")
+        self.release("holder")
+        self.finish(holder)
+        self.finish(process)
+
+    def test_a_competing_contended_lock_waits_for_the_yielded_session_grant(self) -> None:
+        first_lock = str(self.tmp / "first.lock")
+        holder = self.lock_holder(first_lock)
+        self.start("perf", "--idle", "60")
+        first = self.lock_waiter(first_lock)
+        other = self.request("other", 1)
+        self.started("other")
+        second_lock = self.tmp / "second.lock"
+        with second_lock.open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            inherited = f"SLOTFATHER_LEASE={self.session('perf')['lease']}"
+            second = self.spawn(["env", inherited, TOOL, "lock", str(second_lock), "--",
+                                 "sh", "-c", WORK, "work", "competing"])
+            self.assertIn("waiting for lock", self.output_line(second))
+        def resumed_or_started() -> bool:
+            return ("start competing" in self.events() or
+                    any(event["kind"] == "lease.lock_ended" and event["details"]["why"] == "resumed"
+                        for event in self.events_of()))
+        self.wait_for(resumed_or_started, "the contended command to request the slots back")
+        self.assertNotIn("start competing", self.events())
+        self.release("other")
+        self.started("competing")
+        self.release("competing")
+        self.release("holder")
+        self.started("locked")
+        self.release("locked")
+        for process in (other, second, holder, first):
+            self.finish(process)
+
+    def test_taking_a_lock_does_not_clear_another_waiters_marker(self) -> None:
+        first_lock, second_lock = str(self.tmp / "first.lock"), self.tmp / "second.lock"
+        holder = self.lock_holder(first_lock)
+        self.start("perf", "--idle", "60")
+        first = self.lock_waiter(first_lock)
+        with second_lock.open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            second = self.lock_waiter(str(second_lock), "second")
+            self.release("holder")
+            self.started("locked")
+            self.assertEqual(str(second_lock), self.session("perf").get("lock"))
+        self.started("second")
+        self.release("second")
+        self.release("locked")
+        for process in (holder, first, second):
+            self.finish(process)
 
     def test_an_idle_session_releases_itself(self):
         self.start("perf", "--idle", "1")

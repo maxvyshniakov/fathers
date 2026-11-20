@@ -171,6 +171,19 @@ def same_start(written: str, observed: str, epoch: int | None = None) -> bool:
     return all(number == month for number in numbers)
 
 
+def verified_holder(start: object, started: object, pid: int, observed: str) -> bool | None:
+    """Compare a recorded process identity, leaving unavailable or invalid evidence unknown."""
+    epoch = start_epoch(pid)
+    if type(started) is int and epoch is not None:
+        return abs(started - epoch) <= EPOCH_SLACK
+    if not isinstance(start, str):
+        return None
+    written, shown = c_start(start), c_start(observed)
+    if written is not None and shown is not None:
+        return written == shown
+    return True if same_start(start, observed, epoch) else None
+
+
 def memory_short() -> str | None:
     """Why new leases should wait for memory, or None: memory_level()'s reason, at warning or above."""
     return memory_level()[1]

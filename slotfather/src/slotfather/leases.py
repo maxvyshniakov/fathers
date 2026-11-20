@@ -76,6 +76,39 @@ def same_process(table: _queue.Table, pid: int, start: str) -> bool:
     return pid in table and bool(start.strip()) and _platform.same_holder(start, None, pid, table[pid][1])
 
 
+def require_session_owner(name: str, entry: dict[str, Any]) -> None:
+    if _process.process_uid(entry.get("pid")) != os.geteuid():
+        raise _config.SlotError(f"session {name} (pid {entry.get('pid')}) is another user's")
+
+
+def require_session_accepting(name: str, entry: dict[str, Any]) -> None:
+    if entry["session"].get("stopping"):
+        raise _config.SlotError(f"session {name} is stopping: it starts no more runs")
+
+
+def claim_session_run(directory: Path, name: str, label: str | None, command: str, *, expected: Path | None = None
+                      ) -> tuple[Path, dict[str, Any] | None]:
+    """Find the session and register this process in the same locked read that confirms its grant."""
+    me = os.getpid()
+    with _queue.looking(directory, log=True) as (table, live):
+        found = _queue.named_session(live, name)
+        if found is None or (expected is not None and found[0] != expected):
+            raise _config.SlotError(f"no session {name} in this queue (slotfather session start --label {name})")
+        path, entry = found
+        require_session_owner(name, entry)
+        require_session_accepting(name, entry)
+        uses = _state.session_uses(path) if _entry.is_held(entry) else None
+        if uses is None:
+            return path, None
+        uses.setdefault("active", {})[str(me)] = {"start": table.get(me, (0, ""))[1],
+                                                  "started": _platform.start_epoch(me), "label": label,
+                                                  "cmd": command, "since": _config.now()}
+        _state.write(_state.session_path(path), uses)
+        _events.record(directory, None, "session.run_started", _events.request(entry, path),
+                       {"session": name, "run": {"pid": me, "label": label, "cmd": command}})
+        return path, entry
+
+
 CLASS_RANK = {"batch": 0, "normal": 1, "interactive": 2}
 
 
@@ -245,30 +278,46 @@ def yield_for_lock(path: Path, lock: str, owner: tuple[int, str], idle: bool) ->
         if not _entry.is_held(entry):
             return None
         if isinstance(entry.get("session"), dict):
-            from .session import idle_for_lock
-
             idle = False
             with contextlib.suppress(_config.ProcessTableError):
                 table = _queue.process_table(directory)
-                idle = (same_process(table, *owner) and _platform.alive(entry, table)
-                        and idle_for_lock(path, owner[0], table))
+                idle = session_lock_idle(path, entry, owner, table)
         if not idle:
             _entry.to_lock_noted(entry, lock, owner)
             _state.write(path, entry)
             return "noted"
-        _entry.to_lock_waiting(entry, time.time(), lock, owner)
-        _state.write(path, entry)
-        _state.marker(path).unlink(missing_ok=True)  # a yield request is moot: its slots are free now
-        _events.record(directory, f"yielded {entry['count']} ({path.name}) while waiting for lock {lock}",
-                       "lease.yielded", _events.request(entry, path),
-                       {"count": entry["count"], "to": {"id": None, "label": f"lock {lock}"}, "lock": lock,
-                        "yields": int(entry.get("yields") or 0)}, _events.holder(entry))
+        lock_yield(directory, path, entry, lock, owner)
         with contextlib.suppress(_config.SlotError):  # the next look grants the freed slots otherwise
             grant(directory, _queue.process_table(directory))
     return "yielded"
 
 
-def lock_taken(path: Path, why: str = "took") -> None:
+def session_lock_idle(path: Path, entry: dict[str, Any], owner: tuple[int, str], table: _queue.Table) -> bool:
+    if not same_process(table, *owner) or not _platform.alive(entry, table):
+        return False
+    uses = _state.session_uses(path)
+    return uses is not None and _process.session_lock_idle(uses.get("active"), owner[0], table)
+
+
+def lock_yield(directory: Path, path: Path, entry: dict[str, Any], lock: str, owner: tuple[int, str]) -> None:
+    """Under the queue lock, move a lease back to waiting on its external lock."""
+    _entry.to_lock_waiting(entry, time.time(), lock, owner)
+    _state.write(path, entry)
+    _state.marker(path).unlink(missing_ok=True)
+    _events.record(directory, f"yielded {entry['count']} ({path.name}) while waiting for lock {lock}",
+                   "lease.yielded", _events.request(entry, path),
+                   {"count": entry["count"], "to": {"id": None, "label": f"lock {lock}"}, "lock": lock,
+                    "yields": int(entry.get("yields") or 0)}, _events.holder(entry))
+
+
+def session_run_ended(directory: Path, entry: dict[str, Any]) -> None:
+    """Under the queue lock, revisit a noted wait when a session run leaves normally or is pruned."""
+    if _entry.is_held(entry) and _entry.lock_of(entry) is not None:
+        with contextlib.suppress(_config.SlotError):
+            grant(directory, _queue.process_table(directory))
+
+
+def lock_taken(path: Path, why: str, *, lock: str | None = None, owner: tuple[int, str] | None = None) -> None:
     """The lock wait of the lease at `path` is over (`why`: "took" the lock, "stopped" waiting, work "resumed"
     under the lease): the mark goes, recorded in queue.log and EVENTS (`lease.lock_ended`); a yielded lease is then
     an ordinary yielded lease in its place, which its client waits to be granted again (client.held_again())."""
@@ -276,6 +325,11 @@ def lock_taken(path: Path, why: str = "took") -> None:
     with _state.editing(path) as entry:
         if entry is None:
             raise _config.SlotError("the lease vanished from the queue")
+        if why == "resumed":
+            if _entry.phase(entry).name != _entry.YIELDED:
+                return
+        elif owner is None or _entry.lock_owner(entry) != owner or _entry.lock_of(entry) != lock:
+            return
         ended(directory, path, entry, why)
 
 
@@ -313,6 +367,12 @@ def grant(directory: Path, table: _queue.Table) -> str | None:
     """Grant the waiters plan() starts, in their order, that memory lets start (schedule.memory_gate()); then ask yieldable holders to yield for
     interactive waiters that still wait (yield_asks()). Returns why the first that does not start still waits."""
     live = _queue.reap(directory, table)
+    for path, entry in live:
+        if not _entry.is_held(entry) or not isinstance(entry.get("session"), dict):
+            continue
+        lock, owner = _entry.lock_of(entry), _entry.lock_owner(entry)
+        if lock is not None and owner is not None and session_lock_idle(path, entry, owner, table):
+            lock_yield(directory, path, entry, lock, owner)
     held, waiters = _entry.split(e for _, e in live)
     paths = {id(e): path for path, e in live}
     estimate = _queue.estimator(directory)

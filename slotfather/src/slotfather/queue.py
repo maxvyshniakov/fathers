@@ -4,10 +4,11 @@ process runs under, and the estimator a look hands the scheduler. `leases` (the 
 and the sweep read the queue through it, so that `query` does not import `leases`."""
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterator, Mapping, cast
 
 from . import config as _config
 from . import entry as _entry
@@ -67,7 +68,7 @@ def reap(directory: Path, table: Table) -> list[tuple[Path, dict[str, Any]]]:
             path.unlink(missing_ok=True)
             _state.marker(path).unlink(missing_ok=True)
             _idle.path(path).unlink(missing_ok=True)
-            path.with_suffix(".session").unlink(missing_ok=True)  # a session's runs (session.py)
+            _state.session_path(path).unlink(missing_ok=True)
             # queue.log first, as before the one writer: a crash before the history keeps the line (fathers#37 review)
             _events.record(directory, f"reaped {entry.get('state')} lease of {entry.get('count')} for "
                            f"{entry.get('label')} (pid {entry.get('pid')} exited)")
@@ -79,6 +80,22 @@ def reap(directory: Path, table: Table) -> list[tuple[Path, dict[str, Any]]]:
                             "reason": "owner exited"}, _events.actor(kind="tool"), level="warn")
     return live
 
+
+@contextlib.contextmanager
+def looking(directory: Path, processes: Callable[[], Table] | None = None, log: bool = False
+            ) -> Iterator[tuple[Table, list[tuple[Path, dict[str, Any]]]]]:
+    """Read the process table and reap the queue under one lock, held through the caller's transaction."""
+    with _state.locked(directory):
+        table = processes() if processes is not None else process_table(directory, log=log)
+        yield table, reap(directory, table)
+
+
+def named_session(live: list[tuple[Path, dict[str, Any]]], name: str) -> tuple[Path, dict[str, Any]] | None:
+    for path, entry in live:
+        spec: object = entry.get("session")
+        if isinstance(spec, dict) and cast(Mapping[str, object], spec).get("name") == name:
+            return path, entry
+    return None
 
 def stale_lock(entry: dict[str, Any], table: Table) -> bool:
     """Whether a lease's lock mark (`slotfather lock`, fathers#159) has no live waiter: its `lock_owner` is not the
@@ -147,15 +164,6 @@ def inherited_lease(table: Table) -> tuple[Path, dict[str, Any], int] | None:
         if own == str(path) or entry["pid"] in mine:
             return path, entry, count
     return None
-
-
-def other_work(table: Table, root: object, caller: int) -> bool:
-    """Whether a process tree has work beside the caller, its ancestors or its children."""
-    parents = _lineage.parents_of(table)
-    mine = {*_lineage.ancestors(parents, caller), *_lineage.descendants(table, caller)}
-    others = [pid for pid in _lineage.descendants(table, root) if pid not in mine]
-    names = _process.names(others)
-    return any(names.get(pid) not in ("ps", "lsof") for pid in others)
 
 
 def run_above(ran: float, p90: Any) -> bool:
