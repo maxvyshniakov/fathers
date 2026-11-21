@@ -54,8 +54,25 @@ python3 install.py lanefather    # or: python3 lanefather/install.py
 ```
 
 Put `~/.local/bin` on `PATH`, then run `lanefather --version` and `lanefather capabilities --json`.
-Installation creates an immutable release and atomically updates the command; already-running commands keep their
+Installation creates an immutable release under `~/.local/share/lanefather/releases/<version>-<commit>` and
+atomically updates `~/.local/share/lanefather/current` and the command; already-running commands keep their
 release. Install from committed source. There is no documented PyPI/package-manager installation path.
+
+### Upgrade, rollback and uninstall
+
+- **Upgrade**: check out a newer committed revision and run `python3 install.py lanefather` (or
+  `python3 lanefather/install.py`). `current` swaps atomically and never moves backwards during a normal install.
+  Pruning keeps the three newest releases by version and build order (never file modification time), every release
+  pinned by a live lane in registered state directories, and any release in use by a running process (a held
+  `.lock` file or live `.pid` file), and removes stale `releases/.pending-<pid>` directories whose owning process
+  has exited.
+- **Stage without switching (`--no-switch`)**: `python3 install.py lanefather --no-switch` installs the committed
+  revision into `releases/` without moving `current` or rewriting the command. Re-installing an older commit with
+  `--no-switch` does not make it count as newest when pruning.
+- **Rollback (`--rollback`)**: `python3 install.py lanefather --rollback` atomically points `current` at the
+  previous release so `~/.local/bin/lanefather` runs it again without needing a clean Git checkout.
+- **Uninstall (`--uninstall`)**: `python3 install.py lanefather --uninstall` removes `~/.local/bin/lanefather`,
+  `current`, and unpinned releases while keeping any release pinned by a live lane or in use by a running process.
 
 ## Configure one repository
 

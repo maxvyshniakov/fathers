@@ -15,6 +15,8 @@ and that both match the newest release. An installed release also names its comm
 ## Install
 
 Only on an explicit request, `python3 install.py` from a clean, committed `main`: a new immutable release and the
-command swapped in one rename; running commands keep their release. Check it with `lanefather --version` and
-`lanefather capabilities --json`, whose `installed` is true and whose commit is the pushed one. State compatibility
-comes first: [State and its versions](../../README.md#state-and-its-versions).
+command swapped in one rename; running commands keep their release, and `current` never moves backwards. Use
+`--no-switch` to stage a release without switching `current`, `--rollback` to point `current` at the previous
+release, or `--uninstall` to remove the command and unpinned releases while keeping releases pinned by live lanes.
+Check an install with `lanefather --version` and `lanefather capabilities --json`, whose `installed` is true and
+whose commit is the pushed one. State compatibility comes first: [State and its versions](../../README.md#state-and-its-versions).

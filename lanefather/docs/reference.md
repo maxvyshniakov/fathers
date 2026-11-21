@@ -532,7 +532,7 @@ unless `LANEFATHER_REGISTRY` is set.
 The lanes are those not done. `receipt.tree_match` compares the receipt's tree with the lane branch's, null when
 either is unknown; `review.status` is the review receipt's, `stopped` for a running review whose process is gone;
 `logs` holds the newest run log of each phase (`check`, `rerun`, `base`, `post-merge`, `review`); `gate` is the newest
-batch gate; `outcome` stays null until parking records one (#19). `cap` is the project's lifetime admission answer,
+batch gate; `outcome` stays null until lane parking is implemented and records one. `cap` is the project's lifetime admission answer,
 or its derived cap with the reason when admission is unavailable. A project that cannot be read gives
 `{"project", "state_dir", "error"}`, never a failed snapshot; one whose configuration file is missing and that no
 command has seen for 7 days is left out, and the next registration drops it. The command takes no locks, writes
@@ -593,7 +593,13 @@ An installed release verifies its package and canonical hook against its
 manifest; a changed or missing manifest refuses verification. A checkout reports
 `installed: false`, so a project launcher can require the installed artifact.
 The installer accepts committed shipping inputs and reuses an identical existing
-release without replacing its bytes.
+release without replacing its bytes. Normal installs refuse to move `current` backwards;
+`--no-switch` stages a release under `releases/` without moving `current` or the command
+(and an older commit re-installed that way does not count as newest), `--rollback` points
+`current` at the previous release, and `--uninstall` removes the command, `current` and
+unpinned/unused releases while keeping releases pinned by live lanes or in use by a running
+process. Pruning orders releases by version and build order (not mtime), retains pinned and
+in-use releases, and cleans stale `releases/.pending-<pid>` directories.
 
 Free disk (fathers#46). Two values, not to be confused:
 
