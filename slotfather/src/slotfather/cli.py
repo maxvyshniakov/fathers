@@ -1,111 +1,388 @@
 """slotfather: one queue of requests for the machine's capacity, shared by every project and agent (#599).
 
-  slotfather run [-n N|all] [--label L] [--meta K=V]... [--priority P] [--ticket ID] [--yieldable] [--wait S] [--] COMMAND...
-                                                                     run COMMAND holding N slots (default 1)
-  slotfather yield                                                   inside a yieldable lease: yield if asked
-  slotfather lock PATH -- COMMAND...                                 run COMMAND holding a flock on PATH; the
-                                                                     enclosing lease frees its slots while it waits
-  slotfather session start --label NAME [-n N|all] [--idle S] [--expect S] ...  hold the machine for a series of
-                                                                     `run --session NAME -- COMMAND`; session stop NAME
-  slotfather status [--json [--pid PID | --full]]                    running and waiting requests, in queue order
-  slotfather capabilities --json                                     what a dashboard (Godfather) can read and run here
-  slotfather settings [check|set|reset ...] --json                   the shared settings as data, and changes to them
-  slotfather reprioritize PID|LABEL interactive|normal|batch [--start START]  move a request to another class, keeping its place
-  slotfather ask-yield PID --start START                             ask a yieldable lease to yield for a higher class
-  slotfather procs --json [--cwd PATH] [--pid PID]                  read-only process, lease and session ancestry
-  slotfather lane-admission --json                                    stateless lifetime lane policy, stdin JSON
-  slotfather version [--json]                                        identify this runtime source
-  slotfather changelog --json [--since VERSION]                      the installed release's changelog as data
-  slotfather history [N] | export | import HOST [FILE]               the last N requests that left the queue; all of
-                                                                     them as JSON lines; another host's kept here
-  slotfather stats [--since W] [--label L] [--by B] [--json]         request resource use and machine occupancy
-  slotfather slots [N|memory G|lower G|reset]                        show, save or reset shared capacity
-  slotfather available [--label L] [-- COMMAND...]                   queue space before memory checks
-  slotfather advise [--max N] [--exclusive] [--label L] [-- CMD...]  a recommended worker budget, as JSON
-  slotfather order [backfill|window] [--safety X] [--limit S] ...    show, save or reset the queue's order
-  slotfather sweep [--live [--dev-servers]] [--json] | config | --plist  find (and stop) processes left behind
-  slotfather [dashboard [ARGS...]]                                   the live view: runs `godfather ARGS...`
-
-Run heavy builds and tests through `slotfather run -n <k> -- ...`: a test suite or build that keeps the
-machine busy takes 1 to 2 slots, a full gate that must not share the machine takes `-n all`.
-
 Slots: one per three cores, at least one, and no more than one per 4 GiB of memory, so
-`total = min(max(1, cores // 3), max(1, memory_GiB // 4))`: 4 on a 12-core M2 Max with 32 GiB, 2 on a 6-core VM with
-12 GiB (on Linux the memory is the limit of the queue's cgroup where it has one: SLOTFATHER_CGROUP, the one
-install.py --cgroup wrote in, the one saved with the capacity, or the caller's outermost limited one). A request
-above a capacity that shrank takes every slot at its grant, and -n all the capacity then. `slotfather slots N` saves shared capacity,
-which applies at the next grant while requests run or wait: growing it starts waiters at once, shrinking it lets running
-leases keep their slots and starts nothing until no more than the new capacity is held (draining); `slots memory G` one slot per G GiB of memory, `slots lower G` the
-lower of that and the CPU budget (#653); `slotfather slots reset` restores the automatic default. SLOTFATHER_CORES
-replaces the core count, SLOTFATHER_MEMORY_GIB the memory. A request above the total takes every slot.
+`total = min(max(1, cores // 3), max(1, memory_GiB // 4))`. `slotfather slots N` saves shared capacity,
+`slots memory G` one slot per G GiB of memory, `slots lower G` the lower of that and the CPU budget (#653),
+and `slotfather slots reset` restores the automatic default.
 
-Requests are served in arrival order. A waiter that does not fit lets later requests that fit start before it until
-it has waited SLOTFATHER_OVERTAKE_WINDOW seconds (default 600). Past that it is the head (#643, the backfill order):
-its start is reserved for when the held leases are expected to end, and that reservation only ever moves earlier.
-A later request that fits still starts first if, by the run times of earlier requests of its kind in the history,
-three times its expected run ends before that reserved start, or if it takes only slots the head will not need
-then; requests that came after the head pass it only so, whatever their class. So short work keeps flowing beside
-a waiting all-slot request, and the request starts once the leases it waited for end, plus the overrun of what
-passed it. Classes (`--priority interactive|normal|batch`, normal by default): an interactive waiter queues as if
-it came 1800 s earlier, a batch one 1800 s later, and a waiting request moves up a class as it waits (ageing): a
-batch one is served as normal after 1800 s, and a normal one as interactive after 3600 s more, keeping its
-arrival. A batch request never holds back a waiting normal or interactive one: while such work waits it is no
-head, and a batch all-slot request does not start, until it has aged. A waiter whose `--wait` ends before the held
-leases are expected to free its slots, counting the overrun of those past their estimate, holds nobody back
-either. `slotfather order` shows and saves the order and these numbers for every client (order.json beside the
-queue); a client's environment can only tighten them, and SLOTFATHER_QUEUE=window falls back to the earlier order,
-where the head holds back everyone behind it. `slotfather reprioritize PID|LABEL CLASS` moves a request (yours) to
-another class without losing its place. A request that has waited 1800 s (`order --warn-wait`) says so on its
-stderr every 15 minutes, with its expected start, and in queue.log; `status` flags it. An interactive waiter that
-has waited 120 s asks holders of a lower class that took `--yieldable` to yield, by a marker file their client
-checks between steps (SLOTFATHER_YIELD) before it runs
-`slotfather yield`; nothing ever stops a holder. A process
-that already runs under a lease (SLOTFATHER_LEASE, or a holder among its ancestors) runs without a second lease, so
-nested wrappers neither deadlock nor count twice. A lease whose holder died (its pid gone, or reused by a process
-with another start time) is reaped by the next queue operation. While memory is short (free swap under SLOTFATHER_MIN_FREE_SWAP_MB, default 512, where swap is on; on
-macOS the kernel's memory-pressure level at critical; on Linux MemAvailable under SLOTFATHER_MIN_AVAILABLE_MB,
-default 1024, or the queue's cgroup's memory.max less its working set under that, or PSI memory full avg10, the
-cgroup's or else the machine's, at SLOTFATHER_MAX_PSI_FULL percent, default 5), new leases wait for running ones.
-Under a memory-pressure warning (macOS level 2; Linux PSI some avg10 at SLOTFATHER_MAX_PSI_SOME percent, default
-10) one 1-slot lease at a time starts beside them: another waits until it ends or the pressure is normal again,
-and larger requests wait (`order --warning-admits 0`: none start). With nothing running a request starts.
-A waiter checks its own entry every SLOTFATHER_POLL seconds (default 2) but looks over the queue, which runs
-ps, less often the longer nothing changes, up to SLOTFATHER_POLL_MAX (default 10); a release hands its slots on at
-once. `--wait S` gives up after S seconds with exit 75 and leaves the queue. `run` exits with the command's status
-(128 + the signal when a signal ended it).
-
-`advise` sizes work for processes that take no lease: with each slot `cores / total` cores, the current load,
-min(load1, load5), less what the held slots account for, max(0, load - held x cores per slot), is load without a
-lease. Not load15: it still holds work whose leases ended minutes ago, and min() ignores a one-minute spike.
-The worker budget is the slots left after that load (and after the held slots, unless --exclusive: an all-slot
-request waits for them), a slot counting while at least half its cores are idle, never above --max (default
-the total) nor, without --exclusive, the free slots, and at least 1. SLOTFATHER_LOADAVG replaces the load
-averages: "load1 load5 load15", or one number for all three.
-
-State: ~/.local/state/slotfather (SLOTFATHER_DIR replaces it; another user's queue is read only: changes are
-refused and reading creates nothing; queue.log records grants, releases and
-reaps; history.jsonl, which `history` lists, has a line per request that left the queue: its command, directory,
-wait, run and outcome, and for `run` what its process tree used; machine.jsonl samples the machine while leases
-run; `stats` reads both). While its command runs, the holder looks at the command's process tree every
-SLOTFATHER_SAMPLE_MAX seconds at most (default 10; the first look comes sooner): CPU time is the command's own
-rusage, which holds every descendant reaped inside the tree, plus the sampled CPU of processes that left the tree
-(orphans, and launchd children carrying the lease's SLOTFATHER_LEASE). Held leases in the queues listed in
-SLOTFATHER_LEGACY_DIRS (colon-separated; default Straylight's earlier ~/.local/state/straylight-verification/slots;
-empty to ignore) count as used, scaled from their 4 slots, until their holders exit. SLOTFATHER_POLICY: normal
-(default), background (low QoS), or bypass (no lease; for a person who knows the machine is idle). Standard library
-only, Python 3.9 or later: install.py puts thin entry points in ~/.local/bin and preserves their complete package in an immutable release."""
+State: ~/.local/state/slotfather (SLOTFATHER_DIR replaces it; another user's queue is read only).
+Standard library only, Python 3.9 or later: install.py puts thin entry points in ~/.local/bin and
+preserves their complete package in an immutable release.
+"""
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
 import sys
-from typing import Any
+from typing import Any, Callable
 
 from . import config as _config
 
 
 GODFATHER_MISSING = ("the dashboard is part of godfather now; install it from "
                      "https://github.com/maxvyshniakov/fathers/tree/main/godfather (python3 install.py godfather)")
+
+
+@dataclass(frozen=True)
+class OptionSpec:
+    names: tuple[str, ...]
+    metavar: str | None = None
+    multi: bool = False
+    help: str = ""
+    missing_value: str | None = None
+
+    @property
+    def key(self) -> str:
+        return self.names[-1]
+
+
+@dataclass(frozen=True)
+class CommandSpec:
+    name: str
+    usage: str
+    summary: str
+    options: tuple[OptionSpec, ...] = ()
+    stop_at_positional: bool = False
+    passthrough: bool = False
+
+
+class UsageError(_config.SlotError):
+    """A command-line usage error; formatted with a one-line reason and a help pointer."""
+
+    def __init__(self, message: str, command: str | None = None) -> None:
+        super().__init__(message)
+        self.command = command
+
+
+def _order_options() -> tuple[OptionSpec, ...]:
+    opts: list[OptionSpec] = [
+        OptionSpec(("--json",), help="print queue order settings as JSON"),
+    ]
+    for knob in _config.ORDER_KNOBS:
+        flag = "--" + knob.replace("_", "-")
+        if knob in _config.DURATION_KNOBS:
+            opts.append(OptionSpec((flag,), metavar="S", help="duration in seconds or e.g. 30m, 1.5h"))
+        elif knob == "warning_admits":
+            opts.append(OptionSpec((flag,), metavar="1|0", help="admit one 1-slot lease (1) or none (0) under memory warning"))
+        else:
+            opts.append(OptionSpec((flag,), metavar="N", help=f"set {knob.replace('_', ' ')}"))
+    return tuple(opts)
+
+
+COMMANDS: tuple[CommandSpec, ...] = (
+    CommandSpec(
+        "run",
+        "run [-n N|all] [--label L] [--meta K=V]... [--priority P] [--ticket ID] [--yieldable] [--wait S] [--session NAME] [--] COMMAND...",
+        "run COMMAND holding N slots (default 1)",
+        options=(
+            OptionSpec(("-n", "--slots"), metavar="N|all", help="number of slots to hold (or all)"),
+            OptionSpec(("-l", "--label"), metavar="L", help="request label"),
+            OptionSpec(("--meta",), metavar="K=V", multi=True, help="request metadata key=value (repeatable)"),
+            OptionSpec(("--priority",), metavar="P", help="request class: interactive, normal, or batch"),
+            OptionSpec(("--ticket",), metavar="ID", help="ticket identifier"),
+            OptionSpec(("--yieldable",), help="allow higher-priority waiters to request a yield"),
+            OptionSpec(("--wait",), metavar="S", help="give up after S seconds (exit 75)"),
+            OptionSpec(("--session",), metavar="NAME", help="run inside an existing measurement session"),
+        ),
+        stop_at_positional=True,
+    ),
+    CommandSpec(
+        "yield",
+        "yield",
+        "inside a yieldable lease: yield if asked",
+    ),
+    CommandSpec(
+        "lock",
+        "lock PATH -- COMMAND...",
+        "run COMMAND holding a flock on PATH; enclosing lease frees slots while waiting",
+        stop_at_positional=True,
+    ),
+    CommandSpec(
+        "session",
+        "session start --label NAME [-n N|all] [--idle S] [--expect S] [--priority P] [--ticket ID] [--meta K=V]... [--wait S] | session stop NAME",
+        "hold the machine for a series of `run --session NAME -- COMMAND`",
+        options=(
+            OptionSpec(("-l", "--label"), metavar="NAME", help="session name"),
+            OptionSpec(("-n", "--slots"), metavar="N|all", help="number of slots to hold (default all)"),
+            OptionSpec(("--idle",), metavar="S", help="idle timeout before ending the session"),
+            OptionSpec(("--expect",), metavar="S", help="expected total session duration"),
+            OptionSpec(("--priority",), metavar="P", help="request class: interactive, normal, or batch"),
+            OptionSpec(("--ticket",), metavar="ID", help="ticket identifier"),
+            OptionSpec(("--meta",), metavar="K=V", multi=True, help="metadata key=value (repeatable)"),
+            OptionSpec(("--wait",), metavar="S", help="give up after S seconds"),
+        ),
+    ),
+    CommandSpec(
+        "status",
+        "status [--json [--pid PID | --full]]",
+        "running and waiting requests, in queue order",
+        options=(
+            OptionSpec(("--json",), help="print queue status as JSON"),
+            OptionSpec(("--pid",), metavar="PID", help="filter JSON status to one holder PID"),
+            OptionSpec(("--full",), help="include host, time and dashboard model in JSON status"),
+        ),
+    ),
+    CommandSpec(
+        "capabilities",
+        "capabilities [--json]",
+        "what a dashboard (Godfather) can read and run here",
+        options=(
+            OptionSpec(("--json",), help="print capabilities as JSON"),
+        ),
+    ),
+    CommandSpec(
+        "settings",
+        "settings [check KEY VALUE | set KEY VALUE | reset KEY|--all] [--revision R] [--json]",
+        "the shared settings as data, and changes to them",
+        options=(
+            OptionSpec(("--json",), help="print settings or result as JSON"),
+            OptionSpec(("--revision",), metavar="R", help="expected settings revision for set/reset"),
+            OptionSpec(("--all",), help="reset every setting (with `settings reset`)"),
+        ),
+    ),
+    CommandSpec(
+        "reprioritize",
+        "reprioritize PID|LABEL interactive|normal|batch [--start START]",
+        "move a request to another class, keeping its place",
+        options=(
+            OptionSpec(("--start",), metavar="START", help="process start time as reported by status --json",
+                       missing_value="--start takes the process's start time, as status --json gives it"),
+        ),
+    ),
+    CommandSpec(
+        "ask-yield",
+        "ask-yield PID --start START",
+        "ask a yieldable lease to yield for a higher class",
+        options=(
+            OptionSpec(("--start",), metavar="START", help="process start time as reported by status --json",
+                       missing_value="--start takes the process's start time, as status --json gives it"),
+        ),
+    ),
+    CommandSpec(
+        "procs",
+        "procs [--json] [--cwd PATH] [--pid PID]",
+        "read-only process, lease and session ancestry",
+        options=(
+            OptionSpec(("--json",), help="print process table as JSON"),
+            OptionSpec(("--cwd",), metavar="PATH", help="filter to processes under PATH"),
+            OptionSpec(("--pid",), metavar="PID", help="inspect a single process ID"),
+        ),
+    ),
+    CommandSpec(
+        "lane-admission",
+        "lane-admission --json",
+        "stateless lifetime lane policy, stdin JSON",
+        options=(
+            OptionSpec(("--json",), help="read one JSON request on stdin and print JSON reply"),
+        ),
+    ),
+    CommandSpec(
+        "version",
+        "version [--json]",
+        "identify this runtime source",
+        options=(
+            OptionSpec(("--json",), help="print version metadata as JSON"),
+        ),
+    ),
+    CommandSpec(
+        "changelog",
+        "changelog [--json] [--since VERSION]",
+        "the installed release's changelog as data",
+        options=(
+            OptionSpec(("--json",), help="print changelog as JSON"),
+            OptionSpec(("--since",), metavar="VERSION", help="only entries newer than VERSION"),
+        ),
+    ),
+    CommandSpec(
+        "history",
+        "history [N] | history export | history import HOST [FILE]",
+        "recent requests that left the queue; export or import another host's history",
+    ),
+    CommandSpec(
+        "stats",
+        "stats [--since WHEN] [--label GLOB] [--by B] [--host HOST] [--top N] [--trend [--project P] [--phase X]] [--json]",
+        "request resource use, machine occupancy and run-type trends",
+        options=(
+            OptionSpec(("--since",), metavar="WHEN", help="start age (90m, 36h, 7d) or ISO date/time"),
+            OptionSpec(("--label",), metavar="GLOB", help="filter labels by glob pattern"),
+            OptionSpec(("--by",), metavar="B", help="group by both, label, kind, priority, ticket, family, derived, or meta.KEY"),
+            OptionSpec(("--host",), metavar="HOST", help="read imported history for HOST"),
+            OptionSpec(("--top",), metavar="N", help="maximum number of rows to display"),
+            OptionSpec(("--trend",), help="show weekly run-type p50/p90 trends"),
+            OptionSpec(("--project",), metavar="P", help="filter --trend to project P"),
+            OptionSpec(("--phase",), metavar="X", help="filter --trend to phase X"),
+            OptionSpec(("--json",), help="print statistics as JSON"),
+        ),
+    ),
+    CommandSpec(
+        "slots",
+        "slots [N | memory GIB | lower GIB | reset] [--json]",
+        "show, save or reset shared capacity",
+        options=(
+            OptionSpec(("--json",), help="print capacity state as JSON"),
+        ),
+    ),
+    CommandSpec(
+        "available",
+        "available [--label L] [-- COMMAND...]",
+        "queue space before memory checks",
+        options=(
+            OptionSpec(("-l", "--label"), metavar="L", help="request label for estimate lookup"),
+        ),
+    ),
+    CommandSpec(
+        "advise",
+        "advise [--max N] [--exclusive] [--label L] [--json] [-- COMMAND...]",
+        "a recommended worker budget, as JSON",
+        options=(
+            OptionSpec(("--max",), metavar="N", help="upper bound on recommended workers"),
+            OptionSpec(("--exclusive",), help="ignore held slots (for an all-slot request)"),
+            OptionSpec(("-l", "--label"), metavar="L", help="request label for estimate lookup"),
+            OptionSpec(("--json",), help="print advice as JSON"),
+        ),
+    ),
+    CommandSpec(
+        "order",
+        "order [backfill|window] [--safety X] [--limit S] ... [--json] | order reset [--json]",
+        "show, save or reset the queue's scheduling order",
+        options=_order_options(),
+    ),
+    CommandSpec(
+        "sweep",
+        "sweep [--live [--dev-servers]] [--json] [--quiet] [--no-log] [--pid PID]... | sweep config [KEY VALUE]... | sweep --plist [--live [--dev-servers]] [--interval SECONDS]",
+        "find (and stop) processes left behind",
+        options=(
+            OptionSpec(("--live",), help="signal matching processes instead of dry-run"),
+            OptionSpec(("--dev-servers",), help="also include dev servers (with --live)"),
+            OptionSpec(("--json",), help="print sweep report as JSON"),
+            OptionSpec(("--quiet",), help="suppress output when nothing is found"),
+            OptionSpec(("--no-log",), help="do not record dry-run to sweep.jsonl"),
+            OptionSpec(("--plist",), help="print a launchd plist for periodic sweeps"),
+            OptionSpec(("--interval",), metavar="SECONDS", help="launchd interval in seconds (>= 60)"),
+            OptionSpec(("--pid",), metavar="PID", multi=True, help="limit sweep to PID (repeatable)"),
+        ),
+    ),
+    CommandSpec(
+        "dashboard",
+        "dashboard [ARGS...]",
+        "the live view: runs `godfather ARGS...`",
+        passthrough=True,
+    ),
+)
+
+COMMAND_MAP: dict[str, CommandSpec] = {spec.name: spec for spec in COMMANDS}
+
+
+def format_help() -> str:
+    """Generate top-level help text from the command table."""
+    lines = [
+        "usage: slotfather [--help | --version] <command> [options] [args...]",
+        "       slotfather                     (in a terminal: the live dashboard, godfather)",
+        "",
+        "commands:",
+    ]
+    width = max(len(spec.name) for spec in COMMANDS) + 2
+    for spec in COMMANDS:
+        lines.append(f"  {spec.name:<{width}}{spec.summary}")
+    lines.extend([
+        "",
+        "options:",
+        "  -h, --help      show this help and exit",
+        "  --version       show version information and exit",
+        "",
+        "Run 'slotfather <command> --help' for details on a command.",
+    ])
+    return "\n".join(lines)
+
+
+def format_command_help(spec: CommandSpec) -> str:
+    """Generate per-command help text from a CommandSpec."""
+    lines = [f"usage: slotfather {spec.usage}", "", spec.summary]
+    if spec.options:
+        lines.append("")
+        lines.append("options:")
+        entries: list[tuple[str, str]] = []
+        for opt in spec.options:
+            label = ", ".join(opt.names)
+            if opt.metavar:
+                label += f" {opt.metavar}"
+            entries.append((label, opt.help))
+        entries.append(("-h, --help", "show this help and exit"))
+        width = max(len(label) for label, _ in entries) + 2
+        for label, desc in entries:
+            lines.append(f"  {label:<{width}}{desc}")
+    else:
+        lines.append("")
+        lines.append("options:")
+        lines.append("  -h, --help  show this help and exit")
+    return "\n".join(lines)
+
+
+USAGE = format_help()
+
+
+def parse_options(argv: list[str], spec: CommandSpec) -> tuple[dict[str, Any], list[str], list[str], bool]:
+    """Table-driven option parser for one CommandSpec.
+
+    Returns (values, positionals, after_dash, help_requested).
+    """
+    by_name: dict[str, OptionSpec] = {}
+    for opt in spec.options:
+        for name in opt.names:
+            by_name[name] = opt
+    values: dict[str, Any] = {}
+    positionals: list[str] = []
+    after_dash: list[str] = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--":
+            after_dash.extend(argv[i + 1:])
+            break
+        if arg in ("-h", "--help"):
+            return {}, [], [], True
+        if arg.startswith("--") and "=" in arg:
+            opt_name, opt_val = arg.split("=", 1)
+            opt = by_name.get(opt_name)
+            if opt is None:
+                raise UsageError(f"unknown option {opt_name} for {spec.name}", spec.name)
+            if opt.metavar is None:
+                raise UsageError(f"option {opt_name} takes no value", spec.name)
+            if opt.multi:
+                values.setdefault(opt.key, []).append(opt_val)
+            else:
+                values[opt.key] = opt_val
+            i += 1
+        elif arg.startswith("-") and arg != "-":
+            opt = by_name.get(arg)
+            if opt is None:
+                if len(arg) > 1 and arg[1].isdigit():
+                    if spec.stop_at_positional:
+                        positionals.extend(argv[i:])
+                        break
+                    positionals.append(arg)
+                    i += 1
+                    continue
+                raise UsageError(f"unknown option {arg} for {spec.name}", spec.name)
+            if opt.metavar is None:
+                values[opt.key] = True
+                i += 1
+            else:
+                if i + 1 >= len(argv):
+                    raise UsageError(opt.missing_value or f"option {arg} requires a value", spec.name)
+                if opt.multi:
+                    values.setdefault(opt.key, []).append(argv[i + 1])
+                else:
+                    values[opt.key] = argv[i + 1]
+                i += 2
+        else:
+            if spec.stop_at_positional:
+                positionals.extend(argv[i:])
+                break
+            positionals.append(arg)
+            i += 1
+    return values, positionals, after_dash, False
 
 
 def companion(name: str, argv: list[str], title: str) -> int:
@@ -141,127 +418,62 @@ def dashboard(argv: list[str]) -> int:
         return 126
 
 
-USAGE = ("usage: slotfather                     (in a terminal: the live dashboard, godfather)\n"
-         "       slotfather run [-n N|all] [--label L] [--meta KEY=VALUE]... [--priority interactive|normal|batch] [--ticket ID]\n"
-         "                      [--yieldable] [--wait SECONDS] [--] COMMAND...      (inside a lease: slotfather yield)\n"
-         "       slotfather lock PATH -- COMMAND...    (the enclosing lease frees its slots while it waits for the lock)\n"
-         "       slotfather session start --label NAME [-n N|all] [--idle S] [--expect S] [--priority P] [--ticket ID]\n"
-         "                      [--meta K=V]... [--wait S] | session stop NAME | run --session NAME [--label L] -- COMMAND...\n"
-         "       slotfather status [--json [--pid PID | --full]] | available [--label L] [-- COMMAND...]\n"
-         "       slotfather history [N] | history export | history import HOST [FILE]\n"
-         "       slotfather reprioritize PID|LABEL interactive|normal|batch [--start START] | ask-yield PID --start START\n"
-         "       slotfather lane-admission --json                         (one lifetime request on stdin)\n"
-         "       slotfather advise [--max N] [--exclusive] [--label L] [-- COMMAND...]\n"
-         "       slotfather order [backfill|window] [--safety X] [--limit S] [--fallback S] [--overrun X]\n"
-         "                        [--interactive S] [--batch S] [--yield-after S] [--idle-cpu C] [--idle-after S]\n"
-         "                        [--aging-batch S] [--aging-normal S] [--warn-wait S] [--warning-admits 1|0]\n"
-         "                        | reset   (S: 90, 90s, 30m, 1.5h)\n"
-         "       slotfather stats [--since WHEN] [--label GLOB] [--by both|label|kind|family] [--host HOST] [--top N] [--json]\n"
-         "       slotfather slots [N|memory GIB|lower GIB|reset]\n"
-         "       slotfather settings --json | settings check KEY VALUE --json | settings set KEY VALUE [--revision R] --json\n"
-         "                           | settings reset (KEY|--all) [--revision R] --json\n"
-         "       slotfather procs --json [--cwd PATH] [--pid PID] | version [--json] | capabilities --json\n"
-         "       slotfather changelog --json [--since VERSION]\n"
-         "       slotfather sweep [--live [--dev-servers]] [--json] [--quiet] [--pid PID]... | sweep config [KEY VALUE]...\n"
-         "                        | sweep --plist [--live [--dev-servers]] [--interval SECONDS]\n"
-         "       slotfather dashboard [ARGS...]                          (runs godfather ARGS...)")
-
-
 def parse_count(value: str) -> int:
     if value == "all":
         from . import settings as _settings
         return _settings.total()
     if not value.isdigit() or int(value) < 1:
-        raise _config.SlotError(f"-n takes a positive count or all, not {value!r}")
+        raise UsageError(f"-n takes a positive count or all, not {value!r}", "run")
     return int(value)
 
 
-def run_command(argv: list[str]) -> int:
+def run_command(values: dict[str, Any], positionals: list[str], after_dash: list[str]) -> int:
     from . import runner as _runner
-    count, label, wait, yieldable = 1, os.path.basename(os.getcwd()), None, False
-    pairs: list[str] = []
+    cmd = positionals or after_dash
+    if not cmd:
+        raise UsageError("no command to run", "run")
+    counted = "--slots" in values
+    count: int | str = 1
+    if counted:
+        raw_count = str(values["--slots"])
+        count = "all" if raw_count == "all" else parse_count(raw_count)
+    labelled = "--label" in values
+    label = str(values["--label"]) if labelled else os.path.basename(os.getcwd())
+    pairs: list[str] = list(values.get("--meta") or [])
     priority: str | None = None
-    ticket: str | None = None
-    session: str | None = None
-    labelled = counted = False
-    while argv:
-        if argv[0] in ("-n", "--slots") and len(argv) > 1:
-            count, argv = ("all" if argv[1] == "all" else parse_count(argv[1])), argv[2:]
-            counted = True
-        elif argv[0] == "--session" and len(argv) > 1:
-            session, argv = argv[1], argv[2:]
-        elif argv[0] in ("-l", "--label") and len(argv) > 1:
-            label, argv = argv[1], argv[2:]
-            labelled = True
-        elif argv[0] == "--meta" and len(argv) > 1:
-            pairs, argv = pairs + [argv[1]], argv[2:]
-        elif argv[0] == "--priority" and len(argv) > 1:
-            if argv[1] not in _config.PRIORITIES:
-                raise _config.SlotError(f"--priority takes {', '.join(_config.PRIORITIES)}, not {argv[1]!r}")
-            priority, argv = argv[1], argv[2:]
-        elif argv[0] == "--ticket" and len(argv) > 1:
-            ticket, argv = argv[1], argv[2:]
-        elif argv[0] == "--yieldable":
-            yieldable, argv = True, argv[1:]
-        elif argv[0] == "--wait" and len(argv) > 1:
-            try:
-                wait = float(argv[1])
-            except ValueError:
-                raise _config.SlotError(f"--wait takes seconds, not {argv[1]!r}") from None
-            argv = argv[2:]
-        elif argv[0] == "--":
-            argv = argv[1:]
-            break
-        elif argv[0].startswith("-"):
-            raise _config.SlotError(f"unknown option {argv[0]}")
-        else:
-            break
-    if not argv:
-        raise _config.SlotError("no command to run")
+    if "--priority" in values:
+        raw_priority = str(values["--priority"])
+        if raw_priority not in _config.PRIORITIES:
+            raise UsageError(f"--priority takes {', '.join(_config.PRIORITIES)}, not {raw_priority!r}", "run")
+        priority = raw_priority
+    ticket: str | None = str(values["--ticket"]) if "--ticket" in values else None
+    yieldable = bool(values.get("--yieldable", False))
+    wait: float | None = None
+    if "--wait" in values:
+        try:
+            wait = float(values["--wait"])
+        except ValueError:
+            raise UsageError(f"--wait takes seconds, not {values['--wait']!r}", "run") from None
+    session: str | None = str(values["--session"]) if "--session" in values else None
     from .entry import parse_meta
     if session is not None:
         if counted or priority or ticket or yieldable or wait is not None:
-            raise _config.SlotError("run --session takes only --label and --meta: the session's lease is already held")
+            raise UsageError("run --session takes only --label and --meta: the session's lease is already held", "run")
         from .session import run_inside
-        return run_inside(session, argv, label if labelled else None, parse_meta(pairs))
-    return _runner.run(count, label, argv, wait, parse_meta(pairs), yieldable, priority=priority, ticket=ticket,
+        return run_inside(session, cmd, label if labelled else None, parse_meta(pairs))
+    return _runner.run(count, label, cmd, wait, parse_meta(pairs), yieldable, priority=priority, ticket=ticket,
                        labelled=labelled)
 
 
-def request_options(argv: list[str], what: str, flags: dict) -> tuple[dict, str, str]:
-    """`flags` (option -> takes a value) and then `[--label L] [-- COMMAND...]`: (options, label, command). The
-    label defaults to the one run would derive (labels.py), else the directory's name."""
-    found, label, command = {}, os.path.basename(os.getcwd()), ""
-    labelled = False
-    while argv:
-        if argv[0] == "--":
-            command = " ".join(argv[1:])
-            break
-        if argv[0] in ("-l", "--label") and len(argv) > 1:
-            label, argv, labelled = argv[1], argv[2:], True
-        elif argv[0] in flags and (not flags[argv[0]] or len(argv) > 1):
-            found[argv[0]] = argv[1] if flags[argv[0]] else True
-            argv = argv[2:] if flags[argv[0]] else argv[1:]
-        else:
-            raise _config.SlotError(f"unknown {what} option {argv[0]}")
-    if command and not labelled:
-        import contextlib
-        import shlex
-        with contextlib.suppress(Exception):
-            from .labels import choose
-            label = choose(None, os.getcwd(), shlex.split(command))["label"] or label
-    return found, label, command
-
-
-def yield_command(argv: list[str]) -> int:
+def yield_command(values: dict[str, Any], positionals: list[str], after_dash: list[str]) -> int:
     """`slotfather yield`, from inside a yieldable lease between two steps: yields if asked and returns once the
     lease is held again; returns at once when nothing asked. Exit 0 either way."""
     from . import client as _client
     from . import process as _process
     from . import queue as _queue
     from . import state as _state
-    if argv:
-        raise _config.SlotError("yield takes no arguments")
+    if positionals or after_dash:
+        raise UsageError("yield takes no arguments", "yield")
     _state.require_own(_config.state_dir(), "yield")
     found = _queue.inherited_lease(_process.processes())
     if found is None or found[0].parent.parent != _config.state_dir():
@@ -271,76 +483,282 @@ def yield_command(argv: list[str]) -> int:
     return 0
 
 
-def status_command(argv: list[str]) -> int:
-    """`status --json [--pid PID | --full]`."""
-    from . import query as _query
-    pid = None
-    if argv == ["--full"]:
+def lock_command(values: dict[str, Any], positionals: list[str], after_dash: list[str]) -> int:
+    from .lockwait import command as _lock_command
+    reconstructed = list(positionals)
+    if after_dash:
+        reconstructed.append("--")
+        reconstructed.extend(after_dash)
+    return _lock_command(reconstructed)
+
+
+def session_command(argv: list[str]) -> int:
+    if argv[:1] == ["hold"]:
+        from .session import command as _session_command
+        return _session_command(argv)
+    spec = COMMAND_MAP["session"]
+    values, positionals, after_dash, help_requested = parse_options(argv, spec)
+    if help_requested:
+        print(format_command_help(spec))
+        return 0
+    if after_dash:
+        raise UsageError("session does not take -- arguments", "session")
+    if not positionals or positionals[0] not in ("start", "stop"):
+        bad = positionals[0] if positionals else ""
+        raise UsageError(f"session takes start or stop{f', not {bad!r}' if bad else ''}", "session")
+    forwarded: list[str] = [positionals[0]]
+    for opt in spec.options:
+        if opt.key not in values:
+            continue
+        if opt.multi:
+            for item in values[opt.key]:
+                forwarded.extend([opt.key, str(item)])
+        elif opt.metavar is None:
+            forwarded.append(opt.key)
+        else:
+            forwarded.extend([opt.key, str(values[opt.key])])
+    forwarded.extend(positionals[1:])
+    from .session import command as _session_command
+    return _session_command(forwarded)
+
+
+def status_command(values: dict[str, Any], positionals: list[str], after_dash: list[str]) -> int:
+    """`status [--json [--pid PID | --full]]`."""
+    if positionals or after_dash:
+        bad = (positionals or after_dash)[0]
+        raise UsageError(f"unexpected argument {bad!r} for status", "status")
+    as_json = bool(values.get("--json", False))
+    full = bool(values.get("--full", False))
+    raw_pid = values.get("--pid")
+    if not as_json:
+        if full or raw_pid is not None:
+            raise UsageError("status takes --json with --pid or --full", "status")
+        from . import query as _query
+        print("\n".join(_query.status_lines()))
+        return 0
+    if full and raw_pid is not None:
+        raise UsageError("status takes --pid or --full, not both", "status")
+    if full:
         from . import board as _board
         print(json.dumps(_board.full_status(), sort_keys=True))
         return 0
-    if argv[:1] == ["--pid"] and len(argv) == 2 and argv[1].isdigit():
-        pid = int(argv[1])
-    elif argv:
-        raise _config.SlotError("status takes --json and then optionally --pid PID or --full")
+    pid: int | None = None
+    if raw_pid is not None:
+        text_pid = str(raw_pid)
+        if not text_pid.isdigit():
+            raise UsageError(f"--pid takes a positive integer, not {text_pid!r}", "status")
+        pid = int(text_pid)
+    from . import query as _query
     print(json.dumps(_query.status_json(pid=pid), sort_keys=True))
     return 0
 
 
-def start_option(argv: list[str]) -> tuple[list[str], str | None]:
-    """`--start START` (a process start time as `status --json` gives it) taken out of argv."""
-    if "--start" not in argv:
-        return argv, None
-    at = argv.index("--start")
-    if at + 1 >= len(argv) or not argv[at + 1].strip():
-        raise _config.SlotError("--start takes the process's start time, as status --json gives it")
-    return argv[:at] + argv[at + 2:], argv[at + 1]
+def capabilities_command(values: dict[str, Any], positionals: list[str], after_dash: list[str]) -> int:
+    if positionals or after_dash:
+        bad = (positionals or after_dash)[0]
+        raise UsageError(f"unexpected argument {bad!r} for capabilities", "capabilities")
+    from .capabilities import capabilities
+    data = capabilities()
+    if values.get("--json"):
+        print(json.dumps(data, sort_keys=True))
+        return 0
+    dash = data["dashboard"]
+    actions = ", ".join(dash.get("actions", []))
+    print(f"{data['tool']} {data['version']} (capabilities v{data['v']}; dashboard v{dash['v']}, actions: {actions})")
+    return 0
 
 
-def reprioritize_command(argv: list[str]) -> int:
-    """`slotfather reprioritize PID|LABEL interactive|normal|batch [--start START]`: the request keeps its
-    arrival."""
+def settings_command(values: dict[str, Any], positionals: list[str], after_dash: list[str]) -> int:
+    if after_dash:
+        raise UsageError("settings does not take -- arguments", "settings")
+    as_json = bool(values.get("--json", False))
+    wanted: str | None = str(values["--revision"]) if "--revision" in values else None
+    reset_all = bool(values.get("--all", False))
+    if as_json:
+        forwarded: list[str] = list(positionals)
+        if reset_all:
+            forwarded.append("--all")
+        if wanted is not None:
+            forwarded.extend(["--revision", wanted])
+        forwarded.append("--json")
+        from .settings_cli import command as _settings_command
+        return _settings_command(forwarded)
+    from . import settings_cli as _settings_cli
+    if not positionals and wanted is None and not reset_all:
+        document = _settings_cli.Reading().document()
+        for section in document["sections"]:
+            print(f"[{section['title']}]")
+            for row in section["settings"]:
+                print(f"  {row['key']} = {row['value']}")
+        return 0
+    try:
+        if len(positionals) == 3 and positionals[0] == "check" and wanted is None and not reset_all:
+            _, reply = _settings_cli.change(_settings_cli.Reading(), positionals[1], positionals[2])
+            print(reply.get("message") or json.dumps(reply, sort_keys=True))
+            return 0
+        if len(positionals) == 3 and positionals[0] == "set" and not reset_all:
+            changes, _ = _settings_cli.change(_settings_cli.Reading(), positionals[1], positionals[2])
+            code, reply = _settings_cli.save(changes, wanted)
+            print(reply.get("message") or reply.get("error") or json.dumps(reply, sort_keys=True))
+            return code
+        if positionals[:1] == ["reset"]:
+            target = "--all" if reset_all and len(positionals) == 1 else (
+                positionals[1] if len(positionals) == 2 and not reset_all else None)
+            if target is not None:
+                code, reply = _settings_cli.save(_settings_cli.reset_change(target), wanted)
+                print(reply.get("message") or reply.get("error") or json.dumps(reply, sort_keys=True))
+                return code
+    except _settings_cli.Invalid as error:
+        raise UsageError(str(error), "settings") from None
+    raise UsageError("settings takes [check KEY VALUE | set KEY VALUE | reset KEY|--all] [--revision R] [--json]",
+                     "settings")
+
+
+def reprioritize_command(values: dict[str, Any], positionals: list[str], after_dash: list[str]) -> int:
+    """`slotfather reprioritize PID|LABEL interactive|normal|batch [--start START]`."""
     from . import leases as _leases
-    argv, start = start_option(argv)
-    if len(argv) != 2 or argv[1] not in _config.PRIORITIES:
-        raise _config.SlotError(f"reprioritize takes a pid or label and then one of {', '.join(_config.PRIORITIES)}")
-    for entry in _leases.reprioritize(argv[0], argv[1], start=start):
+    if after_dash:
+        raise UsageError("reprioritize does not take -- arguments", "reprioritize")
+    start: str | None = None
+    if "--start" in values:
+        start = str(values["--start"])
+        if not start.strip():
+            raise UsageError("--start takes the process's start time, as status --json gives it", "reprioritize")
+    if len(positionals) != 2 or positionals[1] not in _config.PRIORITIES:
+        raise UsageError(f"reprioritize takes a pid or label and then one of {', '.join(_config.PRIORITIES)}",
+                         "reprioritize")
+    for entry in _leases.reprioritize(positionals[0], positionals[1], start=start):
         first = entry.get("reprioritized")
-        print(f"{entry.get('label')} (pid {entry.get('pid')}, {entry.get('state')}): {argv[1]}" +
-              (f", asked {first} first" if first and first != argv[1] else "") +
+        print(f"{entry.get('label')} (pid {entry.get('pid')}, {entry.get('state')}): {positionals[1]}" +
+              (f", asked {first} first" if first and first != positionals[1] else "") +
               f"; queued since {entry.get('since')}")
     return 0
 
 
-def ask_yield_command(argv: list[str]) -> int:
-    """`slotfather ask-yield PID --start START`: ask a yieldable lease to yield for a waiter of a higher class."""
+def ask_yield_command(values: dict[str, Any], positionals: list[str], after_dash: list[str]) -> int:
+    """`slotfather ask-yield PID --start START`."""
     from . import leases as _leases
-    argv, start = start_option(argv)
-    if len(argv) != 1 or not argv[0].isdigit() or start is None:
-        raise _config.SlotError("ask-yield takes the holder's pid and --start START")
-    entry, request, before = _leases.ask_yield(int(argv[0]), start)
+    if after_dash:
+        raise UsageError("ask-yield does not take -- arguments", "ask-yield")
+    start = str(values["--start"]) if "--start" in values else None
+    if start is not None and not start.strip():
+        raise UsageError("--start takes the process's start time, as status --json gives it", "ask-yield")
+    if len(positionals) != 1 or not positionals[0].isdigit() or start is None:
+        raise UsageError("ask-yield takes the holder's pid and --start START", "ask-yield")
+    entry, request, before = _leases.ask_yield(int(positionals[0]), start)
     print(f"{entry.get('label')} (pid {entry.get('pid')}): " +
           (f"already asked to yield for {request.get('label')}" if before else
            f"asked to yield {entry.get('count')} slot(s) for {request.get('label')}; it yields at its next check"))
     return 0
 
 
-def advise_command(argv: list[str]) -> int:
-    from . import query as _query
-    found, label, command = request_options(argv, "advise", {"--max": True, "--exclusive": False})
-    maximum = parse_count(found["--max"]) if "--max" in found else None
-    print(json.dumps(_query.advise(maximum, "--exclusive" in found, label=label, command=command), sort_keys=True))
+def procs_command(values: dict[str, Any], positionals: list[str], after_dash: list[str]) -> int:
+    if positionals or after_dash:
+        bad = (positionals or after_dash)[0]
+        raise UsageError(f"unexpected argument {bad!r} for procs", "procs")
+    pid: int | None = None
+    if "--pid" in values:
+        raw_pid = str(values["--pid"])
+        if not raw_pid.isascii() or not raw_pid.isdigit() or int(raw_pid) <= 0:
+            raise UsageError(f"--pid takes a positive integer, not {raw_pid!r}", "procs")
+        pid = int(raw_pid)
+    cwd = str(values["--cwd"]) if "--cwd" in values else None
+    from . import procs as _procs
+    found = _procs.query(pid=pid, cwd=cwd)
+    if values.get("--json"):
+        print(json.dumps(found))
+        return 0
+    for proc in found["processes"]:
+        print(f"pid={proc['pid']} ppid={proc['ppid']} uid={proc['uid']} cmd={proc['cmd']}")
     return 0
 
 
-def available_command(argv: list[str]) -> int:
+def lane_admission_command(values: dict[str, Any], positionals: list[str], after_dash: list[str]) -> int:
+    if positionals or after_dash or not values.get("--json"):
+        raise UsageError("lane-admission takes --json and one stdin request", "lane-admission")
+    from .lane_admission import command as _lane_admission_command
+    return _lane_admission_command(["--json"])
+
+
+def version_command(values: dict[str, Any], positionals: list[str], after_dash: list[str]) -> int:
+    if positionals or after_dash:
+        bad = (positionals or after_dash)[0]
+        raise UsageError(f"unexpected argument {bad!r} for version", "version")
+    from .version import info, text
+    if values.get("--json"):
+        print(json.dumps(info(), sort_keys=True))
+    else:
+        print(text())
+    return 0
+
+
+def changelog_command(values: dict[str, Any], positionals: list[str], after_dash: list[str]) -> int:
+    if positionals or after_dash:
+        bad = (positionals or after_dash)[0]
+        raise UsageError(f"unexpected argument {bad!r} for changelog", "changelog")
+    from . import changelog as _changelog
+    since = str(values["--since"]) if "--since" in values else None
+    if since is not None:
+        _changelog.version_key(since)
+    data = _changelog.changelog(since)
+    if values.get("--json"):
+        print(json.dumps(data, sort_keys=True))
+        return 0
+    for entry in data["entries"]:
+        header = "Unreleased" if entry.get("unreleased") else f"{entry.get('version')} ({entry.get('date')})"
+        section = f" [{entry['section']}]" if entry.get("section") else ""
+        print(f"{header}{section}: {entry['text']}")
+    return 0
+
+
+def history_command(values: dict[str, Any], positionals: list[str], after_dash: list[str]) -> int:
+    if after_dash:
+        raise UsageError("history does not take -- arguments", "history")
+    if positionals and not positionals[0].isdigit():
+        from .archive import command as _archive_command
+        return _archive_command(positionals)
+    if not positionals or (len(positionals) == 1 and positionals[0].isdigit()):
+        from . import state as _state
+        print("\n".join(_state.history_lines(int(positionals[0]) if positionals else 20)))
+        return 0
+    raise UsageError("history takes N, export, or import HOST [FILE]", "history")
+
+
+def _resolve_request_label(values: dict[str, Any], after_dash: list[str]) -> tuple[str, str]:
+    labelled = "--label" in values
+    label = str(values["--label"]) if labelled else os.path.basename(os.getcwd())
+    command = " ".join(after_dash)
+    if command and not labelled:
+        import contextlib
+        import shlex
+        with contextlib.suppress(Exception):
+            from .labels import choose
+            label = choose(None, os.getcwd(), shlex.split(command))["label"] or label
+    return label, command
+
+
+def advise_command(values: dict[str, Any], positionals: list[str], after_dash: list[str]) -> int:
+    if positionals:
+        raise UsageError(f"unexpected argument {positionals[0]!r} for advise (use -- before COMMAND)", "advise")
     from . import query as _query
-    _, label, command = request_options(argv, "available", {})
+    label, command = _resolve_request_label(values, after_dash)
+    maximum = parse_count(str(values["--max"])) if "--max" in values else None
+    found = _query.advise(maximum, bool(values.get("--exclusive", False)), label=label, command=command)
+    reply: dict[str, Any] = {"v": 1, **found} if "v" not in found else found
+    print(json.dumps(reply, sort_keys=True))
+    return 0
+
+
+def available_command(values: dict[str, Any], positionals: list[str], after_dash: list[str]) -> int:
+    if positionals:
+        raise UsageError(f"unexpected argument {positionals[0]!r} for available (use -- before COMMAND)", "available")
+    from . import query as _query
+    label, command = _resolve_request_label(values, after_dash)
     print(_query.available(label=label, command=command))
     return 0
 
 
-def order_line(found: dict) -> str:
+def order_line(found: dict[str, Any]) -> str:
     def ages(key: str) -> str:
         return f"after {found[key]:g} s" if found[key] else "never"
     return (f"{found['order']}: safety {found['safety']:g}, limit {found['limit']:g} s, fallback "
@@ -353,44 +771,46 @@ def order_line(found: dict) -> str:
             f"({'saved' if found['saved'] else 'default'})")
 
 
-def order_command(argv: list[str]) -> int:
-    """`slotfather order [backfill|window] [--safety X] [--limit S] [--fallback S] [--overrun X] [--idle-cpu C]
-    [--idle-after S] [--aging-batch S] [--aging-normal S] [--warn-wait S] [--reservation-timeout S]
-    [--warning-admits 1|0] | reset`; S is
-    seconds or 30m, 1.5h."""
+def order_command(values: dict[str, Any], positionals: list[str], after_dash: list[str]) -> int:
+    """`slotfather order [backfill|window] [--safety X] ... [--json] | reset [--json]`."""
+    if after_dash:
+        raise UsageError("order does not take -- arguments", "order")
     from . import durations as _durations
     from . import leases as _leases
     from . import settings as _settings
     directory = _config.state_dir()
     changes: dict[str, Any] = {}
     reset = False
-    while argv:
-        word = argv.pop(0)
+    for word in positionals:
         if word in _config.QUEUE_ORDERS:
             changes["order"] = word
-        elif word == "reset" and not changes:
+        elif word == "reset":
             reset = True
-        elif word.startswith("--") and word[2:].replace("-", "_") in _config.ORDER_KNOBS and argv:
-            key = word[2:].replace("-", "_")
-            try:
-                changes[key] = _durations.clock(argv.pop(0)) if key in _config.DURATION_KNOBS else \
-                    float(argv.pop(0))
-            except ValueError:
-                raise _config.SlotError(f"{word} takes " + ("seconds, or a duration such as 30m or 1.5h"
-                                                            if key in _config.DURATION_KNOBS else "a number")) from None
         else:
-            raise _config.SlotError(f"order takes backfill or window, --safety, --limit, --fallback, --overrun, "
-                            f"--interactive, --batch, --yield-after, --idle-cpu, --idle-after, --aging-batch, "
-                            f"--aging-normal, --warn-wait, --reservation-timeout, --warning-admits, or reset; not {word!r}")
+            raise UsageError(f"unknown order argument {word!r}; expected backfill, window, or reset", "order")
+    for knob in _config.ORDER_KNOBS:
+        flag = "--" + knob.replace("_", "-")
+        if flag not in values:
+            continue
+        raw = str(values[flag])
+        try:
+            changes[knob] = _durations.clock(raw) if knob in _config.DURATION_KNOBS else float(raw)
+        except ValueError:
+            kind = "seconds, or a duration such as 30m or 1.5h" if knob in _config.DURATION_KNOBS else "a number"
+            raise UsageError(f"{flag} takes {kind}, not {raw!r}", "order") from None
     if reset and changes:
-        raise _config.SlotError("order reset takes nothing else")
+        raise UsageError("order reset takes nothing else", "order")
     if changes or reset:
         _settings.configure({"order.json": None if reset else changes}, granted=_leases.grant_now)
     saved = _settings.order_settings(directory, environment=False)
     moved = _settings.order_extension_keys(saved)
     if (changes or reset) and moved:
         print(f"slotfather: note: {_settings.order_compatibility(moved, historical=True)}", file=sys.stderr)
-    print(order_line(_settings.order_settings(directory)))
+    current = _settings.order_settings(directory)
+    if values.get("--json"):
+        print(json.dumps({"v": 1, **current}, sort_keys=True))
+    else:
+        print(order_line(current))
     return 0
 
 
@@ -401,104 +821,202 @@ def slots_value(argv: list[str]) -> dict[str, Any] | None:
 
 
 def slots_command(argv: list[str]) -> int:
+    spec = COMMAND_MAP["slots"]
+    values, positionals, after_dash, help_requested = parse_options(argv, spec)
+    if help_requested:
+        print(format_command_help(spec))
+        return 0
+    if after_dash:
+        raise UsageError("slots does not take -- arguments", "slots")
     from . import leases as _leases
     from . import query as _query
     from . import settings as _settings
     from . import state as _state
     directory = _config.state_dir()
-    if argv:
+    if positionals:
         _state.require_own(directory, "a capacity change")
         # applies at the next grant, busy or not (#7)
-        _settings.configure({"capacity.json": slots_value(argv)}, granted=_leases.grant_now)
+        _settings.configure({"capacity.json": slots_value(positionals)}, granted=_leases.grant_now)
     look = _query.look(directory)
     found, held, drain = look.basis, look.held, look.draining
     if drain:
         print(f"slotfather: note: {held} slots held: draining {drain}; running work keeps its slots and nothing "
               f"more starts until at most {found['slots']} are held", file=sys.stderr)
-    print(_settings.capacity_text(found))
+    if values.get("--json"):
+        print(json.dumps({"v": 1, "slots": found["slots"], "held": held, "draining": drain, "basis": found},
+                         sort_keys=True))
+    else:
+        print(_settings.capacity_text(found))
     return 0
+
+
+def stats_command(values: dict[str, Any], positionals: list[str], after_dash: list[str]) -> int:
+    if positionals or after_dash:
+        bad = (positionals or after_dash)[0]
+        raise UsageError(f"unexpected argument {bad!r} for stats", "stats")
+    from importlib import import_module
+    try:
+        stats_mod = import_module("slotfather.stats")
+    except ModuleNotFoundError as error:
+        if error.name != "slotfather.stats":
+            raise
+        raise _config.SlotError("slotfather-stats is not installed") from None
+    since = None
+    if "--since" in values:
+        try:
+            since = stats_mod.parse_since(str(values["--since"]))
+        except stats_mod.StatsError as error:
+            raise UsageError(str(error), "stats") from None
+    label = str(values["--label"]) if "--label" in values else None
+    host = str(values["--host"]) if "--host" in values else None
+    project = str(values["--project"]) if "--project" in values else None
+    phase = str(values["--phase"]) if "--phase" in values else None
+    trend = bool(values.get("--trend", False))
+    as_json = bool(values.get("--json", False))
+    by = "both"
+    if "--by" in values:
+        raw_by = str(values["--by"])
+        valid_by = raw_by in ("both", "label", "kind", "priority", "ticket", "family", "derived") or (
+            raw_by.startswith("meta.") and raw_by[5:] not in ("class", "priority", "ticket")
+            and bool(_config.META_KEY.fullmatch(raw_by[5:])))
+        if not valid_by:
+            raise UsageError(f"--by takes both, label, kind, priority, ticket, family, derived, or meta.KEY, not {raw_by!r}",
+                             "stats")
+        by = raw_by
+    top = 25
+    if "--top" in values:
+        raw_top = str(values["--top"])
+        if not raw_top.isdigit():
+            raise UsageError(f"--top takes a non-negative integer, not {raw_top!r}", "stats")
+        top = int(raw_top)
+    try:
+        if trend:
+            from . import runtype as _runtype
+            found = _runtype.report(since=since, project=project, phase=phase)
+            if as_json:
+                reply = found if isinstance(found.get("v"), int) else {"v": 1, **found}
+                print(json.dumps(reply, sort_keys=True))
+            else:
+                print(_runtype.report_text(found))
+            return 0
+        summary = stats_mod.summarize(since=since, label=label, by=by, host=host)
+    except stats_mod.StatsError as error:
+        raise UsageError(str(error), "stats") from None
+    if as_json:
+        reply = summary if isinstance(summary.get("v"), int) else {"v": 1, **summary}
+        print(json.dumps(reply, sort_keys=True))
+    else:
+        print(stats_mod.report(summary, top))
+    return 0
+
+
+def sweep_command(argv: list[str]) -> int:
+    spec = COMMAND_MAP["sweep"]
+    if argv[:1] == ["config"]:
+        if any(arg in ("-h", "--help") for arg in argv[1:]):
+            print(format_command_help(spec))
+            return 0
+        return companion("sweep", argv, "slotfather-sweep")
+    values, positionals, after_dash, help_requested = parse_options(argv, spec)
+    if help_requested:
+        print(format_command_help(spec))
+        return 0
+    if positionals or after_dash:
+        bad = (positionals or after_dash)[0]
+        raise UsageError(f"unexpected argument {bad!r} for sweep", "sweep")
+    normalized: list[str] = []
+    for flag in ("--live", "--dev-servers", "--json", "--quiet", "--no-log", "--plist"):
+        if values.get(flag):
+            normalized.append(flag)
+    if "--interval" in values:
+        raw_interval = str(values["--interval"])
+        if not raw_interval.isdigit() or int(raw_interval) < 60:
+            raise UsageError(f"--interval takes an integer >= 60, not {raw_interval!r}", "sweep")
+        normalized.extend(["--interval", raw_interval])
+    raw_pids: list[str] = list(values.get("--pid") or [])
+    for raw_pid in raw_pids:
+        text_pid = str(raw_pid)
+        if not text_pid.isdigit():
+            raise UsageError(f"--pid takes a positive integer, not {text_pid!r}", "sweep")
+        normalized.extend(["--pid", text_pid])
+    return companion("sweep", normalized, "slotfather-sweep")
+
+
+HANDLERS: dict[str, Callable[[dict[str, Any], list[str], list[str]], int]] = {
+    "run": run_command,
+    "yield": yield_command,
+    "lock": lock_command,
+    "status": status_command,
+    "capabilities": capabilities_command,
+    "settings": settings_command,
+    "reprioritize": reprioritize_command,
+    "ask-yield": ask_yield_command,
+    "procs": procs_command,
+    "lane-admission": lane_admission_command,
+    "version": version_command,
+    "changelog": changelog_command,
+    "history": history_command,
+    "stats": stats_command,
+    "available": available_command,
+    "advise": advise_command,
+    "order": order_command,
+}
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    command, rest = (argv[0], argv[1:]) if argv else ("", [])
-    # A person typing just `slotfather` wants to see the queue; a script or agent without a terminal gets the usage.
-    if not argv and sys.stdin.isatty() and sys.stdout.isatty():
-        command = "dashboard"
+    # A person typing just `slotfather` wants to see the queue; a script or agent without a terminal gets usage.
+    if not argv:
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            return dashboard([])
+        print("usage: slotfather <command> [options] [args...]\nTry 'slotfather --help'.", file=sys.stderr)
+        return 2
+    command, rest = argv[0], argv[1:]
+    if command in ("-h", "--help"):
+        print(format_help())
+        return 0
+    if command == "help":
+        if not rest:
+            print(format_help())
+            return 0
+        if len(rest) == 1 and rest[0] in COMMAND_MAP:
+            print(format_command_help(COMMAND_MAP[rest[0]]))
+            return 0
+        print(f"slotfather: unknown command {rest[0]!r}\nTry 'slotfather --help'.", file=sys.stderr)
+        return 2
+    if command == "--version":
+        if rest:
+            print(f"slotfather: unexpected argument {rest[0]!r} for --version\nTry 'slotfather --help'.", file=sys.stderr)
+            return 2
+        from .version import text
+        print(text())
+        return 0
+    if command.startswith("-"):
+        print(f"slotfather: unknown option {command}\nTry 'slotfather --help'.", file=sys.stderr)
+        return 2
+    spec = COMMAND_MAP.get(command)
+    if spec is None:
+        print(f"slotfather: unknown command {command!r}\nTry 'slotfather --help'.", file=sys.stderr)
+        return 2
     try:
-        if command == "lane-admission":
-            from .lane_admission import command as lane_admission_command
-            return lane_admission_command(rest)
-        if command == "version":
-            from .version import info, text
-            if rest == ["--json"]:
-                print(json.dumps(info(), sort_keys=True))
-            elif not rest:
-                print(text())
-            else:
-                raise _config.SlotError("version takes only --json")
-            return 0
-        if command == "changelog":
-            from .changelog import command as changelog_command
-            return changelog_command(rest)
-        if command == "capabilities":
-            if rest != ["--json"]:
-                raise _config.SlotError("capabilities takes --json")
-            from .capabilities import capabilities
-            print(json.dumps(capabilities(), sort_keys=True))
-            return 0
-        if command == "settings":
-            from .settings_cli import command as settings_command
-            return settings_command(rest)
-        if command == "procs":
-            from .procs import command as procs_command
-            return procs_command(rest)
-        if command == "run":
-            return run_command(rest)
+        if spec.passthrough:
+            return dashboard(rest)
         if command == "session":
-            from .session import command as session_command
             return session_command(rest)
+        if command == "sweep":
+            return sweep_command(rest)
         if command == "slots":
             return slots_command(rest)
-        if command == "status" and not rest:
-            from . import query as _query
-            print("\n".join(_query.status_lines()))
+        values, positionals, after_dash, help_requested = parse_options(rest, spec)
+        if help_requested:
+            print(format_command_help(spec))
             return 0
-        if command == "status" and rest[:1] == ["--json"]:
-            return status_command(rest[1:])
-        if command == "yield":
-            return yield_command(rest)
-        if command == "lock":
-            from .lockwait import command as lock_command
-            return lock_command(rest)
-        if command == "reprioritize":
-            return reprioritize_command(rest)
-        if command == "ask-yield":
-            return ask_yield_command(rest)
-        if command == "history" and rest and not rest[0].isdigit():
-            from .archive import command as history_command
-            return history_command(rest)
-        if command == "history" and (not rest or (len(rest) == 1 and rest[0].isdigit())):
-            from . import state as _state
-            print("\n".join(_state.history_lines(int(rest[0]) if rest else 20)))
-            return 0
-        if command == "available":
-            return available_command(rest)
-        if command == "order":
-            return order_command(rest)
-        if command == "advise":
-            return advise_command(rest)
-        if command == "dashboard":
-            return dashboard(rest)
-        if command == "stats":
-            return companion("stats", rest, "slotfather-stats")
-        if command == "sweep":
-            return companion("sweep", rest, "slotfather-sweep")
-        if command in ("-h", "--help", "help"):
-            print(__doc__)
-            return 0
-    except _config.SlotError as error:
-        print(f"slotfather: {error}\n{USAGE}", file=sys.stderr)
+        return HANDLERS[command](values, positionals, after_dash)
+    except UsageError as error:
+        pointer = f"slotfather {error.command} --help" if error.command else "slotfather --help"
+        print(f"slotfather: {error}\nTry '{pointer}'.", file=sys.stderr)
         return 2
-    print(USAGE, file=sys.stderr)
-    return 2
+    except _config.SlotError as error:
+        pointer = f"slotfather {command} --help" if command in COMMAND_MAP else "slotfather --help"
+        print(f"slotfather: {error}\nTry '{pointer}'.", file=sys.stderr)
+        return 2

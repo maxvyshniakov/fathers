@@ -28,19 +28,7 @@ TOOL = cliconvention.Tool("slotfather", (sys.executable, str(PACKAGE / "slotfath
     Command("stats", json=(), option=("--label", "x")), Command("slots", json=()), Command("available"),
     Command("advise", json=()), Command("order", json=()), Command("sweep"),
 ))
-EXPECTED: dict[str, str] = dict.fromkeys((
-    "version", "unknown command", "unknown option", "run --help", "run unknown option", "yield --help",
-    "yield unknown option", "session --help", "session unknown option", "status --help", "status unknown option",
-    "capabilities --help", "capabilities unknown option", "capabilities without --json", "settings --help",
-    "settings unknown option", "settings without --json", "reprioritize --help", "reprioritize unknown option",
-    "ask-yield --help", "ask-yield unknown option", "procs --help", "procs unknown option", "procs without --json",
-    "lane-admission --help", "lane-admission unknown option", "version --help", "version unknown option",
-    "changelog --help", "changelog unknown option", "changelog without --json", "changelog --opt=value",
-    "history --help", "history unknown option", "stats unknown option", "stats --json", "stats --opt=value",
-    "slots --help", "slots unknown option", "slots --json", "available --help", "available unknown option",
-    "advise --help", "advise unknown option", "advise --json", "order --help", "order unknown option",
-    "order --json", "sweep unknown option",
-), "fathers#124")
+EXPECTED: dict[str, str] = {}
 
 
 class CLIConvention(cliconvention.conformance(TOOL, expected=EXPECTED)):

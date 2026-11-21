@@ -83,6 +83,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Changed
 
+- The CLI conforms to the shared CLI convention (`docs/cli.md`, fathers#124): table-driven parsing with per-command
+  `--help`, one-line usage errors pointing to `--help`, `--opt=value`, `--version`, and optional `--json` on
+  `slots`, `order`, `capabilities`, `settings`, `procs`, `changelog`, `stats`, and `advise`.
 - The library's `acquire()` and `Lease` are in `slotfather.client` (were `slotfather.leases`), `run()` and
   `execute()` in `slotfather.runner`; `slotfather.leases` keeps the queue transactions (fathers#37).
 - The installer retries a held queue lock for up to 15 seconds (`SLOTFATHER_INSTALL_LOCK_WAIT`) before it refuses.
