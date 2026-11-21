@@ -22,7 +22,7 @@ import re
 import subprocess
 import sys
 import time
-from typing import Any
+from typing import Any, cast
 
 from . import claims, config, done, journal, lanes, reviewer, settings, state, worktrees
 from .checks import terminable
@@ -113,13 +113,31 @@ def missing_members(receipt: dict[str, Any]) -> list[str]:
 
 
 # The family of the agent that ran the lane's last check (lanefather.events.actor), for the role's `not_family`.
-FAMILIES = {"claude-code": "anthropic", "codex": "openai", "antigravity": "google"}
+FAMILIES = {"claude-code": "anthropic", "codex": "openai", "antigravity": "google", "t3-code": "google"}
 
 
 def implementer_family(lane_id: str) -> str | None:
     """The implementer's model family: that of the agent whose `check` wrote the lane's receipt, None unknown."""
     receipt = state.read_json(state.receipt_path(lane_id)) or {}
-    return FAMILIES.get(str(receipt.get("agent")))
+    family = FAMILIES.get(str(receipt.get("agent")))
+    if family:
+        return family
+    record = state.read_json(state.record_path(lane_id)) or {}
+    agents: list[Any] = record.get("agents") or []
+    for raw_entry in reversed(agents):
+        if isinstance(raw_entry, dict):
+            entry = cast(dict[str, Any], raw_entry)
+            kind = str(entry.get("kind") or "")
+            if kind in FAMILIES:
+                return FAMILIES[kind]
+            model = str(entry.get("model") or "").lower()
+            if model.startswith("gemini-"):
+                return "google"
+            if model.startswith("claude-"):
+                return "anthropic"
+            if model.startswith("gpt-"):
+                return "openai"
+    return None
 
 
 def steering() -> tuple[str, ...]:
@@ -273,13 +291,17 @@ def perform_review(label: str, fields: dict[str, Any], main: str, base: str, tip
                    kind="review.finished", level="info" if receipt["status"] == "finished" else "warn",
                    **review_about(label, fields),
                    details={"status": receipt["status"], "reviewer": receipt.get("reviewer"),
+                            "provider": receipt.get("provider"), "cli": receipt.get("cli"),
                             "model": receipt.get("model"), "effort": receipt["effort"],
+                            "options": receipt.get("options"),
                             "seconds": receipt["seconds"], "findings": len(findings),
                             "severities": {s.lower(): sum(1 for f in findings if f["severity"] == s)
                                            for s in SEVERITIES},
                             "fallback": receipt["fallback"], "error": receipt.get("error"),
                             **({"panel": [{"member": e.get("member"), "reviewer": e.get("reviewer"),
+                                           "provider": e.get("provider"), "cli": e.get("cli"),
                                            "status": e.get("status"), "model": e.get("model"),
+                                           "options": e.get("options"),
                                            "seconds": e.get("seconds"), "findings": len(e.get("numbers") or [])}
                                           for e in receipt["panel"]]} if receipt.get("panel") else {})})
     return receipt
@@ -464,9 +486,11 @@ def reviewer_views(receipt: dict[str, Any]) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = receipt.get("findings", [])
     panel: list[dict[str, Any]] = receipt.get("panel") or []
     if not panel:
-        return [{"member": receipt.get("reviewer"), "reviewer": receipt.get("reviewer"), "model": receipt.get("model"),
-                 "effort": receipt.get("effort"), "seconds": receipt.get("seconds"), "status": receipt.get("status"),
-                 "reason": receipt.get("fallback"), "findings": findings}]
+        return [{"member": receipt.get("reviewer"), "reviewer": receipt.get("reviewer"),
+                 "provider": receipt.get("provider"), "cli": receipt.get("cli"),
+                 "model": receipt.get("model"), "effort": receipt.get("effort"),
+                 "options": receipt.get("options"), "seconds": receipt.get("seconds"),
+                 "status": receipt.get("status"), "reason": receipt.get("fallback"), "findings": findings}]
     by_number = {f["n"]: f for f in findings}
     views: list[dict[str, Any]] = []
     for entry in panel:

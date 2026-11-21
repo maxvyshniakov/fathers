@@ -426,6 +426,26 @@ if os.environ.get("FIXTURE_CLAUDE_FAIL"):
 sys.stdout.write(pathlib.Path(os.environ.get("FIXTURE_CLAUDE_TEXT") or os.environ["FIXTURE_REVIEW_TEXT"]).read_text())
 '''
 
+FAKE_ANTIGRAVITY = r'''#!/usr/bin/env python3
+import json, os, pathlib, sys
+args = sys.argv[1:]
+log = os.environ["FIXTURE_ANTIGRAVITY_LOG"]
+with open(log, "a") as handle:
+    handle.write(json.dumps([os.path.realpath(sys.argv[0]), os.path.realpath(os.getcwd()), *args]) + "\n")
+prompt = sys.stdin.read() if not sys.stdin.isatty() else ""
+pathlib.Path(log + ".prompt").write_text(prompt)
+if os.environ.get("FIXTURE_ANTIGRAVITY_FAIL"):
+    print("antigravity: quota exceeded or backend error", file=sys.stderr)
+    sys.exit(1)
+if os.environ.get("FIXTURE_ANTIGRAVITY_EMPTY"):
+    sys.exit(0)
+text = pathlib.Path(os.environ.get("FIXTURE_ANTIGRAVITY_TEXT") or os.environ["FIXTURE_REVIEW_TEXT"]).read_text()
+if "-o" in args:
+    pathlib.Path(args[args.index("-o") + 1]).write_text(text)
+else:
+    sys.stdout.write(text)
+'''
+
 # A stand-in for Mastack's `bin/role` (fathers#150), installed beside a models file by LaneCase.with_role: it logs
 # its argv and the MASTACK_ variables and answers from the review role of the models file MASTACK_MODELS names, its
 # choices in order (when.not_family, when.limit), with FIXTURE_CODEX_USED and FIXTURE_CODEX_REACHED as the weekly
@@ -661,9 +681,10 @@ class LaneCase(unittest.TestCase):
         gh.parent.mkdir()
         gh.write_text(FAKE_GH)
         gh.chmod(0o755)
-        # The reviewers (#570) are stand-ins first on PATH; no real model runs. An empty CODEX_HOME keeps the
+        # The reviewers (#570, fathers#201) are stand-ins first on PATH; no real model runs. An empty CODEX_HOME keeps the
         # ChatGPT app's CLI (CODEX_CLI_PATH in ~/.codex/config.toml) out of the tests.
-        for name, text in (("codex", FAKE_CODEX), ("claude", FAKE_CLAUDE)):
+        for name, text in (("codex", FAKE_CODEX), ("claude", FAKE_CLAUDE), ("agy", FAKE_ANTIGRAVITY),
+                           ("antigravity", FAKE_ANTIGRAVITY)):
             stub = self.tmp / "bin" / name
             stub.write_text(text)
             stub.chmod(0o755)
@@ -674,13 +695,15 @@ class LaneCase(unittest.TestCase):
         self.review_text.write_text(NO_FINDINGS)
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith(("STRAYLIGHT_", "LANEFATHER_", "SLOTFATHER_", "GIT_", "FIXTURE_",
-                                         "ANTIGRAVITY_", "T3_", "CLAUDE_", "CODEX_"))
+                                         "ANTIGRAVITY_", "AGY_", "T3_", "CLAUDE_", "CODEX_"))
                     and k not in ("CODEX_CLI_PATH", "PYTHONPATH", "ANTHROPIC_MODEL", "AGENT_TRANSCRIPT_PATH",
                                   "THOUGHT_LEVEL")
                     and not k.startswith("MASTACK_")}
         self.env.update(PATH=f"{self.tmp / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}", PYTHONPATH=str(ROOT),
                         CODEX_HOME=str(self.tmp / "codex-home"), FIXTURE_CODEX_LOG=str(self.tmp / "codex.log"),
-                        FIXTURE_CLAUDE_LOG=str(self.tmp / "claude.log"), FIXTURE_REVIEW_TEXT=str(self.review_text),
+                        FIXTURE_CLAUDE_LOG=str(self.tmp / "claude.log"),
+                        FIXTURE_ANTIGRAVITY_LOG=str(self.tmp / "antigravity.log"),
+                        FIXTURE_REVIEW_TEXT=str(self.review_text),
                         # land starts no background review here: the review tests start one, or run it in front.
                         LANEFATHER_REVIEW_START="manual",
                         # No models file and so no Mastack `role`: the real table and quota stay out (fathers#150).
@@ -835,6 +858,10 @@ class LaneCase(unittest.TestCase):
 
     def claude_calls(self):
         log = self.tmp / "claude.log"
+        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+    def antigravity_calls(self) -> list[list[str]]:
+        log = self.tmp / "antigravity.log"
         return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
 
