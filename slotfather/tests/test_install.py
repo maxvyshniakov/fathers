@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-from typing import Any, Optional
+from typing import Any, Optional, cast
 import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -20,7 +20,17 @@ SWEEP = b"#!/usr/bin/env python3\nprint('sweep fixture')\n"
 
 
 class InstallTests(unittest.TestCase):
-    def setUp(self):
+    tmp: Path
+    home: Path
+    state: Path
+    old: Path
+    legacy: Path
+    new: Path
+    bin: Path
+    source: Path
+    env: dict[str, str]
+
+    def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="slotfather-install-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.home = self.tmp / "home"
@@ -472,23 +482,35 @@ class SharedQueueInstallTests(unittest.TestCase):
     """`--user NAME [--bin DIR]` (#653): one queue for every process of a user whatever its HOME, such as the runner
     services of a CI VM, with the commands where those services' PATH looks."""
 
+    tmp: Path
+    home: Path
+    state: Path
+    old: Path
+    legacy: Path
+    new: Path
+    bin: Path
+    source: Path
+    env: dict[str, str]
+    system_bin: Path
+
     run_install = InstallTests.run_install
 
-    def setUp(self):
-        InstallTests.setUp(self)
+    def setUp(self) -> None:
+        InstallTests.setUp(cast(Any, self))
         shutil.copyfile(ROOT / "slotfather", self.source / "slotfather")
         if (ROOT / "src/slotfather").is_dir():
             shutil.copytree(ROOT / "src", self.source / "src", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         self.system_bin = self.tmp / "usr-local-bin"
 
-    def installer(self):
+    def installer(self) -> Any:
         import importlib.util
         spec = importlib.util.spec_from_file_location("slotfather_installer", self.source / "install.py")
-        module = importlib.util.module_from_spec(spec)
+        assert spec is not None and spec.loader is not None
+        module: Any = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         install = module.install
 
-        def quiet(*args, **kwargs):
+        def quiet(*args: Any, **kwargs: Any) -> Any:
             with contextlib.redirect_stdout(io.StringIO()):
                 return install(*args, **kwargs)
         module.install = quiet
@@ -552,14 +574,18 @@ class SharedQueueInstallTests(unittest.TestCase):
             module.install(self.home, self.source / "slotfather", sys.executable, self.system_bin, pinned=True)
         self.assertFalse((self.system_bin / "slotfather").exists())
 
-    def test_give_hands_only_root_owned_paths_under_the_home_to_the_user(self):
+    def test_give_hands_only_root_owned_paths_under_the_home_to_the_user(self) -> None:
         module = self.installer()
         module.install(self.home, self.source / "slotfather", sys.executable, self.system_bin, pinned=True)
-        changed = []
+        changed: list[tuple[Path, int, int]] = []
         (self.new / "keep-mine").write_text("someone else's")
         user = type("User", (), {"pw_uid": 1001, "pw_gid": 1001})()
+
+        def record_chown(path: Path, uid: int, gid: int) -> None:
+            changed.append((Path(path), uid, gid))
+
         module.give(self.home, user, self.system_bin, owner_of=lambda path: 4242 if "keep" in str(path) else 0,
-                    chown=lambda path, uid, gid: changed.append((Path(path), uid, gid)))
+                    chown=record_chown)
         paths = {path for path, _, _ in changed}
         self.assertIn(self.new, paths)
         self.assertIn(self.state / ".slotfather-install.lock", paths)

@@ -133,11 +133,11 @@ def unknown_and_gone(path: Path, entry: object, table: dict[int, str]) -> bool:
     return True
 
 
-def require_idle(directory, table):
+def require_idle(directory: Path, table: dict[int, str]) -> None:
     for path in (directory / "queue").glob("*.json"):
         try:
-            entry = json.loads(path.read_text())
-            if unknown_and_gone(cast(Path, path), entry, cast(dict[int, str], table)):
+            entry: dict[str, Any] = json.loads(path.read_text())
+            if unknown_and_gone(path, entry, table):
                 continue
             pid, start, state = entry["pid"], entry["start"], entry["state"]
             if type(pid) is not int or not isinstance(start, str) or state not in KNOWN_STATES:
@@ -381,7 +381,7 @@ def migrate_history(directory: Path, updates: list[tuple[str, bytes, bytes]], ba
     print(f"Migrated request fields in {', '.join(name for name, _, _ in updates)}; originals saved at {saved}")
 
 
-def exchange(first, second):
+def exchange(first: Path, second: Path) -> None:
     """Swap a directory with a guard atomically; never expose a missing old path."""
     libc = ctypes.CDLL(None, use_errno=True)
     if sys.platform == "darwin":
@@ -453,7 +453,8 @@ def interpreter(python: str | None = None) -> str:
     return python
 
 
-def install_binary(source, target, python, state=None, cgroup=None):
+def install_binary(source: Path, target: Path, python: str, state: Path | None = None,
+                   cgroup: str | None = None) -> None:
     payload = source.read_bytes()
     if payload.startswith(ENV_SHEBANG):
         payload = b"#!" + os.fsencode(python) + b"\n" + payload[len(ENV_SHEBANG):]
@@ -466,7 +467,7 @@ def install_binary(source, target, python, state=None, cgroup=None):
             raise InstallError(f"cannot pin the cgroup in {source}: its DEFAULT_CGROUP line is not the expected one")
         payload = payload.replace(CGROUP_LINE, b"DEFAULT_CGROUP = " + json.dumps(cgroup).encode() + b"  ")
     target.parent.mkdir(parents=True, exist_ok=True)
-    pending = None
+    pending: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".slotfather-", delete=False) as handle:
             pending = Path(handle.name)
@@ -994,7 +995,7 @@ def install(home: Path, source: Path, python: str, bin_dir: Path | None = None,
         try:
             entry_updates: list[tuple[Path, bytes, bytes]] = []
             new_guard = reserve_current_queue(destination, locks, created_guards, entry_updates)
-            old_directories = []
+            old_directories: list[Path] = []
             # Reserve absent old paths before checking idleness. An old client can
             # no longer create a queue while the other paths are being checked.
             for old in old_paths:
@@ -1086,11 +1087,16 @@ def install(home: Path, source: Path, python: str, bin_dir: Path | None = None,
                         path.unlink()
 
 
-def give(home, user, bin_dir, owner_of=lambda path: os.lstat(path).st_uid, chown=os.lchown):
+def _default_owner_of(path: Path) -> int:
+    return os.lstat(path).st_uid
+
+
+def give(home: Path, user: Any, bin_dir: Path, owner_of: Callable[[Path], int] = _default_owner_of,
+         chown: Callable[..., None] = os.lchown) -> None:
     """Hands what this (root) run created under `home` to `user`: the state paths the installer writes, and the
     commands when they live in the user's home. Only root-owned paths change hands; commands elsewhere stay root's."""
     state = home / ".local/state"
-    paths = [home / ".local", state, home / ".local/bin", state / ".slotfather-install.lock"]
+    paths: list[Path] = [home / ".local", state, home / ".local/bin", state / ".slotfather-install.lock"]
     for name in ("slotfather", "machine-slots", "straylight-verification", "slotfather-migrations"):
         top = state / name
         paths.append(top)
@@ -1107,7 +1113,7 @@ def give(home, user, bin_dir, owner_of=lambda path: os.lstat(path).st_uid, chown
             chown(path, user.pw_uid, user.pw_gid)
 
 
-def main():
+def main() -> int:
     if sys.argv[1:] == ["--help"]:
         print(USAGE)
         return 0

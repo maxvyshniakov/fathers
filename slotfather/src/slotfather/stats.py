@@ -125,7 +125,7 @@ def usage_of(items: list[dict[str, Any]]) -> dict[str, Any]:
         "measured": len(counted),
         "cpu_hours": round(cpu / 3600, 3),
         "cores": round(cpu / wall, 2) if wall else None,
-        "cores_p90": None if not per_lease else round(percentile(per_lease, 90), 2),
+        "cores_p90": None if not per_lease else round(percentile(per_lease, 90) or 0.0, 2),
         "cores_per_slot": round(cpu / slot_wall, 2) if slot_wall else None,
         "rss_peak_mb": max((i["rss_peak_mb"] for i in counted if isinstance(i.get("rss_peak_mb"), (int, float))),
                            default=None),
@@ -139,32 +139,35 @@ def usage_of(items: list[dict[str, Any]]) -> dict[str, Any]:
     return found
 
 
-def recorded_capacity(items: list[dict], current: int) -> int:
+def recorded_capacity(items: list[dict[str, Any]], current: int) -> int:
     """The capacity most requests saw when they left (version 2 lines record it), else the current one."""
-    seen = [i["capacity"] for i in items if isinstance(i.get("capacity"), int) and i["capacity"] > 0]
-    return int(percentile(seen, 50)) if seen else current
+    seen = [int(i["capacity"]) for i in items if isinstance(i.get("capacity"), int) and i["capacity"] > 0]
+    p50 = percentile(seen, 50)
+    return int(p50) if p50 is not None else current
 
 
-def held_time(items: list[dict], since: float | None, until: float, capacity: int) -> dict:
+def held_time(items: list[dict[str, Any]], since: float | None, until: float, capacity: int) -> dict[str, Any]:
     """Slots held over time, from the grant and end of every request that ran: while any lease ran, the mean held
     and the share of that time every slot was held."""
-    steps = []
+    steps: list[tuple[float, int]] = []
     for item in items:
         start, end = _config.seconds(item.get("granted")), _config.seconds(item.get("ended"))
         if start is None or end is None or end <= start:
             continue
         start = max(start, since) if since is not None else start
         if end > start:
-            steps += [(start, item.get("count") or 1), (min(end, until), -(item.get("count") or 1))]
+            count = int(item.get("count") or 1)
+            steps += [(start, count), (min(end, until), -count)]
     steps.sort()
     busy = full = area = 0.0
-    level, previous = 0, None
+    level = 0
+    previous: float | None = None
     for moment, delta in steps:
         if previous is not None and level > 0:
-            span = moment - previous
-            busy += span
-            area += span * level
-            full += span if level >= capacity else 0
+            span_s = moment - previous
+            busy += span_s
+            area += span_s * level
+            full += span_s if level >= capacity else 0.0
         level, previous = level + delta, moment
     return {"busy_hours": round(busy / 3600, 3), "held_mean": round(area / busy, 2) if busy else None,
             "all_held": round(full / busy, 3) if busy else None}
@@ -172,70 +175,90 @@ def held_time(items: list[dict], since: float | None, until: float, capacity: in
 
 def machine(samples: list[dict[str, Any]], cores: int, capacity: int) -> dict[str, Any]:
     """The machine while leases ran: each sample stands for the time to the next one, at most GAP seconds."""
-    samples = sorted((s for s in samples if isinstance(s.get("at"), (int, float))), key=lambda s: s["at"])
+    samples = sorted((s for s in samples if isinstance(s.get("at"), (int, float))), key=lambda s: float(s["at"]))
     if not samples:
         return {"samples": 0}
-    gaps = [b["at"] - a["at"] for a, b in zip(samples, samples[1:])]
+    gaps = [float(b["at"]) - float(a["at"]) for a, b in zip(samples, samples[1:])]
     usual = min(percentile(gaps, 50) or _config.MACHINE_EVERY, GAP)
     weights = [min(g, GAP) for g in gaps] + [usual]
     total_weight = sum(weights) or 1.0
-    load1 = [(s.get("load") or [None])[0] for s in samples]
-    over = sum(w for w, l, s in zip(weights, load1, samples) if l is not None and l > (s.get("cores") or cores))
-    under = sum(w for w, l, s in zip(weights, load1, samples) if l is not None and l < (s.get("cores") or cores))
-    busy, busy_weight, busy_sum, idle_slot, held_area, busy_area = [], 0.0, 0.0, 0.0, 0.0, 0.0
+    load1: list[float | None] = [
+        float(raw[0]) if isinstance(raw := s.get("load"), list) and raw and isinstance(raw[0], (int, float)) else None
+        for s in samples
+    ]
+    over = sum(w for w, l, s in zip(weights, load1, samples) if l is not None and l > float(s.get("cores") or cores))
+    under = sum(w for w, l, s in zip(weights, load1, samples) if l is not None and l < float(s.get("cores") or cores))
+    busy: list[float] = []
+    busy_weight = busy_sum = idle_slot = held_area = busy_area = 0.0
     for (a, b), w in zip(zip(samples, samples[1:]), weights):
         if not (a.get("ticks") and b.get("ticks")) or len(a["ticks"]) != 4 or len(b["ticks"]) != 4:
             continue
-        if b["at"] - a["at"] > GAP:
+        if float(b["at"]) - float(a["at"]) > GAP:
             continue  # no lease ran in between: the ticks would average idle time into the busy share
-        delta = [(y - x) % (1 << 32) for x, y in zip(a["ticks"], b["ticks"])]
+        delta = [(int(y) - int(x)) % (1 << 32) for x, y in zip(a["ticks"], b["ticks"])]
         if not sum(delta):
             continue
-        share = 1 - delta[2] / sum(delta)
-        here = a.get("cores") or cores
-        busy.append(share)
+        share_busy = 1.0 - delta[2] / sum(delta)
+        here = int(a.get("cores") or cores)
+        busy.append(share_busy)
         busy_weight += w
-        busy_sum += w * share
-        idle_slot += w if (1 - share) * here >= here / (a.get("capacity") or capacity) else 0
+        busy_sum += w * share_busy
+        idle_slot += w if (1.0 - share_busy) * here >= here / int(a.get("capacity") or capacity) else 0.0
         if a.get("held"):
-            held_area += w * a["held"]
-            busy_area += w * share * here
-    swap_free = [s.get("swap_free_mb") for s in samples if s.get("swap_total_mb")]
-    memory_free = [s.get("memory_free_pct") for s in samples]
-    available = [s.get("memory_available_mb") for s in samples]
+            held_area += w * float(a["held"])
+            busy_area += w * share_busy * here
+    swap_free: list[float | None] = [
+        float(s["swap_free_mb"]) if isinstance(s.get("swap_free_mb"), (int, float)) else None
+        for s in samples if s.get("swap_total_mb")
+    ]
+    memory_free: list[float | None] = [
+        float(s["memory_free_pct"]) if isinstance(s.get("memory_free_pct"), (int, float)) else None
+        for s in samples
+    ]
+    available: list[float | None] = [
+        float(s["memory_available_mb"]) if isinstance(s.get("memory_available_mb"), (int, float)) else None
+        for s in samples
+    ]
 
-    def elevated(sample: dict) -> bool:
+    def elevated(sample: dict[str, Any]) -> bool:
         """macOS: the pressure level above normal; Linux: PSI memory avg10 at the guard's limits."""
-        level, some, full = (sample.get(k) for k in ("pressure", "psi_some", "psi_full"))
-        return (level is not None and level > 1) or (some is not None and some >= _config.MAX_PSI_SOME) or \
-            (full is not None and full >= _config.MAX_PSI_FULL)
+        level, some, full_psi = (sample.get(k) for k in ("pressure", "psi_some", "psi_full"))
+        return bool(
+            (isinstance(level, (int, float)) and level > 1)
+            or (isinstance(some, (int, float)) and some >= _config.MAX_PSI_SOME)
+            or (isinstance(full_psi, (int, float)) and full_psi >= _config.MAX_PSI_FULL)
+        )
     return {
         "samples": len(samples), "hours": round(total_weight / 3600, 3),
         "load1_p50": percentile(load1, 50), "load1_p90": percentile(load1, 90),
         "over_cores": round(over / total_weight, 3), "under_cores": round(under / total_weight, 3),
-        "busy_p50": None if not busy else round(percentile(busy, 50), 3),
+        "busy_p50": None if not busy else round(percentile(busy, 50) or 0.0, 3),
         "busy_mean": None if not busy_weight else round(busy_sum / busy_weight, 3),
         "slot_idle": None if not busy_weight else round(idle_slot / busy_weight, 3),
         "busy_cores_per_held_slot": round(busy_area / held_area, 2) if held_area else None,
         "pressure_elevated": round(sum(w for w, s in zip(weights, samples) if elevated(s)) / total_weight, 3),
-        "memory_free_pct_min": min((m for m in memory_free if m is not None), default=None),
-        "swap_free_mb_min": min((f for f in swap_free if f is not None), default=None),
-        "memory_available_mb_min": min((a for a in available if a is not None), default=None),
+        "memory_free_pct_min": min((int(m) if m.is_integer() else m for m in memory_free if m is not None), default=None),
+        "swap_free_mb_min": min((int(f) if f.is_integer() else f for f in swap_free if f is not None), default=None),
+        "memory_available_mb_min": min((int(a) if a.is_integer() else a for a in available if a is not None), default=None),
     }
 
 
 SWEPT = ("removed", "orphan", "dev-server")
 
 
-def sweeps(items: list[dict]) -> dict:
+def sweeps(items: list[dict[str, Any]]) -> dict[str, Any]:
     """What `slotfather sweep` found and stopped (sweep.jsonl, #662): runs, live runs, processes stopped per class,
     stops that failed, resident memory freed, and what the latest run found."""
-    stopped = {c: sum((i.get("stopped") or {}).get(c, 0) for i in items) for c in SWEPT}
-    last = items[-1] if items else {}
+    stopped = {
+        c: sum(int(cast(dict[str, Any], i.get("stopped") or {}).get(c, 0)) for i in items)
+        for c in SWEPT
+    }
+    last: dict[str, Any] = items[-1] if items else {}
     return {"runs": len(items), "live": sum(bool(i.get("live")) for i in items), "stopped": stopped,
-            "failed": sum(i.get("failed") or 0 for i in items),
-            "freed_mb": round(sum(i.get("freed_mb") or 0 for i in items), 1),
-            "last_at": last.get("at"), "last_found": last.get("found"), "last_live": last.get("live")}
+            "failed": sum(int(i.get("failed") or 0) for i in items),
+            "freed_mb": round(sum(float(i.get("freed_mb") or 0) for i in items), 1),
+            "last_at": last.get("at"), "last_found": last.get("last_found") if "last_found" in last else last.get("found"),
+            "last_live": last.get("live")}
 
 
 def summarize(directory: Path | None = None, since: float | None = None, label: str | None = None,
@@ -271,13 +294,13 @@ def summarize(directory: Path | None = None, since: float | None = None, label: 
         else:
             key = (item.get("label") if by != "kind" else None, kind(item.get("cmd")) if by != "label" else None)
         groups.setdefault(key, []).append(item)
-    rows = []
+    rows: list[dict[str, Any]] = []
     for (name, what), members in groups.items():
         row: dict[str, Any] = {"label": None, "kind": None, "meta": {meta_key: name}} if meta_key else {"label": name, "kind": what}
         if field:
             row = {"label": None, "kind": None, field: name}
         rows.append({**row, **usage_of(members)})
-    rows.sort(key=lambda r: (-r["slot_hours"], -r["requests"]))
+    rows.sort(key=lambda r: (-float(r["slot_hours"]), -int(r["requests"])))
     try:
         capacity, saved = _settings.capacity()
     except _config.SlotError:
@@ -309,19 +332,19 @@ def summarize(directory: Path | None = None, since: float | None = None, label: 
     }
 
 
-def span(value) -> str:
+def span(value: float | None) -> str:
     return "-" if value is None else _config.duration(value)
 
 
-def number(value, digits: int = 1) -> str:
+def number(value: float | None, digits: int = 1) -> str:
     return "-" if value is None else f"{value:.{digits}f}"
 
 
-def share(value) -> str:
+def share(value: float | None) -> str:
     return "-" if value is None else f"{value * 100:.0f}%"
 
 
-def local(stamp) -> str:
+def local(stamp: Any) -> str:
     moment = _config.seconds(stamp)
     return "?" if moment is None else time.strftime("%m-%d %H:%M", time.localtime(moment))
 
@@ -358,7 +381,7 @@ def report(summary: dict[str, Any], top: int = 25) -> str:
     width = min(width, 34)
     kinds = max([len(str(r["kind"] or "")) for r in summary["groups"][:top]] + [4])
     kinds = min(kinds, 40)
-    head = []
+    head: list[str] = []
     if summary["by"] != "kind":
         head.append(f"{title:<{width}}")
     if summary["by"] not in ("label",) and not grouped:
@@ -367,7 +390,7 @@ def report(summary: dict[str, Any], top: int = 25) -> str:
                 f"{'PER SLOT':>8} {'PEAK MB':>7}")
     lines += ["", "  ".join(head)]
     for row in summary["groups"][:top]:
-        cells = []
+        cells: list[str] = []
         if summary["by"] != "kind":
             cells.append(f"{first(row)[:width]:<{width}}")
         if summary["by"] != "label" and not grouped:

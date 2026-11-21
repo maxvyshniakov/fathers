@@ -428,7 +428,7 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
             found.reason = (f"{free} of {slots} slots free; {entry.get('label')} is next, and a later request that fits "
                             f"starts first only if it ends before {entry.get('label')} can start")
             continue
-        until = time.strftime("%H:%M:%S", time.localtime(queued + window))
+        until = time.strftime("%H:%M:%S", time.localtime((queued or moment) + window))
         found.reason = found.reason or (f"{free} of {slots} slots free; requests that fit may pass "
                                         f"{entry.get('label')} until {until}")
     return found

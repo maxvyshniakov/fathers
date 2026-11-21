@@ -22,190 +22,90 @@ import os
 from pathlib import Path
 import re
 import socket
-from typing import Any, Literal, Mapping, Optional, TypedDict, Union, cast, overload
+from typing import Any, Literal, Mapping, cast, overload
 
 from . import entry as _entry
+from .contract import (
+    KINDS,
+    Actor,
+    Blocker,
+    CapacityChanged,
+    Details,
+    Empty,
+    Event,
+    Granted,
+    HeadDropped,
+    Left,
+    LockEnded,
+    OrderChanged,
+    Outlier,
+    Peer,
+    ReapResumed,
+    ReapSkipped,
+    Reaped,
+    Released,
+    Reprioritized,
+    SessionEnded,
+    SessionRun,
+    Subject,
+    Swept,
+    Trend,
+    WaitingLong,
+    YieldAsked,
+    Yielded,
+)
+
+__all__ = [
+    "COMMAND_MAX",
+    "EVENTS_MAX",
+    "KINDS",
+    "LINE_MAX",
+    "VERSION",
+    "Actor",
+    "Blocker",
+    "CapacityChanged",
+    "Details",
+    "Empty",
+    "Event",
+    "Granted",
+    "HeadDropped",
+    "Left",
+    "LockEnded",
+    "OrderChanged",
+    "Outlier",
+    "Peer",
+    "ReapResumed",
+    "ReapSkipped",
+    "Reaped",
+    "Released",
+    "Reprioritized",
+    "SessionEnded",
+    "SessionRun",
+    "Subject",
+    "Swept",
+    "Trend",
+    "WaitingLong",
+    "YieldAsked",
+    "Yielded",
+    "actor",
+    "clean",
+    "command",
+    "emit",
+    "holder",
+    "host",
+    "line",
+    "moment",
+    "path",
+    "record",
+    "request",
+    "rotate",
+]
 
 VERSION = 1
 EVENTS_MAX = 4 << 20  # bytes of events.jsonl before it becomes events.jsonl.1
 LINE_MAX = 16 * 1024  # bytes of one line with its newline
 COMMAND_MAX = 400  # characters of a command line kept
 CONTROL = re.compile("[\x00-\x1f\x7f-\x9f]")
-class Subject(TypedDict, total=False):
-    """What an event is about: `type` and `id` always (a request's id is its entry's name), the rest where known."""
-    type: str
-    id: str
-    label: str
-    lease_id: str
-    pid: int
-
-
-class Actor(TypedDict, total=False):
-    """Who caused it: `type` always (process, tool), `pid`, and `name`, `lane` and `via` where they apply."""
-    type: str
-    pid: int
-    name: str
-    lane: str
-    via: str
-
-
-class Peer(TypedDict, total=False):
-    """Another request an event names: the waiter a yield is for, or the lock a lease yields to wait for."""
-    id: Optional[str]
-    label: Optional[str]
-    priority: str
-
-
-class Granted(TypedDict, total=False):
-    count: int
-    min_count: int
-    max_count: int
-    priority: str
-    waited: Optional[int]
-    served: str
-    resumed: bool
-    meta: dict[str, str]
-    session: Optional[str]
-
-
-class Released(TypedDict, total=False):
-    count: int
-    exit: Optional[int]
-    ran: Optional[float]
-    cpu: Optional[float]
-    rss_peak_mb: Optional[float]
-    unknown: bool
-
-
-class Left(TypedDict, total=False):
-    count: int
-    gave_up_after: Optional[float]
-    reason: str
-
-
-class Reaped(TypedDict):
-    count: Optional[int]
-    ran: Optional[float]
-    waited: Optional[float]
-    reason: str
-
-
-Reprioritized = TypedDict("Reprioritized", {"from": str, "to": str, "state": Optional[str]})  # `from`: a keyword
-
-
-class WaitingLong(TypedDict, total=False):
-    waited: int
-    est_start: Optional[str]
-    behind: dict[str, int]
-    priority: str
-    aged: bool
-
-
-YieldAsked = TypedDict("YieldAsked", {"count": int, "for": Peer, "by_hand": bool}, total=False)  # `for`: a keyword
-
-
-class Yielded(TypedDict, total=False):
-    count: int
-    to: Peer
-    lock: str  # a lease that yields while its command waits on a lock (fathers#159)
-    yields: int
-
-
-class Blocker(TypedDict):
-    id: Optional[str]
-    label: Optional[str]
-    pid: Optional[int]
-
-
-class HeadDropped(TypedDict):
-    """request.head_dropped (fathers#160): a head gave way, `late` seconds past its reserved start, to the leases
-    with no end estimate that hold its slots."""
-    count: int
-    late: int
-    blocked_by: list[Blocker]
-
-
-class LockEnded(TypedDict):
-    """lease.lock_ended (fathers#159): a lease's wait for a lock is over: "took", "stopped", "resumed" (work went on
-    under the lease) or "gone" (its waiter died); `yielded`: it had given up its slots; `waited`: seconds, if so."""
-    lock: str
-    why: str
-    yielded: bool
-    waited: Optional[int]
-
-
-class Empty(TypedDict):
-    """An event whose subject says it all (lease.yield_withdrawn)."""
-
-
-class CapacityChanged(TypedDict):
-    saved: Any  # what capacity.json now holds, or None after a reset
-    mode: str
-    slots: int
-
-
-class OrderChanged(TypedDict, total=False):
-    saved: Any  # what order.json now holds
-    reset: bool
-
-
-Swept = TypedDict("Swept", {"action": str, "class": str, "kind": str, "age": int, "processes": int, "cmd": str})
-
-
-class SessionRun(TypedDict, total=False):
-    session: str
-    run: Any
-
-
-class SessionEnded(TypedDict):
-    reason: str
-    runs: int
-    busy: Any
-    held: int
-
-
-class Outlier(TypedDict):
-    lease_id: Optional[str]
-    ran: float
-    p50: float
-    p90: float
-    ended: Optional[str]
-    later: list[float]
-
-
-class Trend(TypedDict, total=False):
-    verdict: str
-    p50_recent: Optional[float]
-    p50_before: Optional[float]
-    ratio: Optional[float]
-    recent: int
-    before: int
-    plan_change: Any
-    why: Optional[str]
-
-
-class ReapSkipped(TypedDict):
-    reason: str
-
-
-class ReapResumed(TypedDict):
-    after: str
-
-
-Details = Union[Granted, Released, Left, Reaped, Reprioritized, WaitingLong, YieldAsked, Yielded, Empty,
-                CapacityChanged, OrderChanged, Swept, SessionRun, SessionEnded, Outlier, Trend, ReapSkipped,
-                ReapResumed, HeadDropped, LockEnded]
-
-# The event-kind table: each kind this writer emits, with the shape of its details (godfather/docs/events.md).
-KINDS: dict[str, type] = {
-    "lease.granted": Granted, "lease.released": Released, "request.left": Left, "lease.reaped": Reaped,
-    "request.reaped": Reaped, "request.reprioritized": Reprioritized, "request.waiting_long": WaitingLong,
-    "lease.yield_asked": YieldAsked, "lease.yield_withdrawn": Empty, "lease.yielded": Yielded,
-    "lease.lock_ended": LockEnded,
-    "capacity.changed": CapacityChanged, "order.changed": OrderChanged, "process.swept": Swept,
-    "session.run_started": SessionRun, "session.run_ended": SessionRun, "session.ended": SessionEnded,
-    "request.head_dropped": HeadDropped, "run.outlier": Outlier, "run.trend": Trend, "reap.skipped": ReapSkipped, "reap.resumed": ReapResumed,
-}
 
 
 def path(directory: Path) -> Path:
@@ -279,8 +179,9 @@ def holder(entry: Mapping[str, Any]) -> Actor:
 
 def line(kind: str, subject: Mapping[str, Any], details: Mapping[str, Any], who: Mapping[str, Any],
          level: str | None = None) -> bytes:
-    event: dict[str, Any] = {"v": VERSION, "time": moment(), "host": host(), "source": "slotfather", "kind": kind,
-                             "subject": clean(subject), "actor": clean(who), "details": clean(details)}
+    event: Event = {"v": VERSION, "time": moment(), "host": host(), "source": "slotfather", "kind": kind,
+                    "subject": cast(Subject, clean(subject)), "actor": cast(Actor, clean(who)),
+                    "details": cast(dict[str, Any], clean(details))}
     if level and level != "info":
         event["level"] = level
     data = (json.dumps(event, sort_keys=True, allow_nan=False, ensure_ascii=False) + "\n").encode("utf-8")

@@ -247,7 +247,7 @@ def sample_max() -> float:
 
 
 def legacy_dirs() -> list[Path]:
-    value = setting("LEGACY_DIRS", DEFAULT_LEGACY_DIRS)
+    value = setting("LEGACY_DIRS", DEFAULT_LEGACY_DIRS) or ""
     own = state_dir().resolve()
     paths = [Path(os.path.expanduser(p)) for p in value.split(":") if p]
     return [p for p in paths if p.resolve() != own]

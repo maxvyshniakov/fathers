@@ -6,6 +6,11 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- `slotfather.contract` defines `TypedDict` contracts for `status --json` (`StatusSnapshot`, `StatusEntry`),
+  `status --json --full` (`FullSnapshot`, `DashboardBlock`, `DashboardRow`, `DashboardUnknown`, `DashboardEvent`), and
+  `events.jsonl` (`Event`, `Subject`, `Actor`, `KINDS`), checked against `docs/api.md`, with strict Pyright typing
+  across `stats`, `usage`, and `install.py` (fathers#125).
+
 - `slotfather sweep` owns machine-wide disk hygiene across six disk classes (`docker-anonymous`,
   `docker-dangling-images`, `docker-superseded`, `claude-scratch` sparing running Junkfather entries' working
   directories, `package-caches` for uv/Homebrew/npm/bun, and `low-disk` consumer notices), reporting by default,

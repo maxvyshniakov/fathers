@@ -337,7 +337,7 @@ def history_lines(limit: int, directory: Path | None = None) -> list[str]:
             items = tail_objects(path.with_name(path.name + ".1"), limit - len(items)) + items
     else:
         items = list(journal(path))
-    found = []
+    found: list[str] = []
     for item in items:
         ended = _config.seconds(item.get("ended"))
         when = time.strftime("%m-%d %H:%M", time.localtime(ended)) if ended is not None else "?"

@@ -18,6 +18,7 @@ Definitions: [glossary](../GLOSSARY.md). Naming and wire aliases: [terminology](
 | `cli` | Table-driven argument parsing, per-command `--help`, `--version`, and command dispatch. |
 | `client` | The waiting client: `Lease`, `acquire()`, `held_again()` and `yield_now()`, one wait loop (`wait_until()`) with the poll settings read once. Requests share `wait_held()`, including runs joining a measurement session. The library's entry point. |
 | `config` | Environment settings, installation defaults, constants, shared errors and the clock helpers. |
+| `contract` | `TypedDict` definitions for JSON snapshots (`status --json`, `status --json --full` `dashboard` block) and `events.jsonl` envelopes and payloads (`KINDS`), checked against `docs/api.md` (fathers#125). |
 | `durations` | The three duration grammars: `clock()` (`1h30m`: order, settings, sessions), `span()` (`1d`: sweep config), `since()` (ages and dates: stats). |
 | `entry` | A queue entry: its persisted fields, the accessors that read them whoever wrote the file, its phase, and the one definition of each transition (new request, grant and resume, yield, priority change, outcome). Pure: callers read and write the files and log. |
 | `estimates` | Run-time estimates from the history's finished runs (`Estimates`), their `estimates.json` cache and `estimator()`, which asks a run type's expectations first. Loaded only when an estimate is first asked (`leases.estimator()`), off the admission path. |

@@ -58,16 +58,19 @@ Top-level fields:
 
 Per-entry fields:
 
-- `id`, `lease`: entry filename stem and full path (`SLOTFATHER_LEASE`).
+- `id`, `lease_id`, `lease`: entry filename stem, unique lease identifier, and full path (`SLOTFATHER_LEASE`).
 - `state`, `phase`: `state` is `held` or `waiting`; `phase` is `waiting`, `yielded`, `held`, `asked`, or `unknown`.
-- `count`, `label`, `cmd`, `cwd`, `meta`: requested slots, label, command, working directory, and metadata.
+- `count`, `min_count`, `max_count`, `label`, `cmd`, `cwd`, `meta`: requested (or granted) slots, `-n MIN-MAX` bounds when a slot range was requested, label, command, working directory, and metadata.
 - `pid`, `pgid`, `start`, `tree`: holder PID, process group, process start time, and live descendant PIDs.
 - `since`, `granted`: queue arrival and grant timestamps.
 - `priority`, `ticket`, `effective_priority`, `aged`, `reprioritized`: requested class and ticket, served class, whether ageing promoted it, and original class before `reprioritize` (`null` if unchanged).
-- `yieldable`, `yields`, `yield_asked`, `position`: cooperative-yield settings, yield count, standing yield request, and queue position.
+- `yieldable`, `yields`, `yield_asked`, `position`, `lock`: cooperative-yield settings, yield count, standing yield request, queue position, and lock path while waiting on `slotfather lock` (only when waiting on a lock).
 - `idle_since`: epoch seconds since a held lease became idle, or `null` (see Idle leases in scheduling).
-- `est_start`, `head`, `reserved`, `waited`, `long_wait`: waiter's expected start, head flag, reserved start (UTC or `null`), wait duration in seconds, and whether it passed `warn_wait`.
+- `est_start`, `head`, `reserved`, `waited`, `long_wait`, `memory_wait`: waiter's expected start, head flag, reserved start (UTC or `null`), wait duration in seconds, whether it passed `warn_wait`, and why memory holds admission back (`null` otherwise).
+- `est_memory_mb`, `est_memory_source`, `expected`, `overrun` (omitted with `--pid`): expected peak RSS in MB and its source (`"history"` or `"default"`), expected run-type duration summary (see Run types below), and whether a held lease passed its `p90` (`overrun` only on held entries with `p90`).
+- `session` (measurement sessions only): active [session](sessions.md) summary (`name`, `idle`, `expect`, `stopping`, `runs`, `busy`, `last_use`, `active`).
 - `blocked_by`, `idle_slots`, `gave_way` (only when applicable, fathers#160): leases with no end estimate blocking a head past its reserved start (`[{"label", "pid"}]`), idle slot count, and the blocking list recorded when a head gave way.
+- `unknown`, `holds`, `warning` (unknown entries only, fathers#19): why the entry is unknown, slots reserved while its holder runs, and the `status` warning text.
 - `via` (`--pid PID` only): `"tree"` (holder or descendant) or `"env"` (detached process carrying `SLOTFATHER_LEASE`). `procs --json` and `sweep` use the same membership rule (fathers#38).
 
 **Unknown entries** (fathers#19): an entry whose `state` is neither `waiting` nor `held`, or whose `pid`, `count`, `start`, or `since` is missing or malformed, may belong to a newer client and is left untouched (never granted, reaped, ranked, or deleted).
@@ -116,7 +119,9 @@ nothing else. The block:
 - `v` (1), `directory`, `slots`, `cores`, `saved`, `basis` (the capacity basis as `slotfather slots` reads it),
   `averages` (`[l1, l5, l15]`), `draining`, `advice` (as `slotfather advise` computes it), `holders` and `waiters`
   (rows, in the order the dashboard shows them), `used`, `free`, `memory_block` (why new leases wait for memory,
-  or `null`), `admission`, `order`, `start` and `reserved` (the head's expected and reserved start), `limit`,
+  or `null`), `memory_budget_mb` and `memory_expected_mb` (expected-peak memory budget and held leases' expected
+  peak RSS in MB, fathers#9), `admission`, `order`, `start` and `reserved` (the head's expected and reserved start),
+  `limit`,
   `memory` (the memory facts, plus `low`: `true`/`false`, `null` when unknown; `swap_low`: free swap under
   SLOTFATHER_MIN_FREE_SWAP_MB; and `psi_low`: on Linux, PSI memory some or full at or over SLOTFATHER_MAX_PSI_SOME /
   _FULL, so the mem row shows `psi N%`, always `false` on macOS, whose `level` passes through), `history`
@@ -131,7 +136,8 @@ nothing else. The block:
   queue's directory), `label`, `cmd`, `meta`, `workdir`, `context` (the metadata), `priority`, `ticket`,
   `served` (the class it is served in), `reprioritized`, `yieldable`, `yields`, `asked` (the label of the waiter
   that asked it to yield, `""` when none) and `asked_at`, `idle_since`, `est_start`, `since`, `granted`,
-  `passable`, `all`. Strings have their control characters blanked;
+  `passable`, `all`, `est_memory_mb`, `est_memory_source`, `lock` (lock path when waiting on `slotfather lock`,
+  `""` otherwise). Strings have their control characters blanked;
 - an event: `when`, `verb` (`granted`, `released`, `left`, `reaped`, `priority`, `waiting`), `count`, `pid`,
   `delta` (the change to held slots), `label`, `detail`, and `state` or `unsure` where queue.log alone cannot say.
 
@@ -210,28 +216,29 @@ operation, and nothing is written into another user's queue.
 - `v`, `time`, `host`, `source`: schema version (`1`), RFC 3339 UTC timestamp with milliseconds, host name, and
   `"slotfather"`.
 - `kind`, `details`, `level`: event kind (table below), kind-specific payload, and optional `level` (e.g. `"warn"`).
-- `subject`: the request (`type: "request"`, `id` matching `status --json`, `label`, `pid`) unless noted otherwise in
-  the table below.
-- `actor`: holder process (with `lane` from metadata) for client actions, `type: "tool"` (`name: "slotfather"`) for
-  queue-look decisions, or the command's process otherwise (`via: "godfather"` when `GODFATHER_ACTOR` names Godfather).
+- `subject`: the request (`type`: `"request"`, `id` matching `status --json`, `lease_id`, `label`, `pid`) unless noted
+  otherwise in the table below.
+- `actor`: holder process (`pid`, with `lane` from metadata) for client actions, `type`: `"tool"` (`name`:
+  `"slotfather"`) for queue-look decisions, or the command's process otherwise (`via`: `"godfather"` when
+  `GODFATHER_ACTOR` names Godfather).
 
 | Kind | When | `details` |
 | --- | --- | --- |
-| `lease.granted` | a request is granted, or a yielded lease again (`resumed`) | `count`, `priority`, `waited`, `served` when ageing moved it, `meta` |
-| `lease.released` | a lease ends | `count`, `exit`, `ran`, `cpu`, `rss_peak_mb`; only `count` and `unknown: true` when its entry was already gone |
-| `request.left` | a waiter gives up (`--wait`, a signal) | `count`, `gave_up_after` |
+| `lease.granted` | a request is granted, or a yielded lease again | `count`, `min_count`, `max_count`, `priority`, `waited`, `served` (when ageing moved it), `resumed`, `meta`, `session` |
+| `lease.released` | a lease ends | `count`, `exit`, `ran`, `cpu`, `rss_peak_mb`, `unknown` (only `count` and `unknown: true` when its entry was already gone) |
+| `request.left` | a waiter gives up (`--wait`, a signal) | `count`, `gave_up_after`, `reason` |
 | `lease.reaped`, `request.reaped` | a holder that died is reaped (level warn) | `count`, `ran`, `waited`, `reason` |
 | `reap.skipped` | ps gave no process table to trust (it failed, timed out, or left out its caller), so a look that changes the queue reaped nothing; once per failure streak of a client (subject `queue`, level warn) | `reason` |
 | `reap.resumed` | ps answers again after that client's `reap.skipped` (subject `queue`) | `after` (the reason skipped) |
 | `request.reprioritized` | `slotfather reprioritize` | `from`, `to`, `state` |
 | `request.waiting_long` | a waiter says it has waited the warn time (level warn) | `waited`, `est_start`, `behind` (`earlier`, `running`), `priority`, `aged` |
-| `lease.yield_asked` | a waiter, or `ask-yield` (`by_hand`), asks a lease to yield | `count`, `for` (`id`, `label`, `priority`) |
+| `lease.yield_asked` | a waiter, or `ask-yield`, asks a lease to yield | `count`, `for` (`id`, `label`, `priority`), `by_hand` |
 | `lease.yield_withdrawn` | that request is withdrawn | — |
 | `lease.yielded` | the lease yields; for a lock (fathers#159), `to` is `{"id": null, "label": "lock PATH"}` | `count`, `to` (`id`, `label`), `yields`, `lock` (for a lock) |
 | `lease.lock_ended` | a lease's wait for a lock ends (fathers#159; level warn when its waiter is gone) | `lock`, `why` (`took`, `stopped`, `resumed`, `gone`), `yielded`, `waited` |
 | `request.head_dropped` | a head blocked by leases with no end estimate gives way, `late` seconds past its reserved start (fathers#160; actor `tool`, level warn) | `count`, `late`, `blocked_by` (`id`, `label`, `pid`) |
 | `capacity.changed` | a capacity is saved or reset (a save that changes nothing is no event, as for order) (subject `capacity`) | `saved` (capacity.json, `null` for reset), `mode`, `slots` |
-| `order.changed` | order settings are saved or reset (subject `order`) | `saved` (the keys the change named) or `reset: true` |
+| `order.changed` | order settings are saved or reset (subject `order`) | `saved` (the keys the change named), `reset` (`true` on reset) |
 | `process.swept` | `sweep --live` stops a leftover process (subject `process`, level warn) | `action`, `class`, `kind`, `age`, `processes`, `cmd` |
 | `session.run_started`, `session.run_ended` | a `run --session` starts or ends inside a session (subject the session's request) | `session`, `run` (`pid`, `label`, `cmd`; at the end `exit`, `ran`, `cpu`, and `meta` and `git` where it has them) |
 | `run.outlier` | a run above its run type's p90 is settled as an outlier (subject `run_type`, `id` the key; level warn) | `lease_id`, `ran`, `p50`, `p90`, `ended`, `later` |

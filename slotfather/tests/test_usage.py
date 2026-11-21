@@ -22,6 +22,8 @@ import subprocess
 import sys
 import threading
 import time
+import types
+from typing import Any, Callable, Iterable
 import unittest
 from unittest import mock
 
@@ -39,13 +41,16 @@ DETACHED_BURN = (
 )
 
 
-def load(path: str, name: str):
-    import importlib
+def load(path: str, name: str) -> types.ModuleType:
+    import importlib as _il
+    import importlib.util as _ilu
     if pathlib.Path(path).name in ("slotfather-stats", "slotfather-sweep"):
         companion = path.rsplit("slotfather-", 1)[-1]
-        return importlib.reload(importlib.import_module("slotfather." + companion))
+        return _il.reload(_il.import_module("slotfather." + companion))
     loader = importlib.machinery.SourceFileLoader(name, path)
-    module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    spec = _ilu.spec_from_loader(loader.name, loader)
+    assert spec is not None
+    module = _ilu.module_from_spec(spec)
     loader.exec_module(module)
     return module
 
@@ -60,7 +65,7 @@ def lstart(offset: float) -> str:
     return time.strftime("%a %b %e %H:%M:%S %Y", time.localtime(SINCE + offset))
 
 
-def row(ppid: int, cpu: float, rss: int = 0, born: float = 0.0, uid: int = UID):
+def row(ppid: int, cpu: float, rss: int = 0, born: float = 0.0, uid: int = UID) -> tuple[int, str, int, int, float]:
     return (ppid, lstart(born), uid, rss, cpu)
 
 
@@ -68,10 +73,10 @@ class TreeUsageTests(unittest.TestCase):
     """Each table is a snapshot of ps: pid -> (ppid, start, uid, resident KB, own CPU seconds). The command is pid
     100, its holder 50; launchd is 1."""
 
-    def usage(self, marked=None):
-        asked = []
+    def usage(self, marked: Callable[[list[int]], Iterable[int]] | None = None) -> tuple[sf_usage.TreeUsage, list[list[int]]]:
+        asked: list[list[int]] = []
 
-        def mark(pids):
+        def mark(pids: list[int]) -> set[int]:
             asked.append(sorted(pids))
             return set(marked(pids)) if marked else set()
         return sf_usage.TreeUsage(100, SINCE, mark, uid=UID), asked
@@ -149,39 +154,48 @@ class TreeUsageTests(unittest.TestCase):
         usage.observe(SINCE + 1, {100: row(HOLDER, 7.0, 4096), 101: row(100, 5.0, 4096)})
         self.assertEqual((0, 0, 0.0), (usage.processes, usage.rss_peak, usage.result(1.0)["cpu_detached"]))
 
-    def test_ps_cpu_times_parse(self):
+    def test_ps_cpu_times_parse(self) -> None:
         for text, value in (("0:00.05", 0.05), ("593:13.58", 35593.58), ("1:02:03.50", 3723.5),
                             ("2-01:00:00", 176400.0)):
-            self.assertAlmostEqual(value, sf_platform.cpu_seconds(text))
+            parsed = sf_platform.cpu_seconds(text)
+            self.assertIsNotNone(parsed)
+            assert parsed is not None
+            self.assertAlmostEqual(value, parsed)
         self.assertIsNone(sf_platform.cpu_seconds("n/a"))
 
 
 class WatchTests(unittest.TestCase):
     """The sampler thread against stand-ins for ps: it must never hold up the lease's release."""
 
-    def watch(self, marked=None):
+    def watch(self, marked: Callable[[list[int]], set[int]] | None = None) -> sf_usage.Watch:
         usage = sf_usage.TreeUsage(100, SINCE, marked, uid=UID)
         watch = sf_usage.Watch(usage, pathlib.Path("/nonexistent"))
         watch.most = 0.01
         return watch
 
-    def patch(self, name, value):
+    def patch(self, name: str, value: Any) -> None:
         for module in [sf_usage] if name == "sample_machine" else [sf_platform, sf_process]:
             if name in vars(module):  # ps runs in process, sysctl in platform (fathers#38)
-                patcher = mock.patch.object(module, name, value)
+                patcher: Any = mock.patch.object(module, name, value)
                 patcher.start()
                 self.addCleanup(patcher.stop)
 
-    def test_the_environment_query_runs_outside_the_lock(self):
-        held = []
+    def test_the_environment_query_runs_outside_the_lock(self) -> None:
+        held: list[bool] = []
         table = {100: row(HOLDER, 1.0), 200: row(1, 1.0, born=5)}
         self.patch("usage_table", lambda: table)
         self.patch("sample_machine", lambda directory: None)
-        watch = self.watch(lambda pids: held.append(watch.lock.locked()) or set())
+        watch: sf_usage.Watch
+
+        def check_marked(pids: list[int]) -> set[int]:
+            held.append(watch.lock.locked())
+            return set()
+
+        watch = self.watch(check_marked)
         watch.look()
         self.assertEqual([False], held)
 
-    def test_a_stalled_ps_does_not_hold_up_finish(self):
+    def test_a_stalled_ps_does_not_hold_up_finish(self) -> None:
         release = threading.Event()
         self.addCleanup(release.set)
         self.patch("usage_table", lambda: release.wait(60) and {})
@@ -193,22 +207,24 @@ class WatchTests(unittest.TestCase):
         rusage = mock.Mock(ru_utime=1.0, ru_stime=0.5, ru_maxrss=0)
         found = watch.finish(rusage, 2.0)
         self.assertLess(time.monotonic() - began, sf_config.WATCH_JOIN + 2)
+        assert found is not None
         self.assertEqual(1.5, found["cpu"], "the usage so far, without a last look")
 
-    def test_ps_calls_give_up_after_their_timeout(self):
-        def stalled(*args, **kwargs):
+    def test_ps_calls_give_up_after_their_timeout(self) -> None:
+        def stalled(*args: Any, **kwargs: Any) -> Any:
             self.assertEqual(sf_config.PS_TIMEOUT, kwargs.get("timeout"))
-            raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+            raise subprocess.TimeoutExpired(args[0], float(kwargs["timeout"]))
         self.patch("subprocess", mock.Mock(run=stalled, TimeoutExpired=subprocess.TimeoutExpired))
         self.assertEqual(set(), sf_process.carrying([1, 2], "/lease"))
         with self.assertRaises(sf_config.SlotError):
             sf_process.usage_table()
         self.assertIsNone(sf_platform.sysctl("kern.memorystatus_level"))
 
-    def test_the_sampler_thread_leaves_signals_to_the_holder(self):
-        masks, looked = [], threading.Event()
+    def test_the_sampler_thread_leaves_signals_to_the_holder(self) -> None:
+        masks: list[set[int]] = []
+        looked = threading.Event()
 
-        def table():
+        def table() -> dict[int, tuple[Any, ...]]:
             if threading.current_thread() is watch:
                 masks.append(signal.pthread_sigmask(signal.SIG_BLOCK, []))
                 looked.set()

@@ -142,21 +142,23 @@ def config_command(argv: list[str], directory: Path) -> int:
     print(f"sweep settings ({'saved in ' + str(directory / 'sweep.json') if found['saved'] else 'defaults'}):")
     for key in DEFAULTS:
         value = found[key]
-        text = (",".join(value) or "none") if isinstance(value, list) else (
+        text_val = (",".join(cast(list[str], value)) or "none") if isinstance(value, list) else (
             _config.duration(value) if key in _settings.SWEEP_DURATIONS and key != "container_minutes"
             else f"{value:g}")
-        print(f"  {key:<18} {text}")
+        print(f"  {key:<18} {text_val}")
     return 0
 
 
 def read_state(directory: Path) -> dict[str, Any]:
     try:
-        data = json.loads((directory / "sweep-state.json").read_text())
+        data: object = json.loads((directory / "sweep-state.json").read_text())
     except (OSError, ValueError):
         return {}
-    gone = data.get("gone_since") if isinstance(data, dict) else None
-    return {"gone_since": {str(k): float(v) for k, v in gone.items() if isinstance(v, (int, float))}} \
-        if isinstance(gone, dict) else {}
+    gone: object = cast(dict[str, Any], data).get("gone_since") if isinstance(data, dict) else None
+    if not isinstance(gone, dict):
+        return {}
+    gone_map = cast(dict[object, object], gone)
+    return {"gone_since": {str(k): float(v) for k, v in gone_map.items() if isinstance(v, (int, float))}}
 
 
 # The sweep
@@ -252,7 +254,7 @@ def text(report: dict[str, Any], quiet: bool = False) -> str:
         lines.append(f"  {'':<10} {'':<10} {detail}")
     if not items:
         lines.append("  no removed-directory processes, orphans or stale dev servers")
-    sessions = {}
+    sessions: dict[Any, list[dict[str, Any]]] = {}
     for item in items:
         if item.get("under_session"):
             sessions.setdefault(item.get("session"), []).append(item)
@@ -342,7 +344,8 @@ def main(argv: list[str] | None = None) -> int:
             return config_command(argv[1:], directory)
         live = dev = as_json = quiet = as_plist = False
         logged = True
-        only, interval = None, 3600
+        only: set[int] | None = None
+        interval = 3600
         while argv:
             option = argv.pop(0)
             if option == "--live":
@@ -360,7 +363,8 @@ def main(argv: list[str] | None = None) -> int:
             elif option == "--interval" and argv and argv[0].isdigit() and int(argv[0]) >= 60:
                 interval = int(argv.pop(0))
             elif option == "--pid" and argv and argv[0].isdigit():
-                only = (only or set()) | {int(argv.pop(0))}
+                empty_pids: set[int] = set()
+                only = (only or empty_pids) | {int(argv.pop(0))}
             elif option in ("-h", "--help"):
                 print(__doc__)
                 return 0
