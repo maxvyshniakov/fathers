@@ -327,6 +327,10 @@ def review_lines(receipt: dict[str, Any]) -> list[str]:
     elif receipt.get("issue_error"):
         lines.append(f"Ticket not filed: {receipt['issue_error']}; {config.prog()} review --overall "
                      f"{receipt.get('tip', '')[:10]} files it again")
+    pre_land: dict[str, Any] = receipt.get("pre_land_fix") or {}
+    if pre_land:
+        lines.append(f"Pre-land fix round: reviewed commit {str(pre_land.get('reviewed_sha', ''))[:10]} on "
+                     f"{pre_land.get('branch')} ({pre_land.get('worktree')})")
     if receipt.get("kind") == "lane" and any(not f.get("mark") for f in findings):
         lines.append("Mark each finding: " + mark_help(label) + "; the fix round runs in the lane's "
                      f"worktree on a follow-up lane: {config.prog()} review {label} --fix-lane")
@@ -534,8 +538,14 @@ def mark_review(args: Any) -> int:
             kind, _, detail = value.partition(":")
             detail = detail.strip()
             if kind == "fixed":
-                marks.append((finding, {"kind": "fixed", "merge": fix_merge(record["common_dir"], detail),
-                                        "at": journal.now()}))
+                fix_sha = fix_merge(record["common_dir"], detail)
+                pre_land: dict[str, Any] = receipt.get("pre_land_fix") or {}
+                reviewed_sha = pre_land.get("reviewed_sha")
+                if reviewed_sha and git_ok(main_checkout(record["common_dir"]), "merge-base", "--is-ancestor",
+                                           fix_sha, reviewed_sha):
+                    raise LaneError(f"--mark {number} fixed:{detail}: commit {fix_sha[:10]} does not advance past "
+                                    f"the reviewed commit {reviewed_sha[:10]}; commit the fix on top of it first")
+                marks.append((finding, {"kind": "fixed", "merge": fix_sha, "at": journal.now()}))
             elif kind == "rejected":
                 if not detail:
                     raise LaneError(f"--mark {number} rejected: give the reason, rejected:<reason>")
@@ -617,16 +627,74 @@ def fix_base(record: Record, cwd: str) -> str:
                     "again")
 
 
+def pre_land_fix_round(args: Any, record: Record, worktree: str) -> int:
+    """One truthful pre-land fix round on a reviewed active candidate (fathers#197): keeps the reviewed SHA and
+    finding linkage in the lane record and review receipt without landing the defective original or running a second
+    blind review."""
+    prog = config.prog()
+    receipt = state.read_json(state.receipt_path(args.id, "review"))
+    if (not receipt or receipt.get("status") != "finished"
+            or not any(not finding.get("mark") for finding in receipt.get("findings") or ())):
+        raise LaneError(f"hand-over refused: lane {args.id} has no finished review with unmarked findings")
+    existing: dict[str, Any] | None = receipt.get("pre_land_fix") or record.get("pre_land_fix")
+    if existing:
+        sha = str(existing.get("reviewed_sha") or receipt.get("tip") or "")[:10]
+        raise LaneError(f"hand-over refused: lane {args.id} already has a pre-land fix round "
+                        f"(reviewed commit {sha}); only one pre-land fix round is allowed per review")
+    main = main_checkout(record["common_dir"])
+    reviewed_sha = str(receipt.get("tip") or "")
+    if not reviewed_sha or not git_ok(main, "rev-parse", "--verify", "--quiet", reviewed_sha + "^{commit}"):
+        raise LaneError(f"hand-over refused: lane {args.id}'s reviewed commit {reviewed_sha[:10] or '(none)'} "
+                        "is missing from Git")
+    unmarked = [f["n"] for f in receipt.get("findings", []) if not f.get("mark")]
+    fix_round: dict[str, Any] = {
+        "reviewed_sha": reviewed_sha,
+        "branch": record["branch"],
+        "worktree": worktree,
+        "findings": unmarked,
+        "started": journal.now(),
+    }
+    with state.locked("state"):
+        record = state.load(args.id)
+        record["pre_land_fix"] = dict(fix_round)
+        state.save(record)
+    with state.locked(f"review-{args.id}"):
+        receipt = state.read_json(state.receipt_path(args.id, "review")) or {}
+        receipt["pre_land_fix"] = dict(fix_round)
+        state.write_json(state.receipt_path(args.id, "review"), receipt)
+    journal.ledger(f"review-pre-land-fix {args.id} reviewed_sha={reviewed_sha} worktree={worktree}",
+                   kind="review.pre_land_fix", lane=record,
+                   details={"reviewed_sha": reviewed_sha, "branch": record["branch"],
+                            "worktree": worktree, "findings": unmarked})
+    numbered = ", ".join(f"#{n}" for n in unmarked)
+    print(f"Pre-land fix round opened for active lane {args.id} in {worktree} "
+          f"(reviewed commit {reviewed_sha[:10]} preserved; findings {numbered}).")
+    print(f"Commit the fix on {record['branch']} on top of {reviewed_sha[:10]} (do not amend away the reviewed "
+          f"commit), run {prog} check {args.id}, mark each finding ("
+          + mark_help(args.id).replace("<merge>", "<fix-commit>|" + args.id)
+          + f"), then {prog} land {args.id} (its review is kept without a second blind review).")
+    return 0
+
+
 def hand_over(args: Any) -> int:
-    """The fix round: a follow-up lane <id>-review-fixes takes over the landed lane's worktree, where the resumed
-    agent keeps its context (a resumed agent is fenced to its own worktree); its land is the fix and gets no
-    review of its own."""
+    """The fix round: for a landed lane, a follow-up lane <id>-review-fixes takes over the landed lane's worktree,
+    where the resumed agent keeps its context (a resumed agent is fenced to its own worktree); its land is the fix
+    and gets no review of its own. For an active reviewed candidate (fathers#197), opens one truthful pre-land fix
+    round on the same active lane, preserving the reviewed SHA and finding linkage."""
     prog = config.prog()
     record = state.load(args.id)
+    status = record["status"]
+    if status not in ("active", "landed", "released"):
+        raise LaneError(f"hand-over refused: lane {args.id} has unsupported status {status!r} "
+                        "(must be active, landed or released)")
+    worktree = record.get("worktree")
+    if not worktree:
+        raise LaneError(f"hand-over refused: lane {args.id} ({status}) has no worktree to hand over")
+    if not os.path.isdir(worktree):
+        raise LaneError(f"hand-over refused: lane {args.id}'s worktree {worktree} does not exist")
+    if status == "active":
+        return pre_land_fix_round(args, record, worktree)
     receipt = fix_parent_review(args.id, record["common_dir"], "hand-over refused")
-    if record["status"] not in ("landed", "released") or not record.get("worktree") or not os.path.isdir(
-            record["worktree"]):
-        raise LaneError(f"hand-over refused: lane {args.id} is {record['status']} and has no worktree to hand over")
     fix_id = f"{args.id}-review-fixes"
     main = main_checkout(record["common_dir"])
     fix_paths, held = fix_claims(receipt, fix_id, record["common_dir"])

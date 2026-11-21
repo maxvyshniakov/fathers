@@ -617,6 +617,86 @@ class ReviewFixRoundTests(ReviewGateCase):
                 receipt = self.state / f"{lane_id}.review.json"
                 self.assertEqual(receipt.exists() and self.review(lane_id)["status"] == "exempt", exempt)
 
+    def test_pre_land_fix_round_on_reviewed_active_candidate_preserves_sha_and_findings(self):
+        # fathers#197: active candidate reviewed before landing gets one truthful pre-land fix round in its
+        # existing worktree without landing the defective original or running a second blind review.
+        self.review_text.write_text(TWO_FINDINGS)
+        worktree = self.created("a", "lib/**", "calls/**")
+        reviewed_sha = self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.lane("review", "a")
+        self.assertEqual(self.review("a")["tip"], reviewed_sha)
+
+        output = self.lane("review", "a", "--fix-lane")
+        self.assertIn(f"Pre-land fix round opened for active lane a in {worktree}", output)
+        self.assertIn(reviewed_sha[:10], output)
+        # Lane remains active (no fake landed state, no second lane created).
+        record = self.record("a")
+        self.assertEqual(record["status"], "active")
+        self.assertEqual(record["pre_land_fix"]["reviewed_sha"], reviewed_sha)
+        self.assertEqual(record["pre_land_fix"]["findings"], [1, 2])
+        self.assertFalse((self.state / "a-review-fixes.json").exists())
+        receipt = self.review("a")
+        self.assertEqual(receipt["pre_land_fix"]["reviewed_sha"], reviewed_sha)
+        self.assertEqual(receipt["pre_land_fix"]["findings"], [1, 2])
+        kinds = [json.loads(line)["kind"] for line in self.events.read_text().splitlines()]
+        self.assertIn("review.pre_land_fix", kinds)
+
+        # Only one pre-land fix round is allowed per review.
+        second = self.lane("review", "a", "--fix-lane", ok=False)
+        self.assertIn("already has a pre-land fix round", second)
+
+        # Marking fixed with the unfixed reviewed SHA itself is refused.
+        bad_mark = self.lane("review", "a", "--mark", "1", f"fixed:{reviewed_sha}", ok=False)
+        self.assertIn("does not advance past the reviewed commit", bad_mark)
+
+        # Implement the fix commit on top of the reviewed SHA, recheck, mark findings, and land.
+        fix_sha = self.commit(worktree, {"calls/main.txt": "foo\nbaz\n"}, "fix(review): call baz")
+        self.lane("check", "a")
+        self.lane("review", "a", "--mark", "1", f"fixed:{fix_sha}", "--mark", "2", "rejected:out of scope")
+        self.assertEqual(self.review("a")["findings"][0]["mark"]["merge"], fix_sha)
+        land_out = self.lane("land", "a")
+        self.assertIn("review kept", land_out)
+        self.assertEqual(sum(1 for c in self.codex_calls() if c[2] == "exec"), 1, "no second blind review")
+        self.assertEqual(self.record("a")["status"], "done")
+        # promote passes gate_report because fix_sha is an ancestor of the landed merge.
+        self.lane("promote", self.tip(), "--no-push", "--wait", "0")
+
+    def test_hand_over_refusal_distinguishes_unsupported_status_from_missing_worktree(self):
+        # fathers#197: unsupported status (planned, done) must not claim "has no worktree to hand over",
+        # and missing/deleted worktree on an active/landed lane must be named specifically.
+        self.start("p", "docs/**")
+        planned_out = self.lane("review", "p", "--fix-lane", ok=False)
+        self.assertIn("unsupported status 'planned'", planned_out)
+        self.assertNotIn("no worktree", planned_out)
+
+        self.review_text.write_text(TWO_FINDINGS)
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.lane("review", "a")
+
+        # Missing worktree field on an active lane.
+        rec = self.record("a")
+        rec["worktree"] = None
+        (self.state / "a.json").write_text(json.dumps(rec))
+        none_wt = self.lane("review", "a", "--fix-lane", ok=False)
+        self.assertIn("has no worktree to hand over", none_wt)
+
+        # Nonexistent worktree path on an active lane.
+        gone = str(self.tmp / "deleted-wt")
+        rec["worktree"] = gone
+        (self.state / "a.json").write_text(json.dumps(rec))
+        gone_wt = self.lane("review", "a", "--fix-lane", ok=False)
+        self.assertIn(f"worktree {gone} does not exist", gone_wt)
+
+        # Done status.
+        rec["status"] = "done"
+        (self.state / "a.json").write_text(json.dumps(rec))
+        done_out = self.lane("review", "a", "--fix-lane", ok=False)
+        self.assertIn("unsupported status 'done'", done_out)
+        self.assertNotIn("no worktree", done_out)
+
 
 if __name__ == "__main__":
     unittest.main()

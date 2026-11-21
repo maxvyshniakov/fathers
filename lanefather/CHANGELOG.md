@@ -187,6 +187,13 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- Pre-land review fix rounds and clearer hand-over refusals (fathers#197): `lanefather review ID --fix-lane` now
+  supports one truthful pre-land fix round on a reviewed `active` candidate in its existing worktree, preserving
+  the reviewed commit SHA and unmarked finding linkage in both the lane record and review receipt (`pre_land_fix`,
+  event `review.pre_land_fix`) without landing the defective original or running a second blind review; marking a
+  finding `fixed:<sha>` in a pre-land fix round refuses a commit that does not advance past the reviewed SHA, and
+  `--fix-lane` refusals now distinguish unsupported lane status from a missing or nonexistent worktree.
+
 - Lane checks honour a step's declared minimum slots instead of falling to 1 slot on a busy machine (fathers#173):
   a check row in `--plan --json` may declare `min_slots` or `slots`, and `.lanefather.toml` accepts
   `[checks.min_slots]` mapping check or suite fnmatch patterns to a positive slot floor; `check` leases at least that
