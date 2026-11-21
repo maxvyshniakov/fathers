@@ -35,7 +35,7 @@ class SelectionTests(unittest.TestCase):
     def test_slotfather_sources_also_select_godfathers_contract_tests(self) -> None:
         self.assertEqual(package("slotfather") | {"godfather tests"} | ALWAYS,
                          self.selected("slotfather/src/slotfather/state.py"))
-        self.assertEqual(package("slotfather") | ALWAYS, self.selected("slotfather/docs/api.md"))
+        self.assertEqual(package("slotfather") | ALWAYS, self.selected("slotfather/tests/test_usage.py"))
 
     def test_common_selects_every_package(self) -> None:
         every = set().union(*(package(name) for name in checks.PACKAGES))
@@ -54,6 +54,17 @@ class SelectionTests(unittest.TestCase):
         plan = checks.select(["AGENTS.md", "docs/agents/checks.md", "notes/sha-map.md", "LICENSE"])
         self.assertFalse(plan.full)
         self.assertEqual(ALWAYS, set(plan.checks))
+
+    def test_package_documentation_selects_only_the_cheap_root_checks(self) -> None:
+        plan = checks.select(["lanefather/GLOSSARY.md", "slotfather/docs/api.md",
+                              "lanefather/docs/adr/0001-real-adapters-before-general-ports.md"])
+        self.assertFalse(plan.full)
+        self.assertEqual(ALWAYS, set(plan.checks))
+        for path in ("lanefather/CHANGELOG.md", "lanefather/install.py", "lanefather/hooks/pre-commit",
+                     "lanefather/lanefather/cli.py", "lanefather/lanefather/README.md",
+                     "lanefather/tests/fixtures/notes.md"):
+            with self.subTest(path=path):
+                self.assertEqual(package("lanefather") | ALWAYS, self.selected(path))
 
     def test_a_path_no_rule_knows_selects_everything(self) -> None:
         plan = checks.select(["slotfather/x.py", "Makefile"])
@@ -100,6 +111,20 @@ class PlanTests(unittest.TestCase):
         self.assertNotIn("verify:slotfather%20tests", rows)
         self.assertEqual(sorted(rows), sorted(f"verify:{checks.encode(name)}" for name in
                                               package("junkfather") | package("lanefather") | ALWAYS))
+
+    def test_the_plan_for_package_documentation_only_skips_package_checks(self) -> None:
+        root = self.repository()
+        git = ["git", "-C", str(root), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+               "-c", "core.hooksPath=/dev/null"]
+        (root / "lanefather/new.py").unlink()
+        (root / "lanefather/GLOSSARY.md").write_text("# Glossary\n")
+        subprocess.run([*git, "add", "lanefather/GLOSSARY.md"], check=True)
+        subprocess.run([*git, "commit", "-qm", "docs"], check=True)
+        plan = checks.plan(root, "HEAD~1")
+        self.assertFalse(plan["full"])
+        self.assertEqual(["lanefather/GLOSSARY.md"], plan["paths"])
+        self.assertEqual(sorted(f"verify:{checks.encode(name)}" for name in ALWAYS),
+                         sorted(row["id"] for row in plan["checks"]))
 
     def test_the_command_line_prints_the_plan_as_json(self) -> None:
         root = self.repository()
