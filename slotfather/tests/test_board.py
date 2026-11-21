@@ -351,6 +351,125 @@ class EventTests(unittest.TestCase):
         steps = tool.held_history(events, 0, now, window=3600)
         self.assertEqual([0, 2, 3, 1, 0], [level for _, _, level in steps])
 
+    def test_events_jsonl_tracks_yields_resumes_and_release_while_waiting(self) -> None:
+        """fathers#18: events.jsonl drives EVENTS and held_history(), including yields, resumes and releases while
+        waiting to resume (delta 0)."""
+        tool = board()
+        directory = _Path(tempfile.mkdtemp(prefix="slotfather-events-jsonl-"))
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+
+        def entry(at: str, kind: str, req_id: str, label: str, pid: int, details: dict[str, Any]) -> str:
+            return json.dumps({"v": 1, "time": at, "host": "h", "source": "slotfather", "kind": kind,
+                               "subject": {"type": "request", "id": req_id, "label": label, "pid": pid},
+                               "actor": {"type": "process", "pid": pid}, "details": details}) + "\n"
+
+        # 10:00..11:00 window (now = 11:00):
+        # 10:10 a granted 2 -> 2
+        # 10:20 a yields 2 to b -> 0
+        # 10:25 b granted 3 -> 3
+        # 10:30 b yields 3 for lock -> 0
+        # 10:35 a resumed 2 -> 2
+        # 10:40 b released while waiting to resume -> 2 (delta 0)
+        # 10:42 c left -> 2 (delta 0)
+        # 10:45 a released -> 0
+        # 10:50 d granted 1 -> 1
+        # 10:55 d reaped while held -> 0
+        lines = [
+            entry("2026-01-01T10:10:00.000Z", "lease.granted", "0001-10", "alpha", 10, {"count": 2, "waited": 0}),
+            entry("2026-01-01T10:20:00.000Z", "lease.yielded", "0001-10", "alpha", 10,
+                  {"count": 2, "to": {"id": "0002-11", "label": "beta"}, "yields": 1}),
+            entry("2026-01-01T10:25:00.000Z", "lease.granted", "0002-11", "beta", 11, {"count": 3, "waited": 5}),
+            entry("2026-01-01T10:30:00.000Z", "lease.yielded", "0002-11", "beta", 11,
+                  {"count": 3, "lock": "/tmp/build.lock", "yields": 1}),
+            entry("2026-01-01T10:35:00.000Z", "lease.granted", "0001-10", "alpha", 10,
+                  {"count": 2, "waited": 900, "resumed": True}),
+            entry("2026-01-01T10:40:00.000Z", "lease.released", "0002-11", "beta", 11,
+                  {"count": 3, "exit": 0, "ran": 900}),
+            entry("2026-01-01T10:42:00.000Z", "request.left", "0003-12", "gamma", 12,
+                  {"count": 1, "gave_up_after": 60}),
+            entry("2026-01-01T10:45:00.000Z", "lease.released", "0001-10", "alpha", 10,
+                  {"count": 2, "exit": 0, "ran": 2100}),
+            entry("2026-01-01T10:50:00.000Z", "lease.granted", "0004-13", "delta", 13, {"count": 1, "waited": 0}),
+            entry("2026-01-01T10:55:00.000Z", "lease.reaped", "0004-13", "delta", 13,
+                  {"count": 1, "ran": 300, "reason": "owner exited"}),
+        ]
+        (directory / "events.jsonl").write_text("".join(lines))
+        # A stale/contradictory queue.log beside events.jsonl is ignored once events.jsonl exists.
+        (directory / "queue.log").write_text("2026-01-01T10:05:00Z granted 4 to ignored (pid 99)\n")
+
+        events = tool.queue_events(directory)
+        tool.describe_events(events, directory, [])
+        self.assertEqual([
+            ("granted", "alpha", 2, "no wait"),
+            ("yielded", "alpha", -2, "to beta"),
+            ("granted", "beta", 3, "waited 5s"),
+            ("yielded", "beta", -3, "for lock /tmp/build.lock"),
+            ("granted", "alpha", 2, "resumed, waited 15m00s"),
+            ("released", "beta", 0, "exit 0, ran 15m00s"),
+            ("left", "gamma", 0, "gave up after 1m00s"),
+            ("released", "alpha", -2, "exit 0, ran 35m00s"),
+            ("granted", "delta", 1, "no wait"),
+            ("reaped", "delta", -1, "owner exited, ran 5m00s"),
+        ], [(e["verb"], e["label"], e["delta"], e["detail"]) for e in events])
+
+        def t(minute: int) -> datetime.datetime:
+            return datetime.datetime(2026, 1, 1, 10, minute, tzinfo=datetime.timezone.utc)
+
+        now = datetime.datetime(2026, 1, 1, 11, 0, tzinfo=datetime.timezone.utc)
+        steps = tool.held_history(events, 0, now, window=3600)
+        self.assertEqual([
+            (t(0), t(10), 0),
+            (t(10), t(20), 2),
+            (t(20), t(25), 0),
+            (t(25), t(30), 3),
+            (t(30), t(35), 0),
+            (t(35), t(45), 2),
+            (t(45), t(50), 0),
+            (t(50), t(55), 1),
+            (t(55), now, 0),
+        ], steps)
+
+    def test_queue_log_fallback_tracks_yields_regrants_and_release_while_waiting(self) -> None:
+        """fathers#18: when events.jsonl is absent, queue.log tracks yields, re-grants and releases while waiting to
+        resume without corrupting held_history()."""
+        tool = board()
+        directory = self.directory(
+            "2026-01-01T10:10:00Z granted 2 to alpha (pid 10)\n"
+            "2026-01-01T10:20:00Z yielded 2 (0000000001-10.json) to beta\n"
+            "2026-01-01T10:25:00Z granted 3 to beta (pid 11)\n"
+            "2026-01-01T10:30:00Z yielded 3 (0000000002-11.json) while waiting for lock /tmp/build.lock\n"
+            "2026-01-01T10:35:00Z granted 2 to alpha (pid 10)\n"
+            "2026-01-01T10:40:00Z released 3 (0000000002-11.json)\n"
+            "2026-01-01T10:45:00Z released 2 (0000000001-10.json)\n",
+            history=False,
+        )
+        events = tool.queue_events(directory)
+        tool.describe_events(events, directory, [])
+        self.assertEqual([
+            ("granted", "alpha", 2),
+            ("yielded", "alpha", -2),
+            ("granted", "beta", 3),
+            ("yielded", "beta", -3),
+            ("granted", "alpha", 2),
+            ("released", "beta", 0),
+            ("released", "alpha", -2),
+        ], [(e["verb"], e["label"], e["delta"]) for e in events])
+
+        def t(minute: int) -> datetime.datetime:
+            return datetime.datetime(2026, 1, 1, 10, minute, tzinfo=datetime.timezone.utc)
+
+        now = datetime.datetime(2026, 1, 1, 11, 0, tzinfo=datetime.timezone.utc)
+        steps = tool.held_history(events, 0, now, window=3600)
+        self.assertEqual([
+            (t(0), t(10), 0),
+            (t(10), t(20), 2),
+            (t(20), t(25), 0),
+            (t(25), t(30), 3),
+            (t(30), t(35), 0),
+            (t(35), t(45), 2),
+            (t(45), now, 0),
+        ], steps)
+
 
 class MachineFactTests(unittest.TestCase):
     def test_macos_memory_counts_active_wired_and_compressor_physical_pages(self) -> None:
