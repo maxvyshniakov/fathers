@@ -316,12 +316,15 @@ class BackgroundTests(Case):
                 self.reaped_at_session_end(mode, f"agent-{mode}-{n}", command)
 
     def test_a_child_left_behind_that_execs_later_is_still_its_own(self):
-        """The shell leaves `(sleep 1; exec sleep 600) &` and exits; a second later the child becomes `sleep 600`.
-        The watcher keeps watching what it recorded, so session end still reaps it."""
+        """The shell leaves a child behind and exits; once the watcher has registered the child, an explicit
+        barrier releases it to `exec sleep 600`. The watcher records the new command, so session end still reaps it."""
         modes = [m for m, here in (("kqueue", hasattr(select, "kqueue")), ("pidfd", hasattr(os, "pidfd_open"))) if here]
         for n, mode in enumerate(modes):
             with self.subTest(mode=mode):
-                self.reaped_at_session_end(mode, f"agent-late-{n}", "(sleep 1; exec sleep 600) &")
+                gate = self.work / f"go-{n}"
+                self.reaped_at_session_end(
+                    mode, f"agent-late-{n}", f"(while [ ! -e {gate} ]; do sleep 0.05; done; exec sleep 600) &",
+                    after_shell_exit=gate.touch)
 
     def test_an_entry_adopted_inside_the_shell_is_reaped_by_its_own_reap(self):
         shell = self.run_as_claude(self.rewritten(call("sleep 600; :")))
@@ -334,7 +337,8 @@ class BackgroundTests(Case):
         self.wait_for(lambda: not self.runs(child), what="the inner entry's own reap to end its process")
         self.assertEqual("reaped", self.state_of(inner["id"]))
 
-    def reaped_at_session_end(self, mode: str, agent: str, command: str) -> None:
+    def reaped_at_session_end(self, mode: str, agent: str, command: str,
+                              after_shell_exit: Any = None) -> None:
         env = {**self.session_env, "JUNKFATHER_WATCH": mode}
         shell = self.run_as_claude(self.rewritten(call(command, agent=agent, tool_use=f"toolu_{agent}")), env)
         self.wait_for(lambda: any(e.get("owner", {}).get("agent") == agent and e.get("supervisor")
@@ -342,6 +346,13 @@ class BackgroundTests(Case):
         (entry,) = [plain(e) for e in self.store.entries() if e["owner"]["agent"] == agent]
         if command.endswith("&"):
             self.assertIsNotNone(shell.wait(30), "the shell exits and leaves its child")
+        if after_shell_exit is not None:
+            def child_registered() -> bool:
+                seen: List[List[Any]] = list(self.loaded(entry["id"]).get("known_seen") or [])
+                return any(int(item[0]) != shell.pid for item in seen)
+            self.wait_for(child_registered, what="the watcher to register the child before exec",
+                          seen=lambda: str(self.loaded(entry["id"])))
+            after_shell_exit()
 
         def sleepers() -> List[int]:
             seen: List[List[Any]] = list(self.loaded(entry["id"]).get("known_seen") or [])
@@ -598,3 +609,84 @@ class WatcherTests(Case):
                          wall=lambda: now[0] + 1.0)
         self.assertEqual("reaped", self.state_of("jw"))
         self.assertIsNotNone(child.wait(10))
+
+    def test_a_child_that_execs_between_snapshot_and_registration_records_its_current_command(self):
+        """fathers#186: if a newly found child execs after the process-table snapshot and before Eyes.add() finishes,
+        with no replayed NOTE_EXEC event, the watcher refreshes its command after registration so a normal reap
+        recognizes and stops it."""
+        from junkfather import reap
+        shell = self.spawn("sleep", "600", start_new_session=True)
+        child = self.spawn("sleep", "600", start_new_session=True)
+        entry = self.entry(shell, seen="sh -c ...")
+        child_proc = procs.Table.read().get(child.pid)
+        assert child_proc is not None
+        stale_child = child_proc._replace(ppid=1, pgid=shell.pid, tty="", cmd="/bin/sh -c (sleep 1; exec sleep 600)")
+        shell_proc = procs.Table.read().get(shell.pid)
+        assert shell_proc is not None
+        snapshots = [table(shell_proc), table(stale_child)]
+
+        class ExecBeforeAddEyes(FakeEyes):
+            def __init__(self, case: WatcherTests):
+                super().__init__()
+                self.case = case
+                self.waits = 0
+
+            def wait(self, timeout: float) -> List[Tuple[str, int]]:
+                self.waits += 1
+                if self.waits == 1:
+                    return [("exit", shell.pid)]
+                # On the second wait, stop the watcher by marking the entry gone/ended after checking known_seen.
+                self.case.store.update("jw", lambda e: e.update(state="gone"))
+                return []
+
+        background.watch(self.store, "jw", shell.pid, entry["start"], eyes=ExecBeforeAddEyes(self),
+                         reader=lambda: snapshots.pop(0) if snapshots else procs.Table.read())
+        recorded = self.loaded("jw")
+        self.assertEqual([[child.pid, child_proc.start, child_proc.cmd]], recorded["known_seen"])
+        self.store.update("jw", lambda e: e.update(state="running", ended=None))
+        shell.kill()
+        shell.wait()
+        result = reap.reap(self.store, "jw", "session-end", grace=1)
+        self.assertEqual(("stopped", [child.pid]), (result["result"], result["pids"]))
+        self.assertIsNotNone(child.wait(10))
+
+    def test_a_child_that_exits_or_changes_start_identity_during_registration_stays_excluded(self):
+        """fathers#186: a child in the snapshot that exits or changes start time before post-registration identity
+        verification is never added to watched or known_seen."""
+        from unittest import mock
+        shell = self.spawn("sleep", "600", start_new_session=True)
+        entry = self.entry(shell, seen="sleep 600")
+        shell_proc = procs.Table.read().get(shell.pid)
+        assert shell_proc is not None
+        exited = proc(999991, ppid=shell.pid, pgid=shell.pid, start=shell_proc.start, cmd="sleep 600")
+        reused = proc(999992, ppid=shell.pid, pgid=shell.pid, start="Mon Jan  1 00:00:00 2024", cmd="sleep 600")
+        snapshots = [table(shell_proc), table(shell_proc, exited, reused)]
+        real_identities = procs.identities
+
+        def fake_identities(pids: List[int], command: bool = False) -> Dict[int, Any]:
+            if pids == [999991]:
+                return {}
+            if pids == [999992]:
+                return {999992: ("Thu Nov 12 10:00:00 2026", "sleep 600") if command else "Thu Nov 12 10:00:00 2026"}
+            return real_identities(pids, command=command)
+
+        class OneTurnEyes(FakeEyes):
+            def __init__(self, case: WatcherTests):
+                super().__init__()
+                self.case = case
+                self.waits = 0
+
+            def add(self, pid: int) -> bool:
+                return True
+
+            def wait(self, timeout: float) -> List[Tuple[str, int]]:
+                self.waits += 1
+                if self.waits == 2:
+                    self.case.store.update("jw", lambda e: e.update(state="gone"))
+                return []
+
+        with mock.patch.object(procs, "identities", side_effect=fake_identities):
+            background.watch(self.store, "jw", shell.pid, entry["start"], eyes=OneTurnEyes(self),
+                             reader=lambda: snapshots.pop(0) if snapshots else table(shell_proc))
+        recorded = self.loaded("jw")
+        self.assertEqual([[shell.pid, shell_proc.start, "sleep 600"]], recorded["known_seen"])

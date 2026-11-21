@@ -303,8 +303,11 @@ def watch(store: Store, entry_id: str, pid: int, start: str, ready: Callable[[],
                                             for event, which in events)
         watched = {p: held for p, held in watched.items() if table.alive(p, held[0])}
         for proc in _joining(store, entry, table, watched, exited_group, seen_at):
-            if eyes.add(proc.pid) and _procs.identities([proc.pid]).get(proc.pid) == proc.start:
-                watched[proc.pid] = (proc.start, proc.pgid)
+            if eyes.add(proc.pid):
+                current_identity = _procs.identities([proc.pid], command=True).get(proc.pid)
+                if current_identity is not None and current_identity[0] == proc.start:
+                    watched[proc.pid] = (proc.start, proc.pgid)
+                    table.procs[proc.pid] = proc._replace(cmd=current_identity[1])
         running = [table.procs[p] for p in watched if p in table.procs]
         if running:
             _entry.known(store, entry_id, running)
