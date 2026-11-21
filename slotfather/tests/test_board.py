@@ -202,7 +202,7 @@ class BoardTests(SlotCase):
         self.assertEqual({"argv": ["status", "--json", "--full"], "versions": [2], "poll": 1}, dashboard["snapshot"])
         self.assertEqual(str(ROOT / "CHANGELOG.md"), dashboard["changelog"])
         self.assertIn("reprioritize", dashboard["actions"])
-        self.assertEqual(2, self.tool("capabilities").returncode, "only --json")
+        self.assertEqual(0, self.tool("capabilities").returncode, "text summary without --json (#124)")
 
 
 class MemoryFactsTests(unittest.TestCase):
