@@ -75,9 +75,10 @@ class Released(TypedDict, total=False):
     unknown: bool
 
 
-class Left(TypedDict):
+class Left(TypedDict, total=False):
     count: int
     gave_up_after: Optional[float]
+    reason: str
 
 
 class Reaped(TypedDict):

@@ -6,6 +6,12 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- `slotfather stats` and `stats --json` split request outcomes into four groups: command exit nonzero, reaped
+  (held vs waiting), gave up waiting, and refused. Request outcomes are decided once from what the client observed
+  (`entry.decide_outcome`), so a request granted concurrently at timeout or termination is recorded as `left` with
+  its `reason` rather than `released` and does not feed runtime estimates; reaped lines record `was_held`
+  (fathers#10).
+
 - `install.py` smoke-checks a staged release (`--version` and `capabilities --json`) before swapping any wrapper,
   restores the previous wrapper set if a swap fails, and adds `--rollback`, `--prune` (keeping current, previous,
   and in-use releases), and `--uninstall` (fathers#126).

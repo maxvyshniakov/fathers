@@ -175,23 +175,38 @@ def unreadable(directory: Path) -> list[Path]:
     return found
 
 
-def record(directory: Path, entry: dict[str, Any], outcome: str, status: int | None = None,
+def record(directory: Path, entry: dict[str, Any], outcome: str | _entry.Outcome, status: int | None = None,
            usage: dict[str, Any] | None = None, path: Path | None = None,
            expected: dict[str, Any] | None = None, *, capacity: Callable[[], int],
            above: Callable[[float, Any], bool]) -> dict[str, Any]:
-    """Add a request that left the queue to history.jsonl: released (it ran), left (it gave up waiting) or reaped
-    (its holder died), with what its process tree used where the holder measured it. `capacity()` gives the queue's
-    slots for the line (settings.total()), `above(ran, p90)` whether a run is past its series `expected`
+    """Add a request that left the queue to history.jsonl: released (it ran), left (it gave up waiting), reaped
+    (its holder died) or refused, with what its process tree used where the holder measured it. `capacity()` gives the
+    queue's slots for the line (settings.total()), `above(ran, p90)` whether a run is past its series `expected`
     (runtype.above()): the caller's, so that persistence imports neither. Callers hold the queue lock. Returns the line's
     fields (the events of events.py read them)."""
     ended = time.time()
-    queued, granted = _config.seconds(entry.get("since")), _config.seconds(entry.get("granted"))
+    extra_fields: dict[str, Any] = {}
+    never_ran = False
+    if isinstance(outcome, (_entry.Ran, _entry.Left, _entry.Reaped, _entry.Refused)):
+        extra_fields = _entry.outcome_fields(outcome)
+        outcome_str = str(extra_fields["outcome"])
+        if isinstance(outcome, _entry.Ran) and status is None:
+            status = outcome.exit
+        never_ran = isinstance(outcome, (_entry.Left, _entry.Refused))
+    else:
+        outcome_str = outcome
+    queued = _config.seconds(entry.get("since"))
+    granted_stamp = None if never_ran else entry.get("granted")
+    granted = None if never_ran else _config.seconds(granted_stamp)
     item: dict[str, Any] = {"v": _config.HISTORY_VERSION, "label": entry.get("label"), "cmd": entry.get("cmd"), "cwd": entry.get("cwd"),
             "count": entry.get("count"), "pid": entry.get("pid"), "queued": entry.get("since"),
-            "granted": entry.get("granted"), "ended": _config.now(), "outcome": outcome,
+            "granted": granted_stamp, "ended": _config.now(), "outcome": outcome_str,
             "waited": None if queued is None else round((granted or ended) - queued),
             "ran": None if granted is None else round(ended - granted), "status": status,
             "priority": _entry.priority_of(entry)}
+    for key in ("reason", "was_held"):
+        if key in extra_fields:
+            item[key] = extra_fields[key]
     ticket = _entry.ticket_of(entry)
     if ticket is not None:
         item["ticket"] = ticket
@@ -215,12 +230,12 @@ def record(directory: Path, entry: dict[str, Any], outcome: str, status: int | N
     if path is not None or isinstance(entry.get("lease_id"), str):
         # the entry's unique id, as status --json and EVENTS give it (an older client's entry: the same fallback)
         item["lease_id"] = _entry.lease_id(path.stem if path is not None else "", entry)
-    if expected is not None and outcome == "released" and isinstance(item.get("ran"), (int, float)) \
+    if expected is not None and outcome_str == "released" and isinstance(item.get("ran"), (int, float)) \
             and not entry.get("session"):
         # the run type it is judged by and its verdict against that series (runtype.py, fathers#106)
         item["run_key"] = expected["key"]
         item["verdict"] = "pending" if above(float(item["ran"]), expected.get("p90")) else "normal"
-    elif expected is None and outcome == "released" and entry.get("run_key"):
+    elif expected is None and outcome_str == "released" and entry.get("run_key"):
         item["run_key"] = entry["run_key"]
     for key in ("label_given", "label_derived", "project"):
         if isinstance(entry.get(key), str):

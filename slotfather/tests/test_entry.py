@@ -60,6 +60,63 @@ class PhaseTests(unittest.TestCase):
         self.assertEqual("left", sf_entry.outcome(waiter()))
         self.assertEqual("reaped", sf_entry.outcome(waiter(state="held"), reaped=True))
 
+    def test_decide_outcome_uses_client_knowledge_and_produces_history_fields(self) -> None:
+        held = waiter(state="held")
+        waiting = waiter()
+        # Client never saw it as held -> Left even if the file says held (grant raced with timeout/signal)
+        raced = sf_entry.decide_outcome(held, held_seen=False, left_reason="timeout")
+        self.assertEqual(sf_entry.Left("timeout"), raced)
+        self.assertEqual({"outcome": "left", "reason": "timeout"}, sf_entry.outcome_fields(raced))
+        # Client saw it as held -> Ran
+        ran = sf_entry.decide_outcome(held, held_seen=True, status=2)
+        self.assertEqual(sf_entry.Ran(exit=2), ran)
+        self.assertEqual({"outcome": "released"}, sf_entry.outcome_fields(ran))
+        # Reaped distinguishes held vs waiting
+        reaped_held = sf_entry.decide_outcome(held, reaped=True)
+        self.assertEqual(sf_entry.Reaped(was_held=True), reaped_held)
+        self.assertEqual({"outcome": "reaped", "was_held": True}, sf_entry.outcome_fields(reaped_held))
+        reaped_waiting = sf_entry.decide_outcome(waiting, reaped=True)
+        self.assertEqual(sf_entry.Reaped(was_held=False), reaped_waiting)
+        self.assertEqual({"outcome": "reaped", "was_held": False}, sf_entry.outcome_fields(reaped_waiting))
+        # Refused carries its reason
+        refused = sf_entry.decide_outcome(waiting, refused="memory")
+        self.assertEqual(sf_entry.Refused("memory"), refused)
+        self.assertEqual({"outcome": "refused", "reason": "memory"}, sf_entry.outcome_fields(refused))
+
+    def test_grant_injected_between_last_read_and_deadline_is_recorded_left_not_ran(self) -> None:
+        """Issue #10: a concurrent grant after the client's last read at timeout records Left, not Ran,
+        and does not feed runtime estimates."""
+        from slotfather import estimates as sf_estimates
+        root = _Path(tempfile.mkdtemp(prefix="slotfather-race-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        queue = Queue(root)
+        real_release = sf_leases.release
+
+        def inject_grant_then_release(path: _Path, count: int, status: int | None, usage: dict[str, Any] | None,
+                                      **kwargs: Any) -> None:
+            # Simulate another client granting this entry between wait_held's last read and lease.release()
+            data = json.loads(path.read_text())
+            sf_entry.to_held(data, stamp(T0 + 5), T0 + 5)
+            sf_state.write(path, data)
+            real_release(path, count, status, usage, **kwargs)
+
+        with queue.running(), \
+                mock.patch.object(sf_client, "wait_held", side_effect=sf_config.SlotTimeout("timed out")), \
+                mock.patch.object(sf_leases, "release", side_effect=inject_grant_then_release):
+            with self.assertRaises(sf_config.SlotTimeout):
+                sf_client.acquire(1, "race-job", "echo hi", wait=0.1, out=io.StringIO())
+
+        lines = [json.loads(line) for line in (queue.directory / "history.jsonl").read_text().splitlines() if line]
+        self.assertEqual(1, len(lines))
+        item = lines[0]
+        self.assertEqual("left", item["outcome"])
+        self.assertEqual("timeout", item["reason"])
+        self.assertIsNone(item["granted"])
+        self.assertIsNone(item["ran"])
+        # Must not feed runtime estimates
+        est = sf_estimates.history_estimates(queue.directory)
+        self.assertIsNone(est.of("race-job", "echo hi"))
+
 
 class TransitionTests(unittest.TestCase):
     def test_a_yield_and_its_resume_keep_the_first_grant(self) -> None:

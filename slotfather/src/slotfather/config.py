@@ -128,7 +128,7 @@ ESTIMATE_RUNS = 20  # recent runs of a kind its estimate takes the median of
 ESTIMATE_BYTES = 1 << 20  # of the history's end (and of its rotated part) read for estimates
 
 
-UNFINISHED = ("reaped", "left")  # history outcomes whose time is no run of their kind: left out of the estimates
+UNFINISHED = ("reaped", "left", "refused")  # history outcomes whose time is no run of their kind: left out of the estimates
 
 
 ESTIMATES_VERSION = 2  # estimates.json: 2 leaves UNFINISHED out; a file without it (or older) is worked out again

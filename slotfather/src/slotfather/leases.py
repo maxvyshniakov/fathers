@@ -498,7 +498,8 @@ def enqueue(directory: Path, count: int | str, table: _queue.Table, label: str, 
     return path, count
 
 
-def release(path: Path, count: int, status: int | None, usage: dict[str, Any] | None) -> None:
+def release(path: Path, count: int, status: int | None, usage: dict[str, Any] | None, *,
+            held: bool | None = None, left_reason: str | None = None) -> None:
     """Takes the request at `path` out of the queue, records it in the history (released, or left when it never
     ran), and hands its slots on at once. Its outliers and trends are judged after, outside the queue lock."""
     directory = path.parent.parent
@@ -518,17 +519,20 @@ def release(path: Path, count: int, status: int | None, usage: dict[str, Any] | 
         _idle.path(path).unlink(missing_ok=True)
         if isinstance(entry, dict):
             entry = cast(dict[str, Any], entry)
-            outcome = _entry.outcome(entry)  # a yielded lease ran
-            item = _state.record(directory, entry, outcome, status, usage, path=path, expected=expected,
+            result = _entry.decide_outcome(entry, held_seen=held, status=status, left_reason=left_reason)
+            item = _state.record(directory, entry, result, status, usage, path=path, expected=expected,
                                  capacity=_settings.total, above=_queue.run_above)
-            if outcome == "released":
+            if isinstance(result, _entry.Ran):
                 _events.record(directory, None, "lease.released", _events.request(entry, path),
                                {"count": count, "exit": item.get("status"), "ran": item.get("ran"),
                                 "cpu": item.get("cpu"), "rss_peak_mb": item.get("rss_peak_mb")},
                                _events.holder(entry))
             else:
+                left_details: _events.Left = {"count": count, "gave_up_after": item.get("waited")}
+                if isinstance(result, (_entry.Left, _entry.Refused)):
+                    left_details["reason"] = result.reason
                 _events.record(directory, None, "request.left", _events.request(entry, path),
-                               {"count": count, "gave_up_after": item.get("waited")}, _events.holder(entry))
+                               left_details, _events.holder(entry))
         else:  # the entry was gone already: queue.log has its release, nothing more is known
             _events.record(directory, None, "lease.released", {"type": "request", "id": path.stem},
                            {"count": count, "unknown": True})

@@ -131,8 +131,10 @@ def yield_now(path: Path, out: Any = sys.stderr) -> bool:
 class Lease:
     """A held lease, an inherited one, or none (bypass). Release it once the work has finished."""
 
-    def __init__(self, count: int, path: Path | None = None, inherited: bool = False, yieldable: bool = False):
+    def __init__(self, count: int, path: Path | None = None, inherited: bool = False, yieldable: bool = False,
+                 *, held: bool | None = None):
         self.count, self.path, self.inherited, self.yieldable = count, path, inherited, yieldable
+        self.held: bool | None = held  # whether this client ever observed the lease as held (fathers#10)
         self.status: int | None = None  # the command's exit status, for the history, where the holder knows it
         # what the command's process tree used (TreeUsage.result), where the holder measured it
         self.usage: dict[str, Any] | None = None
@@ -160,9 +162,9 @@ class Lease:
             return False
         return yield_now(self.path, out=out)
 
-    def release(self) -> None:
+    def release(self, *, left_reason: str | None = None) -> None:
         if self.path is not None and not self.inherited:
-            _leases.release(self.path, self.count, self.status, self.usage)
+            _leases.release(self.path, self.count, self.status, self.usage, held=self.held, left_reason=left_reason)
             self.path = None
 
     def __enter__(self):
@@ -235,7 +237,7 @@ def acquire(count: int | str, label: str, command: str = "", out: Any = sys.stde
     git = _labels.git(cwd)  # before the queue lock: git may take a moment in a large repository
     path, count = _leases.enqueue(directory, count, table, label, command, cwd, selected_priority, selected_ticket,
                                   meta, naming, session, git, yieldable, wait)
-    lease = Lease(count, path, yieldable=yieldable)
+    lease = Lease(count, path, yieldable=yieldable, held=False)
     deadline = None if wait is None else time.monotonic() + wait
     # A terminated waiter leaves the queue at once rather than at the next reap.
     main_thread = threading.current_thread() is threading.main_thread()
@@ -273,13 +275,20 @@ def acquire(count: int | str, label: str, command: str = "", out: Any = sys.stde
 
     try:
         current = wait_held(path, deadline=deadline, between=between, changed=changed, timeout_error=timeout_error)
+        lease.held = True
         if isinstance(current.get("count"), int) and current["count"] >= 1:
             count = lease.count = current["count"]  # the capacity changed while it waited (plan())
         if said[0]:
             print(f"slot: granted {count} slot(s) to {label}", file=out, flush=True)
         return lease
-    except BaseException:
-        lease.release()
+    except BaseException as exc:
+        if isinstance(exc, _config.SlotTimeout):
+            why = "timeout"
+        elif isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            why = "signal"
+        else:
+            why = "error"
+        lease.release(left_reason=why)
         raise
     finally:
         if previous_term is not None:

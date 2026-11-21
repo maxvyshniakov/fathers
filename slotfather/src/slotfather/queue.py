@@ -72,7 +72,7 @@ def reap(directory: Path, table: Table) -> list[tuple[Path, dict[str, Any]]]:
             # queue.log first, as before the one writer: a crash before the history keeps the line (fathers#37 review)
             _events.record(directory, f"reaped {entry.get('state')} lease of {entry.get('count')} for "
                            f"{entry.get('label')} (pid {entry.get('pid')} exited)")
-            item = _state.record(directory, entry, _entry.outcome(entry, reaped=True), path=path,
+            item = _state.record(directory, entry, _entry.decide_outcome(entry, reaped=True), path=path,
                                  capacity=_settings.total, above=run_above)
             _events.record(directory, None, "lease.reaped" if _entry.is_held(entry) else "request.reaped",
                            _events.request(entry, path),

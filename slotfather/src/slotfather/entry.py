@@ -6,10 +6,11 @@ Every function here is pure apart from the dict it is given: callers read and wr
 read (docs/architecture.md, "State on disk"); a field added here must be one they read past."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import math
 import time
-from typing import Any, Iterable, Mapping, NamedTuple, TypedDict, cast
+from typing import Any, Iterable, Mapping, NamedTuple, TypedDict, Union, cast
 
 from . import config as _config
 
@@ -458,14 +459,81 @@ def to_reprioritized(entry: Record, priority: str, moment: float) -> None:
     entry.pop("aged", None)
 
 
+@dataclass(frozen=True)
+class Ran:
+    """The client saw the lease as held and ran its command to completion."""
+    exit: int | None = None
+
+
+@dataclass(frozen=True)
+class Left:
+    """The client left the queue without ever observing the lease as held."""
+    reason: str = "error"  # "timeout" | "signal" | "error"
+
+
+@dataclass(frozen=True)
+class Reaped:
+    """The holder died and another client reaped the entry."""
+    was_held: bool
+
+
+@dataclass(frozen=True)
+class Refused:
+    """The request was refused by admission or memory policy."""
+    reason: str
+
+
+Outcome = Union[Ran, Left, Reaped, Refused]
+
+
 def ran(entry: Mapping[str, Any]) -> bool:
     """Whether a request ran: it holds, or held before it yielded."""
     return is_held(entry) or bool(entry.get("yields"))
 
 
+def decide_outcome(entry: Mapping[str, Any], *, held_seen: bool | None = None, status: int | None = None,
+                   left_reason: str | None = None, reaped: bool = False, refused: str | None = None) -> Outcome:
+    """Decide a request's outcome once from what the client actually knows (fathers#10).
+
+    A lease the client never saw as held (`held_seen=False`) is always Left, even if another client granted it
+    between the client's last read and its deadline or termination."""
+    if refused is not None:
+        return Refused(refused)
+    if reaped:
+        return Reaped(was_held=ran(entry))
+    if held_seen is False:
+        return Left(left_reason or "error")
+    if held_seen is True:
+        return Ran(exit=status)
+    if ran(entry):
+        return Ran(exit=status)
+    return Left(left_reason or "error")
+
+
+def outcome_name(result: Outcome) -> str:
+    """The history `outcome` string kept compatible for older readers."""
+    if isinstance(result, Ran):
+        return "released"
+    if isinstance(result, Left):
+        return "left"
+    if isinstance(result, Reaped):
+        return "reaped"
+    return "refused"
+
+
+def outcome_fields(result: Outcome) -> dict[str, Any]:
+    """History fields for `result`: `outcome` plus `reason` / `was_held` where applicable."""
+    fields: dict[str, Any] = {"outcome": outcome_name(result)}
+    if isinstance(result, Left):
+        fields["reason"] = result.reason
+    elif isinstance(result, Reaped):
+        fields["was_held"] = result.was_held
+    elif isinstance(result, Refused):
+        fields["reason"] = result.reason
+    return fields
+
+
 def outcome(entry: Mapping[str, Any], reaped: bool = False) -> str:
     """How a request left the queue, as its history line says: `reaped` when its holder died, else `released` when
     it ran (ran()) and `left` when it gave up waiting."""
-    if reaped:
-        return "reaped"
-    return "released" if ran(entry) else "left"
+    return outcome_name(decide_outcome(entry, reaped=reaped))
