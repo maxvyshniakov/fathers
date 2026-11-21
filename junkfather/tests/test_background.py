@@ -432,11 +432,11 @@ class WatcherTests(Case):
         made = self.entry(child)
         real = entry_module.begin_reap
 
-        def watcher_wrote_first(store: Store, entry_id: str, reason: str, table: Any = None) -> Any:
+        def watcher_wrote_first(store: Store, entry_id: str, reason: str, table: Any = None, **extra: Any) -> Any:
             def recorded(e: Entry) -> None:
                 e["known_seen"] = [[child.pid, made["start"], "sleep 600"]]
             store.update(entry_id, recorded)
-            return real(store, entry_id, reason, table)
+            return real(store, entry_id, reason, table, **extra)
         with mock.patch.object(entry_module, "begin_reap", side_effect=watcher_wrote_first):
             result = reap.reap(self.store, "jw", "subagent-stop", grace=1)
         self.assertEqual(("stopped", [child.pid]), (result["result"], result["pids"]))

@@ -353,7 +353,7 @@ def reap_command(store: Store, args: argparse.Namespace) -> int:
         results.append(_reap.reap(store, entry["id"], args.reason, grace=args.grace, dry_run=args.dry_run,
                                   force=bool(args.id) and args.force,
                                   actor=_events.tool(args.via) if args.via else None,
-                                  lifecycle=lifecycle))
+                                  lifecycle=lifecycle, owner=args.owner, agent=args.agent))
     return report(results, args)
 
 

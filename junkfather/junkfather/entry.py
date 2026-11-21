@@ -267,9 +267,10 @@ def noted_error(store: Store, entry_id: str, error: Dict[str, Any], now: Optiona
 
 # Reaping
 
-def begin_reap(store: Store, entry_id: str, reason: str, table: Optional[_procs.Table] = None) -> Optional[int]:
-    """running -> reaping, held by this process; its pid, or None when the entry no longer runs or another reaper
-    has it."""
+def begin_reap(store: Store, entry_id: str, reason: str, table: Optional[_procs.Table] = None,
+               allowed: Optional[Callable[[Entry], bool]] = None) -> Optional[int]:
+    """running -> reaping, held by this process; its pid, or None when the entry no longer runs, `allowed` no longer
+    holds, or another reaper has it."""
     me = os.getpid()
     if table is None:
         try:
@@ -277,7 +278,10 @@ def begin_reap(store: Store, entry_id: str, reason: str, table: Optional[_procs.
         except _procs.ProcError:
             table = None
     mine = ((table.get(me) if table is not None else None) or _procs.Proc(me, 0, 0, 0, "", "", "")).start
-    marked = _move(store, entry_id, _from(RUNNING), lambda e: e.update(
+    def check(e: Entry) -> bool:
+        return e.get("state") == RUNNING and (allowed is None or allowed(e))
+
+    marked = _move(store, entry_id, check, lambda e: e.update(
         {"state": REAPING, "reaping": {"reason": reason, "at": time.time(), "by": me, "by_start": mine}}))
     if marked is None or (marked.get("reaping") or {}).get("by") != me:
         return None

@@ -248,14 +248,24 @@ Stopper = Callable[[List[_procs.Proc], float], Dict[str, Any]]  # stop(), or a t
 def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None, dry_run: bool = False,
          force: bool = False, table: Optional[_procs.Table] = None, stopper: Optional[Stopper] = None,
          actor: Optional[Dict[str, Any]] = None, reader: Optional[Callable[[], _procs.Table]] = None,
-         report_failure: bool = True, *, lifecycle: Optional[Lifecycle] = None) -> Dict[str, Any]:
+         report_failure: bool = True, *, lifecycle: Optional[Lifecycle] = None,
+         owner: Optional[str] = None, agent: Optional[str] = None,
+         allowed: Optional[Callable[[Entry], bool]] = None) -> Dict[str, Any]:
     """End one running entry. Returns {"id", "result", "reason", "pids", "how"}; result "skipped" when the entry
-    is not running (someone else reaped it, it exited, it is still starting), "would-stop" in a dry run. `table`
-    serves the first read only; every later round reads the machine again (`reader`). `report_failure` False: a
-    failure is recorded on the entry (`last_error`) but writes no `entry.reap_failed` event (a retry in a streak)."""
+    is not running (someone else reaped it, it exited, it is still starting) or the guard no longer holds,
+    "would-stop" in a dry run. `table` serves the first read only; every later round reads the machine again
+    (`reader`). `report_failure` False: a failure is recorded on the entry (`last_error`) but writes no
+    `entry.reap_failed` event (a retry in a streak)."""
     reader = reader or _procs.Table.read
     grace = _settings.value("reap.grace", store.root) if grace is None else grace
     stopper = stopper or stop
+    guard = allowed
+    if guard is None and lifecycle is not None and owner is not None:
+        owner_id = owner
+
+        def matching(e: Entry) -> bool:
+            return matches_owner(e, owner_id, agent, lifecycle=lifecycle)
+        guard = matching
     entry = store.load(entry_id)
     if entry is None:
         return {"id": entry_id, "result": "unknown", "reason": reason, "pids": [], "how": ""}
@@ -264,7 +274,7 @@ def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None
             return {"id": entry_id, "result": "skipped", "reason": f"already {entry.get('state')}", "pids": [],
                     "how": ""}
         from . import resources
-        return resources.reap(store, entry, reason, grace, dry_run, actor, lifecycle=lifecycle)
+        return resources.reap(store, entry, reason, grace, dry_run, actor, lifecycle=lifecycle, allowed=guard)
     if entry.get("state") == _entry.STARTING or (entry.get("state") == _entry.RUNNING and not entry.get("pid")):
         return {"id": entry_id, "result": "skipped", "reason": "still starting", "pids": [], "how": ""}
     if entry.get("state") != _entry.RUNNING:
@@ -286,9 +296,12 @@ def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None
     if dry_run:
         return {"id": entry_id, "result": "would-stop" if targets else "gone", "reason": reason,
                 "pids": [p.pid for p in targets], "how": how}
-    me = _entry.begin_reap(store, entry_id, reason, table)
+    me = _entry.begin_reap(store, entry_id, reason, table, allowed=guard)
     if me is None:
-        return {"id": entry_id, "result": "skipped", "reason": "another reaper has it", "pids": [], "how": how}
+        current = store.load(entry_id)
+        why = ("owner changed" if current is not None and current.get("state") == _entry.RUNNING
+               and guard is not None and not guard(current) else "another reaper has it")
+        return {"id": entry_id, "result": "skipped", "reason": why, "pids": [], "how": how}
     # The entry as it was marked: its members can have changed since it was read (a background shell's watcher
     # records an exec'd leader's new command), and no one changes them while it is reaping.
     entry = store.load(entry_id) or entry

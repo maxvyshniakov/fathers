@@ -4,10 +4,12 @@ from __future__ import annotations
 import json
 import os
 import signal
+import subprocess
+import sys
 from typing import Any, Dict, List, Optional, Tuple
 import unittest
 
-from support import Case, as_entry, proc, table
+from support import ROOT, Case, as_entry, proc, table
 
 from junkfather import procs, reap
 from junkfather.entry import Entry
@@ -166,7 +168,6 @@ class ReviewFixTests(Case):
 
     def test_a_child_whose_entry_stopped_starting_is_stopped_not_revived(self):
         from junkfather import launch
-        import subprocess
         record = entry(pid=None)
         record["state"] = "reaped"
         self.store.save(record)
@@ -296,6 +297,132 @@ class CommandFactorTests(Case):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("command changed", result.stderr)
         self.assertTrue(self.runs(child.pid))
+
+
+class LifecycleHandoffRaceTests(Case):
+    """fathers#189: a handoff that completes after selection and before begin_reap skips the lifecycle reap."""
+
+    def make_process(self, entry_id: str = "jtest") -> Entry:
+        record = entry(pid=100, known=[[100, A]])
+        record.update({"id": entry_id, "owner": {"kind": "claude", "session": "s1", "agent": "a1"}, "keep": "owner"})
+        self.store.save(record)
+        return record
+
+    def make_resource(self, entry_id: str = "jres") -> Entry:
+        record: Entry = as_entry({"v": 1, "id": entry_id, "state": "running", "mode": "resource", "group": False,
+                                  "keep": "owner", "owner": {"kind": "claude", "session": "s1", "agent": "a1"},
+                                  "resource": {"kind": "command", "id": "x", "alive": ["true"], "stop": ["false"]},
+                                  "argv": [], "cwd": "/", "created": 1.0, "ttl": 3600.0, "expires": 3601.0,
+                                  "pid": None, "pgid": None, "start": None, "seen": None, "known": [], "handed": []})
+        self.store.save(record)
+        return record
+
+    def test_a_handoff_before_the_mark_skips_process_reap_for_both_lifecycle_events(self):
+        from junkfather import entry as entry_module
+        for lifecycle, agent in ((reap.Lifecycle.SUBAGENT_STOP, "a1"), (reap.Lifecycle.SESSION_END, None)):
+            with self.subTest(lifecycle=lifecycle.value):
+                self.make_process()
+                selected, _ = reap.select(self.store, [], "s1", agent, None, lifecycle=lifecycle)
+                self.assertEqual(["jtest"], [e["id"] for e in selected])
+                stopped: List[Any] = []
+
+                def hand_before_mark() -> procs.Table:
+                    self.assertIsNotNone(entry_module.handed(self.store, "jtest", {"kind": "claude", "session": "s2"}))
+                    return table(proc(100, cmd="node server.js"))
+
+                def stopper(targets: List[procs.Proc], _grace: float,
+                            calls: List[Any] = stopped) -> Dict[str, Any]:
+                    calls.append(targets)
+                    return {"result": "stopped"}
+
+                result = reap.reap(self.store, "jtest", lifecycle.value, reader=hand_before_mark,
+                                   stopper=stopper, lifecycle=lifecycle, owner="s1", agent=agent)
+                self.assertEqual(("skipped", "owner changed", []),
+                                 (result["result"], result["reason"], stopped))
+                loaded = self.loaded("jtest")
+                self.assertEqual(("running", "s2"), (loaded["state"], loaded["owner"]["session"]))
+
+    def test_a_handoff_before_the_mark_skips_resource_reap_for_both_lifecycle_events(self):
+        from unittest import mock
+        from junkfather import entry as entry_module, resources
+        real = entry_module.begin_reap
+
+        def hand_then_mark(store: Any, entry_id: str, reason: str, *args: Any, **kwargs: Any) -> Any:
+            self.assertIsNotNone(entry_module.handed(store, entry_id, {"kind": "claude", "session": "s2"}))
+            return real(store, entry_id, reason, *args, **kwargs)
+
+        for lifecycle, agent in ((reap.Lifecycle.SUBAGENT_STOP, "a1"), (reap.Lifecycle.SESSION_END, None)):
+            with self.subTest(lifecycle=lifecycle.value):
+                self.make_resource()
+                selected, _ = reap.select(self.store, [], "s1", agent, None, lifecycle=lifecycle)
+                self.assertEqual(["jres"], [e["id"] for e in selected])
+                with mock.patch.object(entry_module, "begin_reap", side_effect=hand_then_mark), \
+                        mock.patch.object(resources, "stop", side_effect=AssertionError("resource stop ran")):
+                    result = reap.reap(self.store, "jres", lifecycle.value, lifecycle=lifecycle,
+                                       owner="s1", agent=agent)
+                self.assertEqual(("skipped", "owner changed"), (result["result"], result["reason"]))
+                loaded = self.loaded("jres")
+                self.assertEqual(("running", "s2"), (loaded["state"], loaded["owner"]["session"]))
+
+    def test_a_matching_owner_still_reaps_and_a_mark_before_handoff_refuses_the_handoff(self):
+        from junkfather import entry as entry_module
+        for lifecycle, agent in ((reap.Lifecycle.SUBAGENT_STOP, "a1"), (reap.Lifecycle.SESSION_END, None)):
+            with self.subTest(lifecycle=lifecycle.value):
+                self.make_process()
+                handed_while_reaping: List[Any] = []
+
+                def stopper(targets: List[procs.Proc], _grace: float,
+                            calls: List[Any] = handed_while_reaping) -> Dict[str, Any]:
+                    calls.append(entry_module.handed(self.store, "jtest", {"kind": "claude", "session": "s2"}))
+                    return {"result": "stopped", "signalled": [p.pid for p in targets], "left": []}
+
+                result = reap.reap(self.store, "jtest", lifecycle.value,
+                                   table=table(proc(100, cmd="node server.js")), stopper=stopper,
+                                   lifecycle=lifecycle, owner="s1", agent=agent)
+                self.assertEqual(("stopped", [100], [None]),
+                                 (result["result"], result["pids"], handed_while_reaping))
+                self.assertEqual("reaped", self.state_of("jtest"))
+
+    def test_cli_lifecycle_reap_paused_at_barrier_skips_after_real_store_handoff(self):
+        child = self.spawn("sleep", "600", start_new_session=True)
+        claude = self.fake_claude("s1")
+        other = self.fake_claude("s2")
+        env = self.claude_env("s1", claude)
+        mine = procs.Table.read().get(child.pid)
+        assert mine is not None
+        record = entry(pid=child.pid, start=mine.start, cmd=mine.cmd, known=[[child.pid, mine.start]])
+        record.update({"owner": {"kind": "claude", "session": "s1", "agent": "a1", "pid": claude.pid}, "keep": "owner"})
+        self.store.save(record)
+        selected = self.tmp / "selected"
+        handed = self.tmp / "handed"
+        script = (f"import os, sys, time; sys.path.insert(0, {str(ROOT)!r})\n"
+                  "from junkfather import cli, reap\n"
+                  "real = reap.select\n"
+                  "def paused(*args, **kwargs):\n"
+                  "    found = real(*args, **kwargs)\n"
+                  f"    open({str(selected)!r}, 'w').close()\n"
+                  "    deadline = time.monotonic() + 20\n"
+                  f"    while not os.path.exists({str(handed)!r}) and time.monotonic() < deadline:\n"
+                  "        time.sleep(0.01)\n"
+                  "    return found\n"
+                  "reap.select = paused\n"
+                  "sys.exit(cli.main(['reap', '--owner', 's1', '--agent', 'a1', '--lifecycle', 'SubagentStop', "
+                  "'--reason', 'subagent-stop', '--via', 'hook', '--json']))\n")
+        reaper = subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  text=True, env=env)
+        self.children.append(reaper)
+        self.wait_for(selected.exists, what="reap selection")
+        hand = self.cli("hand", "jtest", "--to", "s2", env=env)
+        self.assertEqual(0, hand.returncode, hand.stderr)
+        handed.touch()
+        out, err = reaper.communicate(timeout=30)
+        self.assertEqual(0, reaper.returncode, err)
+        self.assertEqual([{"how": "leader", "id": "jtest", "pids": [], "reason": "owner changed",
+                           "result": "skipped"}], json.loads(out)["results"])
+        self.assertTrue(self.runs(child.pid))
+        self.assertEqual(("running", "s2", other.pid),
+                         (self.state_of("jtest"), self.loaded("jtest")["owner"]["session"],
+                          self.loaded("jtest")["owner"]["pid"]))
 
 
 class FailureStreakTests(Case):

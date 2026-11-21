@@ -86,6 +86,8 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- A lifecycle reap (`SubagentStop`, `SessionEnd`) rechecks the entry's owner under the store lock before marking it
+  for reap, so an entry handed to another session after selection is skipped (fathers#189).
 - Auto-owned background Bash calls survive `SubagentStop`, even when the hook reaps an explicitly owned runner
   that started them. TTL and session-end cleanup still apply (fathers#176).
 - Usage errors name an unknown option even when it follows an option with a missing value (fathers#175).

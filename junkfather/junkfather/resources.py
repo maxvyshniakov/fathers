@@ -710,7 +710,8 @@ def stopped_event(store: Store, subject: Dict[str, Any], actor: Optional[Dict[st
 
 
 def reap(store: Store, entry: Entry, reason: str, grace: float, dry_run: bool,
-         actor: Optional[Dict[str, Any]], *, lifecycle: Optional[_reap.Lifecycle] = None) -> Dict[str, Any]:
+         actor: Optional[Dict[str, Any]], *, lifecycle: Optional[_reap.Lifecycle] = None,
+         allowed: Optional[Callable[[Entry], bool]] = None) -> Dict[str, Any]:
     """End one running resource entry through its kind's stop command (reap.reap hands resource entries here). A
     dry run asks the kind whether its stop would be refused (a worktree's guards)."""
     recorded = entry.get("resource") or {}
@@ -726,9 +727,12 @@ def reap(store: Store, entry: Entry, reason: str, grace: float, dry_run: bool,
         refused = kind.check(resource) if kind is not None and state is not False else None
         return {"id": entry_id, "result": "gone" if state is False else "would-fail" if refused else "would-stop",
                 "reason": f"{reason}; {refused}" if refused else reason, "pids": [], "how": describe(resource)}
-    me = _entry.begin_reap(store, entry_id, reason)
+    me = _entry.begin_reap(store, entry_id, reason, allowed=allowed)
     if me is None:
-        return {"id": entry_id, "result": "skipped", "reason": "another reaper has it", "pids": [],
+        current = store.load(entry_id)
+        why = ("owner changed" if current is not None and current.get("state") == _entry.RUNNING
+               and allowed is not None and not allowed(current) else "another reaper has it")
+        return {"id": entry_id, "result": "skipped", "reason": why, "pids": [],
                 "how": describe(resource)}
     outcome = stop(resource, grace, alive)
     result = outcome["result"]
