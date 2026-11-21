@@ -30,8 +30,8 @@
 - One workflow per package, `.github/workflows/<package>.yml`, and `common.yml` for `common/` and `install.py`, each
   triggered by its own paths on a push to `main`, on pull requests and by hand. Each calls
   [package.yml](../../.github/workflows/package.yml) with its name and Python floor and differs from the others only
-  in those and its paths (`tools/test_checks.py`): the floor on Ubuntu 24.04 and macOS, the newest Python on
-  ubuntu-latest (26.04, uutils coreutils) and macOS; the lint gate on the newest legs; the steps are the named checks
+  in those and its paths (`tools/test_checks.py`): the floor on Ubuntu 24.04 and the newest Python on
+  ubuntu-latest (26.04, uutils coreutils). Only the newest runs lint. The steps are the named checks
   of `tools/checks.py` (`<package> lint`, `<package> tests`) with the tools of `<package>/requirements-dev.txt`.
 - A new Python floor changes the package's `install.py` `MIN_PYTHON`, its `requires-python` and its workflow's
   `floor` together; a new Python release changes `newest` in package.yml.

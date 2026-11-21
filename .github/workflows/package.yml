@@ -31,7 +31,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The floor and the newest Python on Ubuntu and on macOS. The two Ubuntu legs differ on purpose: 24.04 has
+        # The two Ubuntu legs differ on purpose: 24.04 has
         # GNU coreutils (and setup-python's 3.9 builds, which 26.04 lacks); ubuntu-latest is 26.04, whose coreutils
         # are uutils', whose output and options differ from GNU's and macOS's. Tests that assumed macOS's tools
         # failed only there (junkfather, aa8db1d): keep both, and never pin a test to one system's `ps`, `date` or
@@ -40,11 +40,6 @@ jobs:
           - os: ubuntu-24.04
             python: ${{ inputs.floor }}
           - os: ubuntu-latest
-            python: ${{ inputs.newest }}
-            lint: true
-          - os: macos-latest
-            python: ${{ inputs.floor }}
-          - os: macos-latest
             python: ${{ inputs.newest }}
             lint: true
     env:

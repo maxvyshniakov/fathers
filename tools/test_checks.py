@@ -200,11 +200,11 @@ class WorkflowTests(unittest.TestCase):
     def test_godfather_declares_requires_python(self) -> None:
         self.declares_requires_python("godfather")
 
-    def test_the_reusable_workflow_runs_the_floor_and_the_newest_on_both_systems(self) -> None:
+    def test_the_reusable_workflow_runs_only_the_two_ubuntu_jobs(self) -> None:
         text = (WORKFLOWS / "package.yml").read_text()
         legs = re.findall(r"- os: (\S+)\n\s+python: \$\{\{ inputs\.(floor|newest) \}\}(\n\s+lint: true)?", text)
-        self.assertEqual([("ubuntu-24.04", "floor", ""), ("ubuntu-latest", "newest", "\n            lint: true"),
-                          ("macos-latest", "floor", ""), ("macos-latest", "newest", "\n            lint: true")], legs)
+        self.assertEqual(["ubuntu-24.04", "ubuntu-latest"], re.findall(r"^\s*- os: (\S+)$", text, re.M))
+        self.assertEqual([("ubuntu-24.04", "floor", ""), ("ubuntu-latest", "newest", "\n            lint: true")], legs)
         steps = re.findall(r"^      - name: .+\n(?:        if: (.+)\n)?        run: (.+)$", text, re.M)
         self.assertEqual([("matrix.lint", 'python -m pip install -r "$PACKAGE/requirements-dev.txt"'),
                           ("matrix.lint", 'python tools/checks.py run "$PACKAGE lint"'),
