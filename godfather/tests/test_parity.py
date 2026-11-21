@@ -118,7 +118,8 @@ class ParityTests(unittest.TestCase):
         self.theme = app._theme.from_environment(environ={})
 
     def model(self) -> Dashboard:
-        model, error = app.Screen().load()
+        with app.Screen() as screen:
+            model, error = screen.load()
         self.assertIsNone(error)
         assert model is not None
         entries.dashboard_colours(model, {}, self.theme.holders())

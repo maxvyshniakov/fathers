@@ -47,6 +47,7 @@ class FixtureCase(unittest.TestCase):
         (self.root / "slotfather" / "replies.json").write_text(json.dumps(found))
 
     def frame(self, screen: app.Screen, width: int = 156, height: int = 43) -> str:
+        self.addCleanup(screen.close)
         model, error = screen.load()
         canvas = tui.Canvas(width, height)
         if model:
@@ -74,10 +75,10 @@ class AbsentTests(FixtureCase):
 
     def test_the_settings_of_an_absent_slotfather_are_this_dashboards_alone(self) -> None:
         shutil.rmtree(self.root / "slotfather")
-        screen = app.Screen()
-        screen.load()
-        context = settings_model.Context(width=100, height=40)
-        panel = settings_model.opened(screen.settings_sections(), context, 0.0)
+        with app.Screen() as screen:
+            screen.load()
+            context = settings_model.Context(width=100, height=40)
+            panel = settings_model.opened(screen.settings_sections(), context, 0.0)
         self.assertEqual([("godfather", "interval"), ("godfather", "theme")],
                          [row.focus for row in settings_model.selectable(panel, context)])
         self.assertEqual(["godfather"], settings_model.tools(panel), "no section for an absent tool")
@@ -174,9 +175,9 @@ class RediscoveryTests(FixtureCase):
         self.assertEqual({"dim"}, {cell[1] for row in self.canvas.cells[:-1] for cell in row if str(cell[0]).strip()})
 
     def test_a_snapshot_that_prints_nothing_says_so(self) -> None:
-        screen = app.Screen()
-        self.reply("status --json --full", {"code": 0, "stdout": ""})
-        _, error = screen.load()
+        with app.Screen() as screen:
+            self.reply("status --json --full", {"code": 0, "stdout": ""})
+            _, error = screen.load()
         self.assertEqual("slotfather status --json --full printed nothing", error)
 
 
@@ -184,8 +185,7 @@ class SlowSnapshotTests(unittest.TestCase):
     def test_a_snapshot_over_five_seconds_is_a_failure(self) -> None:
         fake = FakeSlotfather({"sleep": {"status": 2}})
         self.addCleanup(fake.close)
-        with fake.active(), mock.patch.object(sources, "SNAPSHOT_TIMEOUT", 0.5):
-            screen = app.Screen()
+        with fake.active(), mock.patch.object(sources, "SNAPSHOT_TIMEOUT", 0.5), app.Screen() as screen:
             model, error = screen.load()
         self.assertIsNone(model)
         self.assertIn("took longer than 0.5 s", str(error))
@@ -197,8 +197,7 @@ class FakeContractTests(unittest.TestCase):
         self.addCleanup(fake.close)
         # What is tested is the CLI contract, not how fast an interpreter starts on a loaded machine: no deadline
         with fake.active(), mock.patch.object(sources, "CAPABILITIES_TIMEOUT", None), \
-                mock.patch.object(sources, "SNAPSHOT_TIMEOUT", None):
-            screen = app.Screen()
+                mock.patch.object(sources, "SNAPSHOT_TIMEOUT", None), app.Screen() as screen:
             model, error = screen.load()
         self.assertIsNone(error)
         assert model is not None

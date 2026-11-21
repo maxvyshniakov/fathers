@@ -30,7 +30,8 @@ class ReplayTests(unittest.TestCase):
         with tool.environment(None):
             from godfather import app
 
-            model, error = app.Screen().load()
+            with app.Screen() as screen:
+                model, error = screen.load()
         self.assertIsNone(error)
         assert model is not None
         rows = model["events"]
@@ -60,7 +61,8 @@ class ReplayTests(unittest.TestCase):
         with tool.environment(None, folder / "scene"):
             from godfather import app
 
-            model, _ = app.Screen().load()
+            with app.Screen() as screen:
+                model, _ = screen.load()
         assert model is not None
         self.assertEqual(([], [], "slotfather too old for events"),
                          (model["events"], model.get("sources"), model.get("events_note")),
@@ -82,7 +84,8 @@ class ReplayTests(unittest.TestCase):
         with tool.environment(None, folder / "scene"):
             from godfather import app
 
-            model, _ = app.Screen().load()
+            with app.Screen() as screen:
+                model, _ = screen.load()
         assert model is not None
         self.assertEqual("slotfather's events need a newer godfather", model.get("events_note"))
 
@@ -107,6 +110,59 @@ class ReplayTests(unittest.TestCase):
                 feed.close()
         self.assertEqual(keys[0][1], keys[1][0], "the same event, the same identity")
         self.assertNotEqual(keys[0][0], keys[0][1])
+
+    def test_screen_and_live_close_event_tails_even_with_a_load_in_flight(self) -> None:
+        """fathers#187: one-shot, golden and live screens close their event tails deterministically, and a snapshot
+        load in flight when Live closes cannot reopen or read a tail after close."""
+        import gc
+        import threading
+        import warnings
+        from unittest import mock
+
+        from godfather import app
+
+        tool = goldens_tool()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ResourceWarning)
+            with tool.environment(None, tool.MIXED):
+                with app.Screen() as screen:
+                    model, error = screen.load()
+                    self.assertIsNone(error)
+                    assert model is not None
+                    self.assertEqual({"slotfather", "lanefather", "junkfather"}, set(screen.feed.tails))
+                    self.assertTrue(all(tail.handle is not None for tail in screen.feed.tails.values()))
+                self.assertTrue(screen.closed)
+                self.assertTrue(all(tail.handle is None for tail in screen.feed.tails.values()))
+
+                # Live teardown while a background model load is in flight before its event-tail poll.
+                screen = app.Screen()
+                entered = threading.Event()
+                release = threading.Event()
+                real_poll = screen.source.poll
+
+                def delayed_poll() -> Any:
+                    found = real_poll()
+                    entered.set()
+                    release.wait(5)
+                    return found
+
+                with mock.patch.object(screen.source, "poll", side_effect=delayed_poll):
+                    live = app.Live(0, 1, screen, 1.0, "auto")
+                    live.load_model()
+                    self.assertTrue(entered.wait(5), "model loader entered poll")
+                    live.close()
+                    self.assertTrue(screen.closed)
+                    release.set()
+                    deadline = __import__("time").monotonic() + 5
+                    while live.models.wants("model") and __import__("time").monotonic() < deadline:
+                        __import__("time").sleep(0.01)
+                self.assertTrue(all(tail.handle is None for tail in screen.feed.tails.values()),
+                                "in-flight load must not reopen a tail after close")
+                self.assertEqual((None, None), screen.load(), "a closed screen does not load again")
+            tool.render("mixed-156x43", None)
+            gc.collect()
+        resource_warnings = [item for item in caught if issubclass(item.category, ResourceWarning)]
+        self.assertEqual([], resource_warnings)
 
     def test_every_slotfather_kind_today_has_a_result(self) -> None:
         log = [logged("lease.granted", NOW, "a", 1, count=1, waited=3),
