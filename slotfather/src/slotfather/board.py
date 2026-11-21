@@ -457,9 +457,23 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
     saved: bool = look.basis["saved"]
     own, children = process_usage()
 
+    mem_est = _estimates.memory_estimator(directory) if live else None
+    settings_for_mem = look.settings or _settings.order_settings(directory)
+    default_mem_mb = float(settings_for_mem.get("memory_default_mb", _config.ORDER_DEFAULTS["memory_default_mb"]))
+    mem_share = float(settings_for_mem.get("memory_share", _config.ORDER_DEFAULTS["memory_share"]))
+
+    def est_memory_of(entry: dict[str, Any]) -> tuple[float, str]:
+        if mem_est is not None:
+            with contextlib.suppress(Exception):
+                peak = mem_est(entry)
+                if peak is not None:
+                    return round(peak, 1), "history"
+        return round(default_mem_mb, 1), "default"
+
     def item(entry: dict[str, Any], kind: str, count: int, queue: str = "") -> dict[str, Any]:
         tree = process_tree(entry.get("pid"), own, children) if kind != "waiting" else []
         foreseen: dict[str, Any] = expected.get(id(entry)) or {}  # query.outlook(): its class and expected start
+        est_mb, est_src = est_memory_of(entry)
         # The yield request on this entry's own marker, read under the queue lock (#20: by entry, not by pid)
         request = look.asked_of(entry) or {}
         # On Linux, ps %cpu is lifetime average; prefer the holder's recent rate from .idle (fathers#20), falling
@@ -488,6 +502,7 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
                 if foreseen.get("est_start") is not None else None,
                 "granted": parse_utc(entry.get("granted")), "passable": kind == "waiting" and _schedule.overtakable(entry, time.time(), _config.overtake_window()),
                 "all": bool(entry.get("all")),
+                "est_memory_mb": est_mb, "est_memory_source": est_src,
                 "lock": dashboard_text(_entry.lock_of(entry) or ""),  # fathers#159: waiting for this lock
                 "style": "text" if kind == "waiting" else "legacy"}
 
@@ -528,11 +543,15 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
                                     other, memory_block,
                                     _estimates.estimator(directory) if live_waiters else None, settings, memory_kind)
     own_held = sum(h["count"] for h in holders if h["kind"] == "held")
+    ram_gib = _platform.memory_gib()
+    memory_budget_mb = round(ram_gib * 1024.0 * mem_share, 1) if (ram_gib is not None and mem_share > 0) else None
+    memory_expected_mb = round(sum(float(h.get("est_memory_mb") or 0.0) for h in holders if h["kind"] == "held"), 1)
     return {"directory": str(directory), "slots": slots, "saved": saved, "basis": look.basis, "cores": machine,
             "averages": averages, "draining": _query.draining(used, slots),
             "advice": cast(dict[str, Any], cast(Any, _query).size(slots, machine, slots, averages, min(used, slots),
                                                                   bool(waiters) and admission == 0)),
             "holders": holders, "waiters": waiters, "used": used, "free": free, "memory_block": memory_block,
+            "memory_budget_mb": memory_budget_mb, "memory_expected_mb": memory_expected_mb,
             "admission": admission,
             "order": order, "start": start, "reserved": reserved, "limit": settings["limit"],
             "memory": memory_facts(), "history": held_history(events, own_held, moment), "events": events[-60:],

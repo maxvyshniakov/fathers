@@ -183,3 +183,15 @@ def estimator(directory: Path, p90: bool = False) -> _schedule.Estimate:
             loaded.append(_estimates.p90_estimator(directory) if p90 else _estimates.estimator(directory))
         return loaded[0](entry)
     return estimate
+
+
+def memory_estimator(directory: Path) -> _schedule.Estimate:
+    """estimates.memory_estimator(directory), imported lazily on first memory estimate lookup (fathers#9)."""
+    loaded: list[_schedule.Estimate] = []
+
+    def estimate(entry: _schedule.Entry) -> float | None:
+        if not loaded:
+            from . import estimates as _estimates
+            loaded.append(_estimates.memory_estimator(directory))
+        return loaded[0](entry)
+    return estimate

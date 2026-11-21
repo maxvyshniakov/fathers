@@ -69,7 +69,7 @@ QUEUE_ORDERS = ("backfill", "window")  # `slotfather order`; the first is the de
 ORDER_DEFAULTS = {"order": "backfill", "safety": 3.0, "limit": 0.0, "fallback": 3600.0, "overrun": 0.5,
                   "interactive": 1800.0, "batch": 1800.0, "yield_after": 120.0, "idle_cpu": 0.1, "idle_after": 300.0,
                   "aging_batch": 1800.0, "aging_normal": 3600.0, "warn_wait": 1800.0, "warning_admits": 1.0,
-                  "reservation_timeout": 1800.0}
+                  "reservation_timeout": 1800.0, "memory_share": 0.85, "memory_default_mb": 2048.0}
 
 
 ORDER_KNOBS = {"safety": ("BACKFILL_SAFETY", 1.0, "up"), "limit": ("BACKFILL_LIMIT", 0.0, "limit"),
@@ -92,7 +92,11 @@ ORDER_KNOBS = {"safety": ("BACKFILL_SAFETY", 1.0, "up"), "limit": ("BACKFILL_LIM
                # fathers#160: a head whose reserved start passed this long ago while leases with no end estimate
                # still hold its slots gives way (schedule.plan()); 0: never. A client's environment can only keep a
                # head longer: a longer time, or 0.
-               "reservation_timeout": ("RESERVATION_TIMEOUT", 0.0, "delay")}
+               "reservation_timeout": ("RESERVATION_TIMEOUT", 0.0, "delay"),
+               # fathers#9: expected-peak memory admission budget as a share of RAM (0 disables; <= 1.0) and the
+               # default peak MB assumed for families without history.
+               "memory_share": ("MEMORY_SHARE", 0.0, "down"),
+               "memory_default_mb": ("MEMORY_DEFAULT_MB", 0.0, "up")}
 
 
 DURATION_KNOBS = ("limit", "fallback", "interactive", "batch", "yield_after", "idle_after", "aging_batch",
@@ -131,7 +135,7 @@ ESTIMATE_BYTES = 1 << 20  # of the history's end (and of its rotated part) read 
 UNFINISHED = ("reaped", "left", "refused")  # history outcomes whose time is no run of their kind: left out of the estimates
 
 
-ESTIMATES_VERSION = 2  # estimates.json: 2 leaves UNFINISHED out; a file without it (or older) is worked out again
+ESTIMATES_VERSION = 3  # estimates.json: 3 adds peak memory estimates beside run times; older files are rebuilt
 
 
 HISTORY_MAX = 4 << 20  # bytes of history.jsonl; past it the file becomes history.jsonl.1, replacing the older one

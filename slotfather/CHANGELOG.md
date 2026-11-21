@@ -6,6 +6,12 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- Memory-aware admission estimates each request's peak RSS from history by run type, tag, and label family
+  (`estimates.py`), falling back to `memory_default_mb` (default 2048 MB), and defers concurrent grants in
+  `schedule.memory_gate` when held plus candidate expected peaks exceed `memory_share` of RAM (default 0.85,
+  0 disables). `status --json`, the `dashboard` block, and `stats --json` expose the peak memory estimates
+  (fathers#9).
+
 - `slotfather stats` and `stats --json` split request outcomes into four groups: command exit nonzero, reaped
   (held vs waiting), gave up waiting, and refused. Request outcomes are decided once from what the client observed
   (`entry.decide_outcome`), so a request granted concurrently at timeout or termination is recorded as `left` with

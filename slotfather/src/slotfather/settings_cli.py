@@ -40,14 +40,18 @@ KNOBS = {"safety": ("Backfill margin", 0.5), "limit": ("Overtaking stops after",
          "yield_after": ("Ask to yield after", 30), "idle_cpu": ("Idle when below", 0.05),
          "idle_after": ("Idle for", 60), "aging_batch": ("Batch promoted after", 300),
          "aging_normal": ("Normal promoted after", 300), "warn_wait": ("Warn after waiting", 300),
-         "reservation_timeout": ("Reservation timeout", 300)}
+         "reservation_timeout": ("Reservation timeout", 300),
+         "memory_share": ("Memory admission share", 0.05),
+         "memory_default_mb": ("Default job peak memory", 512)}
 UNITS = {"safety": "×", "overrun": "×", "limit": " s", "fallback": " s", "interactive": " s", "batch": " s",
          "yield_after": " s", "idle_after": " s", "idle_cpu": " cores", "interval": " s", "aging_batch": " s",
-         "aging_normal": " s", "warn_wait": " s", "reservation_timeout": " s"}
+         "aging_normal": " s", "warn_wait": " s", "reservation_timeout": " s",
+         "memory_share": "", "memory_default_mb": " MB"}
 # The queue's settings in the panel's order (one flat list, owner, 2026-11-11)
 ORDER_FIELDS = ("order", "safety", "fallback", "overrun", "limit", "interactive", "batch", "aging_batch",
-                "aging_normal", "warn_wait", "reservation_timeout", "idle_cpu", "idle_after", "yield_after")
-NEVER = ("limit", "aging_batch", "aging_normal", "warn_wait", "reservation_timeout")  # 0 is off: shown as "never"
+                "aging_normal", "warn_wait", "reservation_timeout", "memory_share", "memory_default_mb",
+                "idle_cpu", "idle_after", "yield_after")
+NEVER = ("limit", "aging_batch", "aging_normal", "warn_wait", "reservation_timeout", "memory_share")  # 0 is off: shown as "never"
 DESCRIPTIONS = {
     "mode": "Shared by every client. Automatic: the lower of the CPU and memory budgets.",
     "amount.fixed": "Total slots for every client. Applies at the next grant; a shrink drains.",
@@ -64,6 +68,8 @@ DESCRIPTIONS = {
     "warn_wait": "A request waiting this long says so and is flagged; 0: never.",
     "reservation_timeout": "After this long past its reserved start, a blocked head gives way while keeping "
                            "its reservation and place. Zero disables the timeout.",
+    "memory_share": "Share of RAM available to expected peak memory of concurrent leases (0 to 1); 0 disables.",
+    "memory_default_mb": "Assumed peak memory (MB) for requests with no history.",
     "yield_after": "Before a yieldable holder is asked to yield; 0: nobody is asked.",
     "idle_cpu": "A lease below this for the idle time is idle (💤); 0: never.",
     "idle_after": "Below the idle cores this long: idle, and asked if it can yield.",
@@ -103,6 +109,8 @@ def parse(key: str, text: str, mode: str) -> tuple[Any, str]:
     if key == "amount":
         return (value, "") if value > 0 else (None, "Enter GiB per slot, more than 0.")
     least = _config.ORDER_KNOBS[key][1]
+    if key == "memory_share" and value > 1.0:
+        return None, "Enter a number between 0 and 1."
     return (value, "") if value >= least else (None, f"Enter a number of at least {least:g}.")
 
 

@@ -390,7 +390,11 @@ def grant(directory: Path, table: _queue.Table) -> str | None:
                                    _settings.order_settings(directory, environment=False), window, p90)
     used = sum(_entry.holds(e, slots) for e in held) + other
     memory = _platform.memory_level() if found.grants else ("normal", None)
-    gated = _schedule.memory_gate(found.grants, held, used, memory, settings)
+    ram_gib = _platform.memory_gib() if (found.grants and used) else None
+    ram_mb = None if ram_gib is None else ram_gib * 1024.0
+    gated = _schedule.memory_gate(found.grants, held, used, memory, settings,
+                                  memory_estimate=_queue.memory_estimator(directory) if ram_mb is not None else None,
+                                  ram_mb=ram_mb)
     starting = [entry for entry, why in gated if not why]
     for entry in _schedule.reservations(waiters, keeper):
         if not any(entry is g for g in starting):  # a grant is written below; one memory holds back keeps its own

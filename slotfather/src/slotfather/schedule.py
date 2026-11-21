@@ -575,15 +575,28 @@ def idle_asks(waiters: list[Entry], held: list[Entry], idle: list[Entry], slots:
 WARNING_WAIT = "memory pressure warning: one 1-slot lease at a time"
 
 def memory_gate(grants: list[Entry], held: list[Entry], used: int, memory: tuple[str, str | None],
-                settings: dict[str, Any]) -> list[tuple[Entry, str | None]]:
+                settings: dict[str, Any], *, memory_estimate: Estimate | None = None,
+                ram_mb: float | None = None) -> list[tuple[Entry, str | None]]:
     """Which of plan()'s `grants` memory lets start now beside `held` (`used` slots held in all), in their order:
-    (entry, None) starts, (entry, why) waits. Normal memory starts them all. While memory is short nothing starts
-    beside a running lease. Under warning, with `warning_admits` on, a 1-slot request starts when no running lease
-    was granted while memory was not normal (entry.PRESSED), so one such lease runs at a time; others wait. An idle machine
-    (nothing used) always starts its first request."""
+    (entry, None) starts, (entry, why) waits. Normal memory starts them all unless expected peak memory exceeds
+    `memory_share` of `ram_mb` (fathers#9). While memory is short nothing starts beside a running lease. Under
+    warning, with `warning_admits` on, a 1-slot request starts when no running lease was granted while memory was
+    not normal (entry.PRESSED), so one such lease runs at a time; others wait. An idle machine (nothing used) always
+    starts its first request."""
     kind, why = memory
     allowance = kind == "warning" and float(settings.get("warning_admits", 1)) >= 1
     pressed = any(e.get(_entry.PRESSED) for e in held)
+    share = float(settings.get("memory_share", _config.ORDER_DEFAULTS["memory_share"]))
+    default_mb = float(settings.get("memory_default_mb", _config.ORDER_DEFAULTS["memory_default_mb"]))
+    budget_mb = ram_mb * share if (ram_mb is not None and ram_mb > 0 and share > 0 and memory_estimate is not None) else None
+
+    def expected_mb(item: Entry) -> float:
+        if memory_estimate is None:
+            return default_mb
+        found_mb = memory_estimate(item)
+        return float(found_mb) if found_mb is not None else default_mb
+
+    held_mb = sum(expected_mb(e) for e in held) if budget_mb is not None else 0.0
     found: list[tuple[Entry, str | None]] = []
     for entry in grants:
         reason = None
@@ -592,8 +605,15 @@ def memory_gate(grants: list[Entry], held: list[Entry], used: int, memory: tuple
                 reason = why
             elif entry["count"] != 1 or entry.get("all") or pressed:
                 reason = WARNING_WAIT
+        if reason is None and used and budget_mb is not None and ram_mb is not None:
+            need_mb = expected_mb(entry)
+            if held_mb + need_mb > budget_mb:
+                reason = (f"expected memory {held_mb + need_mb:.0f} MB exceeds "
+                          f"{budget_mb:.0f} MB ({share * 100:.0f}% of {ram_mb:.0f} MB)")
         if reason is None:
             used += max(1, int(entry["count"]))
+            if budget_mb is not None:
+                held_mb += expected_mb(entry)
             pressed = pressed or kind != "normal"
         found.append((entry, reason))
     return found

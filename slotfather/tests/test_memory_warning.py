@@ -62,6 +62,62 @@ class GateTests(unittest.TestCase):
                 found = self.gate([{"count": 4, "all": True}, {"count": 1}], [], 0, memory)
                 self.assertEqual([None, memory[1] if memory[0] == "short" else WARNING], found)
 
+    def test_expected_peak_memory_defers_grant_although_slots_are_free(self) -> None:
+        from slotfather import estimates as sf_estimates
+        from slotfather import settings as sf_settings
+        est = sf_estimates.Estimates()
+        est.add_memory("lane-1", "verify.sh", 9000.0)
+        est.add_memory("lane-2", "verify.sh", 9500.0)
+        # 16 GiB RAM * 0.85 = 13926.4 MB; one 9500 MB lease held, second 9500 MB exceeds budget
+        held: list[dict[str, Any]] = [{"count": 1, "label": "lane-3", "cmd": "verify.sh"}]
+        grants: list[dict[str, Any]] = [{"count": 1, "label": "lane-4", "cmd": "verify.sh"}]
+        gated = sf_schedule.memory_gate(
+            grants, held, 1, ("normal", None),
+            {"warning_admits": 1.0, "memory_share": 0.85, "memory_default_mb": 2048.0},
+            memory_estimate=lambda e: est.peak_mb(e.get("label"), e.get("cmd")),
+            ram_mb=16384.0)
+        self.assertIsNotNone(gated[0][1])
+        self.assertIn("expected memory", gated[0][1] or "")
+        # Unknown family uses configurable default (2048 MB): 9500 + 2048 = 11548 <= 13926 -> admitted
+        unknown_grants: list[dict[str, Any]] = [{"count": 1, "label": "brand-new", "cmd": "echo hi"}]
+        admitted = sf_schedule.memory_gate(
+            unknown_grants, held, 1, ("normal", None),
+            {"warning_admits": 1.0, "memory_share": 0.85, "memory_default_mb": 2048.0},
+            memory_estimate=lambda e: est.peak_mb(e.get("label"), e.get("cmd")),
+            ram_mb=16384.0)
+        self.assertIsNone(admitted[0][1])
+        # Raising default_mb to 6000 MB causes unknown family to exceed budget too
+        deferred = sf_schedule.memory_gate(
+            unknown_grants, held, 1, ("normal", None),
+            {"warning_admits": 1.0, "memory_share": 0.85, "memory_default_mb": 6000.0},
+            memory_estimate=lambda e: est.peak_mb(e.get("label"), e.get("cmd")),
+            ram_mb=16384.0)
+        self.assertIsNotNone(deferred[0][1])
+        # order.json bytes stay unchanged when memory knobs are at defaults
+        self.assertNotIn("memory_share", sf_settings.order_bytes(sf_config.ORDER_DEFAULTS))
+        self.assertNotIn("memory_default_mb", sf_settings.order_bytes(sf_config.ORDER_DEFAULTS))
+        custom = sf_settings.order_bytes({**sf_config.ORDER_DEFAULTS, "memory_share": 0.75})
+        self.assertEqual(0.75, custom["memory_share"])
+
+    def test_replay_2026_11_10_reports_memory_deferrals(self) -> None:
+        from test_slotfather import ROOT
+        from test_usage import load
+        replay_mod = cast(Any, load(str(ROOT / "tools" / "replay.py"), "slotfather_replay_mem_test"))
+        fixture = ROOT / "tests" / "fixtures" / "replay-2026-11-10"
+        now = sf_config.seconds("2026-11-10T20:51:00Z")
+        assert now is not None
+        reqs = replay_mod.requests(fixture, now)
+        # Tight 16 GiB RAM budget with memory_share=0.5 should defer heavy concurrent runs
+        policy = {"order": "backfill", "env": replay_mod.WINDOW, "settings": {**replay_mod.RESERVED, "memory_share": 0.5},
+                  "step": 300, "memory_ram_mb": 16384.0}
+        sim = replay_mod.Replay(reqs, 6, policy)
+        results = sim.simulate()
+        start = min(r["arrival"] for r in reqs if r["source"] == "history")
+        until = max(r["arrival"] for r in reqs)
+        measured = replay_mod.measure(reqs, results, start, until, sim)
+        self.assertIn("memory_deferred", measured)
+        self.assertGreater(measured["memory_deferred"], 0)
+
 
 class DashboardAdmissionTests(unittest.TestCase):
     def test_the_dashboard_admits_one_slot_under_warning_and_none_beside_a_pressed_lease(self):

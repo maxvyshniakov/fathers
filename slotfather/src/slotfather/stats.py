@@ -129,6 +129,10 @@ def usage_of(items: list[dict[str, Any]]) -> dict[str, Any]:
         "cores_per_slot": round(cpu / slot_wall, 2) if slot_wall else None,
         "rss_peak_mb": max((i["rss_peak_mb"] for i in counted if isinstance(i.get("rss_peak_mb"), (int, float))),
                            default=None),
+        "rss_peak_mb_p50": percentile([i.get("rss_peak_mb") for i in counted
+                                       if isinstance(i.get("rss_peak_mb"), (int, float))], 50),
+        "rss_peak_mb_p90": percentile([i.get("rss_peak_mb") for i in counted
+                                       if isinstance(i.get("rss_peak_mb"), (int, float))], 90),
         "rss_mean_mb_p50": percentile([i.get("rss_mean_mb") for i in counted
                                        if isinstance(i.get("rss_mean_mb"), (int, float))], 50),
     }

@@ -33,6 +33,7 @@ class Estimates:
 
     def __init__(self, runs: Iterable[Any] = ()) -> None:  # Run tuples, as the history or a replay gives them
         self.runs: dict[Key, list[float]] = {}
+        self.peaks: dict[Key, list[float]] = {}  # peak RSS (MB) of recent runs by label/family/run_type/tag (fathers#9)
         for label, command, ran in cast(Iterable[Run], runs):
             self.add(label, command, ran)
 
@@ -47,21 +48,58 @@ class Estimates:
                       ("kind", what), ("rough", rough)]
         return found + [("label", label), ("family", _runtype.family(label))]
 
+    @classmethod
+    def memory_keys(cls, label: str | None, command: str | None, meta: dict[str, str] | None = None,
+                    run_key: str | None = None) -> list[Key]:
+        """Lookup order for peak memory estimates: run_key, family+phase tag, then the run-time keys."""
+        found: list[Key] = []
+        if run_key:
+            found.append(("run_key", run_key))
+        phase = (meta or {}).get("phase")
+        if phase:
+            found.append(("family_phase", _runtype.family(label), phase))
+        return found + cls.keys(label, command)
+
     def add(self, label: str | None, command: str | None, ran: float) -> None:
         for key in self.keys(label, command):
             recent = self.runs.setdefault(key, [])
             recent.append(float(ran))
             del recent[:-_config.ESTIMATE_RUNS]
 
+    def add_memory(self, label: str | None, command: str | None, peak_mb: float, *,
+                   meta: dict[str, str] | None = None, run_key: str | None = None) -> None:
+        """Record a finished run's peak RSS (MB) for memory-aware admission (fathers#9)."""
+        if peak_mb <= 0:
+            return
+        for key in self.memory_keys(label, command, meta=meta, run_key=run_key):
+            recent = self.peaks.setdefault(key, [])
+            recent.append(float(peak_mb))
+            del recent[:-_config.ESTIMATE_RUNS]
+
     def save(self) -> dict[str, list[float]]:
         return {json.dumps(key): runs for key, runs in self.runs.items()}
 
+    def save_peaks(self) -> dict[str, list[float]]:
+        return {json.dumps(key): peaks for key, peaks in self.peaks.items()}
+
     @classmethod
-    def load(cls, saved: dict[str, Any]) -> "Estimates":
+    def load(cls, saved: dict[str, Any], peaks: dict[str, Any] | None = None) -> "Estimates":
         found = cls()
         found.runs = {tuple(cast(list[Any], json.loads(key))): [float(v) for v in cast(list[Any], runs)]
                       for key, runs in saved.items()}
+        if isinstance(peaks, dict):
+            found.peaks = {tuple(cast(list[Any], json.loads(key))): [float(v) for v in cast(list[Any], vals)]
+                           for key, vals in peaks.items()}
         return found
+
+    def peak_mb(self, label: str | None, command: str | None, *,
+                meta: dict[str, str] | None = None, run_key: str | None = None) -> float | None:
+        """Expected peak RSS (MB) from the 90th percentile of recent matching runs; None when unknown."""
+        for key in self.memory_keys(label, command, meta=meta, run_key=run_key):
+            recent = self.peaks.get(key)
+            if recent:
+                return _runtype.percentile(recent, 90)
+        return None
 
     def p90(self, label: str | None, command: str | None) -> float | None:
         """The 90th percentile (runtype.percentile()) of the closest kind's last runs, as of() finds them; None for
@@ -88,7 +126,7 @@ def history_estimates(directory: Path) -> Estimates:
     orphan of a hung CI job that kept its slots for most of an hour; so is one that gave up (`left`). Requests whose
     holder ran a slotfather that records no history (before #635) are not in it."""
     path = directory / "history.jsonl"
-    runs: list[Run] = []
+    found = Estimates()
     for part in (path.with_name(path.name + ".1"), path):
         try:
             with open(part, "rb") as handle:
@@ -98,10 +136,17 @@ def history_estimates(directory: Path) -> Estimates:
         except FileNotFoundError:
             continue
         for item in _state.objects(lines[1:] if end > _config.ESTIMATE_BYTES else lines):
-            if isinstance(item.get("ran"), (int, float)) and item.get("granted") and \
-                    item.get("outcome") not in _config.UNFINISHED:
-                runs.append((item.get("label"), item.get("cmd"), item["ran"]))
-    return Estimates(runs)
+            if item.get("outcome") in _config.UNFINISHED:
+                continue
+            if isinstance(item.get("ran"), (int, float)) and item.get("granted"):
+                found.add(item.get("label"), item.get("cmd"), float(item["ran"]))
+            peak = item.get("rss_peak_mb")
+            if isinstance(peak, (int, float)) and not isinstance(peak, bool) and peak > 0:
+                run_key = item.get("run_key")
+                found.add_memory(item.get("label"), item.get("cmd"), float(peak),
+                                 meta=_entry.meta_of(item),
+                                 run_key=run_key if isinstance(run_key, str) else None)
+    return found
 
 
 _estimates: dict[str, Estimates] = {}  # history files' (size, mtime) -> Estimates, so a waiter's repeated looks read the history once
@@ -127,12 +172,13 @@ def cached_estimates(directory: Path) -> Estimates:
     with contextlib.suppress(OSError, ValueError, TypeError, AttributeError, KeyError):
         saved: dict[str, Any] = json.loads(cache.read_text())
         if saved["stamp"] == stamp and saved.get("v") == _config.ESTIMATES_VERSION:
-            found = Estimates.load(saved["runs"])
+            found = Estimates.load(saved["runs"], saved.get("peaks"))
     if found is None:
         found = history_estimates(directory)
         if _state.foreign_owner(directory) is None:
             with contextlib.suppress(OSError):
-                _state.write(cache, {"v": _config.ESTIMATES_VERSION, "stamp": stamp, "runs": found.save()})
+                _state.write(cache, {"v": _config.ESTIMATES_VERSION, "stamp": stamp, "runs": found.save(),
+                                     "peaks": found.save_peaks()})
     _estimates.clear()
     _estimates[key] = found
     return found
@@ -171,4 +217,15 @@ def p90_estimator(directory: Path) -> _schedule.Estimate:
                 if found is not None and found["p90"] is not None and not found["fallback"]:
                     return float(found["p90"])
         return cached_estimates(directory).p90(entry.get("label"), entry.get("cmd"))
+    return estimate
+
+
+def memory_estimator(directory: Path) -> _schedule.Estimate:
+    """estimate(entry) of its expected peak RSS in MB from history (fathers#9), or None when unknown."""
+    def estimate(entry: _schedule.Entry) -> float | None:
+        meta = _entry.meta_of(entry)
+        run_key = entry.get("run_key")
+        return cached_estimates(directory).peak_mb(
+            entry.get("label"), entry.get("cmd"), meta=meta,
+            run_key=run_key if isinstance(run_key, str) else None)
     return estimate
