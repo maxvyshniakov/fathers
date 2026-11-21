@@ -386,6 +386,16 @@ def scalar_text(value: Any) -> Optional[str]:
     return None
 
 
+def blocker_text(blocker: dict[str, Any]) -> Optional[str]:
+    """One blocker from `request.head_dropped` (`blocked_by`): its label, id and pid when present."""
+    label = scalar_text(blocker.get("label"))
+    ident = scalar_text(blocker.get("id"))
+    pid = blocker.get("pid")
+    pid_text = f"pid {pid}" if isinstance(pid, int) and not isinstance(pid, bool) else None
+    parts = [part for part in (label, f"id {ident}" if ident else None, pid_text) if part]
+    return " · ".join(parts) if parts else None
+
+
 def field_facts(details: dict[str, Any], skip: tuple[str, ...] = ()) -> list[Fact]:
     """A kind's structured fields as rows, objects one level in (`meta.lane`), nulls and prose left out."""
     facts: list[Fact] = []
@@ -397,6 +407,11 @@ def field_facts(details: dict[str, Any], skip: tuple[str, ...] = ()) -> list[Fac
                 text = scalar_text(item)
                 if text is not None:
                     facts.append((f"{key}.{inner}", [(text, "text")]))
+            continue
+        if key == "blocked_by" and isinstance(value, list):
+            rows = [text for item in cast(list[Any], value) if isinstance(item, dict)
+                    for text in [blocker_text(cast(dict[str, Any], item))] if text]
+            facts.extend((str(key) if index == 0 else "", [(text, "text")]) for index, text in enumerate(rows))
             continue
         text = scalar_text(value)
         if text is not None:
@@ -471,6 +486,12 @@ def event_facts(row: dict[str, Any], moment: Optional[datetime.datetime], marks:
     return facts
 
 
+def wrap_fact(name: str, text: str, width: int) -> list[str]:
+    if name == "lock" or any("/" in token and text_width(token) > width for token in text.split()):
+        return lock_path_lines(text, width)
+    return textwrap.wrap(text, width, break_on_hyphens=False) or [""]
+
+
 def draw_facts(canvas: Canvas, rect: Rect, title: str, facts: list[tuple[str, list[Part], Link]],
                   note: str = "") -> None:
     """A details panel (an event's, fathers#152; a page's row's, fathers#85): label and value rows, long values
@@ -483,7 +504,7 @@ def draw_facts(canvas: Canvas, rect: Rect, title: str, facts: list[tuple[str, li
         if len(parts) != 1 or text_width(text) <= value_width or parts[0][1].startswith("url:"):
             lines.append((name, parts, link))
             continue
-        for index, line in enumerate(textwrap.wrap(text, value_width, break_on_hyphens=False) or [""]):
+        for index, line in enumerate(wrap_fact(name, text, value_width)):
             lines.append((name if index == 0 else "", [(line, parts[0][1])], link if index == 0 else None))
     document = Canvas(rect.width, len(lines))
     column, values = panel.left, panel.left + label_width

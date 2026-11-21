@@ -307,6 +307,73 @@ class LogViewTests(unittest.TestCase):
             detail = self.tool.Canvas(100, 15)
             self.tool.draw_event_detail(detail, Rect(0, 0, 15, 100), row, NOW)
             self.assertIn(full_text, detail.render(False))
+        head_detail = self.tool.Canvas(100, 18)
+        self.tool.draw_event_detail(head_detail, Rect(0, 0, 18, 100), rows[2], NOW)
+        head_text = head_detail.render(False)
+        self.assertRegex(head_text, r"blocked_by +compiler checks · id 128 · pid 450")
+        self.assertRegex(head_text, r"\n│ +package link · id 129 · pid 451")
+
+    def test_event_details_wrap_lock_paths_and_render_each_blocker_row_at_narrow_widths(self) -> None:
+        """fathers#182: full lock paths wrap without splitting their filename, and each blocker gets its own
+        detail row with its identity (including repeated labels, null peer on yield, and missing optional fields),
+        with scroll and resize bounds preserved."""
+        lock = "/tmp/build-cache/worktrees/lane-linux/compiled-assets/cache.lock"
+        yielded, ended, dropped = rows_of([
+            logged("lease.yielded", NOW, "linux build", 112, count=1, lock=lock, to={"id": None}),
+            logged("lease.lock_ended", NOW, "linux build", 112, lock=lock, why="resumed", yielded=True, waited=12),
+            logged("request.head_dropped", NOW, "all-slots test", 113, count=8, late=1800,
+                   blocked_by=[{"label": "compiler checks", "id": "128", "pid": 450},
+                               {"label": "compiler checks", "id": "129", "pid": 451},
+                               {"label": "compiler\nchecks", "id": None, "pid": 452},
+                               {"label": None, "id": "130\x1b", "pid": None},
+                               {"label": None, "id": None, "pid": 453},
+                               {"label": None, "id": None, "pid": None}]),
+        ], TAGS)
+        # Null peer on lock yield produces no `to.id` row; narrow width wraps the lock path and keeps `cache.lock`.
+        for row in (yielded, ended):
+            canvas = self.tool.Canvas(46, 18)
+            self.tool.draw_event_detail(canvas, Rect(0, 0, 18, 46), row, NOW)
+            rendered = canvas.render(False)
+            self.assertNotIn("to.id", rendered)
+            self.assertIn("/tmp/build-cache/", rendered)
+            self.assertIn("cache.lock", rendered)
+            for line in rendered.splitlines():
+                self.assertEqual(46, len(line))
+
+        # Wide details show each blocker on its own row under `blocked_by`, with control characters stripped.
+        wide = self.tool.Canvas(90, 20)
+        self.tool.draw_event_detail(wide, Rect(0, 0, 20, 90), dropped, NOW)
+        wide_text = wide.render(False)
+        self.assertNotIn("\x1b", wide_text)
+        expected_rows = [
+            "compiler checks · id 128 · pid 450",
+            "compiler checks · id 129 · pid 451",
+            "compiler checks · pid 452",
+            "id 130",
+            "pid 453",
+        ]
+        for item in expected_rows:
+            self.assertIn(item, wide_text)
+
+        # Narrow layout wraps blocker rows without horizontal overflow, scrolls to the end, and clamps on resize.
+        narrow = self.tool.Canvas(44, 11)
+        self.tool.draw_event_detail(narrow, Rect(0, 0, 11, 44), dropped, NOW)
+        for line in narrow.render(False).splitlines():
+            self.assertEqual(44, len(line))
+        meta = narrow.tables["details"]
+        self.assertGreater(meta["count"], meta["visible"])
+        max_offset = meta["count"] - meta["visible"]
+
+        scrolled = self.tool.Canvas(44, 11)
+        scrolled.scroll = {"details": 999}
+        self.tool.draw_event_detail(scrolled, Rect(0, 0, 11, 44), dropped, NOW)
+        self.assertEqual(max_offset, scrolled.tables["details"]["offset"], "scroll is bounded at the bottom")
+        self.assertIn("pid 453", scrolled.render(False))
+
+        resized = self.tool.Canvas(90, 20)
+        resized.scroll = {"details": 999}
+        self.tool.draw_event_detail(resized, Rect(0, 0, 20, 90), dropped, NOW)
+        self.assertEqual(0, resized.tables["details"]["offset"], "enlarging clamps scroll back to 0")
 
     def test_slots_log_is_the_default_one_row_per_run_its_title_the_switch(self) -> None:
         canvas, lines = self.draw(120)
