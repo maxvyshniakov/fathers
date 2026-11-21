@@ -105,14 +105,15 @@ def detect_cache_miss(
     prev_model: str | None,
     model: str,
     compacted: bool,
+    input_tokens: int = 0,
 ) -> tuple[bool, str]:
     """Classify whether a request suffered a cache miss and why (fathers#199).
 
-    Rule: not the agent's first request, context > 30K, and cache write > 50% of context.
+    Rule: not the agent's first request, context > 30K, and uncached context (input + cache write) > 50% of context.
     """
     if is_first or context_tokens <= CACHE_MISS_MIN_CONTEXT:
         return False, ""
-    if cache_write_tokens <= context_tokens * CACHE_MISS_WRITE_RATIO:
+    if (input_tokens + cache_write_tokens) <= context_tokens * CACHE_MISS_WRITE_RATIO:
         return False, ""
     if prev_model and model and prev_model != model:
         return True, "model_switch"

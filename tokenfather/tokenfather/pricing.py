@@ -1,7 +1,7 @@
 """Price weights for token usage: reads mastack's models.toml when present, else built-in defaults."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 from pathlib import Path
 import tomllib
@@ -31,11 +31,16 @@ TIER_MULTIPLIERS: dict[str, float] = {
 }
 
 
+def _empty_str_set() -> set[str]:
+    return set()
+
+
 @dataclass
 class PricingTable:
     default: PriceWeights
     by_model: dict[str, PriceWeights]
     source: str
+    aliases: set[str] = field(default_factory=_empty_str_set)
 
     def for_model(self, model: str) -> PriceWeights:
         if not model:
@@ -44,6 +49,15 @@ class PricingTable:
             return self.by_model[model]
         lower = model.lower()
         for key, weights in self.by_model.items():
+            if key.lower() == lower:
+                return weights
+        # Prefix-match longest non-alias keys first so short aliases never shadow specific model IDs.
+        candidates = sorted(
+            ((k, w) for k, w in self.by_model.items() if k not in self.aliases),
+            key=lambda item: len(item[0]),
+            reverse=True,
+        )
+        for key, weights in candidates:
             if lower.startswith(key.lower()):
                 return weights
         return self.default
@@ -115,6 +129,7 @@ def load_pricing(models_path: Path | None = None) -> PricingTable:
                 tier_multiplier=_float(raw_default, "tier_multiplier", 1.0),
             )
 
+    aliases: set[str] = set()
     models_section = as_dict(data.get("models"))
     if models_section is not None:
         for alias, raw_entry in models_section.items():
@@ -141,6 +156,27 @@ def load_pricing(models_path: Path | None = None) -> PricingTable:
                 tier_multiplier=_float(raw_w, "tier_multiplier", TIER_MULTIPLIERS.get(tier, 1.0)),
             )
             by_model[model_id] = weights
-            by_model[alias] = weights
+            if alias != model_id:
+                by_model[alias] = weights
+                aliases.add(alias)
 
-    return PricingTable(default=default, by_model=by_model, source=str(path))
+    # Load standalone [pricing.<model>] entries even when not declared under [models] (e.g. Antigravity/Gemini).
+    if pricing_section is not None:
+        for key, raw_entry in pricing_section.items():
+            if key == "default" or key in by_model:
+                continue
+            entry = as_dict(raw_entry)
+            if entry is None:
+                continue
+            tier = str(entry.get("tier") or "")
+            by_model[key] = PriceWeights(
+                input=_float(entry, "input", default.input),
+                output=_float(entry, "output", default.output),
+                cache_read=_float(entry, "cache_read", default.cache_read),
+                cache_write_short=_float(entry, "cache_write_short", default.cache_write_short),
+                cache_write_long=_float(entry, "cache_write_long", default.cache_write_long),
+                cache_write_default=_float(entry, "cache_write_default", default.cache_write_default),
+                tier_multiplier=_float(entry, "tier_multiplier", TIER_MULTIPLIERS.get(tier, 1.0)),
+            )
+
+    return PricingTable(default=default, by_model=by_model, source=str(path), aliases=aliases)

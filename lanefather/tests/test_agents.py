@@ -109,6 +109,32 @@ class AgentAttributionTests(LaneCase):
         self.assertEqual({"tier": "fast"}, entry["options"])
         self.assertEqual(["start", "adopt", "check"], entry["events"])
 
+    def test_explicit_agent_kind_does_not_leak_other_provider_env_vars(self) -> None:
+        from lanefather import events
+        env = {
+            "CLAUDE_CODE_SESSION_ID": "claude-sess-leak",
+            "CLAUDE_CODE_SUBAGENT_ID": "claude-sub-leak",
+            "CLAUDE_CODE_TRANSCRIPT_PATH": "/tmp/claude-leak.jsonl",
+            "CLAUDE_MODEL": "claude-opus-5-5",
+            "CLAUDE_CODE_EFFORT_LEVEL": "high",
+            "CODEX_THREAD_ID": "codex-sess-real",
+            "CODEX_MODEL": "gpt-6.1-sol",
+        }
+        ctx = events.agent_context("codex", env=env)
+        assert ctx is not None
+        self.assertEqual("codex", ctx["kind"])
+        self.assertEqual("codex-sess-real", ctx["session_id"])
+        self.assertEqual("gpt-6.1-sol", ctx["model"])
+        self.assertNotIn("subagent_id", ctx)
+        self.assertNotIn("transcript_path", ctx)
+        self.assertNotIn("options", ctx)
+
+        # Custom kind does not inherit Claude's session or model when LANEFATHER_AGENT_* is unset.
+        ctx_custom = events.agent_context("custom-agent", env={"CLAUDE_CODE_SESSION_ID": "claude-only",
+                                                               "CLAUDE_MODEL": "claude-opus-5-5"})
+        assert ctx_custom is not None
+        self.assertEqual({"kind": "custom-agent"}, ctx_custom)
+
 
 if __name__ == "__main__":
     unittest.main()

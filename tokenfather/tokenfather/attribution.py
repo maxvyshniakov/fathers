@@ -106,13 +106,17 @@ class LaneIndex:
 
     def __init__(self, lanes: list[LaneMeta]):
         self.lanes = lanes
-        self.by_id: dict[str, LaneMeta] = {lane.lane_id: lane for lane in lanes}
+        self.by_id: dict[tuple[str, str], LaneMeta] = {(lane.project, lane.lane_id): lane for lane in lanes}
+        self._by_bare_id: dict[str, list[LaneMeta]] = {}
         self.by_transcript: dict[str, LaneMeta] = {}
         self.by_subagent: dict[str, LaneMeta] = {}
         self.by_session: dict[str, LaneMeta] = {}
         self.by_worktree: list[tuple[str, LaneMeta]] = []
 
+        session_claims: dict[str, dict[tuple[str, str], LaneMeta]] = {}
         for lane in lanes:
+            lane_key = (lane.project, lane.lane_id)
+            self._by_bare_id.setdefault(lane.lane_id, []).append(lane)
             for agent in lane.agents:
                 tp = agent.get("transcript_path")
                 if isinstance(tp, str) and tp:
@@ -123,14 +127,28 @@ class LaneIndex:
                     self.by_subagent[sub] = lane
                 sess = agent.get("session_id")
                 if isinstance(sess, str) and sess:
-                    self.by_session[sess] = lane
+                    session_claims.setdefault(sess, {})[lane_key] = lane
                 tid = agent.get("thread_id")
                 if isinstance(tid, str) and tid:
-                    self.by_session[tid] = lane
+                    session_claims.setdefault(tid, {})[lane_key] = lane
             if lane.worktree:
                 self.by_worktree.append((lane.worktree, lane))
+        # Only attribute by session_id/thread_id when unambiguous (unique to one lane); shared coordinator
+        # sessions fall back to transcript_path, subagent_id, or worktree match.
+        for sess_id, claimed in session_claims.items():
+            if len(claimed) == 1:
+                self.by_session[sess_id] = next(iter(claimed.values()))
         # Longest worktree path first so nested paths match the most specific worktree.
         self.by_worktree.sort(key=lambda item: len(item[0]), reverse=True)
+
+    def get_lane(self, lane_id: str, project: str = "") -> LaneMeta | None:
+        if (project, lane_id) in self.by_id:
+            return self.by_id[(project, lane_id)]
+        if not project:
+            matches = self._by_bare_id.get(lane_id) or []
+            if len(matches) == 1:
+                return matches[0]
+        return None
 
     def match(self, record: RequestRecord) -> LaneMeta | None:
         # 1. Exact fathers#200 agent metadata matches (transcript_path -> subagent_id -> session_id).

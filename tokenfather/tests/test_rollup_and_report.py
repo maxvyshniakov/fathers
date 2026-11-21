@@ -158,13 +158,79 @@ class RollupAndReportTests(unittest.TestCase):
         models_toml.write_text(
             '[models.opus]\nid = "claude-opus-5-5"\ntier = "strong"\n'
             '[models.sonnet]\nid = "claude-sonnet-5-5"\ntier = "routine"\n'
+            '[models.g]\nid = "gemini-4-neon"\ntier = "strong"\n'
             '[pricing.default]\ninput = 1.0\noutput = 5.0\ncache_read = 0.1\n'
             'cache_write_short = 1.25\ncache_write_long = 2.0\n'
+            '[pricing."gemini-4-neon-flash"]\ninput = 0.25\noutput = 1.0\ntier_multiplier = 0.25\n'
+            '[pricing."gemini-4-standalone"]\ninput = 0.5\noutput = 2.0\n'
         )
         pricing = load_pricing(models_toml)
         self.assertEqual(str(models_toml), pricing.source)
         self.assertEqual(1.0, pricing.for_model("claude-opus-5-5").tier_multiplier)
         self.assertEqual(0.2, pricing.for_model("claude-sonnet-5-5").tier_multiplier)
+        # Longest prefix wins over shorter prefix; short alias "g" does not prefix-match unrelated "gpt-6".
+        self.assertEqual(0.25, pricing.for_model("gemini-4-neon-flash-medium").tier_multiplier)
+        self.assertEqual(1.0, pricing.for_model("gpt-6-astra").input)
+        # Standalone [pricing.<model>] entry loads even without [models.<alias>].
+        self.assertEqual(0.5, pricing.for_model("gemini-4-standalone-high").input)
+
+    def test_ambiguous_session_id_and_cross_project_lane_disambiguation(self) -> None:
+        from tokenfather.schema import RequestRecord
+        wt_a = self.tmp / "proj-a" / "wt-shared"
+        wt_b = self.tmp / "proj-b" / "wt-shared"
+        wt_a.mkdir(parents=True)
+        wt_b.mkdir(parents=True)
+        (self.lanes_dir / "a.json").write_text(json.dumps({
+            "id": "shared-name", "status": "landed", "common_dir": "/Users/test/proj-a/.git",
+            "worktree": str(wt_a),
+            "agents": [{"kind": "claude-code", "session_id": "coord-shared"}],
+        }))
+        lanes_dir_b = self.tmp / "lanes-b"
+        lanes_dir_b.mkdir()
+        (lanes_dir_b / "b.json").write_text(json.dumps({
+            "id": "shared-name", "status": "active", "common_dir": "/Users/test/proj-b/.git",
+            "worktree": str(wt_b),
+            "agents": [{"kind": "claude-code", "session_id": "coord-shared"}],
+        }))
+        idx = LaneIndex(load_lanes([self.lanes_dir, lanes_dir_b]))
+        # Shared session_id is excluded from by_session; worktree fallback disambiguates each record.
+        self.assertNotIn("coord-shared", idx.by_session)
+        rec_a = RequestRecord(
+            provider="claude-code", request_id="r1", time="2026-11-16T10:00:00Z", day="2026-11-16",
+            host="h", project=str(wt_a), session_id="coord-shared", agent_id="a1", agent_role="main",
+            agent_type="main", transcript_path="", model="claude-opus-5-5", effort="high",
+            input_tokens=100, output_tokens=100, cache_read_tokens=0, cache_write_tokens=0,
+        )
+        rec_b = RequestRecord(
+            provider="claude-code", request_id="r2", time="2026-11-16T10:01:00Z", day="2026-11-16",
+            host="h", project=str(wt_b), session_id="coord-shared", agent_id="a2", agent_role="main",
+            agent_type="main", transcript_path="", model="claude-opus-5-5", effort="high",
+            input_tokens=100, output_tokens=100, cache_read_tokens=0, cache_write_tokens=0,
+        )
+        idx.attribute([rec_a, rec_b])
+        self.assertEqual("proj-a", rec_a.lane_project)
+        self.assertEqual("proj-b", rec_b.lane_project)
+        rep = build_report([rec_a, rec_b], load_pricing(self.tmp / "missing.toml"), lane_index=idx)
+        self.assertIn("proj-a:shared-name", rep["by_lane"])
+        self.assertIn("proj-b:shared-name", rep["by_lane"])
+        self.assertEqual("landed", rep["by_lane"]["proj-a:shared-name"]["status"])
+        self.assertEqual("active", rep["by_lane"]["proj-b:shared-name"]["status"])
+
+    def test_cli_report_rejects_invalid_timestamps_and_changelog_filters_since(self) -> None:
+        from tokenfather import cli
+        self.assertEqual(
+            2, cli.main(["report", "--no-collect", "--state-dir", str(self.state), "--since", "not-a-date"])
+        )
+        self.assertEqual(
+            2, cli.main(["report", "--no-collect", "--state-dir", str(self.state), "--until", "bad"])
+        )
+        sample = (
+            "# Tokenfather Changelog\n\n## Unreleased\n\n## 0.2.0 - 2026-11-20\n\n### Added\n\n- New\n\n"
+            "## 0.1.0 - 2026-11-16\n\n### Added\n\n- Old\n"
+        )
+        filtered = cli.filter_changelog_since(sample, "0.1.0")
+        self.assertIn("0.2.0", filtered)
+        self.assertNotIn("0.1.0", filtered)
 
 
 if __name__ == "__main__":

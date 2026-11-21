@@ -54,16 +54,19 @@ class ClaudeCodeAdapter:
         agent_type = str(meta.get("agentType") or ("subagent" if is_subagent else "main"))
         agent_id = path.stem
 
-        seen_ids: set[str] = set(cursor.get("seen_ids") or [])
+        raw_seen = as_list(cursor.get("seen_ids")) or []
+        seen_order: list[str] = [str(s) for s in raw_seen]
+        seen_ids: set[str] = set(seen_order)
+        last_entry = as_dict(cursor.get("last_entry"))
         prev_time_str: str | None = cursor.get("prev_time")
-        prev_time = parse_timestamp(prev_time_str) if prev_time_str else None
         prev_model: str | None = cursor.get("prev_model")
         compacted = bool(cursor.get("compacted", False))
         cwd = str(cursor.get("cwd") or "")
         session_id = str(cursor.get("session_id") or (path.parent.parent.name if is_subagent else path.stem))
 
-        # Claude Code writes one line per content block with the same message.id and identical usage.
-        # Group lines in this batch by message.id so each model request is counted once and all its tools are kept.
+        # Claude Code writes one line per content block with the same message.id and streaming usage updates.
+        # Group lines in this batch by message.id so each model request is counted once with its latest/max
+        # output_tokens and all its tools, including streaming blocks that arrive in a later incremental batch.
         grouped: dict[str, dict[str, Any]] = {}
         order: list[str] = []
 
@@ -101,8 +104,30 @@ class ClaudeCodeAdapter:
                 continue
 
             msg_id = str(message.get("id") or obj.get("requestId") or obj.get("uuid") or "")
-            if not msg_id or msg_id in seen_ids:
+            if not msg_id:
                 continue
+            if msg_id in seen_ids:
+                if last_entry is None or msg_id != last_entry.get("msg_id"):
+                    continue
+                if msg_id not in grouped:
+                    restored_usage = as_dict(last_entry.get("usage")) or {}
+                    grouped[msg_id] = {
+                        "msg_id": msg_id,
+                        "timestamp": last_entry.get("timestamp"),
+                        "cwd": str(last_entry.get("cwd") or cwd),
+                        "session_id": str(last_entry.get("session_id") or session_id),
+                        "model": str(last_entry.get("model") or ""),
+                        "effort": str(last_entry.get("effort") or ""),
+                        "usage": dict(restored_usage),
+                        "tools": list(last_entry.get("tools") or []),
+                        "shell_commands": list(last_entry.get("shell_commands") or []),
+                        "compacted": bool(last_entry.get("compacted", False)),
+                        "_from_prev": True,
+                        "_updated": False,
+                        "_prev_time": last_entry.get("prev_time"),
+                        "_prev_model": last_entry.get("prev_model"),
+                    }
+                    order.append(msg_id)
 
             entry = grouped.get(msg_id)
             if entry is None:
@@ -124,8 +149,15 @@ class ClaudeCodeAdapter:
                 compacted = False
                 grouped[msg_id] = entry
                 order.append(msg_id)
-            elif not entry["effort"]:
-                entry["effort"] = str(obj.get("effort") or obj.get("perTurnEffort") or "")
+            else:
+                if not entry["effort"]:
+                    entry["effort"] = str(obj.get("effort") or obj.get("perTurnEffort") or "")
+                new_out = _as_int(usage.get("output_tokens"))
+                cur_out = _as_int(entry["usage"].get("output_tokens"))
+                if new_out >= cur_out:
+                    if new_out > cur_out:
+                        entry["_updated"] = True
+                    entry["usage"] = usage
 
             content = as_list(message.get("content"))
             if content is not None:
@@ -137,6 +169,7 @@ class ClaudeCodeAdapter:
                         tool_name = str(block.get("name") or "")
                         if tool_name:
                             entry_tools.append(tool_name)
+                            entry["_updated"] = True
                             inp = as_dict(block.get("input"))
                             if inp is not None and isinstance(inp.get("command"), str):
                                 entry_cmds.append(str(inp["command"]))
@@ -144,7 +177,12 @@ class ClaudeCodeAdapter:
         records: list[RequestRecord] = []
         for msg_id in order:
             entry = grouped[msg_id]
-            seen_ids.add(msg_id)
+            from_prev = bool(entry.get("_from_prev"))
+            if from_prev and not entry.get("_updated"):
+                continue
+            if msg_id not in seen_ids:
+                seen_ids.add(msg_id)
+                seen_order.append(msg_id)
             usage = entry["usage"]
 
             moment = parse_timestamp(entry["timestamp"])
@@ -176,10 +214,14 @@ class ClaudeCodeAdapter:
             out_details = as_dict(usage.get("output_tokens_details"))
             reasoning_tokens = _as_int(out_details.get("thinking_tokens")) if out_details is not None else 0
 
+            ref_prev_time_str: str | None = entry.get("_prev_time") if from_prev else prev_time_str
+            ref_prev_time = parse_timestamp(ref_prev_time_str) if ref_prev_time_str else None
+            ref_prev_model: str | None = entry.get("_prev_model") if from_prev else prev_model
+
             gap_seconds: float | None = None
-            is_first = prev_time is None
-            if prev_time is not None:
-                gap_seconds = max(0.0, (moment - prev_time).total_seconds())
+            is_first = ref_prev_time is None
+            if ref_prev_time is not None:
+                gap_seconds = max(0.0, (moment - ref_prev_time).total_seconds())
 
             context_tokens = input_tokens + cache_read + cache_write_total
             miss, reason = detect_cache_miss(
@@ -189,9 +231,10 @@ class ClaudeCodeAdapter:
                 cache_write_ttl_buckets=buckets,
                 agent_role=agent_role,
                 gap_seconds=gap_seconds,
-                prev_model=prev_model,
+                prev_model=ref_prev_model,
                 model=str(entry["model"]),
                 compacted=bool(entry["compacted"]),
+                input_tokens=input_tokens,
             )
             is_wait, is_small_read = classify_tools(entry["tools"], entry["shell_commands"])
 
@@ -223,12 +266,26 @@ class ClaudeCodeAdapter:
                 cache_miss_reason=reason,
             ))
 
-            prev_time = moment
+            last_entry = {
+                "msg_id": msg_id,
+                "timestamp": entry["timestamp"],
+                "cwd": str(entry["cwd"]),
+                "session_id": str(entry["session_id"]),
+                "model": str(entry["model"]),
+                "effort": str(entry["effort"]),
+                "usage": dict(usage),
+                "tools": list(entry["tools"]),
+                "shell_commands": list(entry["shell_commands"]),
+                "compacted": bool(entry["compacted"]),
+                "prev_time": ref_prev_time_str,
+                "prev_model": ref_prev_model,
+            }
             prev_time_str = ts_str
             if entry["model"]:
                 prev_model = str(entry["model"])
 
-        cursor["seen_ids"] = sorted(seen_ids)[-5000:]
+        cursor["seen_ids"] = seen_order[-5000:]
+        cursor["last_entry"] = last_entry
         cursor["prev_time"] = prev_time_str
         cursor["prev_model"] = prev_model
         cursor["compacted"] = compacted

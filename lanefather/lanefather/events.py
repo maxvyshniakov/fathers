@@ -145,7 +145,8 @@ def agent_session(env: Mapping[str, str] | None = None) -> tuple[str, str] | Non
     source = os.environ if env is None else env
     explicit_kind = source.get("LANEFATHER_AGENT_KIND", "").strip().lower()
     if explicit_kind and AGENT_KIND_RE.fullmatch(explicit_kind):
-        explicit_session = _first_env(source, ("LANEFATHER_AGENT_SESSION", *(var for var, _ in AGENTS)))
+        kind_vars = tuple(var for var, name in AGENTS if name == explicit_kind)
+        explicit_session = _first_env(source, ("LANEFATHER_AGENT_SESSION", *kind_vars))
         if explicit_session:
             return explicit_kind, explicit_session
     for variable, name in AGENTS:
@@ -165,41 +166,49 @@ def agent_context(explicit_kind: str | None = None, env: Mapping[str, str] | Non
     if not kind or not AGENT_KIND_RE.fullmatch(kind):
         return None
 
-    session_id = _first_env(source, ("LANEFATHER_AGENT_SESSION",)) or (detected[1] if detected else None)
-    subagent_id = _first_env(source, (
-        "LANEFATHER_AGENT_SUBAGENT_ID",
-        "CLAUDE_CODE_SUBAGENT_ID",
-        "CLAUDE_AGENT_ID",
-        "CODEX_SUBAGENT_ID",
-        "ANTIGRAVITY_SUBAGENT_ID",
-    ))
-    thread_id = _first_env(source, (
-        "LANEFATHER_AGENT_THREAD_ID",
-        "T3_THREAD_ID",
-        "T3_CODE_THREAD_ID",
-    ))
-    transcript_path = _first_env(source, (
-        "LANEFATHER_AGENT_TRANSCRIPT",
-        "AGENT_TRANSCRIPT_PATH",
-        "ANTIGRAVITY_TRANSCRIPT_PATH",
-        "CLAUDE_CODE_TRANSCRIPT_PATH",
-        "CLAUDE_TRANSCRIPT_PATH",
-        "CODEX_TRANSCRIPT_PATH",
-    ))
+    kind_session_vars = tuple(var for var, name in AGENTS if name == kind)
+    session_id = _first_env(source, ("LANEFATHER_AGENT_SESSION", *kind_session_vars))
+    if not session_id and detected and detected[0] == kind:
+        session_id = detected[1]
+
+    subagent_vars: list[str] = ["LANEFATHER_AGENT_SUBAGENT_ID"]
+    if kind == "claude-code":
+        subagent_vars.extend(["CLAUDE_CODE_SUBAGENT_ID", "CLAUDE_AGENT_ID"])
+    elif kind == "codex":
+        subagent_vars.append("CODEX_SUBAGENT_ID")
+    elif kind == "antigravity":
+        subagent_vars.append("ANTIGRAVITY_SUBAGENT_ID")
+    subagent_id = _first_env(source, tuple(subagent_vars))
+
+    thread_vars: list[str] = ["LANEFATHER_AGENT_THREAD_ID"]
+    if kind in ("antigravity", "t3-code"):
+        thread_vars.extend(["T3_THREAD_ID", "T3_CODE_THREAD_ID"])
+    thread_id = _first_env(source, tuple(thread_vars))
+
+    transcript_vars: list[str] = ["LANEFATHER_AGENT_TRANSCRIPT", "AGENT_TRANSCRIPT_PATH"]
+    if kind == "antigravity":
+        transcript_vars.append("ANTIGRAVITY_TRANSCRIPT_PATH")
+    elif kind == "claude-code":
+        transcript_vars.extend(["CLAUDE_CODE_TRANSCRIPT_PATH", "CLAUDE_TRANSCRIPT_PATH"])
+    elif kind == "codex":
+        transcript_vars.append("CODEX_TRANSCRIPT_PATH")
+    transcript_path = _first_env(source, tuple(transcript_vars))
     if not transcript_path and kind == "antigravity" and session_id:
         app_data = _first_env(source, ("ANTIGRAVITY_APP_DATA_DIR",))
         if app_data:
             transcript_path = str(Path(app_data).expanduser() / "brain" / session_id
                                   / ".system_generated" / "logs" / "transcript.jsonl")
 
-    model = _first_env(source, (
-        "LANEFATHER_AGENT_MODEL",
-        "ANTIGRAVITY_MODEL",
-        "T3_MODEL",
-        "CODEX_MODEL",
-        "CLAUDE_MODEL",
-        "ANTHROPIC_MODEL",
-    ))
+    model_vars: list[str] = ["LANEFATHER_AGENT_MODEL"]
+    if kind == "antigravity":
+        model_vars.extend(["ANTIGRAVITY_MODEL", "T3_MODEL"])
+    elif kind == "t3-code":
+        model_vars.append("T3_MODEL")
+    elif kind == "codex":
+        model_vars.append("CODEX_MODEL")
+    elif kind == "claude-code":
+        model_vars.extend(["CLAUDE_MODEL", "ANTHROPIC_MODEL"])
+    model = _first_env(source, tuple(model_vars))
 
     options: dict[str, Any] = {}
     raw_options = source.get("LANEFATHER_AGENT_OPTIONS", "").strip()
@@ -210,21 +219,20 @@ def agent_context(explicit_kind: str | None = None, env: Mapping[str, str] | Non
                 for key, val in cast(dict[Any, Any], parsed).items():
                     if isinstance(key, str) and key and val is not None and val != "":
                         options[clean(key, 1, 64)] = clean(val, 2, 200)
-    effort = _first_env(source, (
-        "LANEFATHER_AGENT_EFFORT",
-        "CLAUDE_CODE_EFFORT_LEVEL",
-        "CLAUDE_EFFORT",
-        "CODEX_REASONING_EFFORT",
-        "CODEX_EFFORT",
-        "T3_EFFORT",
-    ))
+    effort_vars: list[str] = ["LANEFATHER_AGENT_EFFORT"]
+    if kind == "claude-code":
+        effort_vars.extend(["CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_EFFORT"])
+    elif kind == "codex":
+        effort_vars.extend(["CODEX_REASONING_EFFORT", "CODEX_EFFORT"])
+    elif kind in ("antigravity", "t3-code"):
+        effort_vars.append("T3_EFFORT")
+    effort = _first_env(source, tuple(effort_vars))
     if effort:
         options["effort"] = clean(effort, 1, 64)
-    thought_level = _first_env(source, (
-        "LANEFATHER_AGENT_THOUGHT_LEVEL",
-        "ANTIGRAVITY_THOUGHT_LEVEL",
-        "THOUGHT_LEVEL",
-    ))
+    thought_vars: list[str] = ["LANEFATHER_AGENT_THOUGHT_LEVEL"]
+    if kind == "antigravity":
+        thought_vars.extend(["ANTIGRAVITY_THOUGHT_LEVEL", "THOUGHT_LEVEL"])
+    thought_level = _first_env(source, tuple(thought_vars))
     if thought_level:
         options["thought_level"] = clean(thought_level, 1, 64)
 

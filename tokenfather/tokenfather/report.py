@@ -61,7 +61,7 @@ def build_report(
     role_contexts: dict[str, list[int]] = {}
     by_day: dict[str, dict[str, Any]] = {}
     by_week: dict[str, dict[str, Any]] = {}
-    by_lane: dict[str, dict[str, Any]] = {}
+    by_lane: dict[tuple[str, str], dict[str, Any]] = {}
 
     miss_count = 0
     miss_weighted = 0.0
@@ -120,21 +120,23 @@ def build_report(
         day_bucket["requests"] += 1
         day_bucket["weighted_units"] += comp["total"]
         if rec.lane_id:
-            day_bucket["lanes"].add(rec.lane_id)
+            day_bucket["lanes"].add((rec.lane_project, rec.lane_id))
 
         week = _iso_week(rec.day)
         week_bucket = by_week.setdefault(week, {"requests": 0, "weighted_units": 0.0, "lanes": set()})
         week_bucket["requests"] += 1
         week_bucket["weighted_units"] += comp["total"]
         if rec.lane_id:
-            week_bucket["lanes"].add(rec.lane_id)
+            week_bucket["lanes"].add((rec.lane_project, rec.lane_id))
 
-        # By lane
+        # By lane (disambiguated by (project, lane_id) across projects)
         if rec.lane_id:
-            lane_meta = lane_index.by_id.get(rec.lane_id) if lane_index else None
-            lane_row = by_lane.setdefault(rec.lane_id, {
+            lane_meta = lane_index.get_lane(rec.lane_id, rec.lane_project) if lane_index else None
+            lane_proj = rec.lane_project or (lane_meta.project if lane_meta else "")
+            lane_key = (lane_proj, rec.lane_id)
+            lane_row = by_lane.setdefault(lane_key, {
                 "lane_id": rec.lane_id,
-                "project": rec.lane_project or (lane_meta.project if lane_meta else ""),
+                "project": lane_proj,
                 "status": lane_meta.status if lane_meta else "unknown",
                 "requests": 0,
                 "weighted_units": 0.0,
@@ -200,7 +202,11 @@ def build_report(
     lanes_out: dict[str, dict[str, Any]] = {}
     landed_weights: list[float] = []
     landed_turns: list[int] = []
-    for lane_id, row in sorted(by_lane.items()):
+    lane_id_counts: dict[str, int] = {}
+    for _proj, lid in by_lane:
+        lane_id_counts[lid] = lane_id_counts.get(lid, 0) + 1
+    for (lane_proj, lane_id), row in sorted(by_lane.items(), key=lambda kv: (kv[0][1], kv[0][0])):
+        out_key = f"{lane_proj}:{lane_id}" if lane_id_counts[lane_id] > 1 and lane_proj else lane_id
         row_out = {
             "lane_id": row["lane_id"],
             "project": row["project"],
@@ -210,7 +216,7 @@ def build_report(
             "turns_by_role": dict(sorted(row["turns_by_role"].items())),
             "providers": sorted(row["providers"]),
         }
-        lanes_out[lane_id] = row_out
+        lanes_out[out_key] = row_out
         if row["status"] in ("landed", "released", "done"):
             landed_weights.append(row["weighted_units"])
             landed_turns.append(row["requests"])

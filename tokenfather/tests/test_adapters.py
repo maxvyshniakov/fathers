@@ -226,6 +226,112 @@ class AdapterFixtureTests(unittest.TestCase):
         self.assertEqual(40_000, recs[1].context_tokens)
         self.assertAlmostEqual(15.0, recs[1].gap_seconds or 0.0, places=1)
 
+    def test_claude_code_keeps_max_output_tokens_and_handles_cross_batch_streaming_and_seen_order(self) -> None:
+        transcript = self.tmp / "stream.jsonl"
+        b1_line1 = json.dumps({
+            "type": "assistant", "sessionId": "s1", "cwd": "/proj",
+            "timestamp": "2026-11-16T10:00:00.000Z",
+            "message": {"id": "msg_stream", "model": "claude-opus-5-5",
+                        "usage": {"input_tokens": 100, "output_tokens": 12,
+                                  "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 0},
+                        "content": [{"type": "thinking", "thinking": "..."}]},
+        })
+        b1_line2 = json.dumps({
+            "type": "assistant", "sessionId": "s1", "cwd": "/proj",
+            "timestamp": "2026-11-16T10:00:01.000Z",
+            "message": {"id": "msg_stream", "model": "claude-opus-5-5",
+                        "usage": {"input_tokens": 100, "output_tokens": 80,
+                                  "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 0},
+                        "content": [{"type": "text", "text": "part 1"}]},
+        })
+        b2_line = json.dumps({
+            "type": "assistant", "sessionId": "s1", "cwd": "/proj",
+            "timestamp": "2026-11-16T10:00:02.000Z",
+            "message": {"id": "msg_stream", "model": "claude-opus-5-5",
+                        "usage": {"input_tokens": 100, "output_tokens": 250,
+                                  "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 0},
+                        "content": [{"type": "tool_use", "name": "Edit", "input": {}}]},
+        })
+        adapter = ClaudeCodeAdapter()
+        cursor: dict[str, object] = {"seen_ids": ["z_old", "a_old"]}
+        recs1 = adapter.parse_lines(transcript, [b1_line1, b1_line2], cursor, "testhost")
+        self.assertEqual(1, len(recs1))
+        self.assertEqual(80, recs1[0].output_tokens)
+        # Insertion order preserved (not alphabetically sorted).
+        self.assertEqual(["z_old", "a_old", "msg_stream"], cursor["seen_ids"])
+
+        recs2 = adapter.parse_lines(transcript, [b2_line], cursor, "testhost")
+        self.assertEqual(1, len(recs2))
+        self.assertEqual("msg_stream", recs2[0].request_id)
+        self.assertEqual(250, recs2[0].output_tokens)
+        self.assertEqual(["Edit"], recs2[0].tools)
+
+    def test_codex_incremental_batches_use_cumulative_line_offset_and_dedup_token_count(self) -> None:
+        rollout = self.tmp / "rollout-inc.jsonl"
+        batch1 = [
+            json.dumps({"timestamp": "2026-11-17T15:00:00.000Z", "type": "session_meta",
+                        "payload": {"session_id": "sess-inc", "cwd": "/proj"}}),
+            json.dumps({"timestamp": "2026-11-17T15:00:05.000Z", "type": "event_msg",
+                        "payload": {"type": "token_count",
+                                    "info": {"total_token_usage": {"total_tokens": 45_500},
+                                             "last_token_usage": {"input_tokens": 45_000, "cached_input_tokens": 0,
+                                                                  "output_tokens": 500}}}}),
+        ]
+        # Second batch has the matching token_usage_record (must NOT double count) + a new request with high uncached
+        # input_tokens (must trigger cache_miss detection).
+        batch2 = [
+            json.dumps({"timestamp": "2026-11-17T15:00:05.100Z", "type": "token_usage_record",
+                        "payload": {"response_id": "resp_dup",
+                                    "usage": {"input_tokens": 45_000, "cached_input_tokens": 0,
+                                              "output_tokens": 500, "total_tokens": 45_500}}}),
+            json.dumps({"timestamp": "2026-11-17T15:01:00.000Z", "type": "token_usage_record",
+                        "payload": {"usage": {"input_tokens": 50_000, "cached_input_tokens": 5_000,
+                                              "output_tokens": 300, "total_tokens": 50_300}}}),
+        ]
+        adapter = CodexAdapter()
+        cursor: dict[str, object] = {}
+        r1 = adapter.parse_lines(rollout, batch1, cursor, "testhost")
+        self.assertEqual(1, len(r1))
+        r2 = adapter.parse_lines(rollout, batch2, cursor, "testhost")
+        self.assertEqual(1, len(r2))
+        # Fallback req_id uses cumulative line number (3), not batch-relative 1.
+        self.assertEqual("sess-inc:ord:3", r2[0].request_id)
+        # Uncached input (45_000 / 50_000 > 50% and > 30K) triggers cache_miss on Codex.
+        self.assertTrue(r2[0].cache_miss)
+
+    def test_antigravity_subagent_detection_independent_of_cwd_and_uncached_cache_miss(self) -> None:
+        logs_dir = (self.tmp / ".t3" / "userdata" / "providers" / "antigravity" / "abc" / "brain" / "conv-sub"
+                    / ".system_generated" / "logs")
+        logs_dir.mkdir(parents=True)
+        transcript = logs_dir / "transcript.jsonl"
+        (logs_dir.parent.parent / "metadata.json").write_text(json.dumps({"cwd": "/Users/test/fathers"}))
+        batch1 = [
+            json.dumps({
+                "type": "USER_INPUT", "created_at": "2026-11-21T04:00:00Z",
+                "content": "You are a research subagent analyzing tests.",
+            }),
+            json.dumps({
+                "type": "PLANNER_RESPONSE", "created_at": "2026-11-21T04:00:05Z",
+                "model": "gemini-4-neon-medium", "input_tokens": 40_000, "cache_read_tokens": 0, "output_tokens": 200,
+            }),
+        ]
+        batch2 = [
+            json.dumps({
+                "type": "PLANNER_RESPONSE", "created_at": "2026-11-21T04:10:00Z",
+                "model": "gemini-4-neon-medium", "input_tokens": 45_000, "cache_read_tokens": 5_000,
+                "output_tokens": 200,
+            }),
+        ]
+        adapter = AntigravityAdapter()
+        cursor: dict[str, object] = {}
+        r1 = adapter.parse_lines(transcript, batch1, cursor, "testhost")
+        r2 = adapter.parse_lines(transcript, batch2, cursor, "testhost")
+        self.assertEqual("subagent", r1[0].agent_role)
+        self.assertEqual("conv-sub:step:1", r1[0].request_id)
+        self.assertEqual("conv-sub:step:2", r2[0].request_id)
+        self.assertTrue(r2[0].cache_miss)
+        self.assertEqual("wake_after_ttl", r2[0].cache_miss_reason)
+
 
 if __name__ == "__main__":
     unittest.main()

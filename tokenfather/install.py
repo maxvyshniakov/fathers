@@ -76,6 +76,15 @@ def install(share: Path, bin_dir: Path, python: str) -> Path:
     link.unlink(missing_ok=True)
     link.symlink_to(release)
     link.replace(share / "current")
+    releases_dir = share / "releases"
+    if releases_dir.is_dir():
+        existing = [
+            p for p in releases_dir.iterdir()
+            if p.is_dir() and not p.name.startswith(".") and p != release
+        ]
+        existing.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        for stale in existing[max(0, KEEP_RELEASES - 1):]:
+            shutil.rmtree(stale, ignore_errors=True)
     bin_dir.mkdir(parents=True, exist_ok=True)
     command = bin_dir / "tokenfather"
     tmp = bin_dir / f".tokenfather.{os.getpid()}.tmp"

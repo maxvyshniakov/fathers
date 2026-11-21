@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -11,7 +12,7 @@ from typing import Any
 from . import events
 from .adapters import ProviderAdapter, default_adapters
 from .attribution import LaneIndex, discover_lane_dirs, load_lanes
-from .schema import RequestRecord, as_dict, host_name
+from .schema import RequestRecord, as_dict, as_list, host_name
 
 
 def default_state_dir() -> Path:
@@ -111,6 +112,8 @@ class RollupStore:
         for day, day_records in sorted(by_day.items()):
             day_path = self.daily_dir / f"{day}.jsonl"
             existing_keys: set[tuple[str, str]] = set()
+            key_to_idx: dict[tuple[str, str], int] = {}
+            rows: list[dict[str, Any]] = []
             if day_path.is_file():
                 with open(day_path, encoding="utf-8", errors="replace") as handle:
                     for raw_line in handle:
@@ -122,13 +125,32 @@ class RollupStore:
                         except ValueError:
                             continue
                         if obj is not None:
-                            existing_keys.add((str(obj.get("provider", "")), str(obj.get("request_id", ""))))
-            to_write = [r for r in day_records if (r.provider, r.request_id) not in existing_keys]
-            if not to_write:
+                            k = (str(obj.get("provider", "")), str(obj.get("request_id", "")))
+                            if k not in existing_keys:
+                                existing_keys.add(k)
+                                key_to_idx[k] = len(rows)
+                                rows.append(obj)
+            changed = False
+            for rec in day_records:
+                k = (rec.provider, rec.request_id)
+                if k not in existing_keys:
+                    existing_keys.add(k)
+                    key_to_idx[k] = len(rows)
+                    rows.append(rec.to_dict())
+                    changed = True
+                else:
+                    idx = key_to_idx[k]
+                    prev = rows[idx]
+                    raw_out = prev.get("output_tokens")
+                    prev_out = raw_out if isinstance(raw_out, int) and not isinstance(raw_out, bool) else 0
+                    prev_tools = as_list(prev.get("tools")) or []
+                    if rec.output_tokens > prev_out or len(rec.tools) > len(prev_tools):
+                        rows[idx] = rec.to_dict()
+                        changed = True
+            if not changed:
                 continue
-            with open(day_path, "a", encoding="utf-8") as handle:
-                for rec in to_write:
-                    handle.write(json.dumps(rec.to_dict(), ensure_ascii=False, separators=(",", ":")) + "\n")
+            payload = "".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n" for row in rows)
+            _atomic_write(day_path, payload)
             updated_days.append(day)
         return updated_days
 
@@ -139,54 +161,61 @@ class RollupStore:
         adapters: list[ProviderAdapter] | None = None,
         lane_dirs: list[Path] | None = None,
     ) -> CollectSummary:
-        root_home = (home or Path.home()).expanduser()
-        active_adapters = adapters if adapters is not None else default_adapters()
-        cursors = self.load_cursors()
-        host = host_name()
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = self.state_dir / "collect.lock"
+        with open(lock_path, "a+", encoding="utf-8") as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            try:
+                root_home = (home or Path.home()).expanduser()
+                active_adapters = adapters if adapters is not None else default_adapters()
+                cursors = self.load_cursors()
+                host = host_name()
 
-        discovered_lane_dirs = discover_lane_dirs(root_home, lane_dirs)
-        lane_index = LaneIndex(load_lanes(discovered_lane_dirs))
+                discovered_lane_dirs = discover_lane_dirs(root_home, lane_dirs)
+                lane_index = LaneIndex(load_lanes(discovered_lane_dirs))
 
-        files_scanned = 0
-        files_updated = 0
-        all_new: list[RequestRecord] = []
-        by_provider: dict[str, int] = {}
+                files_scanned = 0
+                files_updated = 0
+                all_new: list[RequestRecord] = []
+                by_provider: dict[str, int] = {}
 
-        for adapter in active_adapters:
-            for path in adapter.discover(root_home):
-                files_scanned += 1
-                key = str(path)
-                cursor = cursors.get(key, {})
-                try:
-                    lines, inode, size, new_offset = self._read_new_lines(path, cursor)
-                except OSError:
-                    continue
-                if not lines:
-                    continue
-                files_updated += 1
-                new_records = adapter.parse_lines(path, lines, cursor, host)
-                cursor["inode"] = inode
-                cursor["size"] = size
-                cursor["offset"] = new_offset
-                cursor["provider"] = adapter.name
-                cursors[key] = cursor
-                if new_records:
-                    lane_index.attribute(new_records)
-                    all_new.extend(new_records)
-                    by_provider[adapter.name] = by_provider.get(adapter.name, 0) + len(new_records)
+                for adapter in active_adapters:
+                    for path in adapter.discover(root_home):
+                        files_scanned += 1
+                        key = str(path)
+                        cursor = cursors.get(key, {})
+                        try:
+                            lines, inode, size, new_offset = self._read_new_lines(path, cursor)
+                        except OSError:
+                            continue
+                        if not lines:
+                            continue
+                        files_updated += 1
+                        new_records = adapter.parse_lines(path, lines, cursor, host)
+                        cursor["inode"] = inode
+                        cursor["size"] = size
+                        cursor["offset"] = new_offset
+                        cursor["provider"] = adapter.name
+                        cursors[key] = cursor
+                        if new_records:
+                            lane_index.attribute(new_records)
+                            all_new.extend(new_records)
+                            by_provider[adapter.name] = by_provider.get(adapter.name, 0) + len(new_records)
 
-        days_updated = self._append_daily(all_new)
-        self.save_cursors(cursors)
+                days_updated = self._append_daily(all_new)
+                self.save_cursors(cursors)
 
-        summary = CollectSummary(
-            files_scanned=files_scanned,
-            files_updated=files_updated,
-            new_requests=len(all_new),
-            days_updated=days_updated,
-            by_provider=by_provider,
-        )
-        self._emit_event(summary, all_new)
-        return summary
+                summary = CollectSummary(
+                    files_scanned=files_scanned,
+                    files_updated=files_updated,
+                    new_requests=len(all_new),
+                    days_updated=days_updated,
+                    by_provider=by_provider,
+                )
+                self._emit_event(summary, all_new)
+                return summary
+            finally:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
     def _emit_event(self, summary: CollectSummary, new_records: list[RequestRecord]) -> None:
         if summary.new_requests == 0:
@@ -228,7 +257,11 @@ class RollupStore:
         from .schema import parse_timestamp
 
         since_dt = parse_timestamp(since) if since else None
+        if since and since_dt is None:
+            raise ValueError(f"invalid --since timestamp: {since!r}")
         until_dt = parse_timestamp(until) if until else None
+        if until and until_dt is None:
+            raise ValueError(f"invalid --until timestamp: {until!r}")
         # If --until is a bare date YYYY-MM-DD, treat it as exclusive end of that date (midnight UTC).
         records: list[RequestRecord] = []
         for path in sorted(self.daily_dir.glob("*.jsonl")):

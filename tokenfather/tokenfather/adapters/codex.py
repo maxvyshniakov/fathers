@@ -8,6 +8,7 @@ from typing import Any
 from ..schema import (
     RequestRecord,
     as_dict,
+    as_list,
     classify_tools,
     detect_cache_miss,
     format_timestamp,
@@ -35,7 +36,14 @@ class CodexAdapter:
         cursor: dict[str, Any],
         host: str,
     ) -> list[RequestRecord]:
-        seen_ids: set[str] = set(cursor.get("seen_ids") or [])
+        raw_seen = as_list(cursor.get("seen_ids")) or []
+        seen_order: list[str] = [str(s) for s in raw_seen]
+        seen_ids: set[str] = set(seen_order)
+        line_offset = _as_int(cursor.get("line_offset"))
+        raw_tc = as_list(cursor.get("emitted_tc")) or []
+        emitted_tc: list[dict[str, Any]] = [
+            d for item in raw_tc if (d := as_dict(item)) is not None
+        ]
         prev_time_str: str | None = cursor.get("prev_time")
         prev_time = parse_timestamp(prev_time_str) if prev_time_str else None
         prev_model: str | None = cursor.get("prev_model")
@@ -51,8 +59,8 @@ class CodexAdapter:
 
         # Pre-scan batch to see if token_usage_record exists (modern Codex emits both token_usage_record and
         # event_msg:token_count for the same request; prefer token_usage_record when present to avoid double counting).
-        parsed_objs: list[dict[str, Any]] = []
-        for raw in lines:
+        parsed_objs: list[tuple[int, dict[str, Any]]] = []
+        for idx, raw in enumerate(lines):
             stripped = raw.strip()
             if not stripped:
                 continue
@@ -63,10 +71,10 @@ class CodexAdapter:
             if obj is not None:
                 if obj.get("type") == "token_usage_record":
                     has_usage_records = True
-                parsed_objs.append(obj)
+                parsed_objs.append((line_offset + idx, obj))
 
         records: list[RequestRecord] = []
-        for idx, obj in enumerate(parsed_objs):
+        for line_no, obj in parsed_objs:
             rec_type = obj.get("type")
             payload = as_dict(obj.get("payload"))
             if payload is None:
@@ -115,11 +123,13 @@ class CodexAdapter:
 
             usage_dict: dict[str, Any] | None = None
             req_id = ""
+            from_token_count = False
+            tc_total = 0
             if rec_type == "token_usage_record":
                 usage = as_dict(payload.get("usage"))
                 if usage is not None:
                     usage_dict = usage
-                    req_id = str(payload.get("response_id") or f"{session_id}:ord:{obj.get('ordinal', idx)}")
+                    req_id = str(payload.get("response_id") or f"{session_id}:ord:{obj.get('ordinal', line_no)}")
             elif rec_type == "event_msg" and payload.get("type") == "token_count" and not has_usage_records:
                 info = as_dict(payload.get("info"))
                 if info is not None:
@@ -130,7 +140,9 @@ class CodexAdapter:
                         if total_tok:
                             last_total_tokens = total_tok
                         usage_dict = last_info
-                        req_id = f"{session_id}:tc:{obj.get('timestamp', '')}:{total_tok}:{idx}"
+                        from_token_count = True
+                        tc_total = total_tok
+                        req_id = f"{session_id}:tc:{obj.get('timestamp', '')}:{total_tok}:{line_no}"
 
             if usage_dict is None or not req_id or req_id in seen_ids:
                 continue
@@ -138,9 +150,6 @@ class CodexAdapter:
             moment = parse_timestamp(obj.get("timestamp"))
             if moment is None:
                 continue
-            seen_ids.add(req_id)
-            ts_str = format_timestamp(moment)
-            day = ts_str[:10]
 
             # Codex's input_tokens is inclusive of cached_input_tokens; normalize to non-cached input_tokens.
             raw_input = _as_int(usage_dict.get("input_tokens"))
@@ -149,6 +158,45 @@ class CodexAdapter:
             non_cached_input = max(0, raw_input - cache_read - cache_write)
             output_tokens = _as_int(usage_dict.get("output_tokens"))
             reasoning_tokens = _as_int(usage_dict.get("reasoning_output_tokens"))
+            usage_total = _as_int(usage_dict.get("total_tokens"))
+
+            # Deduplicate token_usage_record against a token_count already emitted in an earlier incremental batch.
+            if not from_token_count and emitted_tc:
+                ts_epoch = moment.timestamp()
+                matched_idx: int | None = None
+                for i_tc, prev_tc in enumerate(emitted_tc):
+                    prev_ts = prev_tc.get("ts")
+                    if not isinstance(prev_ts, (int, float)):
+                        continue
+                    if abs(ts_epoch - float(prev_ts)) > 5.0:
+                        continue
+                    same_usage = (
+                        _as_int(prev_tc.get("raw_input")) == raw_input
+                        and _as_int(prev_tc.get("cache_read")) == cache_read
+                        and _as_int(prev_tc.get("output")) == output_tokens
+                    )
+                    same_total = usage_total > 0 and _as_int(prev_tc.get("total")) == usage_total
+                    if same_usage or same_total:
+                        matched_idx = i_tc
+                        break
+                if matched_idx is not None:
+                    seen_ids.add(req_id)
+                    seen_order.append(req_id)
+                    emitted_tc.pop(matched_idx)
+                    continue
+
+            seen_ids.add(req_id)
+            seen_order.append(req_id)
+            if from_token_count:
+                emitted_tc.append({
+                    "ts": moment.timestamp(),
+                    "raw_input": raw_input,
+                    "cache_read": cache_read,
+                    "output": output_tokens,
+                    "total": tc_total,
+                })
+            ts_str = format_timestamp(moment)
+            day = ts_str[:10]
             buckets = {"default": cache_write} if cache_write > 0 else {}
 
             gap_seconds: float | None = None
@@ -167,6 +215,7 @@ class CodexAdapter:
                 prev_model=prev_model,
                 model=model,
                 compacted=compacted,
+                input_tokens=non_cached_input,
             )
             compacted = False
             is_wait, is_small_read = classify_tools(pending_tools, pending_cmds)
@@ -206,7 +255,9 @@ class CodexAdapter:
             if model:
                 prev_model = model
 
-        cursor["seen_ids"] = sorted(seen_ids)[-5000:]
+        cursor["seen_ids"] = seen_order[-5000:]
+        cursor["line_offset"] = line_offset + len(lines)
+        cursor["emitted_tc"] = emitted_tc[-50:]
         cursor["prev_time"] = prev_time_str
         cursor["prev_model"] = prev_model
         cursor["compacted"] = compacted

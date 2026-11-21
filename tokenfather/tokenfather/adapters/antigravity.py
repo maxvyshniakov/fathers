@@ -67,17 +67,24 @@ class AntigravityAdapter:
     ) -> list[RequestRecord]:
         conv_id = str(cursor.get("session_id") or _conversation_id_from_path(path))
         meta = _read_sibling_metadata(path)
-        seen_ids: set[str] = set(cursor.get("seen_ids") or [])
+        raw_seen = as_list(cursor.get("seen_ids")) or []
+        seen_order: list[str] = [str(s) for s in raw_seen]
+        seen_ids: set[str] = set(seen_order)
+        line_offset = _as_int(cursor.get("line_offset"))
         prev_time_str: str | None = cursor.get("prev_time")
         prev_time = parse_timestamp(prev_time_str) if prev_time_str else None
         prev_model: str | None = cursor.get("prev_model")
         cwd = str(cursor.get("cwd") or meta.get("cwd") or meta.get("workspace") or "")
         agent_role = str(cursor.get("agent_role") or meta.get("agent_role") or "main")
+        meta_role = str(meta.get("role", "")).lower()
+        if "subagent" in meta_role or "sub-agent" in meta_role:
+            agent_role = "subagent"
         agent_type = str(cursor.get("agent_type") or meta.get("agent_type") or "antigravity")
         compacted = bool(cursor.get("compacted", False))
 
         records: list[RequestRecord] = []
         for idx, raw in enumerate(lines):
+            line_no = line_offset + idx
             stripped = raw.strip()
             if not stripped:
                 continue
@@ -89,13 +96,15 @@ class AntigravityAdapter:
                 continue
 
             step_type = obj.get("type")
-            if step_type == "USER_INPUT" and not cwd:
+            if step_type == "USER_INPUT":
                 content = obj.get("content")
                 if isinstance(content, str):
-                    match = WORKSPACE_RE.search(content)
-                    if match:
-                        cwd = match.group(1).strip()
-                    if "Act as the implementation sub-agent" in content or "subagent" in str(meta.get("role", "")):
+                    if not cwd:
+                        match = WORKSPACE_RE.search(content)
+                        if match:
+                            cwd = match.group(1).strip()
+                    lower_content = content.lower()
+                    if "sub-agent" in lower_content or "subagent" in lower_content:
                         agent_role = "subagent"
                 continue
 
@@ -106,7 +115,7 @@ class AntigravityAdapter:
             if step_type != "PLANNER_RESPONSE":
                 continue
 
-            step_index = obj.get("step_index", idx)
+            step_index = obj.get("step_index", line_no)
             req_id = f"{conv_id}:step:{step_index}"
             if req_id in seen_ids:
                 continue
@@ -125,6 +134,7 @@ class AntigravityAdapter:
                 continue
 
             seen_ids.add(req_id)
+            seen_order.append(req_id)
             ts_str = format_timestamp(moment)
             day = ts_str[:10]
 
@@ -168,6 +178,7 @@ class AntigravityAdapter:
                 prev_model=prev_model,
                 model=model,
                 compacted=compacted,
+                input_tokens=input_tokens,
             )
             compacted = False
             is_wait, is_small_read = classify_tools(tools, shell_cmds)
@@ -205,7 +216,8 @@ class AntigravityAdapter:
             if model:
                 prev_model = model
 
-        cursor["seen_ids"] = sorted(seen_ids)[-5000:]
+        cursor["seen_ids"] = seen_order[-5000:]
+        cursor["line_offset"] = line_offset + len(lines)
         cursor["prev_time"] = prev_time_str
         cursor["prev_model"] = prev_model
         cursor["compacted"] = compacted
