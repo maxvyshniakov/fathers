@@ -25,10 +25,10 @@ import time
 from typing import Any, cast
 
 from . import claims, config, done, journal, lanes, lifecycle, reviewer, settings, state, worktrees
-from .checks import terminable
 from .errors import LaneError
 from .gitops import common_dir, current_branch, git, git_ok, main_checkout
 from .state import Record
+from .verify import terminable
 
 SEVERITIES = ("P1", "P2", "P3")
 LaneFinding = tuple[Record, dict[str, Any]]

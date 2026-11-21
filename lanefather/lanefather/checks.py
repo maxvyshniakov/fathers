@@ -9,33 +9,39 @@ heavier check starts and reruns on the base only; the heavier checks run when it
 """
 from __future__ import annotations
 
-from collections.abc import Generator
-import contextlib
+from dataclasses import dataclass
 import fnmatch
 import os
 from pathlib import Path
 import re
 import shutil
-import signal
-import subprocess
-import time
-from types import FrameType
-from typing import Any, TextIO
-import uuid
+from typing import Any
 
-from . import claims, config, events, history, host, journal, plan, queue, settings, slots, state, worktrees
+from . import claims, config, events, history, host, journal, plan, queue, settings, slots, state, verify, worktrees
 from . import results as result_store
 from .errors import LaneError
 from .gitops import current_branch, dirty, git, git_ok
 from .state import Record
+from .verify import (
+    NOT_STAMPED,
+    PASSING,
+    REPORT,
+    STAMPED,
+    UNRESOLVED,
+    is_dependency_blocked,
+    is_executed_failure,
+    new_run_id,
+    plan_meta,
+    report_of,
+    stamp_result,
+    suite_count,
+    terminable,
+    tree_of,
+    verify_env,
+)
 
 Rows = list[dict[str, Any]]
 
-# verify report statuses that are not a failure (a skipped row with blocked_by is dependency-blocked, fathers#195).
-PASSING = ("passed", "not_run", "skipped")
-STAMPED = re.compile(r"^Verified tree ([0-9a-f]+) stamped\b", re.M)
-NOT_STAMPED = re.compile(r"^Verified tree not stamped: (.+?)\.?$", re.M)
-REPORT = re.compile(r"^Verification report: (.+)$", re.M)
 DEFAULT_RERUNS = 5
 LANDABLE = ("flaky-under-load", "pre-existing")
 # Test files by name: a tests/ directory, test-*, test_*, *.test.*, *_test.*, *-test.*.
@@ -47,69 +53,11 @@ DEFAULT_RERUN_WAIT = float(settings.DEFAULT_RERUN_WAIT)
 # measures alone.
 RERUN_MAX_JOBS = 2
 
-
-def is_dependency_blocked(row: dict[str, Any]) -> bool:
-    """Whether a verify report row was skipped or blocked because a dependency failed (fathers#195)."""
-    status = row.get("status")
-    if status == "blocked":
-        return True
-    return status == "skipped" and bool(row.get("blocked_by"))
-
-
-def is_executed_failure(row: dict[str, Any]) -> bool:
-    """Whether a verify report row actually ran and failed (neither passing nor dependency-blocked, fathers#195)."""
-    return row.get("status") not in PASSING and not is_dependency_blocked(row)
-
-
-def stamp_result(text: str, full: bool) -> dict[str, Any]:
-    """What verify's own verified-tree stamp printed for this run."""
-    if not full:
-        return {"stamped": False, "reason": "selected suites; only the full plan stamps"}
-    stamped = STAMPED.findall(text)
-    if stamped:
-        return {"stamped": True, "tree": stamped[-1]}
-    reason = NOT_STAMPED.findall(text)
-    return {"stamped": False, "reason": reason[-1] if reason else "the full run did not pass"}
-
-
-def report_of(text: str) -> tuple[list[str], dict[str, Any] | None]:
-    """The report paths a verify log names, and the last report."""
-    reports = REPORT.findall(text)
-    return reports, state.read_json(Path(reports[-1].strip())) if reports else None
-
-
-def verify_env(label: str, phase: str, *, ticket: str | None = None, **meta: Any) -> dict[str, str]:
-    """The environment of a verify run lanefather starts: its lease's label, the phase's priority (lanefather#24), and
-    metadata naming the phase, the priority's source and what the caller adds (lane, check, sha)."""
-    priority, source = slots.phase_priority(phase)
-    tags: dict[str, Any] = {"phase": phase, **slots.priority_meta(priority, source), **meta}
-    return dict(os.environ, **slots.queue_environment(label, priority, ticket=ticket, **tags))
-
-
-UNRESOLVED: Any = object()
-
-
-def plan_meta(selection: Any, root: Any = None, count: int | None = None, toolchain: Any = UNRESOLVED,
-              ) -> dict[str, str]:
-    """The run type a slot request carries (fathers#107): `plan`, the plan's key of the results store (fathers#91:
-    its sorted check ids, or FULL, with the toolchain), and `checks`, how many checks it runs. A selection of check
-    ids counts them; the full gate, whole suites (`suite:<name>`) and a promote step (`step:<name>`) take `count`,
-    and leave `checks` out without one. The toolchain is the caller's when it resolved it, else `root`'s; a refused
-    one is one run type, whatever its message. Slotfather keeps expected durations per run type."""
-    if toolchain is UNRESOLVED:
-        toolchain = plan.toolchain_state(root) if root is not None else None
-    if isinstance(toolchain, dict) and "refused" in toolchain:
-        toolchain = {"refused": True}
-    named = selection == result_store.FULL or any(str(item).startswith(("suite:", "step:")) for item in selection)
-    number = count if named else len(set(selection))
-    return {"plan": result_store.plan_hash(selection, toolchain), **({"checks": str(number)} if number is not None
-                                                                    else {})}
-
-
-def suite_count(root: Any, suites: list[str]) -> int | None:
-    """How many checks whole suites hold, by the tree's plan module; None for a tree without it."""
-    owners = plan.suite_owners(root, suites)
-    return None if owners is None else sum(len(ids) for ids in owners.values())
+__all__ = [
+    "NOT_STAMPED", "PASSING", "REPORT", "STAMPED", "UNRESOLVED",
+    "is_dependency_blocked", "is_executed_failure", "new_run_id", "plan_meta",
+    "report_of", "stamp_result", "suite_count", "terminable", "tree_of", "verify_env",
+]
 
 
 def lane_meta(record: Record) -> dict[str, str]:
@@ -121,60 +69,13 @@ def lane_ticket(record: Record) -> str | None:
     return slots.ticket_value(str(record.get("ticket") or ""))
 
 
-def run_suites(root: Any, suites: list[str], label: str, jobs: int, full: bool = False,
-               selected: dict[str, list[str]] | None = None, phase: str = "check",
-               meta: dict[str, Any] | None = None, ticket: str | None = None, toolchain: Any = UNRESOLVED,
-               ) -> tuple[Rows, dict[str, dict[str, Any]], str | None, dict[str, Any]]:
-    """Each suite's result, each selected check's result, the gate triage when the run is red, and the verified-tree
-    stamp.
-
-    A full plan runs verify without a selection: that is the full gate, which stamps the tree when every check
-    passed on a clean, unchanged tree. With `selected` (the checks the plan selected in each suite) it runs those
-    checks, otherwise whole suites. The suites share one verify run. Each result records the optional load wait
-    (#572) and the load averages at the run's start and end. A check's result is {suite, status,
-    log}, its status as the verify report gives it, or "void" when the run failed outside any check (environment,
-    setup, slot limiter): nothing of such a run counts as passed."""
-    if not suites:
-        return [], {}, None, stamp_result("", False)
-    load_wait = host.wait_for_load(label)
-    log = journal.log_path(label)
-    ids = None if full or selected is None else [c for s in suites for c in selected[s]]
-    selection = () if full else ("--checks", ",".join(ids)) if ids is not None else ("--suites", ",".join(suites))
-    argv = [plan.verify_path(root), *selection, "--keep-going", "--jobs", str(jobs)]
-    # verify queues for its own --jobs-slot lease; label, priority, ticket and tags name the run (#650).
-    if full:
-        known = plan.known_checks(root)
-        kind = plan_meta(result_store.FULL, root, len(known) if known is not None else None, toolchain)
-    elif ids is not None:
-        kind = plan_meta(ids, root, toolchain=toolchain)
-    else:
-        kind = plan_meta([f"suite:{s}" for s in suites], root, suite_count(root, suites), toolchain)
-    # verify queues for its own --jobs-slot lease; label, priority, ticket and tags name the run (#650). The run id
-    # and tree in the lease's meta tie the lease to the receipt and the history (fathers#92).
-    run_id, tree = new_run_id(), tree_of(root)
-    env = verify_env(label, phase, ticket=ticket, **(meta or {}), **kind, run=run_id,
-                     **({"tree": tree} if tree else {}))
-    what = "the full gate" if full else ", ".join(suites) + (f" ({len(ids)} checks)" if ids is not None else "")
-    print(f"lane: running {what} in {root} (log {log}); queue: slotfather status", flush=True)
-    started, load, started_at = time.monotonic(), {"start": host.load_averages()}, journal.now()
-    with open(log, "w") as handle:
-        status = subprocess.run(argv, cwd=root, env=env, stdout=handle, stderr=subprocess.STDOUT).returncode
-    seconds = round(time.monotonic() - started, 1)
-    load["end"] = host.load_averages()
-    failed_checks: list[str] = []
-    blocked_by_id: dict[str, list[str]] = {}
-    text = log.read_text(errors="replace")
-    reports, report = report_of(text)
-    history.record_run(report, lane=(meta or {}).get("lane"), phase=phase, tree=tree, run=run_id, started=started_at,
-                       finished=journal.now(), seconds=seconds, checks=ids)
-    lease = {"run": run_id, **({"lease": report["lease"]} if report and report.get("lease") else {})}
-    if report:
-        failed_checks = [row["id"] for row in report.get("checks", []) if is_executed_failure(row)]
-        blocked_by_id = {row["id"]: list(row.get("blocked_by") or []) for row in report.get("checks", [])
-                         if is_dependency_blocked(row)}
-    # verify voids a run whose environment failed (the toolchain refused or changed, #571): no suite of it passed,
-    # so a later check reuses none of its results.
-    environment = ((report or {}).get("environment") or {}).get("class")
+def suite_outcomes(root: Any, suites: list[str], selected: dict[str, list[str]] | None,
+                   outcome: verify.Outcome) -> tuple[Rows, dict[str, dict[str, Any]]]:
+    """Project one `verify.Outcome` onto per-suite results and per-check results."""
+    status = outcome.exit
+    environment = outcome.environment
+    failed_checks = outcome.failed_checks
+    blocked_by_id = outcome.blocked_by_id
     owners = plan.suite_owners(root, suites) if status or environment or blocked_by_id else None
     failing = {s: [c for c in failed_checks if plan.owned(owners, s, c)] for s in suites}
     blocking = {s: [c for c in blocked_by_id if plan.owned(owners, s, c)] for s in suites}
@@ -183,24 +84,27 @@ def run_suites(root: Any, suites: list[str], label: str, jobs: int, full: bool =
     failed = (list(suites) if environment
               else ([s for s in suites if failing[s]] or ([] if any(blocking.values()) else suites)) if status else [])
     blocked_suites = [s for s in suites if s not in failed and blocking[s]]
-    rows = {row.get("id"): row for row in (report or {}).get("checks", [])}
+    rows = {row.get("id"): row for row in (outcome.report or {}).get("checks", [])}
     # A run that stopped at its first checks (#639) did not start the others: a suite with one of them not run and
     # none red neither passed nor failed.
-    stopped = (report or {}).get("stopped")
+    stopped = outcome.stopped
+    ids = None if selected is None else [c for s in suites for c in selected[s]]
     unstarted = [s for s in suites if stopped and s not in failed and s not in blocked_suites and (
         selected is None or ids is None
         or any(rows.get(c, {}).get("status", "not_run") == "not_run" for c in selected[s]))]
     if stopped:
         print(f"lane: verify stopped at its first checks (#639): {', '.join(stopped['failed'])} red; "
-              f"{stopped['not_run']} heavier checks did not start ({log})", flush=True)
+              f"{stopped['not_run']} heavier checks did not start ({outcome.log})", flush=True)
+    lease = outcome.lease_fields
     results: Rows = [{"suite": suite,
                       "status": ("failed" if suite in failed else "blocked" if suite in blocked_suites
                                  else "not_run" if suite in unstarted else "passed"),
                       "exit": status,
-                      "seconds": seconds, "load_wait": load_wait, "load": load, "log": str(log), **lease,
+                      "seconds": outcome.seconds, "load_wait": outcome.load_wait, "load": outcome.load,
+                      "log": str(outcome.log), **lease,
                       "failed_checks": failing[suite] if suite in failed else [],
                       **({"blocked_checks": blocking[suite]} if blocking[suite] else {}),
-                      **({"report": reports[-1].strip()} if reports else {}),
+                      **({"report": str(outcome.report_path)} if outcome.report_path is not None else {}),
                       **({"environment": environment} if environment else {}),
                       **({"checks": selected[suite]} if selected is not None else {})}
                      for suite in suites]
@@ -212,7 +116,7 @@ def run_suites(root: Any, suites: list[str], label: str, jobs: int, full: bool =
         entry: dict[str, Any] = {
             "suite": suite,
             "status": "void" if void else "blocked" if blocked else row.get("status", "not_run"),
-            "log": str(log),
+            "log": str(outcome.log),
             **lease,
         }
         if blocked and row.get("blocked_by"):
@@ -223,8 +127,7 @@ def run_suites(root: Any, suites: list[str], label: str, jobs: int, full: bool =
 
     checks: dict[str, dict[str, Any]] = {} if ids is None or selected is None else {
         check: check_entry(suite, check) for suite in suites for check in selected[suite]}
-    stamp = {"stamped": False, "reason": "the run failed"} if status or environment else stamp_result(text, full)
-    return results, checks, plan.triage(root, Path(reports[-1].strip()).parent) if status and reports else None, stamp
+    return results, checks
 
 
 def reusable(previous: Record, delta: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -237,14 +140,6 @@ def reusable(previous: Record, delta: dict[str, Any]) -> dict[str, dict[str, Any
     return {check: dict(entry, reused_from=entry.get("reused_from") or previous["tree"])
             for check, entry in (previous.get("check_results") or {}).items()
             if entry.get("status") == "passed" and check not in changed}
-
-
-def new_run_id() -> str:
-    return uuid.uuid4().hex[:12]
-
-
-def tree_of(root: Any) -> str | None:
-    return git(root, "rev-parse", "HEAD^{tree}", check=False) or None
 
 
 def same_tree(wanted: dict[str, str], tree: str, toolchain: Any) -> dict[str, dict[str, Any]]:
@@ -331,22 +226,7 @@ def red_checks(results: Rows) -> list[str]:
     return found
 
 
-def _terminated(signum: int, _frame: FrameType | None) -> None:
-    raise SystemExit(128 + signum)
-
-
-@contextlib.contextmanager
-def terminable() -> Generator[None]:
-    """SIGTERM exits through the finally blocks, which stop the rerun and remove the base checkout."""
-    previous = signal.signal(signal.SIGTERM, _terminated)
-    try:
-        yield
-    finally:
-        signal.signal(signal.SIGTERM, previous)
-
-
-class RerunUnavailable(Exception):
-    """A rerun could not run; its checks stay unclassified."""
+RerunUnavailable = verify.LeaseTimedOut
 
 
 def rerun_wait() -> float:
@@ -416,65 +296,34 @@ def rerun_jobs(jobs: int, minimum: int = 1) -> int:
 
 
 class Rerun:
-    """One verify run of red checks in a checkout: `verify --checks <ids> --keep-going --jobs <jobs>`, under a
-    lease of `jobs` slots at the rerun's priority (interactive unless set otherwise) that waits at most the rerun
-    wait (`slotfather run -n <jobs> --wait`, which exits 75 without running verify when the lease does not come).
-    Without slotfather, or under a lease this process holds, verify runs as the lane check ran. `queued=False` runs
-    verify as it queues itself: the cheap first checks (#639), which on a clean checkout run before the queue and
-    need no slot."""
+    """One verify run of red checks in a checkout, delegated to `verify.Run`."""
 
     def __init__(self, root: Any, ids: list[str], label: str, jobs: int, queued: bool = True,
                  meta: dict[str, Any] | None = None, ticket: str | None = None, toolchain: Any = UNRESOLVED):
         self.root, self.ids, self.label, self.jobs = root, ids, label, jobs
-        self.log = journal.log_path(label)
-        self.run_id, self.tree = new_run_id(), tree_of(root)
-        self.meta = {"check": ",".join(ids), **(meta or {}), **plan_meta(ids, root, toolchain=toolchain),
-                     "run": self.run_id, **({"tree": self.tree} if self.tree else {})}
-        self.ticket = ticket
-        self.verify = [plan.verify_path(root), "--checks", ",".join(ids), "--keep-going", "--jobs", str(jobs)]
-        priority, source = slots.phase_priority("rerun")
-        self.argv = slots.wrap(jobs, label, self.verify, wait=rerun_wait(),
-                               meta={"phase": "rerun", "kind": "rerun", **slots.priority_meta(priority, source),
-                                     **self.meta},
-                               priority=priority, ticket=ticket) if queued else self.verify
-        self.child: subprocess.Popen[bytes] | None = None
-        self.started, self.clock = journal.now(), time.monotonic()
-        self.handle: TextIO | None = None
+        lease = verify.Lease(wait=rerun_wait(), kind="rerun") if queued else None
+        self._run = verify.Run(
+            root,
+            verify.Selection.checks(ids),
+            label,
+            "rerun",
+            jobs,
+            meta={"check": ",".join(ids), **(meta or {})},
+            ticket=ticket,
+            run_type=plan_meta(ids, root, toolchain=toolchain),
+            lease=lease,
+            wait_for_load=False,
+            banner=f"lane: rerunning {', '.join(ids)} in {root} on {jobs} slot(s) (log {{log}})",
+            stoppable=True,
+        )
+        self.log = self._run.log
+        self.run_id = self._run.run_id
+        self.tree = self._run.tree
+        self.verify = self._run.verify_argv
+        self.argv = self._run.argv
 
-    def start(self) -> None:
-        print(f"lane: rerunning {', '.join(self.ids)} in {self.root} on {self.jobs} slot(s) (log {self.log})",
-              flush=True)
-        self.started, self.clock = journal.now(), time.monotonic()
-        self.handle = open(self.log, "w")  # noqa: SIM115 - closed in finish, after the child exits
-        self.child = subprocess.Popen(self.argv, cwd=self.root, stdout=self.handle, stderr=subprocess.STDOUT,
-                                      env=verify_env(self.label, "rerun", ticket=self.ticket, **self.meta))
-
-    def finish(self) -> tuple[dict[str, Any] | None, Path, Path | None]:
-        """The report (None when there is none), the log and the run directory, once the child exited."""
-        assert self.child is not None and self.handle is not None
-        status = self.child.wait()
-        self.handle.close()
-        reports = REPORT.findall(self.log.read_text(errors="replace"))
-        if self.argv != self.verify and status == slots.TIMED_OUT and not reports:
-            raise RerunUnavailable(f"no lease of {self.jobs} slot(s) within {rerun_wait():g} s (slotfather status)")
-        run = Path(reports[-1].strip()).parent if reports else None
-        report = state.read_json(run / "report.json") if run else None
-        history.record_run(report, lane=self.meta.get("lane"), phase="rerun", tree=self.tree, run=self.run_id,
-                           started=self.started, finished=journal.now(),
-                           seconds=round(time.monotonic() - self.clock, 1), checks=self.ids)
-        return report, self.log, run
-
-    def stop(self) -> None:
-        """SIGTERM to a child still running (verify stops its jobs on it), SIGKILL 30 s later."""
-        if self.child is not None and self.child.poll() is None:
-            self.child.terminate()
-            try:
-                self.child.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                self.child.kill()
-                self.child.wait()
-        if self.handle is not None:
-            self.handle.close()
+    def execute(self) -> verify.Outcome:
+        return self._run.execute()
 
 
 Outcome = tuple[dict[str, Any] | None, Path | None, Path | None, str | None]
@@ -483,13 +332,10 @@ Outcome = tuple[dict[str, Any] | None, Path | None, Path | None, str | None]
 def run_rerun(rerun: Rerun) -> Outcome:
     """The rerun's (report, log, run directory, problem); when this process exits first, the child stops."""
     try:
-        rerun.start()
-        report, log, run = rerun.finish()
-        return report, log, run, rerun_problem(report, log)
+        outcome = rerun.execute()
+        return outcome.report, outcome.log, outcome.run_dir, rerun_problem(outcome.report, outcome.log)
     except RerunUnavailable as error:
         return None, None, None, str(error)
-    finally:
-        rerun.stop()
 
 
 def rerun_problem(report: dict[str, Any] | None, log: Path | None) -> str | None:
@@ -813,19 +659,58 @@ def _record_check_agent(lane_id: str, agent_info: dict[str, Any] | None) -> None
     store.update(lane_id, lambda current: state.record_agent(current, "check", agent_info, now=journal.now()))
 
 
-def check(args: Any) -> int:
+@dataclass(frozen=True)
+class Prepared:
+    record: Record
+    worktree: str
+    head: str
+    tree: str
+    receipt_path: Path
+    previous: Record | None
+    agent_info: dict[str, Any] | None
+
+
+@dataclass(frozen=True)
+class Selected:
+    toolchain: Any
+    platform: str
+    base: str
+    lane_plan: dict[str, Any]
+    fix_of: dict[str, Any] | None
+    suites: list[str]
+    selected: dict[str, list[str]] | None
+    reused: dict[str, dict[str, Any]]
+    remaining: dict[str, list[str]] | None
+    outside: list[str]
+    added: list[str]
+    overlaps: list[dict[str, Any]]
+    decision: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class CheckRun:
+    started: str
+    fresh: Rows
+    ran: dict[str, dict[str, Any]]
+    triage: str | None
+    classification: dict[str, Any] | None
+    stopped: Any
+
+
+def prepare(lane_id: str, *, agent: str | None = None) -> Prepared:
+    """Adopt a planned lane's worktree when run there, refuse non-active/wrong-branch/dirty worktrees."""
     from . import lanes, lifecycle  # adopt_worktree; lanes imports this module for its commands
     prog = config.prog()
-    agent_info = events.agent_context(getattr(args, "agent", None))
-    record = state.load(args.id)
+    agent_info = events.agent_context(agent)
+    record = state.load(lane_id)
     if lifecycle.planned(record):
         cwd = git(os.getcwd(), "rev-parse", "--show-toplevel", check=False)
         if not cwd or current_branch(cwd) != record["branch"]:
-            raise LaneError(f"lane {args.id} has no worktree yet: run it from a worktree on {record['branch']}, "
+            raise LaneError(f"lane {lane_id} has no worktree yet: run it from a worktree on {record['branch']}, "
                             f"or register one with {prog} adopt")
-        lanes.adopt_worktree(record, cwd, record["branch"], agent=getattr(args, "agent", None))
+        lanes.adopt_worktree(record, cwd, record["branch"], agent=agent)
     if not lifecycle.active(record):
-        raise LaneError(f"lane {args.id} is {record['status']}; check runs before landing")
+        raise LaneError(f"lane {lane_id} is {record['status']}; check runs before landing")
     worktree = record["worktree"]
     if current_branch(worktree) != record["branch"]:
         raise LaneError(f"{worktree} is on {current_branch(worktree)}, not the lane branch {record['branch']}")
@@ -833,19 +718,28 @@ def check(args: Any) -> int:
         raise LaneError("commit your work (or set it aside in a WIP commit) first: the receipt covers a committed "
                         "tree\n" + dirty(worktree))
     head, tree = git(worktree, "rev-parse", "HEAD"), git(worktree, "rev-parse", "HEAD^{tree}")
-    path = state.receipt_path(args.id)
+    path = state.receipt_path(lane_id)
     previous = state.read_json(path)
+    return Prepared(record=record, worktree=worktree, head=head, tree=tree, receipt_path=path,
+                    previous=previous, agent_info=agent_info)
+
+
+def select(prepared: Prepared, *, rerun: bool = False, slots_override: int | None = None) -> Selected | None:
+    """Resolve toolchain/platform, short-circuit a current green receipt, plan, reuse passes, widen claims and size
+    jobs. Returns None when the existing green receipt already certifies the tree."""
+    record, worktree, tree = prepared.record, prepared.worktree, prepared.tree
+    previous, path = prepared.previous, prepared.receipt_path
     # A receipt and its results certify the toolchain they ran with (#571): another one, or none now, voids them.
     toolchain = plan.toolchain_state(worktree)
     # ... and the platform they ran on (owner decision 2026-11-13): a receipt naming another, or none, voids them.
     platform = result_store.host_platform()
     same_rust = (previous is not None and previous.get("toolchain") == toolchain
                  and result_store.receipt_platform(previous, worktree) == platform)
-    if previous and previous.get("tree") == tree and previous.get("status") == "green" and not args.rerun:
+    if previous and previous.get("tree") == tree and previous.get("status") == "green" and not rerun:
         if same_rust:
-            _record_check_agent(args.id, agent_info)
+            _record_check_agent(record["id"], prepared.agent_info)
             print(f"Receipt current: green for tree {tree} on {platform} ({path})")
-            return 0
+            return None
         print(f"lane: the receipt was not made on {platform}; running the checks again"
               if previous.get("toolchain") == toolchain else
               "lane: the Rust toolchain changed since the receipt (#571); running the checks again")
@@ -865,13 +759,13 @@ def check(args: Any) -> int:
     suites: list[str] = lane_plan["selected"]
     selected: dict[str, list[str]] | None = lane_plan["by_suite"]
     reused: dict[str, dict[str, Any]] = {}
-    if (selected is not None and previous and same_rust and previous.get("head") and not args.rerun
+    if (selected is not None and previous and same_rust and previous.get("head") and not rerun
             and git_ok(worktree, "cat-file", "-e", previous["head"])):
         # Per check: a check that passed for an earlier tree of the lane and that no change since selects.
         wanted = {c for ids in selected.values() for c in ids}
         reused = {c: e for c, e in reusable(previous, plan.plan_for(worktree, previous["head"])).items()
                   if c in wanted}
-    if (selected is not None and parent and not args.rerun and parent.get("toolchain") == toolchain
+    if (selected is not None and parent and not rerun and parent.get("toolchain") == toolchain
             and result_store.receipt_platform(parent) == platform
             and parent.get("head") and git_ok(worktree, "cat-file", "-e", parent["head"])):
         # The parent's passes stand for each check no change since the parent's head selects, as an earlier
@@ -882,13 +776,13 @@ def check(args: Any) -> int:
                                reused_receipt=e.get("reused_receipt") or parent_receipt) for c, e in
                        reusable(parent, plan.plan_for(worktree, parent["head"])).items()
                        if c in wanted and c not in reused})
-    if selected is not None and not args.rerun:
+    if selected is not None and not rerun:
         # fathers#91: a check that passed on this very tree under this toolchain, in any lane or run, stands.
         reused.update(same_tree({c: s for s, ids in selected.items() for c in ids if c not in reused}, tree,
                                 toolchain))
     outside = [p for p in lane_plan["paths"] if not claims.unclaimed(p)
                and not any(claims.matches(c, p) for c in record["claims"])]
-    added, overlaps = claims.widen_claims(args.id, outside)
+    added, overlaps = claims.widen_claims(record["id"], outside)
     if added:
         print(f"lane: claims widened: {', '.join(added)}")
     for overlap in overlaps:
@@ -897,62 +791,84 @@ def check(args: Any) -> int:
     for unowned in lane_plan.get("unowned", []):
         print(f"lane: no check reads {unowned}, so the plan is the full gate: declare its readers in "
               f"{config.current().plan_module or 'the plan module'}")
-    started = journal.now()
     # A lane check runs its selection even for a full plan (every check of the gate): no stamp; only promote's
     # batch gate stamps the tree it promotes.
     remaining = None if selected is None else {s: [c for c in ids if c not in reused] for s, ids in selected.items()}
-    if args.slots:
-        decision = host.given_jobs(args.slots, "--slots")
+    if slots_override:
+        decision = host.given_jobs(slots_override, "--slots")
     elif remaining is None or any(remaining.values()):
         min_slots, min_for = required_min_slots(lane_plan, remaining, suites)
         decision = host.check_jobs(host.host(), minimum=min_slots, min_for=min_for)
     else:
-        decision: dict[str, Any] = {"jobs": 1, "reason": "nothing to run"}
-    fresh, ran, triaged, classification, stopped = lane_run(record, worktree, base, suites, remaining,
-                                                            decision["jobs"], toolchain, lane_plan=lane_plan)
+        decision = {"jobs": 1, "reason": "nothing to run"}
+    return Selected(toolchain=toolchain, platform=platform, base=base, lane_plan=lane_plan, fix_of=fix_of,
+                    suites=suites, selected=selected, reused=reused, remaining=remaining, outside=outside,
+                    added=added, overlaps=overlaps, decision=decision)
+
+
+def run(prepared: Prepared, selection: Selected) -> CheckRun:
+    """Execute the remaining checks through `verify.Run` and classify any red checks."""
+    started = journal.now()
+    fresh, ran, triaged, classification, stopped = lane_run(
+        prepared.record, prepared.worktree, selection.base, selection.suites, selection.remaining,
+        selection.decision["jobs"], selection.toolchain, lane_plan=selection.lane_plan)
+    return CheckRun(started=started, fresh=fresh, ran=ran, triage=triaged,
+                    classification=classification, stopped=stopped)
+
+
+def record(prepared: Prepared, selection: Selected, executed: CheckRun) -> int:
+    """Write the receipt, update the results store, history and ledger, print the summary, and return exit code."""
+    prog = config.prog()
+    rec = prepared.record
+    lane_id, head, tree, path = rec["id"], prepared.head, prepared.tree, prepared.receipt_path
+    suites, selected, reused = selection.suites, selection.selected, selection.reused
+    decision, lane_plan = selection.decision, selection.lane_plan
+    fresh, ran, triaged = executed.fresh, executed.ran, executed.triage
+    classification, stopped = executed.classification, executed.stopped
     results = combined_results(suites, selected, fresh, reused)
     check_results = {} if selected is None else {
         c: reused.get(c) or ran.get(c) or {"suite": s, "status": "not_run"} for s, ids in selected.items() for c in ids}
     status = "green" if all(r["status"] == "passed" for r in results) else "red"
     # The lane's first receipt: a test file the lane changes whose check was red there is named.
-    first = first_receipt(record, previous, head, tree, results)
+    first = first_receipt(rec, prepared.previous, head, tree, results)
     # A run that stopped at its first checks stays red: its heavier checks did not run.
     if status == "red" and classification and classification["green"] and not stopped:
         status = "green"
     changed_tests = changed_red_tests(lane_plan, first)
     info = host.host()
-    state.write_json(path, {"version": 1, "lane": args.id, "ticket": record["ticket"], "branch": record["branch"],
-                            "head": head, "tree": tree, "base": base, "suites": suites,
+    agent_kind = prepared.agent_info["kind"] if prepared.agent_info else None
+    state.write_json(path, {"version": 1, "lane": lane_id, "ticket": rec["ticket"], "branch": rec["branch"],
+                            "head": head, "tree": tree, "base": selection.base, "suites": suites,
                             "reasons": lane_plan["reasons"], "checks": selected, "selection": lane_plan["selection"],
                             "check_results": check_results, "unowned": lane_plan.get("unowned", []),
-                            "full": lane_plan["full"], "outside_claims": outside, "claims_added": added,
-                            "claim_overlaps": overlaps, "toolchain": toolchain, "platform": platform,
-                            "jobs": decision["jobs"],
-                            "jobs_decision": decision, "results": results, "triage": triaged,
-                            "classification": classification, "first": first, "changed_red_tests": changed_tests,
-                            "stopped": stopped, "status": status, "host": info, "started": started,
-                            "paths": lane_plan["paths"], **({"fix_of": fix_of} if fix_of else {}),
+                            "full": lane_plan["full"], "outside_claims": selection.outside,
+                            "claims_added": selection.added, "claim_overlaps": selection.overlaps,
+                            "toolchain": selection.toolchain, "platform": selection.platform,
+                            "jobs": decision["jobs"], "jobs_decision": decision, "results": results,
+                            "triage": triaged, "classification": classification, "first": first,
+                            "changed_red_tests": changed_tests, "stopped": stopped, "status": status, "host": info,
+                            "started": executed.started, "paths": lane_plan["paths"],
+                            **({"fix_of": selection.fix_of} if selection.fix_of else {}),
                             "leases": leases_of(fresh, classification),
                             # Who ran the check, which a review takes for the implementer (fathers#150, fathers#200).
-                            **({"agent": agent} if (agent := implementer(args)) else {}),
+                            **({"agent": agent_kind} if agent_kind else {}),
                             "finished": journal.now()})
-    _record_check_agent(args.id, agent_info)
+    _record_check_agent(lane_id, prepared.agent_info)
     # fathers#91: what ran, and what was reused for this tree, is on record for any later run of the tree. A check
     # that failed and passed rerun by itself stays failed here: the merge runs it again (#640); the history marks it
     # a flake (fathers#92).
-    result_store.record(tree, recordable(check_results), source="check", toolchain=toolchain, platform=platform,
-                        lane=args.id,
-                        sha=head, receipt=str(path), reused=list(reused), origins=origins(reused, str(path)),
-                        phase="check")
+    result_store.record(tree, recordable(check_results), source="check", toolchain=selection.toolchain,
+                        platform=selection.platform, lane=lane_id, sha=head, receipt=str(path),
+                        reused=list(reused), origins=origins(reused, str(path)), phase="check")
     for entry in (classification or {}).get("checks", []):
         if entry.get("class") == "flaky-under-load":
-            history.flake(entry["check"], lane=args.id, tree=tree, failed_at=started, how="rerun-alone",
+            history.flake(entry["check"], lane=lane_id, tree=tree, failed_at=executed.started, how="rerun-alone",
                           junit=entry.get("junit"), phase="check")
     classes = ",".join(f"{e['check']}={e['class']}" for e in (classification or {}).get("checks", []))
-    journal.ledger(f"check {args.id} tree={tree} {status} suites={','.join(suites) or '-'} "
+    journal.ledger(f"check {lane_id} tree={tree} {status} suites={','.join(suites) or '-'} "
                    f"checks={len(check_results) - len(reused)} reused={len(reused)} jobs={decision['jobs']} "
                    f"classified={classes or '-'} {host.host_fields(info)}",
-                   kind="lane.checked", lane=record, level="info" if status == "green" else "warn",
+                   kind="lane.checked", lane=rec, level="info" if status == "green" else "warn",
                    details={"status": status, "tree": tree, "suites": suites,
                             "checks": len(check_results) - len(reused), "reused": len(reused),
                             "jobs": decision["jobs"], "receipt": str(path)})
@@ -976,6 +892,15 @@ def check(args: Any) -> int:
               f"{stopped['not_run']} heavier checks did not start. Fix them, commit and run {prog} check again.")
     print(f"Receipt {status} for tree {tree}: {path}")
     return 0 if status == "green" else 1
+
+
+def check(args: Any) -> int:
+    prepared = prepare(args.id, agent=getattr(args, "agent", None))
+    selection = select(prepared, rerun=bool(args.rerun), slots_override=args.slots)
+    if selection is None:
+        return 0
+    executed = run(prepared, selection)
+    return record(prepared, selection, executed)
 
 
 def leases_of(fresh: Rows, classification: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -1002,21 +927,33 @@ def lane_run(record: Record, worktree: str, base: str, suites: list[str], remain
     the base too (pre-existing) do the heavier checks run, once, in a second run whose results join the first's."""
     def attempt(selection: dict[str, list[str]] | None) -> tuple[Rows, dict[str, dict[str, Any]], str | None,
                                                                  dict[str, Any] | None, Any]:
-        fresh, ran, triaged, _ = run_suites(worktree, [s for s in suites if selection is None or selection.get(s)],
-                                            f"lane-{record['id']}", jobs, selected=selection,
-                                            meta=lane_meta(record), ticket=lane_ticket(record), toolchain=toolchain)
-        classification, report = None, None
+        active_suites = [s for s in suites if selection is None or selection.get(s)]
+        if not active_suites:
+            return [], {}, None, None, None
+        ids = None if selection is None else [c for s in active_suites for c in selection[s]]
+        choice = verify.Selection.checks(ids) if ids is not None else verify.Selection.suites(active_suites)
+        run_type = (plan_meta(ids, worktree, toolchain=toolchain) if ids is not None
+                    else plan_meta([f"suite:{s}" for s in active_suites], worktree,
+                                   suite_count(worktree, active_suites), toolchain))
+        what = ", ".join(active_suites) + (f" ({len(ids)} checks)" if ids is not None else "")
+        outcome = verify.Run(
+            worktree, choice, f"lane-{record['id']}", "check", jobs,
+            meta=lane_meta(record), ticket=lane_ticket(record), run_type=run_type,
+            banner=f"lane: running {what} in {worktree} (log {{log}}); queue: slotfather status",
+        ).execute()
+        fresh, ran = suite_outcomes(worktree, active_suites, selection, outcome)
+        triaged = outcome.triage
+        classification, report = None, outcome.report
         if any(r["status"] != "passed" for r in fresh):
-            run = next((Path(r["report"]).parent for r in fresh if r.get("report")), None)
-            report = state.read_json(run / "report.json") if run else None
+            run_dir = outcome.run_dir
             with terminable():
                 classification = classify(record, worktree, base, fresh, report, jobs, toolchain,
                                           lane_plan=lane_plan)
-            if classification and run:
+            if classification and run_dir is not None:
                 # The project's gate triage reads the classification beside the run's report (rerun.json).
-                state.write_json(run / "rerun.json", classification)
-                triaged = plan.triage(worktree, run) or triaged
-        return fresh, ran, triaged, classification, (report or {}).get("stopped")
+                state.write_json(run_dir / "rerun.json", classification)
+                triaged = plan.triage(worktree, run_dir) or triaged
+        return fresh, ran, triaged, classification, outcome.stopped
 
     fresh, ran, triaged, classification, stopped = attempt(remaining)
     if not (stopped and classification and classification["green"] and remaining is not None):

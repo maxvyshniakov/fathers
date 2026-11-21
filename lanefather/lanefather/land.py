@@ -19,7 +19,7 @@ import subprocess
 import sys
 from typing import Any
 
-from . import checks, config, done, journal, lifecycle, plan, postmerge, review, state, tickets, worktrees
+from . import checks, config, done, journal, lifecycle, plan, postmerge, review, state, tickets, verify, worktrees
 from . import results as result_store
 from .errors import LaneError
 from .gitops import current_branch, dirty, git, git_ok, main_checkout
@@ -127,15 +127,22 @@ def run_smoke(record: dict[str, Any], checkout: str, suites: list[str], selected
     check results, triage, the verified-tree stamp, green or red)."""
     if not suites:
         decision: dict[str, Any] = {"jobs": 0, "reason": "nothing to run"}
-    else:
-        decision = given_jobs(slots, "--slots") if slots else post_merge_jobs(host())
-    results, check_results, triaged, stamp = checks.run_suites(checkout, suites, label, decision["jobs"],
-                                                               selected=selected, phase="post-merge",
-                                                               meta=checks.lane_meta(record),
-                                                               ticket=checks.lane_ticket(record),
-                                                               toolchain=toolchain)
+        return decision, [], {}, None, verify.stamp_result("", False), "green"
+    decision = given_jobs(slots, "--slots") if slots else post_merge_jobs(host())
+    ids = None if selected is None else [c for s in suites for c in selected[s]]
+    selection = verify.Selection.checks(ids) if ids is not None else verify.Selection.suites(suites)
+    run_type = (verify.plan_meta(ids, checkout, toolchain=toolchain) if ids is not None
+                else verify.plan_meta([f"suite:{s}" for s in suites], checkout, verify.suite_count(checkout, suites),
+                                      toolchain))
+    what = ", ".join(suites) + (f" ({len(ids)} checks)" if ids is not None else "")
+    outcome = verify.Run(
+        checkout, selection, label, "post-merge", decision["jobs"],
+        meta=checks.lane_meta(record), ticket=checks.lane_ticket(record), run_type=run_type,
+        banner=f"lane: running {what} in {checkout} (log {{log}}); queue: slotfather status",
+    ).execute()
+    results, check_results = checks.suite_outcomes(checkout, suites, selected, outcome)
     status = "green" if all(r["status"] == "passed" for r in results) else "red"
-    return decision, results, check_results, triaged, stamp, status
+    return decision, results, check_results, outcome.triage, outcome.stamp, status
 
 
 def complete(record: dict[str, Any], merge: str, integration: str, onto: str, receipt: dict[str, Any] | None,
