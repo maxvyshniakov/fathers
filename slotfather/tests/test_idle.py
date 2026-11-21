@@ -148,6 +148,31 @@ class ReaderTests(unittest.TestCase):
         sf_idle.record(self.entry, since=None, rate=0.4, moment=M)
         self.assertIsNone(sf_idle.idle_since(self.entry, self.settings, M), "busy")
 
+    def test_record_stores_recent_cpu_percent_and_reader_validates_freshness(self) -> None:
+        """fathers#20: .idle records the recent CPU rate in percent (cores * 100) for the Linux dashboard."""
+        import math
+        tracker = sf_idle.Tracker()
+        tracker.observe(M - 410, tree(0.0), 0.1)
+        tracker.observe(M - 400, tree(30.0), 0.1)  # 3.0 cores burst
+        self.assertAlmostEqual(3.0, tracker.rate)
+        since = tracker.observe(M - 390, tree(30.25), 0.1)  # 0.025 cores = 2.5%
+        self.assertEqual(M - 400, since)
+        sf_idle.record(self.entry, since=since, rate=tracker.rate, moment=M)
+        saved = json.loads(sf_idle.path(self.entry).read_text())
+        self.assertEqual(0.025, saved["cpu"])
+        self.assertEqual(2.5, saved["cpu_pct"])
+        self.assertEqual(2.5, sf_idle.recent_cpu(self.entry, M))
+        self.assertEqual((M - 400, 2.5), sf_idle.facts(self.entry, self.settings, M))
+        self.assertIsNone(sf_idle.recent_cpu(self.entry, M + 120), "stale record falls back to ps")
+
+        sf_idle.record(self.entry, since=None, rate=math.inf, moment=M)
+        self.assertIsNone(json.loads(sf_idle.path(self.entry).read_text())["cpu_pct"])
+        self.assertIsNone(sf_idle.recent_cpu(self.entry, M), "no rate before a second sample")
+
+        # Older record with `cpu` in cores and no `cpu_pct` still converts to cores * 100.
+        sf_idle.path(self.entry).write_text(json.dumps({"since": M - 400, "cpu": 0.04, "at": M, "expires": M + 60}))
+        self.assertEqual(4.0, sf_idle.recent_cpu(self.entry, M))
+
 
 class AskTests(unittest.TestCase):
     """An idle yieldable lease is asked to yield while a request waits that its slots would start."""

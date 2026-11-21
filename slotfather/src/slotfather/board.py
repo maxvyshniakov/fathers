@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime
+import json
 import math
 import os
 from pathlib import Path
@@ -35,6 +36,7 @@ EVENT_MATCH = 2.0  # seconds between a queue.log line and the history stamp of t
 JOINER = "‍"  # the zero-width joiner of an emoji sequence
 
 GRANTED = re.compile(r"granted (\d+) to (.*) \(pid (\d+)\)$")
+YIELDED = re.compile(r"yielded (\d+) \(\d+-(\d+)\.json\)(?: (.*))?$")
 RELEASED = re.compile(r"released (\d+) \(\d+-(\d+)\.json\)$")
 REAPED = re.compile(r"reaped (\S+) lease of (\d+) for (.*) \(pid (\d+) exited\)$")
 REPRIORITIZED = re.compile(r"reprioritized (.*) \(pid (\d+)\) from (\w+) to (\w+)$")
@@ -61,10 +63,14 @@ def span(seconds: float) -> str:
 
 
 def parse_utc(value: object) -> datetime.datetime | None:
-    try:
-        return datetime.datetime.strptime(cast(str, value), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
-    except (TypeError, ValueError):
+    if not isinstance(value, str) or not value:
         return None
+    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"):
+        try:
+            return datetime.datetime.strptime(value, fmt).replace(tzinfo=datetime.timezone.utc)
+        except ValueError:
+            continue
+    return None
 
 
 def process_usage() -> tuple[dict[int, tuple[float, int, str]], dict[int, list[int]]]:
@@ -147,35 +153,147 @@ def swap_low(memory: dict[str, Any]) -> bool:
     return float(memory["swap_free"]) < _config.number_setting("MIN_FREE_SWAP_MB", _config.MIN_FREE_SWAP_MB)
 
 
-def queue_events(directory: Path) -> list[dict[str, Any]]:
-    """The grants, releases and reaps at the end of queue.log, oldest first. Each event carries `delta`, the change
-    it made to held slots. A release whose grant precedes the part read is taken to end a held lease; one whose
-    pid was never granted in a fully read log is a waiter that gave up."""
-    # The current part, and the end of the rotated one (queue.log.1, fathers#123) where the current is shorter than
-    # the part read. `cut` where the log was not read whole: cut, or a rotated part exists (lines
-    # older than it are gone).
+def _tail_lines(directory: Path, name: str) -> tuple[list[str], bool] | None:
+    """The lines at the end of `name` and its rotated predecessor `<name>.1` (fathers#123), oldest first, with
+    whether the log was cut. None when `name` cannot be opened."""
     data, cut, begin, seen = b"", False, 0, None
-    for name in ("queue.log", "queue.log.1"):
+    for filename in (name, f"{name}.1"):
         try:
-            with open(directory / name, "rb") as handle:
+            with open(directory / filename, "rb") as handle:
                 found = os.fstat(handle.fileno())
                 if (found.st_dev, found.st_ino) == seen:
-                    break  # rotated between the two reads: queue.log.1 is the file just read
+                    break  # rotated between the two reads: <name>.1 is the file just read
                 seen = (found.st_dev, found.st_ino)
                 begin = max(0, handle.seek(0, os.SEEK_END) - (LOG_TAIL - len(data)))
                 handle.seek(begin)
                 part = handle.read()
         except OSError:
-            if name == "queue.log":
-                return []
+            if filename == name:
+                return None
             break
         data = part + (b"\n" if data and part and not part.endswith(b"\n") else b"") + data
-        cut = cut or begin > 0 or name == "queue.log.1"
+        cut = cut or begin > 0 or filename != name
         if len(data) >= LOG_TAIL:
             break
-    lines = data.decode("utf-8", "replace").splitlines()[1 if begin else 0:]
+    return data.decode("utf-8", "replace").splitlines()[1 if begin else 0:], cut
+
+
+def _whole(value: object) -> int:
+    return int(value) if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _events_from_jsonl(lines: list[str], cut: bool) -> list[dict[str, Any]]:
+    """Queue events from events.jsonl (fathers#18): grants (including resumes), yields, releases, give-ups, reaps,
+    reprioritizations and long waits, with accurate held-slot deltas across yields."""
+    events: list[dict[str, Any]] = []
+    # Tracks each request's last known slot-holding state: "held" or "yielded" (waiting to resume).
+    states: dict[Any, str] = {}
+    labels: dict[Any, str] = {}
+    for line in lines:
+        try:
+            raw: object = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(raw, dict):
+            continue
+        item = cast(dict[str, Any], raw)
+        when = parse_utc(item.get("time"))
+        kind = item.get("kind")
+        if when is None or not isinstance(kind, str):
+            continue
+        subject = cast(dict[str, Any], item["subject"]) if isinstance(item.get("subject"), dict) else {}
+        details = cast(dict[str, Any], item["details"]) if isinstance(item.get("details"), dict) else {}
+        key = subject.get("id") if subject.get("id") is not None else subject.get("pid")
+        pid = _whole(subject.get("pid"))
+        label = str(subject.get("label") or labels.get(key) or "")
+        if kind == "lease.granted":
+            count = _whole(details.get("count"))
+            if key is not None:
+                states[key] = "held"
+                if label:
+                    labels[key] = label
+            waited = details.get("waited")
+            waited_text = (f"waited {span(waited)}" if waited >= 1 else "no wait") \
+                if isinstance(waited, (int, float)) and not isinstance(waited, bool) else ""
+            resumed = details.get("resumed") is True
+            detail = ", ".join(part for part in ("resumed" if resumed else "", waited_text) if part)
+            events.append({"when": when, "verb": "granted", "count": count, "label": label, "pid": pid,
+                           "delta": count, "detail": detail})
+        elif kind == "lease.yielded":
+            count = _whole(details.get("count"))
+            if key is not None:
+                states[key] = "yielded"
+                if label:
+                    labels[key] = label
+            lock = details.get("lock")
+            peer = cast(dict[str, Any], details["to"]) if isinstance(details.get("to"), dict) else {}
+            detail = f"for lock {lock}" if isinstance(lock, str) and lock \
+                else f"to {peer['label']}" if peer.get("label") else ""
+            events.append({"when": when, "verb": "yielded", "count": count, "label": label, "pid": pid,
+                           "delta": -count, "detail": detail})
+        elif kind == "lease.released":
+            count = _whole(details.get("count"))
+            prev = states.pop(key, None) if key is not None else None
+            labels.pop(key, None)
+            if prev == "yielded":
+                held = False
+            elif prev == "held":
+                held = True
+            else:
+                held = not (details.get("unknown") is True and not cut)
+            ran = details.get("ran")
+            ran_text = f"ran {span(ran)}" if isinstance(ran, (int, float)) and not isinstance(ran, bool) else ""
+            status = details.get("exit")
+            exit_text = f"exit {status}" if isinstance(status, int) and not isinstance(status, bool) else ""
+            detail = ", ".join(part for part in (exit_text, ran_text) if part)
+            events.append({"when": when, "verb": "released", "count": count, "label": label, "pid": pid,
+                           "delta": -count if held else 0, "detail": detail})
+        elif kind in ("request.left", "lease.left"):
+            count = _whole(details.get("count"))
+            states.pop(key, None)
+            labels.pop(key, None)
+            waited = details.get("gave_up_after")
+            detail = f"gave up after {span(waited)}" \
+                if isinstance(waited, (int, float)) and not isinstance(waited, bool) else "gave up"
+            events.append({"when": when, "verb": "left", "count": count, "label": label, "pid": pid,
+                           "delta": 0, "detail": detail})
+        elif kind in ("lease.reaped", "request.reaped"):
+            count = _whole(details.get("count"))
+            prev = states.pop(key, None) if key is not None else None
+            labels.pop(key, None)
+            held = kind == "lease.reaped" and prev != "yielded"
+            reason = str(details.get("reason") or "owner exited")
+            ran = details.get("ran")
+            ran_text = f"ran {span(ran)}" if isinstance(ran, (int, float)) and not isinstance(ran, bool) else ""
+            detail = ", ".join(part for part in (reason, ran_text) if part)
+            events.append({"when": when, "verb": "reaped", "count": count, "label": label, "pid": pid,
+                           "delta": -count if held else 0, "state": "held" if held else "waiting", "detail": detail})
+        elif kind == "request.reprioritized":
+            events.append({"when": when, "verb": "priority", "count": 0, "label": label, "pid": pid,
+                           "delta": 0, "detail": f"{details.get('from', '')} → {details.get('to', '')}"})
+        elif kind == "request.waiting_long":
+            waited = details.get("waited")
+            waited_text = span(waited) if isinstance(waited, (int, float)) and not isinstance(waited, bool) else ""
+            est = str(details.get("est_start") or "unknown")
+            detail = f"{waited_text}, est. {est}" if waited_text else f"est. {est}"
+            events.append({"when": when, "verb": "waiting", "count": 0, "label": label, "pid": pid,
+                           "delta": 0, "detail": detail})
+    return events
+
+
+def queue_events(directory: Path) -> list[dict[str, Any]]:
+    """The grants, yields, releases and reaps at the end of events.jsonl (or queue.log when events.jsonl is absent,
+    for older writers), oldest first. Each event carries `delta`, the change it made to held slots."""
+    tailed = _tail_lines(directory, "events.jsonl")
+    if tailed is not None:
+        return _events_from_jsonl(*tailed)
+    tailed = _tail_lines(directory, "queue.log")
+    if tailed is None:
+        return []
+    lines, cut = tailed
     events: list[dict[str, Any]] = []
     granted: dict[int, str] = {}
+    yielded: dict[int, str] = {}
     for line in lines:
         moment, _, message = line.partition(" ")
         when = parse_utc(moment)
@@ -183,19 +301,32 @@ def queue_events(directory: Path) -> list[dict[str, Any]]:
             continue
         if found := GRANTED.match(message):
             count, label, pid = int(found[1]), found[2], int(found[3])
+            yielded.pop(pid, None)
             granted[pid] = label
             events.append({"when": when, "verb": "granted", "count": count, "label": label, "pid": pid,
                            "delta": count})
+        elif found := YIELDED.match(message):
+            count, pid, reason = int(found[1]), int(found[2]), (found[3] or "").strip()
+            label = granted.pop(pid, yielded.get(pid, ""))
+            yielded[pid] = label
+            events.append({"when": when, "verb": "yielded", "count": count, "label": label, "pid": pid,
+                           "delta": -count, "detail": reason})
         elif found := RELEASED.match(message):
             count, pid = int(found[1]), int(found[2])
-            held = pid in granted or cut
+            if pid in yielded:
+                events.append({"when": when, "verb": "released", "count": count,
+                               "label": yielded.pop(pid), "pid": pid, "delta": 0, "unsure": False})
+                continue
+            was_granted = pid in granted
+            held = was_granted or cut
             events.append({"when": when, "verb": "released" if held else "left", "count": count,
                            "label": granted.pop(pid, ""), "pid": pid, "delta": -count if held else 0,
                            # granted before the part read, or never: describe_events() asks its history line
-                           "unsure": held and pid not in granted})
+                           "unsure": held and not was_granted})
         elif found := REAPED.match(message):
             state, count, label, pid = found[1], int(found[2]), found[3], int(found[4])
             granted.pop(pid, None)
+            yielded.pop(pid, None)
             events.append({"when": when, "verb": "reaped", "count": count, "label": label, "pid": pid,
                            "delta": -count if state == "held" else 0, "state": state})
         elif found := REPRIORITIZED.match(message):  # slotfather reprioritize: a class, not slots
@@ -210,9 +341,12 @@ def queue_events(directory: Path) -> list[dict[str, Any]]:
 def describe_events(events: list[dict[str, Any]], directory: Path, live: list[dict[str, Any]]) -> None:
     """Adds each event's `detail` from the history line of its request (state.record() writes it as the request
     leaves): `waited 3m00s` for a grant (a running lease's from its queue entry), `exit 1, ran 4m00s` for a release,
-    `gave up after 15m00s` for a waiter that left, `owner exited, ran 5m55s` for a reap. The history line also
-    settles whether a release was a lease ending or a waiter giving up, which queue.log alone cannot say once it is
-    longer than the part queue_events() reads; a waiter that gave up changed no held slots."""
+    `gave up after 15m00s` for a waiter that left, `owner exited, ran 5m55s` for a reap. Events from events.jsonl
+    carry their structured detail already. For queue.log, the history line also settles whether a release was a lease
+    ending or a waiter giving up, which queue.log alone cannot say once it is longer than the part queue_events()
+    reads; a waiter that gave up changed no held slots."""
+    if all("detail" in event for event in events):
+        return
     by_pid: dict[int, list[dict[str, Any]]] = {}
     history = cast(list[dict[str, Any]], cast(Any, _state).tail_objects(directory / "history.jsonl", EVENT_HISTORY))
     for item in history:
@@ -226,7 +360,7 @@ def describe_events(events: list[dict[str, Any]], directory: Path, live: list[di
         return moment is not None and abs((moment - when).total_seconds()) <= EVENT_MATCH
 
     for event in events:
-        if event["verb"] in ("priority", "waiting"):  # their detail is their own line's
+        if "detail" in event or event["verb"] in ("priority", "waiting", "yielded"):
             continue
         event["detail"] = ""
         verb, when = event["verb"], event["when"]
@@ -328,7 +462,12 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
         foreseen: dict[str, Any] = expected.get(id(entry)) or {}  # query.outlook(): its class and expected start
         # The yield request on this entry's own marker, read under the queue lock (#20: by entry, not by pid)
         request = look.asked_of(entry) or {}
-        return {"tree": sorted(tree, key=lambda process: -process[1]), "cpu": sum(p[1] for p in tree),
+        # On Linux, ps %cpu is lifetime average; prefer the holder's recent rate from .idle (fathers#20), falling
+        # back to ps when absent/stale (older clients) or on macOS.
+        recent = entry.get("recent_cpu") if kind == "held" and _platform.linux() else None
+        cpu = float(recent) if isinstance(recent, (int, float)) and not isinstance(recent, bool) \
+            else sum(p[1] for p in tree)
+        return {"tree": sorted(tree, key=lambda process: -process[1]), "cpu": cpu,
                 "rss": sum(p[2] for p in tree), "procs": len(tree), "key": (entry.get("pid"), entry.get("since")),
                 "kind": kind, "count": count, "queue": queue,
                 "label": dashboard_text(entry.get("label", "")), "pid": entry.get("pid"),

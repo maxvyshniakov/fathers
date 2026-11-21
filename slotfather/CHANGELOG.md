@@ -149,6 +149,12 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- The holder's `.idle` record now includes its recent CPU rate (`cpu_pct`, cores × 100), and on Linux the
+  dashboard block uses it for held leases' `cpu` (falling back to `ps %cpu` for older clients or on macOS), so
+  an idle lease is no longer also marked hot from `ps`'s lifetime average (fathers#20).
+- Dashboard EVENTS and the held-slot history now read `events.jsonl` (falling back to `queue.log` only when
+  `events.jsonl` is absent) and account for yields, resumes and releases while waiting to resume instead of
+  drifting the held-slot count (fathers#18).
 - A request run outside any git repository (a temporary directory, a clean worktree there) no longer gets a
   run type named after its command (`true · check`, `echo · check`): its run type keys by its label's family, or
   without a label of its own by its phase alone, so its runs form one series whatever their command (fathers#106).

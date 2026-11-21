@@ -351,6 +351,180 @@ class EventTests(unittest.TestCase):
         steps = tool.held_history(events, 0, now, window=3600)
         self.assertEqual([0, 2, 3, 1, 0], [level for _, _, level in steps])
 
+    def test_events_jsonl_tracks_yields_resumes_and_release_while_waiting(self) -> None:
+        """fathers#18: events.jsonl drives EVENTS and held_history(), including yields, resumes and releases while
+        waiting to resume (delta 0)."""
+        tool = board()
+        directory = _Path(tempfile.mkdtemp(prefix="slotfather-events-jsonl-"))
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+
+        def entry(at: str, kind: str, req_id: str, label: str, pid: int, details: dict[str, Any]) -> str:
+            return json.dumps({"v": 1, "time": at, "host": "h", "source": "slotfather", "kind": kind,
+                               "subject": {"type": "request", "id": req_id, "label": label, "pid": pid},
+                               "actor": {"type": "process", "pid": pid}, "details": details}) + "\n"
+
+        # 10:00..11:00 window (now = 11:00):
+        # 10:10 a granted 2 -> 2
+        # 10:20 a yields 2 to b -> 0
+        # 10:25 b granted 3 -> 3
+        # 10:30 b yields 3 for lock -> 0
+        # 10:35 a resumed 2 -> 2
+        # 10:40 b released while waiting to resume -> 2 (delta 0)
+        # 10:42 c left -> 2 (delta 0)
+        # 10:45 a released -> 0
+        # 10:50 d granted 1 -> 1
+        # 10:55 d reaped while held -> 0
+        lines = [
+            entry("2026-01-01T10:10:00.000Z", "lease.granted", "0001-10", "alpha", 10, {"count": 2, "waited": 0}),
+            entry("2026-01-01T10:20:00.000Z", "lease.yielded", "0001-10", "alpha", 10,
+                  {"count": 2, "to": {"id": "0002-11", "label": "beta"}, "yields": 1}),
+            entry("2026-01-01T10:25:00.000Z", "lease.granted", "0002-11", "beta", 11, {"count": 3, "waited": 5}),
+            entry("2026-01-01T10:30:00.000Z", "lease.yielded", "0002-11", "beta", 11,
+                  {"count": 3, "lock": "/tmp/build.lock", "yields": 1}),
+            entry("2026-01-01T10:35:00.000Z", "lease.granted", "0001-10", "alpha", 10,
+                  {"count": 2, "waited": 900, "resumed": True}),
+            entry("2026-01-01T10:40:00.000Z", "lease.released", "0002-11", "beta", 11,
+                  {"count": 3, "exit": 0, "ran": 900}),
+            entry("2026-01-01T10:42:00.000Z", "request.left", "0003-12", "gamma", 12,
+                  {"count": 1, "gave_up_after": 60}),
+            entry("2026-01-01T10:45:00.000Z", "lease.released", "0001-10", "alpha", 10,
+                  {"count": 2, "exit": 0, "ran": 2100}),
+            entry("2026-01-01T10:50:00.000Z", "lease.granted", "0004-13", "delta", 13, {"count": 1, "waited": 0}),
+            entry("2026-01-01T10:55:00.000Z", "lease.reaped", "0004-13", "delta", 13,
+                  {"count": 1, "ran": 300, "reason": "owner exited"}),
+        ]
+        (directory / "events.jsonl").write_text("".join(lines))
+        # A stale/contradictory queue.log beside events.jsonl is ignored once events.jsonl exists.
+        (directory / "queue.log").write_text("2026-01-01T10:05:00Z granted 4 to ignored (pid 99)\n")
+
+        events = tool.queue_events(directory)
+        tool.describe_events(events, directory, [])
+        self.assertEqual([
+            ("granted", "alpha", 2, "no wait"),
+            ("yielded", "alpha", -2, "to beta"),
+            ("granted", "beta", 3, "waited 5s"),
+            ("yielded", "beta", -3, "for lock /tmp/build.lock"),
+            ("granted", "alpha", 2, "resumed, waited 15m00s"),
+            ("released", "beta", 0, "exit 0, ran 15m00s"),
+            ("left", "gamma", 0, "gave up after 1m00s"),
+            ("released", "alpha", -2, "exit 0, ran 35m00s"),
+            ("granted", "delta", 1, "no wait"),
+            ("reaped", "delta", -1, "owner exited, ran 5m00s"),
+        ], [(e["verb"], e["label"], e["delta"], e["detail"]) for e in events])
+
+        def t(minute: int) -> datetime.datetime:
+            return datetime.datetime(2026, 1, 1, 10, minute, tzinfo=datetime.timezone.utc)
+
+        now = datetime.datetime(2026, 1, 1, 11, 0, tzinfo=datetime.timezone.utc)
+        steps = tool.held_history(events, 0, now, window=3600)
+        self.assertEqual([
+            (t(0), t(10), 0),
+            (t(10), t(20), 2),
+            (t(20), t(25), 0),
+            (t(25), t(30), 3),
+            (t(30), t(35), 0),
+            (t(35), t(45), 2),
+            (t(45), t(50), 0),
+            (t(50), t(55), 1),
+            (t(55), now, 0),
+        ], steps)
+
+    def test_queue_log_fallback_tracks_yields_regrants_and_release_while_waiting(self) -> None:
+        """fathers#18: when events.jsonl is absent, queue.log tracks yields, re-grants and releases while waiting to
+        resume without corrupting held_history()."""
+        tool = board()
+        directory = self.directory(
+            "2026-01-01T10:10:00Z granted 2 to alpha (pid 10)\n"
+            "2026-01-01T10:20:00Z yielded 2 (0000000001-10.json) to beta\n"
+            "2026-01-01T10:25:00Z granted 3 to beta (pid 11)\n"
+            "2026-01-01T10:30:00Z yielded 3 (0000000002-11.json) while waiting for lock /tmp/build.lock\n"
+            "2026-01-01T10:35:00Z granted 2 to alpha (pid 10)\n"
+            "2026-01-01T10:40:00Z released 3 (0000000002-11.json)\n"
+            "2026-01-01T10:45:00Z released 2 (0000000001-10.json)\n",
+            history=False,
+        )
+        events = tool.queue_events(directory)
+        tool.describe_events(events, directory, [])
+        self.assertEqual([
+            ("granted", "alpha", 2),
+            ("yielded", "alpha", -2),
+            ("granted", "beta", 3),
+            ("yielded", "beta", -3),
+            ("granted", "alpha", 2),
+            ("released", "beta", 0),
+            ("released", "alpha", -2),
+        ], [(e["verb"], e["label"], e["delta"]) for e in events])
+
+        def t(minute: int) -> datetime.datetime:
+            return datetime.datetime(2026, 1, 1, 10, minute, tzinfo=datetime.timezone.utc)
+
+        now = datetime.datetime(2026, 1, 1, 11, 0, tzinfo=datetime.timezone.utc)
+        steps = tool.held_history(events, 0, now, window=3600)
+        self.assertEqual([
+            (t(0), t(10), 0),
+            (t(10), t(20), 2),
+            (t(20), t(25), 0),
+            (t(25), t(30), 3),
+            (t(30), t(35), 0),
+            (t(35), t(45), 2),
+            (t(45), now, 0),
+        ], steps)
+
+
+class RecentCpuTests(SlotCase):
+    """fathers#20: on Linux, held leases' dashboard `cpu` reads the holder's recent rate from `.idle` so an idle
+    lease is not simultaneously hot from `ps`'s lifetime average; older clients and macOS fall back to `ps`."""
+
+    def test_linux_idle_lease_uses_recent_cpu_and_older_holder_or_macos_falls_back_to_ps(self) -> None:
+        from slotfather import idle as sf_idle
+
+        (self.state / "queue").mkdir(parents=True, exist_ok=True)
+        quiet_pid, quiet_start = self.holder()
+        older_pid, older_start = self.holder()
+        now = time.time()
+        since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 600))
+        quiet_path = self.state / "queue" / f"{1:010d}-{quiet_pid}.json"
+        older_path = self.state / "queue" / f"{2:010d}-{older_pid}.json"
+        quiet_path.write_text(json.dumps(
+            {"pid": quiet_pid, "start": quiet_start, "count": 1, "label": "quiet", "cmd": "sleep 60",
+             "since": since, "granted": since, "state": "held"}))
+        older_path.write_text(json.dumps(
+            {"pid": older_pid, "start": older_start, "count": 1, "label": "older", "cmd": "sleep 60",
+             "since": since, "granted": since, "state": "held"}))
+
+        # Feed injected samples: a heavy burst followed by a quiet interval long enough to be idle.
+        tracker = sf_idle.Tracker()
+        key = (quiet_pid, quiet_start)
+        tracker.observe(now - 420, {key: 0.0}, 0.1)
+        tracker.observe(now - 410, {key: 40.0}, 0.1)  # 4.0 cores burst
+        idle_at = tracker.observe(now - 400, {key: 40.1}, 0.1)  # 0.01 cores = 1.0%
+        idle_at = tracker.observe(now, {key: 44.1}, 0.1)  # 0.01 cores over 400s = 1.0%
+        sf_idle.record(quiet_path, since=idle_at, rate=tracker.rate, moment=now)
+
+        # Fake ps reporting high lifetime %cpu (400% = 4 cores, well above a 1-slot hot share) for both holders.
+        fake_usage: tuple[dict[int, tuple[float, int, str]], dict[int, list[int]]] = (
+            {quiet_pid: (400.0, 1024, "python3"), older_pid: (400.0, 1024, "python3")}, {})
+        tool = board()
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(tool, "process_usage", return_value=fake_usage), \
+                mock.patch.object(tool._platform, "linux", return_value=True):
+            linux_block = tool.dashboard_json(tool.dashboard_model())
+        linux_rows = {row["label"]: row for row in linux_block["holders"]}
+        self.assertIsNotNone(linux_rows["quiet"]["idle_since"], "quiet lease is idle")
+        self.assertAlmostEqual(1.0, linux_rows["quiet"]["cpu"], places=1,
+                               msg="recent rate from .idle is near 0, below the hot threshold")
+        self.assertIsNone(linux_rows["older"]["idle_since"], "older client writes no .idle record")
+        self.assertEqual(400.0, linux_rows["older"]["cpu"], "older holder without a record falls back to ps")
+
+        # On macOS, dashboard_model falls back to ps %cpu even when a fresh .idle record exists.
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(tool, "process_usage", return_value=fake_usage), \
+                mock.patch.object(tool._platform, "linux", return_value=False):
+            mac_block = tool.dashboard_json(tool.dashboard_model())
+        mac_rows = {row["label"]: row for row in mac_block["holders"]}
+        self.assertIsNotNone(mac_rows["quiet"]["idle_since"])
+        self.assertEqual(400.0, mac_rows["quiet"]["cpu"])
+
 
 class MachineFactTests(unittest.TestCase):
     def test_macos_memory_counts_active_wired_and_compressor_physical_pages(self) -> None:

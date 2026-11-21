@@ -87,10 +87,13 @@ class Tracker:
 
 
 def record(entry: Path, since: float | None, rate: float, moment: float) -> None:
-    """The holder's record: since when its tree has been low (None: busy), the cores it used last, when, and until
-    when the record holds (`expires`, by the holder's own sampling interval, so every reader agrees on it)."""
+    """The holder's record: since when its tree has been low (None: busy), the cores and percent (cores * 100) it
+    used last, when, and until when the record holds (`expires`, by the holder's own sampling interval, so every
+    reader agrees on it)."""
     found: dict[str, Any] = {"since": None if since is None else round(since, 3),
-                             "cpu": None if not math.isfinite(rate) else round(rate, 3), "at": round(moment, 3),
+                             "cpu": None if not math.isfinite(rate) else round(rate, 3),
+                             "cpu_pct": None if not math.isfinite(rate) else round(rate * 100, 1),
+                             "at": round(moment, 3),
                              "expires": round(moment + stale_after(), 3)}
     cast(Any, _state).write(path(entry), found)
 
@@ -102,22 +105,55 @@ def stale_after() -> float:
     return max(STALE_LEAST, STALE_LOOKS * longest)
 
 
-def idle_since(entry: Path, settings: Mapping[str, Any], moment: float) -> float | None:
-    """Since when the lease at `entry` has been idle (epoch seconds), or None: not idle, not yet idle for
-    `idle_after`, or no fresh record (an older holder, one that stopped sampling, or a broken file)."""
+def read(entry: Path, moment: float) -> dict[str, Any] | None:
+    """The holder's fresh record at `moment`, or None: missing, malformed, or past its expiry."""
     try:
         found = json.loads(path(entry).read_text())
     except (OSError, ValueError):
         return None
     if not isinstance(found, dict):
         return None
-    record = cast(dict[str, Any], found)
-    at, since, expires = record.get("at"), record.get("since"), record.get("expires")
+    data = cast(dict[str, Any], found)
+    at, expires = data.get("at"), data.get("expires")
     numbers = (int, float)
-    if not isinstance(at, numbers) or not isinstance(since, numbers) or isinstance(since, bool):
+    if not isinstance(at, numbers) or isinstance(at, bool):
         return None
     if not isinstance(expires, numbers) or isinstance(expires, bool):
         expires = at + stale_after()  # a record without its holder's expiry: this reader's interval
-    if moment > expires or moment - since < float(settings.get("idle_after", 0.0)):
+    if moment > expires:
         return None
-    return float(since)
+    return data
+
+
+def facts(entry: Path, settings: Mapping[str, Any], moment: float) -> tuple[float | None, float | None]:
+    """From one read of the holder's fresh record: (idle_since, recent_cpu_pct). Either is None when absent, stale,
+    or (for idle_since) not yet low for `idle_after`."""
+    data = read(entry, moment)
+    if data is None:
+        return None, None
+    since = data.get("since")
+    if not isinstance(since, (int, float)) or isinstance(since, bool) \
+            or moment - since < float(settings.get("idle_after", 0.0)):
+        since_value: float | None = None
+    else:
+        since_value = float(since)
+    pct = data.get("cpu_pct")
+    if isinstance(pct, (int, float)) and not isinstance(pct, bool) and math.isfinite(pct):
+        cpu_value: float | None = float(pct)
+    else:
+        cores = data.get("cpu")
+        cpu_value = round(float(cores) * 100, 1) \
+            if isinstance(cores, (int, float)) and not isinstance(cores, bool) and math.isfinite(cores) else None
+    return since_value, cpu_value
+
+
+def idle_since(entry: Path, settings: Mapping[str, Any], moment: float) -> float | None:
+    """Since when the lease at `entry` has been idle (epoch seconds), or None: not idle, not yet idle for
+    `idle_after`, or no fresh record (an older holder, one that stopped sampling, or a broken file)."""
+    return facts(entry, settings, moment)[0]
+
+
+def recent_cpu(entry: Path, moment: float) -> float | None:
+    """The holder's recent CPU rate in percent (cores * 100) from a fresh record, or None when absent, stale, or
+    before the holder has a second sample (fathers#20)."""
+    return facts(entry, {}, moment)[1]
