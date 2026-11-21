@@ -18,13 +18,13 @@ import fcntl
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 import time
 from typing import Any, cast
 
 from . import (
     config,
+    github,
     host,
     journal,
     lifecycle,
@@ -32,7 +32,6 @@ from . import (
     procs,
     receipts,
     registry,
-    review,
     state,
     tickets,
     worktrees,
@@ -46,13 +45,12 @@ REPAIR_WINDOW = 600.0
 
 def ticket_commented(record: Record, project: config.Config) -> str | None:
     """None when the ticket has a comment since the lane started, else the refusal."""
-    argv = [project.env("GH") or "gh", "issue", "view", record["ticket"], "--json", "comments",
-            *review.repo_args(record["common_dir"])]
-    result = subprocess.run(argv, capture_output=True, text=True)
-    if result.returncode:
-        return f"gh could not read #{record['ticket']}: {result.stderr.strip()}"
+    data, error = github.issue_view(record["ticket"], json_fields="comments", common=record["common_dir"],
+                                    project=project)
+    if data is None:
+        return f"gh could not read #{record['ticket']}: {error}"
     since = journal.parse_time(record["created"])
-    comments: list[dict[str, Any]] = json.loads(result.stdout).get("comments", [])
+    comments: list[dict[str, Any]] = data.get("comments", [])
     # The comment land posts (#25) is not the lane's evidence.
     if any(journal.parse_time(c["createdAt"]) >= since and not c.get("body", "").startswith(tickets.LAND_MARKER)
            for c in comments):
@@ -123,7 +121,7 @@ def unfinished(record: Record, store: state.Store) -> str | None:
     smoke = field(record, "post_merge").get("status")
     if smoke != "green" and not (smoke == "red" and postmerge.clearing(record, store)):
         return f"its post-merge smoke is {smoke or 'not run'}"
-    reviewed, words = review.review_state(record["id"], store)
+    reviewed, words = receipts.review_state(store, record["id"])
     if not reviewed:
         return words
     return "kept" if kept(record) else None
@@ -344,7 +342,7 @@ def finish_refusals(
         ):
             # The fix round of the review runs in this worktree (#570); a lane landed without a review has none.
             _, words = receipts.review_words(lane_id, review_v, prog=prog)
-            refusals.append(f"its {words}: mark each finding with " + review.mark_help(lane_id, prog))
+            refusals.append(f"its {words}: mark each finding with " + receipts.mark_help(lane_id, prog))
         cleared = cleared or field(record, "post_merge").get("cleared_by")
         if integration is None:
             named = field(record, "landed").get("integration") or record.get("integration")

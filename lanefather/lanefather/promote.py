@@ -18,7 +18,7 @@ import subprocess
 import sys
 from typing import Any
 
-from . import config, events, gate, journal, plan, review, slots, state, tickets, verify, worktrees
+from . import config, events, gate, journal, plan, review, review_gate, slots, state, tickets, verify, worktrees
 from .errors import LaneError
 from .gate import (
     batch_gate,
@@ -319,7 +319,7 @@ def step_review_gate(run: PromoteRun) -> None:
     # fathers#109: an unmarked blocking finding of a finished review holds the batch gate too; a review still
     # running does not (#570: the gate runs while reviews finish).
     prog = config.prog()
-    report = review.gate_report(run.cwd, run.common, run.sha)
+    report = review_gate.gate_report(run.cwd, run.common, run.sha)
     for entry in report["reported"]:
         print(f"lane: reported, does not block: {entry['text']}", flush=True)
     blocking = [e["text"] for e in report["blocking"]]
@@ -345,7 +345,7 @@ def step_batch_gate(run: PromoteRun) -> None:
 def step_review_refusals(run: PromoteRun) -> None:
     prog = config.prog()
     # The gate runs while reviews finish; only the move of dev waits for them (#570).
-    refusals = review.review_refusals(run.cwd, run.common, run.sha)
+    refusals = review_gate.review_refusals(run.cwd, run.common, run.sha)
     if refusals and not run.force_reason:
         raise LaneError("promote refused: dev waits for the review of every lane landed since dev:\n- "
                         + "\n- ".join(refusals) + "\nMark each finding with " + review.mark_help("<id>")

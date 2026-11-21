@@ -16,11 +16,10 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 import sys
 from typing import Any
 
-from . import config, journal, receipts, review, state
+from . import config, github, journal, receipts, state
 from .gitops import common_dir, git, git_ok
 from .state import Record
 
@@ -64,40 +63,34 @@ def fixed_issues(cwd: str, base: str, head: str) -> list[str]:
 
 def repository(common: str, rule: config.Tickets | None = None) -> str | None:
     """owner/name for gh: the configured repo, else origin's GitHub repository."""
-    active_rule = rule or rules()
-    if active_rule.repo:
-        return active_rule.repo
-    found = review.repo_args(common)
-    return found[1] if found else None
+    return github.repository(common, rule)
 
 
 def gh(repo: str, *args: str) -> str | None:
     """Run gh without a prompt against repo; None when it succeeded, else what went wrong."""
     env = dict(os.environ, GH_PROMPT_DISABLED="1", GH_NO_UPDATE_NOTIFIER="1", NO_COLOR="1")
-    argv = [review.gh_command(), *args, "--repo", repo]
-    try:
-        result = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env,
-                                timeout=GH_TIMEOUT)
-    except (OSError, subprocess.TimeoutExpired) as error:
-        return f"gh {' '.join(args[:2])}: {error}"
-    if result.returncode:
-        return f"gh {' '.join(args[:2])} exited {result.returncode}: {(result.stderr or result.stdout).strip()}"
-    return None
+    return github._run_status(args, repo=repo, env=env, timeout=GH_TIMEOUT)  # pyright: ignore[reportPrivateUsage]
+
+
+def _gh_env() -> dict[str, str]:
+    return dict(os.environ, GH_PROMPT_DISABLED="1", GH_NO_UPDATE_NOTIFIER="1", NO_COLOR="1")
 
 
 def add_label(repo: str, number: str) -> str | None:
     """Label the issue `integrated`, creating the label once when the repository lacks it."""
-    if gh(repo, "issue", "edit", number, "--add-label", LABEL) is None:
+    env = _gh_env()
+    if github.issue_edit(repo, number, "--add-label", LABEL, env=env, timeout=GH_TIMEOUT) is None:
         return None
-    created = gh(repo, "label", "create", LABEL, "--color", LABEL_COLOR, "--description", LABEL_DESCRIPTION)
+    created = github.label_create(repo, LABEL, color=LABEL_COLOR, description=LABEL_DESCRIPTION,
+                                  env=env, timeout=GH_TIMEOUT)
     if created and "already exists" not in created:
         return created
-    return gh(repo, "issue", "edit", number, "--add-label", LABEL)
+    return github.issue_edit(repo, number, "--add-label", LABEL, env=env, timeout=GH_TIMEOUT)
 
 
 def remove_label(repo: str, number: str) -> str | None:
     """Take the `integrated` label off the issue; a repository without the label has nothing to remove."""
-    problem = gh(repo, "issue", "edit", number, "--remove-label", LABEL)
+    problem = github.issue_edit(repo, number, "--remove-label", LABEL, env=_gh_env(), timeout=GH_TIMEOUT)
     return None if problem and f"'{LABEL}' not found" in problem else problem
 
 

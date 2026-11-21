@@ -25,7 +25,6 @@ from . import (
     lifecycle,
     queue,
     receipts,
-    review,
     slots,
     state,
     tickets,
@@ -122,7 +121,7 @@ def admit(record: Record, force_reason: str | None, repaired: str | None) -> tup
             raise LaneError(f"--after {name}: no lane that is not done by that name")
     for fix_id in state.fix_parents(record):
         prefix = f"--fix-of {fix_id}" if state.batch_fix(record) else "hand-over refused"
-        review.fix_parent_review(fix_id, record["common_dir"], prefix)
+        receipts.fix_parent_review(fix_id, record["common_dir"], prefix)
     parent = fix_parent(record)
     decision = admission.evaluate(config.current(), others, record["common_dir"], cap_exempt=parent is not None,
                                   repaired=repaired)
@@ -257,6 +256,29 @@ def adopt_worktree(record: Record, worktree: str, branch: str, *, agent: str | N
     record.clear()
     record.update(updated)
     return updated
+
+
+def hand_over_fix_lane(
+    store: state.Store,
+    record: Record,
+    fix_id: str,
+    fix_paths: list[str],
+    base: str,
+    force_reason: str | None,
+) -> tuple[Record, Record]:
+    """Register a follow-up fix lane taking over `record`'s landed worktree and transition `record` via `hand_over`."""
+    main = main_checkout(record["common_dir"])
+    fix, rules = prepare(main, fix_id, record["ticket"], fix_paths, base, [], parents=[record["id"]])
+    fix["worktree"] = record["worktree"]
+    register(fix, rules, force_reason, False)
+    updated_parent = lifecycle.transition(
+        store,
+        record["id"],
+        "hand_over",
+        worktree=None,
+        handed_over={"to": fix_id, "worktree": fix["worktree"], "at": journal.now()},
+    )
+    return fix, updated_parent
 
 
 def adopt(args: Any) -> int:

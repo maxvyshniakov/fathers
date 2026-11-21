@@ -24,6 +24,8 @@ from . import (
     history,
     host,
     journal,
+    lanes,
+    lifecycle,
     plan,
     queue,
     receipts,
@@ -688,7 +690,6 @@ class CheckRun:
 
 def prepare(lane_id: str, *, agent: str | None = None) -> Prepared:
     """Adopt a planned lane's worktree when run there, refuse non-active/wrong-branch/dirty worktrees."""
-    from . import lanes, lifecycle  # adopt_worktree; lanes imports this module for its commands
     prog = config.prog()
     agent_info = events.agent_context(agent)
     record = state.load(lane_id)

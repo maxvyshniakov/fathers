@@ -1,0 +1,126 @@
+"""The review gate (fathers#109, #74): `gate_report`, `review_refusals`, and `findings`."""
+from __future__ import annotations
+
+import json
+import os
+from typing import Any
+
+from . import config, journal, receipts, state
+from .errors import LaneError
+from .gitops import common_dir, git, git_ok
+from .state import Record
+
+
+def finding_line(record: Record, finding: dict[str, Any]) -> str:
+    """A finding and the two commands that mark it (fathers#109)."""
+    prog, lane_id, n = config.prog(), record["id"], finding.get("n")
+    where = ""
+    if finding.get("file"):
+        where = f" {finding['file']}" + (f":{finding['line']}" if finding.get("line") else "")
+    return (f"lane {lane_id} (#{record['ticket']}): finding #{n} {finding.get('severity', 'P2')}{where} "
+            f"{finding.get('title', '')}: {prog} review {lane_id} --mark {n} fixed:<merge> | "
+            f"{prog} review {lane_id} --mark {n} rejected:<reason>")
+
+
+def gate_report(cwd: str, common: str, sha: str, since: str | None = None) -> dict[str, Any]:
+    """The reviews of the lanes landed in the SHA and not in `since` (local dev by default), as the batch gate,
+    promote and a publish read them (#570, fathers#109): {v, sha, since, blocks, unfinished, blocking, reported}.
+
+    - unfinished: a lane whose review is missing, running or failed;
+    - blocking: an unmarked finding whose severity `[review] blocks` names (P1 and P2 by default), and a finding
+      marked fixed by a merge that is not in the SHA;
+    - reported: an unmarked finding of another severity, shown and not blocking.
+    - unknown: merges in the range when this state knows no lane landed there (another machine or state directory
+      ran them): the report cannot say, so it holds.
+    Each finding entry names the lane, its ticket, severity, file and line, and `text` the two commands that mark
+    it."""
+    base = since or git(cwd, "rev-parse", "--verify", "--quiet", "refs/heads/dev^{commit}", check=False) or None
+    store = state.Store(config.current())
+    blocks = store.project.review_blocks
+    report: dict[str, Any] = {"v": 1, "sha": sha, "since": base, "blocks": list(blocks), "unfinished": [],
+                              "blocking": [], "reported": [], "unknown": []}
+    known = 0
+    for record in store.lanes():
+        landed_info: dict[str, Any] = record.get("landed") or {}
+        merge = str(landed_info.get("merge") or "")
+        if not merge or record.get("common_dir") != common:
+            continue
+        if not git_ok(cwd, "merge-base", "--is-ancestor", merge, sha):
+            continue
+        if base and git_ok(cwd, "merge-base", "--is-ancestor", merge, base):
+            continue
+        known += 1
+        receipt = receipts.read(store, record["id"], "review")
+        verdict = receipts.review_verdict(record, receipt, panel_required=store.project.review_panel_required)
+        _, words = receipts.review_words(record["id"], verdict, prog=config.prog())
+        if isinstance(verdict, receipts.Exempt):
+            continue
+        if isinstance(verdict, (receipts.Absent, receipts.Running, receipts.Died)):
+            report["unfinished"].append({"lane": record["id"], "ticket": record["ticket"],
+                                         "text": f"lane {record['id']} (#{record['ticket']}): {words}"})
+            continue
+        if isinstance(verdict, receipts.Failed):
+            report["unfinished"].append({"lane": record["id"], "ticket": record["ticket"],
+                                         "text": f"lane {record['id']} (#{record['ticket']}): {words}"})
+            if not verdict.missing_members:
+                continue
+        for finding in verdict.findings:
+            mark: dict[str, Any] = finding.get("mark") or {}
+            entry = {"lane": record["id"], "ticket": record["ticket"], "n": finding.get("n"),
+                     "severity": finding.get("severity", "P2"), "title": finding.get("title", ""),
+                     "file": finding.get("file"), "line": finding.get("line"), "text": finding_line(record, finding)}
+            held = entry["severity"] in blocks
+            fix_merge = str(mark.get("merge") or "")
+            if not mark:
+                report["blocking" if held else "reported"].append(entry)
+            elif mark.get("kind") == "fixed" and not git_ok(cwd, "merge-base", "--is-ancestor", fix_merge, sha):
+                # A finding marked fixed is fixed in what moves only when its follow-up merge is in the SHA.
+                report["blocking" if held else "reported"].append(dict(entry, text=(
+                    f"lane {record['id']} (#{record['ticket']}): finding #{finding.get('n')} is marked fixed by "
+                    f"{fix_merge[:10]}, which is not in {sha[:10]}")))
+    if not known:
+        merges = git(cwd, "rev-list", "--merges", f"{base}..{sha}" if base else sha, check=False).split()
+        report["unknown"] = [{"merge": m, "text": f"merge {m[:10]}: no lane state here knows it; run where the lanes' "
+                                                  "state lives"} for m in merges[:20]]
+    return report
+
+
+def review_refusals(cwd: str, common: str, sha: str) -> list[str]:
+    """What holds the move of dev: each lane whose review is unfinished, and each blocking finding with its mark
+    commands (fathers#109)."""
+    report = gate_report(cwd, common, sha)
+    return [e["text"] for e in report["unfinished"]] + [e["text"] for e in report["blocking"]]
+
+
+def findings(args: Any) -> int:
+    """`lanefather findings <sha>`: the review gate as the batch gate and promote apply it, for a publish that
+    Lanefather does not run (Repo-Kit's release:publish). Exit 0 when nothing holds the SHA, 1 when a review is
+    unfinished or a blocking finding is unmarked; --force-reason answers 0 and logs the override."""
+    cwd = os.getcwd()
+    sha = git(cwd, "rev-parse", "--verify", "--quiet", args.sha + "^{commit}", check=False)
+    if not sha:
+        raise LaneError(f"findings: {args.sha} is not a commit here")
+    since = None
+    if args.since:
+        since = git(cwd, "rev-parse", "--verify", "--quiet", args.since + "^{commit}", check=False)
+        if not since:
+            raise LaneError(f"findings: --since {args.since} is not a commit here")
+    report = gate_report(cwd, common_dir(cwd), sha, since)
+    held = [e["text"] for e in report["unfinished"] + report["blocking"] + report["unknown"]]
+    if held and args.force_reason:
+        journal.ledger(f"override findings {sha}: {args.force_reason} ({'; '.join(held)})", kind="override",
+                       level="warn", subject={"type": "commit", "id": sha},
+                       details={"command": "findings", "reason": args.force_reason, "refusals": held})
+    report["held"] = bool(held) and not args.force_reason
+    if args.json:
+        print(json.dumps(report, sort_keys=True))
+    else:
+        for entry in report["unfinished"] + report["blocking"] + report["unknown"]:
+            print(f"held: {entry['text']}")
+        for entry in report["reported"]:
+            print(f"reported ({entry['severity']}, does not block): {entry['text']}")
+        if not held:
+            print(f"lane: no review holds {sha[:10]}")
+        elif args.force_reason:
+            print(f"lane: {len(held)} held, overridden: {args.force_reason} (logged)")
+    return 1 if report["held"] else 0
