@@ -29,7 +29,8 @@ def title(tool: str) -> str:
 
 # Godfather's own CHANGELOG.md: the Sid-Kit layout, the same rules as a tool's `changelog --json`
 
-RELEASE = re.compile(r"^## \[?([^\]\s]+)\]?(?: - (\d{4}-\d\d-\d\d))?(?: \((\w+)\))?")
+RELEASE = re.compile(r"^## \[?(\d+\.\d+\.\d+[^\]\s]*)\]? - (\d{4}-\d\d-\d\d)\s*$")
+UNRELEASED = re.compile(r"^## \[?Unreleased\]?\s*$", re.IGNORECASE)
 MARKUP = re.compile(r"\*\*|`|\[([^\]]*)\]\([^)]*\)")
 
 
@@ -47,21 +48,45 @@ def plain(text: str) -> str:
 
 def parse_changelog(text: str) -> list[Release]:
     """The releases of a Keep a Changelog file, newest first, with markdown taken out of the entries; an entry's
-    continuation lines join it."""
+    two-space-indented continuation lines join it, and unindented text ends continuation (docs/contracts/changelog.md)."""
     found: list[Release] = []
+    open_release = False
+    bulleted = False
     for line in text.splitlines():
-        heading = RELEASE.match(line)
-        if heading:
-            found.append(Release(heading[1], heading[2] or "", heading[3] or "", []))
-        elif not found:
+        if line.startswith("# "):
+            open_release, bulleted = False, False
+        elif line.startswith("## "):
+            dated = RELEASE.match(line)
+            if UNRELEASED.match(line):
+                found.append(Release("Unreleased", "", "", []))
+                open_release = True
+            elif dated:
+                found.append(Release(dated[1], dated[2], "", []))
+                open_release = True
+            else:
+                open_release = False
+            bulleted = False
+        elif not open_release:
             continue
         elif line.startswith("### "):
-            found[-1].sections.append((line[4:].strip(), []))
+            heading = line[4:].strip()
+            if heading:
+                found[-1].sections.append((heading, []))
+            bulleted = False
         elif line.startswith("- ") and found[-1].sections:
-            found[-1].sections[-1][1].append(plain(line[2:].strip()))
-        elif line.startswith("  ") and line.strip() and found[-1].sections and found[-1].sections[-1][1]:
+            item = line[2:].strip()
+            if item:
+                found[-1].sections[-1][1].append(plain(item))
+                bulleted = True
+            else:
+                bulleted = False
+        elif line.startswith("  ") and line.strip() and bulleted:
             entries = found[-1].sections[-1][1]
             entries[-1] += " " + plain(line.strip())
+        elif not line.strip():
+            continue
+        else:
+            bulleted = False
     return found
 
 

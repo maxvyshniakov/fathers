@@ -86,6 +86,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- `junkfather changelog --json --since` accepts build-suffixed versions and orders matching release headings by file
+  order, and unindented prose ends a bullet's continuation lines as the shared changelog contract requires
+  (fathers#119).
 - The background-shell watcher re-reads a newly joined child's command after event registration so an `exec` between
   the process-table snapshot and kqueue/pidfd subscription is recorded at once (fathers#186).
 - The background-shell watcher enforces the entry's finite TTL deadline while the owning agents are quiet, rechecking

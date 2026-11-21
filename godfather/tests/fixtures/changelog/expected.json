@@ -1,0 +1,121 @@
+{
+  "full_installed": [
+    {
+      "version": null,
+      "unreleased": true,
+      "date": null,
+      "source": "81abd86c0ffe",
+      "section": "Added",
+      "text": "`tool changelog --json` **parses** [the contract](docs/contracts/changelog.md) across wrapped lines, with a nested list: - nested item one"
+    },
+    {
+      "version": null,
+      "unreleased": true,
+      "date": null,
+      "source": "81abd86c0ffe",
+      "section": "Fixed",
+      "text": "Loose prose after a bullet ends continuation."
+    },
+    {
+      "version": null,
+      "unreleased": true,
+      "date": null,
+      "source": "81abd86c0ffe",
+      "section": "Fixed",
+      "text": "Still under Fixed after the level-four heading."
+    },
+    {
+      "version": "0.10.0",
+      "date": "2026-12-01",
+      "section": "Breaking",
+      "text": "Replaced `--old` with `--new`."
+    },
+    {
+      "version": "0.2.0",
+      "date": "2026-11-15",
+      "section": "Added",
+      "text": "First in 0.2.0."
+    },
+    {
+      "version": "0.2.0",
+      "date": "2026-11-15",
+      "section": "Added",
+      "text": "Second in 0.2.0."
+    },
+    {
+      "version": "0.2.0",
+      "date": "2026-11-15",
+      "section": "Notes",
+      "text": "Custom section name stays as written."
+    },
+    {
+      "version": "0.1.0+1138486",
+      "date": "2026-11-12",
+      "section": "Added",
+      "text": "Newer build on 0.1.0."
+    },
+    {
+      "version": "0.1.0+7eca44a",
+      "date": "2026-11-11",
+      "section": "Fixed",
+      "text": "Earlier build on 0.1.0."
+    },
+    {
+      "version": "0.1.0",
+      "date": "2026-11-10",
+      "section": "Added",
+      "text": "Initial release."
+    }
+  ],
+  "since_0_2_0": [
+    null,
+    null,
+    null,
+    "0.10.0"
+  ],
+  "since_0_1_9": [
+    null,
+    null,
+    null,
+    "0.10.0",
+    "0.2.0",
+    "0.2.0",
+    "0.2.0"
+  ],
+  "since_0_1_0": [
+    null,
+    null,
+    null,
+    "0.10.0",
+    "0.2.0",
+    "0.2.0",
+    "0.2.0",
+    "0.1.0+1138486",
+    "0.1.0+7eca44a"
+  ],
+  "since_0_1_0_build": [
+    null,
+    null,
+    null,
+    "0.10.0",
+    "0.2.0",
+    "0.2.0",
+    "0.2.0",
+    "0.1.0+1138486"
+  ],
+  "released_only": [
+    {
+      "version": "0.2.0",
+      "date": "2026-11-20",
+      "section": "Added",
+      "text": "Shipped feature."
+    },
+    {
+      "version": "0.1.0",
+      "date": "2026-11-01",
+      "section": "Fixed",
+      "text": "Initial fix."
+    }
+  ],
+  "empty": []
+}

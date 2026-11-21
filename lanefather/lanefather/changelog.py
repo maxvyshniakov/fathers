@@ -1,23 +1,18 @@
 """The installed release's CHANGELOG.md as entries, for `lanefather changelog --json` (Godfather's what's new,
-fathers#102 and #104; docs/api.md). Standard library and no other lanefather module, so the command stays fast.
-
-  {"v": 1, "tool": "lanefather", "version": "0.1.0", "source": "<the CHANGELOG.md read, or null>",
-   "entries": [{"version", "date", "section", "text"}, ...]}
-
-Entries are newest first, as the file keeps them: one per bullet of every `### <section>`, an entry's indented
-continuation lines joined by one space, markdown as written. A dated release is `## x.y.z[+build] - YYYY-MM-DD`.
-The `## Unreleased` entries come first, as {"version": null, "date": null, "unreleased": true, "source": <the
-installed commit, or null in a checkout>}, so a reader can tell news since the commit it last saw.
+fathers#102, #104 and #119; godfather/docs/contracts/changelog.md). Standard library and no other lanefather module,
+so the command stays fast.
 """
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
 import sys
 from typing import Any
 
-RELEASE = re.compile(r"^## (\d+\.\d+\.\d+\S*) - (\d{4}-\d\d-\d\d)\s*$")
+RELEASE = re.compile(r"^## \[?(\d+\.\d+\.\d+[^\]\s]*)\]? - (\d{4}-\d\d-\d\d)\s*$")
+UNRELEASED = re.compile(r"^## \[?Unreleased\]?\s*$", re.IGNORECASE)
 VERSION = re.compile(r"\d+\.\d+\.\d+\S*")
 PACKAGE = Path(__file__).resolve().parent
 
@@ -26,11 +21,15 @@ def version_key(version: str) -> tuple[int, ...]:
     return tuple(int(part) for part in re.findall(r"\d+", version.split("-", maxsplit=1)[0].split("+", maxsplit=1)[0]))
 
 
+def valid_version(text: str) -> bool:
+    return VERSION.fullmatch(text) is not None
+
+
 def entries(text: str, since: str | None = None, commit: str | None = None) -> list[dict[str, Any]]:
-    """Every entry of Unreleased and of every dated release, newest first. Anything before the first release heading
-    and under other headings is left out. `since`: only the releases newer than that version, and Unreleased; a
-    version the file has a heading for keeps the releases above that heading, so a build (`0.1.0+7eca44a`) counts as
-    newer than the release below it although its number is the same."""
+    """Every entry of Unreleased and of every dated release, newest first. Anything before the first release heading,
+    under `# ` titles or other `## ` headings, or before a `### ` section is left out. `since`: only the releases
+    newer than that version, and Unreleased; a version the file has a heading for keeps the releases above that
+    heading, so a build (`0.1.0+7eca44a`) counts as newer than the release below it although its number is the same."""
     headings = [m[1] for m in (RELEASE.match(line) for line in text.splitlines()) if m]
     if since and since in headings:
         newer = set(headings[:headings.index(since)])
@@ -38,13 +37,15 @@ def entries(text: str, since: str | None = None, commit: str | None = None) -> l
     found: list[dict[str, Any]] = []
     release: dict[str, Any] | None = None
     section: str | None = None
-    bulleted = False  # an entry started under the current section: continuation lines join it
+    bulleted = False
     floor = version_key(since) if since else None
     for line in text.splitlines():
-        if line.startswith("## "):
+        if line.startswith("# "):
+            release, section, bulleted = None, None, False
+        elif line.startswith("## "):
             heading = RELEASE.match(line)
-            if line.strip() == "## Unreleased":
-                release = {"version": None, "date": None, "unreleased": True, "source": commit}
+            if UNRELEASED.match(line):
+                release = {"version": None, "unreleased": True, "date": None, "source": commit}
             elif heading and (floor is None or version_key(heading[1]) > floor):
                 release = {"version": heading[1], "date": heading[2]}
             else:
@@ -53,10 +54,14 @@ def entries(text: str, since: str | None = None, commit: str | None = None) -> l
         elif release is None:
             continue
         elif line.startswith("### "):
-            section, bulleted = line[4:].strip(), False
+            section, bulleted = line[4:].strip() or None, False
         elif line.startswith("- ") and section:
-            found.append({**release, "section": section, "text": line[2:].strip()})
-            bulleted = True
+            item = line[2:].strip()
+            if item:
+                found.append({**release, "section": section, "text": item})
+                bulleted = True
+            else:
+                bulleted = False
         elif line.startswith("  ") and line.strip() and bulleted:
             found[-1]["text"] += " " + line.strip()
         elif not line.strip():
@@ -79,20 +84,29 @@ def installed_commit() -> str | None:
         return None
 
 
-def report(since: str | None = None) -> dict[str, Any]:
-    from . import __version__
-    found = path()
+def report(since: str | None = None, changelog_file: str | Path | None = None,
+           commit: str | None = None) -> dict[str, Any]:
+    if since is not None and not valid_version(since):
+        raise ValueError(f"--since takes a version like 0.1.0, not {since!r}")
     try:
-        text: str = found.read_text(encoding="utf-8")
-        source: str | None = str(found.resolve())
+        from . import __version__
+    except ImportError:
+        __version__ = "0.1.0"
+    chosen = path() if changelog_file is None else Path(changelog_file)
+    try:
+        if not str(chosen):
+            raise FileNotFoundError
+        body: str = chosen.read_text(encoding="utf-8")
+        source: str | None = os.path.realpath(chosen)
     except (OSError, UnicodeDecodeError):
-        text, source = "", None
+        body, source = "", None
+    built = installed_commit() if commit is None and changelog_file is None else commit
     return {"v": 1, "tool": "lanefather", "version": __version__, "source": source,
-            "entries": entries(text, since, installed_commit())}
+            "entries": entries(body, since, built)}
 
 
 def command(args: Any) -> int:
-    if args.since is not None and not VERSION.fullmatch(args.since):
+    if args.since is not None and not valid_version(args.since):
         print(f"lanefather: --since takes a version like 0.1.0, not {args.since!r}", file=sys.stderr)
         return 2
     answer = report(args.since)
