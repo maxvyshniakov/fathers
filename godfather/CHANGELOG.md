@@ -178,6 +178,9 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Fixed
 
+- Saved choices (`settings.json`), read changelog marks (`news.json`) and `install.py` now share `fathers_common`'s
+  durable atomic writes, changelog parser, CLI refusal formatter and locked release staging (`fathers_common` ships
+  beside `godfather` inside each immutable release and is part of its source digest) (fathers#117, fathers#119).
 - A Slotfather snapshot missing a request's `pid`, `kind`, `count`, `procs`, `yields` or `rss`, or one of the
   dashboard block's required fields, is now the source's notice (`a request has no pid; update slotfather`) instead of
   ending the view with a KeyError (fathers#142), and so is an `advice` without a numeric `unleased_load` or a process

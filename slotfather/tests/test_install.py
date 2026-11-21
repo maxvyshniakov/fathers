@@ -44,6 +44,7 @@ class InstallTests(unittest.TestCase):
         (self.bin / "machine-slot").write_text("old command")
         self.source = self.tmp / "source"
         self.source.mkdir()
+        (self.tmp / "common").symlink_to(ROOT.parent / "common")
         if (ROOT / "install.py").exists():
             shutil.copyfile(ROOT / "install.py", self.source / "install.py")
         (self.source / "slotfather").write_bytes(PAYLOAD)
@@ -650,6 +651,8 @@ class PackageInstallTests(unittest.TestCase):
     def package(self) -> Path:
         package = self.source / 'src' / 'slotfather'
         package.mkdir(parents=True)
+        if not (self.source / 'src' / 'fathers_common').exists():
+            (self.source / 'src' / 'fathers_common').symlink_to(ROOT.parent / 'common' / 'fathers_common')
         (package / '__init__.py').write_text('')
         (package / 'config.py').write_text('DEFAULT_DIR = "~/.local/state/slotfather"\nDEFAULT_CGROUP = None  # installer default\n')
         (package / 'cli.py').write_text(

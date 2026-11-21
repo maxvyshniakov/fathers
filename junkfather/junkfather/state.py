@@ -13,14 +13,14 @@ detached commands and an append-only event log, all under one directory.
 from __future__ import annotations
 
 import contextlib
-import errno
 import fcntl
 import json
 import os
 from pathlib import Path
 import secrets
-import tempfile
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, cast
+
+from fathers_common.atomic import atomic_write
 
 if TYPE_CHECKING:
     from .entry import Entry
@@ -37,36 +37,8 @@ def state_dir() -> Path:
 
 
 def write_atomic(path: Path, data: Any) -> None:
-    """Replace `path` with `data` as JSON in one rename, after the new content reached the disk (fsync of the file,
-    then of its directory). A write that fails leaves the old file as it was and removes its temp file. A failed
-    directory fsync raises (the new content is in place but not known to be durable), except on a filesystem that
-    cannot sync a directory (EINVAL, ENOTSUP)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", dir=path.parent, prefix=f".{path.name}.", delete=False) as handle:
-        try:
-            json.dump(data, handle, indent=1, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        except BaseException:
-            handle.close()
-            with contextlib.suppress(OSError):
-                os.unlink(handle.name)
-            raise
-    try:
-        os.replace(handle.name, path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(handle.name)
-        raise
-    directory = os.open(path.parent, os.O_RDONLY)
-    try:
-        os.fsync(directory)
-    except OSError as error:
-        if error.errno not in (errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP):
-            raise  # the rename is in place but not known to be on disk: the caller must not take it for durable
-    finally:
-        os.close(directory)
+    """Replace `path` with `data` as JSON durably via `fathers_common.atomic.atomic_write`."""
+    atomic_write(path, json.dumps(data, indent=1, sort_keys=True) + "\n")
 
 
 def read_json(path: Path) -> Any:

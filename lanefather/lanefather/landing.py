@@ -19,6 +19,8 @@ import re
 import secrets
 import time
 
+from fathers_common.atomic import atomic_write
+
 from . import journal
 from .errors import LaneError
 
@@ -71,10 +73,8 @@ def landing(common: str, holder: str, wait: float) -> Generator[dict[str, str]]:
             current = read_landing(path)
             stale = landing_stale(current) if current is not None else None
             if current is None or stale:
-                pending = path.with_name(f"landing.lock.{os.getpid()}")
-                pending.write_text(f"token {token}\nholder {holder}\nacquired {int(time.time())}\n"
+                atomic_write(path, f"token {token}\nholder {holder}\nacquired {int(time.time())}\n"
                                    f"pid {os.getpid()}\nhost {os.uname().nodename}\n")
-                pending.replace(path)
                 if stale and current is not None:
                     journal.ledger(f"landing lock taken over from {current.get('holder', '?')} ({stale}) by {holder}",
                                    kind="landing.lock_taken", level="warn",

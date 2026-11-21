@@ -15,14 +15,11 @@ reap.resumed.
 from __future__ import annotations
 
 import contextlib
-import datetime
-import fcntl
-import json
 import os
 from pathlib import Path
-import re
-import socket
-from typing import Any, Literal, Mapping, cast, overload
+from typing import Any, Literal, Mapping, overload
+
+from fathers_common import events as _common_events
 
 from . import entry as _entry
 from .contract import (
@@ -101,11 +98,11 @@ __all__ = [
     "rotate",
 ]
 
-VERSION = 1
-EVENTS_MAX = 4 << 20  # bytes of events.jsonl before it becomes events.jsonl.1
-LINE_MAX = 16 * 1024  # bytes of one line with its newline
-COMMAND_MAX = 400  # characters of a command line kept
-CONTROL = re.compile("[\x00-\x1f\x7f-\x9f]")
+VERSION = _common_events.SCHEMA_VERSION
+EVENTS_MAX = _common_events.ROTATE_AT  # bytes of events.jsonl before it becomes events.jsonl.1
+LINE_MAX = _common_events.MAX_LINE  # bytes of one line with its newline
+COMMAND_MAX = _common_events.MAX_COMMAND  # characters of a command line kept
+LOCK_WAIT = _common_events.LOCK_WAIT
 
 
 def path(directory: Path) -> Path:
@@ -114,32 +111,21 @@ def path(directory: Path) -> Path:
 
 def host() -> str:
     """The machine's short host name, lowercase."""
-    name = socket.gethostname().split(".")[0].lower()
-    name = re.sub(r"[^a-z0-9-]", "-", name).strip("-")[:63]
-    return name or "localhost"
+    return _common_events.host_name()
 
 
 def moment() -> str:
     """Now, RFC 3339 UTC with milliseconds."""
-    now = datetime.datetime.now(datetime.timezone.utc)
-    return now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
+    return _common_events.timestamp()
 
 
 def clean(value: Any) -> Any:
-    """Strings without control characters (none reaches a terminal as an escape), recursively."""
-    if isinstance(value, str):
-        return CONTROL.sub(" ", value)
-    if isinstance(value, dict):
-        return {CONTROL.sub(" ", str(key)): clean(item) for key, item in cast(dict[Any, Any], value).items()}
-    if isinstance(value, (list, tuple)):
-        return [clean(item) for item in cast(list[Any], value)]
-    if isinstance(value, float) and value != value:
-        return None
-    return value
+    """Strings without control/separator characters, capped and bounded via `fathers_common.events.clean`."""
+    return _common_events.clean(value)
 
 
 def command(text: Any) -> str:
-    return str(text or "")[:COMMAND_MAX]
+    return _common_events.command(str(text or ""))
 
 
 def request(entry: Mapping[str, Any], entry_path: Path | None = None) -> Subject:
@@ -179,18 +165,8 @@ def holder(entry: Mapping[str, Any]) -> Actor:
 
 def line(kind: str, subject: Mapping[str, Any], details: Mapping[str, Any], who: Mapping[str, Any],
          level: str | None = None) -> bytes:
-    event: Event = {"v": VERSION, "time": moment(), "host": host(), "source": "slotfather", "kind": kind,
-                    "subject": cast(Subject, clean(subject)), "actor": cast(Actor, clean(who)),
-                    "details": cast(dict[str, Any], clean(details))}
-    if level and level != "info":
-        event["level"] = level
-    data = (json.dumps(event, sort_keys=True, allow_nan=False, ensure_ascii=False) + "\n").encode("utf-8")
-    if len(data) > LINE_MAX:  # never an oversized line: the details go, the event stays
-        event["details"] = {"truncated": True}
-        data = (json.dumps(event, sort_keys=True, allow_nan=False, ensure_ascii=False) + "\n").encode("utf-8")
-    if len(data) > LINE_MAX:  # a subject or actor too large even so: no line at all
-        raise ValueError("event too large")
-    return data
+    built = _common_events.build_event("slotfather", kind, subject, who, details, level=level)
+    return _common_events.encode_event(built, compact=False)
 
 
 @overload
@@ -322,21 +298,10 @@ def emit(directory: Path, kind: str, subject: Mapping[str, Any], details: Mappin
         if foreign_owner(directory) is not None:
             return
         data = line(kind, subject, details or {}, who or actor(), level)
-        target = path(directory)
-        fd = os.open(target, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
-        try:
-            size = os.fstat(fd).st_size
-            # A torn earlier write must not swallow this line: start it on a line of its own.
-            prefix = b"\n" if size and os.pread(fd, 1, size - 1) != b"\n" else b""
-            os.write(fd, prefix + data)  # one write, at the end even with other appenders
-        finally:
-            os.close(fd)
-        if target.stat().st_size > EVENTS_MAX:
-            rotate(target)
+        _common_events.append_event(path(directory), data, rotate_at=EVENTS_MAX, lock_wait=LOCK_WAIT)
 
 
 def rotate(target: Path) -> None:
-    with open(target.with_name("events.lock"), "a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        if target.exists() and target.stat().st_size > EVENTS_MAX:  # another writer may have rotated meanwhile
+    with open(target.with_name("events.lock"), "a", encoding="utf-8") as lock:
+        if _common_events.hold_lock(lock, LOCK_WAIT) and target.exists() and target.stat().st_size > EVENTS_MAX:
             target.replace(target.with_name(target.name + ".1"))

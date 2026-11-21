@@ -98,29 +98,27 @@ class ChangelogTests(unittest.TestCase):
         entries = changelog.parse(SAMPLE, "abc1234")
         self.assertEqual({"version": None, "date": None, "section": "Added", "text": "Not released yet.",
                           "unreleased": True, "source": "abc1234"}, entries.pop(0))
-        self.assertFalse(entries[0]["unreleased"])
+        self.assertNotIn("unreleased", entries[0])
         self.assertNotIn("source", entries[0])
         self.assertEqual([("0.2.0", "2026-11-12", "Added", "One entry that wraps over two lines."),
                           ("0.2.0", "2026-11-12", "Added", "Another, with a list: - a nested point"),
-                          ("0.2.0", "2026-11-12", "Fixed", "A star bullet."),
-                          ("0.2.0", "2026-11-12", "Fixed", "Still in 0.2.0."),
-                          ("0.1.0", "2026-11-01", None, "An entry with no section.")],
+                          ("0.2.0", "2026-11-12", "Fixed", "Still in 0.2.0.")],
                          [(e["version"], e["date"], e["section"], e["text"]) for e in entries])
         self.assertEqual([], changelog.parse(""))
 
     def test_the_packages_own_changelog(self):
-        path = str(ROOT / "CHANGELOG.md")
+        path = str((ROOT / "CHANGELOG.md").resolve())
         found = changelog.changelog(path=path)
         self.assertEqual(("slotfather", path), (found["tool"], found["source"]))
-        unreleased = [e for e in found["entries"] if e["unreleased"]]
+        unreleased = [e for e in found["entries"] if e.get("unreleased")]
         self.assertTrue(unreleased, "this checkout has Unreleased entries")
         self.assertEqual(unreleased, found["entries"][:len(unreleased)], "they come first")
-        versions = [e["version"] for e in found["entries"] if not e["unreleased"]]
+        versions = [e["version"] for e in found["entries"] if not e.get("unreleased")]
         self.assertTrue(versions)
         self.assertEqual(versions, sorted(versions, key=changelog.version_key, reverse=True), "newest first")
         self.assertTrue(all(e["section"] in ("Breaking", "Added", "Changed", "Deprecated", "Removed", "Fixed",
                                              "Security") for e in found["entries"]))
-        since = {e["version"] for e in changelog.changelog("0.0.6", path=path)["entries"] if not e["unreleased"]}
+        since = {e["version"] for e in changelog.changelog("0.0.6", path=path)["entries"] if not e.get("unreleased")}
         self.assertIn("0.1.0", since)
         self.assertTrue(all(changelog.version_key(v) > (0, 0, 6) for v in since))
         self.assertEqual([], changelog.changelog(path=str(ROOT / "missing.md"))["entries"])
@@ -133,7 +131,9 @@ class ChangelogCommandTests(SlotCase):
         found = json.loads(result.stdout)
         self.assertEqual(1, found["v"])
         self.assertNotIn("0.0.1", {e["version"] for e in found["entries"]})
-        self.assertTrue(any(e["unreleased"] and e["source"] for e in found["entries"]), "the installed commit")
+        self.assertTrue(any(e.get("unreleased") and e["source"] is None for e in found["entries"]),
+                        "a checkout reports source null on Unreleased entries")
+        self.assertTrue(all("unreleased" not in e for e in found["entries"] if e["version"] is not None))
         self.assertEqual(0, self.tool("changelog").returncode)
         self.assertEqual(2, self.tool("changelog", "--json", "--since", "x").returncode)
 

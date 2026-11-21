@@ -18,15 +18,15 @@ from __future__ import annotations
 
 from collections.abc import Callable, Generator
 import contextlib
-import errno
 import fcntl
 import json
 import os
 from pathlib import Path
 import re
-import secrets
 import threading
 from typing import Any
+
+from fathers_common.atomic import atomic_write as _atomic_write
 
 from . import config
 from .errors import LaneError
@@ -160,9 +160,6 @@ def read_json(path: Path, *, reject_duplicates: bool = False) -> dict[str, Any] 
     return data if isinstance(data, dict) else None  # pyright: ignore[reportUnknownVariableType]
 
 
-UNSYNCABLE = {errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP}
-
-
 def cut_short(path: Path) -> str:
     return (f"lane state {path} is unreadable, empty or not a JSON object: a write was cut short or the file is "
             "damaged. Restore the record or remove the file; until then it is not read as a lane, and start does not "
@@ -170,35 +167,8 @@ def cut_short(path: Path) -> str:
 
 
 def atomic_write(path: Path, text: str, mode: int | None = None) -> None:
-    """Replace `path` with `text` so a reader sees the old file or the whole new one, and a crash after the call
-    returns keeps the new one (fathers#129).
-
-    Each writer gets its own temporary file beside the target, named so no glob of records matches it; the file
-    and then its directory are synced; a failed write removes the temporary file and leaves the target as it was.
-    `mode` sets the file's permissions; None leaves them to the umask, as for an ordinary new file."""
-    pending = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
-    descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666 if mode is None else mode)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            if mode is not None:
-                os.fchmod(handle.fileno(), mode)
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(pending, path)
-    except BaseException:
-        pending.unlink(missing_ok=True)
-        raise
-    # The rename lasts once the directory entry does. A file system that cannot sync a directory says so with
-    # EINVAL or ENOTSUP and has done what it can; any other failure (EIO) is the caller's to see.
-    folder = os.open(path.parent, os.O_RDONLY)
-    try:
-        os.fsync(folder)
-    except OSError as error:
-        if error.errno not in UNSYNCABLE:
-            raise
-    finally:
-        os.close(folder)
+    """Replace `path` with `text` durably via `fathers_common.atomic.atomic_write` (fathers#129, fathers#117)."""
+    _atomic_write(path, text, mode=mode)
 
 
 def write_json(path: Path, data: Any) -> None:

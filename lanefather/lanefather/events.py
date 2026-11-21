@@ -19,25 +19,24 @@ from __future__ import annotations
 from collections.abc import Mapping
 import contextlib
 import datetime
-import fcntl
 import json
-import math
 import os
 from pathlib import Path
 import re
-import socket
 import tempfile
-import time
 from typing import Any, cast
 
-SCHEMA = 1
+from fathers_common import events as _common_events
+
+SCHEMA = _common_events.SCHEMA_VERSION
 SOURCE = "lanefather"
 TAG = "lane"
-MAX_LINE = 16 * 1024
-ROTATE_AT = 4 * 2**20
-MAX_DEPTH = 4  # details itself is level 1
-MAX_STRING = 1000
-MAX_COMMAND = 400
+MAX_LINE = _common_events.MAX_LINE
+ROTATE_AT = _common_events.ROTATE_AT
+MAX_DEPTH = _common_events.MAX_DEPTH
+MAX_STRING = _common_events.MAX_STRING
+MAX_COMMAND = _common_events.MAX_COMMAND
+LOCK_WAIT = _common_events.LOCK_WAIT
 
 # The kinds Lanefather writes, each at one kind of ledger entry. Godfather's per-source formatters read this list.
 KINDS: dict[str, str] = {
@@ -80,11 +79,6 @@ KINDS: dict[str, str] = {
     "override": "a --force-reason overrode a refusal (warn)",
 }
 
-# C0, DEL and C1, and the line and paragraph separators, which text readers split lines on.
-_CONTROL = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]")
-LOCK_WAIT = 1.0
-
-
 def path() -> Path:
     """The machine-wide log: LANEFATHER_EVENTS, else events.jsonl in Lanefather's default state directory."""
     configured = os.environ.get("LANEFATHER_EVENTS")
@@ -108,14 +102,12 @@ def temporary(directory: Path) -> bool:
 
 def host_name() -> str:
     """The machine's short host name, lowercase, as every event and snapshot names it."""
-    name = re.sub(r"[^a-z0-9-]", "-", socket.gethostname().split(".", 1)[0].lower()).strip("-")
-    return name[:63].strip("-") or "localhost"
+    return _common_events.host_name()
 
 
 def timestamp(moment: datetime.datetime) -> str:
     """RFC 3339 UTC with milliseconds."""
-    utc = moment.astimezone(datetime.UTC)
-    return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond // 1000:03d}Z"
+    return _common_events.timestamp(moment)
 
 
 # The agent sessions a process can run for, the most specific first: a Codex thread started from a Claude Code
@@ -267,84 +259,30 @@ def actor() -> dict[str, Any]:
 
 
 def clean(value: Any, depth: int = 1, limit: int = MAX_STRING) -> Any:
-    """A JSON value the schema accepts: strings without control characters and cut to `limit`, finite numbers,
-    containers no deeper than the schema allows (a deeper one becomes its JSON text)."""
-    if isinstance(value, str):
-        text = _CONTROL.sub(" ", value)
-        return text if len(text) <= limit else text[:limit - 1] + "…"
-    if isinstance(value, bool) or value is None or isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return value if math.isfinite(value) else None
-    if isinstance(value, (dict, list, tuple)):
-        if depth >= MAX_DEPTH:
-            return clean(json.dumps(value, default=str, sort_keys=True), depth, limit)
-        if isinstance(value, dict):
-            mapping = cast(dict[Any, Any], value)
-            return {clean(str(key), depth, 64): clean(item, depth + 1, limit) for key, item in mapping.items()}
-        items: list[Any] = list(cast(Any, value))
-        return [clean(item, depth + 1, limit) for item in items]
-    return clean(str(value), depth, limit)
+    """Sanitize `value` for schema v1 via `fathers_common.events.clean`."""
+    return _common_events.clean(value, depth, limit)
 
 
 def command(argv: list[str] | tuple[str, ...]) -> str:
     """A command line for an event: joined and cut to 400 characters."""
-    return clean(" ".join(argv), 1, MAX_COMMAND)
+    return _common_events.command(argv)
 
 
 def event(kind: str, subject: dict[str, Any], details: dict[str, Any], level: str = "info",
           moment: datetime.datetime | None = None) -> dict[str, Any]:
     """One event of `kind` about `subject`, caused by this process."""
-    found: dict[str, Any] = {
-        "v": SCHEMA, "time": timestamp(moment or datetime.datetime.now(datetime.UTC)), "host": host_name(),
-        "source": SOURCE, "kind": kind,
-        "subject": {key: clean(item, MAX_DEPTH) for key, item in subject.items() if item is not None},
-        "actor": actor(), "details": clean(details, 1)}
-    if level != "info":
-        found["level"] = level
-    return found
+    return _common_events.build_event(SOURCE, kind, subject, actor(), details, level=level, moment=moment)
 
 
 def encode(found: dict[str, Any]) -> bytes:
-    """The event's line; a line over 16 KiB keeps the shorter strings, then only the ledger message."""
-    for limit in (MAX_STRING, 200):
-        line = (json.dumps(dict(found, details=clean(found["details"], 1, limit)), ensure_ascii=False,
-                           separators=(",", ":")) + "\n").encode()
-        if len(line) <= MAX_LINE:
-            return line
-    details = {"message": clean(found["details"].get("message", ""), 1, 2000), "truncated": True}
-    return (json.dumps(dict(found, details=details), ensure_ascii=False, separators=(",", ":")) + "\n").encode()
+    """The event's line, kept within 16 KiB via `fathers_common.events.encode_event`."""
+    return _common_events.encode_event(found)
 
 
 def hold(handle: Any, wait: float) -> bool:
-    """Take an exclusive flock on `handle` within `wait` seconds; False when another process keeps it."""
-    deadline = time.monotonic() + wait
-    while True:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return True
-        except BlockingIOError:
-            if time.monotonic() >= deadline:
-                return False
-            time.sleep(0.02)
+    return _common_events.hold_lock(handle, wait)
 
 
 def append(found: dict[str, Any], log: Path | None = None) -> bool:
     """Append one event; False when it could not be written, which never stops the caller."""
-    target = log or path()
-    with contextlib.suppress(Exception):
-        line = encode(found)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with open(target.with_name("events.lock"), "a") as lock:
-            if not hold(lock, LOCK_WAIT):
-                return False  # a writer that stopped holding the lock never stalls an action
-            with contextlib.suppress(FileNotFoundError):
-                if target.stat().st_size + len(line) > ROTATE_AT:
-                    target.replace(target.with_name(target.name + ".1"))
-            descriptor = os.open(target, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-            try:
-                os.write(descriptor, line)
-            finally:
-                os.close(descriptor)
-        return True
-    return False
+    return _common_events.append_event(log or path(), found, rotate_at=ROTATE_AT, lock_wait=LOCK_WAIT)

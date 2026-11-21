@@ -24,7 +24,6 @@ from __future__ import annotations
 import ast
 from contextlib import ExitStack, contextmanager
 import ctypes
-import fcntl
 import hashlib
 import io
 import json
@@ -39,9 +38,25 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import time
 import uuid
 from typing import Any, Callable, Iterator, cast
+
+_ROOT_DIR = Path(__file__).resolve().parent
+for _extra in (_ROOT_DIR / "src", _ROOT_DIR.parent / "common"):
+    if _extra.is_dir() and str(_extra) not in sys.path:
+        sys.path.insert(0, str(_extra))
+
+from fathers_common.atomic import atomic_write  # noqa: E402
+from fathers_common.installer import (  # noqa: E402
+    InstallError,
+    copy_python_tree,
+    files_digest,
+    git_source_identity,
+    install_lock,
+    resolve_interpreter,
+    stage_release,
+    swap_commands,
+)
 
 MIN_PYTHON = (3, 9)
 ENV_SHEBANG = b"#!/usr/bin/env python3\n"
@@ -57,10 +72,6 @@ CGROUP_LINE = b"DEFAULT_CGROUP = None  "  # in slotfather; --cgroup replaces the
 GUARD = b"Retired queue: use slotfather with ~/.local/state/slotfather. Update this checkout before running heavy work.\n"
 
 
-class InstallError(Exception):
-    pass
-
-
 LOCK_WAIT = 15.0  # seconds the installer retries a queue lock that a client holds (SLOTFATHER_INSTALL_LOCK_WAIT)
 
 
@@ -73,20 +84,8 @@ def lock_wait() -> float:
 
 @contextmanager
 def lock(path: Path) -> Iterator[None]:
-    """Takes the lock at `path`, retrying for lock_wait() seconds: queue clients hold it for moments at a time, and
-    dozens of them share a busy queue. Refuses before anything changed when it stays held."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a") as handle:
-        deadline = time.monotonic() + lock_wait()
-        while True:
-            try:
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    raise InstallError(f"queue operation in progress at {path} for {lock_wait():g} s; nothing was "
-                                       f"changed: retry after it finishes") from None
-                time.sleep(0.05)
+    """Takes the lock at `path`, retrying for lock_wait() seconds via `fathers_common.installer.install_lock`."""
+    with install_lock(path, lock_wait(), label="queue operation"):
         yield
 
 
@@ -227,16 +226,7 @@ def migrate_queue(updates: list[tuple[Path, bytes, bytes]], backup: Path) -> Non
                 handle.flush()
                 os.fsync(handle.fileno())
         for path, _, payload in updates:
-            pending = path.with_name(path.name + ".pending")
-            try:
-                with pending.open("wb") as handle:
-                    os.fchmod(handle.fileno(), path.stat().st_mode & 0o777)
-                    handle.write(payload)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                os.replace(pending, path)
-            finally:
-                pending.unlink(missing_ok=True)
+            atomic_write(path, payload, mode=path.stat().st_mode & 0o777)
     except OSError as error:
         raise InstallError(f"queue conversion stopped; original entries are preserved at {saved}: {error}") from None
     print(f"Converted request fields of {len(updates)} live queue entr{'y' if len(updates) == 1 else 'ies'} in place; "
@@ -435,22 +425,7 @@ def options(argv: list[str]) -> dict[str, str]:
 def interpreter(python: str | None = None) -> str:
     """The interpreter the commands will name: --python PATH, else this one unless it belongs to a virtual
     environment, whose interpreter disappears with the project. It must exist and be Python 3.9 or later."""
-    if python:
-        python = os.path.abspath(os.path.expanduser(python))
-    elif sys.prefix != sys.base_prefix:
-        raise InstallError("this Python belongs to a virtual environment; run install.py with a Python outside it, "
-                           "or name one with --python")
-    else:
-        python = sys.executable  # as invoked, not resolved: a version-manager link keeps following upgrades
-    try:
-        found = subprocess.run([python, "-c", "import sys; print('%d.%d' % sys.version_info[:2])"],
-                               capture_output=True, text=True, timeout=20).stdout.strip()
-        version = tuple(int(part) for part in found.split("."))
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        raise InstallError(f"cannot run {python} as Python") from None
-    if version < MIN_PYTHON:
-        raise InstallError(f"{python} is Python {found}; slotfather needs {MIN_PYTHON[0]}.{MIN_PYTHON[1]} or later")
-    return python
+    return resolve_interpreter(python, MIN_PYTHON, tool="slotfather", allow_venv=False, allow_explicit_venv=True)
 
 
 def install_binary(source: Path, target: Path, python: str, state: Path | None = None,
@@ -466,59 +441,32 @@ def install_binary(source: Path, target: Path, python: str, state: Path | None =
         if payload.count(CGROUP_LINE) != 1:
             raise InstallError(f"cannot pin the cgroup in {source}: its DEFAULT_CGROUP line is not the expected one")
         payload = payload.replace(CGROUP_LINE, b"DEFAULT_CGROUP = " + json.dumps(cgroup).encode() + b"  ")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    pending: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".slotfather-", delete=False) as handle:
-            pending = Path(handle.name)
-            handle.write(payload)
-            handle.flush()
-            os.fchmod(handle.fileno(), 0o755)
-            os.fsync(handle.fileno())
-        os.replace(pending, target)
-    finally:
-        if pending is not None:
-            pending.unlink(missing_ok=True)
+    atomic_write(target, payload, mode=0o755)
 
 
 def source_files(root: Path) -> list[Path]:
     """The portable runtime payload, excluding bytecode, git data and unrelated checkout files."""
     files = [root / "install.py", *(root / name for name in COMMANDS)]
-    package = root / "src" / "slotfather"
-    if package.is_dir():
-        files.extend(sorted(package.rglob("*.py")))
+    for sub in ("slotfather", "fathers_common"):
+        package = root / "src" / sub
+        if package.is_dir():
+            files.extend(sorted(p for p in package.rglob("*.py") if "__pycache__" not in p.parts))
     if (root / "CHANGELOG.md").is_file():  # shipped with the package: capabilities --json names it for Godfather
         files.append(root / "CHANGELOG.md")
     return files
 
 
 def source_digest(root: Path) -> str:
-    digest = hashlib.sha256()
-    for path in source_files(root):
-        if not path.is_file():
-            raise InstallError(f"source file missing: {path}")
-        name = str(path.relative_to(root)).encode()
-        payload = path.read_bytes()
-        digest.update(len(name).to_bytes(8, "big") + name)
-        digest.update(len(payload).to_bytes(8, "big") + payload)
-    return digest.hexdigest()
+    return files_digest(root, source_files(root))
 
 
 def source_identity(root: Path) -> dict[str, Any]:
     """Installed and streamed checkouts identify exactly the same runtime bytes."""
-    digest = source_digest(root)
-    supplied = root / ".slotfather-source.json"
-    if supplied.is_file():
-        data = json.loads(supplied.read_text())
-        if data.get("source_sha256") != digest:
-            raise InstallError("streamed source does not match its recorded digest")
-        return data
-    result = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True)
-    commit = result.stdout.strip() if result.returncode == 0 else None
-    changed = subprocess.run(["git", "-C", str(root), "status", "--porcelain", "--untracked-files=normal", "--",
-                              "install.py", *COMMANDS, "src", "CHANGELOG.md"], capture_output=True, text=True)
-    return {"v": 1, "commit": commit, "dirty": bool(changed.stdout.strip()) or commit is None,
-            "source_sha256": digest}
+    status_paths: list[str] = ["install.py", *COMMANDS, "src", "CHANGELOG.md"]
+    common_source = root.parent / "common" / "fathers_common"
+    if common_source.exists():
+        status_paths.append(str(common_source))
+    return git_source_identity(root, source_files(root), status_paths, supplied_file=root / ".slotfather-source.json")
 
 
 def releases_dir(home: Path, bin_dir: Path | None = None) -> Path:
@@ -549,20 +497,8 @@ def load_history(releases: Path) -> dict[str, Any]:
 
 def save_history(releases: Path, entries: list[str], python: str | None) -> None:
     path = history_path(releases)
-    path.parent.mkdir(parents=True, exist_ok=True)
     payload = (json.dumps({"v": 1, "releases": entries, "python": python}, sort_keys=True) + "\n").encode()
-    pending: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".history-", delete=False) as handle:
-            pending = Path(handle.name)
-            handle.write(payload)
-            handle.flush()
-            os.fchmod(handle.fileno(), 0o644)
-            os.fsync(handle.fileno())
-        os.replace(pending, path)
-    finally:
-        if pending is not None:
-            pending.unlink(missing_ok=True)
+    atomic_write(path, payload, mode=0o644)
 
 
 def wrapper_release(path: Path) -> Path | None:
@@ -593,20 +529,13 @@ def install_package(home: Path, root: Path, state: Path | None = None, cgroup: s
     descriptor = {"identity": identity, "defaults": defaults}
     suffix = hashlib.sha256(json.dumps(descriptor, sort_keys=True).encode()).hexdigest()[:12]
     releases = releases_dir(home, bin_dir)
-    releases.mkdir(parents=True, exist_ok=True)
-    releases.parent.chmod(0o755)
-    releases.chmod(0o755)
-    release = releases / (identity["source_sha256"] + "-" + suffix)
-    pending = Path(tempfile.mkdtemp(prefix=".pending-", dir=releases))
-    try:
-        package = pending / "slotfather"
-        package.mkdir()
-        source_package = root / "src/slotfather"
-        for path in sorted(source_package.rglob("*.py")):
-            target = package / path.relative_to(source_package)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(path, target)
-        config = package / "config.py"
+    release_name = f"{identity['source_sha256']}-{suffix}"
+
+    def populate(pending: Path) -> None:
+        copy_python_tree(root / "src/slotfather", pending / "slotfather")
+        if (root / "src/fathers_common").is_dir():
+            copy_python_tree(root / "src/fathers_common", pending / "fathers_common")
+        config = pending / "slotfather" / "config.py"
         payload = config.read_bytes()
         if state is not None:
             if payload.count(STATE_LINE) != 1:
@@ -617,27 +546,13 @@ def install_package(home: Path, root: Path, state: Path | None = None, cgroup: s
                 raise InstallError(f"cannot pin the cgroup in {config}: unexpected DEFAULT_CGROUP")
             payload = payload.replace(CGROUP_LINE, b"DEFAULT_CGROUP = " + json.dumps(cgroup).encode() + b"  ")
         config.write_bytes(payload)
-        (package / "version.json").write_text(json.dumps(identity, sort_keys=True) + "\n")
+        (pending / "slotfather" / "version.json").write_text(json.dumps(identity, sort_keys=True) + "\n")
         if (root / "CHANGELOG.md").is_file():
-            shutil.copyfile(root / "CHANGELOG.md", package / "CHANGELOG.md")
-        # mkdtemp is private while preparing; published root-owned code must be readable by runner.
-        for path in pending.rglob("*"):
-            path.chmod(0o755 if path.is_dir() else 0o644)
-        pending.chmod(0o755)
+            shutil.copyfile(root / "CHANGELOG.md", pending / "slotfather" / "CHANGELOG.md")
         if source_digest(root) != identity["source_sha256"]:
             raise InstallError("source changed during install; retry from a stable checkout")
-        if release.exists():
-            expected = {str(p.relative_to(pending)): p.read_bytes() for p in pending.rglob("*") if p.is_file()}
-            actual = {str(p.relative_to(release)): p.read_bytes() for p in release.rglob("*")
-                      if p.is_file() and "__pycache__" not in p.parts}
-            if actual != expected:
-                raise InstallError(f"immutable installed release differs from source: {release}")
-        else:
-            os.replace(pending, release)
-        return release
-    finally:
-        if pending.exists():
-            shutil.rmtree(pending)
+
+    return stage_release(releases, release_name, populate, world_readable=True)
 
 
 def package_wrapper(release: Path, name: str) -> bytes:
@@ -683,63 +598,9 @@ def smoke_check(release: Path, python: str) -> None:
                                        "expected a JSON object")
 
 
-def _snapshot_wrapper(path: Path) -> tuple[str, bytes | str | None, int]:
-    if path.is_symlink():
-        return ("symlink", os.readlink(path), 0)
-    if path.is_file():
-        return ("file", path.read_bytes(), path.stat().st_mode & 0o777)
-    return ("absent", None, 0)
-
-
-def _restore_wrapper(path: Path, snap: tuple[str, bytes | str | None, int]) -> None:
-    kind, data, mode = snap
-    if kind == "absent":
-        path.unlink(missing_ok=True)
-        return
-    if kind == "symlink" and isinstance(data, str):
-        pending = path.with_name(f".restore-{uuid.uuid4().hex}")
-        try:
-            os.symlink(data, pending)
-            os.replace(pending, path)
-        finally:
-            pending.unlink(missing_ok=True)
-        return
-    if kind == "file" and isinstance(data, bytes):
-        pending = None
-        try:
-            with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".restore-", delete=False) as handle:
-                pending = Path(handle.name)
-                handle.write(data)
-                handle.flush()
-                os.fchmod(handle.fileno(), mode)
-                os.fsync(handle.fileno())
-            os.replace(pending, path)
-        finally:
-            if pending is not None:
-                pending.unlink(missing_ok=True)
-
-
 def swap_wrappers(bin_dir: Path, writers: list[tuple[str, Callable[[Path], None]]]) -> None:
     """Replace all command wrappers; restore the previous set if any swap fails."""
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    snapshots = [(name, _snapshot_wrapper(bin_dir / name)) for name, _ in writers]
-    swapped: list[tuple[str, tuple[str, bytes | str | None, int]]] = []
-    for (name, write_fn), (_, snap) in zip(writers, snapshots):
-        target = bin_dir / name
-        try:
-            write_fn(target)
-            swapped.append((name, snap))
-        except (InstallError, OSError) as error:
-            for prev_name, prev_snap in reversed(swapped):
-                try:
-                    _restore_wrapper(bin_dir / prev_name, prev_snap)
-                except OSError:
-                    pass
-            try:
-                _restore_wrapper(target, snap)
-            except OSError:
-                pass
-            raise InstallError(f"wrapper swap failed for {name}; restored previous commands: {error}") from None
+    swap_commands(bin_dir, writers)
 
 
 def _write_release_wrappers(bin_dir: Path, release: Path, python: str) -> None:

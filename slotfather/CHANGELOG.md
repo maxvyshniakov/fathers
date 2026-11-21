@@ -190,6 +190,13 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- `events.jsonl` strips Unicode line and paragraph separators (`U+2028`, `U+2029`), caps general strings at 1000
+  characters (400 for commands) and bounds the `events.lock` wait to 1 s, and `install.py` vendors `fathers_common`
+  into each immutable release and includes it in the source digest and dirty checks (fathers#117).
+- `slotfather changelog --json` follows the shared changelog contract (`godfather/docs/contracts/changelog.md`):
+  entries require `- ` bullets under a `### ` section, dated entries omit `unreleased`, `--since` accepts build-suffixed
+  versions and orders matching headings by file order, and `source` on Unreleased entries comes from `version.json`
+  (`null` from a checkout) (fathers#119).
 - On Linux, `procs --json --cwd` omits non-dumpable long-lived managed services (`systemd --user`, `(sd-pam)`, and
   systemd `.service` `MainPID`s) whose `/proc` links fail with `EACCES`, while any non-dumpable process started
   inside a worktree or outside a service's `MainPID` remains in `cwd_unknown` (fathers#164).

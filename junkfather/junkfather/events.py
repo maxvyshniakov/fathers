@@ -1,9 +1,7 @@
-"""The event log, `events.jsonl` in the state directory, in Godfather's event schema version 1.
+"""The event log, `events.jsonl` in the state directory, in Godfather's event schema version 1 (fathers#117).
 
-One UTF-8 JSON object per line, at most 16 KiB: `v`, `time` (RFC 3339 UTC with milliseconds), `host`, `source`
-(`junkfather`), `kind`, `subject`, `actor`, `details`, optional `level`. Each line goes out in one `write` on a file
-opened with O_APPEND, mode 0600; past 4 MiB the log becomes `events.jsonl.1` under an flock on `events.lock`. An
-event is written after the change it describes, and one that cannot be written never fails the action.
+Backed by `fathers_common.events`: strips C0/DEL/C1 and U+2028/U+2029, caps strings to 1000 chars (400 for commands),
+bounds nesting at four levels, keeps lines within 16 KiB, and rotates past 4 MiB under a bounded flock on `events.lock`.
 
 Kinds (docs/reference.md, Events): entry.owned, entry.adopted, entry.exited, entry.extended, entry.handed,
 entry.reaped, entry.reap_failed, resource.owned, resource.stopped, resource.stop_failed, unowned.reported,
@@ -11,50 +9,40 @@ unowned.reaped, sweep.finished, hook.failed.
 """
 from __future__ import annotations
 
-import fcntl
-import json
 import os
 from pathlib import Path
-import re
-import socket
-import time
-from typing import Any, Dict, Mapping, Optional, Sequence, cast
+from typing import Any, Dict, Mapping, Optional, Sequence
+
+from fathers_common import events as _common_events
 
 from . import owner as _owner
-from . import text as _text
 
-VERSION = 1
+VERSION = _common_events.SCHEMA_VERSION
 SOURCE = "junkfather"
-ROTATE = 4 << 20
-LINE_MAX = 16 << 10
-TEXT_MAX = 400
+ROTATE = _common_events.ROTATE_AT
+LINE_MAX = _common_events.MAX_LINE
+TEXT_MAX = _common_events.MAX_STRING
+COMMAND_MAX = _common_events.MAX_COMMAND
+LOCK_WAIT = _common_events.LOCK_WAIT
 KINDS = ("entry.owned", "entry.adopted", "entry.exited", "entry.extended", "entry.handed", "entry.reaped",
          "entry.reap_failed", "resource.owned", "resource.stopped", "resource.stop_failed", "unowned.reported",
          "unowned.reaped", "sweep.finished", "hook.failed")
-CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
 def now() -> str:
-    return str(_text.iso(time.time()))
+    return _common_events.timestamp()
 
 
 def host() -> str:
-    return socket.gethostname().split(".")[0].lower() or "localhost"
+    return _common_events.host_name()
 
 
-def clean(value: Any, depth: int = 0) -> Any:
-    """No control characters, strings cut to TEXT_MAX, nesting cut at four levels."""
-    if isinstance(value, str):
-        return CONTROL.sub(" ", value)[:TEXT_MAX]
-    if isinstance(value, bool) or value is None or isinstance(value, (int, float)):
-        return value
-    if depth >= 3:
-        return clean(json.dumps(value, sort_keys=True, default=str), depth)
-    if isinstance(value, Mapping):
-        return {clean(str(k)): clean(v, depth + 1) for k, v in cast(Mapping[Any, Any], value).items()}
-    if isinstance(value, (list, tuple)):
-        return [clean(v, depth + 1) for v in cast(Sequence[Any], value)]
-    return clean(str(value), depth)
+def clean(value: Any, depth: int = 1, limit: int = TEXT_MAX) -> Any:
+    return _common_events.clean(value, depth, limit)
+
+
+def command(value: str | Sequence[str] | None) -> str:
+    return _common_events.command(value)
 
 
 def subject(entry: Mapping[str, Any]) -> Dict[str, Any]:
@@ -100,39 +88,11 @@ def caller(via: Optional[str] = None) -> Dict[str, Any]:
 
 def line(kind: str, subject_: Mapping[str, Any], actor: Mapping[str, Any], details: Mapping[str, Any],
          level: Optional[str] = None) -> str:
-    event: Dict[str, Any] = {"v": VERSION, "time": now(), "host": host(), "source": SOURCE, "kind": kind,
-                             "subject": clean(subject_), "actor": clean(actor), "details": clean(details)}
-    if level and level != "info":
-        event["level"] = level
-    text = json.dumps(event, sort_keys=True, ensure_ascii=False) + "\n"
-    if len(text.encode("utf-8")) > LINE_MAX:
-        event["details"] = {"truncated": True}
-        text = json.dumps(event, sort_keys=True, ensure_ascii=False) + "\n"
-    return text
+    built = _common_events.build_event(SOURCE, kind, subject_, actor, details, level=level)
+    return _common_events.encode_event(built, compact=False).decode("utf-8")
 
 
 def write(root: Path, kind: str, subject_: Mapping[str, Any], actor: Mapping[str, Any],
           details: Optional[Mapping[str, Any]] = None, level: Optional[str] = None) -> None:
-    try:
-        text = line(kind, subject_, actor, details or {}, level).encode("utf-8")
-        root.mkdir(parents=True, exist_ok=True)
-        path = root / "events.jsonl"
-        try:
-            size = path.stat().st_size
-        except OSError:
-            size = 0
-        if size + len(text) > ROTATE:
-            with open(root / "events.lock", "a") as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX)
-                try:
-                    if path.stat().st_size + len(text) > ROTATE:
-                        os.replace(path, root / "events.jsonl.1")
-                except OSError:
-                    pass
-        descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-        try:
-            os.write(descriptor, text)
-        finally:
-            os.close(descriptor)
-    except Exception:  # noqa: BLE001 - an event that cannot be written never fails the action
-        pass
+    built = _common_events.build_event(SOURCE, kind, subject_, actor, details or {}, level=level)
+    _common_events.append_event(root / "events.jsonl", built, rotate_at=ROTATE, lock_wait=LOCK_WAIT)

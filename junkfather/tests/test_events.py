@@ -77,12 +77,14 @@ class EventLogTests(Case):
         self.assertEqual([], eventcheck.validate(event, strict=True))
 
     def test_control_characters_and_long_commands_are_cleaned(self):
-        events.write(self.state, "entry.owned", {"type": "entry", "id": "j1", "label": "a\x1b[31mred"},
-                     events.tool("sweep"), {"argv": ["x" * 1000], "deep": {"a": {"b": {"c": {"d": 1}}}}})
+        events.write(self.state, "entry.owned", {"type": "entry", "id": "j1", "label": "a\x1b[31mred\u2028b"},
+                     events.tool("sweep"), {"cmd": events.command(["x" * 1000]), "note": "y" * 1500,
+                                            "deep": {"a": {"b": {"c": {"d": 1}}}}})
         (event,) = self.lines()
         self.assertEqual([], eventcheck.validate(event, strict=True))
-        self.assertEqual("a [31mred", event["subject"]["label"])
-        self.assertEqual(400, len(event["details"]["argv"][0]))
+        self.assertEqual("a [31mred b", event["subject"]["label"])
+        self.assertEqual(400, len(event["details"]["cmd"]))
+        self.assertEqual(1000, len(event["details"]["note"]))
 
     def test_the_log_rotates_past_four_mebibytes(self):
         self.state.mkdir(parents=True)

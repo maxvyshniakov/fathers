@@ -263,12 +263,14 @@ operation, and nothing is written into another user's queue.
   (`week`, `count`, `p50`, `p90`), `plan_changes`, `trend` (including `why`: `plan grew: +N checks`, `plan shrank: ...`,
   `plan changed`, `same plan`, or `no plan recorded`), and `verdicts`. Without `--json`, prints one line per key.
 
-**Changelog** (fathers#103): `slotfather changelog --json [--since VERSION]` prints the installed release's
-CHANGELOG.md as `{"v": 1, "tool": "slotfather", "version", "source": its path or null, "entries": [{"version",
-"date", "section", "text", "unreleased"}]}`, one entry per bullet in file order with wrapped lines joined, newest
-first. Installs come from main, so the `## Unreleased` entries are what is installed: they come first, with
-`version` and `date` null, `unreleased: true` and `source`, the installed commit. `--since VERSION` keeps releases
-newer than VERSION, and Unreleased. It reads the changelog and the release's version.json, nothing else.
+**Changelog** (fathers#103, fathers#119): `slotfather changelog --json [--since VERSION]` prints the installed
+release's CHANGELOG.md as `{"v": 1, "tool": "slotfather", "version", "source": its resolved path or null, "entries":
+[{"version", "date", "section", "text"}]}`, one entry per `- ` bullet under a `### ` section in file order with
+indented continuation lines joined, newest first ([contract](../../godfather/docs/contracts/changelog.md)). Installs
+come from main, so the `## Unreleased` entries are what is installed: they come first, with `version` and `date` null,
+`unreleased: true` and `source` set to the installed commit (`null` from a checkout); dated release entries omit
+`unreleased` and `source`. `--since VERSION` keeps releases newer than VERSION, and Unreleased. It reads the changelog
+and the release's `version.json`, nothing else.
 
 **Dashboard actions** (`capabilities.dashboard.actions`): `reprioritize` and `ask-yield`, each identity-checked
 with the start time the caller saw (`status --json`'s `start`):

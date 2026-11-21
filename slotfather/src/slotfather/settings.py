@@ -420,9 +420,8 @@ def configure(changes: Mapping[str, Mapping[str, Any] | None], *,
                 if original is None:
                     path.unlink(missing_ok=True)
                 else:
-                    pending = path.with_name(path.name + ".pending")
-                    pending.write_bytes(original)
-                    pending.replace(path)
+                    from fathers_common.atomic import atomic_write
+                    atomic_write(path, original)
             raise _config.SlotError(f"cannot save settings: {error}") from None
         after: dict[str, bytes | None] = {}
         for name in changed:

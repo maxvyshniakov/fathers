@@ -168,8 +168,18 @@ class EventLogTests(SlotCase):
         self.assertIn("granted 1 to fine", (self.state / "queue.log").read_text())
 
     def test_strings_lose_control_characters_and_long_lines_their_details(self) -> None:
+        capped = json.loads(sf_events.line(
+            "lease.granted",
+            {"type": "request", "id": "1-2", "label": "a\x1b[31mb\u2028c"},
+            {"meta": {"cmd": "x" * 2000}},
+            sf_events.actor(),
+        ))
+        self.assertEqual([], eventcheck.validate(capped, strict=True))
+        self.assertEqual("a [31mb c", capped["subject"]["label"])
+        self.assertEqual(1000, len(capped["details"]["meta"]["cmd"]))
+
         line = sf_events.line("lease.granted", {"type": "request", "id": "1-2", "label": "a\x1b[31mb"},
-                              {"meta": {"cmd": "x" * 20000}}, sf_events.actor())
+                              {"items": ["x" * 1000 for _ in range(100)]}, sf_events.actor())
         event = json.loads(line)
         self.assertEqual([], eventcheck.validate(event, strict=True))
         self.assertEqual("a [31mb", event["subject"]["label"])

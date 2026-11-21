@@ -11,6 +11,8 @@ import stat
 import time
 from typing import Any, Callable, Iterable, Iterator, cast
 
+from fathers_common.atomic import atomic_write
+
 from . import config as _config
 from . import entry as _entry
 
@@ -121,28 +123,8 @@ def entries(directory: Path) -> list[tuple[Path, dict[str, Any]]]:
 
 
 def write(path: Path, entry: Any) -> None:
-    """Writes `entry` as JSON to `path` whole: a .pending file is written in full and fsynced, renamed over `path`,
-    and the directory fsynced, so a crash leaves the old file or the new one, never an empty or cut one
-    (fathers#123). A write that fails (a full disk) removes the .pending file and leaves `path` as it was. fsync,
-    not macOS's F_FULLFSYNC, deliberately: it survives a crash of the system, and a lease's grant must not wait
-    tens of milliseconds for the drive's cache on every write; a power cut may lose the last writes on macOS."""
-    pending = path.with_name(path.name + ".pending")
-    try:
-        with open(pending, "w", encoding="utf-8") as handle:  # a file object writes all of it or raises
-            handle.write(json.dumps(entry) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        pending.replace(path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            pending.unlink()
-        raise
-    with contextlib.suppress(OSError):  # a file system that cannot sync a directory keeps the rename as it is
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+    """Writes `entry` as JSON to `path` whole via `fathers_common.atomic.atomic_write` (fathers#123, fathers#117)."""
+    atomic_write(path, json.dumps(entry) + "\n")
 
 
 def unknown(directory: Path) -> list[tuple[Path, dict[str, Any]]]:

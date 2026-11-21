@@ -31,17 +31,33 @@ from typing import Any, cast
 
 # Inspect and copy source without creating uncommitted interpreter cache files in it.
 sys.dont_write_bytecode = True
+SOURCE = Path(__file__).resolve().parent
+COMMON = SOURCE.parent / "common" / "fathers_common"
+if str(SOURCE.parent / "common") not in sys.path:
+    sys.path.insert(0, str(SOURCE.parent / "common"))
+
+from fathers_common.installer import (  # noqa: E402
+    InstallError,
+    clean_git_env,
+    committed_head,
+    copy_python_tree,
+    install_lock,
+    resolve_interpreter,
+    stage_release,
+    write_launcher,
+)
+from fathers_common.installer import (  # noqa: E402
+    switch_symlink as _switch_symlink,
+)
 from lanefather import config, registry  # noqa: E402
 from lanefather.errors import LaneError  # noqa: E402
 from lanefather.runtime import MANIFEST, installed_identity, payload_digest, shipping_files  # noqa: E402
-from lanefather.state import atomic_write, read_json  # noqa: E402
+from lanefather.state import read_json  # noqa: E402
 
 MIN_PYTHON = (3, 11)
 KEEP_RELEASES = 3
-SOURCE = Path(__file__).resolve().parent
-COMMON = SOURCE.parent / "common" / "fathers_common"
 HEX_COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
-PENDING_DIR = re.compile(r"^\.pending-(\d+)$")
+PENDING_DIR = re.compile(r"^\.pending-(\d+)(?:-.*)?$")
 VERSION_PREFIX = re.compile(r"^(\d+(?:\.\d+)*)(?:-|$)")
 LAUNCHER = """#!{python}
 # lanefather's command (install.py): the release share/current points at, on the interpreter it was installed for.
@@ -54,42 +70,18 @@ sys.exit(main())
 """
 
 
-class InstallError(Exception):
-    pass
-
-
-def clean_git_env() -> dict[str, str]:
-    # A publisher can invoke this from a Git hook. Its repository bindings must not select
-    # that hook's checkout while the shipping bytes come from SOURCE.
-    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-
-
 def interpreter(python: str | None) -> str:
-    chosen = python or sys.executable
-    result = subprocess.run([chosen, "-c", "import sys; print(sys.version_info[:2] >= (3, 11))"],
-                            capture_output=True, text=True)
-    if result.returncode or result.stdout.strip() != "True":
-        raise InstallError(f"{chosen} is not Python {'.'.join(map(str, MIN_PYTHON))} or newer")
-    # The path as found, not resolved: /opt/homebrew/bin/python3 and ~/.local/bin/python3 are links that survive a
-    # Python upgrade, while the versioned file they point at goes with it.
-    return os.path.abspath(shutil.which(chosen) or chosen)
+    return resolve_interpreter(python, MIN_PYTHON, tool="lanefather", allow_venv=True, resolve_which=True)
 
 
 def commit() -> str:
-    environment = clean_git_env()
-    head = subprocess.run(["git", "rev-parse", "--verify", "HEAD"], cwd=SOURCE,
-                          capture_output=True, text=True, env=environment)
-    if head.returncode:
-        raise InstallError("install from a committed Git checkout, not an unversioned source directory")
-    changed = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all", "--",
-                              "lanefather", "hooks", "install.py", "CHANGELOG.md", str(COMMON)], cwd=SOURCE,
-                             capture_output=True, text=True, env=environment)
-    if changed.returncode:
-        raise InstallError("cannot inspect shipping inputs; the installed release was not changed")
-    if changed.stdout.strip():
-        raise InstallError("uncommitted shipping inputs: commit and verify them before installing; "
-                           "the installed release was not changed")
-    return head.stdout.strip()
+    return committed_head(
+        SOURCE,
+        ("lanefather", "hooks", "install.py", "CHANGELOG.md", str(COMMON)),
+        unversioned_message="install from a committed Git checkout, not an unversioned source directory",
+        dirty_message="uncommitted shipping inputs: commit and verify them before installing; "
+                      "the installed release was not changed",
+    )
 
 
 def commit_meta(rev: str) -> tuple[int, int]:
@@ -112,8 +104,7 @@ def version() -> str:
 
 
 def write_atomic(path: Path, text: str, mode: int) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write(path, text, mode)
+    write_launcher(path, text, mode=mode)
 
 
 def pid_alive(pid: int) -> bool:
@@ -348,11 +339,7 @@ def current_release(share: Path) -> Path | None:
 
 def switch_symlink(link_path: Path, target: Path, share: Path) -> None:
     """Atomically point `link_path` at `target` (relative to `share`)."""
-    share.mkdir(parents=True, exist_ok=True)
-    temp = share / f".{link_path.name}-{os.getpid()}"
-    temp.unlink(missing_ok=True)
-    temp.symlink_to(target.relative_to(share))
-    os.replace(temp, link_path)
+    _switch_symlink(link_path, target, relative_to=share)
 
 
 def prune_releases(share: Path, keep_extra: set[Path] | None = None) -> list[Path]:
@@ -386,49 +373,48 @@ def install(share: Path, bin_dir: Path, python: str | None, *, switch: bool = Tr
     ct, count = commit_meta(built)
     ver = version()
     release_name = f"{ver}-{built[:12]}"
-    release = share / "releases" / release_name
-    cur = current_release(share)
-    if switch and cur is not None and cur != release.resolve():
-        candidate_key = (parse_version(release_name), ct, count, release_name)
-        if candidate_key < release_sort_key(cur):
-            raise InstallError(f"current release {cur.name} is newer than {release_name}; "
-                               "use --no-switch to install without switching or --rollback to move current back")
-    clean_pending(share)
-    pending = share / "releases" / f".pending-{os.getpid()}"
-    shutil.rmtree(pending, ignore_errors=True)
-    shutil.copytree(SOURCE / "lanefather", pending / "lanefather",
-                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    shutil.copytree(COMMON, pending / COMMON.name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    shutil.copytree(SOURCE / "hooks", pending / "hooks")
-    # `lanefather changelog --json` reads the release's own changelog (fathers#104); a source without one ships none
-    # and the command answers source null.
-    if (SOURCE / "CHANGELOG.md").is_file():
-        shutil.copy2(SOURCE / "CHANGELOG.md", pending / "lanefather" / "CHANGELOG.md")
-    (pending / "lanefather" / "COMMIT").write_text(built + "\n")
-    files = shipping_files(pending)
-    manifest = {"v": 1, "commit": built, "commit_time": ct, "commit_count": count,
-                "files": files, "sha256": payload_digest(files)}
-    (pending / "lanefather" / MANIFEST).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-    if release.exists():
+    manifest_digest: list[str] = []
+
+    def populate(pending: Path) -> None:
+        copy_python_tree(SOURCE / "lanefather", pending / "lanefather")
+        copy_python_tree(COMMON, pending / COMMON.name)
+        shutil.copytree(SOURCE / "hooks", pending / "hooks")
+        if (SOURCE / "CHANGELOG.md").is_file():
+            shutil.copy2(SOURCE / "CHANGELOG.md", pending / "lanefather" / "CHANGELOG.md")
+        (pending / "lanefather" / "COMMIT").write_text(built + "\n")
+        files = shipping_files(pending)
+        digest = payload_digest(files)
+        manifest_digest[:] = [digest]
+        manifest = {"v": 1, "commit": built, "commit_time": ct, "commit_count": count,
+                    "files": files, "sha256": digest}
+        (pending / "lanefather" / MANIFEST).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+
+    def verify_existing(existing: Path, _pending: Path) -> None:
         try:
-            identity = installed_identity(release)
-            if identity["commit"] != built or identity["sha256"] != manifest["sha256"]:
+            identity = installed_identity(existing)
+            if identity["commit"] != built or identity["sha256"] != manifest_digest[0]:
                 raise InstallError("existing release differs from committed shipping inputs")
         except LaneError as error:
             raise InstallError(str(error)) from None
-        finally:
-            shutil.rmtree(pending, ignore_errors=True)
-    else:
-        pending.rename(release)
-    if switch:
-        if cur is not None and cur != release.resolve():
-            switch_symlink(share / "previous", cur, share)
-        # Swap share/current in one rename, so a starting command sees the old release or the new one.
-        switch_symlink(share / "current", release, share)
-        if python is None:
-            raise InstallError("an interpreter is required to write the command")
-        write_atomic(bin_dir / "lanefather", LAUNCHER.format(python=python, current=str(share / "current")), 0o755)
-    prune_releases(share, keep_extra={release})
+
+    with install_lock(share / ".install.lock"):
+        release = share / "releases" / release_name
+        cur = current_release(share)
+        if switch and cur is not None and cur != release.resolve():
+            candidate_key = (parse_version(release_name), ct, count, release_name)
+            if candidate_key < release_sort_key(cur):
+                raise InstallError(f"current release {cur.name} is newer than {release_name}; "
+                                   "use --no-switch to install without switching or --rollback to move current back")
+        clean_pending(share)
+        release = stage_release(share / "releases", release_name, populate, verify_existing=verify_existing)
+        if switch:
+            if cur is not None and cur != release.resolve():
+                switch_symlink(share / "previous", cur, share)
+            switch_symlink(share / "current", release, share)
+            if python is None:
+                raise InstallError("an interpreter is required to write the command")
+            write_atomic(bin_dir / "lanefather", LAUNCHER.format(python=python, current=str(share / "current")), 0o755)
+        prune_releases(share, keep_extra={release})
     return release
 
 
@@ -496,8 +482,10 @@ def uninstall(share: Path, bin_dir: Path) -> tuple[list[Path], list[Path]]:
                 removed.append(rel)
         if not any(releases_dir.iterdir()):
             releases_dir.rmdir()
-    if share.is_dir() and not any(share.iterdir()):
-        share.rmdir()
+    if share.is_dir():
+        (share / ".install.lock").unlink(missing_ok=True)
+        if not any(share.iterdir()):
+            share.rmdir()
     return removed, kept
 
 
