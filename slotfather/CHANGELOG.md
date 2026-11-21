@@ -6,6 +6,12 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- `slotfather run` automatically tags leases with `lane` (from `LANEFATHER_LANE` or the worktree's Lanefather
+  record/path) and `agent_session` (from `CLAUDE_CODE_SESSION_ID`) unless set by the caller, trimming auto-tags
+  to 200 characters and dropping them with a warning at the 16-key limit while still refusing over-limit caller
+  metadata. `run` also exports `SLOTFATHER_LEASE_CORES` (`max(1, floor(min(count, total) * cores / total))`) to
+  the child process (fathers#11).
+
 - Memory-aware admission estimates each request's peak RSS from history by run type, tag, and label family
   (`estimates.py`), falling back to `memory_default_mb` (default 2048 MB), and defers concurrent grants in
   `schedule.memory_gate` when held plus candidate expected peaks exceed `memory_share` of RAM (default 0.85,

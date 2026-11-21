@@ -4,6 +4,7 @@ a lease (client.acquire()) and the command under it."""
 from __future__ import annotations
 
 import contextlib
+import math
 import os
 from pathlib import Path
 import signal
@@ -14,7 +15,18 @@ from typing import Any
 
 from . import client as _client
 from . import config as _config
+from . import entry as _entry
 from . import process as _process
+from . import settings as _settings
+
+
+def lease_cores(count: int, cores: int | None = None, total: int | None = None) -> int:
+    """The lease's exported core share (SLOTFATHER_LEASE_CORES, fathers#11):
+    `max(1, floor(min(count, total) * cores / total))`."""
+    machine = _config.cores() if cores is None else cores
+    capacity = _settings.total() if total is None else total
+    effective = min(max(1, count), max(1, capacity))
+    return max(1, math.floor(effective * max(1, machine) / max(1, capacity)))
 
 
 def execute(argv: list[str], environment: dict[str, str], background: bool = False, marker: Path | None = None,
@@ -78,14 +90,20 @@ def run(count: int | str, label: str, argv: list[str], wait: float | None = None
     """Run argv under a lease of `count` slots; the command's exit status. Without `labelled` (no --label), `label`
     (the directory's name) gives way to one derived from the project, the command and the metadata (labels.py); a
     label that says little gets the derived parts appended, with a hint."""
+    meta = _entry.checked_meta(meta)
     naming: dict[str, Any] = {}
     if _client.policy() != "bypass" and not _config.setting("LEASE"):  # a nested run takes no lease and names none
+        try:
+            cwd = os.getcwd()
+        except OSError:
+            cwd = ""
+        with contextlib.suppress(Exception):  # auto-tagging must never cost the run
+            from . import labels as _labels
+            meta, tag_warnings = _labels.auto_tags(cwd, meta)
+            for warning in tag_warnings:
+                print(f"slot: {warning}", file=sys.stderr, flush=True)
         with contextlib.suppress(Exception):  # a name must never cost the run
             from . import labels as _labels
-            try:
-                cwd = os.getcwd()
-            except OSError:
-                cwd = ""
             naming = _labels.choose(label if labelled else None, cwd, argv, meta,
                                     None if ticket is None else str(ticket))
             label = naming["label"] or label
@@ -113,5 +131,7 @@ def run(count: int | str, label: str, argv: list[str], wait: float | None = None
                 print(f"slot: {found}", file=sys.stderr, flush=True)
     with lease:
         marker = lease.path if lease.path is not None and not lease.inherited else None
-        lease.status, lease.usage = execute(argv, lease.environment(), background, marker)
+        child_env = lease.environment()
+        child_env["SLOTFATHER_LEASE_CORES"] = str(lease_cores(lease.count))
+        lease.status, lease.usage = execute(argv, child_env, background, marker)
     return lease.status

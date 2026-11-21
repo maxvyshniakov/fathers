@@ -158,6 +158,70 @@ class DefaultLabelTests(SlotCase):
         by = json.loads(self.tool("stats", "--json", "--by", "derived").stdout)
         self.assertEqual({"mastack · bin/check": 3}, {g["derived"]: g["requests"] for g in by["groups"]})
 
+
+class AutoTagAndLeaseCoresTests(SlotCase):
+    def history(self) -> list[dict[str, Any]]:
+        return [json.loads(x) for x in (self.state / "history.jsonl").read_text().splitlines() if x]
+
+    def test_auto_tags_inside_and_outside_lane_worktree_and_session(self) -> None:
+        # Outside a lane worktree, no session -> no auto-tags
+        plain_dir = self.tmp / "plain"
+        plain_dir.mkdir()
+        merged, warnings = labels.auto_tags(str(plain_dir), {}, env={})
+        self.assertEqual(({}, []), (merged, warnings))
+        # Inside a lane worktree + CLAUDE_CODE_SESSION_ID
+        wt = self.tmp / "repo" / ".claude" / "worktrees" / "lane-demo-11"
+        wt.mkdir(parents=True)
+        merged, warnings = labels.auto_tags(str(wt), {}, env={"CLAUDE_CODE_SESSION_ID": "sess-abc"})
+        self.assertEqual(({"lane": "demo-11", "agent_session": "sess-abc"}, []), (merged, warnings))
+        # Caller-set values win
+        merged, warnings = labels.auto_tags(str(wt), {"lane": "caller-lane", "agent_session": "caller-sess"},
+                                            env={"CLAUDE_CODE_SESSION_ID": "sess-abc"})
+        self.assertEqual({"lane": "caller-lane", "agent_session": "caller-sess"}, merged)
+        self.assertEqual([], warnings)
+
+    def test_auto_tags_trim_long_values_and_drop_past_key_limit_with_warnings(self) -> None:
+        wt = self.tmp / "repo" / ".claude" / "worktrees" / "lane-trim"
+        wt.mkdir(parents=True)
+        long_sess = "s" * 250
+        merged, warnings = labels.auto_tags(str(wt), {}, env={"CLAUDE_CODE_SESSION_ID": long_sess})
+        self.assertEqual(200, len(merged["agent_session"]))
+        self.assertEqual(1, len(warnings))
+        self.assertIn("trimmed", warnings[0])
+        # 16 caller keys -> both auto-tags dropped with warnings
+        full_caller = {f"k{i}": "v" for i in range(16)}
+        merged, warnings = labels.auto_tags(str(wt), full_caller, env={"CLAUDE_CODE_SESSION_ID": "sess-1"})
+        self.assertEqual(full_caller, merged)
+        self.assertEqual(2, len(warnings))
+        self.assertTrue(all("dropped" in w for w in warnings))
+
+    def test_run_exports_slotfather_lease_cores_and_tags_leases(self) -> None:
+        from slotfather import runner as sf_runner
+        # Unit check for counts 1, total, above total
+        self.assertEqual(3, sf_runner.lease_cores(1, cores=12, total=4))
+        self.assertEqual(12, sf_runner.lease_cores(4, cores=12, total=4))
+        self.assertEqual(12, sf_runner.lease_cores(8, cores=12, total=4))
+        self.assertEqual(1, sf_runner.lease_cores(1, cores=2, total=4))
+
+        wt = self.tmp / "repo" / ".claude" / "worktrees" / "lane-exec-11"
+        wt.mkdir(parents=True)
+        env = {k: v for k, v in self.env.items() if k != "SLOTFATHER_AUTO_TAGS"}
+        env["CLAUDE_CODE_SESSION_ID"] = "sess-run-11"
+        for flag, expected_cores in (("1", "3"), ("4", "12"), ("8", "12"), ("all", "12")):
+            with self.subTest(slots=flag):
+                res = subprocess.run([TOOL, "run", "-n", flag, "--", "sh", "-c",
+                                      'printf "%s %s" "$SLOTFATHER_LEASE_CORES" "$SLOTFATHER_CORES"'],
+                                     cwd=wt, env=env, capture_output=True, text=True, timeout=20)
+                self.assertEqual(0, res.returncode, res.stderr)
+                self.assertEqual(f"{expected_cores} 12", res.stdout.strip())
+        last = self.history()[-1]
+        self.assertEqual("exec-11", last["meta"]["lane"])
+        self.assertEqual("sess-run-11", last["meta"]["agent_session"])
+        # Caller metadata over limits is still refused
+        bad = subprocess.run([TOOL, "run", "--meta", "k=" + "x" * 201, "--", "true"],
+                             cwd=wt, env=env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(2, bad.returncode)
+
     def test_a_temporary_directory_is_no_project(self):
         self.assertTrue(labels.temporary(SCRATCH))
         self.assertTrue(labels.temporary(os.path.realpath(self.tmp)))
