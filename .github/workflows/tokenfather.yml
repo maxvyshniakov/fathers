@@ -1,0 +1,37 @@
+name: tokenfather
+
+# The shared shape: package.yml runs the lint gate and the tests on the floor and the newest Python, on Ubuntu and
+# macOS (fathers#120).
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tokenfather/**'
+      - 'common/**'
+      - 'tools/ruff.toml'
+      - 'tools/checks.py'
+      - '.github/workflows/tokenfather.yml'
+      - '.github/workflows/package.yml'
+  pull_request:
+    paths:
+      - 'tokenfather/**'
+      - 'common/**'
+      - 'tools/ruff.toml'
+      - 'tools/checks.py'
+      - '.github/workflows/tokenfather.yml'
+      - '.github/workflows/package.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tokenfather-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    uses: ./.github/workflows/package.yml
+    with:
+      package: tokenfather
+      floor: '3.11'

@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 import sys
 
-PACKAGES = ("slotfather", "lanefather", "junkfather", "godfather")
+PACKAGES = ("slotfather", "lanefather", "junkfather", "godfather", "tokenfather")
 
 
 def main(argv: list[str]) -> int:

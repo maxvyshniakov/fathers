@@ -1,0 +1,17 @@
+# tokenfather is standard library only and installs without a build step (install.py); this file names the version
+# and configures the checks tools/check.py runs (Ruff and Pyright, pinned in requirements-dev.txt).
+[project]
+name = "tokenfather"
+version = "0.1.0"  # the newest release in CHANGELOG.md; tokenfather/__init__.py __version__ matches it
+requires-python = ">=3.11"
+license = "MIT"
+
+[tool.ruff]
+extend = "../tools/ruff.toml"
+target-version = "py311"
+
+[tool.pyright]
+include = ["tokenfather", "tests", "install.py", "tools"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+extraPaths = ["../common"]  # eventcheck, cliconvention: common/

@@ -800,25 +800,32 @@ def plan_base(record: Record, worktree: str) -> str:
 # The command
 
 def implementer(args: Any) -> str | None:
-    """The agent that built the lane, for the review's implementer family (fathers#150): `check --agent`, else the
-    agent session this check runs in (events.agent_session), else None."""
-    stated: str | None = getattr(args, "agent", None)
-    if stated:
-        return stated
-    session = events.agent_session()
-    return session[0] if session else None
+    """The agent that built the lane, for the review's implementer family (fathers#150, fathers#200): `check --agent`,
+    else the agent session this check runs in (events.agent_context), else None."""
+    context = events.agent_context(getattr(args, "agent", None))
+    return context["kind"] if context else None
+
+
+def _record_check_agent(lane_id: str, agent_info: dict[str, Any] | None) -> None:
+    if not agent_info:
+        return
+    with state.locked("state"):
+        current = state.load(lane_id)
+        if state.record_agent(current, "check", agent_info, now=journal.now()):
+            state.save(current)
 
 
 def check(args: Any) -> int:
     from . import lanes  # adopt_worktree; lanes imports this module for its commands
     prog = config.prog()
+    agent_info = events.agent_context(getattr(args, "agent", None))
     record = state.load(args.id)
     if record["status"] == "planned":
         cwd = git(os.getcwd(), "rev-parse", "--show-toplevel", check=False)
         if not cwd or current_branch(cwd) != record["branch"]:
             raise LaneError(f"lane {args.id} has no worktree yet: run it from a worktree on {record['branch']}, "
                             f"or register one with {prog} adopt")
-        lanes.adopt_worktree(record, cwd, record["branch"])
+        lanes.adopt_worktree(record, cwd, record["branch"], agent=getattr(args, "agent", None))
     if record["status"] != "active":
         raise LaneError(f"lane {args.id} is {record['status']}; check runs before landing")
     worktree = record["worktree"]
@@ -838,6 +845,7 @@ def check(args: Any) -> int:
                  and result_store.receipt_platform(previous, worktree) == platform)
     if previous and previous.get("tree") == tree and previous.get("status") == "green" and not args.rerun:
         if same_rust:
+            _record_check_agent(args.id, agent_info)
             print(f"Receipt current: green for tree {tree} on {platform} ({path})")
             return 0
         print(f"lane: the receipt was not made on {platform}; running the checks again"
@@ -927,9 +935,10 @@ def check(args: Any) -> int:
                             "stopped": stopped, "status": status, "host": info, "started": started,
                             "paths": lane_plan["paths"], **({"fix_of": fix_of} if fix_of else {}),
                             "leases": leases_of(fresh, classification),
-                            # Who ran the check, which a review takes for the implementer (fathers#150).
+                            # Who ran the check, which a review takes for the implementer (fathers#150, fathers#200).
                             **({"agent": agent} if (agent := implementer(args)) else {}),
                             "finished": journal.now()})
+    _record_check_agent(args.id, agent_info)
     # fathers#91: what ran, and what was reused for this tree, is on record for any later run of the tree. A check
     # that failed and passed rerun by itself stays failed here: the merge runs it again (#640); the history marks it
     # a flake (fathers#92).

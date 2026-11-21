@@ -27,7 +27,7 @@ import sys
 from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[1]
-PACKAGES = ("slotfather", "lanefather", "junkfather", "godfather")
+PACKAGES = ("slotfather", "lanefather", "junkfather", "godfather", "tokenfather")
 DEFAULT_BASE = "origin/main"
 # Paths that no check reads: they select only the root checks every selection runs.
 DOCUMENTATION = ("LICENSE", ".gitignore", ".github/dependabot.yml")
@@ -52,6 +52,7 @@ TESTS = {
     "lanefather": ["-s", "tests", "-p", "test_*.py"],
     "junkfather": ["-s", "tests"],
     "godfather": ["-s", "tests", "-t", "tests"],
+    "tokenfather": ["-s", "tests"],
 }
 CHECKS = [
     *(check for name in PACKAGES for check in (

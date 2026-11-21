@@ -8,6 +8,12 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Multi-provider agent attribution on lanes (fathers#200): `start`, `adopt` and every `check` record each agent that
+  worked the lane (`claude-code`, `codex`, `antigravity`, `t3-code`, or any configured harness/provider kind) with its
+  session id, subagent/thread id, transcript path, model and options (`effort`, `thought_level`) on the lane record
+  (`agents`) and in `lanefather show <id> --json`. `--agent` now accepts any valid provider kind identifier instead of
+  only `claude-code` or `codex`.
+
 - `lanefather wait ID --for registered|landed|done [--timeout S] [--json]` (fathers#175) blocks until the lane is in
   that state instead of a loop over `list`: it reads the lane's record with a growing pause, exits 0 on the state, 75
   with the current state at the timeout (default 3600 s; 0 answers at once) and 3 for a state that cannot come (a
