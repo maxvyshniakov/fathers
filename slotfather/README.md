@@ -53,11 +53,14 @@ cd fathers
 python3 install.py slotfather    # or: python3 slotfather/install.py
 ```
 
-Put `~/.local/bin` on your `PATH`. Re-running the installer updates the commands
-without cancelling running work. It pins them to the installer’s interpreter,
-so a project’s virtual environment does not change their Python.
+Put `~/.local/bin` on your `PATH`. Re-running the installer smoke-checks the new release
+and updates all three commands atomically without cancelling running work. It pins them to
+the installer’s interpreter, so a project’s virtual environment does not change their Python.
+Use `python3 slotfather/install.py --rollback` to return to the previous release, `--prune`
+to remove unused older releases (sparing any in-use release), and `--uninstall` to remove
+the commands while keeping queue state.
 
-[Installation, migration and service accounts](docs/installation.md)
+[Installation, upgrade, rollback, prune, uninstall and service accounts](docs/installation.md)
 
 ## Run work
 
@@ -141,7 +144,7 @@ slotfather run -n 1 -- python3 -m unittest discover -s tests -v
 
 The dashboard media above are Godfather's (copied from its README); they are made there.
 
-[Verification](docs/testing.md) · [Scheduler experiments](docs/scheduler-experiments.md)
+[Verification](docs/testing.md) · [Architecture](docs/architecture.md)
 
 Lifetime workflow registrations can use the separate, stateless
 [`lane-admission --json` contract](docs/lane-admission.md); it does not reserve

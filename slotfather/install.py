@@ -21,6 +21,7 @@ shell outside it, such as root's through the guest agent, counts the same capaci
 """
 from __future__ import annotations
 
+import ast
 from contextlib import ExitStack, contextmanager
 import ctypes
 import fcntl
@@ -40,14 +41,17 @@ import tarfile
 import tempfile
 import time
 import uuid
-from typing import Any, Iterator, cast
+from typing import Any, Callable, Iterator, cast
 
 MIN_PYTHON = (3, 9)
 ENV_SHEBANG = b"#!/usr/bin/env python3\n"
 COMMANDS = ("slotfather", "slotfather-stats", "slotfather-sweep")
 # Commands an earlier release installed and this one removes: the dashboard moved to Godfather (slotfather#28).
 RETIRED = ("slotfather-dashboard",)
-USAGE = "usage: python3 install.py [--python /path/to/python3] [--user NAME] [--bin DIR] [--cgroup /A.slice/B.slice] [--host SSH_ALIAS]"
+FLAGS = ("--rollback", "--prune", "--uninstall")
+VALUE_OPTIONS = ("--python", "--user", "--bin", "--cgroup", "--host")
+USAGE = ("usage: python3 install.py [--python /path/to/python3] [--user NAME] [--bin DIR] "
+         "[--cgroup /A.slice/B.slice] [--host SSH_ALIAS] [--rollback | --prune | --uninstall]")
 STATE_LINE = b'DEFAULT_DIR = "~/.local/state/slotfather"\n'  # in slotfather; --user replaces it
 CGROUP_LINE = b"DEFAULT_CGROUP = None  "  # in slotfather; --cgroup replaces the None
 GUARD = b"Retired queue: use slotfather with ~/.local/state/slotfather. Update this checkout before running heavy work.\n"
@@ -403,12 +407,28 @@ def make_guard(path: Path) -> int:
 
 
 def options(argv: list[str]) -> dict[str, str]:
-    """Local install options and an optional SSH destination, each once with a value."""
+    """Local install options, maintenance flags, and an optional SSH destination."""
     found: dict[str, str] = {}
     while argv:
-        if argv[0] not in ("--python", "--user", "--bin", "--cgroup", "--host") or len(argv) < 2 or argv[0] in found:
+        arg = argv[0]
+        if arg in FLAGS:
+            if arg in found:
+                raise InstallError(USAGE)
+            found[arg], argv = "1", argv[1:]
+        elif arg.startswith("--") and "=" in arg:
+            opt, val = arg.split("=", 1)
+            if opt not in VALUE_OPTIONS or opt in found:
+                raise InstallError(USAGE)
+            found[opt], argv = val, argv[1:]
+        elif arg in VALUE_OPTIONS and len(argv) >= 2 and arg not in found:
+            found[arg], argv = argv[1], argv[2:]
+        else:
             raise InstallError(USAGE)
-        found[argv[0]], argv = argv[1], argv[2:]
+    modes = [flag for flag in FLAGS if flag in found]
+    if len(modes) > 1:
+        raise InstallError(f"{' and '.join(modes)} cannot be combined")
+    if ("--prune" in found or "--uninstall" in found) and "--cgroup" in found:
+        raise InstallError("--cgroup applies only to installation")
     return found
 
 
@@ -500,6 +520,70 @@ def source_identity(root: Path) -> dict[str, Any]:
             "source_sha256": digest}
 
 
+def releases_dir(home: Path, bin_dir: Path | None = None) -> Path:
+    # System entry points must never load runner-writable modules during a root status query.
+    prefix = home / ".local" if bin_dir is None or home in bin_dir.parents else bin_dir.parent
+    return prefix / "lib/slotfather/releases"
+
+
+def history_path(releases: Path) -> Path:
+    return releases.parent / "history.json"
+
+
+def load_history(releases: Path) -> dict[str, Any]:
+    path = history_path(releases)
+    if not path.is_file():
+        return {"v": 1, "releases": [], "python": None}
+    try:
+        raw: object = json.loads(path.read_text())
+        if isinstance(raw, dict):
+            data = cast(dict[str, Any], raw)
+            entries = [str(item) for item in data.get("releases", []) if isinstance(item, str)]
+            python = data.get("python") if isinstance(data.get("python"), str) else None
+            return {"v": 1, "releases": entries, "python": python}
+    except (OSError, ValueError):
+        pass
+    return {"v": 1, "releases": [], "python": None}
+
+
+def save_history(releases: Path, entries: list[str], python: str | None) -> None:
+    path = history_path(releases)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = (json.dumps({"v": 1, "releases": entries, "python": python}, sort_keys=True) + "\n").encode()
+    pending: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".history-", delete=False) as handle:
+            pending = Path(handle.name)
+            handle.write(payload)
+            handle.flush()
+            os.fchmod(handle.fileno(), 0o644)
+            os.fsync(handle.fileno())
+        os.replace(pending, path)
+    finally:
+        if pending is not None:
+            pending.unlink(missing_ok=True)
+
+
+def wrapper_release(path: Path) -> Path | None:
+    """Return the immutable release directory referenced by an installed wrapper, or None."""
+    try:
+        if not path.is_file():
+            return None
+        head = path.read_bytes()[:4096].decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    if not head.startswith("#!"):
+        return None
+    match = re.search(r"sys\.path\.insert\(0,\s*(.+?)\)", head)
+    if not match:
+        return None
+    try:
+        value: object = ast.literal_eval(match.group(1))
+    except (SyntaxError, ValueError):
+        return None
+    return Path(value) if isinstance(value, str) else None
+
+
 def install_package(home: Path, root: Path, state: Path | None = None, cgroup: str | None = None,
                     bin_dir: Path | None = None) -> Path:
     """Prepare a complete immutable release before any command can reference it."""
@@ -507,9 +591,7 @@ def install_package(home: Path, root: Path, state: Path | None = None, cgroup: s
     defaults = {"state": str(state) if state is not None else None, "cgroup": cgroup}
     descriptor = {"identity": identity, "defaults": defaults}
     suffix = hashlib.sha256(json.dumps(descriptor, sort_keys=True).encode()).hexdigest()[:12]
-    # System entry points must never load runner-writable modules during a root status query.
-    prefix = home / ".local" if bin_dir is None or home in bin_dir.parents else bin_dir.parent
-    releases = prefix / "lib/slotfather/releases"
+    releases = releases_dir(home, bin_dir)
     releases.mkdir(parents=True, exist_ok=True)
     releases.parent.chmod(0o755)
     releases.chmod(0o755)
@@ -559,8 +641,288 @@ def install_package(home: Path, root: Path, state: Path | None = None, cgroup: s
 
 def package_wrapper(release: Path, name: str) -> bytes:
     module = "cli" if name == "slotfather" else name.removeprefix("slotfather-")
-    return ("#!/usr/bin/env python3\nimport sys\nsys.path.insert(0, " + repr(str(release)) + ")\n"
+    return ("#!/usr/bin/env python3\nimport os, sys\n"
+            "os.environ['SLOTFATHER_RELEASE'] = " + repr(str(release)) + "\n"
+            "sys.path.insert(0, " + repr(str(release)) + ")\n"
             "from slotfather." + module + " import main\nif __name__ == '__main__':\n    sys.exit(main())\n").encode()
+
+
+def smoke_check(release: Path, python: str) -> None:
+    """Verify the new release answers `--version` and `capabilities --json` before swapping any wrapper."""
+    with tempfile.TemporaryDirectory(prefix="slotfather-smoke-") as tmp_dir:
+        tmp = Path(tmp_dir)
+        wrapper = tmp / "slotfather"
+        payload = package_wrapper(release, "slotfather")
+        if payload.startswith(ENV_SHEBANG):
+            payload = b"#!" + os.fsencode(python) + b"\n" + payload[len(ENV_SHEBANG):]
+        wrapper.write_bytes(payload)
+        wrapper.chmod(0o755)
+        smoke_state = tmp / "state"
+        smoke_env = {**os.environ, "SLOTFATHER_DIR": str(smoke_state), "SLOTFATHER_LEGACY_DIRS": ""}
+        for args, expect_json in ((["--version"], False), (["capabilities", "--json"], True)):
+            try:
+                result = subprocess.run([str(wrapper), *args], env=smoke_env, capture_output=True, text=True,
+                                        timeout=20)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise InstallError(f"smoke check failed for {release.name} ({' '.join(args)}): {error}") from None
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout).strip().splitlines()
+                reason = detail[0] if detail else f"exit {result.returncode}"
+                raise InstallError(f"smoke check failed for {release.name} ({' '.join(args)}): {reason}")
+            if not result.stdout.strip():
+                raise InstallError(f"smoke check failed for {release.name} ({' '.join(args)}): empty output")
+            if expect_json:
+                try:
+                    parsed: object = json.loads(result.stdout)
+                except ValueError as error:
+                    raise InstallError(f"smoke check failed for {release.name} (capabilities --json): "
+                                       f"invalid JSON: {error}") from None
+                if not isinstance(parsed, dict):
+                    raise InstallError(f"smoke check failed for {release.name} (capabilities --json): "
+                                       "expected a JSON object")
+
+
+def _snapshot_wrapper(path: Path) -> tuple[str, bytes | str | None, int]:
+    if path.is_symlink():
+        return ("symlink", os.readlink(path), 0)
+    if path.is_file():
+        return ("file", path.read_bytes(), path.stat().st_mode & 0o777)
+    return ("absent", None, 0)
+
+
+def _restore_wrapper(path: Path, snap: tuple[str, bytes | str | None, int]) -> None:
+    kind, data, mode = snap
+    if kind == "absent":
+        path.unlink(missing_ok=True)
+        return
+    if kind == "symlink" and isinstance(data, str):
+        pending = path.with_name(f".restore-{uuid.uuid4().hex}")
+        try:
+            os.symlink(data, pending)
+            os.replace(pending, path)
+        finally:
+            pending.unlink(missing_ok=True)
+        return
+    if kind == "file" and isinstance(data, bytes):
+        pending = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".restore-", delete=False) as handle:
+                pending = Path(handle.name)
+                handle.write(data)
+                handle.flush()
+                os.fchmod(handle.fileno(), mode)
+                os.fsync(handle.fileno())
+            os.replace(pending, path)
+        finally:
+            if pending is not None:
+                pending.unlink(missing_ok=True)
+
+
+def swap_wrappers(bin_dir: Path, writers: list[tuple[str, Callable[[Path], None]]]) -> None:
+    """Replace all command wrappers; restore the previous set if any swap fails."""
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    snapshots = [(name, _snapshot_wrapper(bin_dir / name)) for name, _ in writers]
+    swapped: list[tuple[str, tuple[str, bytes | str | None, int]]] = []
+    for (name, write_fn), (_, snap) in zip(writers, snapshots):
+        target = bin_dir / name
+        try:
+            write_fn(target)
+            swapped.append((name, snap))
+        except (InstallError, OSError) as error:
+            for prev_name, prev_snap in reversed(swapped):
+                try:
+                    _restore_wrapper(bin_dir / prev_name, prev_snap)
+                except OSError:
+                    pass
+            try:
+                _restore_wrapper(target, snap)
+            except OSError:
+                pass
+            raise InstallError(f"wrapper swap failed for {name}; restored previous commands: {error}") from None
+
+
+def _write_release_wrappers(bin_dir: Path, release: Path, python: str) -> None:
+    def make_writer(cmd_name: str) -> Callable[[Path], None]:
+        def _write(target: Path) -> None:
+            with tempfile.NamedTemporaryFile(dir=release, prefix=".wrapper-", delete=False) as handle:
+                wrapper = Path(handle.name)
+                handle.write(package_wrapper(release, cmd_name))
+            try:
+                install_binary(wrapper, target, python)
+            finally:
+                wrapper.unlink(missing_ok=True)
+        return _write
+
+    swap_wrappers(bin_dir, [(name, make_writer(name)) for name in reversed(COMMANDS)])
+
+
+def in_use_releases(releases: Path) -> set[str]:
+    """Return release directory names currently referenced by any live process."""
+    if not releases.is_dir():
+        return set()
+    prefixes = {str(releases).rstrip("/") + "/", str(releases.resolve()).rstrip("/") + "/"}
+    found: set[str] = set()
+
+    def scan_text(blob: str) -> None:
+        for prefix in prefixes:
+            start = 0
+            while True:
+                at = blob.find(prefix, start)
+                if at == -1:
+                    break
+                rest = blob[at + len(prefix):]
+                end = len(rest)
+                for index, ch in enumerate(rest):
+                    if ch in ("/", " ", "\t", "\n", "\0", "'", '"', ":"):
+                        end = index
+                        break
+                name = rest[:end]
+                if name:
+                    found.add(name)
+                start = at + len(prefix)
+
+    env = {**os.environ, "LC_ALL": "C"} if sys.platform.startswith("linux") else None
+    ps_cmds = [["ps", "eww", "-axo", "pid=,command="]] if sys.platform == "darwin" else [["ps", "-axo", "pid=,args="]]
+    for cmd in ps_cmds:
+        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        if result.returncode == 0:
+            scan_text(result.stdout)
+    if sys.platform.startswith("linux") and Path("/proc").is_dir():
+        for entry in Path("/proc").iterdir():
+            if not entry.name.isdigit():
+                continue
+            for sub in ("cmdline", "environ"):
+                try:
+                    raw = (entry / sub).read_bytes().decode("utf-8", errors="ignore")
+                    scan_text(raw)
+                except OSError:
+                    pass
+            try:
+                scan_text(os.readlink(entry / "cwd") + "/")
+            except OSError:
+                pass
+    return found
+
+
+def rollback(home: Path, bin_dir: Path | None = None, python: str | None = None) -> None:
+    """Swap installed wrappers back to the previous release after smoke-checking it."""
+    bin_dir = bin_dir or home / ".local/bin"
+    state = home / ".local/state"
+    releases = releases_dir(home, bin_dir)
+    with lock(state / ".slotfather-install.lock"):
+        data = load_history(releases)
+        entries: list[str] = list(data["releases"])
+        active = wrapper_release(bin_dir / "slotfather")
+        if active is not None and active.parent == releases and active.name not in entries:
+            entries.append(active.name)
+        if len(entries) < 2:
+            raise InstallError("no previous release to roll back to")
+        target_name = entries[-2]
+        target = releases / target_name
+        if not target.is_dir():
+            raise InstallError(f"previous release is missing: {target}")
+        chosen_python = interpreter(python or data.get("python"))
+        smoke_check(target, chosen_python)
+        _write_release_wrappers(bin_dir, target, chosen_python)
+        entries.pop()
+        save_history(releases, entries, chosen_python)
+        print(f"Rolled back {bin_dir / 'slotfather'}, slotfather-stats and slotfather-sweep to {target_name}")
+
+
+def prune(home: Path, bin_dir: Path | None = None) -> None:
+    """Remove old releases, keeping current, previous, wrapper-pinned, and any in-use release."""
+    bin_dir = bin_dir or home / ".local/bin"
+    state = home / ".local/state"
+    releases = releases_dir(home, bin_dir)
+    with lock(state / ".slotfather-install.lock"):
+        if not releases.is_dir():
+            print("No installed releases to prune")
+            return
+        data = load_history(releases)
+        entries: list[str] = list(data["releases"])
+        keep: set[str] = set()
+        if entries:
+            keep.add(entries[-1])
+        if len(entries) >= 2:
+            keep.add(entries[-2])
+        for name in COMMANDS:
+            ref = wrapper_release(bin_dir / name)
+            if ref is not None and ref.parent == releases:
+                keep.add(ref.name)
+        live = in_use_releases(releases)
+        keep.update(live)
+        removed: list[str] = []
+        spared_live: list[str] = []
+        for path in sorted(releases.iterdir()):
+            if not path.is_dir():
+                continue
+            if path.name in keep:
+                if path.name in live and path.name not in entries[-2:]:
+                    spared_live.append(path.name)
+                continue
+            shutil.rmtree(path)
+            removed.append(path.name)
+        remaining = [name for name in entries if (releases / name).is_dir()]
+        save_history(releases, remaining, data.get("python"))
+        note = f"; spared {len(spared_live)} in-use release(s)" if spared_live else ""
+        print(f"Pruned {len(removed)} release(s) from {releases}; kept {len(keep & {p.name for p in releases.iterdir()})}{note}")
+
+
+def _is_slotfather_command(path: Path) -> bool:
+    try:
+        if path.is_symlink():
+            target = Path(os.readlink(path))
+            if target.name in (*COMMANDS, *RETIRED):
+                return True
+        if not path.is_file():
+            return False
+        head = path.read_bytes()[:4096]
+        return head.startswith(b"#!") and (b"slotfather" in head or b"stats fixture" in head or b"sweep fixture" in head)
+    except OSError:
+        return False
+
+
+def uninstall(home: Path, bin_dir: Path | None = None) -> None:
+    """Remove installed commands and unused releases while preserving queue state."""
+    bin_dir = bin_dir or home / ".local/bin"
+    state = home / ".local/state"
+    destination = state / "slotfather"
+    releases = releases_dir(home, bin_dir)
+    with lock(state / ".slotfather-install.lock"):
+        removed_cmds: list[str] = []
+        for name in (*COMMANDS, *RETIRED):
+            path = bin_dir / name
+            if _is_slotfather_command(path):
+                path.unlink()
+                removed_cmds.append(name)
+        removed_releases = 0
+        spared_live: list[str] = []
+        if releases.is_dir():
+            live = in_use_releases(releases)
+            for path in sorted(releases.iterdir()):
+                if not path.is_dir():
+                    continue
+                if path.name in live:
+                    spared_live.append(path.name)
+                    continue
+                shutil.rmtree(path)
+                removed_releases += 1
+            if not any(releases.iterdir()):
+                releases.rmdir()
+                history_path(releases).unlink(missing_ok=True)
+                try:
+                    releases.parent.rmdir()
+                except OSError:
+                    pass
+            else:
+                data = load_history(releases)
+                remaining = [name for name in data["releases"] if (releases / name).is_dir()]
+                save_history(releases, remaining, data.get("python"))
+        if spared_live:
+            print(f"slotfather install: note: spared {len(spared_live)} in-use release(s) under {releases}",
+                  file=sys.stderr)
+        print(f"Uninstalled {len(removed_cmds)} command(s) from {bin_dir} and {removed_releases} release(s); "
+              f"queue state preserved at {destination}")
 
 
 def install_remote(root: Path, host: str, argv: list[str]) -> None:
@@ -662,6 +1024,7 @@ def install(home: Path, source: Path, python: str, bin_dir: Path | None = None,
             updates = history_updates(history_source)
             if (source.parent / "src/slotfather").is_dir():
                 release = install_package(home, source.parent, destination if pinned else None, cgroup, bin_dir)
+                smoke_check(release, python)
             backup = state / "slotfather-migrations" / uuid.uuid4().hex
             for old in old_directories:
                 if new_guard and old == old_paths[0]:
@@ -687,20 +1050,26 @@ def install(home: Path, source: Path, python: str, bin_dir: Path | None = None,
             migrate_queue(entry_updates, backup)
             migrate_history(destination, updates, backup)
             # The companions (stats, sweep) first: an executable that names a missing one is the shorter-lived
-            # mismatch.
-            for name in reversed(COMMANDS):
-                main_command = name == "slotfather"
-                if release is None:
-                    install_binary(source.with_name(name), bin_dir / name, python,
-                                   destination if pinned and main_command else None, cgroup if main_command else None)
-                else:
-                    with tempfile.NamedTemporaryFile(dir=release, prefix=".wrapper-", delete=False) as handle:
-                        wrapper = Path(handle.name)
-                        handle.write(package_wrapper(release, name))
-                    try:
-                        install_binary(wrapper, bin_dir / name, python)
-                    finally:
-                        wrapper.unlink(missing_ok=True)
+            # mismatch. All three swap together or restore the previous set on failure.
+            if release is None:
+                def make_plain_writer(cmd_name: str) -> Callable[[Path], None]:
+                    main_command = cmd_name == "slotfather"
+                    return lambda target: install_binary(
+                        source.with_name(cmd_name), target, python,
+                        destination if pinned and main_command else None, cgroup if main_command else None)
+                swap_wrappers(bin_dir, [(name, make_plain_writer(name)) for name in reversed(COMMANDS)])
+            else:
+                releases = releases_dir(home, bin_dir)
+                previous_wrapper = wrapper_release(bin_dir / "slotfather")
+                _write_release_wrappers(bin_dir, release, python)
+                data = load_history(releases)
+                entries: list[str] = list(data["releases"])
+                if previous_wrapper is not None and previous_wrapper.parent == releases and previous_wrapper.name not in entries:
+                    entries.append(previous_wrapper.name)
+                if not entries or entries[-1] != release.name:
+                    entries = [name for name in entries if name != release.name]
+                    entries.append(release.name)
+                save_history(releases, entries, python)
             old_command.unlink(missing_ok=True)
             for name in RETIRED:
                 if retire_command(bin_dir / name):
@@ -746,10 +1115,14 @@ def main():
         found = options(sys.argv[1:])
         if "--host" in found:
             host = found.pop("--host")
-            forwarded = [value for pair in found.items() for value in pair]
+            forwarded: list[str] = []
+            for key, value in found.items():
+                if key in FLAGS:
+                    forwarded.append(key)
+                else:
+                    forwarded.extend([key, value])
             install_remote(Path(__file__).resolve().parent, host, forwarded)
             return 0
-        python = interpreter(found.get("--python"))
         home, user = Path.home(), None
         if "--user" in found:
             try:
@@ -762,6 +1135,20 @@ def main():
         bin_dir = Path(os.path.expanduser(found["--bin"])) if "--bin" in found else None
         if bin_dir is not None and not bin_dir.is_absolute():
             raise InstallError("--bin takes an absolute directory")
+        if "--prune" in found:
+            prune(home, bin_dir)
+            return 0
+        if "--uninstall" in found:
+            uninstall(home, bin_dir)
+            return 0
+        if "--rollback" in found:
+            try:
+                rollback(home, bin_dir, found.get("--python"))
+            finally:
+                if user is not None and os.getuid() == 0 and user.pw_uid != 0:
+                    give(home, user, bin_dir or home / ".local/bin")
+            return 0
+        python = interpreter(found.get("--python"))
         cgroup = found.get("--cgroup")
         if cgroup is not None and (not cgroup.startswith("/") or "\n" in cgroup or ".." in cgroup.split("/")):
             raise InstallError("--cgroup takes a cgroup v2 path such as /ci.slice/ci-runners.slice")

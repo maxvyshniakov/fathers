@@ -185,5 +185,5 @@ class SettingsCliTests(SlotCase):
         self.assertEqual({"versions": [1]}, found["dashboard"]["settings"])
 
     def test_usage_needs_json(self) -> None:
-        self.assertEqual(2, self.tool("settings").returncode)
+        self.assertEqual(0, self.tool("settings").returncode)
         self.assertEqual(2, self.tool("settings", "set", "capacity.slots", "--json").returncode)

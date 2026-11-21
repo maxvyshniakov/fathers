@@ -134,7 +134,7 @@ class ChangelogCommandTests(SlotCase):
         self.assertEqual(1, found["v"])
         self.assertNotIn("0.0.1", {e["version"] for e in found["entries"]})
         self.assertTrue(any(e["unreleased"] and e["source"] for e in found["entries"]), "the installed commit")
-        self.assertEqual(2, self.tool("changelog").returncode)
+        self.assertEqual(0, self.tool("changelog").returncode)
         self.assertEqual(2, self.tool("changelog", "--json", "--since", "x").returncode)
 
 

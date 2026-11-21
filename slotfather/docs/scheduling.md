@@ -89,4 +89,4 @@ A client may ignore a request: the waiting request then waits as it would have, 
 
 **Mixed versions.** A slotfather before classes (`3e3a621` and earlier, Straylight's vendored copy) ignores them and the requests: its looks grant in arrival order, so until every client runs this version a waiting request may start as either order allows. It lists a yielded lease as a waiting request and may grant it again before the waiting request it yielded to; `slotfather yield` then returns as usual. Since the yield itself grants at once, the waiting request normally starts before an older client looks.
 
-See [recorded experiments](scheduler-experiments.md) for the historical tuning results.
+See [architecture](architecture.md#scheduling-design-decisions) for the replay methodology and why these defaults were chosen.

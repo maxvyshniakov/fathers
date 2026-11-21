@@ -6,6 +6,10 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- `install.py` smoke-checks a staged release (`--version` and `capabilities --json`) before swapping any wrapper,
+  restores the previous wrapper set if a swap fails, and adds `--rollback`, `--prune` (keeping current, previous,
+  and in-use releases), and `--uninstall` (fathers#126).
+
 - A detached measurement session can yield its slots while its only active run waits on a foreground lock.
   Slots stay held for a background lock, a busy sibling or uncertain membership. Slotfather reconsiders a
   recorded wait when a sibling finishes, and a lock command waits for a grant before starting work. (fathers#183)
@@ -83,6 +87,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Changed
 
+- The CLI conforms to the shared CLI convention (`docs/cli.md`, fathers#124): table-driven parsing with per-command
+  `--help`, one-line usage errors pointing to `--help`, `--opt=value`, `--version`, and optional `--json` on
+  `slots`, `order`, `capabilities`, `settings`, `procs`, `changelog`, `stats`, and `advise`.
 - The library's `acquire()` and `Lease` are in `slotfather.client` (were `slotfather.leases`), `run()` and
   `execute()` in `slotfather.runner`; `slotfather.leases` keeps the queue transactions (fathers#37).
 - The installer retries a held queue lock for up to 15 seconds (`SLOTFATHER_INSTALL_LOCK_WAIT`) before it refuses.
