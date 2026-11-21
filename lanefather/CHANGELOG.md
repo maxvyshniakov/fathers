@@ -8,6 +8,14 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Safer release management in `install.py` (fathers#50): pruning keeps every release pinned by a live lane in
+  registered state directories and every release in use by a running process (lock or live pid file), plus the
+  newest three releases ordered by version and build order rather than mtime; normal installs never move `current`
+  backwards; `--no-switch` installs into `releases/` without changing `current` or the command (and an older commit
+  re-installed this way does not count as newest); `--rollback` points `current` at the previous release;
+  `--uninstall` removes the command, `current` and unpinned releases while preserving releases pinned by live lanes
+  or in use; and stale `releases/.pending-<pid>` directories whose owning pid is gone are cleaned automatically.
+
 - Antigravity / Google reviewer backend (fathers#201): `lanefather review` supports the third reviewer family
   (`antigravity` / `google` / `agy` CLI or configured `[cli.antigravity]` harness adapter from Mastack's `models.toml`,
   with `gemini-4-neon`, `gemini-4-argon`, `gemini-4-carbon`, `gemini-3.8-flash` and `thought_level`), selectable via
