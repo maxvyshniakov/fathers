@@ -12,6 +12,7 @@ change, a removed or changed one changes `v`.
 | `lanefather stats --json` | people, dashboards | below |
 | `lanefather findings <sha> --json` | Repo-Kit's `release:publish` | below |
 | `lanefather changelog --json` | Godfather's what's new | below |
+| `<verify> --checks … [--only …]` | Lanefather's check & rerun classification | [check contract](#the-check-contract) |
 
 ## `lanefather changelog --json [--since VERSION]`
 
@@ -69,3 +70,13 @@ ledger.log.
 reads everything kept (twelve months). `reviewers` (fathers#151) counts the finished review receipts of the window
 (and lane) per reviewer alias: its reviews, its failed panel runs, its findings by severity and their marks now, so
 Sol and Opus compare as reviewers.
+
+## The check contract
+
+See [reference](reference.md#the-check-contract) for the full check invocation and report contract. A verifier that
+supports running only specific test files on a rerun advertises `"only"` in `capabilities` (on the `--changed --plan
+--json` output, the verify report's `capabilities`, or `CAPABILITIES` on `plan_module`) and reports `failed_tests:
+[...]` on failing rows in `report.json` (fathers#147). Lanefather then passes `--only <test,...>` to both the lane and
+base reruns, records `"tests"` on the receipt's `classification.checks` and `classification.runs` entries, and leaves
+a check `"unclassified"` if any red test is reported outside `failed_tests` (`outside_failed_tests` / `unreached_tests`
+or unexpected `failed_tests`). When `"only"` is not advertised, `--only` is omitted and receipts stay byte-identical.

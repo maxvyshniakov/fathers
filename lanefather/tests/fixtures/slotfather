@@ -66,16 +66,31 @@ def main(argv):
                                   "lease": os.environ.get("SLOTFATHER_LEASE")}) + "\n")
     command, rest = (argv[0], argv[1:]) if argv else ("", [])
     if command == "run":
-        count, wait, yieldable = 1, None, False
+        count, wait, yieldable, label = 1, None, False, ""
         while rest and rest[0] != "--" and rest[0].startswith("-"):
             if rest[0] == "--yieldable":
                 yieldable, rest = True, rest[1:]
                 continue
             option, value, rest = rest[0], rest[1], rest[2:]
             if option == "-n":
-                count = total if value == "all" else min(int(value), total)
+                if "-" in value:
+                    if not os.environ.get("FAKE_SLOTFATHER_RANGE"):
+                        print(f"slotfather: invalid slot count {value!r}", file=sys.stderr)
+                        return 2
+                    low_s, _, high_s = value.partition("-")
+                    low, high = max(1, int(low_s)), min(int(high_s), total)
+                    high = max(low, high)
+                    raw_granted = os.environ.get("FAKE_SLOTFATHER_GRANTED")
+                    if raw_granted:
+                        count = max(low, min(high, int(raw_granted)))
+                    else:
+                        count = max(low, min(high, max(1, total - held)))
+                else:
+                    count = total if value == "all" else min(int(value), total)
             elif option == "--wait":
                 wait = value
+            elif option == "--label":
+                label = value
         if rest[:1] == ["--"]:
             rest = rest[1:]
         if os.environ.get("SLOTFATHER_LEASE"):
@@ -83,8 +98,22 @@ def main(argv):
         if wait is not None and os.environ.get("FAKE_SLOTFATHER_BUSY"):
             print(f"slot: fake: no {count} slot(s) within {wait} s", file=sys.stderr)
             return 75
+        queue_hold = os.environ.get("FAKE_SLOTFATHER_QUEUE_HOLD")
+        if queue_hold and not os.path.exists(queue_hold):
+            marker = queue_hold + ".waiting"
+            with open(marker, "w") as out:
+                out.write(json.dumps({"pid": os.getpid(), "label": label, "count": count, "started": time.monotonic()}))
+            try:
+                while not os.path.exists(queue_hold):
+                    time.sleep(0.05)
+            finally:
+                try:
+                    os.remove(marker)
+                except OSError:
+                    pass
         if not os.environ.get("FAKE_SLOTFATHER_BYPASS"):
-            os.environ.update(SLOTFATHER_LEASE=f"fake-lease-{os.getpid()}", SLOTFATHER_COUNT=str(count))
+            os.environ.update(SLOTFATHER_LEASE=f"fake-lease-{os.getpid()}", SLOTFATHER_COUNT=str(count),
+                              SLOTFATHER_SLOTS=",".join(str(i + 1) for i in range(count)))
             if yieldable:
                 os.environ["SLOTFATHER_YIELD"] = yield_path()
         os.execvp(rest[0], rest)
@@ -126,7 +155,19 @@ def main(argv):
     if command == "status":
         if rest[:1] == ["--json"]:
             # An empty queue: no process is in a lease; --pid echoes the start time as slotfather reads it.
-            answer = {"v": 2, "slots": total, "held": held, "free": total - held, "legacy": [], "entries": []}
+            entries = []
+            queue_hold = os.environ.get("FAKE_SLOTFATHER_QUEUE_HOLD")
+            if queue_hold and os.path.exists(queue_hold + ".waiting") and not os.path.exists(queue_hold):
+                try:
+                    info = json.loads(open(queue_hold + ".waiting").read())
+                    entries.append({
+                        "id": "fake-wait", "state": "waiting", "label": info.get("label", ""),
+                        "pid": info.get("pid"), "count": info.get("count", 1), "position": 1,
+                        "waited": max(0, round(time.monotonic() - float(info.get("started", time.monotonic())))),
+                    })
+                except (OSError, ValueError):
+                    pass
+            answer = {"v": 2, "slots": total, "held": held, "free": total - held, "legacy": [], "entries": entries}
             if rest[1:2] == ["--pid"] and rest[2:3]:
                 start = subprocess.run(["ps", "-o", "lstart=", "-p", rest[2]], capture_output=True, text=True,
                                        env={**os.environ, "LC_ALL": "C"}).stdout.strip()
@@ -140,7 +181,18 @@ def main(argv):
     if command == "available":
         print(total - held)
         return 0
-    print("usage: fake slotfather run|yield|advise|slots|status|available", file=sys.stderr)
+    if command == "capabilities":
+        if os.environ.get("FAKE_SLOTFATHER_FAIL"):
+            print("slotfather: " + os.environ["FAKE_SLOTFATHER_FAIL"], file=sys.stderr)
+            return 2
+        if rest[:1] == ["--json"]:
+            features = ["slot-range"] if os.environ.get("FAKE_SLOTFATHER_RANGE") else []
+            payload = {"v": 1, "tool": "slotfather", "version": "0.1.0", "features": features}
+            if features:
+                payload["run"] = {"slot_range": True}
+            print(json.dumps(payload))
+            return 0
+    print("usage: fake slotfather run|yield|advise|slots|status|available|capabilities", file=sys.stderr)
     return 2
 
 

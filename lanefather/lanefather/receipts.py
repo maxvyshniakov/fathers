@@ -436,7 +436,7 @@ def smoke_basis(
         return "the lane's receipt has no per-check results"
     if isinstance(verdict, StaleToolchain):
         if verdict.toolchain_changed:
-            return "the Rust toolchain changed since the lane check"
+            return f"the {config.current().toolchain_name} changed since the lane check"
         return f"the lane check did not run on {verdict.platform}"
     return None
 

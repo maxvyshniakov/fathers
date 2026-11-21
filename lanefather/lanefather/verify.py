@@ -21,7 +21,7 @@ from types import FrameType
 from typing import Any, Literal, TextIO, cast
 import uuid
 
-from . import history, host, journal, plan, slots, state
+from . import config, history, host, journal, plan, slots, state
 from . import results as result_store
 from .gitops import git
 
@@ -30,7 +30,203 @@ PASSING = ("passed", "not_run", "skipped")
 STAMPED = re.compile(r"^Verified tree ([0-9a-f]+) stamped\b", re.M)
 NOT_STAMPED = re.compile(r"^Verified tree not stamped: (.+?)\.?$", re.M)
 REPORT = re.compile(r"^Verification report: (.+)$", re.M)
+DEFAULT_HEARTBEAT = 30.0
+MAX_HEARTBEATS = 240
+_SETUP_LINE = re.compile(r"^(?:setup|preparing|installing|bootstrapping)\b[:\s-]", re.I)
+_UNITTEST_ACTIVE = re.compile(r"^(test_\S+\s+\([^)]+\))\s+\.\.\.\s*$")
+_RUNNING_TEST = re.compile(r"^Running test:\s+(\S+)\s*$")
 UNRESOLVED: Any = object()
+
+
+def _heartbeat_interval() -> float | None:
+    """LANEFATHER_VERIFY_HEARTBEAT: seconds of quiet before emitting a progress line (0/off disables)."""
+    raw = config.current().env("VERIFY_HEARTBEAT")
+    if not raw or not raw.strip():
+        return DEFAULT_HEARTBEAT
+    text = raw.strip().lower()
+    if text in ("0", "off", "false", "no"):
+        return None
+    try:
+        value = float(text)
+    except ValueError:
+        return DEFAULT_HEARTBEAT
+    return max(0.05, value) if value > 0 else None
+
+
+def _parse_ps_cpu(text: str) -> float | None:
+    """Parse `ps -o time=` ([DD-]HH:MM:SS[.cc] or MM:SS[.cc]) into CPU seconds."""
+    token = text.strip()
+    if not token:
+        return None
+    days = 0
+    if "-" in token:
+        day_part, _, token = token.partition("-")
+        if not day_part.isdigit():
+            return None
+        days = int(day_part)
+    parts = token.split(":")
+    try:
+        if len(parts) == 2:
+            return days * 86400 + int(parts[0]) * 60 + float(parts[1])
+        if len(parts) == 3:
+            return days * 86400 + int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+    except ValueError:
+        return None
+    return None
+
+
+def _sample_process_tree(root_pid: int) -> dict[str, Any] | None:
+    """Best-effort snapshot of `root_pid` and its live descendants (CPU time, count, slotfather pids)."""
+    if root_pid <= 0:
+        return None
+    try:
+        out = subprocess.run(
+            ["ps", "-axo", "pid=,ppid=,time=,command="],
+            capture_output=True, text=True, timeout=2,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode:
+        return None
+    children: dict[int, list[int]] = {}
+    info: dict[int, tuple[float, str]] = {}
+    for raw_line in out.stdout.splitlines():
+        parts = raw_line.strip().split(None, 3)
+        if len(parts) < 4 or not parts[0].isdigit() or not parts[1].isdigit():
+            continue
+        pid, ppid = int(parts[0]), int(parts[1])
+        cpu = _parse_ps_cpu(parts[2])
+        children.setdefault(ppid, []).append(pid)
+        info[pid] = (cpu or 0.0, parts[3])
+    if root_pid not in info:
+        return None
+    visited: set[int] = set()
+    stack = [root_pid]
+    while stack:
+        current = stack.pop()
+        if current in visited or current not in info:
+            continue
+        visited.add(current)
+        stack.extend(children.get(current, ()))
+    total_cpu = sum(info[pid][0] for pid in visited)
+    slotfather_pids = [pid for pid in sorted(visited) if "slotfather" in info[pid][1].lower()]
+    return {
+        "pids": frozenset(visited),
+        "procs": len(visited),
+        "children": max(0, len(visited) - 1),
+        "cpu_seconds": round(total_cpu, 2),
+        "slotfather_pids": slotfather_pids,
+    }
+
+
+@dataclass(frozen=True)
+class ProgressSample:
+    """One bounded status observation of a running `verify.Run`."""
+    state: Literal["queued", "setup", "active"]
+    target: str
+    output_age: float
+    line_age: float
+    bytes_delta: int
+    procs: int | None = None
+    children: int | None = None
+    cpu_seconds: float | None = None
+    cpu_delta: float | None = None
+    children_changed: bool = False
+    test: str | None = None
+    queue_detail: str | None = None
+
+    def format_line(self, label: str) -> str:
+        queue_note = f" ({self.queue_detail})" if self.queue_detail else ""
+        if self.bytes_delta > 0:
+            silence = (f"last output {self.output_age:.1f}s ago, "
+                       f"no newline for {self.line_age:.1f}s (+{self.bytes_delta} B)")
+        else:
+            silence = f"last output {self.output_age:.1f}s ago"
+        if self.procs is not None and self.cpu_seconds is not None:
+            proc_word = "proc" if self.procs == 1 else "procs"
+            child_note = (f" ({self.children} {'child' if self.children == 1 else 'children'})"
+                          if self.children else "")
+            delta_note = f" (+{self.cpu_delta:.2f}s)" if self.cpu_delta is not None else ""
+            changed_note = ", children changed" if self.children_changed else ""
+            activity = f"cpu {self.cpu_seconds:.2f}s{delta_note}, {self.procs} {proc_word}{child_note}{changed_note}"
+        else:
+            activity = "activity unavailable"
+        test_note = f"; test {self.test}" if self.test else ""
+        return f"lane: {label} [{self.state}] {self.target}{queue_note}; {silence}; {activity}{test_note}"
+
+
+class _ProgressTracker:
+    """Track log silence, observed check/suite/setup markers, and reliably emitted test names."""
+
+    def __init__(self, log: Path, selection: Selection) -> None:
+        self.log = log
+        self.selection = selection
+        self.offset = 0
+        self.line_buf = b""
+        self.last_output_at = 0.0
+        self.last_line_at = 0.0
+        self.bytes_since_heartbeat = 0
+        self.in_setup = False
+        self.active_target: str | None = (
+            selection.items[0] if selection.kind in ("checks", "suites") and len(selection.items) == 1 else None
+        )
+        self.observed_test: str | None = None
+        self._item_patterns = [
+            (item, re.compile(rf"(?:^|[\s:=\[\(]){re.escape(item)}(?:$|[\s:=\]\)])"))
+            for item in selection.items
+        ]
+
+    def reset(self, now: float) -> None:
+        self.offset = 0
+        self.line_buf = b""
+        self.last_output_at = now
+        self.last_line_at = now
+        self.bytes_since_heartbeat = 0
+        self.in_setup = False
+        self.observed_test = None
+
+    def poll(self, now: float) -> None:
+        try:
+            with open(self.log, "rb") as handle:
+                handle.seek(self.offset)
+                chunk = handle.read()
+        except OSError:
+            return
+        if not chunk:
+            return
+        self.offset += len(chunk)
+        self.last_output_at = now
+        self.bytes_since_heartbeat += len(chunk)
+        self.line_buf += chunk
+        if b"\n" in self.line_buf:
+            self.last_line_at = now
+            parts = self.line_buf.split(b"\n")
+            self.line_buf = parts[-1]
+            for raw_line in parts[:-1]:
+                self._observe_line(raw_line.decode("utf-8", errors="replace").strip())
+        self._observe_partial(self.line_buf.decode("utf-8", errors="replace").strip())
+
+    def _observe_line(self, line: str) -> None:
+        if not line:
+            return
+        self.observed_test = None
+        if line.startswith("Verification report:"):
+            return
+        for item, pattern in self._item_patterns:
+            if pattern.search(line):
+                self.active_target = item
+                self.in_setup = False
+                return
+        if _SETUP_LINE.match(line):
+            self.in_setup = True
+
+    def _observe_partial(self, partial: str) -> None:
+        if not partial:
+            self.observed_test = None
+            return
+        match = _UNITTEST_ACTIVE.match(partial) or _RUNNING_TEST.match(partial)
+        self.observed_test = match.group(1) if match else None
 
 
 class LeaseTimedOut(Exception):
@@ -101,12 +297,24 @@ def _read_stamp(text: str, full: bool) -> dict[str, Any]:
     return stamp_result(text, full)
 
 
-def verify_env(label: str, phase: str, *, ticket: str | None = None, **meta: Any) -> dict[str, str]:
+def verify_env(label: str, phase: str, *, ticket: str | None = None, min_jobs: int | None = None,
+               **meta: Any) -> dict[str, str]:
     """The environment of a verify run lanefather starts: its lease's label, the phase's priority (lanefather#24), and
     metadata naming the phase, the priority's source and what the caller adds (lane, check, sha)."""
     priority, source = slots.phase_priority(phase)
     tags: dict[str, Any] = {"phase": phase, **slots.priority_meta(priority, source), **meta}
-    return dict(os.environ, **slots.queue_environment(label, priority, ticket=ticket, **tags))
+    return dict(os.environ, **slots.queue_environment(label, priority, ticket=ticket, min_jobs=min_jobs, **tags))
+
+
+def report_jobs(report: dict[str, Any] | None) -> int | None:
+    """Granted worker count reported by the verify report (fathers#43), or None."""
+    if not report:
+        return None
+    for key in ("jobs", "slots", "granted_jobs"):
+        value = report.get(key)
+        if type(value) is int and value > 0:
+            return value
+    return None
 
 
 def plan_meta(selection: Any, root: Any = None, count: int | None = None, toolchain: Any = UNRESOLVED,
@@ -145,6 +353,7 @@ class Selection:
     """What a verify run executes: the full gate, whole suites, or named check ids."""
     kind: Literal["full", "suites", "checks"]
     items: tuple[str, ...] = ()
+    only: tuple[str, ...] = ()
 
     @classmethod
     def full(cls) -> Selection:
@@ -155,14 +364,15 @@ class Selection:
         return cls("suites", tuple(names))
 
     @classmethod
-    def checks(cls, ids: Iterable[str]) -> Selection:
-        return cls("checks", tuple(ids))
+    def checks(cls, ids: Iterable[str], *, only: Iterable[str] = ()) -> Selection:
+        return cls("checks", tuple(ids), only=tuple(only))
 
     def argv(self) -> tuple[str, ...]:
         if self.kind == "full":
             return ()
         if self.kind == "checks":
-            return ("--checks", ",".join(self.items))
+            base: tuple[str, ...] = ("--checks", ",".join(self.items))
+            return (*base, "--only", ",".join(self.only)) if self.only else base
         return ("--suites", ",".join(self.items))
 
     def describe(self) -> str:
@@ -201,6 +411,7 @@ class Outcome:
     started: str
     finished: str
     tree: str | None = None
+    granted_jobs: int | None = None
 
     @property
     def run_dir(self) -> Path | None:
@@ -235,12 +446,15 @@ class Run:
         load_wait: dict[str, Any] | None = None,
         banner: str | None = None,
         stoppable: bool = False,
+        heartbeat: float | None = UNRESOLVED,
+        min_jobs: int | None = None,
     ) -> None:
         self.root = root
         self.selection = selection
         self.label = label
         self.phase = phase
         self.jobs = jobs
+        self.min_jobs = min_jobs
         self.ticket = ticket
         self.lease = lease
         self.record_history = record_history
@@ -248,6 +462,7 @@ class Run:
         self._given_load_wait = load_wait
         self._banner = banner
         self.stoppable = stoppable
+        self.heartbeat = _heartbeat_interval() if heartbeat is UNRESOLVED else heartbeat
         self.log = journal.log_path(label)
         self.run_id = new_run_id()
         self.tree = tree_of(root)
@@ -267,16 +482,17 @@ class Run:
                 **self.meta,
             }
             self.argv = slots.wrap(jobs, label, self.verify_argv, wait=lease.wait, meta=wrap_meta,
-                                   priority=priority, ticket=ticket, required=lease.required)
+                                   priority=priority, ticket=ticket, required=lease.required, min_count=min_jobs)
         else:
             self.argv = list(self.verify_argv)
-        self.env = verify_env(label, phase, ticket=ticket, **self.meta)
+        self.env = verify_env(label, phase, ticket=ticket, min_jobs=min_jobs, **self.meta)
         self._child: subprocess.Popen[bytes] | None = None
         self._handle: TextIO | None = None
         self._started_at: str = ""
         self._clock: float = 0.0
         self._load: dict[str, Any] = {}
         self._load_wait: dict[str, Any] | None = None
+        self._progress = _ProgressTracker(self.log, self.selection)
 
     def _print_banner(self) -> None:
         line = (self._banner.format(log=self.log) if self._banner is not None
@@ -295,10 +511,11 @@ class Run:
             raise LeaseTimedOut(f"no lease of {self.jobs} slot(s) within {wait} (slotfather status)")
         report_path = Path(reports[-1].strip()) if reports else None
         ids = list(self.selection.items) if self.selection.kind == "checks" else None
+        granted_jobs = report_jobs(report)
         if self.record_history:
             history.record_run(report, lane=self.meta.get("lane"), phase=self.phase, tree=self.tree,
                                run=self.run_id, started=self._started_at, finished=finished,
-                               seconds=seconds, checks=ids)
+                               seconds=seconds, checks=ids, jobs=granted_jobs)
         failed_checks: list[str] = []
         blocked_by_id: dict[str, list[str]] = {}
         if report:
@@ -333,7 +550,83 @@ class Run:
             started=self._started_at,
             finished=finished,
             tree=self.tree,
+            granted_jobs=granted_jobs,
         )
+
+    def status_sample(self, now: float | None = None,
+                      prev_tree: dict[str, Any] | None = None) -> tuple[ProgressSample, dict[str, Any] | None]:
+        """Collect one bounded progress sample separating log silence from process/queue activity."""
+        moment = time.monotonic() if now is None else now
+        self._progress.poll(moment)
+        pid = self._child.pid if self._child is not None else 0
+        tree = _sample_process_tree(pid)
+        queue_detail: str | None = None
+        queued = False
+        if tree and tree["slotfather_pids"]:
+            sf_pid = int(tree["slotfather_pids"][0])
+        elif self.lease is not None and self.argv != self.verify_argv and pid > 0:
+            sf_pid = pid
+        else:
+            sf_pid = 0
+        if sf_pid:
+            status = slots.request_status(sf_pid)
+            raw_entries: Any = (status or {}).get("entries") or []
+            for raw_entry in cast(list[Any], raw_entries) if isinstance(raw_entries, list) else []:
+                if not isinstance(raw_entry, dict):
+                    continue
+                entry = cast(dict[str, Any], raw_entry)
+                if entry.get("state") == "waiting":
+                    queued = True
+                    parts = ["slotfather waiting"]
+                    if entry.get("position") is not None:
+                        parts.append(f"pos {entry['position']}")
+                    if entry.get("waited") is not None:
+                        parts.append(f"waited {entry['waited']}s")
+                    queue_detail = ", ".join(parts)
+                    break
+        state_name: Literal["queued", "setup", "active"] = (
+            "queued" if queued else "setup" if self._progress.in_setup else "active"
+        )
+        cpu_delta = (max(0.0, round(tree["cpu_seconds"] - prev_tree["cpu_seconds"], 2))
+                     if tree and prev_tree else None)
+        children_changed = bool(tree and prev_tree and tree["pids"] != prev_tree["pids"])
+        sample = ProgressSample(
+            state=state_name,
+            target=self._progress.active_target or self.selection.describe(),
+            output_age=max(0.0, moment - self._progress.last_output_at),
+            line_age=max(0.0, moment - self._progress.last_line_at),
+            bytes_delta=self._progress.bytes_since_heartbeat,
+            procs=tree["procs"] if tree else None,
+            children=tree["children"] if tree else None,
+            cpu_seconds=tree["cpu_seconds"] if tree else None,
+            cpu_delta=cpu_delta,
+            children_changed=children_changed,
+            test=self._progress.observed_test,
+            queue_detail=queue_detail,
+        )
+        return sample, tree
+
+    def _wait_child(self) -> int:
+        assert self._child is not None
+        interval = self.heartbeat
+        last_heartbeat = self._clock
+        prev_tree: dict[str, Any] | None = None
+        emitted = 0
+        poll_pause = min(0.1, interval / 3.0) if interval is not None else 0.1
+        while True:
+            status = self._child.poll()
+            if status is not None:
+                return status
+            now = time.monotonic()
+            if interval is not None and emitted < MAX_HEARTBEATS:
+                self._progress.poll(now)
+                if now - self._progress.last_line_at >= interval and now - last_heartbeat >= interval:
+                    sample, prev_tree = self.status_sample(now, prev_tree)
+                    print(sample.format_line(self.label), flush=True)
+                    self._progress.bytes_since_heartbeat = 0
+                    last_heartbeat = now
+                    emitted += 1
+            time.sleep(poll_pause)
 
     def start(self) -> None:
         self._load_wait = (self._given_load_wait if self._given_load_wait is not None
@@ -341,6 +634,7 @@ class Run:
         self._print_banner()
         self._started_at = journal.now()
         self._clock = time.monotonic()
+        self._progress.reset(self._clock)
         self._load = {"start": host.load_averages()}
         self._handle = open(self.log, "w")  # noqa: SIM115 - closed in finish/stop, after the child exits
         self._child = subprocess.Popen(self.argv, cwd=self.root, env=self.env,
@@ -348,7 +642,7 @@ class Run:
 
     def finish(self) -> Outcome:
         assert self._child is not None and self._handle is not None
-        status = self._child.wait()
+        status = self._wait_child()
         self._handle.close()
         self._handle = None
         return self._build_outcome(status)
@@ -374,13 +668,10 @@ class Run:
                 return self.finish()
             finally:
                 self.stop()
-        self._load_wait = (self._given_load_wait if self._given_load_wait is not None
-                           else host.wait_for_load(self.label) if self.wait_for_load else None)
-        self._print_banner()
-        self._started_at = journal.now()
-        self._clock = time.monotonic()
-        self._load = {"start": host.load_averages()}
-        with open(self.log, "w") as handle:
-            status = subprocess.run(self.argv, cwd=self.root, env=self.env,
-                                    stdout=handle, stderr=subprocess.STDOUT).returncode
-        return self._build_outcome(status)
+        try:
+            self.start()
+            return self.finish()
+        finally:
+            if self._handle is not None:
+                self._handle.close()
+                self._handle = None

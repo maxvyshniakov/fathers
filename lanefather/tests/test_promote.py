@@ -666,5 +666,58 @@ class SyncTests(LaneCase):
             self.assertIn("blocked checks: browser:e2e", buf.getvalue())
 
 
+class SingleBranchNoRustProjectTests(LaneCase):
+    """fathers#131: a project with a single `main` branch, custom worktrees_root, and no Rust lands and promotes
+    with no override."""
+
+    def test_single_main_branch_and_no_rust_project_lands_and_promotes_without_override(self):
+        # Configure a project with only `main` promoted, custom worktrees_root, and no Rust/toolchain/targets/stamp.
+        self.commit(self.integration, {
+            ".lanefather.toml": (
+                'project = "Plain"\n'
+                '[checks]\nverify = "verify.sh"\n'
+                '[lane]\nworktrees_root = ".worktrees"\n'
+                '[promote]\nbranches = ["main"]\n'
+            ),
+        }, "single-main no-rust policy")
+        # Confirm no `dev` branch exists and set up a bare remote with only `main`.
+        self.assertEqual(self.git(self.repo, "rev-parse", "--verify", "--quiet", "refs/heads/dev", check=False)
+                         if False else subprocess.run(
+                             ["git", "-C", str(self.repo), "rev-parse", "--verify", "--quiet", "refs/heads/dev"],
+                             capture_output=True).returncode, 1)
+        remote = self.tmp / "origin.git"
+        self.git(self.tmp, "init", "-q", "--bare", str(remote))
+        (self.tmp / "no-hooks").mkdir()
+        self.git(self.repo, "config", "core.hooksPath", str(self.tmp / "no-hooks"))
+        self.git(self.repo, "remote", "add", "origin", str(remote))
+        self.git(self.repo, "push", "-q", "origin", "main")
+
+        # Start lane under configured worktrees_root; header emits no Cargo target line.
+        start_out = self.lane("start", "plain-lane", "--ticket", "none", "--base", "integrate/q",
+                              "--claims", "lib/**", "--create")
+        self.assertNotIn("Cargo target", start_out)
+        wt = pathlib.Path(self.record("plain-lane")["worktree"])
+        self.assertTrue(wt.is_relative_to((self.repo / ".worktrees").resolve()))
+        self.assertEqual(self.record("plain-lane")["cargo_targets"], [])
+
+        # Check, land, review, and promote onto `main` with no override and no `dev` branch.
+        self.commit(wt, {"lib/api.txt": "foo\nplain\n"})
+        self.lane("check", "plain-lane")
+        receipt = json.loads((self.state / "plain-lane.receipt.json").read_text())
+        self.assertIsNone(receipt["toolchain"])
+        self.lane("land", "plain-lane")
+        self.lane("review", "plain-lane")
+        tip = self.tip()
+        out = self.lane("promote", tip, "--wait", "0")
+        self.assertIn(f"Promoted {tip[:10]}", out)
+        self.assertEqual(self.git(self.repo, "rev-parse", "main"), tip)
+        self.assertEqual(self.git(remote, "rev-parse", "main"), tip)
+        self.assertEqual(subprocess.run(
+            ["git", "-C", str(self.repo), "rev-parse", "--verify", "--quiet", "refs/heads/dev"],
+            capture_output=True).returncode, 1)
+        # Smoke checkout used the configured `.worktrees` root too.
+        self.assertTrue((self.repo / ".worktrees" / "smoke-0").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

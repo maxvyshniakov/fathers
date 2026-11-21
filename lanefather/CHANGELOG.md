@@ -8,6 +8,30 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Subset `--only` reruns for failing test files (fathers#147): when a verifier advertises `"only"` capability and
+  reports `failed_tests: [...]`, `Rerun` passes `--only <test,...>` to both lane and base reruns, records the subset
+  tests in the receipt (`classification.checks[].tests`, `classification.runs[].tests`), and leaves a check
+  `unclassified` if any red test falls outside `failed_tests`; when not advertised, argv and receipts stay
+  byte-identical.
+
+- Dynamic lane check worker count via Slotfather range leases (fathers#43): detects `slot-range` in `slotfather
+  capabilities --json`, passes `--jobs` max with `<slot_env>_MIN_JOBS` (and `slotfather run -n MIN-MAX` in
+  `slots.wrap`), and records the granted worker count from the verify report in the lane receipt and run history
+  (`history.py`) while preserving exact argv and receipts on older Slotfather releases.
+
+- Configurable project policy in `.lanefather.toml` and `capabilities --json` (fathers#131): `[promote] branches`
+  (default `["dev", "main"]`), `[lane] worktrees_root` (default `".claude/worktrees"`), `[lane] target_label`
+  (default `"Cargo target"`), `[lane] cache_depfiles` (default `["debug/*.d", "release/*.d"]`), and
+  `[checks] toolchain_name` (default `"Rust toolchain"`). Existing consumers need no config change; `lanefather
+  capabilities --json` reports the effective `policy` values (`project.policy` capability), and single-branch
+  projects without Rust land and promote without overrides.
+
+- Bounded verify progress heartbeats during quiet runs (fathers#190): `lanefather.verify.Run` samples log silence,
+  Slotfather queue state (`slotfather status --json --pid`), and process tree CPU/child activity during quiet
+  intervals (`LANEFATHER_VERIFY_HEARTBEAT`, default 30 s) and prints bounded progress lines distinguishing `queued`,
+  `setup`, and `active` states, active suite/check, last-output age, and activity evidence without fabricating test
+  names, while preserving command outcomes and receipts.
+
 - `lanefather land` three-phase split (`merge`, `post_merge`, `after_land`), kill-after-merge recovery, and
   lock-free `done` cleanup (fathers#72): `land` records a `landing` intent before merging and finishes the `land`
   transition on re-land if killed between merge and save (with `lanefather land ID --repair` for pre-intent

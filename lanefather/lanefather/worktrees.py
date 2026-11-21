@@ -26,8 +26,13 @@ GATE_WORKTREE = "batch-gate"
 SMOKE_WORKTREE = "smoke"
 
 
-def worktrees_root(common: str) -> Path:
-    return Path(main_checkout(common)) / ".claude" / "worktrees"
+def worktrees_root_from_main(main: str, project: config.Config | None = None) -> Path:
+    root = Path((project or config.current()).worktrees_root)
+    return root if root.is_absolute() else Path(main) / root
+
+
+def worktrees_root(common: str, project: config.Config | None = None) -> Path:
+    return worktrees_root_from_main(main_checkout(common), project)
 
 
 def remove_checkout(worktree: Any, path: Path) -> None:
@@ -134,9 +139,10 @@ def cache_root(project: config.Config | None = None) -> Path:
     return base / current.cache_name
 
 
-def lane_targets(lane_id: str) -> list[str]:
+def lane_targets(lane_id: str, project: config.Config | None = None) -> list[str]:
     """The lane's own build directories (`[lane] targets`, `{id}` replaced) under the cache root."""
-    return [str(cache_root() / pattern.replace("{id}", lane_id)) for pattern in config.current().lane_targets]
+    cfg = project or config.current()
+    return [str(cache_root(cfg) / pattern.replace("{id}", lane_id)) for pattern in cfg.lane_targets]
 
 
 def size(path: str) -> int:
@@ -157,15 +163,18 @@ def remove_tree(path: str, protected: list[str]) -> int:
 
 def shared_partitions(*checkouts: str, project: config.Config | None = None) -> list[Path]:
     """Shared cache partitions (`[lane] cache_partitions` under the cache root, 64-hex directories of a build cache
-    such as Straylight's cargo-v2) whose dependency files name a path under the checkouts."""
-    name = (project or config.current()).cache_partitions
-    if not name:
+    such as Straylight's cargo-v2) whose dependency files (`[lane] cache_depfiles`) name a path under the
+    checkouts."""
+    cfg = project or config.current()
+    name = cfg.cache_partitions
+    if not name or not cfg.cache_depfiles:
         return []
     found: list[Path] = []
-    for partition in (cache_root(project) / name).glob("[0-9a-f]" * 64):
+    for partition in (cache_root(cfg) / name).glob("[0-9a-f]" * 64):
         if not partition.is_dir() or partition.is_symlink():
             continue
-        for depfile in [*partition.glob("debug/*.d"), *partition.glob("release/*.d")]:
+        depfiles = [path for pattern in cfg.cache_depfiles for path in partition.glob(pattern)]
+        for depfile in depfiles:
             try:
                 with open(depfile, errors="replace") as handle:
                     text = handle.read(1 << 16)

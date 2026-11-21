@@ -167,13 +167,13 @@ self-contained configuration in the README for a Repo-Kit consumer.
 | `legacy_env_prefix`, `[env]` | the variables older tools set, read after `LANEFATHER_*` |
 | `rules_dir`, `coding_standards`, `steering`, `report_doc` | rule/standards inputs and the report-link text |
 | `unclaimed`, `merge_config` | paths no lane claims; `git -c` settings for land's merge |
-| `[checks]` `verify`, `plan_module`, `triage`, `toolchain`, `slot_env` | the check contract below |
+| `[checks]` `verify`, `plan_module`, `triage`, `toolchain`, `toolchain_name`, `slot_env` | the check contract below |
 | `[review]` `blocks` | the unmarked review finding severities that hold the batch gate, promote and `findings` (default `["P1", "P2"]`; fathers#109) |
 | `[review]` `panel`, `panel_required` | the review panel (fathers#151): two or more model aliases of the models file that review every lane at once; `panel_required = true` holds the gate while a member gave no answer ([Reviewer configuration](#reviewer-configuration)) |
 | `[checks]` `gate_only` | check-id patterns (fnmatch) the post-merge smoke leaves to the batch gate, such as tooling self-tests (fathers#94); a tree whose plan names whole suites has no check ids to match, so its smoke runs them |
-| `[lane]` `targets`, `cache_partitions` | build directories `done` removes |
+| `[lane]` `worktrees_root`, `targets`, `target_label`, `cache_partitions`, `cache_depfiles` | managed worktree root (default `.claude/worktrees`), per-lane build directories and label, and shared cache partition depfile globs (default `debug/*.d`, `release/*.d`) |
 | `[gate]` `stamp_tool`, `stamp_file`, `pre_push_hook` | the verified-tree stamp of the full gate |
-| `[promote]` `install`, `deploy`, `after`, `ship_refuses` | what promote runs after it moved dev |
+| `[promote]` `branches`, `install`, `deploy`, `after`, `ship_refuses` | promoted branches (default `["dev", "main"]`; fathers#131) and what promote runs after moving them |
 | `[gc]` `dirs`, `branches`, `collect_uncommitted_sessions`, `disposable` | what `gc` collects (fnmatch patterns, fathers#44). A worktree under the main checkout's `.claude/worktrees` is a candidate when a `dirs` pattern matches its name (a pattern without `/`) or its path from the main checkout (`.claude/worktrees/*`), or a `branches` pattern matches its branch. Every candidate must be clean, idle for 2 h, unused by any process, owned by no open lane, unlocked (a `claude agent` lock counts only while its pid is dead), and hold no other worktree or Git repository anywhere below it. An agent or lane worktree (`agent-*`, `lane-*`, `worktree-agent-*`, `lane/*`) must be merged into origin/dev, origin/main or a local `integrate/*`. Any other candidate is a session worktree: its HEAD must be in origin/dev or origin/main, it must have a commit of its own in its HEAD reflog unless `collect_uncommitted_sessions = true`, and every ignored path in it must have a component that `disposable` names (default `node_modules`, `__pycache__`, `target`, `.build`, `dist`, `build`, `.venv`, `.turbo`, `.next`, `storybook-static`, `coverage`, `.pytest_cache`, `.ruff_cache`, `.DS_Store`). A merged branch is deleted only when `branches` names it, no worktree or lane uses it and it is merged as its family requires; any other branch outlives its worktree. Defaults: `dirs = ["agent-*", "lane-*", ".claude/worktrees/*"]` (Codex's `codex-*` worktrees are under `.claude/worktrees`), `branches = ["worktree-agent-*", "lane/*", "claude/*", "codex/*"]`; `dev`, `main` and `integrate/*` are never collected. |
 | `[gc]` `after_remove`, `after_remove_report` | project cache cleanup after removal (`{worktree}`, `{name}`, `{project}`). Stdout is ignored by default, preserving existing hooks. With `after_remove_report = true`, a successful hook must emit `{"v":1,"freed":123}` to add its actually removed bytes; diagnostics go to stderr. Invalid reports add zero bytes and a report error. |
 | `[slots.priority]` `check`, `post-merge`, `gate`, `rerun`, `perf`, `default` | each run's Slotfather priority; see [slot priorities](#slot-priorities) |
@@ -272,20 +272,35 @@ land's comment as the lane's evidence. The capability is `tickets.lifecycle`.
 ### The check contract
 
 ```
-<verify> --changed --base B --plan --json   {full, paths, unowned, checks: [{id, suite, paths, producer}], suites, reasons}
-<verify> --checks A,B | --suites S --keep-going --jobs N
+<verify> --changed --base B --plan --json   {full, paths, unowned, checks: [{id, suite, paths, producer}], suites, reasons, capabilities?}
+<verify> --checks A,B [--only T1,T2] | --suites S --keep-going --jobs N
                                              prints `Verification report: <report.json>`
 <verify> --keep-going --jobs N               the full gate; prints `Verified tree <tree> stamped`
 ```
 
 The plan module (`plan_module`) answers `SUITES`, `checks(...)` and `smoke(root)`; `PERF = "<suite>"` names the perf
-suite. A project without one gets whole suites.
+suite, and `CAPABILITIES` may advertise `"only"`. A project without one gets whole suites.
 
-The report is `{checks: [{id, status, log, blocked_by}], stopped, environment}`. Optional row fields feed the run
+The report is `{checks: [{id, status, log, blocked_by, failed_tests?, outside_failed_tests?}], stopped, environment, capabilities?}`. Optional row fields feed the run
 history (fathers#92): `seconds` (the check's duration; without it `stats` has no p50/p90 for the check), `started`
 and `finished` (ISO times), `junit` (a JUnit XML file whose failed test cases a flake names) and `lease` (the slot
-lease id, also allowed at the report's top level). Lanefather hands each run its run id and tree in the slot meta
+lease id, also allowed at the report's top level). When a verifier advertises `"only"` (`capabilities`) and reports
+`failed_tests: [...]` on a failing check (fathers#147), red-check reruns pass `--only <test,...>` to both the lane
+and base reruns, record `"tests"` in `classification.checks` and `classification.runs`, and keep a check
+`"unclassified"` if a red test is outside `failed_tests`; otherwise argv and receipts are unchanged. Lanefather hands each run its run id and tree in the slot meta
 (`run`, `tree`) with `plan` and `checks` (fathers#107).
+
+When Slotfather advertises `slot-range` via `slotfather capabilities --json` (fathers#43), lane checks pass the
+maximum `--jobs` alongside `<slot_env>_MIN_JOBS` (`1`, or the highest selected `min_slots`) so the verifier can
+request `slotfather run -n MIN-MAX` (and `slots.wrap` issues `-n MIN-MAX`), then record the granted worker count from
+the verify report (`jobs`, `slots`, or `granted_jobs`) in the receipt (`jobs`, `jobs_decision.granted`) and run
+history (`history.py`). When Slotfather does not advertise `slot-range`, the command arguments and receipts stay
+unchanged.
+
+During any quiet verify run (no complete output line for `LANEFATHER_VERIFY_HEARTBEAT` seconds, default `30`, `0` or
+`off` to disable), the shared verify runner emits bounded heartbeat lines naming the state (`queued` when waiting in
+Slotfather, `setup` during setup lines, else `active`), the active suite or check, the last-output age (separately from
+process CPU and child-process activity), and any reliably observed test name without fabricating one (fathers#190).
 
 ## Reviewer configuration
 

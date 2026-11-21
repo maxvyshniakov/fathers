@@ -1,17 +1,19 @@
 """The check contract: what a project's verify command and plan module answer (#649, #422, #640).
 
   <verify> --changed --base B --plan --json   the plan: {full, paths, unowned, checks: [{id, suite, paths,
-                                             producer}], suites, reasons}; a tree from before the verification
-                                             graph has no `checks` and names whole suites
-  <verify> --checks A,B | --suites S,T [--keep-going] --jobs N
+                                             producer}], suites, reasons, capabilities?}; a tree from before the
+                                             verification graph has no `checks` and names whole suites
+  <verify> --checks A,B [--only T1,T2] | --suites S,T [--keep-going] --jobs N
                                              a run; it prints `Verification report: <path>` to a report.json of
-                                             {checks: [{id, status, log, blocked_by}], stopped, environment}
+                                             {checks: [{id, status, log, blocked_by, failed_tests?}], stopped,
+                                             environment, capabilities?}
   <verify> (no selection)                    the full gate, which stamps the tree (`Verified tree <tree> stamped`)
 
 The plan module (`plan_module`, loaded from the tree it plans) answers `SUITES`, `checks(root, scratch, suites,
 keep_going, native_only, jobs, bundle=...)` with objects carrying .id and .suite, and `smoke(root)`, the check ids
-of the post-merge smoke. `PERF = "<suite>"` in it names the perf suite. Each answer of a tree without the module is
-None, and lanefather falls back to whole suites.
+of the post-merge smoke. `PERF = "<suite>"` in it names the perf suite; `CAPABILITIES` (or `SUPPORTS_ONLY`) can
+advertise `"only"` subset reruns (fathers#147). Each answer of a tree without the module is None, and lanefather falls
+back to whole suites.
 """
 from __future__ import annotations
 
@@ -24,7 +26,7 @@ from pathlib import Path
 import subprocess
 import sys
 from types import ModuleType
-from typing import Any
+from typing import Any, cast
 
 from . import config, gitops, receipts
 from .errors import LaneError
@@ -43,6 +45,27 @@ def declared_slots(row: dict[str, Any]) -> int | None:
         if type(value) is int and value > 0:
             return value
     return None
+
+
+def _has_only_capability(value: Any) -> bool:
+    if isinstance(value, dict):
+        return bool(cast(dict[Any, Any], value).get("only"))
+    if isinstance(value, (list, tuple, set)):
+        return "only" in cast(Any, value)
+    return False
+
+
+def supports_only(root: Any, *, lane_plan: dict[str, Any] | None = None,
+                  report: dict[str, Any] | None = None) -> bool:
+    """Whether the project's verifier advertises `--only <tests>` subset reruns (fathers#147)."""
+    if report and _has_only_capability(report.get("capabilities")):
+        return True
+    if lane_plan and _has_only_capability(lane_plan.get("capabilities")):
+        return True
+    found = module(root)
+    if found is None:
+        return False
+    return bool(getattr(found, "SUPPORTS_ONLY", False) or _has_only_capability(getattr(found, "CAPABILITIES", None)))
 
 
 def plan_for(root: Any, base: str) -> dict[str, Any]:

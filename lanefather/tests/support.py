@@ -135,6 +135,13 @@ if args[:1] == ["--changed"]:
     print(json.dumps(plan))
     sys.exit(0)
 full = "--suites" not in args and "--checks" not in args
+min_jobs_env = os.environ.get("LANEFATHER_SLOT_MIN_JOBS")
+if min_jobs_env and not os.environ.get("SLOTFATHER_LEASE") and "--jobs" in args:
+    max_jobs = args[args.index("--jobs") + 1]
+    slot_cmd = os.environ.get("LANEFATHER_SLOT_CMD", "slotfather")
+    os.execvp(slot_cmd, [slot_cmd, "run", "-n", f"{min_jobs_env}-{max_jobs}",
+                         "--label", os.environ.get("LANEFATHER_SLOT_LABEL", "verify"), "--",
+                         sys.executable, __file__, *args])
 if "--checks" in args:
     ids = args[args.index("--checks") + 1].split(",")
     if any(id not in CHECKS for id in ids):
@@ -230,6 +237,8 @@ if status_label and status_label == os.environ.get("LANEFATHER_SLOT_LABEL"):
             row.update(status=forced, exit=None, **({"blocked_by": ["fixture-build"]} if forced == "blocked" else {}))
             status = status or (1 if forced in ("blocked", "failed") else 0)
 report = {"exit": status, "checks": rows, "stopped": stopped}
+if os.environ.get("LANEFATHER_SLOT_MIN_JOBS") and os.environ.get("SLOTFATHER_COUNT"):
+    report["jobs"] = int(os.environ["SLOTFATHER_COUNT"])
 if environment:
     rows.append({"id": "environment:toolchain", "status": "failed", "exit": 1, "log": None})
     report.update(exit=1, environment={"class": environment, "detail": "environment: " + environment})

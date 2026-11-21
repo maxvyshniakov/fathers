@@ -231,15 +231,27 @@ def gate_jobs(info: dict[str, Any]) -> dict[str, Any]:
 
 def check_jobs(info: dict[str, Any], minimum: int = 1, min_for: list[str] | None = None) -> dict[str, Any]:
     """A lane check shares the machine like the batch gate: at most CHECK_MAX_JOBS (or `minimum` when a selected
-    step declares a higher slot floor, fathers#173) and no more than the free slots, except that it honours a step's
-    declared minimum slots (capped at the machine's total slot capacity) instead of falling to 1 slot on a busy
-    machine."""
+    step declares a higher slot floor, fathers#173). When Slotfather advertises `slot-range` (fathers#43), pass the
+    maximum and let the verifier queue for `minimum-maximum` so the grant takes whatever is free then; otherwise
+    size from `advise` and honour `minimum`."""
     maximum = max(CHECK_MAX_JOBS, minimum)
     decision = jobs_decision(info, maximum)
+    raw_total = decision.get("slots") if type(decision.get("slots")) is int else decision.get("total")
+    total_slots = raw_total if type(raw_total) is int and raw_total > 0 else None
+    if slots.supports_range() and "fallback" not in decision:
+        effective_max = min(maximum, total_slots) if total_slots is not None else maximum
+        effective_min = min(minimum, effective_max)
+        extra: dict[str, Any] = {"min_jobs": effective_min, "slot_range": True}
+        if minimum > 1:
+            extra["min_slots"] = effective_min
+            if min_for:
+                extra["min_slots_for"] = list(min_for)
+        if decision["jobs"] < effective_max:
+            return dict(decision, advised_jobs=decision["jobs"], jobs=effective_max, **extra)
+        return dict(decision, **extra)
     if minimum > 1:
-        total_slots = decision.get("slots")
-        effective = min(minimum, total_slots) if type(total_slots) is int and total_slots > 0 else minimum
-        extra: dict[str, Any] = {"min_slots": effective, **({"min_slots_for": list(min_for)} if min_for else {})}
+        effective = min(minimum, total_slots) if total_slots is not None else minimum
+        extra = {"min_slots": effective, **({"min_slots_for": list(min_for)} if min_for else {})}
         if decision["jobs"] < effective:
             decision = dict(decision, advised_jobs=decision["jobs"], jobs=effective, **extra)
         else:

@@ -162,6 +162,49 @@ class FreeDiskMinimumTests(unittest.TestCase):
         self.assertEqual(report['host'], {'min_disk_gb': expected})
         self.assertGreaterEqual(report['host']['min_disk_gb'], host.DISK_RESERVE_GB)
         self.assertIn('host.min_disk_gb', report['capabilities'])
+        self.assertIn('project.policy', report['capabilities'])
+        self.assertEqual(report['policy'], {
+            'promoted': ['dev', 'main'],
+            'worktrees_root': '.claude/worktrees',
+            'lane_targets': [],
+            'target_label': 'Cargo target',
+            'cache_partitions': None,
+            'cache_depfiles': ['debug/*.d', 'release/*.d'],
+            'toolchain': False,
+            'toolchain_name': 'Rust toolchain',
+        })
+
+    def test_capabilities_report_configured_project_policy(self):
+        import argparse
+        import contextlib
+        import io
+        from unittest.mock import patch
+
+        from lanefather import config, runtime
+        cfg_file = self.tmp / '.lanefather.toml'
+        cfg_file.write_text(
+            '[checks]\ntoolchain = ["python3", "tools/tc.py"]\ntoolchain_pin = "tc.toml"\n'
+            'toolchain_name = "Node toolchain"\n'
+            '[lane]\nworktrees_root = ".worktrees"\ntargets = ["{id}-build"]\n'
+            'target_label = "Build dir"\ncache_partitions = "shared"\ncache_depfiles = ["*.d"]\n'
+            '[promote]\nbranches = ["main"]\n'
+        )
+        isolated = {'LANEFATHER_STATE': str(self.tmp / 'state'), 'LANEFATHER_SETTINGS': str(self.tmp / 'settings.json')}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), patch.dict(os.environ, isolated), \
+                patch('lanefather.config.current', return_value=config.load(cfg_file)):
+            self.assertEqual(runtime.capabilities(argparse.Namespace(json=True)), 0)
+        report = json.loads(out.getvalue())
+        self.assertEqual(report['policy'], {
+            'promoted': ['main'],
+            'worktrees_root': '.worktrees',
+            'lane_targets': ['{id}-build'],
+            'target_label': 'Build dir',
+            'cache_partitions': 'shared',
+            'cache_depfiles': ['*.d'],
+            'toolchain': True,
+            'toolchain_name': 'Node toolchain',
+        })
 
     def test_a_project_hook_reads_the_minimum_next_to_disk_free_gb(self):
         import argparse

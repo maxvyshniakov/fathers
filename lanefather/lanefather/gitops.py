@@ -81,9 +81,9 @@ def tracking(cwd: str, remote: str, branch: str) -> tuple[str | None, str | None
 
 
 def ahead_lines(cwd: str, remote: str = "origin") -> list[str]:
-    """A warning for each of local dev and main that has commits <remote> lacks, as last fetched."""
+    """A warning for each promoted branch that has commits <remote> lacks, as last fetched."""
     lines: list[str] = []
-    for branch in ("dev", "main"):
+    for branch in config.current().promoted:
         local, upstream = tracking(cwd, remote, branch)
         if local and upstream and local != upstream:
             count = int(git(cwd, "rev-list", "--count", f"{upstream}..{local}", check=False) or 0)
