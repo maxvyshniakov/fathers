@@ -5,6 +5,7 @@ import os
 import subprocess
 from typing import Any
 
+from . import config
 from .errors import LaneError
 
 
@@ -65,3 +66,55 @@ def resolve(cwd: Any, ref: str) -> str | None:
 
 def is_ancestor(cwd: Any, ancestor: str, descendant: str) -> bool:
     return git_ok(cwd, "merge-base", "--is-ancestor", ancestor, descendant)
+
+
+def commits(count: int) -> str:
+    return f"{count} commit" + ("" if count == 1 else "s")
+
+
+def tracking(cwd: str, remote: str, branch: str) -> tuple[str | None, str | None]:
+    """Local <branch> and <remote>/<branch>, each None when absent."""
+    local = git(cwd, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}", check=False) or None
+    upstream = git(cwd, "rev-parse", "--verify", "--quiet", f"refs/remotes/{remote}/{branch}^{{commit}}",
+                   check=False) or None
+    return local, upstream
+
+
+def ahead_lines(cwd: str, remote: str = "origin") -> list[str]:
+    """A warning for each of local dev and main that has commits <remote> lacks, as last fetched."""
+    lines: list[str] = []
+    for branch in ("dev", "main"):
+        local, upstream = tracking(cwd, remote, branch)
+        if local and upstream and local != upstream:
+            count = int(git(cwd, "rev-list", "--count", f"{upstream}..{local}", check=False) or 0)
+            if count:
+                lines.append(f"local {branch} is {commits(count)} ahead of {remote}; `{config.prog()} sync "
+                             "--drop-local` drops them with a backup")
+    return lines
+
+
+def move_branch(
+    cwd: str,
+    branch: str,
+    old: str,
+    new: str,
+    env: dict[str, str] | None,
+    reason: str,
+    *,
+    checked_out: dict[str, str] | None = None,
+    reset: bool = False,
+) -> str | None:
+    """Move local `branch` from `old` to `new` (ff-only merge or reset --keep in its worktree, else update-ref).
+
+    Returns None on success or an error line on failure."""
+    if checked_out is None:
+        checked_out = {w["branch"]: w["path"] for w in worktree_list(cwd) if w.get("branch")}
+    where = checked_out.get(branch)
+    if where:
+        argv = ["git", "reset", "-q", "--keep", new] if reset else ["git", "merge", "--ff-only", "-q", new]
+    else:
+        argv = ["git", "update-ref", "-m", reason, f"refs/heads/{branch}", new, old or ""]
+    moved = subprocess.run(argv, cwd=where or cwd, env=env, capture_output=True, text=True)
+    if moved.returncode:
+        return f"local {branch} in {where or cwd}: {(moved.stdout + moved.stderr).strip()}"
+    return None

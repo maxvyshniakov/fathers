@@ -23,7 +23,6 @@ from . import (
     host,
     journal,
     lifecycle,
-    promote,
     queue,
     receipts,
     review,
@@ -33,7 +32,7 @@ from . import (
     worktrees,
 )
 from .errors import LaneError
-from .gitops import common_dir, current_branch, git, git_ok, main_checkout, worktree_list
+from .gitops import ahead_lines, common_dir, current_branch, git, git_ok, main_checkout, worktree_list
 from .state import Record
 
 
@@ -310,7 +309,7 @@ def list_lanes(args: Any) -> int:
         for phase, found in priorities.items()))
     # #666: the repository it runs in, as last fetched; outside a Git checkout there is nothing to compare.
     if git_ok(os.getcwd(), "rev-parse", "--git-dir"):
-        for line in promote.ahead_lines(os.getcwd()):
+        for line in ahead_lines(os.getcwd()):
             print(line)
     pending = list(receipts.unmarked_reviews(records, store))
     label = "review" if len(pending) == 1 else "reviews"

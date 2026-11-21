@@ -24,6 +24,7 @@ from . import (
     config,
     done,
     events,
+    gate,
     gc,
     history,
     land,
@@ -338,7 +339,7 @@ def parser() -> Parser:
     p = add(root, commands, "perf", "The perf suite (#579) in the gate worktree; moves nothing.")
     p.add_argument("sha")
     p.add_argument("--remote", default="origin", help="whose main a red run bisects from (default: origin)")
-    p.set_defaults(run=promote.perf)
+    p.set_defaults(run=gate.perf)
     p = add(root, commands, "shipped", "After a release publish: comments the version on each issue a Fixes #N line in "
             "REF..HEAD names (lanefather.tickets, [tickets] release_comment).")
     p.add_argument("version", help="the published version, for example v1.4.0")
