@@ -139,9 +139,10 @@ def documentation_only(paths: list[str]) -> bool:
 
 
 def valid_fix_parents(record: Record, store: state.Store | None = None) -> Iterator[str]:
+    resolved_store = store if store is not None else state.Store(config.current())
     for parent in state.fix_parents(record):
         try:
-            fix_parent_review(parent, record["common_dir"], "review exemption refused", store=store)
+            fix_parent_review(parent, record["common_dir"], "review exemption refused", store=resolved_store)
         except LaneError:
             continue
         yield parent
