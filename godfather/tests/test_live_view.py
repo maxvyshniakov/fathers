@@ -179,6 +179,8 @@ class VersionTests(LiveCase):
             folder = root / name
             shutil.copytree(ROOT / "src" / "godfather", folder / "godfather",
                             ignore=shutil.ignore_patterns("__pycache__"))
+            shutil.copytree(ROOT / "src" / "fathers_common", folder / "fathers_common",
+                            ignore=shutil.ignore_patterns("__pycache__"))
             shutil.copyfile(ROOT / "CHANGELOG.md", folder / "godfather" / "CHANGELOG.md")
             (folder / "godfather" / "version.json").write_text(json.dumps(
                 {"v": 1, "commit": "0" * 40, "dirty": False, "source_sha256": digest}))

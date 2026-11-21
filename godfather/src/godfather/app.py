@@ -26,6 +26,9 @@ import time
 from pathlib import Path
 from typing import Any, cast
 
+from fathers_common.atomic import atomic_write
+from fathers_common.errors import Refused, Usage, refuse, say
+
 from . import actions as _actions
 from . import entries as _entries
 from . import events as _events
@@ -56,14 +59,7 @@ USAGE = ("usage: godfather [--interval SECONDS]\n"
          "       godfather events [--source NAME]... [--follow] [--json]\n"
          "       godfather --version")
 
-
-class UsageError(Exception):
-    """A command line Godfather does not take (exit 2, docs/cli.md): the reason, then one line pointing to the help of
-    `command` (None: Godfather's own)."""
-
-    def __init__(self, reason: str, command: str | None = None) -> None:
-        super().__init__(reason)
-        self.command = command
+UsageError = Usage
 
 
 # Godfather's own settings (SPEC 22): Refresh every and Colour theme, kept between runs
@@ -83,14 +79,9 @@ def load_choices() -> dict[str, Any]:
 
 
 def save_choices(interval: float, theme: str) -> None:
-    """Writes them atomically (a temporary file renamed over the old one); a failure leaves the old file."""
-    path = config_path()
+    """Writes them atomically via `fathers_common.atomic.atomic_write`; a failure leaves the old file."""
     with contextlib.suppress(OSError):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        pending = path.with_name(f".settings-{os.getpid()}.json")
-        pending.write_text(json.dumps({"v": 1, "interval": interval, "theme": theme}, indent=1) + "\n",
-                           encoding="utf-8")
-        os.replace(pending, path)
+        atomic_write(config_path(), json.dumps({"v": 1, "interval": interval, "theme": theme}, indent=1) + "\n")
 
 
 def starting_choices(interval: float | None) -> tuple[float, str]:
@@ -795,7 +786,7 @@ def events_command(argv: list[str]) -> int:
             continue
         log = _events.log_path(source.capabilities)
         if source.state == "unsupported" or not log:
-            print(f"godfather: {source.problem or name + ': no event log'}", file=sys.stderr)
+            say("godfather", source.problem or f"{name}: no event log")
             continue
         tags[name] = source.tag
         feed.follow(name, str(_sources.event_log(name, log)))
@@ -867,9 +858,7 @@ def command(argv: list[str]) -> int:
     if run_once:
         return once(width, height, colour, interval, resolved, page)
     if not sys.stdin.isatty() or not sys.stdout.isatty():
-        print("godfather: the live view needs an interactive terminal; --once prints one frame", file=sys.stderr)
-        print("Try 'godfather --help'.", file=sys.stderr)
-        return 2
+        return refuse("godfather", Usage("the live view needs an interactive terminal; --once prints one frame"))
     try:
         dashboard_live(interval, theme)
     except KeyboardInterrupt:
@@ -880,7 +869,5 @@ def command(argv: list[str]) -> int:
 def main(argv: list[str] | None = None) -> int:
     try:
         return command(list(sys.argv[1:] if argv is None else argv))
-    except UsageError as error:
-        print(f"godfather: {error}", file=sys.stderr)
-        print(f"Try 'godfather {error.command + ' ' if error.command else ''}--help'.", file=sys.stderr)
-        return 2
+    except Refused as error:
+        return refuse("godfather", error)

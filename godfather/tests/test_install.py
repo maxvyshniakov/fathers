@@ -43,6 +43,7 @@ class InstallTests(unittest.TestCase):
         for name in ("app.py", "tui.py", "views/overview.py", "adapters/slotfather.py",
                      "version.json", "CHANGELOG.md"):
             self.assertTrue((release / "godfather" / name).is_file(), name)
+        self.assertTrue((release / "fathers_common" / "errors.py").is_file())
         self.assertFalse(any(release.rglob("__pycache__")))
         result = subprocess.run([str(entry), "--version"], capture_output=True, text=True,
                                 env={"PATH": "/usr/bin:/bin", "HOME": str(self.home)})
@@ -73,9 +74,14 @@ class InstallTests(unittest.TestCase):
 
     def test_a_changed_release_with_the_same_identity_is_refused(self) -> None:
         release = self.install()
-        (release / "godfather" / "tui.py").write_text("tampered")
-        with self.assertRaisesRegex(self.tool.InstallError, "immutable installed release differs"):
-            self.install()
+        for target in (release / "godfather" / "tui.py", release / "fathers_common" / "errors.py"):
+            original = target.read_bytes()
+            target.write_text("tampered")
+            try:
+                with self.assertRaisesRegex(self.tool.InstallError, "immutable installed release differs"):
+                    self.install()
+            finally:
+                target.write_bytes(original)
 
     def test_a_running_dashboard_tells_a_newer_install(self) -> None:
         from godfather import version

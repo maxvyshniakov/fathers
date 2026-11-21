@@ -14,6 +14,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple, Optional, cast
 
+from fathers_common.atomic import atomic_write
+from fathers_common.changelog import RELEASE, UNRELEASED, entries as _changelog_entries
+
 from . import sources as _sources
 from . import version as _version
 
@@ -27,10 +30,8 @@ def title(tool: str) -> str:
     return tool[:1].upper() + tool[1:]
 
 
-# Godfather's own CHANGELOG.md: the Sid-Kit layout, the same rules as a tool's `changelog --json`
+# Godfather's own CHANGELOG.md: the Sid-Kit layout, parsed by `fathers_common.changelog`
 
-RELEASE = re.compile(r"^## \[?(\d+\.\d+\.\d+[^\]\s]*)\]? - (\d{4}-\d\d-\d\d)\s*$")
-UNRELEASED = re.compile(r"^## \[?Unreleased\]?\s*$", re.IGNORECASE)
 MARKUP = re.compile(r"\*\*|`|\[([^\]]*)\]\([^)]*\)")
 
 
@@ -47,46 +48,31 @@ def plain(text: str) -> str:
 
 
 def parse_changelog(text: str) -> list[Release]:
-    """The releases of a Keep a Changelog file, newest first, with markdown taken out of the entries; an entry's
-    two-space-indented continuation lines join it, and unindented text ends continuation (docs/contracts/changelog.md)."""
+    """The releases of a Keep a Changelog file, newest first, with markdown taken out of the entries."""
     found: list[Release] = []
-    open_release = False
-    bulleted = False
+    by_version: dict[str, Release] = {}
     for line in text.splitlines():
-        if line.startswith("# "):
-            open_release, bulleted = False, False
-        elif line.startswith("## "):
+        if line.startswith("## "):
             dated = RELEASE.match(line)
-            if UNRELEASED.match(line):
-                found.append(Release("Unreleased", "", "", []))
-                open_release = True
-            elif dated:
-                found.append(Release(dated[1], dated[2], "", []))
-                open_release = True
-            else:
-                open_release = False
-            bulleted = False
-        elif not open_release:
+            if UNRELEASED.match(line) and "Unreleased" not in by_version:
+                rel = Release("Unreleased", "", "", [])
+                found.append(rel)
+                by_version["Unreleased"] = rel
+            elif dated and dated[1] not in by_version:
+                rel = Release(dated[1], dated[2], "", [])
+                found.append(rel)
+                by_version[dated[1]] = rel
+    for entry in _changelog_entries(text):
+        key = "Unreleased" if entry.get("unreleased") else str(entry["version"])
+        target = by_version.get(key)
+        if target is None:
             continue
-        elif line.startswith("### "):
-            heading = line[4:].strip()
-            if heading:
-                found[-1].sections.append((heading, []))
-            bulleted = False
-        elif line.startswith("- ") and found[-1].sections:
-            item = line[2:].strip()
-            if item:
-                found[-1].sections[-1][1].append(plain(item))
-                bulleted = True
-            else:
-                bulleted = False
-        elif line.startswith("  ") and line.strip() and bulleted:
-            entries = found[-1].sections[-1][1]
-            entries[-1] += " " + plain(line.strip())
-        elif not line.strip():
-            continue
+        section = str(entry["section"])
+        cleaned = plain(str(entry["text"]))
+        if not target.sections or target.sections[-1][0] != section:
+            target.sections.append((section, [cleaned]))
         else:
-            bulleted = False
+            target.sections[-1][1].append(cleaned)
     return found
 
 
@@ -300,10 +286,6 @@ def load_read() -> Read:
 
 
 def save_read(read: Read) -> None:
-    """Writes them atomically; a failure leaves the old file."""
-    path = state_path()
+    """Writes them atomically via `fathers_common.atomic.atomic_write`; a failure leaves the old file."""
     with contextlib.suppress(OSError):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        pending = path.with_name(f".news-{os.getpid()}.json")
-        pending.write_text(json.dumps({"v": 1, "read": read}, indent=1, sort_keys=True) + "\n", encoding="utf-8")
-        os.replace(pending, path)
+        atomic_write(state_path(), json.dumps({"v": 1, "read": read}, indent=1, sort_keys=True) + "\n")
