@@ -28,7 +28,6 @@ import unittest
 from unittest import mock
 
 from test_slotfather import ROOT, TOOL, SlotCase
-from test_usage import load
 
 PROC = ROOT / "tests" / "fixtures" / "proc"
 LINUX = sys.platform.startswith("linux")

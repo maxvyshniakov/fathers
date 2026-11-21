@@ -21,7 +21,7 @@ import subprocess
 import sys
 import textwrap
 import time
-from typing import Any, Callable, Iterable
+from typing import Any, Iterable
 import unittest
 import unittest.mock
 
@@ -323,7 +323,10 @@ class ReviewTests(unittest.TestCase):
 
     def test_lists_and_output_paths_are_no_removed_directory(self):
         gone = f"{HOME}/sweep-fixture-gone"
-        isdir: Callable[[str], bool] = (lambda path: not path.startswith(gone))
+
+        def isdir(path: str) -> bool:
+            return not path.startswith(gone)
+
         within = sweep_plan.roots()
         for cmd in (f"java -cp {HOME}/a.jar:{HOME}/b.jar Main", f"env NODE_PATH={HOME}/a:{HOME}/b node x.js",
                     f"PATH={HOME}/.local/bin:/usr/bin make", f"tool --paths={HOME}/x,{HOME}/y"):

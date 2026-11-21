@@ -186,8 +186,10 @@ def machine(samples: list[dict[str, Any]], cores: int, capacity: int) -> dict[st
         float(raw[0]) if isinstance(raw := s.get("load"), list) and raw and isinstance(raw[0], (int, float)) else None
         for s in samples
     ]
-    over = sum(w for w, l, s in zip(weights, load1, samples) if l is not None and l > float(s.get("cores") or cores))
-    under = sum(w for w, l, s in zip(weights, load1, samples) if l is not None and l < float(s.get("cores") or cores))
+    over = sum(w for w, load_val, s in zip(weights, load1, samples)
+               if load_val is not None and load_val > float(s.get("cores") or cores))
+    under = sum(w for w, load_val, s in zip(weights, load1, samples)
+                if load_val is not None and load_val < float(s.get("cores") or cores))
     busy: list[float] = []
     busy_weight = busy_sum = idle_slot = held_area = busy_area = 0.0
     for (a, b), w in zip(zip(samples, samples[1:]), weights):
@@ -435,7 +437,7 @@ def report(summary: dict[str, Any], top: int = 25) -> str:
         lines.append(f"sweeps: {w['runs']} ({w['live']} live); stopped "
                      + ", ".join(f"{w['stopped'][c]} {c}" for c in SWEPT)
                      + f", {w['failed']} failed, {w['freed_mb']:.0f} MB resident freed; the last "
-                     + ("live " if w.get("last_live") else "dry ") + f"run at "
+                     + ("live " if w.get("last_live") else "dry ") + "run at "
                      + time.strftime("%m-%d %H:%M", time.localtime(w["last_at"] or 0)) + " found "
                      + ", ".join(f"{found.get(c, 0)} {c}" for c in (*SWEPT, "container")))
     return "\n".join(lines)

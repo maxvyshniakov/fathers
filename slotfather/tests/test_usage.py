@@ -12,6 +12,7 @@ from slotfather import state as sf_state
 from slotfather import usage as sf_usage
 
 
+import importlib
 import importlib.machinery
 import importlib.util
 import json
@@ -42,15 +43,13 @@ DETACHED_BURN = (
 
 
 def load(path: str, name: str) -> types.ModuleType:
-    import importlib as _il
-    import importlib.util as _ilu
     if pathlib.Path(path).name in ("slotfather-stats", "slotfather-sweep"):
         companion = path.rsplit("slotfather-", 1)[-1]
-        return _il.reload(_il.import_module("slotfather." + companion))
+        return importlib.reload(importlib.import_module("slotfather." + companion))
     loader = importlib.machinery.SourceFileLoader(name, path)
-    spec = _ilu.spec_from_loader(loader.name, loader)
+    spec = importlib.util.spec_from_loader(loader.name, loader)
     assert spec is not None
-    module = _ilu.module_from_spec(spec)
+    module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
     return module
 
