@@ -23,17 +23,15 @@ from . import (
     host,
     journal,
     lifecycle,
-    promote,
     queue,
     receipts,
-    review,
     slots,
     state,
     tickets,
     worktrees,
 )
 from .errors import LaneError
-from .gitops import common_dir, current_branch, git, git_ok, main_checkout, worktree_list
+from .gitops import ahead_lines, common_dir, current_branch, git, git_ok, main_checkout, worktree_list
 from .state import Record
 
 
@@ -123,7 +121,7 @@ def admit(record: Record, force_reason: str | None, repaired: str | None) -> tup
             raise LaneError(f"--after {name}: no lane that is not done by that name")
     for fix_id in state.fix_parents(record):
         prefix = f"--fix-of {fix_id}" if state.batch_fix(record) else "hand-over refused"
-        review.fix_parent_review(fix_id, record["common_dir"], prefix)
+        receipts.fix_parent_review(fix_id, record["common_dir"], prefix)
     parent = fix_parent(record)
     decision = admission.evaluate(config.current(), others, record["common_dir"], cap_exempt=parent is not None,
                                   repaired=repaired)
@@ -260,6 +258,29 @@ def adopt_worktree(record: Record, worktree: str, branch: str, *, agent: str | N
     return updated
 
 
+def hand_over_fix_lane(
+    store: state.Store,
+    record: Record,
+    fix_id: str,
+    fix_paths: list[str],
+    base: str,
+    force_reason: str | None,
+) -> tuple[Record, Record]:
+    """Register a follow-up fix lane taking over `record`'s landed worktree and transition `record` via `hand_over`."""
+    main = main_checkout(record["common_dir"])
+    fix, rules = prepare(main, fix_id, record["ticket"], fix_paths, base, [], parents=[record["id"]])
+    fix["worktree"] = record["worktree"]
+    register(fix, rules, force_reason, False)
+    updated_parent = lifecycle.transition(
+        store,
+        record["id"],
+        "hand_over",
+        worktree=None,
+        handed_over={"to": fix_id, "worktree": fix["worktree"], "at": journal.now()},
+    )
+    return fix, updated_parent
+
+
 def adopt(args: Any) -> int:
     store = state.Store(config.current())
     with store.locked("state"):
@@ -310,7 +331,7 @@ def list_lanes(args: Any) -> int:
         for phase, found in priorities.items()))
     # #666: the repository it runs in, as last fetched; outside a Git checkout there is nothing to compare.
     if git_ok(os.getcwd(), "rev-parse", "--git-dir"):
-        for line in promote.ahead_lines(os.getcwd()):
+        for line in ahead_lines(os.getcwd()):
             print(line)
     pending = list(receipts.unmarked_reviews(records, store))
     label = "review" if len(pending) == 1 else "reviews"

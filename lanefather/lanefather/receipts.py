@@ -19,8 +19,9 @@ import re
 import subprocess
 from typing import Any, Literal, cast
 
-from . import lifecycle, state
+from . import config, lifecycle, state
 from . import results as result_store
+from .errors import LaneError
 from .gitops import main_checkout
 from .state import Record
 
@@ -626,6 +627,29 @@ def review_state(
     found = read(store, label, "review")
     verdict = review_verdict(record, found, panel_required=store.project.review_panel_required)
     return review_words(label, verdict, prog=prog or store.project.command)
+
+
+def mark_help(lane_id: str = "{id}", prog: str | None = None) -> str:
+    return f"{prog or config.prog()} review {lane_id} --mark <n> fixed:<merge>|rejected:<reason>"
+
+
+def fix_parent_review(lane_id: str, common: str, refusal: str, *,
+                      store: state.Store | None = None) -> dict[str, Any]:
+    """A landed lane in this repository with a finished review and an open finding."""
+    current = store or state.Store(config.current())
+    parent_record = state.read_json(current.record_path(lane_id))
+    if parent_record is None:
+        raise LaneError(f"{refusal}: no lane by that name")
+    landed: dict[str, Any] = parent_record.get("landed") or {}
+    if not lifecycle.landed(parent_record) or not landed.get("merge"):
+        raise LaneError(f"{refusal}: lane {lane_id} is {parent_record.get('status')}, not landed; a fix lane fixes "
+                        "the review findings of landed lanes")
+    if parent_record.get("common_dir") != common:
+        raise LaneError(f"{refusal}: lane {lane_id} is from another repository")
+    receipt = read(current, lane_id, "review")
+    if not isinstance(review_verdict(parent_record, receipt), Unmarked) or receipt is None:
+        raise LaneError(f"{refusal}: lane {lane_id} has no finished review with unmarked findings")
+    return receipt
 
 
 def unmarked_reviews(records: Iterable[Record], store: state.Store) -> Iterator[tuple[Record, list[dict[str, Any]]]]:

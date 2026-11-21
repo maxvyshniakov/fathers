@@ -24,6 +24,7 @@ from . import (
     config,
     done,
     events,
+    gate,
     gc,
     history,
     land,
@@ -32,6 +33,7 @@ from . import (
     registry,
     results,
     review,
+    review_gate,
     runtime,
     settings,
     show,
@@ -265,7 +267,7 @@ def parser() -> Parser:
     p.add_argument("--since", metavar="REF", help="lanes landed after REF (default: local dev)")
     p.add_argument("--json", action="store_true", help="the version-1 report")
     p.add_argument("--force-reason", help="answer 0 although a review holds the SHA; logged")
-    p.set_defaults(run=review.findings)
+    p.set_defaults(run=review_gate.findings)
     p = add(root, commands, "done", "After landing: stops what the lane left running, removes its worktree, branches, "
             "build directories and scratch. A red post-merge smoke that a later green gate or smoke on the "
             "integration branch cleared does not refuse. --finished: done on every finished lane of the registered "
@@ -338,7 +340,7 @@ def parser() -> Parser:
     p = add(root, commands, "perf", "The perf suite (#579) in the gate worktree; moves nothing.")
     p.add_argument("sha")
     p.add_argument("--remote", default="origin", help="whose main a red run bisects from (default: origin)")
-    p.set_defaults(run=promote.perf)
+    p.set_defaults(run=gate.perf)
     p = add(root, commands, "shipped", "After a release publish: comments the version on each issue a Fixes #N line in "
             "REF..HEAD names (lanefather.tickets, [tickets] release_comment).")
     p.add_argument("version", help="the published version, for example v1.4.0")

@@ -1,21 +1,16 @@
-"""The batch gate, the perf suite, promote and sync.
+"""Promote and sync (fathers#73).
 
-promote <sha> runs the full gate on <sha> in the gate worktree unless its tree is stamped; then, once every lane
-landed since dev has a finished review with each finding marked, it fast-forwards local dev (and main) to it and
-pushes <sha>:dev (and <sha>:main, in one atomic push) through the pre-push gate, then runs the project's after-promote
-command. --ship refuses a tree that still holds the configured unreleased directory, runs the perf suite once after
-the gate, and starts one overall review of origin/main..<sha>. --no-push moves the local branches only to a SHA the
-remote already has (#666). --install runs the configured install (and with --deploy the deploy) steps in the gate
-worktree, each only after the previous succeeded (#569).
+promote <sha> runs the ordered promotion steps on <sha> (refusals, batch gate via gate.py, review gate, perf suite,
+atomic push + local branch moves under the landing lock, after-promote, release comments, overall review, and
+configured install/deploy steps).
 
 sync fetches, then fast-forwards local dev and main to the remote under the landing lock; a branch with commits the
 remote lacks is refused, and --drop-local resets it after keeping them on backup/<branch>-<date>[-N] (#666).
-
-promote and sync work in any repository they run in; a tree without the configured verify and stamp tool gets no
-batch gate from promote.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass, field
 import datetime
 import os
 from pathlib import Path
@@ -23,274 +18,62 @@ import subprocess
 import sys
 from typing import Any
 
-from . import config, events, host, journal, plan, receipts, review, slots, state, tickets, verify, worktrees
-from . import results as result_store
+from . import config, events, gate, journal, plan, review, review_gate, slots, state, tickets, verify, worktrees
 from .errors import LaneError
-from .gitops import common_dir, git, git_ok, worktree_list
+from .gate import (
+    batch_gate,
+    main_base,
+    perf,
+    perf_suite,
+    promote_lock_message,
+    run_batch_gate,
+    stamped_trees,
+    verified,
+    verified_why,
+)
+from .gitops import ahead_lines, commits, common_dir, git, git_ok, move_branch, tracking, worktree_list
 from .landing import landing
 
-
-def promote_lock_message() -> str:
-    return f"lane: waiting for another promote's gate worktree (lock {state.state_dir() / '.promote.lock'})"
-
-
-# The batch gate (#446): the full gate once per batch, at promote.
-
-def stamped_trees(common: str) -> set[str]:
-    """The trees a full verify run stamped, from the common Git directory."""
-    try:
-        rows = (Path(common) / config.current().stamp_file).read_text().splitlines()
-    except OSError:
-        return set()
-    return {row.split()[0] for row in rows if row.split()}
-
-
-def verified(cwd: str, common: str, sha: str) -> bool:
-    """Whether pre-push would take the SHA's tree: stamped, or (with the hook) differing only in documentation."""
-    if git(cwd, "rev-parse", sha + "^{tree}") in stamped_trees(common):
-        return True
-    cfg = config.current()
-    if not cfg.stamp_tool:
-        return False
-    top = git(cwd, "rev-parse", "--show-toplevel")
-    script = Path(top) / cfg.stamp_tool
-    if not (Path(top) / cfg.pre_push_hook).is_file() or not script.is_file():
-        return False
-    return subprocess.run([str(script), "check", sha], cwd=top, capture_output=True).returncode == 0
+__all__ = [
+    "PromoteRun",
+    "after_promote",
+    "batch_gate",
+    "install_and_deploy",
+    "main_base",
+    "perf",
+    "perf_suite",
+    "plan",
+    "promote",
+    "promote_lock_message",
+    "promote_sha",
+    "promote_steps",
+    "run_batch_gate",
+    "stamped_trees",
+    "step_priority",
+    "sync",
+    "sync_plan",
+    "verified",
+    "verified_why",
+]
 
 
-def verified_why(cwd: str, sha: str) -> str:
-    """Why a verified tree needs no gate: the green full gate the results store holds for it (fathers#91), else its
-    stamp."""
-    tree = git(cwd, "rev-parse", sha + "^{tree}")
-    top = git(cwd, "rev-parse", "--show-toplevel", check=False) or cwd
-    entry = result_store.full_green(tree, plan.toolchain_state(top))
-    if entry is None:
-        return f"tree {tree[:10]} is stamped"
-    source = f"the batch gate of {str(entry.get('sha'))[:10]}" if entry.get("source") == "gate" else entry.get("source")
-    return (f"{source} passed tree {tree[:10]} at {entry.get('at')}"
-            + (f"; receipt {entry['receipt']}" if entry.get("receipt") else ""))
-
-
-def bisect_list(cwd: str, common: str, sha: str,
-                depth: int = 500) -> tuple[str | None, list[tuple[str, str]], list[tuple[str, str]]]:
-    """The newest first-parent ancestor of the SHA with a stamped tree, and the merges and other commits after it,
-    oldest first."""
-    stamped = stamped_trees(common)
-    green: str | None = None
-    merges: list[tuple[str, str]] = []
-    direct: list[tuple[str, str]] = []
-    for row in git(cwd, "log", "--first-parent", f"-n{depth}", "--format=%H %T %P%x1f%s", sha).splitlines():
-        head, _, subject = row.partition("\x1f")
-        commit, tree, *parents = head.split()
-        if tree in stamped:
-            green = commit
-            break
-        (merges if len(parents) > 1 else direct).append((commit, subject))
-    return green, merges[::-1], direct[::-1]
-
-
-def bisect_lines(cwd: str, common: str, sha: str) -> list[str]:
-    green, merges, direct = bisect_list(cwd, common, sha)
-    by_merge = {r["landed"]["merge"]: r["id"] for r in state.lanes() if r.get("landed")}
-    since = (f"since the last green verified tree {green[:10]}" if green
-             else f"among the last 500 first-parent commits of {sha[:10]} (none has a verified tree)")
-    lines = [f"Lane merges {since}, oldest first; bisect these:"]
-    lines += [f"  {c[:10]} {s}" + (f"  lane {by_merge[c]}" if c in by_merge else "") for c, s in merges] or ["  none"]
-    if direct:
-        lines.append("Other commits on the integration branch since then:")
-        lines += [f"  {c[:10]} {s}" for c, s in direct]
-    return lines
-
-
-def batch_gate(cwd: str, common: str, sha: str, jobs: int | None) -> None:
-    """Run the full gate on the SHA in the gate worktree; return once its tree is stamped, else refuse.
-
-    One promote at a time holds the gate worktree, from its checkout to the end of verify: a second checkout under a
-    running gate changed the tree that gate was verifying (#454)."""
-    with state.locked("promote", "lane: waiting for the batch gate of another promote "
-                                 f"(lock {state.state_dir() / '.promote.lock'})"):
-        if verified(cwd, common, sha):
-            print(f"lane: {sha[:10]}'s tree was verified while this promote waited; no batch gate needed")
-            return
-        run_batch_gate(cwd, common, sha, jobs)
-
-
-def gate_meta(path: Any) -> dict[str, str]:
-    """The batch gate's run type (fathers#107): the full plan, and how many checks the tree's plan module defines."""
-    known = plan.known_checks(path)
-    return verify.plan_meta(result_store.FULL, path, len(known) if known is not None else None)
-
-
-def run_batch_gate(cwd: str, common: str, sha: str, jobs: int | None) -> None:
-    path = worktrees.gate_worktree(common, sha)
-    label = f"promote-{sha[:10]}"
-    load_wait = host.wait_for_load(label)
-    # Sized once the wait is over (#599 review), so jobs_decision records the load the gate starts under.
-    info = host.host()
-    decision = host.given_jobs(jobs, "--jobs") if jobs else host.gate_jobs(info)
-    job_count = int(decision["jobs"])
-    outcome = verify.Run(
-        path, verify.Selection.full(), label, "gate", job_count,
-        meta={"sha": sha[:10]}, ticket=None, run_type=gate_meta(path),
-        record_history=False, wait_for_load=False, load_wait=load_wait,
-        banner=f"lane: batch gate: the full gate on {sha[:10]} in {path} with {job_count} jobs (log {{log}}); "
-               "queue: slotfather status",
-    ).execute()
-    jobs = job_count
-    status, seconds, load, log = outcome.exit, outcome.seconds, outcome.load, outcome.log
-    stamp, report = outcome.stamp, outcome.report
-    failed, blocked, triaged = outcome.failed_checks, outcome.blocked_checks, outcome.triage
-    green = status == 0 and stamp["stamped"] and not blocked
-    module = plan.module(path)
-    store = state.Store(config.current())
-    tree = git(cwd, "rev-parse", sha + "^{tree}")
-    gate_path = receipts.write(
-        store, label,
-        {"version": 1, "lane": label, "sha": sha, "tree": tree, "full": True,
-         "platform": result_store.host_platform(),
-         "suites": list(getattr(module, "SUITES", ())), "jobs": jobs, "jobs_decision": decision, "exit": status,
-         "seconds": seconds,
-         "status": "green" if green else "red", "failed_checks": failed,
-         **({"blocked_checks": blocked} if blocked else {}),
-         "triage": triaged, "verified_tree": stamp,
-         "load_wait": load_wait, "load": load,
-         "results": [{"suite": "full gate", "status": "passed" if green else "failed", "seconds": seconds,
-                      "load_wait": load_wait, "load": load, "log": str(log), "failed_checks": failed,
-                      **({"blocked_checks": blocked} if blocked else {})}],
-         "log": str(log), "host": info, "started": outcome.started, "finished": journal.now()},
-        "gate",
-    )
-    # fathers#91: the gate's result belongs to the tree; a later promote of any commit with it reads why it is verified.
-    rows = {row["id"]: row.get("status") for row in (report or {}).get("checks", []) if row.get("id")}
-    result_store.record(tree,
-                   {c: v for c, v in rows.items() if v in ("passed", "failed")}, source="gate", full=True,
-                   status="green" if green else "red", toolchain=plan.toolchain_state(path), sha=sha,
-                   receipt=str(gate_path))
-    journal.ledger(f"promote-gate {sha} {'green' if green else 'red'} jobs={jobs} seconds={seconds:.0f}"
-                   f"{' stamped' if stamp['stamped'] else ''} {host.host_fields(info)}",
-                   kind="gate.finished", level="info" if green else "error", subject={"type": "commit", "id": sha},
-                   details={"status": "green" if green else "red", "jobs": jobs, "seconds": seconds,
-                            "stamped": bool(stamp["stamped"]), "failed_checks": failed, "log": str(log)})
-    if green:
-        print(f"lane: batch gate green in {seconds:.0f} s; verified tree {stamp['tree']} stamped")
-        return
-    if status:
-        blocked_note = f"; blocked checks: {', '.join(blocked)}" if blocked else ""
-        print(f"lane: batch gate red on {sha[:10]} after {seconds:.0f} s; failed checks: "
-              f"{', '.join(failed) or '(see the log)'}{blocked_note}  {log}")
-        if triaged:
-            print(triaged)
-    elif blocked:
-        print(f"lane: batch gate red on {sha[:10]} after {seconds:.0f} s; blocked checks: "
-              f"{', '.join(blocked)}  {log}")
-    else:
-        print(f"lane: the batch gate passed but did not stamp: {stamp.get('reason', 'unknown')}")
-    print("\n".join(bisect_lines(cwd, common, sha)))
-    raise LaneError(f"promote refused: the batch gate did not stamp {sha[:10]}; nothing moved")
-
-
-# The perf suite (#579, owner decision 2026-10-27): the timing budgets run only before main, once, alone on the
-# machine.
-
-def main_base(cwd: str, remote: str = "origin") -> str | None:
-    """What main holds: the remote's main, else the local one."""
-    return (git(cwd, "rev-parse", "--verify", "--quiet", f"refs/remotes/{remote}/main^{{commit}}", check=False)
-            or git(cwd, "rev-parse", "--verify", "--quiet", "refs/heads/main^{commit}", check=False) or None)
-
-
-def perf_bisect_lines(cwd: str, sha: str, base: str | None) -> list[str]:
-    """The lane merges and other commits main has not taken: a red perf run's regression is among them."""
-    if not base:
-        return ["No main to bisect from: bisect the lane merges since the last release."]
-    by_merge = {r["landed"]["merge"]: r["id"] for r in state.lanes() if r.get("landed")}
-    merges: list[tuple[str, str]] = []
-    direct: list[tuple[str, str]] = []
-    for row in git(cwd, "log", "--first-parent", "--reverse", "--format=%H %P%x1f%s", f"{base}..{sha}").splitlines():
-        head, _, subject = row.partition("\x1f")
-        commit, *parents = head.split()
-        (merges if len(parents) > 1 else direct).append((commit, subject))
-    lines = [f"Lane merges since main {base[:10]}, oldest first; bisect these for the performance regression "
-             f"(./{config.current().verify} --suites perf on each):"]
-    lines += [f"  {c[:10]} {s}" + (f"  lane {by_merge[c]}" if c in by_merge else "") for c, s in merges] or ["  none"]
-    if direct:
-        lines.append("Other commits since main:")
-        lines += [f"  {c[:10]} {s}" for c, s in direct]
-    return lines
-
-
-def perf_suite(cwd: str, common: str, sha: str, ship: bool, remote: str = "origin") -> dict[str, Any] | None:
-    """Run the perf suite on the SHA in the gate worktree: verify --suites <perf>, which holds every verification
-    slot while it measures. Returns its receipt, or None for a tree whose plan has no perf suite. For a ship, a green
-    receipt of the same tree stands; a red run raises.
-
-    One promote at a time holds the gate worktree, so the perf run never shares the machine with a batch gate."""
-    suite = plan.perf_suite_of(cwd, sha)
-    if not suite:
-        print(f"lane: {sha[:10]} has no perf suite in {config.current().plan_module or 'its plan'}; nothing to measure")
-        return None
-    tree = git(cwd, "rev-parse", sha + "^{tree}")
-    store = state.Store(config.current())
-    if ship:
-        previous = receipts.perf_reusable(store, sha, tree)
-        if previous is not None:
-            print(f"lane: perf suite already green on tree {tree[:10]} ({previous.get('log')})")
-            return previous
-    with store.locked("promote", promote_lock_message()):
-        worktree = worktrees.gate_worktree(common, sha)
-        label = f"perf-{sha[:10]}"
-        outcome = verify.Run(
-            worktree, verify.Selection.suites([suite]), label, "perf", 1,
-            meta={"sha": sha[:10]}, ticket=None,
-            run_type=verify.plan_meta([f"suite:{suite}"], worktree, verify.suite_count(worktree, [suite])),
-            record_history=False, wait_for_load=False,
-            banner=f"lane: perf suite on {sha[:10]} in {worktree}, alone on the machine (log {{log}}); "
-                   "queue: slotfather status",
-        ).execute()
-        status, seconds, load, log = outcome.exit, outcome.seconds, outcome.load, outcome.log
-        failed, blocked = outcome.failed_checks, outcome.blocked_checks
-        triaged, started = outcome.triage, outcome.started
-    info = host.host()
-    perf_status = "red" if status or blocked else "green"
-    receipt: dict[str, Any] = {"version": 1, "sha": sha, "tree": tree,
-                               "status": perf_status,
-                               "exit": status, "seconds": seconds, "failed_checks": failed,
-                               **({"blocked_checks": blocked} if blocked else {}),
-                               "triage": triaged,
-                               "log": str(log), "load": load, "host": info, "started": started,
-                               "finished": journal.now()}
-    receipts.write(store, sha, receipt, "perf")
-    journal.ledger(f"perf {sha} {perf_status} seconds={seconds:.0f} {host.host_fields(info)}",
-                   kind="perf.finished", level="info" if perf_status == "green" else "error",
-                   subject={"type": "commit", "id": sha},
-                   details={"status": perf_status, "seconds": seconds, "failed_checks": failed,
-                            "log": str(log)})
-    if perf_status == "green":
-        print(f"lane: perf suite green in {seconds:.0f} s on {sha[:10]}")
-        return receipt
-    parts: list[str] = []
-    if failed:
-        parts.append(f"failed checks: {', '.join(failed)}")
-    if blocked:
-        parts.append(f"blocked checks: {', '.join(blocked)}")
-    detail = "; ".join(parts) or "failed checks: (see the log)"
-    print(f"lane: perf suite red on {sha[:10]} after {seconds:.0f} s; {detail}  {log}")
-    if triaged:
-        print(triaged)
-    print("A red perf suite is a performance regression, not a flake: no registry entry excuses it.")
-    print("\n".join(perf_bisect_lines(cwd, sha, main_base(cwd, remote))))
-    raise LaneError(f"{'promote --ship refused' if ship else 'perf'}: the perf suite is red on {sha[:10]}; "
-                    "nothing moved")
-
-
-def perf(args: Any) -> int:
-    """The perf suite on a SHA by hand; it moves nothing."""
-    cwd = os.getcwd()
-    sha = git(cwd, "rev-parse", "--verify", "--quiet", args.sha + "^{commit}", check=False)
-    if not sha:
-        raise LaneError(f"perf refused: {args.sha} is not a commit here")
-    perf_suite(cwd, common_dir(cwd), sha, ship=False, remote=args.remote)
-    return 0
+@dataclass
+class PromoteRun:
+    cwd: str
+    common: str
+    sha: str
+    branches: list[str]
+    remote: str
+    ship: bool = False
+    no_push: bool = False
+    jobs: int | None = None
+    wait: float = 120.0
+    force_reason: str | None = None
+    install: bool = False
+    deploy: str | None = None
+    subject: str = ""
+    ship_base: str | None = None
+    failed_moves: list[str] = field(default_factory=list[str])
 
 
 def substitute(text: str, values: dict[str, str]) -> str:
@@ -308,68 +91,50 @@ def step_priority(step: config.Step) -> tuple[str, str]:
     return slots.phase_priority("gate", fallback="normal")
 
 
+def _run_config_step(common: str, sha: str, step: config.Step, skipped: list[str], deploy: str | None) -> None:
+    cfg = config.current()
+    values = {"sha": sha, "short": sha[:10], "host": deploy or "", "package": str(state.state_dir() / "link-package")}
+    environment = {k: v for k, v in os.environ.items() if k not in cfg.install_env_drop}
+    with state.locked("promote", promote_lock_message()):
+        path = worktrees.gate_worktree(common, sha)
+        argv = [substitute(part, values) for part in step.argv]
+        extra = {key: substitute(value, values) for key, value in step.env}
+        print(f"lane: {step.name}: {' '.join(argv)} in {path}", flush=True)
+        if step.lease:
+            priority, source = step_priority(step)
+            try:
+                argv = slots.wrap(step.lease.slots, f"promote-{sha[:10]}-{step.name}", argv,
+                                  priority=priority, ticket=step.lease.ticket, required=True,
+                                  meta={"phase": step.name, "kind": "promote", "sha": sha[:10],
+                                        **verify.plan_meta([f"step:{step.name}"], None, 0),
+                                        **slots.priority_meta(priority, source),
+                                        "lanefather.state": str(state.state_dir())})
+            except slots.Unavailable as error:
+                raise LaneError(f"promote of {sha[:10]} went through, but {step.name} cannot run: "
+                                f"{error}") from None
+        status = subprocess.run(argv, cwd=path, env={**environment, **extra}).returncode
+        journal.ledger(f"promote-{step.name} {sha} exit={status}", kind="promote.step",
+                       level="error" if status else "info", subject={"type": "commit", "id": sha},
+                       details={"step": step.name, "exit": status, "command": events.command(argv)})
+        if status:
+            skipped_text = ", ".join(skipped) or "none"
+            raise LaneError(f"promote of {sha[:10]} went through, but {step.name} failed (exit {status}); "
+                            f"later steps not run: {skipped_text}")
+
+
 def install_and_deploy(common: str, sha: str, deploy: str | None) -> None:
     """After a promotion (#569): the configured install steps from the gate worktree, and with a host the deploy
     steps, each only after the previous succeeded. The steps run without the variables `install_env_drop` names
     (the landing token, a project's unpromoted marker), so each guard sees the promoted tree. The gate worktree is
     promote's, so the promote lock holds it at the SHA throughout."""
     cfg = config.current()
-    values = {"sha": sha, "short": sha[:10], "host": deploy or "", "package": str(state.state_dir() / "link-package")}
     steps = [*cfg.install, *(cfg.deploy if deploy else ())]
     if not cfg.install:
         raise LaneError("promote --install: the project names no install steps ([[promote.install]] in "
                         ".lanefather.toml)")
-    environment = {k: v for k, v in os.environ.items() if k not in cfg.install_env_drop}
-    with state.locked("promote", promote_lock_message()):
-        path = worktrees.gate_worktree(common, sha)
-        for index, step in enumerate(steps):
-            argv = [substitute(part, values) for part in step.argv]
-            extra = {key: substitute(value, values) for key, value in step.env}
-            print(f"lane: {step.name}: {' '.join(argv)} in {path}", flush=True)
-            if step.lease:
-                priority, source = step_priority(step)
-                try:
-                    argv = slots.wrap(step.lease.slots, f"promote-{sha[:10]}-{step.name}", argv,
-                                      priority=priority, ticket=step.lease.ticket, required=True,
-                                      meta={"phase": step.name, "kind": "promote", "sha": sha[:10],
-                                            **verify.plan_meta([f"step:{step.name}"], None, 0),
-                                            **slots.priority_meta(priority, source),
-                                            "lanefather.state": str(state.state_dir())})
-                except slots.Unavailable as error:
-                    raise LaneError(f"promote of {sha[:10]} went through, but {step.name} cannot run: "
-                                    f"{error}") from None
-            status = subprocess.run(argv, cwd=path, env={**environment, **extra}).returncode
-            journal.ledger(f"promote-{step.name} {sha} exit={status}", kind="promote.step",
-                           level="error" if status else "info", subject={"type": "commit", "id": sha},
-                           details={"step": step.name, "exit": status, "command": events.command(argv)})
-            if status:
-                skipped = ", ".join(later.name for later in steps[index + 1:]) or "none"
-                raise LaneError(f"promote of {sha[:10]} went through, but {step.name} failed (exit {status}); "
-                                f"later steps not run: {skipped}")
+    for index, step in enumerate(steps):
+        _run_config_step(common, sha, step, [later.name for later in steps[index + 1:]], deploy)
     print(f"Installed{' and deployed' if deploy else ''} {sha[:10]}" + (f" to {deploy}" if deploy else ""))
-
-
-def promote(args: Any) -> int:
-    """The batch gate on a SHA unless its tree is verified; then fast-forward local dev (and main with --ship) to
-    it and push it, under the landing lock; with --install (and --deploy) install and deploy it."""
-    if args.deploy and not args.install:
-        raise LaneError("promote refused: --deploy needs --install (install the Mac first, as deploy.sh says)")
-    if (args.install or args.deploy) and args.no_push:
-        raise LaneError("promote refused: --install and --deploy need the push: the install and deploy guards take "
-                        "only a SHA on origin/dev")
-    cfg = config.current()
-    steps = (*cfg.install, *(cfg.deploy if args.deploy else ())) if args.install else ()
-    if any(step.lease for step in steps) and slots.command() is None:
-        raise LaneError("promote refused: configured execution leases require slotfather on PATH; nothing published")
-    # An invalid priority refuses before anything moves, not after the promotion (lanefather#24).
-    for step in steps:
-        if step.lease:
-            step_priority(step)
-    status = promote_sha(args)
-    if status == 0 and args.install:
-        cwd = os.getcwd()
-        install_and_deploy(common_dir(cwd), git(cwd, "rev-parse", args.sha + "^{commit}"), args.deploy)
-    return status
 
 
 # Local dev and main follow origin (#666): promote --no-push once left them ahead of it, and only the owner could
@@ -380,10 +145,6 @@ def publish_hint(sha: str, ship: bool = False) -> str:
             + (" --ship" if ship else ""))
 
 
-def commits(count: int) -> str:
-    return f"{count} commit" + ("" if count == 1 else "s")
-
-
 def has_remote(cwd: str, remote: str) -> bool:
     return bool(git(cwd, "remote", "get-url", remote, check=False))
 
@@ -392,27 +153,6 @@ def fetch(cwd: str, remote: str, verb: str) -> None:
     fetched = subprocess.run(["git", "fetch", "-q", remote], cwd=cwd, capture_output=True, text=True)
     if fetched.returncode:
         raise LaneError(f"{verb} refused: git fetch {remote} failed: {fetched.stderr.strip()}")
-
-
-def tracking(cwd: str, remote: str, branch: str) -> tuple[str | None, str | None]:
-    """Local <branch> and <remote>/<branch>, each None when absent."""
-    local = git(cwd, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}", check=False) or None
-    upstream = git(cwd, "rev-parse", "--verify", "--quiet", f"refs/remotes/{remote}/{branch}^{{commit}}",
-                   check=False) or None
-    return local, upstream
-
-
-def ahead_lines(cwd: str, remote: str = "origin") -> list[str]:
-    """A warning for each of local dev and main that has commits <remote> lacks, as last fetched."""
-    lines: list[str] = []
-    for branch in ("dev", "main"):
-        local, upstream = tracking(cwd, remote, branch)
-        if local and upstream and local != upstream:
-            count = int(git(cwd, "rev-list", "--count", f"{upstream}..{local}", check=False) or 0)
-            if count:
-                lines.append(f"local {branch} is {commits(count)} ahead of {remote}; `{config.prog()} sync "
-                             "--drop-local` drops them with a backup")
-    return lines
 
 
 def no_push_refusal(cwd: str, sha: str, branches: list[str], remote: str) -> None:
@@ -501,21 +241,17 @@ def sync(args: Any) -> int:
     with landing(common, holder, args.wait) as env:
         moves, notes, checked_out = sync_plan(cwd, args, verb)
         for branch, old, new, dropped in moves:
-            where = checked_out.get(branch)
             backup = None
             if dropped is not None:
                 backup = backup_name(cwd, branch)
                 git(cwd, "branch", backup, old)
-                # reset --keep refuses to overwrite local changes, as a checked-out branch's worktree may have.
-                argv = (["git", "reset", "-q", "--keep", new] if where else
-                        ["git", "update-ref", "-m", f"lane sync --drop-local ({backup})", f"refs/heads/{branch}", new,
-                         old])
+                reason = f"lane sync --drop-local ({backup})"
             else:
-                argv = (["git", "merge", "--ff-only", "-q", new] if where else
-                        ["git", "update-ref", "-m", "lane sync", f"refs/heads/{branch}", new, old])
-            moved = subprocess.run(argv, cwd=where or cwd, env=env, capture_output=True, text=True)
-            if moved.returncode:
-                failed.append(f"local {branch} in {where or cwd}: {(moved.stdout + moved.stderr).strip()}")
+                reason = "lane sync"
+            error = move_branch(cwd, branch, old, new, env, reason, checked_out=checked_out,
+                                reset=dropped is not None)
+            if error:
+                failed.append(error)
                 if backup:
                     # Nothing was dropped, so nothing needs keeping: a rerun takes the same name.
                     git(cwd, "branch", "-D", backup, check=False)
@@ -561,116 +297,232 @@ def after_promote(cwd: str, sha: str) -> None:
         print(f"lane: warning: the after-promote command failed (exit {status}): {' '.join(argv)}", file=sys.stderr)
 
 
-def promote_sha(args: Any) -> int:
-    prog = config.prog()
-    cfg = config.current()
-    cwd = os.getcwd()
-    common = common_dir(cwd)
-    sha = git(cwd, "rev-parse", "--verify", "--quiet", args.sha + "^{commit}", check=False)
-    if not sha:
-        raise LaneError(f"promote refused: {args.sha} is not a commit here")
-    if args.no_push:
-        no_push_refusal(cwd, sha, ["dev", "main"] if args.ship else ["dev"], args.remote)
-    for line in ahead_lines(cwd, args.remote):
+def step_no_push_refusal(run: PromoteRun) -> None:
+    if run.no_push:
+        no_push_refusal(run.cwd, run.sha, run.branches, run.remote)
+
+
+def step_ahead_warnings(run: PromoteRun) -> None:
+    for line in ahead_lines(run.cwd, run.remote):
         print(f"lane: {line}", flush=True)
+
+
+def step_ship_refusal(run: PromoteRun) -> None:
+    cfg = config.current()
     # main takes only released notes: fragments wait on dev until a release commit folds them (#447).
-    if args.ship and cfg.ship_refuses and git(cwd, "ls-tree", "--name-only", f"{sha}:{cfg.ship_refuses}",
-                                              check=False):
-        raise LaneError(f"promote --ship refused: {sha[:10]} still has {cfg.ship_refuses}/; {cfg.ship_refusal}")
+    if run.ship and cfg.ship_refuses and git(run.cwd, "ls-tree", "--name-only", f"{run.sha}:{cfg.ship_refuses}",
+                                             check=False):
+        raise LaneError(f"promote --ship refused: {run.sha[:10]} still has {cfg.ship_refuses}/; {cfg.ship_refusal}")
+
+
+def step_review_gate(run: PromoteRun) -> None:
     # fathers#109: an unmarked blocking finding of a finished review holds the batch gate too; a review still
     # running does not (#570: the gate runs while reviews finish).
-    report = review.gate_report(cwd, common, sha)
+    prog = config.prog()
+    report = review_gate.gate_report(run.cwd, run.common, run.sha)
     for entry in report["reported"]:
         print(f"lane: reported, does not block: {entry['text']}", flush=True)
     blocking = [e["text"] for e in report["blocking"]]
-    if blocking and not args.force_reason:
+    if blocking and not run.force_reason:
         raise LaneError(f"promote refused: {'/'.join(report['blocks'])} review findings unmarked (or marked fixed "
                         "outside the SHA) hold the batch "
-                        "gate and dev:\n- " + "\n- ".join(blocking) + f"\nThen rerun {prog} promote {sha[:10]}. "
+                        "gate and dev:\n- " + "\n- ".join(blocking) + f"\nThen rerun {prog} promote {run.sha[:10]}. "
                         "--force-reason overrides, logged")
+
+
+def step_batch_gate(run: PromoteRun) -> None:
+    cfg = config.current()
     # Only fully gated trees are promoted. Repositories without the stamp tooling have their own pre-push gate.
-    if (cfg.stamp_tool and git_ok(cwd, "cat-file", "-e", f"{sha}:{cfg.verify}")
-            and git_ok(cwd, "cat-file", "-e", f"{sha}:{cfg.stamp_tool}")):
-        if verified(cwd, common, sha):
-            print(f"lane: {sha[:10]}'s tree is already verified ({verified_why(cwd, sha)}); no batch gate needed")
+    if (cfg.stamp_tool and git_ok(run.cwd, "cat-file", "-e", f"{run.sha}:{cfg.verify}")
+            and git_ok(run.cwd, "cat-file", "-e", f"{run.sha}:{cfg.stamp_tool}")):
+        if gate.verified(run.cwd, run.common, run.sha):
+            print(f"lane: {run.sha[:10]}'s tree is already verified ({gate.verified_why(run.cwd, run.sha)}); "
+                  "no batch gate needed")
         else:
-            batch_gate(cwd, common, sha, args.jobs)
+            gate.batch_gate(run.cwd, run.common, run.sha, run.jobs)
+
+
+def step_review_refusals(run: PromoteRun) -> None:
+    prog = config.prog()
     # The gate runs while reviews finish; only the move of dev waits for them (#570).
-    refusals = review.review_refusals(cwd, common, sha)
-    if refusals and not args.force_reason:
+    refusals = review_gate.review_refusals(run.cwd, run.common, run.sha)
+    if refusals and not run.force_reason:
         raise LaneError("promote refused: dev waits for the review of every lane landed since dev:\n- "
                         + "\n- ".join(refusals) + "\nMark each finding with " + review.mark_help("<id>")
-                        + f", then rerun {prog} promote {sha[:10]}; a stamped tree is not gated again. "
+                        + f", then rerun {prog} promote {run.sha[:10]}; a stamped tree is not gated again. "
                         "--force-reason overrides, logged")
     if refusals:
-        journal.ledger(f"override promote {sha}: {args.force_reason} ({'; '.join(refusals)})", kind="override",
-                       level="warn", subject={"type": "commit", "id": sha},
-                       details={"command": "promote", "reason": args.force_reason, "refusals": refusals})
+        journal.ledger(f"override promote {run.sha}: {run.force_reason} ({'; '.join(refusals)})", kind="override",
+                       level="warn", subject={"type": "commit", "id": run.sha},
+                       details={"command": "promote", "reason": run.force_reason, "refusals": refusals})
+
+
+def step_perf_suite(run: PromoteRun) -> None:
+    cfg = config.current()
     # main takes only a tree whose timing budgets held, measured alone after the gate (#579); dev never waits for it.
-    if args.ship and git_ok(cwd, "cat-file", "-e", f"{sha}:{cfg.verify}"):
-        perf_suite(cwd, common, sha, ship=True, remote=args.remote)
-    branches = ["dev", "main"] if args.ship else ["dev"]
-    subject = git(cwd, "log", "-1", "--format=%s", sha)
-    holder = f"{prog} promote {sha[:10]}{' --ship' if args.ship else ''} (pid {os.getpid()}, {cwd})"
-    ship_base = None
-    failed: list[str] = []
-    with landing(common, holder, args.wait) as env:
-        if not args.no_push:
-            fetch(cwd, args.remote, "promote")
-        if args.ship:
+    if run.ship and git_ok(run.cwd, "cat-file", "-e", f"{run.sha}:{cfg.verify}"):
+        gate.perf_suite(run.cwd, run.common, run.sha, ship=True, remote=run.remote)
+
+
+def step_publish_refs(run: PromoteRun) -> int:
+    prog = config.prog()
+    run.subject = git(run.cwd, "log", "-1", "--format=%s", run.sha)
+    holder = f"{prog} promote {run.sha[:10]}{' --ship' if run.ship else ''} (pid {os.getpid()}, {run.cwd})"
+    run.failed_moves = []
+    with landing(run.common, holder, run.wait) as env:
+        if not run.no_push:
+            fetch(run.cwd, run.remote, "promote")
+        if run.ship:
             # The overall review covers what main gains: origin/main (local main without one) to the SHA.
-            ship_base = (git(cwd, "rev-parse", "--verify", "--quiet", f"refs/remotes/{args.remote}/main^{{commit}}",
-                             check=False)
-                         or git(cwd, "rev-parse", "--verify", "--quiet", "refs/heads/main^{commit}", check=False))
+            run.ship_base = gate.main_base(run.cwd, run.remote)
         moves: list[tuple[str, str]] = []
-        for branch in branches:
-            old = git(cwd, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}", check=False)
-            if old and not git_ok(cwd, "merge-base", "--is-ancestor", old, sha):
-                foreign = git(cwd, "log", "--oneline", "--no-decorate", "-10", f"{sha}..{old}")
-                upstream = f"{args.remote}/{branch}"
-                on_remote = git_ok(cwd, "rev-parse", "--verify", "--quiet", f"refs/remotes/{upstream}") and not git(
-                    cwd, "rev-list", "-1", old, f"^{sha}", f"^refs/remotes/{upstream}", check=False)
+        for branch in run.branches:
+            old = git(run.cwd, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}", check=False)
+            if old and not git_ok(run.cwd, "merge-base", "--is-ancestor", old, run.sha):
+                foreign = git(run.cwd, "log", "--oneline", "--no-decorate", "-10", f"{run.sha}..{old}")
+                upstream = f"{run.remote}/{branch}"
+                on_remote = git_ok(run.cwd, "rev-parse", "--verify", "--quiet", f"refs/remotes/{upstream}") and not git(
+                    run.cwd, "rev-list", "-1", old, f"^{run.sha}", f"^refs/remotes/{upstream}", check=False)
                 way_out = (f"they are on {upstream}: merge {upstream} into the lane or integration branch and promote "
                            "the new tip" if on_remote else
                            f"land them through a lane into the integration branch; if they are stale, {prog} sync "
                            "--drop-local drops them and keeps them on a backup branch")
-                raise LaneError(f"promote refused: local {branch} has commits that are not in {sha[:10]}:\n{foreign}\n"
-                                f"{way_out[0].upper() + way_out[1:]}. Nothing was pushed")
+                raise LaneError(f"promote refused: local {branch} has commits that are not in {run.sha[:10]}:\n"
+                                f"{foreign}\n{way_out[0].upper() + way_out[1:]}. Nothing was pushed")
             moves.append((branch, old))
-        if not args.no_push:
-            refspecs = [f"{sha}:refs/heads/{branch}" for branch in branches]
-            print(f"lane: pushing {sha[:10]} {subject!r} to {args.remote} {' and '.join(branches)}", flush=True)
+        if not run.no_push:
+            refspecs = [f"{run.sha}:refs/heads/{branch}" for branch in run.branches]
+            print(f"lane: pushing {run.sha[:10]} {run.subject!r} to {run.remote} {' and '.join(run.branches)}",
+                  flush=True)
             # The pre-push hook gates the push: a verified tree, and main only as a dev tip. The push moves
             # remote-tracking refs only, so the token stays out of the verify runs a pre-push hook may start.
             # --atomic: the remote takes dev and main together or neither, so a refused main leaves dev in place.
-            if subprocess.run(["git", "push", "--atomic", args.remote, *refspecs], cwd=cwd).returncode:
-                raise LaneError(f"promote refused: git push {args.remote} {' '.join(refspecs)} failed; "
-                                f"local {' and '.join(branches)} unchanged")
-        checked_out = {w["branch"]: w["path"] for w in worktree_list(cwd) if w.get("branch")}
+            if subprocess.run(["git", "push", "--atomic", run.remote, *refspecs], cwd=run.cwd).returncode:
+                raise LaneError(f"promote refused: git push {run.remote} {' '.join(refspecs)} failed; "
+                                f"local {' and '.join(run.branches)} unchanged")
+        checked_out = {w["branch"]: w["path"] for w in worktree_list(run.cwd) if w.get("branch")}
         for branch, old in moves:
-            if old == sha:
+            if old == run.sha:
                 continue
-            if branch in checked_out:
-                argv, where = ["git", "merge", "--ff-only", "-q", sha], checked_out[branch]
-            else:
-                argv, where = ["git", "update-ref", "-m", f"lane promote {sha[:10]}", f"refs/heads/{branch}", sha,
-                               old or ""], cwd
-            moved = subprocess.run(argv, cwd=where, env=env, capture_output=True, text=True)
-            if moved.returncode:
-                failed.append(f"local {branch} in {where}: {(moved.stdout + moved.stderr).strip()}")
-    pushed = "local only" if args.no_push else f"pushed to {args.remote}"
-    journal.ledger(f"promote {sha} {'+'.join(branches)} {pushed}" + (f" failed: {'; '.join(failed)}" if failed else ""),
-                   kind="promote.finished", level="warn" if failed else "info", subject={"type": "commit", "id": sha},
-                   details={"branches": branches, "pushed": not args.no_push, "remote": args.remote,
-                            "failed": failed})
-    if failed:
-        print("lane: " + ("the push went through, but " if not args.no_push else "") + "these local branches did "
-              "not move:\n  " + "\n  ".join(failed) + f"\nFix that, then rerun {prog} promote {sha[:10]}"
-              + (" --ship" if args.ship else ""), file=sys.stderr)
+            error = move_branch(run.cwd, branch, old, run.sha, env, f"lane promote {run.sha[:10]}",
+                                checked_out=checked_out)
+            if error:
+                run.failed_moves.append(error)
+    pushed = "local only" if run.no_push else f"pushed to {run.remote}"
+    journal.ledger(f"promote {run.sha} {'+'.join(run.branches)} {pushed}"
+                   + (f" failed: {'; '.join(run.failed_moves)}" if run.failed_moves else ""),
+                   kind="promote.finished", level="warn" if run.failed_moves else "info",
+                   subject={"type": "commit", "id": run.sha},
+                   details={"branches": run.branches, "pushed": not run.no_push, "remote": run.remote,
+                            "failed": run.failed_moves})
+    if run.failed_moves:
+        print("lane: " + ("the push went through, but " if not run.no_push else "") + "these local branches did "
+              "not move:\n  " + "\n  ".join(run.failed_moves) + f"\nFix that, then rerun {prog} promote {run.sha[:10]}"
+              + (" --ship" if run.ship else ""), file=sys.stderr)
         return 1
-    print(f"Promoted {sha[:10]} {subject!r}: {' and '.join(branches)}, {pushed}")
-    after_promote(cwd, sha)
-    if args.ship and ship_base:
-        tickets.release_comments(cwd, common, ship_base, sha, None)
-        print(f"lane: {review.start_overall_review(cwd, sha, ship_base)}")
+    print(f"Promoted {run.sha[:10]} {run.subject!r}: {' and '.join(run.branches)}, {pushed}")
     return 0
+
+
+def step_after_promote(run: PromoteRun) -> None:
+    after_promote(run.cwd, run.sha)
+
+
+def step_release_comments(run: PromoteRun) -> None:
+    if run.ship and run.ship_base:
+        tickets.release_comments(run.cwd, run.common, run.ship_base, run.sha, None)
+
+
+def step_overall_review(run: PromoteRun) -> None:
+    if run.ship and run.ship_base:
+        print(f"lane: {review.start_overall_review(run.cwd, run.sha, run.ship_base)}")
+
+
+def _install_summary_step(run: PromoteRun) -> None:
+    print(f"Installed{' and deployed' if run.deploy else ''} {run.sha[:10]}"
+          + (f" to {run.deploy}" if run.deploy else ""))
+
+
+def _require_install_steps(_run: PromoteRun) -> None:
+    if not config.current().install:
+        raise LaneError("promote --install: the project names no install steps ([[promote.install]] in "
+                        ".lanefather.toml)")
+
+
+PromoteStep = Callable[[PromoteRun], int | None]
+
+
+def promote_steps(run: PromoteRun) -> list[tuple[str, PromoteStep]]:
+    steps: list[tuple[str, PromoteStep]] = [
+        ("no_push_refusal", step_no_push_refusal),
+        ("ahead_warnings", step_ahead_warnings),
+        ("ship_refusal", step_ship_refusal),
+        ("review_gate", step_review_gate),
+        ("batch_gate", step_batch_gate),
+        ("review_refusals", step_review_refusals),
+        ("perf_suite", step_perf_suite),
+        ("publish_refs", step_publish_refs),
+        ("after_promote", step_after_promote),
+        ("release_comments", step_release_comments),
+        ("overall_review", step_overall_review),
+    ]
+    if run.install:
+        cfg = config.current()
+        if not cfg.install:
+            steps.append(("install_check", _require_install_steps))
+        else:
+            configured = [*cfg.install, *(cfg.deploy if run.deploy else ())]
+            for index, cfg_step in enumerate(configured):
+                skipped = [later.name for later in configured[index + 1:]]
+
+                def _run_step(r: PromoteRun, s: config.Step = cfg_step, sk: list[str] = skipped) -> None:
+                    _run_config_step(r.common, r.sha, s, sk, r.deploy)
+
+                steps.append((f"step:{cfg_step.name}", _run_step))
+            steps.append(("install_summary", _install_summary_step))
+    return steps
+
+
+def promote_sha(run: PromoteRun) -> int:
+    for _name, step in promote_steps(run):
+        status = step(run)
+        if status:
+            return status
+    return 0
+
+
+def promote(args: Any) -> int:
+    """The batch gate on a SHA unless its tree is verified; then fast-forward local dev (and main with --ship) to
+    it and push it, under the landing lock; with --install (and --deploy) install and deploy it."""
+    if args.deploy and not args.install:
+        raise LaneError("promote refused: --deploy needs --install (install the Mac first, as deploy.sh says)")
+    if (args.install or args.deploy) and args.no_push:
+        raise LaneError("promote refused: --install and --deploy need the push: the install and deploy guards take "
+                        "only a SHA on origin/dev")
+    cfg = config.current()
+    steps = (*cfg.install, *(cfg.deploy if args.deploy else ())) if args.install else ()
+    if any(step.lease for step in steps) and slots.command() is None:
+        raise LaneError("promote refused: configured execution leases require slotfather on PATH; nothing published")
+    # An invalid priority refuses before anything moves, not after the promotion (lanefather#24).
+    for step in steps:
+        if step.lease:
+            step_priority(step)
+    cwd = os.getcwd()
+    sha = git(cwd, "rev-parse", "--verify", "--quiet", args.sha + "^{commit}", check=False)
+    if not sha:
+        raise LaneError(f"promote refused: {args.sha} is not a commit here")
+    run = PromoteRun(
+        cwd=cwd,
+        common=common_dir(cwd),
+        sha=sha,
+        branches=["dev", "main"] if args.ship else ["dev"],
+        remote=args.remote,
+        ship=bool(args.ship),
+        no_push=bool(args.no_push),
+        jobs=args.jobs,
+        wait=args.wait,
+        force_reason=args.force_reason,
+        install=bool(args.install),
+        deploy=args.deploy,
+    )
+    return promote_sha(run)
