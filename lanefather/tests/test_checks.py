@@ -901,6 +901,52 @@ class MinSlotsTests(LaneCase):
         self.assertEqual(decision["jobs"], 1)
         self.assertEqual(decision["min_slots"], 1)
 
+    def test_classify_reruns_honour_declared_min_slots(self):
+        from lanefather import checks
+        lane_plan: dict[str, Any] = {
+            "selection": [{"id": "browser:e2e", "suite": "browser", "paths": ["a.ts"], "min_slots": 4}],
+        }
+        fresh = [{"suite": "browser", "status": "failed", "failed_checks": ["browser:e2e"]}]
+        report = {"checks": [{"id": "browser:e2e", "status": "failed"}]}
+        seen_jobs: list[int] = []
+
+        class FakeRerun:
+            def __init__(self, root: Any, ids: list[str], label: str, jobs: int, **kwargs: Any) -> None:
+                seen_jobs.append(jobs)
+                self.run_id = f"run-{label}"
+
+        @contextlib.contextmanager
+        def fake_base(*_args: Any, **_kwargs: Any) -> Any:
+            yield "/tmp"
+
+        with (unittest.mock.patch.object(checks, "Rerun", FakeRerun),
+              unittest.mock.patch.object(checks, "run_rerun", return_value=(report, pathlib.Path("/tmp/l"), None, None)),
+              unittest.mock.patch.object(checks.worktrees, "base_checkout", side_effect=fake_base),
+              unittest.mock.patch.object(checks.plan, "known_checks", return_value={"browser:e2e"})):
+            checks.classify({"id": "a", "ticket": "1"}, "/tmp", "deadbeef", fresh, report, jobs=4,
+                            lane_plan=lane_plan)
+        self.assertEqual(seen_jobs, [4, 4])
+
+    def test_fix_plan_preserves_min_slots_on_added_parent_checks(self):
+        from lanefather import checks
+        lane_plan: dict[str, Any] = {
+            "paths": ["src/new.ts"],
+            "selection": [{"id": "unit", "suite": "verify", "paths": ["src/new.ts"]}],
+            "selected": ["verify"],
+            "by_suite": {"verify": ["unit"]},
+        }
+        parent: dict[str, Any] = {
+            "lane": "p",
+            "tree": "abc",
+            "paths": ["src/old.ts"],
+            "selection": [{"id": "browser:e2e", "suite": "browser", "paths": ["src/old.ts"], "min_slots": 4}],
+        }
+        about = checks.fix_plan(lane_plan, parent, known={"unit", "browser:e2e"})
+        self.assertTrue(about["union"])
+        selection: list[dict[str, Any]] = lane_plan["selection"]
+        added = next(r for r in selection if r["id"] == "browser:e2e")
+        self.assertEqual(added.get("min_slots"), 4)
+
 
 if __name__ == "__main__":
     unittest.main()

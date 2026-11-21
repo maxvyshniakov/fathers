@@ -332,8 +332,11 @@ def review_lines(receipt: dict[str, Any]) -> list[str]:
         lines.append(f"Pre-land fix round: reviewed commit {str(pre_land.get('reviewed_sha', ''))[:10]} on "
                      f"{pre_land.get('branch')} ({pre_land.get('worktree')})")
     if receipt.get("kind") == "lane" and any(not f.get("mark") for f in findings):
-        lines.append("Mark each finding: " + mark_help(label) + "; the fix round runs in the lane's "
-                     f"worktree on a follow-up lane: {config.prog()} review {label} --fix-lane")
+        if pre_land:
+            lines.append("Mark each finding: " + mark_help(label).replace("<merge>", "<fix-commit>|" + label))
+        else:
+            lines.append("Mark each finding: " + mark_help(label) + "; the fix round runs in the lane's "
+                         f"worktree on a follow-up lane: {config.prog()} review {label} --fix-lane")
     return lines
 
 
@@ -442,6 +445,11 @@ def review_lane(args: Any) -> int:
     receipt = perform_review(args.id, {"kind": "lane", "lane": args.id, "ticket": record["ticket"]},
                              main_checkout(record["common_dir"]), base, tip, ticket_text(record),
                              family=implementer_family(args.id), reviewers=asked_reviewers(args))
+    if record.get("pre_land_fix"):
+        with state.locked("state"):
+            latest = state.load(args.id)
+            if latest.pop("pre_land_fix", None) is not None:
+                state.save(latest)
     print("\n".join(review_lines(receipt)))
     if receipt["status"] != "finished":
         return 1
@@ -511,10 +519,16 @@ def compare(args: Any) -> int:
 
 
 def fix_merge(common: str, value: str) -> str:
-    """The commit a `fixed:` mark names: a landed lane's merge (the fix lane's id) or a commit."""
+    """The commit a `fixed:` mark names: a landed lane's merge (the fix lane's id), an active lane's tip during a
+    pre-land fix round, or a commit."""
     record = state.read_json(state.record_path(value)) if state.ID.match(value) else None
     if record and (record.get("landed") or {}).get("merge"):
         return record["landed"]["merge"]
+    if record and record.get("status") == "active" and record.get("pre_land_fix"):
+        tip = git(main_checkout(common), "rev-parse", "--verify", "--quiet", record["branch"] + "^{commit}",
+                  check=False)
+        if tip:
+            return tip
     sha = git(main_checkout(common), "rev-parse", "--verify", "--quiet", value + "^{commit}", check=False)
     if not value or not sha:
         raise LaneError(f"fixed:{value}: not a commit or a landed lane here; give the follow-up merge")
@@ -541,8 +555,8 @@ def mark_review(args: Any) -> int:
                 fix_sha = fix_merge(record["common_dir"], detail)
                 pre_land: dict[str, Any] = receipt.get("pre_land_fix") or {}
                 reviewed_sha = pre_land.get("reviewed_sha")
-                if reviewed_sha and git_ok(main_checkout(record["common_dir"]), "merge-base", "--is-ancestor",
-                                           fix_sha, reviewed_sha):
+                if reviewed_sha and (fix_sha == reviewed_sha or not git_ok(
+                        main_checkout(record["common_dir"]), "merge-base", "--is-ancestor", reviewed_sha, fix_sha)):
                     raise LaneError(f"--mark {number} fixed:{detail}: commit {fix_sha[:10]} does not advance past "
                                     f"the reviewed commit {reviewed_sha[:10]}; commit the fix on top of it first")
                 marks.append((finding, {"kind": "fixed", "merge": fix_sha, "at": journal.now()}))

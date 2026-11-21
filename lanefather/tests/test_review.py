@@ -650,10 +650,21 @@ class ReviewFixRoundTests(ReviewGateCase):
         bad_mark = self.lane("review", "a", "--mark", "1", f"fixed:{reviewed_sha}", ok=False)
         self.assertIn("does not advance past the reviewed commit", bad_mark)
 
-        # Implement the fix commit on top of the reviewed SHA, recheck, mark findings, and land.
+        # Marking fixed with an unrelated commit (not a descendant of reviewed_sha) is also refused.
+        other_wt = self.created("other", "docs/**")
+        unrelated_sha = self.commit(other_wt, {"docs/unrelated.md": "unrelated\n"}, "unrelated commit")
+        unrelated_mark = self.lane("review", "a", "--mark", "1", f"fixed:{unrelated_sha}", ok=False)
+        self.assertIn("does not advance past the reviewed commit", unrelated_mark)
+
+        # review output suppresses the --fix-lane hint once pre_land_fix is open.
+        shown = self.lane("review", "a")
+        self.assertIn("Pre-land fix round:", shown)
+        self.assertNotIn("--fix-lane", shown)
+
+        # Implement the fix commit on top of the reviewed SHA, recheck, mark findings (using lane id), and land.
         fix_sha = self.commit(worktree, {"calls/main.txt": "foo\nbaz\n"}, "fix(review): call baz")
         self.lane("check", "a")
-        self.lane("review", "a", "--mark", "1", f"fixed:{fix_sha}", "--mark", "2", "rejected:out of scope")
+        self.lane("review", "a", "--mark", "1", "fixed:a", "--mark", "2", "rejected:out of scope")
         self.assertEqual(self.review("a")["findings"][0]["mark"]["merge"], fix_sha)
         land_out = self.lane("land", "a")
         self.assertIn("review kept", land_out)
@@ -661,6 +672,17 @@ class ReviewFixRoundTests(ReviewGateCase):
         self.assertEqual(self.record("a")["status"], "done")
         # promote passes gate_report because fix_sha is an ancestor of the landed merge.
         self.lane("promote", self.tip(), "--no-push", "--wait", "0")
+
+    def test_force_reason_review_clears_pre_land_fix_on_record(self):
+        self.review_text.write_text(TWO_FINDINGS)
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.lane("review", "a")
+        self.lane("review", "a", "--fix-lane")
+        self.assertIn("pre_land_fix", self.record("a"))
+        self.lane("review", "a", "--force-reason", "re-review after scope change")
+        self.assertNotIn("pre_land_fix", self.record("a"))
 
     def test_hand_over_refusal_distinguishes_unsupported_status_from_missing_worktree(self):
         # fathers#197: unsupported status (planned, done) must not claim "has no worktree to hand over",

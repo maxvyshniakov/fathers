@@ -177,12 +177,16 @@ def run_batch_gate(cwd: str, common: str, sha: str, jobs: int | None) -> None:
         print(f"lane: batch gate green in {seconds:.0f} s; verified tree {stamp['tree']} stamped")
         return
     if status:
+        blocked_note = f"; blocked checks: {', '.join(blocked)}" if blocked else ""
         print(f"lane: batch gate red on {sha[:10]} after {seconds:.0f} s; failed checks: "
-              f"{', '.join(failed) or '(see the log)'}  {log}")
+              f"{', '.join(failed) or '(see the log)'}{blocked_note}  {log}")
         if triaged:
             print(triaged)
+    elif blocked:
+        print(f"lane: batch gate red on {sha[:10]} after {seconds:.0f} s; blocked checks: "
+              f"{', '.join(blocked)}  {log}")
     else:
-        print(f"lane: the batch gate passed but did not stamp: {stamp['reason']}")
+        print(f"lane: the batch gate passed but did not stamp: {stamp.get('reason', 'unknown')}")
     print("\n".join(bisect_lines(cwd, common, sha)))
     raise LaneError(f"promote refused: the batch gate did not stamp {sha[:10]}; nothing moved")
 
@@ -267,11 +271,16 @@ def perf_suite(cwd: str, common: str, sha: str, ship: bool, remote: str = "origi
                    subject={"type": "commit", "id": sha},
                    details={"status": receipt["status"], "seconds": seconds, "failed_checks": failed,
                             "log": str(log)})
-    if not status:
+    if receipt["status"] == "green":
         print(f"lane: perf suite green in {seconds:.0f} s on {sha[:10]}")
         return receipt
-    print(f"lane: perf suite red on {sha[:10]} after {seconds:.0f} s; failed checks: "
-          f"{', '.join(failed) or '(see the log)'}  {log}")
+    parts: list[str] = []
+    if failed:
+        parts.append(f"failed checks: {', '.join(failed)}")
+    if blocked:
+        parts.append(f"blocked checks: {', '.join(blocked)}")
+    detail = "; ".join(parts) or "failed checks: (see the log)"
+    print(f"lane: perf suite red on {sha[:10]} after {seconds:.0f} s; {detail}  {log}")
     if triaged:
         print(triaged)
     print("A red perf suite is a performance regression, not a flake: no registry entry excuses it.")

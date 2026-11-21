@@ -202,8 +202,14 @@ def recheck(args: Any) -> int:
         print(f"Lane {args.id}: post-merge still red on {tip[:10]} (recheck: {what}); {path}")
         for result in results:
             if result["status"] != "passed":
-                named = ", ".join(result.get("failed_checks") or []) or "(see log)"
-                print(f"  {result['suite']}: failed checks {named}  {result['log']}")
+                if result["status"] == "blocked":
+                    blocked = ", ".join(result.get("blocked_checks") or []) or "(see log)"
+                    print(f"  {result['suite']}: blocked checks: {blocked}  {result['log']}")
+                else:
+                    named = ", ".join(result.get("failed_checks") or []) or "(see log)"
+                    blocked = (f" blocked checks: {', '.join(result['blocked_checks'])}"
+                               if result.get("blocked_checks") else "")
+                    print(f"  {result['suite']}: failed checks {named}{blocked}  {result['log']}")
         if triaged:
             print(triaged)
         return 1
@@ -430,7 +436,13 @@ def land(args: Any) -> int:
     failed = [r for r in results if r["status"] == "failed"]
     for result in failed:
         named = ', '.join(result['failed_checks']) or '(see log)'
-        print(f"  {result['suite']}: failed checks {named}  {result['log']}")
+        blocked = (f" blocked checks: {', '.join(result['blocked_checks'])}"
+                   if result.get("blocked_checks") else "")
+        print(f"  {result['suite']}: failed checks {named}{blocked}  {result['log']}")
+    for result in results:
+        if result["status"] == "blocked":
+            blocked = ', '.join(result.get('blocked_checks') or []) or '(see log)'
+            print(f"  {result['suite']}: blocked checks: {blocked}  {result['log']}")
     if triaged:
         print(triaged)
     head = git(integration, "rev-parse", "HEAD")

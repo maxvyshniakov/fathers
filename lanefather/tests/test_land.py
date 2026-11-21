@@ -1,11 +1,14 @@
 """Tests of land and the post-merge smoke (lanefather.land, lanefather.plan): replays of orchestration incidents in scratch Git repositories (support.py)."""
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import pathlib
 from typing import Any
 import unittest
+import unittest.mock
 
 from support import RUST_STUB, LaneCase, load_lane, project
 
@@ -652,6 +655,36 @@ class SmokeNarrowingTests(LaneCase):
         self.assertIn("preparing post-merge plan for b", output_b)
         self.assertIn("queue: slotfather status", output_b)
         self.assertEqual(self.post("b")["status"], "green")
+
+    def test_land_and_recheck_print_blocked_checks_for_blocked_suites(self):
+        from lanefather import config, land
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.integration_moves()
+        blocked_results = [
+            {"suite": "verify", "status": "failed", "failed_checks": ["verify:unit"], "log": "/tmp/v.log"},
+            {"suite": "browser", "status": "blocked", "failed_checks": [],
+             "blocked_checks": ["browser:e2e"], "log": "/tmp/b.log"},
+        ]
+        config.use(config.load(config.find(self.repo)))
+        self.addCleanup(config.use, None)
+        with unittest.mock.patch.dict(os.environ, self.env, clear=False), unittest.mock.patch.object(
+                land, "run_smoke", return_value=({"jobs": 1}, blocked_results, {}, None, {"stamped": False}, "red")):
+            args = unittest.mock.MagicMock(id="a", into=None, force_reason=None, wait=0, message=None,
+                                           keep=False, slots=None)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = land.land(args)
+            self.assertEqual(rc, 1)
+            self.assertIn("browser: blocked checks: browser:e2e", buf.getvalue())
+            # Also verify recheck prints blocked checks.
+            recheck_args = unittest.mock.MagicMock(id="a", into=None, slots=None, suites=None)
+            buf2 = io.StringIO()
+            with contextlib.redirect_stdout(buf2):
+                rc2 = land.recheck(recheck_args)
+            self.assertEqual(rc2, 1)
+            self.assertIn("browser: blocked checks: browser:e2e", buf2.getvalue())
 
 
 if __name__ == "__main__":

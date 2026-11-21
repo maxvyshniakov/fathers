@@ -392,6 +392,22 @@ def required_min_slots(lane_plan: dict[str, Any], remaining: dict[str, list[str]
     return floor, [name for name, count in needs.items() if count == floor]
 
 
+def rerun_min_slots(check_ids: list[str], lane_plan: dict[str, Any] | None, fresh: Rows) -> int:
+    """Minimum slots required for a rerun of `check_ids` (fathers#173)."""
+    if lane_plan is not None and lane_plan.get("selection") is not None:
+        return required_min_slots(lane_plan, {"_": check_ids}, [])[0]
+    floor = 1
+    if lane_plan is not None:
+        suites = [r["suite"] for r in fresh if r["status"] != "passed"]
+        floor = max(floor, required_min_slots(lane_plan, None, suites)[0])
+    patterns = config.current().min_slots
+    for cid in check_ids:
+        for pattern, count in patterns:
+            if fnmatch.fnmatchcase(cid, pattern):
+                floor = max(floor, count)
+    return floor
+
+
 def rerun_jobs(jobs: int, minimum: int = 1) -> int:
     """A rerun's lease size (lanefather#4): the lane check's own, 1 to RERUN_MAX_JOBS slots (or the step's declared
     minimum slots, fathers#173). A lease of the whole machine never came within its wait while one-slot lane checks
@@ -504,7 +520,8 @@ def keep_run(run: Path | None, label: str) -> Path | None:
 
 
 def classify(record: Record, worktree: str, base: str, fresh: Rows,
-             report: dict[str, Any] | None, jobs: int = 1, toolchain: Any = UNRESOLVED) -> dict[str, Any] | None:
+             report: dict[str, Any] | None, jobs: int = 1, toolchain: Any = UNRESOLVED,
+             lane_plan: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Rerun the red checks of a lane check (at most LANEFATHER_RERUNS) and classify each; None when nothing is red.
     `green` is true when every red check is flaky-under-load or pre-existing.
 
@@ -540,7 +557,8 @@ def classify(record: Record, worktree: str, base: str, fresh: Rows,
                 "status": "not rerun", "reason": "a first check (#639): static, so load does not make it red"}}
     still_red: list[str] = list(rerun) if first else []
     if rerun and not first:
-        alone = Rerun(worktree, rerun, f"lane-{record['id']}-alone", rerun_jobs(jobs), meta=lane_meta(record),
+        alone_jobs = rerun_jobs(jobs, minimum=rerun_min_slots(rerun, lane_plan, fresh))
+        alone = Rerun(worktree, rerun, f"lane-{record['id']}-alone", alone_jobs, meta=lane_meta(record),
                       ticket=lane_ticket(record), toolchain=toolchain)
         runs.append({"run": alone.run_id, "rerun": "alone"})
         alone_report, log, _, problem = run_rerun(alone)
@@ -580,9 +598,10 @@ def classify(record: Record, worktree: str, base: str, fresh: Rows,
             if present:
                 base_label = f"lane-{record['id']}-base"
                 # The cheap first checks rerun as verify queues them; others under a lease like the lane's rerun.
-                on_base = Rerun(path, present, base_label, 1 if first else rerun_jobs(jobs),
-                                            queued=not first, meta={**lane_meta(record), "on": "base"},
-                                            ticket=lane_ticket(record))
+                base_jobs = 1 if first else rerun_jobs(jobs, minimum=rerun_min_slots(present, lane_plan, fresh))
+                on_base = Rerun(path, present, base_label, base_jobs,
+                                queued=not first, meta={**lane_meta(record), "on": "base"},
+                                ticket=lane_ticket(record))
                 runs.append({"run": on_base.run_id, "rerun": "base"})
                 base_side = run_rerun(on_base)
                 kept = keep_run(base_side[2], base_label)
@@ -753,7 +772,9 @@ def fix_plan(lane_plan: dict[str, Any], parent: dict[str, Any], known: set[str] 
     added = [row for row in parent["selection"] if row["id"] not in rows and (known is None or row["id"] in known)]
     dropped = [row["id"] for row in parent["selection"] if known is not None and row["id"] not in known]
     lane_plan["selection"] = [*lane_plan["selection"],
-                              *({"id": r["id"], "suite": r["suite"], "paths": r.get("paths", [])} for r in added)]
+                              *({"id": r["id"], "suite": r["suite"], "paths": r.get("paths", []),
+                                 **({"min_slots": need} if (need := plan.declared_slots(r)) is not None else {})}
+                                for r in added)]
     lane_plan["selected"] = plan.suites_of(lane_plan["selection"])
     lane_plan["by_suite"] = plan.by_suite(lane_plan["selection"])
     about["added"] = [r["id"] for r in added]
@@ -882,7 +903,7 @@ def check(args: Any) -> int:
     else:
         decision: dict[str, Any] = {"jobs": 1, "reason": "nothing to run"}
     fresh, ran, triaged, classification, stopped = lane_run(record, worktree, base, suites, remaining,
-                                                            decision["jobs"], toolchain)
+                                                            decision["jobs"], toolchain, lane_plan=lane_plan)
     results = combined_results(suites, selected, fresh, reused)
     check_results = {} if selected is None else {
         c: reused.get(c) or ran.get(c) or {"suite": s, "status": "not_run"} for s, ids in selected.items() for c in ids}
@@ -964,7 +985,7 @@ def leases_of(fresh: Rows, classification: dict[str, Any] | None = None) -> list
 
 
 def lane_run(record: Record, worktree: str, base: str, suites: list[str], remaining: dict[str, list[str]] | None,
-             jobs: int, toolchain: Any = UNRESOLVED,
+             jobs: int, toolchain: Any = UNRESOLVED, lane_plan: dict[str, Any] | None = None,
              ) -> tuple[Rows, dict[str, dict[str, Any]], str | None, dict[str, Any] | None, Any]:
     """Run the lane's checks that are left and classify the red ones (#568): (results, check results, triage,
     classification, stopped).
@@ -982,7 +1003,8 @@ def lane_run(record: Record, worktree: str, base: str, suites: list[str], remain
             run = next((Path(r["report"]).parent for r in fresh if r.get("report")), None)
             report = state.read_json(run / "report.json") if run else None
             with terminable():
-                classification = classify(record, worktree, base, fresh, report, jobs, toolchain)
+                classification = classify(record, worktree, base, fresh, report, jobs, toolchain,
+                                          lane_plan=lane_plan)
             if classification and run:
                 # The project's gate triage reads the classification beside the run's report (rerun.json).
                 state.write_json(run / "rerun.json", classification)
