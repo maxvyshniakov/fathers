@@ -6,6 +6,12 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- `slotfather sweep` owns machine-wide disk hygiene across six disk classes (`docker-anonymous`,
+  `docker-dangling-images`, `docker-superseded`, `claude-scratch` sparing running Junkfather entries' working
+  directories, `package-caches` for uv/Homebrew/npm/bun, and `low-disk` consumer notices), reporting by default,
+  acting only with `--live`, configured through `slotfather sweep config`, and preserving `sweep.json` bytes when
+  no disk setting is changed (fathers#6).
+
 - `slotfather run -n MIN-MAX` queues as a `MIN`-slot request (scheduling order treats it as `MIN`) and grants up
   to `MAX` of what is free at grant time. The granted slot count is exported as `SLOTFATHER_SLOTS` and recorded on
   the entry, in `status --json`, and in the `lease.granted` event; `capabilities --json` advertises `slot-range`

@@ -233,16 +233,37 @@ def order_bytes(values: Mapping[str, Any]) -> dict[str, Any]:
 
 # Sweep
 
+SWEEP_BASE = ("classes", "removed_age", "orphan_age", "dev_server_age", "session_removed_age", "grace",
+              "container_minutes", "container_restarts", "swap_free_mb", "swap_free_pct", "memory_top")
 SWEEP_DEFAULTS: dict[str, Any] = {
     "classes": list(_config.SWEEP_CLASSES), "removed_age": 600.0, "orphan_age": 7200.0, "dev_server_age": 28800.0,
     "session_removed_age": 21600.0, "grace": 10.0, "container_minutes": 30.0, "container_restarts": 3.0,
-    "swap_free_mb": 1024.0, "swap_free_pct": 20.0, "memory_top": 8.0}
+    "swap_free_mb": 1024.0, "swap_free_pct": 20.0, "memory_top": 8.0,
+    "disk_classes": list(_config.SWEEP_DISK_CLASSES),
+    "docker_anonymous_age": 3600.0, "docker_dangling_age": 86400.0,
+    "docker_superseded": [], "docker_superseded_keep": 2.0,
+    "claude_scratch_age": 86400.0, "claude_scratch_gb": 2.0,
+    "cache_free_gb": 100.0, "disk_free_gb": 100.0,
+}
 SWEEP_DURATIONS = ("removed_age", "orphan_age", "dev_server_age", "session_removed_age", "grace",
-                   "container_minutes")
+                   "container_minutes", "docker_anonymous_age", "docker_dangling_age", "claude_scratch_age")
 
 
 def sweep_defaults() -> dict[str, Any]:
-    return dict(SWEEP_DEFAULTS, classes=list(SWEEP_DEFAULTS["classes"]))
+    return dict(SWEEP_DEFAULTS, classes=list(SWEEP_DEFAULTS["classes"]),
+                disk_classes=list(SWEEP_DEFAULTS["disk_classes"]),
+                docker_superseded=list(SWEEP_DEFAULTS["docker_superseded"]))
+
+
+def sweep_bytes(values: Mapping[str, Any]) -> dict[str, Any]:
+    """sweep.json as saved: the pre-disk base keys always, and disk keys only when they differ from defaults
+    (fathers#6: sweep.json keeps the bytes it has today when no disk setting is changed)."""
+    found: dict[str, Any] = {}
+    for key, default in SWEEP_DEFAULTS.items():
+        val = values.get(key, default)
+        if key in SWEEP_BASE or val != default:
+            found[key] = list(cast(list[Any], val)) if isinstance(val, list) else val
+    return found
 
 
 def sweep_from(text: str | bytes | None) -> dict[str, Any]:
@@ -280,14 +301,33 @@ def checked_sweep(data: Any) -> dict[str, Any]:
     """Sweep settings, validated: raises ValueError for anything `slotfather sweep config` would refuse."""
     if not isinstance(data, dict) or set(cast(dict[str, Any], data)) - set(SWEEP_DEFAULTS):
         raise ValueError(f"not sweep settings: {data!r}")
+    given = cast(dict[str, Any], data)
     found: dict[str, Any] = {}
-    for key, value in cast(dict[str, Any], data).items():
+    for key, value in given.items():
         if key == "classes":
-            if not isinstance(value, list) or set(cast(list[Any], value)) - set(_config.SWEEP_CLASSES):
-                raise ValueError(f"classes are some of {', '.join(_config.SWEEP_CLASSES)}, not {value!r}")
-            found[key] = [c for c in _config.SWEEP_CLASSES if c in value]
-        elif type(value) not in (int, float) or value < 0 or (key == "memory_top" and value < 1):
-            raise ValueError(f"{key} must be a number of at least {1 if key == 'memory_top' else 0}, not {value!r}")
+            if not isinstance(value, list) or any(not isinstance(c, str) for c in cast(list[Any], value)) \
+                    or set(cast(list[str], value)) - set(_config.SWEEP_ALL_CLASSES):
+                raise ValueError(f"classes are some of {', '.join(_config.SWEEP_ALL_CLASSES)}, not {value!r}")
+            chosen = cast(list[str], value)
+            found["classes"] = [c for c in _config.SWEEP_CLASSES if c in chosen]
+            if "disk_classes" not in given and any(c in _config.SWEEP_DISK_CLASSES for c in chosen):
+                found["disk_classes"] = [c for c in _config.SWEEP_DISK_CLASSES if c in chosen]
+        elif key == "disk_classes":
+            if not isinstance(value, list) or any(not isinstance(c, str) for c in cast(list[Any], value)) \
+                    or set(cast(list[str], value)) - set(_config.SWEEP_DISK_CLASSES):
+                raise ValueError(f"disk_classes are some of {', '.join(_config.SWEEP_DISK_CLASSES)}, not {value!r}")
+            chosen_disk = cast(list[str], value)
+            found["disk_classes"] = [c for c in _config.SWEEP_DISK_CLASSES if c in chosen_disk]
+        elif key == "docker_superseded":
+            if not isinstance(value, list) or any(
+                    not isinstance(item, str) or not item.strip() or not item.isprintable()
+                    for item in cast(list[Any], value)):
+                raise ValueError(f"docker_superseded must be a list of image patterns, not {value!r}")
+            found["docker_superseded"] = [item.strip() for item in cast(list[str], value)]
+        elif (type(value) not in (int, float) or not math.isfinite(value)
+              or value < (1 if key in ("memory_top", "docker_superseded_keep") else 0)):
+            least = 1 if key in ("memory_top", "docker_superseded_keep") else 0
+            raise ValueError(f"{key} must be a number of at least {least}, not {value!r}")
         else:
             found[key] = float(value)
     return found
@@ -361,7 +401,7 @@ def configure(changes: Mapping[str, Mapping[str, Any] | None], *,
                 if "error" in current:  # a broken file is replaced by the defaults and these changes
                     current = sweep_defaults()
                 kept = {k: v for k, v in current.items() if k in SWEEP_DEFAULTS}
-                values["sweep.json"] = checked_sweep({**kept, **values["sweep.json"]})
+                values["sweep.json"] = sweep_bytes(checked_sweep({**kept, **values["sweep.json"]}))
         except ValueError as error:
             raise _config.SlotError(str(error)) from None
         # A capacity change applies at the next grant, whatever the queue holds (#7): every client's plan reads it
