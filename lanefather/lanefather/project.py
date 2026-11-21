@@ -3,10 +3,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-import os
 from pathlib import Path
 import stat
-import tempfile
 from typing import Any
 
 from . import admission, config, journal, queue, state
@@ -97,19 +95,7 @@ class Project:
             if change.text == snapshot.text:
                 return change.message
             mode = stat.S_IMODE(self._queue_path.stat().st_mode)
-            pending: Path | None = None
-            try:
-                with tempfile.NamedTemporaryFile('w', dir=self._queue_path.parent,
-                                                 prefix=f'.{self._queue_path.name}.pending-', delete=False) as handle:
-                    pending = Path(handle.name)
-                    handle.write(change.text)
-                    handle.flush()
-                    os.fchmod(handle.fileno(), mode)
-                    os.fsync(handle.fileno())
-                os.replace(pending, self._queue_path)
-            finally:
-                if pending is not None:
-                    pending.unlink(missing_ok=True)
+            state.atomic_write(self._queue_path, change.text, mode=mode)
             journal.ledger(change.message or "queue updated via project policy", kind="queue.updated",
                            subject={"type": "queue", "id": str(self._queue_path)},
                            details={"lanes": ids}, directory=self._store.directory, project=self.config)
