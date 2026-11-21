@@ -28,10 +28,12 @@ RESERVATION = cast(dict[str, Any], json.loads(
 ORDER_DEFAULTS = {"order": "backfill", "safety": 3.0, "limit": 0.0, "fallback": 3600.0, "overrun": 0.5,
                   "interactive": 1800.0, "batch": 1800.0, "yield_after": 120.0, "idle_cpu": 0.1, "idle_after": 300.0,
                   "aging_batch": 1800.0, "aging_normal": 3600.0, "warn_wait": 1800.0,
-                  "reservation_timeout": float(RESERVATION["default"])}
+                  "reservation_timeout": float(RESERVATION["default"]),
+                  "memory_share": 0.85, "memory_default_mb": 2048.0}
 MINIMUMS = {"safety": 1.0, "limit": 0.0, "fallback": 0.0, "overrun": 0.0, "interactive": 0.0, "batch": 0.0,
             "yield_after": 0.0, "idle_cpu": 0.0, "idle_after": 1.0, "aging_batch": 0.0, "aging_normal": 0.0,
-            "warn_wait": 0.0, "reservation_timeout": float(RESERVATION["min"])}
+            "warn_wait": 0.0, "reservation_timeout": float(RESERVATION["min"]),
+            "memory_share": 0.0, "memory_default_mb": 0.0}
 MODES = ("automatic", "fixed", "memory", "lower")
 UNKNOWN = "the machine's memory is unknown here; save a count instead (slotfather slots N)"
 PATH = os.environ.get("FAKE_SLOTFATHER_STATE", "")
@@ -167,11 +169,14 @@ KNOBS = {"safety": ("Backfill margin", 0.5, "number", "×"), "fallback": ("Unkno
          "aging_batch": ("Batch promoted after", 300, "duration", "s"),
          "aging_normal": ("Normal promoted after", 300, "duration", "s"),
          "warn_wait": ("Warn after waiting", 300, "duration", "s"),
+         "memory_share": ("Memory admission share", 0.05, "number", ""),
+         "memory_default_mb": ("Default job peak memory", 512, "number", "MB"),
          "idle_cpu": ("Idle when below", 0.05, "number", "cores"),
          "idle_after": ("Idle for", 60, "duration", "s"), "yield_after": ("Ask to yield after", 30, "duration", "s")}
-NEVER = ("limit", "aging_batch", "aging_normal", "warn_wait")
+NEVER = ("limit", "aging_batch", "aging_normal", "warn_wait", "memory_share")
 ORDER_FIELDS = ("order", "safety", "fallback", "overrun", "limit", "interactive", "batch", "aging_batch",
-                "aging_normal", "warn_wait", "reservation_timeout", "idle_cpu", "idle_after", "yield_after")  # the panel's order
+                "aging_normal", "warn_wait", "reservation_timeout", "memory_share", "memory_default_mb",
+                "idle_cpu", "idle_after", "yield_after")  # the panel's order
 DESCRIPTIONS = {
     "mode": "Shared by every client. Automatic: the lower of the CPU and memory budgets.",
     "amount.fixed": "Total slots for every client. Applies at the next grant; a shrink drains.",
@@ -186,6 +191,8 @@ DESCRIPTIONS = {
     "aging_batch": "A waiting batch request is served as normal after this; 0: never.",
     "aging_normal": "A waiting normal request is served as interactive after this; 0: never.",
     "warn_wait": "A request waiting this long says so and is flagged; 0: never.",
+    "memory_share": "Share of RAM available to expected peak memory of concurrent leases (0 to 1); 0 disables.",
+    "memory_default_mb": "Assumed peak memory (MB) for requests with no history.",
     "yield_after": "Before a yieldable holder is asked to yield; 0: nobody is asked.",
     "idle_cpu": "A lease below this for the idle time is idle (💤); 0: never.",
     "idle_after": "Below the idle cores this long: idle, and asked if it can yield.",
