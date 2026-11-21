@@ -11,7 +11,6 @@ import sys
 from typing import Any
 import unittest
 
-import helpers  # noqa: F401 - src/ on sys.path
 from helpers import mouse
 import view as _view
 from godfather.adapters import lanefather as _lanefather

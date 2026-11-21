@@ -1,7 +1,6 @@
 """Dashboard colours from the terminal's theme (#14): tokens, mixed surfaces, holder colours and the chart gradient."""
 from __future__ import annotations
 
-import helpers  # noqa: F401 - src/ on sys.path
 import view as _view
 
 import itertools

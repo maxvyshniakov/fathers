@@ -27,7 +27,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Iterator, cast
+from typing import Any, Iterable, Iterator, cast
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -101,9 +101,9 @@ def stamp(value: Any) -> Any:
     if isinstance(value, dt.datetime):
         return value.astimezone(dt.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     if isinstance(value, dict):
-        return {str(key): stamp(item) for key, item in value.items()}
+        return {str(key): stamp(item) for key, item in cast(dict[Any, Any], value).items()}
     if isinstance(value, (list, tuple)):
-        return [stamp(item) for item in value]
+        return [stamp(item) for item in cast(Iterable[Any], value)]
     return value
 
 
@@ -519,7 +519,7 @@ def admission_screen(name: str, theme: str | None) -> str:
 
 
 def goldens() -> dict[str, str]:
-    found = {}
+    found: dict[str, str] = {}
     for name in SCREENS:
         found[f"{name}.txt"] = render(name, None) + "\n"
         for theme in THEMES:

@@ -1,14 +1,11 @@
 """CHANGELOG.md keeps the Sid-Kit layout and its newest release is the version (until repo-kit checks it)."""
 from __future__ import annotations
 
-import helpers  # noqa: F401 - src/ on sys.path
-
 import re
 import unittest
 
-from godfather import version
-
 from helpers import ROOT
+from godfather import version
 SECTIONS = ["Breaking", "Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"]
 
 

@@ -2,7 +2,6 @@
 """The dashboard against real queues: `dashboard --once` prints the same canvas the live view draws, so these tests
 read its text. Log history is checked on slotfather-dashboard itself."""
 from __future__ import annotations
-import helpers  # noqa: F401 - src/ on sys.path
 from helpers import ROOT, logged, mouse, rows_of
 import view as _view
 
@@ -1094,7 +1093,7 @@ class HistoryTests(unittest.TestCase):
         base = datetime.datetime(2026, 1, 1, 10, tzinfo=datetime.timezone.utc)
         rise = base + datetime.timedelta(seconds=601.2)
         fall = base + datetime.timedelta(seconds=601.4)
-        def buckets(seconds):
+        def buckets(seconds: float) -> list[int]:
             now = base + datetime.timedelta(seconds=seconds)
             steps = [(now - datetime.timedelta(hours=1), rise, 0),
                      (rise, fall, 4), (fall, now, 0)]

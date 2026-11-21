@@ -2,9 +2,8 @@
 put while scrolled, the footer's what's new opens it."""
 from __future__ import annotations
 
-import helpers  # noqa: F401 - src/ on sys.path
-import view as _view
 from helpers import ROOT
+import view as _view
 
 import dataclasses
 import datetime

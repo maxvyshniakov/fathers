@@ -12,17 +12,17 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest import mock
 
-import helpers  # noqa: F401 - src/ on sys.path
+from helpers import ROOT
 
 import fake_slotfather
 import fake_tool
 from godfather import app, sources
 from godfather.adapters import slotfather as adapter
 
-SIBLING = Path(__file__).resolve().parents[2] / "slotfather" / "slotfather"
+SIBLING = ROOT.parent / "slotfather" / "slotfather"
 EXECUTABLE = os.environ.get("SLOTFATHER_BIN") or (str(SIBLING) if SIBLING.is_file() else shutil.which("slotfather"))
 
 
@@ -51,11 +51,12 @@ class ContractTests(unittest.TestCase):
             (bin_dir / "slotfather").symlink_to(EXECUTABLE)
             environ["PATH"] = f"{bin_dir}:{environ.get('PATH', '')}"
         found = capabilities(environ)
-        if not isinstance(found, dict) or adapter.unsupported(found):
+        found_dict = cast(dict[str, Any], found) if isinstance(found, dict) else None
+        if found_dict is None or adapter.unsupported(found_dict):
             # The sibling package is this commit's Slotfather: a broken one fails here instead of skipping.
             self.assertNotEqual(EXECUTABLE, str(SIBLING), f"../slotfather/slotfather capabilities --json: {found!r}")
             self.skipTest("slotfather with capabilities --json and a dashboard block (SF-1) is not installed")
-        self.capabilities: dict[str, Any] = found
+        self.capabilities: dict[str, Any] = found_dict
         patcher = mock.patch.dict(os.environ, environ, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)

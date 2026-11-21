@@ -1,33 +1,4 @@
 {
   "version": 1,
-  "diagnostics": {
-    "tests/fake_slotfather.py|pyright|reportUnknownMemberType|Type of \"append\" is partially unknown\n  Type of \"append\" is \"(object: Unknown, /) -> None\"": 1,
-    "tests/test_changelog.py|pyright|reportUnusedImport|Import \"helpers\" is not accessed": 1,
-    "tests/test_contract.py|pyright|reportUnknownArgumentType|Argument type is partially unknown\n  Argument corresponds to parameter \"capabilities\" in function \"unsupported\"\n  Argument type is \"dict[Unknown, Unknown]\"": 1,
-    "tests/test_contract.py|pyright|reportUnusedImport|Import \"helpers\" is not accessed": 1,
-    "tests/test_dashboard.py|pyright|reportMissingParameterType|Type annotation is missing for parameter \"seconds\"": 1,
-    "tests/test_dashboard.py|pyright|reportUnknownArgumentType|Argument type is unknown\n  Argument corresponds to parameter \"seconds\" in function \"__new__\"": 1,
-    "tests/test_dashboard.py|pyright|reportUnknownParameterType|Type of parameter \"seconds\" is unknown": 1,
-    "tests/test_dashboard.py|pyright|reportUnusedImport|Import \"helpers\" is not accessed": 1,
-    "tests/test_details.py|pyright|reportUnusedImport|Import \"helpers\" is not accessed": 1,
-    "tests/test_footer.py|pyright|reportUnusedImport|Import \"helpers\" is not accessed": 1,
-    "tests/test_help.py|pyright|reportUnusedImport|Import \"helpers\" is not accessed": 1,
-    "tests/test_keys.py|pyright|reportUnusedImport|Import \"helpers\" is not accessed": 1,
-    "tests/test_live.py|pyright|reportUnusedImport|Import \"helpers\" is not accessed": 1,
-    "tests/test_marks.py|pyright|reportUnusedImport|Import \"helpers\" is not accessed": 1,
-    "tests/test_parity.py|pyright|reportPrivateUsage|\"_theme\" is private and used outside of the module in which it is declared": 1,
-    "tests/test_sources.py|pyright|reportAttributeAccessIssue|Cannot access attribute \"strip\" for class \"bool\"\n  Attribute \"strip\" is unknown": 1,
-    "tests/test_sources.py|pyright|reportPrivateUsage|\"_theme\" is private and used outside of the module in which it is declared": 1,
-    "tests/test_sources.py|pyright|reportUnknownMemberType|Type of \"strip\" is partially unknown\n  Type of \"strip\" is \"((chars: str | None = None, /) -> str) | Unknown\"": 1,
-    "tests/test_sources.py|pyright|reportUnusedVariable|Variable \"value\" is not accessed": 1,
-    "tests/test_theme.py|pyright|reportUnusedImport|Import \"helpers\" is not accessed": 1,
-    "tests/view.py|pyright|reportUnknownArgumentType|Argument type is partially unknown\n  Argument corresponds to parameter \"modules\" in function \"__init__\"\n  Argument type is \"list[Unknown]\"": 1,
-    "tests/view.py|pyright|reportUnknownMemberType|Type of \"append\" is partially unknown\n  Type of \"append\" is \"(object: Unknown, /) -> None\"": 1,
-    "tests/view.py|pyright|reportUnknownVariableType|Return type is unknown": 1,
-    "tests/view.py|pyright|reportUnusedImport|Import \"helpers\" is not accessed": 1,
-    "tools/goldens.py|pyright|reportUnknownArgumentType|Argument type is unknown\n  Argument corresponds to parameter \"object\" in function \"__new__\"": 1,
-    "tools/goldens.py|pyright|reportUnknownVariableType|Return type, \"dict[Unknown, Unknown]\", is partially unknown": 1,
-    "tools/goldens.py|pyright|reportUnknownVariableType|Type of \"item\" is unknown": 2,
-    "tools/goldens.py|pyright|reportUnknownVariableType|Type of \"key\" is unknown": 1
-  }
+  "diagnostics": {}
 }
