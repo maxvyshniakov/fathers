@@ -28,6 +28,15 @@ from unittest import mock
 from test_slotfather import TOOL, SlotCase
 
 BURN = "import sys, time\nt = time.process_time()\nwhile time.process_time() - t < float(sys.argv[1]): pass\n"
+DETACHED_BURN = (
+    "import os, pathlib, sys, time\n"
+    "t = time.process_time()\n"
+    "while time.process_time() - t < float(sys.argv[1]): pass\n"
+    "pathlib.Path(sys.argv[2]).write_text(f'{os.getpid()}\\n')\n"
+    "release = pathlib.Path(sys.argv[3])\n"
+    "deadline = time.monotonic() + 20\n"
+    "while not release.exists() and time.monotonic() < deadline: time.sleep(0.05)\n"
+)
 
 
 def load(path: str, name: str):
@@ -246,8 +255,18 @@ class RunUsageTests(SlotCase):
         time.sleep(0.3)
         if probe.pid not in sf_process.carrying([probe.pid], "/probe"):
             self.skipTest(f"ps shows no environment for {sys.executable} on this host")
-        result = self.tool("run", "--label", "daemon", "--", "sh", "-c", '( "$PY" -c "$BURN" 0.5 & ); sleep 1.5')
+        done = self.tmp / "detached-done"
+        release = self.tmp / "detached-release"
+        self.addCleanup(release.touch)
+        script = (
+            '( "$PY" -c "$DETACHED_BURN" 0.5 "$DONE" "$RELEASE_CHILD" </dev/null >/dev/null 2>&1 & ); '
+            'n=400; while [ ! -e "$DONE" ] && [ "$n" -gt 0 ]; do sleep 0.05; n=$((n - 1)); done'
+        )
+        result = self.tool("run", "--label", "daemon", "--", "sh", "-c", script,
+                           DETACHED_BURN=DETACHED_BURN, DONE=str(done), RELEASE_CHILD=str(release))
+        release.touch()
         self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(done.exists(), "the detached child did not finish its CPU burn before the holder exited")
         self.assertGreaterEqual(self.history()[-1]["cpu_detached"], 0.25, self.history()[-1])
 
     def test_holders_sample_the_machine_while_leases_run(self):
