@@ -44,7 +44,7 @@ admission, slot, lease) are in the [fathers glossary](../GLOSSARY.md).
 | Batch gate | Full verification of a candidate for promotion. |
 | Verified-tree stamp | Evidence that a tree passed the full verification required for promotion. _Avoid_: gate stamp. |
 | Ledger | The append-only log of every lane action and override (`ledger.log`). _Avoid_: journal. |
-| Lifetime admission | The decision whether one more lane may be registered under the lane cap, disk and host load; it reserves no slots. |
+| Lifetime admission | The decision whether to register one more lane under the lane cap, claims, dependencies and disk floor. Machine load is advisory. Registration reserves no execution slots. |
 | Unchecked path | A changed path no check claims to read, which makes the plan the full gate. Wire: `unowned`. |
 | Overall review | An independent review of the changes in a shipping range. |
 | Promote | Advance publication branches to a verified candidate and, by default, push them. |

@@ -16,6 +16,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import subprocess
+import sys
 from typing import Any
 
 from . import checks, config, done, journal, plan, postmerge, review, state, tickets, worktrees
@@ -213,6 +214,29 @@ def recheck(args: Any) -> int:
     return 0
 
 
+def check_other_reviews(record: state.Record, force_reason: str | None) -> None:
+    """Under the landing lock, before moving the integration branch (fathers#177)."""
+    store = state.Store(config.current())
+    held, reported = review.landing_findings(record, store)
+    for lane, finding in reported:
+        print(f"lane: reported ({finding['severity']}, does not block): {review.finding_line(lane, finding)}",
+              file=sys.stderr)
+    if not held:
+        return
+    refusals = [review.finding_line(lane, finding) for lane, finding in held]
+    if not force_reason:
+        lines = [f"- {text}" for text in refusals]
+        blocking_lanes = {lane["id"]: lane for lane, _ in held}
+        fixes = review.fix_round_commands(blocking_lanes.values(), review.valid_fix_parents(record, store))
+        raise LaneError("\n".join(["land refused: other finished reviews have unmarked P1/P2 findings", *lines,
+                                  "For findings that need a fix:", *(f"  {line}" for line in fixes),
+                                  "--force-reason overrides and is logged"]))
+    record.setdefault("overrides", []).append({"at": journal.now(), "reason": force_reason, "refusals": refusals})
+    journal.ledger(f"override land {record['id']}: {force_reason} ({'; '.join(refusals)})", kind="override",
+                   level="warn", lane=record,
+                   details={"command": "land", "reason": force_reason, "refusals": refusals})
+
+
 def land(args: Any) -> int:
     prog = config.prog()
     with state.locked("land", f"lane: waiting for another land's merge (lock {state.state_dir() / '.land.lock'})"):
@@ -268,6 +292,7 @@ def land(args: Any) -> int:
         # The landing lock lets the merge move an integration worktree that is on dev or main (B2).
         conflicts = ""
         with landing(record["common_dir"], f"{prog} land {args.id} (pid {os.getpid()})", args.wait) as env:
+            check_other_reviews(record, args.force_reason)
             merged = subprocess.run(["git", *merge_config, "merge", "--no-ff", "-m", message, record["branch"]],
                                     cwd=integration, capture_output=True, text=True, env=env)
             if merged.returncode:

@@ -13,7 +13,7 @@ runs several reviewers at once, their findings numbered in one list for marks an
 """
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
 import json
 import os
 from pathlib import Path
@@ -31,6 +31,7 @@ from .gitops import common_dir, current_branch, git, git_ok, main_checkout
 from .state import Record
 
 SEVERITIES = ("P1", "P2", "P3")
+LaneFinding = tuple[Record, dict[str, Any]]
 
 
 def mark_help(lane_id: str = "{id}", prog: str | None = None) -> str:
@@ -85,7 +86,7 @@ def review_state(label: str, store: state.Store | None = None) -> tuple[bool, st
     if missing and project.review_panel_required:
         return False, (f"panel member {', '.join(missing)} gave no review ([review] panel_required): "
                        f"{prog} review {label} --force-reason <why> reviews again")
-    unmarked = [f for f in findings if not f.get("mark")]
+    unmarked = unmarked_findings(receipt)
     if unmarked:
         return False, (f"{len(unmarked)} of {len(findings)} review findings unmarked "
                        f"({', '.join('#' + str(f['n']) for f in unmarked)})")
@@ -133,9 +134,15 @@ def documentation_only(paths: list[str]) -> bool:
                for p in paths)
 
 
-def fix_parent_review(lane_id: str, common: str, refusal: str) -> dict[str, Any]:
+def unmarked_findings(receipt: dict[str, Any]) -> list[dict[str, Any]]:
+    return [finding for finding in receipt.get("findings") or () if not finding.get("mark")]
+
+
+def fix_parent_review(lane_id: str, common: str, refusal: str, *,
+                      store: state.Store | None = None) -> dict[str, Any]:
     """A landed lane in this repository with a finished review and an open finding."""
-    parent = state.read_json(state.record_path(lane_id))
+    current = store or state.Store(config.current())
+    parent = state.read_json(current.record_path(lane_id))
     if parent is None:
         raise LaneError(f"{refusal}: no lane by that name")
     landed: dict[str, Any] = parent.get("landed") or {}
@@ -144,20 +151,24 @@ def fix_parent_review(lane_id: str, common: str, refusal: str) -> dict[str, Any]
                         "review findings of landed lanes")
     if parent.get("common_dir") != common:
         raise LaneError(f"{refusal}: lane {lane_id} is from another repository")
-    receipt = state.read_json(state.receipt_path(lane_id, "review"))
-    if (not receipt or receipt.get("status") != "finished"
-            or not any(not finding.get("mark") for finding in receipt.get("findings") or ())):
+    receipt = state.read_json(current.receipt_path(lane_id, "review"))
+    if not receipt or receipt.get("status") != "finished" or not unmarked_findings(receipt):
         raise LaneError(f"{refusal}: lane {lane_id} has no finished review with unmarked findings")
     return receipt
 
 
+def valid_fix_parents(record: Record, store: state.Store | None = None) -> Iterator[str]:
+    for parent in state.fix_parents(record):
+        try:
+            fix_parent_review(parent, record["common_dir"], "review exemption refused", store=store)
+        except LaneError:
+            continue
+        yield parent
+
+
 def review_exemption(record: Record) -> str | None:
     parents = state.fix_parents(record)
-    try:
-        for parent in parents:
-            fix_parent_review(parent, record["common_dir"], "review exemption refused")
-    except LaneError:
-        # Older checkouts could register a fix without validating the parent. Review those lanes normally.
+    if parents != list(valid_fix_parents(record)):
         parents = []
     if len(parents) == 1:
         return f"the fix round of {parents[0]}'s review, which nobody reviews again"
@@ -760,6 +771,53 @@ def review(args: Any) -> int:
     if args.fix_lane:
         return hand_over(args)
     return review_lane(args)
+
+
+def unmarked_reviews(records: Iterable[Record], store: state.Store) -> Iterator[tuple[Record, list[dict[str, Any]]]]:
+    """Open findings in each finished lane review, in record order."""
+    for record in records:
+        receipt = state.read_json(store.receipt_path(record["id"], "review"))
+        if receipt and receipt.get("status") == "finished" and (pending := unmarked_findings(receipt)):
+            yield record, pending
+
+
+def landing_findings(record: Record, store: state.Store) -> tuple[list[LaneFinding], list[LaneFinding]]:
+    """The open findings of other lanes here. A valid parent cannot hold the fix that will resolve its findings."""
+    parents = set(valid_fix_parents(record, store))
+    other = (r for r in store.lanes() if r.get("common_dir") == record["common_dir"] and r["id"] != record["id"])
+    held: list[LaneFinding] = []
+    reported: list[LaneFinding] = []
+    for lane, findings in unmarked_reviews(other, store):
+        for finding in findings:
+            if finding.get("severity", "P2") in ("P1", "P2"):
+                if lane["id"] not in parents:
+                    held.append((lane, finding))
+            else:
+                reported.append((lane, finding))
+    return held, reported
+
+
+def fix_round_commands(records: Iterable[Record], alongside: Iterable[str] = ()) -> list[str]:
+    prog = config.prog()
+    lines: list[str] = []
+    landed: list[Record] = []
+    for record in records:
+        landing: dict[str, Any] = record.get("landed") or {}
+        if landing.get("merge"):
+            landed.append(record)
+        else:
+            lines.append(f"Apply the fix on {record['branch']} and mark {record['id']}'s findings before another land.")
+    if not landed:
+        return lines
+    parents = list(dict.fromkeys([*alongside, *(record["id"] for record in landed)]))
+    ticket = "<ticket>"
+    if len(parents) == 1:
+        [parent] = landed
+        ticket = parent["ticket"]
+        if parent["status"] in ("landed", "released") and parent.get("worktree") and os.path.isdir(parent["worktree"]):
+            lines.append(f"{prog} review {parent['id']} --fix-lane")
+    lines.append(f"{prog} start <fix-id> --fix-of {','.join(parents)} --ticket {ticket} --claims <paths> --create")
+    return lines
 
 
 def finding_line(record: Record, finding: dict[str, Any]) -> str:

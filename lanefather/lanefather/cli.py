@@ -177,13 +177,13 @@ def parser() -> Parser:
     p.add_argument("--create", action="store_true", help="create the worktree now instead of adopting one")
     p.add_argument("--fix-of", action="append", metavar="ID,ID",
                    help="a fix lane for the review findings of these landed lanes: its land is exempt from review")
-    p.add_argument("--force-reason", help="start despite the lane cap, disk or load; logged")
+    p.add_argument("--force-reason", help="start despite the lane cap or disk floor; logged")
     p.set_defaults(run=lanes.start)
     p = add(root, commands, "next", "Prints the first ready entry of the ranked queue as a brief header.")
     p.add_argument("--start", action="store_true", help="register the lane, as start would")
     p.add_argument("--base", help="integration branch (default: the queue's base, else this worktree's branch)")
     p.add_argument("--create", action="store_true", help="with --start: create the worktree now")
-    p.add_argument("--force-reason", help="with --start: start despite the lane cap, disk or load; logged")
+    p.add_argument("--force-reason", help="with --start: start despite the lane cap or disk floor; logged")
     p.set_defaults(run=lanes.next_lane)
     p = add(root, commands, "adopt", "Prints the lane's next commands.")
     p.add_argument("id")
@@ -211,8 +211,8 @@ def parser() -> Parser:
                    help=f"give up after S seconds (default {wait.DEFAULT_TIMEOUT:g})")
     p.add_argument("--json", action="store_true", help="the version-1 reply: lane, for, status, reached, waited")
     p.set_defaults(run=wait.command)
-    p = add(root, commands, "land", "After a current green receipt: merge, start the review, run the post-merge smoke, "
-            "finish the lane (lanefather.land).")
+    p = add(root, commands, "land", "After a current green receipt: merge, start the review and run the post-merge "
+            "smoke. Earlier finished reviews with unmarked P1/P2 findings hold the merge (fathers#177).")
     p.add_argument("id")
     p.add_argument("--into", help="integration worktree (default: the worktree on the lane's base branch)")
     p.add_argument("-m", "--message")
@@ -221,7 +221,7 @@ def parser() -> Parser:
                         "(default: slotfather advise --max 3)")
     p.add_argument("--keep", action="store_true",
                    help="leave the landed lane for done (another lane needs its artifacts)")
-    p.add_argument("--force-reason", help="land without a current green receipt; logged")
+    p.add_argument("--force-reason", help="override a missing green receipt or a review hold, with a logged reason")
     p.add_argument("--wait", type=float, default=120, metavar="SECONDS", help="wait this long for the landing lock")
     p.set_defaults(run=land.land)
     p = add(root, commands, "review", "The lane's one independent review (Sol, or Opus when Codex is low; or the "

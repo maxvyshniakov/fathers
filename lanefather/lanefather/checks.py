@@ -119,8 +119,8 @@ def run_suites(root: Any, suites: list[str], label: str, jobs: int, full: bool =
 
     A full plan runs verify without a selection: that is the full gate, which stamps the tree when every check
     passed on a clean, unchanged tree. With `selected` (the checks the plan selected in each suite) it runs those
-    checks, otherwise whole suites. The suites share one verify run, which starts once the load allows (#572); each
-    result records that wait and the load averages at the run's start and end. A check's result is {suite, status,
+    checks, otherwise whole suites. The suites share one verify run. Each result records the optional load wait
+    (#572) and the load averages at the run's start and end. A check's result is {suite, status,
     log}, its status as the verify report gives it, or "void" when the run failed outside any check (environment,
     setup, slot limiter): nothing of such a run counts as passed."""
     if not suites:

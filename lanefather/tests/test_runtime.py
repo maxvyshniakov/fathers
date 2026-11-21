@@ -57,7 +57,8 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(report['v'], 1)
         self.assertEqual(report['state_schema'], 1)
         self.assertEqual(report['slotfather_query_versions'], [1, 2])
-        self.assertTrue({'project.readiness', 'project.update_queue', 'project-hook'} <= set(report['capabilities']))
+        self.assertTrue({'project.readiness', 'project.update_queue', 'project-hook', 'lane.load_advisory'}
+                        <= set(report['capabilities']))
         self.assertEqual(report['source']['commit'], self.head)
         self.assertTrue(report['source']['installed'])
         self.assertTrue(report['source']['verified'])

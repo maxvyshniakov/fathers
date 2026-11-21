@@ -155,7 +155,7 @@ class NewestMergeBaseTests(LaneCase):
 class LoadThrottleTests(LaneCase):
     """#572: every result records the load at its verify run's start and end. Owner decision on the #572 review: the
     load wait is off by default; with LANEFATHER_LOAD_THROTTLE=1 a verify run of check, land or promote starts only while
-    load15 is under the limit lanefather start enforces (1.5 x cores), and the result records that wait."""
+    load15 is at or below the local advisory limit (1.5 x cores), and the result records that wait."""
 
     def receipt(self, name):
         return json.loads((self.state / f"{name}.json").read_text())

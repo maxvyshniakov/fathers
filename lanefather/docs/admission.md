@@ -10,9 +10,17 @@ provider = "slotfather"
 
 `admission.evaluate` is the shared decision module for registration, CLI list and
 `Project.readiness`. The active Slotfather provider owns the CPU/physical-memory
-cap formula and load15 threshold. It never falls back to duplicate local policy
-or `advise.jobs`; lifetime registrations reserve no execution slots. The legacy
-provider alone retains the existing local arithmetic during rollout.
+cap formula and reports a load15 threshold. Lanefather validates the full v1
+answer and treats its load verdict as advice (fathers#172). The legacy provider
+computes the threshold locally. Both providers report high load after successful
+registration. Lifetime registration reserves no execution slots.
+
+`start --create` runs `git worktree add`. Dependency installation and builds belong
+to the project's check adapter. Its checks, gate and post-merge smoke use
+Slotfather where configured. The execution adapter sizes workers for load where
+it uses `slotfather advise` and waits for capacity at lease acquisition.
+`LANEFATHER_LOAD_THROTTLE=1` adds Lanefather's optional load15 wait before a
+verification run.
 
 Lanefather counts planned+active once within its configured Store, among the
 lanes of one repository (its Git common directory, fathers#149): a state
@@ -23,7 +31,7 @@ is in, else every lane. A record that names no repository counts for every one.
 The optional `LANEFATHER_GLOBAL_CAP` ceiling counts every project's lanes,
 locally, for both providers. Landed, released and done do not occupy a place. A
 fix lane (`review --fix-lane`) for a landed, kept parent is admitted outside the
-cap and the ceiling, in its parent's place; disk, load and claims still apply.
+cap and the ceiling, in its parent's place. The disk floor and claims still apply.
 That holds at registration only: once registered the fix lane counts like any
 planned or active lane, while its landed parent did not (part (b) of fathers#45
 changes this). Actual registration reads strict state and queries while holding
@@ -56,16 +64,13 @@ nonzero exit, malformed or duplicate JSON fields, invalid numeric types, mismatc
 scope/count/CAP echo, changed sample override values/provenance and inconsistent
 decisions are unavailable, not policy permission.
 
-Disk remains Lanefather's existing home-filesystem 150 decimal-GB policy. Claims,
-dependencies, lifecycle persistence and override journals also remain here. A force
-reason may bypass and audit all known cap/load/disk refusals, never claim conflicts,
-unreadable ownership state or an unavailable query. No Slotfather queue, history,
-capacity, lease or ordering files are read or changed by lifetime advice.
+Lanefather owns the [home-filesystem disk floor](reference.md#finishing-lanes), claims,
+dependencies and lifecycle. A force reason may bypass and audit a cap or disk
+refusal. Claim conflicts, unreadable ownership state and unavailable queries
+prevent registration. The lifetime query reads host facts and carries no lease.
 
-Two deliberate corrections apply: readiness now uses registration's strict `>`
-load comparison (equality allows); registration/list now refuse corrupt registry
-records rather than silently undercounting them. Strict reads reject duplicate JSON fields and invalid
-record identity/status. The state schema and existing lifecycle fields are unchanged.
+Registration, list and readiness use strict reads that reject duplicate JSON
+fields and invalid record identity or status.
 
 ## Compatibility and acceptance
 

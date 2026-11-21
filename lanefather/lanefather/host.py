@@ -2,10 +2,9 @@
 
 The lane cap is a lane per 2 cores and per 4 GB of physical memory beyond 8 GB, whichever is fewer (#572); a project's
 `[admission] cap` and above it LANEFATHER_CAP override it, and start logs the cap with its source. It counts one
-repository's lanes (fathers#149); LANEFATHER_GLOBAL_CAP, when set, caps every project's together. start refuses while
-load15 is above 1.5 x the cores. With LANEFATHER_LOAD_THROTTLE=1 (off by default, owner decision on the #572 review)
-each verify run (check, the post-merge smoke, the batch gate) also waits until it is not, at most LANEFATHER_LOAD_WAIT
-seconds.
+repository's lanes (fathers#149); LANEFATHER_GLOBAL_CAP, when set, caps every project's together.
+Load is advisory at registration (fathers#172). With LANEFATHER_LOAD_THROTTLE=1, each verify run waits until load15
+is at or below 1.5 times the core count, for at most LANEFATHER_LOAD_WAIT seconds (#572).
 """
 from __future__ import annotations
 
@@ -194,7 +193,7 @@ def host(project: config.Config | None = None) -> dict[str, Any]:
 
 
 def load_limit(cores: int) -> float:
-    """The load15 at which start refuses a lane and a throttled verify run waits (#572)."""
+    """The local load threshold for registration advice and the optional verify throttle."""
     return LOAD_FACTOR * cores
 
 
@@ -206,7 +205,7 @@ def host_fields(info: dict[str, Any]) -> str:
 def host_line(info: dict[str, Any], floor: Floor) -> str:
     limit = info["load_limit"] if "load_limit" in info else load_limit(info["cores"])
     return (f"disk free {info['disk_free_gb']:.0f} GB (minimum {floor.gb:.0f} GB); load15 {info['load15']:.1f} on "
-            f"{info['cores']} cores (maximum {limit:.1f})")
+            f"{info['cores']} cores (advisory limit {limit:.1f})")
 
 
 def jobs_decision(info: dict[str, Any], maximum: int, exclusive: bool = False) -> dict[str, Any]:
@@ -261,7 +260,7 @@ def load_wait_enabled() -> bool:
 
 
 def wait_for_load(label: str) -> dict[str, Any]:
-    """With the throttle on, wait until load15 is at or below the limit start enforces before a verify run starts
+    """With the throttle on, wait until load15 is at or below the local limit before a verify run starts
     (#572); the wait for the receipt, which says whether it was on. It runs before verify asks for its slot lease,
     so it never holds a slot. A process that already runs under a lease does not wait: it would hold those slots
     idle. After LANEFATHER_LOAD_WAIT seconds (default 3600) the run starts anyway, marked gave_up."""
