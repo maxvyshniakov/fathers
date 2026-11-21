@@ -26,7 +26,7 @@ import sys
 from types import ModuleType
 from typing import Any
 
-from . import config, gitops
+from . import config, gitops, receipts
 from .errors import LaneError
 
 Rows = list[dict[str, Any]]
@@ -185,21 +185,7 @@ def lane_basis(receipt: dict[str, Any] | None, landed: dict[str, Any], toolchain
                worktree: Any = None) -> str | None:
     """Why the lane's receipt cannot stand for part of its merge's smoke (#640), or None when it can: green, for
     the tree the lane landed, with per-check results, and run with the toolchain the smoke resolves (#571)."""
-    if not receipt:
-        return "the lane has no receipt"
-    if receipt.get("status") != "green":
-        return "the lane's receipt is red"
-    if receipt.get("tree") != landed["tree"]:
-        return (f"the lane's receipt covers tree {str(receipt.get('tree'))[:10]}, not the landed tree "
-                f"{landed['tree'][:10]}")
-    if receipt.get("checks") is None or receipt.get("check_results") is None:
-        return "the lane's receipt has no per-check results"
-    if receipt.get("toolchain") != toolchain:
-        return "the Rust toolchain changed since the lane check"
-    from . import results
-    if results.receipt_platform(receipt, worktree) != results.host_platform():
-        return f"the lane check did not run on {results.host_platform()}"
-    return None
+    return receipts.smoke_basis(None, receipt, landed, toolchain, worktree=worktree)
 
 
 def exact_tree_reuse(checkout: Any, receipt: dict[str, Any] | None, landed: dict[str, Any], merge_tree: str,
@@ -213,10 +199,11 @@ def exact_tree_reuse(checkout: Any, receipt: dict[str, Any] | None, landed: dict
     post-merge selection would run already passed on this exact merge tree under the same toolchain and platform;
     otherwise `fallback_reason` names why plan preparation is still required."""
     reason = lane_basis(receipt, landed, toolchain, worktree)
-    if reason or receipt is None:
+    receipt_tree = receipts.tree_of(receipt)
+    if reason or receipt is None or receipt_tree is None:
         return None, None, {}, reason or "the lane has no receipt"
-    if merge_tree != receipt["tree"]:
-        return None, None, {}, f"merge tree {merge_tree[:10]} differs from lane receipt {receipt['tree'][:10]}"
+    if merge_tree != receipt_tree:
+        return None, None, {}, f"merge tree {merge_tree[:10]} differs from lane receipt {receipt_tree[:10]}"
     results: dict[str, Any] = receipt["check_results"]
     passed = {c for c, e in results.items() if e.get("status") == "passed"}
     receipt_base = receipt.get("base")
@@ -252,8 +239,8 @@ def exact_tree_reuse(checkout: Any, receipt: dict[str, Any] | None, landed: dict
         listed = ", ".join(missing[:3]) + ("..." if len(missing) > 3 else "")
         return None, None, {}, f"lane receipt did not verify {listed}"
     lane_verified = {row["id"]: dict(results[row["id"]], reused_from=results[row["id"]].get("reused_from")
-                                     or receipt["tree"]) for row in rows}
-    narrowing = {"receipt_tree": receipt["tree"], "receipt_head": receipt.get("head"), "lane_tip": landed["tip"],
+                                     or receipt_tree) for row in rows}
+    narrowing = {"receipt_tree": receipt_tree, "receipt_head": receipt.get("head"), "lane_tip": landed["tip"],
                  "narrowed": True, "integration_paths": [], "dropped": list(lane_verified)}
     return lane_verified, narrowing, dict(receipt.get("reasons") or {}), None
 
@@ -274,11 +261,12 @@ def narrow_smoke(checkout: Any, receipt: dict[str, Any] | None, landed: dict[str
     if rows is None:
         return kind, rows, {"narrowed": False, "reason": "the tree's plan names whole suites"}
     reason = lane_basis(receipt, landed, toolchain_state(checkout), worktree)
-    if reason or receipt is None:
+    receipt_tree = receipts.tree_of(receipt)
+    if reason or receipt is None or receipt_tree is None:
         return kind, rows, {"narrowed": False, "reason": reason}
-    basis = {"receipt_tree": receipt["tree"], "receipt_head": receipt.get("head"), "lane_tip": landed["tip"]}
+    basis = {"receipt_tree": receipt_tree, "receipt_head": receipt.get("head"), "lane_tip": landed["tip"]}
     paths: list[str]
-    if merge_tree == receipt["tree"]:
+    if merge_tree == receipt_tree:
         brought: dict[str, list[str]] = {}
         paths = []
     else:
@@ -299,7 +287,7 @@ def narrow_smoke(checkout: Any, receipt: dict[str, Any] | None, landed: dict[str
     running = {row["id"] for row in kept}
     # Every check left out passed in the receipt; land records its result in check_results.
     lane_verified = {row["id"]: dict(results[row["id"]], reused_from=results[row["id"]].get("reused_from")
-                                     or receipt["tree"]) for row in rows if row["id"] not in running}
+                                     or receipt_tree) for row in rows if row["id"] not in running}
     narrowing = dict(basis, narrowed=True, integration_paths=paths, lane_verified=lane_verified,
                      dropped=list(lane_verified))
     return ("narrowed" if kept else "skip"), kept, narrowing

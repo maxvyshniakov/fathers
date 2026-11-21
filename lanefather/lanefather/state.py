@@ -1,7 +1,7 @@
 """Lane records and receipts: one JSON file per lane in the state directory, receipts beside it.
 
   <state>/<id>.json                 the lane record (status, branch, base, claims, worktree, landed, ...)
-  <state>/<id>.receipt.json         the lane check's receipt for the tree it verified
+  <state>/<id>.receipt.json         the lane check's receipt for the tree it verified (lanefather.receipts)
   <state>/<id>.first.json           the lane's first receipt, kept whatever the branch does later
   <state>/<id>.post-merge.json      the post-merge smoke's receipt
   <state>/<id>.review.json          the lane's review
@@ -56,7 +56,8 @@ class Store:
         return self.directory / f"{lane_id}.json"
 
     def receipt_path(self, lane_id: str, kind: str = "receipt") -> Path:
-        return self.directory / f"{lane_id}.{kind}.json"
+        actual = "receipt" if kind == "check" else kind
+        return self.directory / f"{lane_id}.{actual}.json"
 
     def load(self, lane_id: str) -> Record:
         path = self.record_path(lane_id)
@@ -137,7 +138,8 @@ def record_path(lane_id: str) -> Path:
 
 
 def receipt_path(lane_id: str, kind: str = "receipt") -> Path:
-    return state_dir() / f"{lane_id}.{kind}.json"
+    state_dir()
+    return Store(config.current()).receipt_path(lane_id, kind)
 
 
 def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

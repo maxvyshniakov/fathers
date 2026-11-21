@@ -19,7 +19,21 @@ import subprocess
 import sys
 from typing import Any
 
-from . import checks, config, done, journal, lifecycle, plan, postmerge, review, state, tickets, verify, worktrees
+from . import (
+    checks,
+    config,
+    done,
+    journal,
+    lifecycle,
+    plan,
+    postmerge,
+    receipts,
+    review,
+    state,
+    tickets,
+    verify,
+    worktrees,
+)
 from . import results as result_store
 from .errors import LaneError
 from .gitops import current_branch, dirty, git, git_ok, main_checkout
@@ -41,10 +55,11 @@ def touched_lines(failed: list[tuple[str, str]], integration: str, merge: str) -
     """The lanes in the merge, newest first, whose checks ran each failed (check, suite) item: the check itself, or
     its whole suite (review of #422, finding 1); for a suite item, any check of the suite. A lane that landed after
     the merge, while its smoke ran (#573), is not in it."""
-    landed = [r for r in sorted(state.lanes(), key=lambda r: r.get("landed", {}).get("at", ""), reverse=True)
+    store = state.Store(config.current())
+    landed = [r for r in sorted(store.lanes(), key=lambda r: r.get("landed", {}).get("at", ""), reverse=True)
               if r.get("landed", {}).get("integration") == integration
               and git_ok(integration, "merge-base", "--is-ancestor", r["landed"]["merge"], merge)]
-    ran = {r["id"]: checks.lane_ran(r["id"]) for r in landed}
+    ran = {r["id"]: receipts.lane_ran(store, r["id"]) for r in landed}
 
     def covers(lane_id: str, item: str, suite: str) -> bool:
         lane_checks, suites, whole = ran[lane_id]
@@ -92,29 +107,29 @@ def smoke_reuse(kind: str, rows: list[dict[str, Any]] | None, merge_tree: str, t
     return ("skip" if skips and not kept else kind), kept, reused, skips
 
 
-def merge_problem(args: Any, tip: str, tree: str, receipt: dict[str, Any] | None) -> str | None:
+def merge_problem(args: Any, tip: str, tree: str, receipt: dict[str, Any] | None, *,
+                  record: state.Record | None = None) -> str | None:
     """Why the lane may not land: no receipt, a stale one, or a red one."""
     prog = config.prog()
-    if not receipt:
+    # Behaviour preserved in Tidy 3 (#71): land checks tree currency only, ignoring toolchain until #59.
+    verdict = receipts.check_verdict(record, receipt, tree)
+    if isinstance(verdict, receipts.NoReceipt):
         return f"no receipt for lane {args.id}: run {prog} check {args.id} in its worktree"
-    if receipt.get("tree") != tree:
-        return (f"the receipt is stale: it covers tree {receipt.get('tree')}, the lane tip {tip[:10]} has tree "
+    if isinstance(verdict, receipts.StaleTree):
+        return (f"the receipt is stale: it covers tree {verdict.receipt_tree}, the lane tip {tip[:10]} has tree "
                 f"{tree}; rerun {prog} check {args.id}")
-    if receipt.get("status") == "green":
+    if isinstance(verdict, receipts.Green):
         return None
+    assert isinstance(verdict, receipts.Red)
     # A suite whose checks did not start behind a red first check (#639) is named apart from the red ones.
-    results = receipt.get("results", [])
-    failed = [r["suite"] for r in results if r["status"] not in ("passed", "not_run")]
-    unstarted = [r["suite"] for r in results if r["status"] == "not_run"]
-    problem = (f"the receipt for tree {tree} is red ({', '.join(failed)}"
-               + (f"; not run: {', '.join(unstarted)}" if unstarted else "") + ")")
-    entries = [e for e in (receipt.get("classification") or {}).get("checks", []) if e["class"] == "regression"]
-    if entries:
+    problem = (f"the receipt for tree {tree} is red ({', '.join(verdict.failed)}"
+               + (f"; not run: {', '.join(verdict.unstarted)}" if verdict.unstarted else "") + ")")
+    if verdict.regressions:
         # The receipt key stays "alone": the lane's rerun of the check by itself, at its own lease size.
-        rerun = all((e.get("alone") or {}).get("status") != "not rerun" for e in entries)
-        problem += (f"; regression: {', '.join(e['check'] for e in entries)} fails on the lane"
-                    f"{' again when rerun by itself' if rerun else ''} and passes on its base "
-                    f"{receipt['classification']['base'][:10]}")
+        base = (verdict.classification_base or "")[:10]
+        problem += (f"; regression: {', '.join(verdict.regressions)} fails on the lane"
+                    f"{' again when rerun by itself' if verdict.rerun_alone else ''} and passes on its base "
+                    f"{base}")
     return problem
 
 
@@ -180,14 +195,17 @@ def recheck(args: Any) -> int:
                 record, checkout, suites, selected, f"recheck-{args.id}", args.slots, toolchain)
             tree = git(checkout, "rev-parse", "HEAD^{tree}")
         status = status if results else "red"
-        path = store.receipt_path(args.id, "recheck")
-        red_path = str(store.receipt_path(args.id, "post-merge"))
-        state.write_json(path, {"version": 1, "lane": args.id, "kind": "recheck", "merge": merge, "sha": tip,
-                                "tree": tree, "checkout": checkout, "platform": result_store.host_platform(),
-                                "red_receipt": red_path, "suites": suites, "checks": selected,
-                                "check_results": check_results, "results": results, "triage": triaged,
-                                "status": status, "jobs": decision["jobs"], "jobs_decision": decision,
-                                "leases": checks.leases_of(results), "host": host(), "finished": journal.now()})
+        red_path = str(receipts.path(store, args.id, "post-merge"))
+        path = receipts.write(
+            store, args.id,
+            {"version": 1, "lane": args.id, "kind": "recheck", "merge": merge, "sha": tip,
+             "tree": tree, "checkout": checkout, "platform": result_store.host_platform(),
+             "red_receipt": red_path, "suites": suites, "checks": selected,
+             "check_results": check_results, "results": results, "triage": triaged,
+             "status": status, "jobs": decision["jobs"], "jobs_decision": decision,
+             "leases": checks.leases_of(results), "host": host(), "finished": journal.now()},
+            "recheck",
+        )
         result_store.record(tree, checks.recordable(check_results), source="post-merge", toolchain=toolchain,
                             lane=args.id, sha=tip, receipt=str(path), phase="post-merge")
         if status == "green":
@@ -226,7 +244,7 @@ def recheck(args: Any) -> int:
     print(f"Lane {args.id}: post-merge green on {tip[:10]} (recheck: {what}); it replaces the red smoke of "
           f"{merge[:10]} ({path})")
     complete(record, merge, integration, current_branch(integration) or integration,
-             state.read_json(store.receipt_path(args.id)), status, f"recheck on {tip[:10]}: {what}", done.kept(record))
+             receipts.read(store, args.id), status, f"recheck on {tip[:10]}: {what}", done.kept(record))
     return 0
 
 
@@ -270,8 +288,8 @@ def land(args: Any) -> int:
         main = main_checkout(record["common_dir"])
         tip = git(main, "rev-parse", "--verify", record["branch"] + "^{commit}")
         tree = git(main, "rev-parse", tip + "^{tree}")
-        receipt = state.read_json(store.receipt_path(args.id))
-        problem = merge_problem(args, tip, tree, receipt)
+        receipt = receipts.read(store, args.id)
+        problem = merge_problem(args, tip, tree, receipt, record=record)
         if problem and not args.force_reason:
             raise LaneError("land refused: " + problem)
         if problem:
@@ -390,22 +408,25 @@ def land(args: Any) -> int:
             decision, results, check_results, triaged, stamp, status = run_smoke(
                 record, checkout, suites, selected, f"post-merge-{args.id}", args.slots, toolchain)
             jobs = decision["jobs"]
-    post = state.receipt_path(args.id, "post-merge")
     info = host()
-    state.write_json(post, {"version": 1, "lane": args.id, "merge": merge, "base": previous,
-                            "tree": merge_tree, "checkout": checkout, "kind": kind,
-                            "platform": result_store.host_platform(),
-                            "jobs": jobs, "jobs_decision": decision, "suites": suites, "full": False,
-                            "reasons": reasons, "checks": selected, "selection": rows,
-                            "narrowing": narrowing, "skipped": skips,
-                            "check_results": {**lane_verified, **tree_verified, **check_results},
-                            "results": results, "triage": triaged, "status": status, "verified_tree": stamp,
-                            "leases": checks.leases_of(results),
-                            "host": info, "finished": journal.now()})
+    post = receipts.write(
+        store, args.id,
+        {"version": 1, "lane": args.id, "merge": merge, "base": previous,
+         "tree": merge_tree, "checkout": checkout, "kind": kind,
+         "platform": result_store.host_platform(),
+         "jobs": jobs, "jobs_decision": decision, "suites": suites, "full": False,
+         "reasons": reasons, "checks": selected, "selection": rows,
+         "narrowing": narrowing, "skipped": skips,
+         "check_results": {**lane_verified, **tree_verified, **check_results},
+         "results": results, "triage": triaged, "status": status, "verified_tree": stamp,
+         "leases": checks.leases_of(results),
+         "host": info, "finished": journal.now()},
+        "post-merge",
+    )
     result_store.record(merge_tree, checks.recordable({**lane_verified, **tree_verified, **check_results}),
                    source="post-merge", toolchain=toolchain, lane=args.id, sha=merge, receipt=str(post),
                    reused=[*lane_verified, *tree_verified],
-                   origins={**checks.origins(lane_verified, str(state.receipt_path(args.id))),
+                   origins={**checks.origins(lane_verified, str(receipts.path(store, args.id))),
                             **checks.origins(tree_verified, "")}, phase="post-merge")
     # Reloaded: a review hand-over may have changed the record during the smoke.
     def _set_post_merge(rec: state.Record) -> None:

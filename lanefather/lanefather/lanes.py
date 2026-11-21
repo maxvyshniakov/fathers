@@ -25,6 +25,7 @@ from . import (
     lifecycle,
     promote,
     queue,
+    receipts,
     review,
     slots,
     state,
@@ -60,12 +61,13 @@ def next_lines(record: Record) -> list[str]:
     """The lane's next commands, as start and adopt print them (fathers#175): the agent goes on without a complete
     brief or a --help turn."""
     prog, lane_id = config.prog(), record["id"]
+    store = state.Store(config.current())
     return [
         "Next, in the worktree:",
         *([f'  git checkout -B {record["branch"]} {record["base"]} && {prog} adopt {lane_id} "$PWD" '
            f'{record["branch"]}'] if not record["worktree"] else []),
         f"  {prog} check {lane_id}    (on a clean committed tree; its receipt is the evidence)",
-        f"  Hand back: the block in {config.current().report_doc}, with Receipt: {state.receipt_path(lane_id)}",
+        f"  Hand back: the block in {config.current().report_doc}, with Receipt: {receipts.path(store, lane_id)}",
         f"  Then the coordinator lands it ({prog} land {lane_id}); {prog} wait {lane_id} --for landed blocks until "
         "it does, no loop over list.",
     ]
@@ -270,21 +272,9 @@ def adopt(args: Any) -> int:
     return 0
 
 
-def receipt_state(record: Record) -> str:
-    receipt = state.read_json(state.receipt_path(record["id"]))
-    if not receipt:
-        return "no receipt"
-    text = receipt.get("status", "?")
-    if lifecycle.active(record):
-        tip = git(main_checkout(record["common_dir"]), "rev-parse", "--verify", "--quiet",
-                  record["branch"] + "^{tree}", check=False)
-        if tip and tip != receipt.get("tree"):
-            text += " (stale)"
-    if record.get("post_merge"):
-        text += f", post-merge {record['post_merge']['status']}"
-    if record.get("landed") and not lifecycle.finished(record):
-        text += f", {review.review_state(record['id'])[1]}"
-    return text
+def receipt_state(record: Record, store: state.Store | None = None) -> str:
+    current = store or state.Store(config.current())
+    return receipts.lane_view(current, record, repository=None, prog=config.prog()).list_receipt_text()
 
 
 def list_lanes(args: Any) -> int:
@@ -296,17 +286,18 @@ def list_lanes(args: Any) -> int:
     ceiling = decision.ceiling
     # Each run's effective slot priority and its source (lanefather#24).
     priorities = slots.priorities()
+    views = [(r, receipts.lane_view(store, r, repository=None, prog=config.prog())) for r in shown]
     if args.json:
         # Scripts read lanes here (#577): every record with its worktree (null until adopt) and receipt state.
-        print(json.dumps({"lanes": [dict(r, receipt=receipt_state(r)) for r in shown],
+        print(json.dumps({"lanes": [view.for_list(r) for r, view in views],
                           "active": len(decision.occupying), "cap": cap, "cap_source": source,
                           "global": {"active": len(decision.everywhere), "cap": ceiling[0] if ceiling else None,
                                      "cap_source": ceiling[1] if ceiling else None},
                           "host": machine, "priorities": priorities}, indent=2))
         return 0
-    for record in shown:
+    for record, view in views:
         print(f"{record['id']}  {record['status']}  #{record['ticket']}  {record['branch']}  "
-              f"receipt: {receipt_state(record)}")
+              f"receipt: {view.list_receipt_text()}")
         print(f"    claims: {' '.join(record['claims'])}"
               + (f"  after: {', '.join(record['after'])}" if record["after"] else ""))
         if record.get("worktree"):
@@ -321,7 +312,7 @@ def list_lanes(args: Any) -> int:
     if git_ok(os.getcwd(), "rev-parse", "--git-dir"):
         for line in promote.ahead_lines(os.getcwd()):
             print(line)
-    pending = list(review.unmarked_reviews(records, store))
+    pending = list(receipts.unmarked_reviews(records, store))
     label = "review" if len(pending) == 1 else "reviews"
     references = [f"{lane['id']}#{finding['n']}" for lane, findings in pending for finding in findings]
     summary = f"{len(pending)} finished {label} with unmarked findings"

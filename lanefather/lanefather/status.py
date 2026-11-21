@@ -23,9 +23,9 @@ import os
 from pathlib import Path
 import re
 import subprocess
-from typing import Any, cast
+from typing import Any
 
-from . import admission, events, host, journal, lifecycle, registry, review, state
+from . import admission, config, events, host, journal, lifecycle, receipts, registry, state
 from .errors import LaneError
 from .gitops import main_checkout
 
@@ -77,40 +77,14 @@ def latest_logs(directory: Path, ids: set[str]) -> dict[str, dict[str, str]]:
 
 def newest_gate(directory: Path) -> dict[str, Any] | None:
     """The newest batch gate's result: promote-<sha>.gate.json by its finish time."""
-    newest: dict[str, Any] | None = None
-    for path in directory.glob("promote-*.gate.json"):
-        gate = state.read_json(path)
-        if gate and isinstance(gate.get("finished"), str) and (newest is None or gate["finished"] > newest["at"]):
-            newest = {"sha": gate.get("sha"), "status": gate.get("status"), "at": gate["finished"]}
-    return newest
+    return receipts.newest_gate(state.Store(config.Config(), directory=directory))
 
 
 def lane_entry(record: state.Record, directory: Path, repo: str | None, trees: dict[str, str],
-               logs: dict[str, str]) -> dict[str, Any]:
-    lane_id = str(record["id"])
-    number = str(record.get("ticket", "")).lstrip("#")
-    receipt = state.read_json(directory / f"{lane_id}.receipt.json")
+               logs: dict[str, str], *, store: state.Store | None = None) -> dict[str, Any]:
+    current = store or state.Store(config.Config(), directory=directory)
     tree = trees.get(str(record.get("branch", "")))
-    review_receipt = state.read_json(directory / f"{lane_id}.review.json") or {}
-    raw: Any = review_receipt.get("findings")
-    findings: list[dict[str, Any]] = [cast(dict[str, Any], f) for f in cast(list[Any], raw)
-                                      if isinstance(f, dict)] if isinstance(raw, list) else []
-    status = review_receipt.get("status", "not started")
-    if status == "running" and not review.alive(review_receipt.get("pid")):
-        status = "stopped"
-    return {
-        "id": lane_id, "status": record.get("status"),
-        "ticket": {"number": number if number and number != "none" else None,
-                   "url": f"https://github.com/{repo}/issues/{number}" if repo and number.isdigit() else None},
-        "branch": record.get("branch"), "base": record.get("base"), "worktree": record.get("worktree"),
-        "claims": record.get("claims", []), "after": record.get("after", []), "created": record.get("created"),
-        "receipt": {"status": receipt.get("status", "unknown") if receipt else "not run",
-                    "tree_match": receipt.get("tree") == tree if receipt and tree else None,
-                    "path": str(directory / f"{lane_id}.receipt.json") if receipt else None},
-        "post_merge": cast(dict[str, Any], post).get("status") if isinstance(post := record.get("post_merge"), dict)
-        else None,
-        "review": {"status": status, "open": sum(1 for f in findings if not f.get("mark")), "findings": len(findings)},
-        "logs": logs, "outcome": record.get("outcome")}
+    return receipts.lane_view(current, record, tip_tree=tree, repository=repo, logs=logs).for_status()
 
 
 def project_entry(found: registry.Project) -> dict[str, Any]:
@@ -119,7 +93,8 @@ def project_entry(found: registry.Project) -> dict[str, Any]:
     # and a record that names none, as the cap counts it (state.of_project).
     # A record a write cut short cannot say its repository: every project of the directory lists it (fathers#129).
     damaged: list[Path] = []
-    everywhere = state.Store(project, directory=directory).lanes(damaged=damaged)
+    store = state.Store(project, directory=directory)
+    everywhere = store.lanes(damaged=damaged)
     records = state.of_project(everywhere, common)
     try:
         decision = admission.evaluate(project, everywhere, common)
@@ -138,8 +113,8 @@ def project_entry(found: registry.Project) -> dict[str, Any]:
             "repository": repo, "cap": cap, "cap_source": source,
             "active": sum(1 for r in records if lifecycle.active(r)),
             "planned": sum(1 for r in records if lifecycle.planned(r)),
-            "gate": newest_gate(directory),
-            "lanes": [lane_entry(r, directory, repo, trees, logs.get(str(r["id"]), {})) for r in shown],
+            "gate": receipts.newest_gate(store),
+            "lanes": [lane_entry(r, directory, repo, trees, logs.get(str(r["id"]), {}), store=store) for r in shown],
             "damaged": [{"path": str(path), "error": state.cut_short(path)} for path in damaged]}
 
 
@@ -169,9 +144,10 @@ def status(args: Any) -> int:
         if "error" in project:
             print(f"{project['project']}  {project['state_dir']}  error: {project['error']}")
             continue
-        gate = project["gate"]
+        gate_info = project["gate"]
         print(f"{project['project']}  {project['active']} active, {project['planned']} planned of {project['cap']}"
-              + (f"  gate {gate['status']} {str(gate['sha'])[:10]}" if gate else "") + f"  {project['state_dir']}")
+              + (f"  gate {gate_info['status']} {str(gate_info['sha'])[:10]}" if gate_info else "")
+              + f"  {project['state_dir']}")
         for lane in project["lanes"]:
             print(f"    {lane['id']}  {lane['status']}  receipt {lane['receipt']['status']}"
                   f"  review {lane['review']['status']}")

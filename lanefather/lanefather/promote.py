@@ -23,7 +23,7 @@ import subprocess
 import sys
 from typing import Any
 
-from . import config, events, host, journal, plan, review, slots, state, tickets, verify, worktrees
+from . import config, events, host, journal, plan, receipts, review, slots, state, tickets, verify, worktrees
 from . import results as result_store
 from .errors import LaneError
 from .gitops import common_dir, git, git_ok, worktree_list
@@ -143,25 +143,30 @@ def run_batch_gate(cwd: str, common: str, sha: str, jobs: int | None) -> None:
     failed, blocked, triaged = outcome.failed_checks, outcome.blocked_checks, outcome.triage
     green = status == 0 and stamp["stamped"] and not blocked
     module = plan.module(path)
-    state.write_json(state.state_dir() / f"{label}.gate.json", {
-        "version": 1, "lane": label, "sha": sha, "tree": git(cwd, "rev-parse", sha + "^{tree}"), "full": True,
-        "platform": result_store.host_platform(),
-        "suites": list(getattr(module, "SUITES", ())), "jobs": jobs, "jobs_decision": decision, "exit": status,
-        "seconds": seconds,
-        "status": "green" if green else "red", "failed_checks": failed,
-        **({"blocked_checks": blocked} if blocked else {}),
-        "triage": triaged, "verified_tree": stamp,
-        "load_wait": load_wait, "load": load,
-        "results": [{"suite": "full gate", "status": "passed" if green else "failed", "seconds": seconds,
-                     "load_wait": load_wait, "load": load, "log": str(log), "failed_checks": failed,
-                     **({"blocked_checks": blocked} if blocked else {})}],
-        "log": str(log), "host": info, "started": outcome.started, "finished": journal.now()})
+    store = state.Store(config.current())
+    tree = git(cwd, "rev-parse", sha + "^{tree}")
+    gate_path = receipts.write(
+        store, label,
+        {"version": 1, "lane": label, "sha": sha, "tree": tree, "full": True,
+         "platform": result_store.host_platform(),
+         "suites": list(getattr(module, "SUITES", ())), "jobs": jobs, "jobs_decision": decision, "exit": status,
+         "seconds": seconds,
+         "status": "green" if green else "red", "failed_checks": failed,
+         **({"blocked_checks": blocked} if blocked else {}),
+         "triage": triaged, "verified_tree": stamp,
+         "load_wait": load_wait, "load": load,
+         "results": [{"suite": "full gate", "status": "passed" if green else "failed", "seconds": seconds,
+                      "load_wait": load_wait, "load": load, "log": str(log), "failed_checks": failed,
+                      **({"blocked_checks": blocked} if blocked else {})}],
+         "log": str(log), "host": info, "started": outcome.started, "finished": journal.now()},
+        "gate",
+    )
     # fathers#91: the gate's result belongs to the tree; a later promote of any commit with it reads why it is verified.
     rows = {row["id"]: row.get("status") for row in (report or {}).get("checks", []) if row.get("id")}
-    result_store.record(git(cwd, "rev-parse", sha + "^{tree}"),
+    result_store.record(tree,
                    {c: v for c, v in rows.items() if v in ("passed", "failed")}, source="gate", full=True,
                    status="green" if green else "red", toolchain=plan.toolchain_state(path), sha=sha,
-                   receipt=str(state.state_dir() / f"{label}.gate.json"))
+                   receipt=str(gate_path))
     journal.ledger(f"promote-gate {sha} {'green' if green else 'red'} jobs={jobs} seconds={seconds:.0f}"
                    f"{' stamped' if stamp['stamped'] else ''} {host.host_fields(info)}",
                    kind="gate.finished", level="info" if green else "error", subject={"type": "commit", "id": sha},
@@ -225,12 +230,13 @@ def perf_suite(cwd: str, common: str, sha: str, ship: bool, remote: str = "origi
         print(f"lane: {sha[:10]} has no perf suite in {config.current().plan_module or 'its plan'}; nothing to measure")
         return None
     tree = git(cwd, "rev-parse", sha + "^{tree}")
-    path = state.state_dir() / f"perf-{sha[:10]}.perf.json"
-    previous = state.read_json(path)
-    if ship and previous and previous.get("status") == "green" and previous.get("tree") == tree:
-        print(f"lane: perf suite already green on tree {tree[:10]} ({previous.get('log')})")
-        return previous
-    with state.locked("promote", promote_lock_message()):
+    store = state.Store(config.current())
+    if ship:
+        previous = receipts.perf_reusable(store, sha, tree)
+        if previous is not None:
+            print(f"lane: perf suite already green on tree {tree[:10]} ({previous.get('log')})")
+            return previous
+    with store.locked("promote", promote_lock_message()):
         worktree = worktrees.gate_worktree(common, sha)
         label = f"perf-{sha[:10]}"
         outcome = verify.Run(
@@ -245,20 +251,21 @@ def perf_suite(cwd: str, common: str, sha: str, ship: bool, remote: str = "origi
         failed, blocked = outcome.failed_checks, outcome.blocked_checks
         triaged, started = outcome.triage, outcome.started
     info = host.host()
+    perf_status = "red" if status or blocked else "green"
     receipt: dict[str, Any] = {"version": 1, "sha": sha, "tree": tree,
-                               "status": "red" if status or blocked else "green",
+                               "status": perf_status,
                                "exit": status, "seconds": seconds, "failed_checks": failed,
                                **({"blocked_checks": blocked} if blocked else {}),
                                "triage": triaged,
                                "log": str(log), "load": load, "host": info, "started": started,
                                "finished": journal.now()}
-    state.write_json(path, receipt)
-    journal.ledger(f"perf {sha} {receipt['status']} seconds={seconds:.0f} {host.host_fields(info)}",
-                   kind="perf.finished", level="info" if receipt["status"] == "green" else "error",
+    receipts.write(store, sha, receipt, "perf")
+    journal.ledger(f"perf {sha} {perf_status} seconds={seconds:.0f} {host.host_fields(info)}",
+                   kind="perf.finished", level="info" if perf_status == "green" else "error",
                    subject={"type": "commit", "id": sha},
-                   details={"status": receipt["status"], "seconds": seconds, "failed_checks": failed,
+                   details={"status": perf_status, "seconds": seconds, "failed_checks": failed,
                             "log": str(log)})
-    if receipt["status"] == "green":
+    if perf_status == "green":
         print(f"lane: perf suite green in {seconds:.0f} s on {sha[:10]}")
         return receipt
     parts: list[str] = []

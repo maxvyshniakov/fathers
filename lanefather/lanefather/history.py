@@ -22,7 +22,7 @@ import statistics
 from typing import Any
 from xml.etree import ElementTree
 
-from . import state
+from . import config, receipts, state
 from .journal import now, parse_time
 
 VERSION = 1
@@ -170,13 +170,10 @@ def reviewer_totals(days: float | None = 7, lane: str | None = None) -> list[dic
 
     cutoff = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=days)) if days else None
     table: dict[str, dict[str, Any]] = {}
-    try:
-        paths = sorted(state.state_dir().glob("*.review.json"))
-    except OSError:
-        return []
-    for path in paths:
-        receipt = state.read_json(path)
-        if not receipt or receipt.get("status") != "finished" or (lane is not None and receipt.get("lane") != lane):
+    store = state.Store(config.current())
+    for _, receipt in receipts.reviews(store):
+        if (not isinstance(receipts.review_verdict(None, receipt), (receipts.Unmarked, receipts.Complete))
+                or (lane is not None and receipt.get("lane") != lane)):
             continue
         try:
             if cutoff and parse_time(str(receipt.get("finished"))) < cutoff:
