@@ -353,6 +353,7 @@ class Selection:
     """What a verify run executes: the full gate, whole suites, or named check ids."""
     kind: Literal["full", "suites", "checks"]
     items: tuple[str, ...] = ()
+    only: tuple[str, ...] = ()
 
     @classmethod
     def full(cls) -> Selection:
@@ -363,14 +364,15 @@ class Selection:
         return cls("suites", tuple(names))
 
     @classmethod
-    def checks(cls, ids: Iterable[str]) -> Selection:
-        return cls("checks", tuple(ids))
+    def checks(cls, ids: Iterable[str], *, only: Iterable[str] = ()) -> Selection:
+        return cls("checks", tuple(ids), only=tuple(only))
 
     def argv(self) -> tuple[str, ...]:
         if self.kind == "full":
             return ()
         if self.kind == "checks":
-            return ("--checks", ",".join(self.items))
+            base: tuple[str, ...] = ("--checks", ",".join(self.items))
+            return (*base, "--only", ",".join(self.only)) if self.only else base
         return ("--suites", ",".join(self.items))
 
     def describe(self) -> str:

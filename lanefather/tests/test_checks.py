@@ -620,6 +620,186 @@ class RedCheckClassificationTests(LaneCase):
         self.lane("check", "a")
         self.assertEqual(self.receipt("a")["changed_red_tests"], [])
 
+    def _install_only_verifier(self) -> pathlib.Path:
+        only_log = self.state / "only-runs.jsonl"
+        script = textwrap.dedent("""\
+            #!/usr/bin/env python3
+            import json, os, pathlib, subprocess, sys, time, uuid
+
+            SUITES = ("structure", "lib")
+            CHECKS = {"structure-check": ("structure", ("",)), "lib-check": ("lib", ("lib/",))}
+            root = pathlib.Path(__file__).resolve().parent
+            args = sys.argv[1:]
+            if args[:1] == ["--changed"]:
+                base = args[args.index("--base") + 1]
+                paths = sorted(set(subprocess.check_output(
+                    ["git", "diff", "--name-only", base, "--"], cwd=root, text=True).split()))
+                rows = [{"id": cid, "suite": suite, "paths": [p for p in paths if p.startswith(reads)],
+                         "producer": False} for cid, (suite, reads) in CHECKS.items()]
+                rows = [r for r in rows if r["paths"]]
+                suites = [s for s in SUITES if any(r["suite"] == s for r in rows)]
+                reasons = {s: sorted({p for r in rows if r["suite"] == s for p in r["paths"]}) for s in suites}
+                print(json.dumps({
+                    "full": False, "paths": paths, "unowned": [], "checks": rows, "suites": suites,
+                    "reasons": reasons, "capabilities": ["only"],
+                }))
+                sys.exit(0)
+
+            ids = args[args.index("--checks") + 1].split(",") if "--checks" in args else ["structure-check", "lib-check"]
+            only = args[args.index("--only") + 1].split(",") if "--only" in args else None
+            label = os.environ.get("LANEFATHER_SLOT_LABEL", "-")
+            with open(os.environ["ONLY_VERIFY_LOG"], "a") as handle:
+                handle.write(json.dumps({"label": label, "checks": ids, "only": only, "args": args}) + "\\n")
+
+            run = root / ".build" / "verification-runs" / (time.strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8])
+            run.mkdir(parents=True, exist_ok=True)
+            rows = []
+            status = 0
+            for cid in ids:
+                log_path = run / f"{cid}.log"
+                failed_tests = []
+                outside = []
+                code = 0
+                if cid == "lib-check":
+                    mode = os.environ.get("ONLY_MODE", "regression")
+                    if only is None:
+                        if mode == "flaky":
+                            flag = pathlib.Path(os.environ["ONLY_FLAKE_FLAG"])
+                            if flag.exists():
+                                flag.unlink()
+                                code = 1
+                                failed_tests = ["tests/flake.test.ts"]
+                        elif mode == "pre-existing":
+                            code = 1
+                            failed_tests = ["tests/shared.test.ts"]
+                        elif mode == "outside-rerun":
+                            code = 1
+                            failed_tests = ["tests/a.test.ts"]
+                        elif mode == "outside-initial":
+                            code = 1
+                            failed_tests = ["tests/a.test.ts"]
+                            outside = ["tests/unscoped.test.ts"]
+                        else:
+                            if (root / "lib/reg/broken.txt").exists():
+                                code = 1
+                                failed_tests = ["tests/broken.test.ts"]
+                    else:
+                        if mode == "outside-rerun" and label.endswith("-alone"):
+                            code = 1
+                            failed_tests = ["tests/other.test.ts"]
+                        elif mode == "pre-existing" and "tests/shared.test.ts" in only:
+                            code = 1
+                            failed_tests = ["tests/shared.test.ts"]
+                        elif "tests/broken.test.ts" in only and (root / "lib/reg/broken.txt").exists():
+                            code = 1
+                            failed_tests = ["tests/broken.test.ts"]
+                log_path.write_text(f"{cid} exit {code}\\n")
+                row = {"id": cid, "status": "passed" if code == 0 else "failed", "exit": code, "log": str(log_path)}
+                if failed_tests:
+                    row["failed_tests"] = failed_tests
+                if outside:
+                    row["outside_failed_tests"] = outside
+                rows.append(row)
+                status = status or code
+
+            report = {"exit": status, "checks": rows, "stopped": None, "capabilities": ["only"]}
+            report_path = run / "report.json"
+            report_path.write_text(json.dumps(report))
+            print(f"Verification report: {report_path}")
+            sys.exit(status)
+        """)
+        self.commit(self.integration, {"verify.sh": script}, "verifier supporting --only subset reruns")
+        self.env["ONLY_VERIFY_LOG"] = str(only_log)
+        return only_log
+
+    def test_only_reruns_failing_tests_across_regression_pre_existing_and_flaky(self):
+        only_log = self._install_only_verifier()
+        base = self.tip()
+
+        # 1. Regression: passes --only to both lane and base reruns and records tests in receipt.
+        self.env["ONLY_MODE"] = "regression"
+        wt_reg = self.created("reg", "lib/reg/**")
+        self.commit(wt_reg, {"lib/reg/broken.txt": "bad\n"})
+        self.lane("check", "reg", ok=False)
+        entry = self.entries("reg")["lib-check"]
+        self.assertEqual(entry["class"], "regression")
+        self.assertEqual(entry["base"]["sha"], base)
+        self.assertEqual(entry["base"]["status"], "passed")
+        self.assertEqual(entry["tests"], ["tests/broken.test.ts"])
+        rec_reg = self.receipt("reg")
+        self.assertEqual(rec_reg["status"], "red")
+        self.assertEqual([r.get("tests") for r in rec_reg["classification"]["runs"]],
+                         [["tests/broken.test.ts"], ["tests/broken.test.ts"]])
+        logged: list[dict[str, Any]] = [json.loads(line) for line in only_log.read_text().splitlines() if line]
+        self.assertEqual([(r["label"], r["only"]) for r in logged[-3:]], [
+            ("lane-reg", None),
+            ("lane-reg-alone", ["tests/broken.test.ts"]),
+            ("lane-reg-base", ["tests/broken.test.ts"]),
+        ])
+
+        # 2. Pre-existing: both alone and base run with --only and fail on the same test file.
+        self.env["ONLY_MODE"] = "pre-existing"
+        wt_pre = self.created("pre", "lib/pre/**")
+        self.commit(wt_pre, {"lib/pre/ok.txt": "change\n"})
+        self.lane("check", "pre")
+        entry_pre = self.entries("pre")["lib-check"]
+        self.assertEqual(entry_pre["class"], "pre-existing")
+        self.assertEqual(entry_pre["tests"], ["tests/shared.test.ts"])
+        self.assertEqual(self.receipt("pre")["status"], "green")
+
+        # 3. Flaky-under-load: alone runs with --only and passes; base does not run.
+        flake_flag = self.state / "flake.flag"
+        flake_flag.write_text("1")
+        self.env.update(ONLY_MODE="flaky", ONLY_FLAKE_FLAG=str(flake_flag))
+        wt_flk = self.created("flk", "lib/flk/**")
+        self.commit(wt_flk, {"lib/flk/flk.txt": "change\n"})
+        before = len(only_log.read_text().splitlines())
+        self.lane("check", "flk")
+        after_lines: list[dict[str, Any]] = [
+            json.loads(line) for line in only_log.read_text().splitlines()[before:] if line]
+        self.assertEqual([(r["label"], r["only"]) for r in after_lines], [
+            ("lane-flk", None),
+            ("lane-flk-alone", ["tests/flake.test.ts"]),
+        ])
+        entry_flk = self.entries("flk")["lib-check"]
+        self.assertEqual(entry_flk["class"], "flaky-under-load")
+        self.assertEqual(entry_flk["tests"], ["tests/flake.test.ts"])
+        self.assertEqual(self.receipt("flk")["status"], "green")
+
+    def test_only_leaves_check_unclassified_when_red_test_falls_outside_failed_tests(self):
+        self._install_only_verifier()
+
+        # Case A: alone rerun reports a red test not listed in the initial failed_tests.
+        self.env["ONLY_MODE"] = "outside-rerun"
+        wt_out = self.created("out", "lib/out/**")
+        self.commit(wt_out, {"lib/out/broken.txt": "bad\n"})
+        self.lane("check", "out", ok=False)
+        entry_out = self.entries("out")["lib-check"]
+        self.assertEqual(entry_out["class"], "unclassified")
+        self.assertIn("tests/other.test.ts", entry_out["outside_failed_tests"])
+        self.assertEqual(self.receipt("out")["status"], "red")
+
+        # Case B: initial lane report already notes a red test outside failed_tests.
+        self.env["ONLY_MODE"] = "outside-initial"
+        wt_init = self.created("initout", "lib/initout/**")
+        self.commit(wt_init, {"lib/initout/other.txt": "bad\n"})
+        self.lane("check", "initout", ok=False)
+        entry_init = self.entries("initout")["lib-check"]
+        self.assertEqual(entry_init["class"], "unclassified")
+        self.assertIn("tests/unscoped.test.ts", entry_init["outside_failed_tests"])
+        self.assertEqual(self.receipt("initout")["status"], "red")
+
+    def test_without_only_capability_keeps_argv_and_receipt_classification_unchanged(self):
+        # Default fixture verifier does not advertise "only": verify argv and classification keys match legacy schema.
+        worktree = self.created("core", "native/**")
+        self.commit(worktree, {"native/straylight-core/corpus.txt": "v2\n"})
+        self.lane("check", "core", ok=False)
+        selections = [selection for _, _, _, _, selection in self.runs()]
+        self.assertTrue(all("--only" not in selection for selection in selections))
+        classification = self.receipt("core")["classification"]
+        self.assertTrue(all("tests" not in run for run in classification["runs"]))
+        self.assertTrue(all("tests" not in entry for entry in classification["checks"]))
+
 
 
 class ToolchainAndEnvironmentReceiptTests(LaneCase):

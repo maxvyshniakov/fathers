@@ -9,6 +9,7 @@ heavier check starts and reruns on the base only; the heavier checks run when it
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 import fnmatch
 import os
@@ -300,12 +301,14 @@ class Rerun:
     """One verify run of red checks in a checkout, delegated to `verify.Run`."""
 
     def __init__(self, root: Any, ids: list[str], label: str, jobs: int, queued: bool = True,
-                 meta: dict[str, Any] | None = None, ticket: str | None = None, toolchain: Any = UNRESOLVED):
+                 meta: dict[str, Any] | None = None, ticket: str | None = None, toolchain: Any = UNRESOLVED,
+                 only: Iterable[str] = ()):
         self.root, self.ids, self.label, self.jobs = root, ids, label, jobs
+        self.only = tuple(only)
         lease = verify.Lease(wait=rerun_wait(), kind="rerun") if queued else None
         self._run = verify.Run(
             root,
-            verify.Selection.checks(ids),
+            verify.Selection.checks(ids, only=self.only),
             label,
             "rerun",
             jobs,
@@ -357,6 +360,36 @@ def report_row(report: dict[str, Any] | None, check_id: str) -> dict[str, Any]:
     return next((r for r in (report or {}).get("checks", []) if r.get("id") == check_id), {"status": "not_run"})
 
 
+def _dedup_strings(value: Any) -> list[str]:
+    if type(value) not in (list, tuple, set):
+        return []
+    found: list[str] = []
+    for item in value:
+        if isinstance(item, str) and item and item not in found:
+            found.append(item)
+    return found
+
+
+def _ordered_subset_tests(check_ids: list[str], failed_tests_by_check: dict[str, list[str]]) -> list[str]:
+    if not check_ids or not all(c in failed_tests_by_check for c in check_ids):
+        return []
+    merged: list[str] = []
+    for check_id in check_ids:
+        for test_name in failed_tests_by_check[check_id]:
+            if test_name not in merged:
+                merged.append(test_name)
+    return merged
+
+
+def _outside_failed_tests(row: dict[str, Any], expected_tests: set[str]) -> list[str]:
+    outside = _dedup_strings(row.get("outside_failed_tests") or row.get("unreached_tests"))
+    if expected_tests:
+        for name in _dedup_strings(row.get("failed_tests")):
+            if name not in expected_tests and name not in outside:
+                outside.append(name)
+    return outside
+
+
 def keep_run(run: Path | None, label: str) -> Path | None:
     """Copy a run directory out of a checkout about to be removed, into the lane logs."""
     if run is None or not run.is_dir():
@@ -392,33 +425,71 @@ def classify(record: Record, worktree: str, base: str, fresh: Rows,
                          - set(candidates)) + [r["suite"] for r in failed if not r.get("failed_checks")]
     cap = rerun_cap()
     rerun = candidates[:cap]
+    only_supported = plan.supports_only(worktree, lane_plan=lane_plan, report=report)
+    failed_tests_by_check: dict[str, list[str]] = {}
+    outside_by_check: dict[str, list[str]] = {}
+    if only_supported:
+        for check_id in rerun:
+            first_row = report_row(report, check_id)
+            tests = _dedup_strings(first_row.get("failed_tests"))
+            if tests:
+                failed_tests_by_check[check_id] = tests
+            outside = _dedup_strings(first_row.get("outside_failed_tests") or first_row.get("unreached_tests"))
+            if outside:
+                outside_by_check[check_id] = outside
     load: dict[str, Any] = {"first_run": host.load_averages()}
     entries: dict[str, dict[str, Any]] = {
         c: {"check": c, "class": "unclassified", "reason": f"only the first {cap} red checks rerun"}
         for c in candidates[cap:]}
+    for check_id, outside in outside_by_check.items():
+        entries[check_id] = {
+            "check": check_id,
+            "class": "unclassified",
+            "reason": f"red test(s) outside failed_tests: {', '.join(outside)}",
+            "outside_failed_tests": outside,
+            **({"tests": failed_tests_by_check[check_id]} if check_id in failed_tests_by_check else {}),
+        }
+    active_rerun = [c for c in rerun if c not in outside_by_check]
     present: list[str] = []
-    runs: list[dict[str, str]] = []  # each rerun's run id, which its slot lease names (fathers#92)
-    if rerun and first:
-        for check_id in rerun:
+    runs: list[dict[str, Any]] = []  # each rerun's run id, which its slot lease names (fathers#92)
+    if active_rerun and first:
+        for check_id in active_rerun:
             entries[check_id] = {"check": check_id, "alone": {
                 "status": "not rerun", "reason": "a first check (#639): static, so load does not make it red"}}
-    still_red: list[str] = list(rerun) if first else []
-    if rerun and not first:
-        alone_jobs = rerun_jobs(jobs, minimum=rerun_min_slots(rerun, lane_plan, fresh))
-        alone = Rerun(worktree, rerun, f"lane-{record['id']}-alone", alone_jobs, meta=lane_meta(record),
-                      ticket=lane_ticket(record), toolchain=toolchain)
-        runs.append({"run": alone.run_id, "rerun": "alone"})
+    still_red: list[str] = list(active_rerun) if first else []
+    alone_tests = _ordered_subset_tests(active_rerun, failed_tests_by_check) if (only_supported and not first) else []
+    if active_rerun and not first:
+        alone_jobs = rerun_jobs(jobs, minimum=rerun_min_slots(active_rerun, lane_plan, fresh))
+        alone = (Rerun(worktree, active_rerun, f"lane-{record['id']}-alone", alone_jobs, meta=lane_meta(record),
+                       ticket=lane_ticket(record), toolchain=toolchain, only=alone_tests)
+                 if alone_tests else
+                 Rerun(worktree, active_rerun, f"lane-{record['id']}-alone", alone_jobs, meta=lane_meta(record),
+                       ticket=lane_ticket(record), toolchain=toolchain))
+        runs.append({"run": alone.run_id, "rerun": "alone", **({"tests": alone_tests} if alone_tests else {})})
         alone_report, log, _, problem = run_rerun(alone)
         load["alone"] = host.load_averages()
-        for check_id in rerun:
+        for check_id in active_rerun:
             row = report_row(alone_report, check_id)
+            check_tests = failed_tests_by_check.get(check_id) if alone_tests else None
+            outside = _outside_failed_tests(row, set(check_tests)) if check_tests else []
             if problem:
-                entries[check_id] = {"check": check_id, "class": "unclassified", "reason": problem}
+                entries[check_id] = {"check": check_id, "class": "unclassified", "reason": problem,
+                                     **({"tests": check_tests} if check_tests else {})}
+            elif outside:
+                entries[check_id] = {
+                    "check": check_id,
+                    "class": "unclassified",
+                    "reason": f"red test(s) outside failed_tests: {', '.join(outside)}",
+                    "outside_failed_tests": outside,
+                    "tests": check_tests,
+                    "alone": {"status": row["status"], "log": str(log)},
+                }
             elif row["status"] == "passed":
                 first_row = report_row(report, check_id)
                 entries[check_id] = {"check": check_id, "class": "flaky-under-load", "load": load,
                                      "alone": {"status": "passed", "log": str(log)},
-                                     **({"junit": first_row["junit"]} if first_row.get("junit") else {})}
+                                     **({"junit": first_row["junit"]} if first_row.get("junit") else {}),
+                                     **({"tests": check_tests} if check_tests else {})}
             elif is_dependency_blocked(row):
                 blockers = list(row.get("blocked_by") or [])
                 entries[check_id] = {
@@ -429,12 +500,15 @@ def classify(record: Record, worktree: str, base: str, fresh: Rows,
                               **({"blocked_by": blockers} if blockers else {})}}
             elif row["status"] == "failed":
                 still_red.append(check_id)
-                entries[check_id] = {"check": check_id, "alone": {"status": row["status"], "log": str(log)}}
+                entries[check_id] = {"check": check_id, "alone": {"status": row["status"], "log": str(log)},
+                                     **({"tests": check_tests} if check_tests else {})}
             else:
                 entries[check_id] = {"check": check_id, "class": "unclassified",
-                                     "reason": f"the lane's rerun did not run it ({not_run(row)}): {log}"}
+                                     "reason": f"the lane's rerun did not run it ({not_run(row)}): {log}",
+                                     **({"tests": check_tests} if check_tests else {})}
     base_side: Outcome | None = None
     kept: Path | None = None
+    base_tests: list[str] = []
     if still_red:
         # Only after the lane's rerun is red, never beside it (review of lanefather#4): a check with a fixed port,
         # /tmp path or launchd label fails when two copies run at once, and a base red from that collision would
@@ -446,10 +520,14 @@ def classify(record: Record, worktree: str, base: str, fresh: Rows,
                 base_label = f"lane-{record['id']}-base"
                 # The cheap first checks rerun as verify queues them; others under a lease like the lane's rerun.
                 base_jobs = 1 if first else rerun_jobs(jobs, minimum=rerun_min_slots(present, lane_plan, fresh))
-                on_base = Rerun(path, present, base_label, base_jobs,
-                                queued=not first, meta={**lane_meta(record), "on": "base"},
-                                ticket=lane_ticket(record))
-                runs.append({"run": on_base.run_id, "rerun": "base"})
+                base_tests = _ordered_subset_tests(present, failed_tests_by_check) if only_supported else []
+                on_base = (Rerun(path, present, base_label, base_jobs, queued=not first,
+                                 meta={**lane_meta(record), "on": "base"}, ticket=lane_ticket(record),
+                                 only=base_tests)
+                           if base_tests else
+                           Rerun(path, present, base_label, base_jobs, queued=not first,
+                                 meta={**lane_meta(record), "on": "base"}, ticket=lane_ticket(record)))
+                runs.append({"run": on_base.run_id, "rerun": "base", **({"tests": base_tests} if base_tests else {})})
                 base_side = run_rerun(on_base)
                 kept = keep_run(base_side[2], base_label)
         for check_id in still_red:
@@ -463,8 +541,19 @@ def classify(record: Record, worktree: str, base: str, fresh: Rows,
             evidence = {"sha": base, "status": row["status"],
                         "log": str(own) if own and own.is_file() else str(base_log),
                         **({"blocked_by": row["blocked_by"]} if row.get("blocked_by") else {})}
+            check_tests = failed_tests_by_check.get(check_id) if base_tests else None
+            outside = _outside_failed_tests(row, set(check_tests)) if check_tests else []
+            if check_tests:
+                entries[check_id]["tests"] = check_tests
             if problem:
                 entries[check_id].update({"class": "unclassified", "reason": problem, "base": evidence})
+            elif outside:
+                entries[check_id].update({
+                    "class": "unclassified",
+                    "reason": f"red test(s) outside failed_tests: {', '.join(outside)}",
+                    "outside_failed_tests": outside,
+                    "base": evidence,
+                })
             elif row["status"] == "passed":
                 entries[check_id].update({"class": "regression", "base": evidence})
             elif row["status"] == "failed":

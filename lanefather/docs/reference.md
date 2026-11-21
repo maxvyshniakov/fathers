@@ -272,19 +272,22 @@ land's comment as the lane's evidence. The capability is `tickets.lifecycle`.
 ### The check contract
 
 ```
-<verify> --changed --base B --plan --json   {full, paths, unowned, checks: [{id, suite, paths, producer}], suites, reasons}
-<verify> --checks A,B | --suites S --keep-going --jobs N
+<verify> --changed --base B --plan --json   {full, paths, unowned, checks: [{id, suite, paths, producer}], suites, reasons, capabilities?}
+<verify> --checks A,B [--only T1,T2] | --suites S --keep-going --jobs N
                                              prints `Verification report: <report.json>`
 <verify> --keep-going --jobs N               the full gate; prints `Verified tree <tree> stamped`
 ```
 
 The plan module (`plan_module`) answers `SUITES`, `checks(...)` and `smoke(root)`; `PERF = "<suite>"` names the perf
-suite. A project without one gets whole suites.
+suite, and `CAPABILITIES` may advertise `"only"`. A project without one gets whole suites.
 
-The report is `{checks: [{id, status, log, blocked_by}], stopped, environment}`. Optional row fields feed the run
+The report is `{checks: [{id, status, log, blocked_by, failed_tests?, outside_failed_tests?}], stopped, environment, capabilities?}`. Optional row fields feed the run
 history (fathers#92): `seconds` (the check's duration; without it `stats` has no p50/p90 for the check), `started`
 and `finished` (ISO times), `junit` (a JUnit XML file whose failed test cases a flake names) and `lease` (the slot
-lease id, also allowed at the report's top level). Lanefather hands each run its run id and tree in the slot meta
+lease id, also allowed at the report's top level). When a verifier advertises `"only"` (`capabilities`) and reports
+`failed_tests: [...]` on a failing check (fathers#147), red-check reruns pass `--only <test,...>` to both the lane
+and base reruns, record `"tests"` in `classification.checks` and `classification.runs`, and keep a check
+`"unclassified"` if a red test is outside `failed_tests`; otherwise argv and receipts are unchanged. Lanefather hands each run its run id and tree in the slot meta
 (`run`, `tree`) with `plan` and `checks` (fathers#107).
 
 When Slotfather advertises `slot-range` via `slotfather capabilities --json` (fathers#43), lane checks pass the

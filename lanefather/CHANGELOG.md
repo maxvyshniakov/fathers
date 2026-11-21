@@ -8,6 +8,12 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Subset `--only` reruns for failing test files (fathers#147): when a verifier advertises `"only"` capability and
+  reports `failed_tests: [...]`, `Rerun` passes `--only <test,...>` to both lane and base reruns, records the subset
+  tests in the receipt (`classification.checks[].tests`, `classification.runs[].tests`), and leaves a check
+  `unclassified` if any red test falls outside `failed_tests`; when not advertised, argv and receipts stay
+  byte-identical.
+
 - Dynamic lane check worker count via Slotfather range leases (fathers#43): detects `slot-range` in `slotfather
   capabilities --json`, passes `--jobs` max with `<slot_env>_MIN_JOBS` (and `slotfather run -n MIN-MAX` in
   `slots.wrap`), and records the granted worker count from the verify report in the lane receipt and run history
