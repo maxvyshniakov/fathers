@@ -242,7 +242,15 @@ class FinishedLaneTests(LaneCase):
         child = subprocess.Popen([sys.executable, "-c", "import time; print('ready', flush=True); time.sleep(300)",
                                   "scratch-holder"], cwd=scratch, stdout=subprocess.PIPE, text=True,
                                  start_new_session=True)
-        self.addCleanup(lambda: (child.kill(), child.wait()))
+
+        def cleanup_child() -> None:
+            if child.poll() is None:
+                child.kill()
+            child.wait()
+            if child.stdout is not None:
+                child.stdout.close()
+
+        self.addCleanup(cleanup_child)
         assert child.stdout is not None
         self.assertEqual(child.stdout.readline().strip(), "ready")
         output = self.lane("done", "a", ok=False)

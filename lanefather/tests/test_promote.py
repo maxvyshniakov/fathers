@@ -554,7 +554,15 @@ class SyncTests(LaneCase):
         self.landing.write_text(f"token theirs\nholder tools/lane land other (pid 4242)\nacquired {int(time.time())}\n")
         process = subprocess.Popen([sys.executable, "-m", "lanefather", "sync", "--drop-local", "--wait", "60"], cwd=self.repo,
                                    env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        self.addCleanup(lambda: process.poll() is None and (process.kill(), process.wait()))
+
+        def cleanup_process() -> None:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            if process.stdout is not None:
+                process.stdout.close()
+
+        self.addCleanup(cleanup_process)
         guard = self.repo / ".git" / "landing.lock.guard"
         deadline = time.monotonic() + 60
         while not guard.exists():
