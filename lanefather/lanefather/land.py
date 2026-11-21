@@ -19,7 +19,7 @@ import subprocess
 import sys
 from typing import Any
 
-from . import checks, config, done, journal, plan, postmerge, review, state, tickets, worktrees
+from . import checks, config, done, journal, lifecycle, plan, postmerge, review, state, tickets, worktrees
 from . import results as result_store
 from .errors import LaneError
 from .gitops import current_branch, dirty, git, git_ok, main_checkout
@@ -183,13 +183,16 @@ def recheck(args: Any) -> int:
                                 "leases": checks.leases_of(results), "host": host(), "finished": journal.now()})
         result_store.record(tree, checks.recordable(check_results), source="post-merge", toolchain=toolchain,
                             lane=args.id, sha=tip, receipt=str(path), phase="post-merge")
-        with store.locked("state"):
-            record = store.load(args.id)
-            if status == "green":
-                record["post_merge"] = {"status": "green", "receipt": str(path),
-                                        "cleared_by": {"kind": "recheck", "receipt": str(path), "sha": tip,
-                                                       "red_receipt": red_path}}
-                store.save(record)
+        if status == "green":
+            def _clear_post_merge(current: state.Record) -> None:
+                current["post_merge"] = {"status": "green", "receipt": str(path),
+                                         "cleared_by": {"kind": "recheck", "receipt": str(path), "sha": tip,
+                                                        "red_receipt": red_path}}
+
+            record = store.update(args.id, _clear_post_merge)
+        else:
+            with store.locked("state"):
+                record = store.load(args.id)
         journal.ledger(f"recheck {args.id} {status} sha={tip} merge={merge} receipt={path}"
                        + (f" replaces red {red_path}" if status == "green" else ""),
                        kind="lane.rechecked", level="info" if status == "green" else "error", lane=record,
@@ -220,7 +223,7 @@ def recheck(args: Any) -> int:
     return 0
 
 
-def check_other_reviews(record: state.Record, force_reason: str | None) -> None:
+def check_other_reviews(record: state.Record, force_reason: str | None) -> dict[str, Any] | None:
     """Under the landing lock, before moving the integration branch (fathers#177)."""
     store = state.Store(config.current())
     held, reported = review.landing_findings(record, store)
@@ -228,7 +231,7 @@ def check_other_reviews(record: state.Record, force_reason: str | None) -> None:
         print(f"lane: reported ({finding['severity']}, does not block): {review.finding_line(lane, finding)}",
               file=sys.stderr)
     if not held:
-        return
+        return None
     refusals = [review.finding_line(lane, finding) for lane, finding in held]
     if not force_reason:
         lines = [f"- {text}" for text in refusals]
@@ -237,32 +240,37 @@ def check_other_reviews(record: state.Record, force_reason: str | None) -> None:
         raise LaneError("\n".join(["land refused: other finished reviews have unmarked P1/P2 findings", *lines,
                                   "For findings that need a fix:", *(f"  {line}" for line in fixes),
                                   "--force-reason overrides and is logged"]))
-    record.setdefault("overrides", []).append({"at": journal.now(), "reason": force_reason, "refusals": refusals})
+    override = {"at": journal.now(), "reason": force_reason, "refusals": refusals}
+    record.setdefault("overrides", []).append(override)
     journal.ledger(f"override land {record['id']}: {force_reason} ({'; '.join(refusals)})", kind="override",
                    level="warn", lane=record,
                    details={"command": "land", "reason": force_reason, "refusals": refusals})
+    return override
 
 
 def land(args: Any) -> int:
-    prog = config.prog()
-    with state.locked("land", f"lane: waiting for another land's merge (lock {state.state_dir() / '.land.lock'})"):
-        record = state.load(args.id)
-        if record["status"] != "active":
+    store = state.Store(config.current())
+    prog = store.project.command
+    new_overrides: list[dict[str, Any]] = []
+    with store.locked("land", f"lane: waiting for another land's merge (lock {store.directory / '.land.lock'})"):
+        record = store.load(args.id)
+        if not lifecycle.active(record):
             raise LaneError(f"land refused: lane {args.id} is {record['status']}" +
-                            ("; it has no worktree yet" if record["status"] == "planned" else ""))
+                            ("; it has no worktree yet" if lifecycle.planned(record) else ""))
         for name in record["after"]:
-            if state.load(name)["status"] not in state.LANDED:
+            if not lifecycle.landed(store.load(name)):
                 raise LaneError(f"land refused: lane {args.id} is declared to land after {name}, which has not landed")
         main = main_checkout(record["common_dir"])
         tip = git(main, "rev-parse", "--verify", record["branch"] + "^{commit}")
         tree = git(main, "rev-parse", tip + "^{tree}")
-        receipt = state.read_json(state.receipt_path(args.id))
+        receipt = state.read_json(store.receipt_path(args.id))
         problem = merge_problem(args, tip, tree, receipt)
         if problem and not args.force_reason:
             raise LaneError("land refused: " + problem)
         if problem:
-            record.setdefault("overrides", []).append({"at": journal.now(), "reason": args.force_reason,
-                                                       "refusals": [problem]})
+            override = {"at": journal.now(), "reason": args.force_reason, "refusals": [problem]}
+            record.setdefault("overrides", []).append(override)
+            new_overrides.append(override)
             journal.ledger(f"override land {args.id}: {args.force_reason} ({problem})", kind="override",
                            level="warn", lane=record,
                            details={"command": "land", "reason": args.force_reason, "refusals": [problem]})
@@ -280,8 +288,10 @@ def land(args: Any) -> int:
                     raise LaneError(f"land refused: {integration} is on {onto}, which promote would not hold for "
                                     f"this lane's review ({words}); run {prog} review {args.id} and mark its "
                                     "findings first, or land into the integration branch")
-                record.setdefault("overrides", []).append({"at": journal.now(), "reason": args.force_reason,
-                                                           "refusals": [f"unreviewed land onto {onto}"]})
+                override = {"at": journal.now(), "reason": args.force_reason,
+                            "refusals": [f"unreviewed land onto {onto}"]}
+                record.setdefault("overrides", []).append(override)
+                new_overrides.append(override)
                 journal.ledger(f"override land {args.id} onto {onto} unreviewed: {args.force_reason} ({words})",
                                kind="override", level="warn", lane=record,
                                details={"command": "land", "reason": args.force_reason,
@@ -298,7 +308,9 @@ def land(args: Any) -> int:
         # The landing lock lets the merge move an integration worktree that is on dev or main (B2).
         conflicts = ""
         with landing(record["common_dir"], f"{prog} land {args.id} (pid {os.getpid()})", args.wait) as env:
-            check_other_reviews(record, args.force_reason)
+            review_override = check_other_reviews(record, args.force_reason)
+            if review_override is not None:
+                new_overrides.append(review_override)
             merged = subprocess.run(["git", *merge_config, "merge", "--no-ff", "-m", message, record["branch"]],
                                     cwd=integration, capture_output=True, text=True, env=env)
             if merged.returncode:
@@ -313,12 +325,16 @@ def land(args: Any) -> int:
         merge = git(integration, "rev-parse", "HEAD")
         # `lanefather keep` before the land marks the record; land carries it where older installs read it.
         keep = bool(args.keep or record.get("keep"))
-        record.update(status="landed", landed={"merge": merge, "previous": previous, "tip": tip, "tree": tree,
-                                               "integration": integration, "at": journal.now(), "keep": keep})
-        state.save(record)
-        journal.ledger(f"land {args.id} merge={merge} previous={previous}", kind="lane.landed", lane=record,
-                       details={"merge": merge, "previous": previous, "tip": tip, "onto": onto,
-                                "integration": integration, "keep": keep})
+        record = lifecycle.transition(
+            store, args.id, "land",
+            landed={"merge": merge, "previous": previous, "tip": tip, "tree": tree,
+                    "integration": integration, "at": journal.now(), "keep": keep},
+            overrides=new_overrides or None,
+            ledger_message=f"land {args.id} merge={merge} previous={previous}",
+            ledger_details={"merge": merge, "previous": previous, "tip": tip, "onto": onto,
+                            "integration": integration, "keep": keep},
+        )
+        keep = bool(record["landed"]["keep"])
     # The land lock is free from here on (#573): the next land merges while this merge's smoke runs on its own
     # checkout of the merge, since the integration worktree moves on.
     with worktrees.smoke_checkout(record["common_dir"], merge) as checkout:
@@ -330,10 +346,8 @@ def land(args: Any) -> int:
         if exact_verified is not None and exact_narrowing is not None:
             merged_paths = [p for p in git(checkout, "diff", "--name-only", previous, merge).splitlines() if p]
             # The independent review (#570) runs beside the smoke and never holds the land; promote waits for it.
-            with state.locked("state"):
-                record = state.load(args.id)
-                record["landed"].update(docs_only=review.documentation_only(merged_paths))
-                state.save(record)
+            docs_only = review.documentation_only(merged_paths)
+            record = store.update(args.id, lambda rec: rec["landed"].update(docs_only=docs_only))
             print(f"lane: {review.start_lane_review(record)}", flush=True)
             print(f"lane: post-merge smoke skipped: exact merge tree {merge_tree[:10]} already verified by lane "
                   f"receipt ({len(exact_verified)} checks); no plan bootstrap needed", flush=True)
@@ -352,10 +366,8 @@ def land(args: Any) -> int:
                   "queue: slotfather status", flush=True)
             merged_plan = plan.plan_for(checkout, previous)
             # The independent review (#570) runs beside the smoke and never holds the land; promote waits for it.
-            with state.locked("state"):
-                record = state.load(args.id)
-                record["landed"].update(docs_only=review.documentation_only(merged_plan["paths"]))
-                state.save(record)
+            plan_docs_only = review.documentation_only(merged_plan["paths"])
+            record = store.update(args.id, lambda rec: rec["landed"].update(docs_only=plan_docs_only))
             print(f"lane: {review.start_lane_review(record)}", flush=True)
             kind, rows = plan.post_merge_selection(checkout, merged_plan)
             # #640: what the lane's green receipt already verified does not run again.
@@ -389,10 +401,10 @@ def land(args: Any) -> int:
                    origins={**checks.origins(lane_verified, str(state.receipt_path(args.id))),
                             **checks.origins(tree_verified, "")}, phase="post-merge")
     # Reloaded: a review hand-over may have changed the record during the smoke.
-    with state.locked("state"):
-        record = state.load(args.id)
-        record["post_merge"] = {"status": status, "receipt": str(post)}
-        state.save(record)
+    def _set_post_merge(rec: state.Record) -> None:
+        rec["post_merge"] = {"status": status, "receipt": str(post)}
+
+    record = store.update(args.id, _set_post_merge)
     verified = len(lane_verified)
     journal.ledger(f"post-merge {args.id} {status} {kind} jobs={jobs} suites={','.join(suites) or '-'} "
                    + (f"lane_verified={verified} " if narrowing.get("narrowed") else "")

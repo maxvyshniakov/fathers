@@ -16,7 +16,7 @@ with this tool in both directions. A record of a newer schema is refused rather 
 """
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 import contextlib
 import errno
 import fcntl
@@ -25,6 +25,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import threading
 from typing import Any
 
 from . import config
@@ -37,6 +38,7 @@ SCHEMA = 1
 OCCUPYING = ("planned", "active")
 LANDED = ("landed", "released", "done")
 ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_LOCKED = threading.local()
 
 
 class Store:
@@ -69,6 +71,15 @@ class Store:
         self.directory.mkdir(parents=True, exist_ok=True)
         write_json(self.record_path(record["id"]), record)
 
+    def update(self, lane_id: str, change: Callable[[Record], Any]) -> Record:
+        """Reload the lane record under the `state` lock, apply `change(record)`, save and return it.
+        When `change` returns False, the record is not rewritten."""
+        with self.locked("state"):
+            record = self.load(lane_id)
+            if change(record) is not False:
+                self.save(record)
+            return record
+
     def lanes(self, *, strict: bool = False, damaged: list[Path] | None = None) -> list[Record]:
         """The lane records. A record a write cut short raises, so nothing that admits, claims or collects acts on
         a partial set; a read-only listing passes `damaged` to get the healthy lanes and the damaged paths."""
@@ -92,14 +103,26 @@ class Store:
     @contextlib.contextmanager
     def locked(self, name: str, waiting: str | None = None) -> Generator[None]:
         self.directory.mkdir(parents=True, exist_ok=True)
-        with open(self.directory / f".{name}.lock", "a") as handle:
+        lock_path = (self.directory / f".{name}.lock").resolve()
+        held: set[Path] | None = getattr(_LOCKED, "paths", None)
+        if held is None:
+            held = set()
+            _LOCKED.paths = held
+        if lock_path in held:
+            yield
+            return
+        with open(lock_path, "a") as handle:
             try:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 if waiting:
                     print(waiting, flush=True)
                 fcntl.flock(handle, fcntl.LOCK_EX)
-            yield
+            held.add(lock_path)
+            try:
+                yield
+            finally:
+                held.discard(lock_path)
 
 
 def state_dir() -> Path:

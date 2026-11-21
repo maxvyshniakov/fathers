@@ -11,7 +11,7 @@ import re
 import tomllib
 from typing import Any
 
-from . import claims, config, state
+from . import claims, config, lifecycle, state
 from .errors import LaneError
 from .state import Record
 
@@ -93,7 +93,7 @@ def queue_states(entries: list[dict[str, Any]], records: list[Record],
             reason = f"registered ({by_id[entry['id']]['status']})"
         else:
             waiting = [f"{name} ({by_id[name]['status'] if name in by_id else 'not started'})"
-                       for name in entry.get("after", []) if (by_id.get(name) or {}).get("status") not in state.LANDED]
+                       for name in entry.get("after", []) if not lifecycle.landed(by_id.get(name))]
             if waiting:
                 reason = "waits for " + ", ".join(waiting)
             for other in [] if waiting else active:

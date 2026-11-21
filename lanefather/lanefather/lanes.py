@@ -22,6 +22,7 @@ from . import (
     events,
     host,
     journal,
+    lifecycle,
     promote,
     queue,
     review,
@@ -101,7 +102,7 @@ def fix_parent(record: Record) -> str | None:
     if parent_id is None:
         return None
     parent = state.read_json(state.record_path(parent_id))
-    if (parent and parent.get("status") in ("landed", "released") and parent.get("worktree")
+    if (parent and lifecycle.awaiting_done(parent) and parent.get("worktree")
             and parent.get("worktree") == record.get("worktree")):
         return parent_id
     return None
@@ -112,11 +113,11 @@ def admit(record: Record, force_reason: str | None, repaired: str | None) -> tup
     prog = config.prog()
     lane_id, lane_claims, after = record["id"], record["claims"], record["after"]
     existing = state.read_json(state.record_path(lane_id))
-    if existing and existing["status"] != "done":
+    if existing and not lifecycle.finished(existing):
         raise LaneError(f"lane {lane_id} exists ({existing['status']}); finish it with {prog} done")
     others = [r for r in state.Store(config.current()).lanes(strict=True) if r["id"] != lane_id]
     for name in after:
-        if name not in {r["id"] for r in others if r["status"] != "done"}:
+        if name not in {r["id"] for r in others if not lifecycle.finished(r)}:
             raise LaneError(f"--after {name}: no lane that is not done by that name")
     for fix_id in state.fix_parents(record):
         prefix = f"--fix-of {fix_id}" if state.batch_fix(record) else "hand-over refused"
@@ -176,20 +177,25 @@ def register_admitted(record: Record, decision: admission.Decision, refusals: li
         journal.ledger(f"override start {lane_id}: {force_reason} (refusals: {'; '.join(refusals)})",
                        kind="override", level="warn", lane=record,
                        details={"command": "start", "reason": force_reason, "refusals": refusals})
+    store = state.Store(config.current())
+    worktree: str | None = record.get("worktree")
+    status = "planned"
     if create:
         main = main_checkout(record["common_dir"])
         path = os.path.join(main, ".claude", "worktrees", f"lane-{lane_id}")
         git(main, "worktree", "add", "-q", "-b", record["branch"], path, record["base_sha"])
-        record.update(worktree=os.path.realpath(path), status="active")
-    state.record_agent(record, "start", events.agent_context(agent), now=journal.now())
-    state.save(record)
-    journal.ledger(f"start {lane_id} ticket={record['ticket']} branch={record['branch']} "
-                   f"base={record['base']}@{record['base_sha'][:10]} claims={' '.join(lane_claims)} "
-                   f"after={','.join(after) or '-'} cap={cap} ({source}) {host.host_fields(info)}",
-                   kind="lane.started", lane=record,
-                   details={"status": record["status"], "branch": record["branch"], "base": record["base"],
-                            "base_sha": record["base_sha"], "claims": lane_claims, "after": after,
-                            "worktree": record["worktree"], "cap": cap, "cap_source": source})
+        worktree = os.path.realpath(path)
+        status = "active"
+    lifecycle.register(
+        store, record, status=status, worktree=worktree,
+        agent=events.agent_context(agent), now=journal.now(),
+        ledger_message=(f"start {lane_id} ticket={record['ticket']} branch={record['branch']} "
+                        f"base={record['base']}@{record['base_sha'][:10]} claims={' '.join(lane_claims)} "
+                        f"after={','.join(after) or '-'} cap={cap} ({source}) {host.host_fields(info)}"),
+        ledger_details={"status": status, "branch": record["branch"], "base": record["base"],
+                        "base_sha": record["base_sha"], "claims": lane_claims, "after": after,
+                        "worktree": worktree, "cap": cap, "cap_source": source},
+    )
 
 
 def start(args: Any) -> int:
@@ -226,31 +232,39 @@ def next_lane(args: Any) -> int:
     return 0
 
 
-def adopt_worktree(record: Record, worktree: str, branch: str, *, agent: str | None = None) -> None:
+def adopt_worktree(record: Record, worktree: str, branch: str, *, agent: str | None = None,
+                   store: state.Store | None = None) -> Record:
+    store = store or state.Store(config.current())
     path = os.path.realpath(worktree)
     if not os.path.isdir(path) or common_dir(path) != record["common_dir"]:
         raise LaneError(f"adopt refused: {path} is not a worktree of {main_checkout(record['common_dir'])}")
     actual = current_branch(path)
     if actual != branch:
         raise LaneError(f"adopt refused: {path} is on {actual or 'a detached HEAD'}, not {branch}")
-    for other in state.lanes():
-        if other["id"] != record["id"] and other["status"] != "done" and other.get("worktree") == path:
-            raise LaneError(f"adopt refused: lane {other['id']} owns {path}")
-    now = journal.now()
-    record.update(worktree=path, branch=branch, status="active" if record["status"] == "planned" else record["status"],
-                  adopted=now)
-    state.record_agent(record, "adopt", events.agent_context(agent), now=now)
-    state.save(record)
-    journal.ledger(f"adopt {record['id']} worktree={path} branch={branch}", kind="lane.adopted", lane=record,
-                   details={"worktree": path, "branch": branch, "status": record["status"]})
+    with store.locked("state"):
+        for other in store.lanes():
+            if other["id"] != record["id"] and not lifecycle.finished(other) and other.get("worktree") == path:
+                raise LaneError(f"adopt refused: lane {other['id']} owns {path}")
+        now = journal.now()
+        updated = lifecycle.transition(
+            store, record["id"], "adopt",
+            worktree=path, branch=branch, adopted=now,
+            agent=events.agent_context(agent), agent_now=now,
+            ledger_message=f"adopt {record['id']} worktree={path} branch={branch}",
+            ledger_details={"worktree": path, "branch": branch},
+        )
+    record.clear()
+    record.update(updated)
+    return updated
 
 
 def adopt(args: Any) -> int:
-    with state.locked("state"):
-        record = state.load(args.id)
-        if record["status"] not in ("planned", "active"):
+    store = state.Store(config.current())
+    with store.locked("state"):
+        record = store.load(args.id)
+        if not lifecycle.occupying(record):
             raise LaneError(f"adopt refused: lane {args.id} is {record['status']}")
-        adopt_worktree(record, args.worktree, args.branch, agent=getattr(args, "agent", None))
+        adopt_worktree(record, args.worktree, args.branch, agent=getattr(args, "agent", None), store=store)
     print(f"Lane {args.id} adopted {record['worktree']} on {args.branch}")
     print("\n".join(next_lines(record)))
     return 0
@@ -261,14 +275,14 @@ def receipt_state(record: Record) -> str:
     if not receipt:
         return "no receipt"
     text = receipt.get("status", "?")
-    if record["status"] == "active":
+    if lifecycle.active(record):
         tip = git(main_checkout(record["common_dir"]), "rev-parse", "--verify", "--quiet",
                   record["branch"] + "^{tree}", check=False)
         if tip and tip != receipt.get("tree"):
             text += " (stale)"
     if record.get("post_merge"):
         text += f", post-merge {record['post_merge']['status']}"
-    if record.get("landed") and record["status"] != "done":
+    if record.get("landed") and not lifecycle.finished(record):
         text += f", {review.review_state(record['id'])[1]}"
     return text
 
@@ -276,7 +290,7 @@ def receipt_state(record: Record) -> str:
 def list_lanes(args: Any) -> int:
     store = state.Store(config.current())
     records = store.lanes(strict=True)
-    shown = [r for r in records if args.all or r["status"] != "done"]
+    shown = [r for r in records if args.all or not lifecycle.finished(r)]
     decision = admission.evaluate(config.current(), records, admission.running_common(config.current()))
     cap, source, machine = decision.cap, decision.source, decision.machine
     ceiling = decision.ceiling

@@ -25,7 +25,7 @@ import re
 import subprocess
 from typing import Any, cast
 
-from . import admission, events, host, journal, registry, review, state
+from . import admission, events, host, journal, lifecycle, registry, review, state
 from .errors import LaneError
 from .gitops import main_checkout
 
@@ -127,7 +127,7 @@ def project_entry(found: registry.Project) -> dict[str, Any]:
     except LaneError as error:
         cap, source = host.lane_cap(project)
         source += f" (admission unavailable: {error})"
-    shown = [r for r in records if r.get("status") != "done"]
+    shown = [r for r in records if not lifecycle.finished(r)]
     roots = {main_checkout(str(r["common_dir"])) for r in shown if r.get("common_dir")}
     trees: dict[str, str] = {}
     for root in sorted(roots):
@@ -136,8 +136,8 @@ def project_entry(found: registry.Project) -> dict[str, Any]:
     logs = latest_logs(directory, {str(r["id"]) for r in shown})
     return {"project": found.name, "state_dir": str(directory), "config": configured,
             "repository": repo, "cap": cap, "cap_source": source,
-            "active": sum(1 for r in records if r.get("status") == "active"),
-            "planned": sum(1 for r in records if r.get("status") == "planned"),
+            "active": sum(1 for r in records if lifecycle.active(r)),
+            "planned": sum(1 for r in records if lifecycle.planned(r)),
             "gate": newest_gate(directory),
             "lanes": [lane_entry(r, directory, repo, trees, logs.get(str(r["id"]), {})) for r in shown],
             "damaged": [{"path": str(path), "error": state.cut_short(path)} for path in damaged]}

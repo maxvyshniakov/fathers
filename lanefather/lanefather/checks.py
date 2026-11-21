@@ -809,24 +809,22 @@ def implementer(args: Any) -> str | None:
 def _record_check_agent(lane_id: str, agent_info: dict[str, Any] | None) -> None:
     if not agent_info:
         return
-    with state.locked("state"):
-        current = state.load(lane_id)
-        if state.record_agent(current, "check", agent_info, now=journal.now()):
-            state.save(current)
+    store = state.Store(config.current())
+    store.update(lane_id, lambda current: state.record_agent(current, "check", agent_info, now=journal.now()))
 
 
 def check(args: Any) -> int:
-    from . import lanes  # adopt_worktree; lanes imports this module for its commands
+    from . import lanes, lifecycle  # adopt_worktree; lanes imports this module for its commands
     prog = config.prog()
     agent_info = events.agent_context(getattr(args, "agent", None))
     record = state.load(args.id)
-    if record["status"] == "planned":
+    if lifecycle.planned(record):
         cwd = git(os.getcwd(), "rev-parse", "--show-toplevel", check=False)
         if not cwd or current_branch(cwd) != record["branch"]:
             raise LaneError(f"lane {args.id} has no worktree yet: run it from a worktree on {record['branch']}, "
                             f"or register one with {prog} adopt")
         lanes.adopt_worktree(record, cwd, record["branch"], agent=getattr(args, "agent", None))
-    if record["status"] != "active":
+    if not lifecycle.active(record):
         raise LaneError(f"lane {args.id} is {record['status']}; check runs before landing")
     worktree = record["worktree"]
     if current_branch(worktree) != record["branch"]:

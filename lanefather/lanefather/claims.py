@@ -141,27 +141,37 @@ def unclaimed(path: str) -> bool:
     return path.startswith(config.current().unclaimed)
 
 
-def widen_claims(lane_id: str, paths: list[str]) -> tuple[list[str], list[dict[str, Any]]]:
+def widen_claims(lane_id: str, paths: list[str], *,
+                 store: state.Store | None = None) -> tuple[list[str], list[dict[str, Any]]]:
     """Add the changed paths outside the lane's claims to them (#574): the paths added, and each overlap of one with
     the claims of another planned or active lane. Lanes declared in sequence (--after either way) may overlap."""
-    with state.locked("state"):
-        record = state.load(lane_id)
+    store = store or state.Store(config.current())
+    added: list[str] = []
+    overlaps: list[dict[str, Any]] = []
+
+    def _widen(record: Record) -> bool:
+        nonlocal added, overlaps
         added = [p for p in dict.fromkeys(paths) if not any(matches(c, p) for c in record["claims"])]
         if not added:
-            return [], []
-        others = [r for r in state.occupying(state.of_project(state.lanes(), record.get("common_dir")))
+            return False
+        others = [r for r in state.occupying(state.of_project(store.lanes(), record.get("common_dir")))
                   if r["id"] != lane_id and r["id"] not in record["after"]
                   and lane_id not in r.get("after", [])]
         prefetch_kinds([*record["claims"], *(claim for other in others for claim in other["claims"])])
         overlaps = [{"path": path, "lane": other["id"], "ticket": other["ticket"], "claim": claim}
                     for path in added for other in others for claim in other["claims"] if matches(claim, path)]
         record["claims"] = [*record["claims"], *added]
-        state.save(record)
-        journal.ledger(f"claims {lane_id} + {' '.join(added)}"
-                       + "".join(f" (overlaps {o['lane']}: {o['claim']})" for o in overlaps),
-                       kind="claims.added", lane=record,
-                       details={"added": added, "overlaps": [{"lane": o["lane"], "claim": o["claim"]}
-                                                             for o in overlaps]})
+        return True
+
+    with store.locked("state"):
+        record = store.update(lane_id, _widen)
+        if added:
+            journal.ledger(f"claims {lane_id} + {' '.join(added)}"
+                           + "".join(f" (overlaps {o['lane']}: {o['claim']})" for o in overlaps),
+                           kind="claims.added", lane=record,
+                           details={"added": added, "overlaps": [{"lane": o["lane"], "claim": o["claim"]}
+                                                                 for o in overlaps]},
+                           directory=store.directory, project=store.project)
     return added, overlaps
 
 

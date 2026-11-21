@@ -17,7 +17,7 @@ import sys
 import time
 from typing import Any
 
-from . import config, journal, settings, slots
+from . import config, journal, lifecycle, settings, slots
 
 # A lane per CORES_PER_LANE cores and per LANE_MEMORY_GB of the memory left after MEMORY_RESERVE_GB for the system
 # and the owner's apps. 12 cores and 32 GB give 6.
@@ -160,7 +160,7 @@ class Floor:
 def lane_peak_gb(records: list[dict[str, Any]]) -> float:
     """The largest lane of the RECENT_LANES last done ones: what done freed of it (worktree, build directories,
     scratch); DEFAULT_LANE_PEAK_GB before any lane is done."""
-    done = sorted((r for r in records if r.get("status") == "done" and isinstance(r.get("freed_bytes"), int)),
+    done = sorted((r for r in records if lifecycle.finished(r) and isinstance(r.get("freed_bytes"), int)),
                   key=lambda r: str(r.get("done") or ""), reverse=True)[:RECENT_LANES]
     sizes = [r["freed_bytes"] / 1e9 for r in done if r["freed_bytes"] > 0]
     return max(sizes) if sizes else DEFAULT_LANE_PEAK_GB
