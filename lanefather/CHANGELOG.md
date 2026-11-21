@@ -187,6 +187,12 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- Dependency-blocked checks (`status: "blocked"`, or `status: "skipped"` with `blocked_by`) are preserved separately
+  from executed check failures across the check receipt, suite results and red-check classifier (fathers#195): only
+  checks that actually ran and failed consume the rerun budget or enter `first.failed_checks`, dependency-blocked
+  children are classified as `dependency-blocked` with their `blocked_by` prerequisites instead of `regression`, and
+  the receipt stays red until those checks actually run and pass.
+
 - `lanefather land` checks exact-tree green receipt reuse before running `plan_for` (fathers#198): when the merge
   tree matches the lane's current green receipt under the same toolchain and platform and the receipt covers every
   post-merge check, land takes the skip path without invoking the plan adapter's dependency bootstrap; when plan

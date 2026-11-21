@@ -144,19 +144,23 @@ def run_batch_gate(cwd: str, common: str, sha: str, jobs: int | None) -> None:
     text = log.read_text(errors="replace")
     stamp = checks.stamp_result(text, True) if status == 0 else {"stamped": False, "reason": "the run failed"}
     reports, report = checks.report_of(text)
-    failed = [row["id"] for row in (report or {}).get("checks", []) if row.get("status") not in checks.PASSING]
+    failed = [row["id"] for row in (report or {}).get("checks", []) if checks.is_executed_failure(row)]
+    blocked = [row["id"] for row in (report or {}).get("checks", []) if checks.is_dependency_blocked(row)]
     triaged = plan.triage(path, Path(reports[-1].strip()).parent) if status and reports else None
-    green = status == 0 and stamp["stamped"]
+    green = status == 0 and stamp["stamped"] and not blocked
     module = plan.module(path)
     state.write_json(state.state_dir() / f"{label}.gate.json", {
         "version": 1, "lane": label, "sha": sha, "tree": git(cwd, "rev-parse", sha + "^{tree}"), "full": True,
         "platform": result_store.host_platform(),
         "suites": list(getattr(module, "SUITES", ())), "jobs": jobs, "jobs_decision": decision, "exit": status,
         "seconds": seconds,
-        "status": "green" if green else "red", "failed_checks": failed, "triage": triaged, "verified_tree": stamp,
+        "status": "green" if green else "red", "failed_checks": failed,
+        **({"blocked_checks": blocked} if blocked else {}),
+        "triage": triaged, "verified_tree": stamp,
         "load_wait": load_wait, "load": load,
         "results": [{"suite": "full gate", "status": "passed" if green else "failed", "seconds": seconds,
-                     "load_wait": load_wait, "load": load, "log": str(log), "failed_checks": failed}],
+                     "load_wait": load_wait, "load": load, "log": str(log), "failed_checks": failed,
+                     **({"blocked_checks": blocked} if blocked else {})}],
         "log": str(log), "host": info, "started": started, "finished": journal.now()})
     # fathers#91: the gate's result belongs to the tree; a later promote of any commit with it reads why it is verified.
     rows = {row["id"]: row.get("status") for row in (report or {}).get("checks", []) if row.get("id")}
@@ -246,11 +250,15 @@ def perf_suite(cwd: str, common: str, sha: str, ship: bool, remote: str = "origi
         load["end"] = host.load_averages()
         text = log.read_text(errors="replace")
         reports, report = checks.report_of(text)
-        failed = [row["id"] for row in (report or {}).get("checks", []) if row.get("status") not in checks.PASSING]
+        failed = [row["id"] for row in (report or {}).get("checks", []) if checks.is_executed_failure(row)]
+        blocked = [row["id"] for row in (report or {}).get("checks", []) if checks.is_dependency_blocked(row)]
         triaged = plan.triage(worktree, Path(reports[-1].strip()).parent) if status and reports else None
     info = host.host()
-    receipt: dict[str, Any] = {"version": 1, "sha": sha, "tree": tree, "status": "red" if status else "green",
-                               "exit": status, "seconds": seconds, "failed_checks": failed, "triage": triaged,
+    receipt: dict[str, Any] = {"version": 1, "sha": sha, "tree": tree,
+                               "status": "red" if status or blocked else "green",
+                               "exit": status, "seconds": seconds, "failed_checks": failed,
+                               **({"blocked_checks": blocked} if blocked else {}),
+                               "triage": triaged,
                                "log": str(log), "load": load, "host": info, "started": started,
                                "finished": journal.now()}
     state.write_json(path, receipt)
