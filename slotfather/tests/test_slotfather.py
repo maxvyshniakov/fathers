@@ -53,7 +53,7 @@ class SlotCase(unittest.TestCase):
                         SLOTFATHER_CORES="12", SLOTFATHER_MEMORY_GIB="64", SLOTFATHER_MEMORY_FILE=str(self.memory),
                         LOG=str(self.log),
                         RELEASE=str(self.release_dir))
-        self.processes = []
+        self.processes: list[subprocess.Popen[Any]] = []
         self.addCleanup(self.stop_all)
 
     def stop_all(self):
@@ -217,20 +217,47 @@ class CapacityTests(SlotCase):
     def test_a_grown_capacity_grants_waiters_at_once_while_work_runs(self):
         holder = self.request("holder", 4)
         self.started("holder")
-        waiter = self.request("waiter", 2)
-        self.wait_for(lambda: "waiting: 2 slot(s) waiter" in self.status(), "the waiter to queue")
-        # A stopped waiter takes no look of its own, so only the capacity change can grant it.
-        with (self.state / ".lock").open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            os.kill(waiter.pid, signal.SIGSTOP)
-            os.waitpid(waiter.pid, os.WUNTRACED)
+        paused = self.tmp / "waiter-paused"
+        proceed = self.tmp / "waiter-proceed"
+        self.addCleanup(proceed.touch)
+        # Pause the waiter outside the queue lock after its first blocked look, so only the capacity change can grant it.
+        pause_code = (
+            "import pathlib, sys, time\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "from slotfather import cli, client\n"
+            "paused, proceed = pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])\n"
+            "real_wait_until = client.wait_until\n"
+            "def controlled_wait_until(ready, *, between=None, **kwargs):\n"
+            "    held_once = False\n"
+            "    def gate(waiting):\n"
+            "        nonlocal held_once\n"
+            "        if between is not None:\n"
+            "            between(waiting)\n"
+            "        if not held_once:\n"
+            "            held_once = True\n"
+            "            paused.write_text('paused\\n')\n"
+            "            deadline = time.monotonic() + 20\n"
+            "            while not proceed.exists() and time.monotonic() < deadline:\n"
+            "                time.sleep(0.02)\n"
+            "    return real_wait_until(ready, between=gate, **kwargs)\n"
+            "client.wait_until = controlled_wait_until\n"
+            "raise SystemExit(cli.main(sys.argv[4:]))\n"
+        )
+        waiter = subprocess.Popen(
+            [sys.executable, "-c", pause_code, str(ROOT / "src"), str(paused), str(proceed),
+             "run", "-n", "2", "--label", "waiter", "--", "sh", "-c", WORK, "work", "waiter"],
+            env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True,
+        )
+        self.processes.append(waiter)
+        self.wait_for(paused.exists, "the waiter to pause outside the queue lock")
+        self.assertIn("waiting: 2 slot(s) waiter", self.status())
         try:
             changed = self.tool("slots", "6")
             self.assertEqual(0, changed.returncode, changed.stderr)
             self.assertEqual("6 slots (saved)", changed.stdout.strip())
             self.assertIn("held: 2 slot(s) waiter", self.status(), "the change grants without the waiter's look")
         finally:
-            os.kill(waiter.pid, signal.SIGCONT)
+            proceed.touch()
         self.started("waiter")
         self.assertIn("6 of 6 slots held", self.status())
         for label in ("holder", "waiter"):

@@ -172,9 +172,9 @@ class FreeDiskMinimumTests(unittest.TestCase):
         project.mkdir()
         seen = self.tmp / 'seen.json'
         (project / 'policy.py').write_text(
-            "import json,os,sys\n"
+            "import json, os, pathlib\n"
             "names = ('LANEFATHER_MIN_DISK_GB', 'STRAYLIGHT_LANE_MIN_DISK_GB', 'STRAYLIGHT_LANE_DISK_FREE_GB')\n"
-            f"open({str(seen)!r}, 'w').write(json.dumps({{n: os.environ.get(n) for n in names}}))\n")
+            f"pathlib.Path({str(seen)!r}).write_text(json.dumps({{n: os.environ.get(n) for n in names}}))\n")
         configuration = project / '.lanefather.toml'
         configuration.write_text('legacy_env_prefix = "STRAYLIGHT_LANE_"\n'
                                  'shared_env = ["DISK_FREE_GB"]\n[hooks.project]\npolicy = "policy.py"\n')

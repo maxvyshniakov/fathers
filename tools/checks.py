@@ -10,10 +10,10 @@ checks from the changed paths.
   python3 tools/checks.py run NAME         run one check (the steps' command, through `bun run check NAME`)
   python3 tools/checks.py plan BASE        Lanefather's plan for the changes since BASE (tools/lane-check answers it)
 
-A change under a package selects its lint gate and tests; one under common/ selects every package; Slotfather's
-command and sources also select Godfather's tests, which run them. Documentation selects only the cheap root checks,
-which every selection includes. A path no rule knows selects everything. A tree without changes since its base
-verifies everything.
+A change under a package selects its lint gate and tests, except package documentation (GLOSSARY.md, docs/**); one
+under common/ selects every package; Slotfather's command and sources also select Godfather's tests, which run them.
+Documentation selects only the cheap root checks, which every selection includes. A path no rule knows selects
+everything. A tree without changes since its base verifies everything.
 """
 from __future__ import annotations
 
@@ -31,6 +31,8 @@ PACKAGES = ("slotfather", "lanefather", "junkfather", "godfather", "tokenfather"
 DEFAULT_BASE = "origin/main"
 # Paths that no check reads: they select only the root checks every selection runs.
 DOCUMENTATION = ("LICENSE", ".gitignore", ".github/dependabot.yml")
+# Package documentation that no package check or installer reads (fathers#193).
+PACKAGE_DOCUMENTATION = ("GLOSSARY.md",)
 # Repo-Kit's own files: its configuration check and the root tool tests cover them.
 KIT_FILES = ("package.json", "bun.lock", "bunfig.toml", "repo-kit.config.mjs", ".lanefather.toml")
 
@@ -73,6 +75,8 @@ def owners(path: str) -> set[str] | None:
     """The checks a changed path selects besides the root checks; None for a path no rule knows."""
     first, _, rest = path.partition("/")
     if first in PACKAGES:
+        if rest in PACKAGE_DOCUMENTATION or rest.startswith("docs/"):
+            return set()
         chosen = {f"{first} lint", f"{first} tests"}
         if first == "slotfather" and (rest == "slotfather" or rest.startswith("src/")):
             chosen.add("godfather tests")  # its contract tests run ../slotfather

@@ -217,7 +217,15 @@ class ClearedPostMergeTests(LaneCase):
         first = subprocess.Popen([sys.executable, "-m", "lanefather", "recheck", "a"], cwd=self.integration,
                                  env={**self.env, "FIXTURE_HOLD": f"recheck-a:{hold}"}, stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT, text=True)
-        self.addCleanup(lambda: first.poll() is None and (first.kill(), first.wait()))
+
+        def cleanup_first() -> None:
+            if first.poll() is None:
+                first.kill()
+                first.wait()
+            if first.stdout is not None:
+                first.stdout.close()
+
+        self.addCleanup(cleanup_first)
         self.addCleanup(hold.touch)
         started = pathlib.Path(f"{hold}.started")
         deadline = time.monotonic() + 60
@@ -239,7 +247,8 @@ class ClearedPostMergeTests(LaneCase):
             self.assertIsNone(second.poll(), log.read_text())
             time.sleep(0.05)
         hold.touch()
-        self.assertEqual(first.wait(timeout=120), 0, first.stdout.read() if first.stdout else "")
+        output, _ = first.communicate(timeout=120)
+        self.assertEqual(first.returncode, 0, output)
         self.assertEqual(second.wait(timeout=120), 1)
         self.assertIn("nothing to recheck", log.read_text())
         receipt = json.loads((self.state / "a.recheck.json").read_text())

@@ -815,7 +815,15 @@ class LaneCase(unittest.TestCase):
         process = subprocess.Popen([sys.executable, "-m", "lanefather", "land", lane_id], cwd=self.integration,
                                    env={**self.env, "FIXTURE_HOLD": f"post-merge-{lane_id}:{hold}", **env},
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        self.addCleanup(lambda: process.poll() is None and (process.kill(), process.wait()))
+
+        def cleanup_process() -> None:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            if process.stdout is not None:
+                process.stdout.close()
+
+        self.addCleanup(cleanup_process)
         self.addCleanup(hold.touch)
         return process
 
