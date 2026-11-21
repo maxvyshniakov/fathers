@@ -149,6 +149,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- The holder's `.idle` record now includes its recent CPU rate (`cpu_pct`, cores × 100), and on Linux the
+  dashboard block uses it for held leases' `cpu` (falling back to `ps %cpu` for older clients or on macOS), so
+  an idle lease is no longer also marked hot from `ps`'s lifetime average (fathers#20).
 - Dashboard EVENTS and the held-slot history now read `events.jsonl` (falling back to `queue.log` only when
   `events.jsonl` is absent) and account for yields, resumes and releases while waiting to resume instead of
   drifting the held-slot count (fathers#18).

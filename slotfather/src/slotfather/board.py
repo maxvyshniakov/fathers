@@ -462,7 +462,12 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
         foreseen: dict[str, Any] = expected.get(id(entry)) or {}  # query.outlook(): its class and expected start
         # The yield request on this entry's own marker, read under the queue lock (#20: by entry, not by pid)
         request = look.asked_of(entry) or {}
-        return {"tree": sorted(tree, key=lambda process: -process[1]), "cpu": sum(p[1] for p in tree),
+        # On Linux, ps %cpu is lifetime average; prefer the holder's recent rate from .idle (fathers#20), falling
+        # back to ps when absent/stale (older clients) or on macOS.
+        recent = entry.get("recent_cpu") if kind == "held" and _platform.linux() else None
+        cpu = float(recent) if isinstance(recent, (int, float)) and not isinstance(recent, bool) \
+            else sum(p[1] for p in tree)
+        return {"tree": sorted(tree, key=lambda process: -process[1]), "cpu": cpu,
                 "rss": sum(p[2] for p in tree), "procs": len(tree), "key": (entry.get("pid"), entry.get("since")),
                 "kind": kind, "count": count, "queue": queue,
                 "label": dashboard_text(entry.get("label", "")), "pid": entry.get("pid"),

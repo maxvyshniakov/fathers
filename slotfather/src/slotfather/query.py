@@ -110,10 +110,11 @@ def looking(directory: Path | None = None, processes: Callable[[], Table] | None
         strange = tuple(_state.unknown(directory))
         kept = tuple(_queue.reserved(directory, table))
         # all under the one lock (fathers#36 review): idle records, the earlier queues' holders, the order settings
-        marked = idle_of(directory, found)
+        facts = idle_facts(directory, found)
         legacy = _queue.legacy_holders(table)
         settings = _settings.order_settings(directory)
-        live = [dict(entry, idle_since=marked.get(id(entry))) if _entry.is_held(entry) else entry
+        live = [dict(entry, idle_since=facts[id(entry)][0], recent_cpu=facts[id(entry)][1])
+                if _entry.is_held(entry) else entry
                 for _, entry in found]
         yield Look(directory, table, found, live, basis, legacy, requests, strange, kept, settings,
                    _queue.estimator(directory))
@@ -127,12 +128,18 @@ def locked_snapshot(directory: Path | None = None) -> tuple[list[dict[str, Any]]
     return found.live, [*found.legacy, *found.reserved], found.table, found.basis
 
 
+def idle_facts(directory: Path, live: list[tuple[Path, dict[str, Any]]]) -> dict[int, tuple[float | None, float | None]]:
+    """id(entry) -> (idle_since, recent_cpu_pct) for each held lease from one read of its .idle record (#12,
+    fathers#20), by the queue's saved settings."""
+    settings = _settings.order_settings(directory, environment=False)
+    moment = time.time()
+    return {id(entry): _idle.facts(path, settings, moment) for path, entry in live if _entry.is_held(entry)}
+
+
 def idle_of(directory: Path, live: list[tuple[Path, dict[str, Any]]]) -> dict[int, float | None]:
     """id(entry) -> since when each held lease has been idle (#12; idle.idle_since(), by the queue's saved
     settings), None where it is not."""
-    settings = _settings.order_settings(directory, environment=False)
-    moment = time.time()
-    return {id(entry): _idle.idle_since(path, settings, moment) for path, entry in live if _entry.is_held(entry)}
+    return {entry_id: since for entry_id, (since, _) in idle_facts(directory, live).items()}
 
 
 def iso(moment: float | None) -> str | None:

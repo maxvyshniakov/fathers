@@ -471,6 +471,61 @@ class EventTests(unittest.TestCase):
         ], steps)
 
 
+class RecentCpuTests(SlotCase):
+    """fathers#20: on Linux, held leases' dashboard `cpu` reads the holder's recent rate from `.idle` so an idle
+    lease is not simultaneously hot from `ps`'s lifetime average; older clients and macOS fall back to `ps`."""
+
+    def test_linux_idle_lease_uses_recent_cpu_and_older_holder_or_macos_falls_back_to_ps(self) -> None:
+        from slotfather import idle as sf_idle
+
+        (self.state / "queue").mkdir(parents=True, exist_ok=True)
+        quiet_pid, quiet_start = self.holder()
+        older_pid, older_start = self.holder()
+        now = time.time()
+        since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 600))
+        quiet_path = self.state / "queue" / f"{1:010d}-{quiet_pid}.json"
+        older_path = self.state / "queue" / f"{2:010d}-{older_pid}.json"
+        quiet_path.write_text(json.dumps(
+            {"pid": quiet_pid, "start": quiet_start, "count": 1, "label": "quiet", "cmd": "sleep 60",
+             "since": since, "granted": since, "state": "held"}))
+        older_path.write_text(json.dumps(
+            {"pid": older_pid, "start": older_start, "count": 1, "label": "older", "cmd": "sleep 60",
+             "since": since, "granted": since, "state": "held"}))
+
+        # Feed injected samples: a heavy burst followed by a quiet interval long enough to be idle.
+        tracker = sf_idle.Tracker()
+        key = (quiet_pid, quiet_start)
+        tracker.observe(now - 420, {key: 0.0}, 0.1)
+        tracker.observe(now - 410, {key: 40.0}, 0.1)  # 4.0 cores burst
+        idle_at = tracker.observe(now - 400, {key: 40.1}, 0.1)  # 0.01 cores = 1.0%
+        idle_at = tracker.observe(now, {key: 44.1}, 0.1)  # 0.01 cores over 400s = 1.0%
+        sf_idle.record(quiet_path, since=idle_at, rate=tracker.rate, moment=now)
+
+        # Fake ps reporting high lifetime %cpu (400% = 4 cores, well above a 1-slot hot share) for both holders.
+        fake_usage: tuple[dict[int, tuple[float, int, str]], dict[int, list[int]]] = (
+            {quiet_pid: (400.0, 1024, "python3"), older_pid: (400.0, 1024, "python3")}, {})
+        tool = board()
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(tool, "process_usage", return_value=fake_usage), \
+                mock.patch.object(tool._platform, "linux", return_value=True):
+            linux_block = tool.dashboard_json(tool.dashboard_model())
+        linux_rows = {row["label"]: row for row in linux_block["holders"]}
+        self.assertIsNotNone(linux_rows["quiet"]["idle_since"], "quiet lease is idle")
+        self.assertAlmostEqual(1.0, linux_rows["quiet"]["cpu"], places=1,
+                               msg="recent rate from .idle is near 0, below the hot threshold")
+        self.assertIsNone(linux_rows["older"]["idle_since"], "older client writes no .idle record")
+        self.assertEqual(400.0, linux_rows["older"]["cpu"], "older holder without a record falls back to ps")
+
+        # On macOS, dashboard_model falls back to ps %cpu even when a fresh .idle record exists.
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(tool, "process_usage", return_value=fake_usage), \
+                mock.patch.object(tool._platform, "linux", return_value=False):
+            mac_block = tool.dashboard_json(tool.dashboard_model())
+        mac_rows = {row["label"]: row for row in mac_block["holders"]}
+        self.assertIsNotNone(mac_rows["quiet"]["idle_since"])
+        self.assertEqual(400.0, mac_rows["quiet"]["cpu"])
+
+
 class MachineFactTests(unittest.TestCase):
     def test_macos_memory_counts_active_wired_and_compressor_physical_pages(self) -> None:
         sample = ("Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages active: 100.\n"
