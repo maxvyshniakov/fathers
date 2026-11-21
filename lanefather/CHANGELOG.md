@@ -8,6 +8,13 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Configurable project policy in `.lanefather.toml` and `capabilities --json` (fathers#131): `[promote] branches`
+  (default `["dev", "main"]`), `[lane] worktrees_root` (default `".claude/worktrees"`), `[lane] target_label`
+  (default `"Cargo target"`), `[lane] cache_depfiles` (default `["debug/*.d", "release/*.d"]`), and
+  `[checks] toolchain_name` (default `"Rust toolchain"`). Existing consumers need no config change; `lanefather
+  capabilities --json` reports the effective `policy` values (`project.policy` capability), and single-branch
+  projects without Rust land and promote without overrides.
+
 - Bounded verify progress heartbeats during quiet runs (fathers#190): `lanefather.verify.Run` samples log silence,
   Slotfather queue state (`slotfather status --json --pid`), and process tree CPU/child activity during quiet
   intervals (`LANEFATHER_VERIFY_HEARTBEAT`, default 30 s) and prints bounded progress lines distinguishing `queued`,

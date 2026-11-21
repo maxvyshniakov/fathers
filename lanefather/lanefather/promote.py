@@ -155,18 +155,20 @@ def fetch(cwd: str, remote: str, verb: str) -> None:
         raise LaneError(f"{verb} refused: git fetch {remote} failed: {fetched.stderr.strip()}")
 
 
-def no_push_refusal(cwd: str, sha: str, branches: list[str], remote: str) -> None:
+def no_push_refusal(cwd: str, sha: str, branches: list[str], remote: str, *, ship: bool | None = None) -> None:
     """--no-push moves a local branch only to what <remote> already has, so it never runs ahead of it. A repository
     without the remote has nothing to run ahead of."""
     if not has_remote(cwd, remote):
         return
     fetch(cwd, remote, "promote --no-push")
+    promoted = config.current().promoted
+    need_ship = (len(promoted) > 1 and promoted[-1] in branches) if ship is None else ship
     for branch in branches:
         _, upstream = tracking(cwd, remote, branch)
         if not upstream or not git_ok(cwd, "merge-base", "--is-ancestor", sha, upstream):
             raise LaneError(f"promote --no-push refused: {sha[:10]} is not on {remote}/{branch}, and --no-push moves "
                             f"local {branch} only to what {remote} has; "
-                            + publish_hint(sha[:10], ship="main" in branches))
+                            + publish_hint(sha[:10], ship=need_ship))
 
 
 def backup_name(cwd: str, branch: str) -> str:
@@ -192,7 +194,7 @@ def sync_plan(cwd: str, args: Any, verb: str) -> tuple[list[Move], list[str], di
     moves: list[Move] = []
     notes: list[str] = []
     diverged: list[Move] = []
-    for branch in ("dev", "main"):
+    for branch in config.current().promoted:
         local, upstream = tracking(cwd, args.remote, branch)
         if not local or not upstream:
             missing = f"local {branch}" if not local else f"{args.remote}/{branch}"
@@ -262,7 +264,9 @@ def sync(args: Any) -> int:
             else:
                 finished.append(f"{branch} {old[:10]}->{new[:10]} fast-forwarded")
     if not moves:
-        print(f"lane: local dev and main are up to date with {args.remote} ({'; '.join(notes)})")
+        promoted = config.current().promoted
+        verb_word = "is" if len(promoted) == 1 else "are"
+        print(f"lane: local {' and '.join(promoted)} {verb_word} up to date with {args.remote} ({'; '.join(notes)})")
         return 0
     journal.ledger(f"sync {args.remote}: {'; '.join(finished) or '-'}" + (f" failed: {'; '.join(failed)}" if failed
                                                                             else ""),
@@ -299,7 +303,7 @@ def after_promote(cwd: str, sha: str) -> None:
 
 def step_no_push_refusal(run: PromoteRun) -> None:
     if run.no_push:
-        no_push_refusal(run.cwd, run.sha, run.branches, run.remote)
+        no_push_refusal(run.cwd, run.sha, run.branches, run.remote, ship=run.ship)
 
 
 def step_ahead_warnings(run: PromoteRun) -> None:
@@ -511,11 +515,13 @@ def promote(args: Any) -> int:
     sha = git(cwd, "rev-parse", "--verify", "--quiet", args.sha + "^{commit}", check=False)
     if not sha:
         raise LaneError(f"promote refused: {args.sha} is not a commit here")
+    promoted = cfg.promoted
+    branches = list(promoted) if args.ship or len(promoted) == 1 else list(promoted[:-1])
     run = PromoteRun(
         cwd=cwd,
         common=common_dir(cwd),
         sha=sha,
-        branches=["dev", "main"] if args.ship else ["dev"],
+        branches=branches,
         remote=args.remote,
         ship=bool(args.ship),
         no_push=bool(args.no_push),

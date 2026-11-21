@@ -34,8 +34,10 @@ def gate_report(cwd: str, common: str, sha: str, since: str | None = None) -> di
       ran them): the report cannot say, so it holds.
     Each finding entry names the lane, its ticket, severity, file and line, and `text` the two commands that mark
     it."""
-    base = since or git(cwd, "rev-parse", "--verify", "--quiet", "refs/heads/dev^{commit}", check=False) or None
     store = state.Store(config.current())
+    promoted = store.project.promoted
+    base = (since or git(cwd, "rev-parse", "--verify", "--quiet", f"refs/heads/{promoted[0]}^{{commit}}", check=False)
+            or None)
     blocks = store.project.review_blocks
     report: dict[str, Any] = {"v": 1, "sha": sha, "since": base, "blocks": list(blocks), "unfinished": [],
                               "blocking": [], "reported": [], "unknown": []}

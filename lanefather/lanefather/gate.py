@@ -185,9 +185,10 @@ def run_batch_gate(cwd: str, common: str, sha: str, jobs: int | None) -> None:
 # machine.
 
 def main_base(cwd: str, remote: str = "origin") -> str | None:
-    """What main holds: the remote's main, else the local one."""
-    return (git(cwd, "rev-parse", "--verify", "--quiet", f"refs/remotes/{remote}/main^{{commit}}", check=False)
-            or git(cwd, "rev-parse", "--verify", "--quiet", "refs/heads/main^{commit}", check=False) or None)
+    """What the final promoted branch holds: the remote's, else the local one."""
+    branch = config.current().promoted[-1]
+    return (git(cwd, "rev-parse", "--verify", "--quiet", f"refs/remotes/{remote}/{branch}^{{commit}}", check=False)
+            or git(cwd, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}", check=False) or None)
 
 
 def perf_bisect_lines(cwd: str, sha: str, base: str | None) -> list[str]:

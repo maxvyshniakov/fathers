@@ -40,8 +40,8 @@ from .gitops import current_branch, dirty, git, git_ok, main_checkout
 from .host import given_jobs, host, host_fields, post_merge_jobs
 from .landing import landing
 
-# The branches only promote moves; promote's review gate covers lanes that are not in dev yet (#570).
-PROMOTED = ("dev", "main")
+# The branches only promote moves; promote's review gate covers lanes that are not yet promoted (#570).
+PROMOTED = config.Config().promoted
 
 
 def failed_items(failed: list[dict[str, Any]]) -> list[tuple[str, str]]:
@@ -382,8 +382,8 @@ def merge(
                            details={"command": "land", "reason": force_reason, "refusals": [problem]})
         if dirty(integration) or os.path.exists(git(integration, "rev-parse", "--git-path", "MERGE_HEAD")):
             raise LaneError(f"land refused: {integration} has uncommitted changes or a merge in progress")
-        if onto in PROMOTED:
-            # promote waits only for lanes not yet in dev (#570): a lane landed on dev or main is reviewed first.
+        if onto in store.project.promoted:
+            # promote waits only for lanes not yet promoted (#570): landing on a promoted branch needs review first.
             reviewed, words = review.review_state(lane_id, store)
             if not reviewed and not review.review_exemption(record):
                 if not force_reason:

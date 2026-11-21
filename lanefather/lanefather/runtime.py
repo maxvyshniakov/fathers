@@ -19,7 +19,7 @@ MANIFEST = 'INSTALL.json'
 CAPABILITIES = ('project.readiness', 'project.update_queue', 'project-hook', 'canonical-reference-transaction',
                 'promote.step-leases', 'tickets.lifecycle', 'slots.priority', 'dashboard.events',
                 'dashboard.status', 'dashboard.settings', 'host.min_disk_gb', 'lane.drop',
-                'post_merge.cleared', 'lane.wait', 'review.fix_of', 'lane.load_advisory')
+                'post_merge.cleared', 'lane.wait', 'review.fix_of', 'lane.load_advisory', 'project.policy')
 # The dashboard contract versions Godfather reads (its SPEC.md, "Capabilities contract").
 DASHBOARD = 1
 
@@ -86,11 +86,30 @@ def minimum_gb(project: config.Config | None = None) -> float:
         return admission.current_floor(config.Config()).gb
 
 
+def policy_summary() -> dict[str, Any]:
+    """Effective project policy values reported by `capabilities --json` (fathers#131)."""
+    try:
+        cfg = config.current()
+    except LaneError:
+        cfg = config.Config()
+    return {
+        'promoted': list(cfg.promoted),
+        'worktrees_root': cfg.worktrees_root,
+        'lane_targets': list(cfg.lane_targets),
+        'target_label': cfg.target_label,
+        'cache_partitions': cfg.cache_partitions or None,
+        'cache_depfiles': list(cfg.cache_depfiles),
+        'toolchain': bool(cfg.toolchain and cfg.toolchain_pin),
+        'toolchain_name': cfg.toolchain_name,
+    }
+
+
 def capabilities(args: argparse.Namespace) -> int:
     report = {'v': 1, 'tool': 'lanefather', 'version': __version__, 'state_schema': 1,
               'slotfather_query_versions': [1, 2], 'capabilities': CAPABILITIES, 'dashboard': dashboard(),
               # The free disk under which start refuses a lane here, in decimal GB (fathers#46, #157).
               'host': {'min_disk_gb': round(minimum_gb(), 1)},
+              'policy': policy_summary(),
               'source': installed_identity(Path(__file__).resolve().parent.parent)}
     print(json.dumps(report, sort_keys=True) if args.json else json.dumps(report, indent=2, sort_keys=True))
     return 0

@@ -59,7 +59,34 @@ class ConfigTests(ConfigCase):
         current = config.current()
         self.assertEqual((current.command, current.verify, current.plan_module, current.install),
                          ("lanefather", "verify.sh", "", ()))
+        self.assertEqual((current.promoted, current.worktrees_root, current.lane_targets, current.cache_partitions,
+                          current.cache_depfiles, current.target_label, current.toolchain_name),
+                         (("dev", "main"), ".claude/worktrees", (), "", ("debug/*.d", "release/*.d"),
+                          "Cargo target", "Rust toolchain"))
         self.assertEqual(config.prog(), "lanefather")
+
+    def test_project_policy_keys_override_defaults_and_reject_invalid_values(self):
+        cfg = self.use("""\
+            [checks]
+            toolchain_name = "Node toolchain"
+            [lane]
+            worktrees_root = ".worktrees"
+            target_label = "Build cache"
+            cache_depfiles = ["build/*.d"]
+            [promote]
+            branches = ["main"]
+            """)
+        self.assertEqual(cfg.promoted, ("main",))
+        self.assertEqual(cfg.worktrees_root, ".worktrees")
+        self.assertEqual(cfg.target_label, "Build cache")
+        self.assertEqual(cfg.cache_depfiles, ("build/*.d",))
+        self.assertEqual(cfg.toolchain_name, "Node toolchain")
+        for bad, msg in (('[promote]\nbranches = []\n', "branches takes one or more"),
+                         ('[promote]\nbranches = ["-bad"]\n', "branches takes one or more"),
+                         ('[lane]\nworktrees_root = "  "\n', "worktrees_root must be a non-empty string"),
+                         ('[lane]\ncache_depfiles = [""]\n', r"\[lane\] cache_depfiles takes non-empty patterns")):
+            with self.subTest(bad=bad), self.assertRaisesRegex(LaneError, msg):
+                self.use(bad)
 
     def test_the_fixture_config_names_every_seam(self):
         current = self.use(FIXTURE_CONFIG)

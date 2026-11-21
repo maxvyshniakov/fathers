@@ -93,6 +93,7 @@ class Config:
     triage: tuple[str, ...] = ()
     toolchain: tuple[str, ...] = ()
     toolchain_pin: str = ""
+    toolchain_name: str = "Rust toolchain"
     # The variables a verify run that queues itself reads: <slot_env>_LABEL, _PRIORITY, _TICKET, _META, _YIELDABLE.
     slot_env: str = "LANEFATHER_SLOT"
     # Check ids (fnmatch patterns) the post-merge smoke leaves to the batch gate: tooling self-tests (fathers#94).
@@ -112,11 +113,15 @@ class Config:
     # [slots.priority]: a phase's (or `default`) Slotfather priority, below the environment's (lanefather#24).
     slot_priority: tuple[tuple[str, str], ...] = ()
     cache_name: str = "lanefather"
+    worktrees_root: str = ".claude/worktrees"
     lane_targets: tuple[str, ...] = ()
+    target_label: str = "Cargo target"
     cache_partitions: str = ""
+    cache_depfiles: tuple[str, ...] = ("debug/*.d", "release/*.d")
     stamp_tool: str = ""
     stamp_file: str = "verified-trees"
     pre_push_hook: str = ".githooks/pre-push"
+    promoted: tuple[str, ...] = ("dev", "main")
     ship_refuses: str = ""
     ship_refusal: str = "fold it into a release first"
     install: tuple[Step, ...] = ()
@@ -195,6 +200,14 @@ def _string(data: dict[str, Any], key: str, default: str) -> str:
     return value
 
 
+def _nonempty(data: dict[str, Any], key: str, default: str, section: str = "") -> str:
+    value = _string(data, key, default).strip()
+    if not value:
+        where = f"[{section}] " if section else ""
+        raise LaneError(f"{CONFIG_NAME}: {where}{key} must be a non-empty string")
+    return value
+
+
 def _step_lease(table: dict[str, Any], name: str) -> Lease | None:
     if "lease" not in table:
         return None
@@ -253,10 +266,11 @@ TOP_KEYS = ("project", "command", "state_dir", "legacy_env_prefix", "shared_env"
             "promote", "hooks", "env", "gc", "admission", "tickets", "slots", "review", "done")
 TABLE_KEYS = {
     "admission": ("provider", "cap"),
-    "checks": ("verify", "plan_module", "triage", "toolchain", "toolchain_pin", "slot_env", "gate_only", "min_slots"),
-    "lane": ("cache_name", "targets", "cache_partitions"),
+    "checks": ("verify", "plan_module", "triage", "toolchain", "toolchain_pin", "toolchain_name",
+               "slot_env", "gate_only", "min_slots"),
+    "lane": ("cache_name", "worktrees_root", "targets", "target_label", "cache_partitions", "cache_depfiles"),
     "gate": ("stamp_tool", "stamp_file", "pre_push_hook"),
-    "promote": ("ship_refuses", "ship_refusal", "install", "deploy", "install_env_drop", "after"),
+    "promote": ("branches", "ship_refuses", "ship_refusal", "install", "deploy", "install_env_drop", "after"),
     "hooks": ("process_scan", "project"),
     "gc": ("after_remove", "after_remove_report", "dirs", "branches", "collect_uncommitted_sessions", "disposable"),
     "tickets": ("integrated_label", "land_comment", "fixes_trailer", "release_comment", "preview", "repo"),
@@ -299,10 +313,17 @@ def _panel(table: dict[str, Any]) -> tuple[str, ...]:
     return found
 
 
-def _patterns(table: dict[str, Any], key: str, default: tuple[str, ...]) -> tuple[str, ...]:
+def _patterns(table: dict[str, Any], key: str, default: tuple[str, ...], section: str = "gc") -> tuple[str, ...]:
     found = _strings(table, key, default)
     if not all(found):
-        raise LaneError(f"{CONFIG_NAME}: [gc] {key} takes non-empty patterns")
+        raise LaneError(f"{CONFIG_NAME}: [{section}] {key} takes non-empty patterns")
+    return found
+
+
+def _promoted(table: dict[str, Any], default: tuple[str, ...]) -> tuple[str, ...]:
+    found = _strings(table, "branches", default)
+    if not found or any(not b.strip() or b.startswith("-") or any(c.isspace() for c in b) for b in found):
+        raise LaneError(f"{CONFIG_NAME}: [promote] branches takes one or more valid branch names")
     return found
 
 
@@ -403,6 +424,7 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         triage=_strings(checks, "triage", default.triage),
         toolchain=_strings(checks, "toolchain", default.toolchain),
         toolchain_pin=_string(checks, "toolchain_pin", default.toolchain_pin),
+        toolchain_name=_string(checks, "toolchain_name", default.toolchain_name) or default.toolchain_name,
         slot_env=_string(checks, "slot_env", default.slot_env),
         gate_only=_strings(checks, "gate_only", default.gate_only),
         min_slots=_min_slots(checks),
@@ -412,11 +434,15 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         done_auto=done_auto,
         slot_priority=_slot_priority(slot_table),
         cache_name=_string(lane, "cache_name", default.cache_name),
+        worktrees_root=_nonempty(lane, "worktrees_root", default.worktrees_root, "lane"),
         lane_targets=_strings(lane, "targets", default.lane_targets),
+        target_label=_string(lane, "target_label", default.target_label),
         cache_partitions=_string(lane, "cache_partitions", default.cache_partitions),
+        cache_depfiles=_patterns(lane, "cache_depfiles", default.cache_depfiles, "lane"),
         stamp_tool=_string(gate, "stamp_tool", default.stamp_tool),
         stamp_file=_string(gate, "stamp_file", default.stamp_file),
         pre_push_hook=_string(gate, "pre_push_hook", default.pre_push_hook),
+        promoted=_promoted(promote, default.promoted),
         ship_refuses=_string(promote, "ship_refuses", default.ship_refuses),
         ship_refusal=_string(promote, "ship_refusal", default.ship_refusal),
         install=_steps(promote, "install"),

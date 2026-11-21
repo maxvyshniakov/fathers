@@ -39,6 +39,7 @@ def header(record: Record, rules: list[dict[str, Any]] | tuple[()] = ()) -> str:
     prog = config.prog()
     ticket = f"#{record['ticket']}" if record["ticket"] != "none" else "none (no ticket)"
     targets = record.get("cargo_targets") or []
+    target_label = config.current().target_label or "Build target"
     return "\n".join([
         f"Lane {record['id']}: ticket {ticket}",
         f"Branch: {record['branch']} from {record['base']} ({record['base_sha'][:10]})",
@@ -49,7 +50,7 @@ def header(record: Record, rules: list[dict[str, Any]] | tuple[()] = ()) -> str:
                         or f"yours; first run git checkout -B {record['branch']} {record['base']}")
         + ("" if record["worktree"] else f', then {prog} adopt {record["id"]} "$PWD" {record["branch"]}'),
         f"Scratch: {record['scratch'][0]} (evidence logs and probes; {prog} done removes it)",
-        *([f"Cargo target, when the lane needs its own: {targets[0]}"] if targets else []),
+        *([f"{target_label}, when the lane needs its own: {targets[0]}"] if targets else []),
         *claims.rules_block(list(rules)),
         *next_lines(record),
     ])
@@ -182,7 +183,7 @@ def register_admitted(record: Record, decision: admission.Decision, refusals: li
     status = "planned"
     if create:
         main = main_checkout(record["common_dir"])
-        path = os.path.join(main, ".claude", "worktrees", f"lane-{lane_id}")
+        path = str(worktrees.worktrees_root(record["common_dir"]) / f"lane-{lane_id}")
         git(main, "worktree", "add", "-q", "-b", record["branch"], path, record["base_sha"])
         worktree = os.path.realpath(path)
         status = "active"

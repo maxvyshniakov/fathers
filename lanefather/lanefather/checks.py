@@ -732,10 +732,11 @@ def select(prepared: Prepared, *, rerun: bool = False, slots_override: int | Non
             print(f"Receipt current: green for tree {tree} on {platform} ({path})")
             return None
         if isinstance(verdict, receipts.StaleToolchain):
-            print("lane: the Rust toolchain changed since the receipt (#571); running the checks again"
+            print(f"lane: the {config.current().toolchain_name} changed since the receipt (#571); "
+                  "running the checks again"
                   if verdict.toolchain_changed else
                   f"lane: the receipt was not made on {platform}; running the checks again")
-    same_rust = receipts.same_environment(previous, toolchain, worktree=worktree, platform=platform)
+    same_env = receipts.same_environment(previous, toolchain, worktree=worktree, platform=platform)
     base = plan_base(record, worktree)
     lane_plan = plan.plan_for(worktree, base)
     # fathers#93: a review-fix lane runs the plan of its fix, widened to both diffs when the fix leaves the parent's.
@@ -752,7 +753,7 @@ def select(prepared: Prepared, *, rerun: bool = False, slots_override: int | Non
     suites: list[str] = lane_plan["selected"]
     selected: dict[str, list[str]] | None = lane_plan["by_suite"]
     reused: dict[str, dict[str, Any]] = {}
-    if (selected is not None and previous and same_rust and previous.get("head") and not rerun
+    if (selected is not None and previous and same_env and previous.get("head") and not rerun
             and git_ok(worktree, "cat-file", "-e", previous["head"])):
         # Per check: a check that passed for an earlier tree of the lane and that no change since selects.
         wanted = {c for ids in selected.values() for c in ids}

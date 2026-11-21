@@ -62,17 +62,19 @@ class Project:
     def run(self, dry_run: bool = False) -> Result:
         result = Result()
         with self._store.locked("state"):
-            targets = git(self._root, "for-each-ref", "--format=%(refname)", "refs/remotes/origin/dev",
-                          "refs/remotes/origin/main", "refs/heads/integrate/").splitlines()
+            promoted_refs = [f"refs/remotes/origin/{b}" for b in self._settings.promoted]
+            targets = git(self._root, "for-each-ref", "--format=%(refname)", *promoted_refs,
+                          "refs/heads/integrate/").splitlines()
             if not targets:
                 result.kept.append({"path": self._root, "reason": "no merge target refs"})
                 return result
             records = [r for r in self._store.lanes(strict=True) if not lifecycle.finished(r)]
             entries = worktree_list(self._root)
             removed: set[str] = set()
+            wt_root = os.path.realpath(worktrees.worktrees_root_from_main(self._root, self._settings))
             for entry in entries:
                 path = entry["path"]
-                if not path.startswith(os.path.realpath(Path(self._root) / ".claude/worktrees") + "/"):
+                if not path.startswith(wt_root + "/"):
                     continue
                 reason = self._keep(entry, targets, records)
                 if reason:
@@ -115,7 +117,7 @@ class Project:
             return "the collector is running inside this worktree"
         if not (self._dir_collected(path) or self._branch_collected(branch)):
             return "not a collected worktree: neither [gc] dirs nor [gc] branches names it"
-        if branch in ("dev", "main") or branch.startswith("integrate/"):
+        if branch in self._settings.promoted or branch.startswith("integrate/"):
             return f"it has {branch} checked out"
         inside = next((w["path"] for w in worktree_list(self._root) if w["path"].startswith(path + "/")), None)
         if inside:
@@ -139,7 +141,7 @@ class Project:
                        or any(fnmatch.fnmatchcase(branch, p) for p in AGENT_BRANCHES))
         if session:
             if not any(git_ok(path, "merge-base", "--is-ancestor", "HEAD", t) for t in upstream(targets)):
-                return "HEAD is not merged into origin/dev or origin/main"
+                return f"HEAD is not merged into {' or '.join(f'origin/{b}' for b in self._settings.promoted)}"
         elif not any(git_ok(path, "merge-base", "--is-ancestor", "HEAD", t) for t in targets):
             return "HEAD is not merged"
         if git(path, "--no-optional-locks", "status", "--porcelain"):
@@ -169,11 +171,14 @@ class Project:
     def _dir_collected(self, path: str) -> bool:
         """A pattern with a '/' matches the path from the main checkout, one without the directory's name."""
         relative = os.path.relpath(path, os.path.realpath(self._root))
-        return any(fnmatch.fnmatchcase(relative if "/" in p else os.path.basename(path), p)
-                   for p in self._settings.gc_dirs)
+        patterns = self._settings.gc_dirs
+        default_cfg = config.Config()
+        if self._settings.worktrees_root != default_cfg.worktrees_root and patterns == default_cfg.gc_dirs:
+            patterns = (*patterns, f"{self._settings.worktrees_root.strip('/')}/*")
+        return any(fnmatch.fnmatchcase(relative if "/" in p else os.path.basename(path), p) for p in patterns)
 
     def _branch_collected(self, branch: str) -> bool:
-        if not branch or branch in ("dev", "main") or branch.startswith("integrate/"):
+        if not branch or branch in self._settings.promoted or branch.startswith("integrate/"):
             return False
         return any(fnmatch.fnmatchcase(branch, p) for p in self._settings.gc_branches)
 
