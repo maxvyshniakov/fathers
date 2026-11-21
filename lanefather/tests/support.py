@@ -673,8 +673,10 @@ class LaneCase(unittest.TestCase):
         self.review_text = self.tmp / "review.md"
         self.review_text.write_text(NO_FINDINGS)
         self.env = {k: v for k, v in os.environ.items()
-                    if not k.startswith(("STRAYLIGHT_", "LANEFATHER_", "SLOTFATHER_", "GIT_", "FIXTURE_"))
-                    and k not in ("CODEX_CLI_PATH", "PYTHONPATH", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")
+                    if not k.startswith(("STRAYLIGHT_", "LANEFATHER_", "SLOTFATHER_", "GIT_", "FIXTURE_",
+                                         "ANTIGRAVITY_", "T3_", "CLAUDE_", "CODEX_"))
+                    and k not in ("CODEX_CLI_PATH", "PYTHONPATH", "ANTHROPIC_MODEL", "AGENT_TRANSCRIPT_PATH",
+                                  "THOUGHT_LEVEL")
                     and not k.startswith("MASTACK_")}
         self.env.update(PATH=f"{self.tmp / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}", PYTHONPATH=str(ROOT),
                         CODEX_HOME=str(self.tmp / "codex-home"), FIXTURE_CODEX_LOG=str(self.tmp / "codex.log"),

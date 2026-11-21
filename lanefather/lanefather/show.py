@@ -54,6 +54,7 @@ def summary(lane_id: str, directory: Path) -> dict[str, Any]:
             'repository': repository, 'ticket': ticket, 'status': record.get('status'),
             'branch': record.get('branch'), 'base': record.get('base'), 'worktree': record.get('worktree'),
             'claims': record.get('claims', []), 'after': record.get('after', []), 'checks': checks,
+            'agents': record.get('agents', []),
             'review': {'status': review.get('status', 'not started'), 'findings': len(findings),
                        'unresolved': sum(1 for finding in findings if not finding.get('mark'))}}
 

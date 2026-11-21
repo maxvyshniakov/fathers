@@ -112,7 +112,7 @@ def missing_members(receipt: dict[str, Any]) -> list[str]:
 
 
 # The family of the agent that ran the lane's last check (lanefather.events.actor), for the role's `not_family`.
-FAMILIES = {"claude-code": "anthropic", "codex": "openai"}
+FAMILIES = {"claude-code": "anthropic", "codex": "openai", "antigravity": "google"}
 
 
 def implementer_family(lane_id: str) -> str | None:

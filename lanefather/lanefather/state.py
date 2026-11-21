@@ -188,12 +188,66 @@ def migrate(record: Record) -> Record:
                         "update lanefather")
     # A record from before #577 may lack the key; a planned lane's is null until adopt.
     record.setdefault("worktree", None)
+    # fathers#200: every agent that touched the lane at start, adopt or check.
+    if not isinstance(record.get("agents"), list):
+        record["agents"] = []
     if isinstance(record.get("review_fix_of"), list):
         # A brief schema-1 format put the batch in the legacy string field. Normalize it on the next write.
         parents = fix_parents(record)
         if parents:
             set_fix_parents(record, parents, batch=True)
     return record
+
+
+def record_agent(record: Record, phase: str, agent: dict[str, Any] | None, *, now: str | None = None) -> bool:
+    """Attach or update an agent entry on `record["agents"]` (fathers#200). Returns True when recorded."""
+    if not agent or not agent.get("kind"):
+        return False
+    raw_agents: Any = record.get("agents")
+    agents: list[dict[str, Any]]
+    if isinstance(raw_agents, list):
+        agents = raw_agents  # pyright: ignore[reportUnknownVariableType]
+    else:
+        agents = []
+        record["agents"] = agents
+    kind = agent["kind"]
+    session_id = agent.get("session_id")
+    subagent_id = agent.get("subagent_id")
+    thread_id = agent.get("thread_id")
+    transcript_path = agent.get("transcript_path")
+    for entry in agents:
+        if (entry.get("kind") == kind
+                and entry.get("session_id") == session_id
+                and entry.get("subagent_id") == subagent_id
+                and entry.get("thread_id") == thread_id
+                and (not transcript_path or not entry.get("transcript_path")
+                     or entry.get("transcript_path") == transcript_path)):
+            phases: list[str] = list(entry.get("events") or [])
+            if phase not in phases:
+                phases.append(phase)
+            entry["events"] = phases
+            if now:
+                entry["last_seen"] = now
+            for field in ("transcript_path", "model"):
+                if agent.get(field) and not entry.get(field):
+                    entry[field] = agent[field]
+            if isinstance(agent.get("options"), dict) and agent["options"]:
+                merged = dict(entry.get("options") or {})
+                merged.update(agent["options"])
+                entry["options"] = merged
+            return True
+    entry_new: dict[str, Any] = {"kind": kind}
+    for field in ("session_id", "subagent_id", "thread_id", "transcript_path", "model"):
+        if agent.get(field):
+            entry_new[field] = agent[field]
+    if isinstance(agent.get("options"), dict) and agent["options"]:
+        entry_new["options"] = dict(agent["options"])
+    entry_new["events"] = [phase]
+    if now:
+        entry_new["first_seen"] = now
+        entry_new["last_seen"] = now
+    agents.append(entry_new)
+    return True
 
 
 def batch_fix(record: Record) -> bool:

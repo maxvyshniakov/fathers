@@ -14,7 +14,22 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from . import admission, claims, config, done, host, journal, promote, queue, review, slots, state, tickets, worktrees
+from . import (
+    admission,
+    claims,
+    config,
+    done,
+    events,
+    host,
+    journal,
+    promote,
+    queue,
+    review,
+    slots,
+    state,
+    tickets,
+    worktrees,
+)
 from .errors import LaneError
 from .gitops import common_dir, current_branch, git, git_ok, main_checkout, worktree_list
 from .state import Record
@@ -74,7 +89,7 @@ def prepare(cwd: Any, lane_id: str, ticket: str, lane_claims: list[str], base: s
         "integration": integration, "worktree": None, "status": "planned", "created": journal.now(),
         "scratch": [str(state.state_dir() / f"{lane_id}.scratch"), *(os.path.realpath(s) for s in scratch)],
         # The record key keeps the name older tools/lane checkouts read (#648).
-        "cargo_targets": worktrees.lane_targets(lane_id), "overrides": [],
+        "cargo_targets": worktrees.lane_targets(lane_id), "overrides": [], "agents": [],
         "rules": [rule["name"] for rule in rules]}
     state.set_fix_parents(record, parents or [], batch=batch_fix)
     return record, rules
@@ -122,7 +137,8 @@ def admit(record: Record, force_reason: str | None, repaired: str | None) -> tup
     return decision, refusals
 
 
-def register(record: Record, rules: list[dict[str, Any]], force_reason: str | None, create: bool) -> None:
+def register(record: Record, rules: list[dict[str, Any]], force_reason: str | None, create: bool,
+             *, agent: str | None = None) -> None:
     """Enforce the cap, disk, load and claims, save the record and print its brief header. When the disk floor is
     the only refusal left, start's disk repair runs first (fathers#157), outside the state lock each done takes,
     and the decision is taken again; `review --fix-lane` registers through here, so it repairs too."""
@@ -133,7 +149,7 @@ def register(record: Record, rules: list[dict[str, Any]], force_reason: str | No
             if not refusals or force_reason or repaired is not None:
                 if refusals and not force_reason:
                     raise LaneError("refused:\n- " + "\n- ".join(refusals))
-                register_admitted(record, decision, refusals, force_reason, create)
+                register_admitted(record, decision, refusals, force_reason, create, agent=agent)
                 break
         repaired = done.repair_disk(decision.machine["disk_free_gb"], decision.floor)
     print(header(record, rules))
@@ -143,7 +159,7 @@ def register(record: Record, rules: list[dict[str, Any]], force_reason: str | No
 
 
 def register_admitted(record: Record, decision: admission.Decision, refusals: list[str], force_reason: str | None,
-                      create: bool) -> None:
+                      create: bool, *, agent: str | None = None) -> None:
     """Under the state lock, once admitted: save the record and log the start."""
     lane_id, lane_claims, after = record["id"], record["claims"], record["after"]
     cap, source, info = decision.cap, decision.source, decision.machine
@@ -162,6 +178,7 @@ def register_admitted(record: Record, decision: admission.Decision, refusals: li
         path = os.path.join(main, ".claude", "worktrees", f"lane-{lane_id}")
         git(main, "worktree", "add", "-q", "-b", record["branch"], path, record["base_sha"])
         record.update(worktree=os.path.realpath(path), status="active")
+    state.record_agent(record, "start", events.agent_context(agent), now=journal.now())
     state.save(record)
     journal.ledger(f"start {lane_id} ticket={record['ticket']} branch={record['branch']} "
                    f"base={record['base']}@{record['base_sha'][:10]} claims={' '.join(lane_claims)} "
@@ -178,7 +195,7 @@ def start(args: Any) -> int:
     parents = list(dict.fromkeys(name for value in given for name in value.replace(",", " ").split()))
     record, rules = prepare(os.getcwd(), args.id, args.ticket, lane_claims, args.base, args.after, args.branch,
                             args.scratch, parents=parents, batch_fix=True)
-    register(record, rules, args.force_reason, args.create)
+    register(record, rules, args.force_reason, args.create, agent=getattr(args, "agent", None))
     if not parents and "review-fixes" in args.id:
         print(f"{config.prog()}: warning: {args.id} looks like a fix lane but names no parent, so its land starts "
               f"a review of the fix; to exempt it, {config.prog()} drop {args.id} and start it again with "
@@ -206,7 +223,7 @@ def next_lane(args: Any) -> int:
     return 0
 
 
-def adopt_worktree(record: Record, worktree: str, branch: str) -> None:
+def adopt_worktree(record: Record, worktree: str, branch: str, *, agent: str | None = None) -> None:
     path = os.path.realpath(worktree)
     if not os.path.isdir(path) or common_dir(path) != record["common_dir"]:
         raise LaneError(f"adopt refused: {path} is not a worktree of {main_checkout(record['common_dir'])}")
@@ -216,8 +233,10 @@ def adopt_worktree(record: Record, worktree: str, branch: str) -> None:
     for other in state.lanes():
         if other["id"] != record["id"] and other["status"] != "done" and other.get("worktree") == path:
             raise LaneError(f"adopt refused: lane {other['id']} owns {path}")
+    now = journal.now()
     record.update(worktree=path, branch=branch, status="active" if record["status"] == "planned" else record["status"],
-                  adopted=journal.now())
+                  adopted=now)
+    state.record_agent(record, "adopt", events.agent_context(agent), now=now)
     state.save(record)
     journal.ledger(f"adopt {record['id']} worktree={path} branch={branch}", kind="lane.adopted", lane=record,
                    details={"worktree": path, "branch": branch, "status": record["status"]})
@@ -228,7 +247,7 @@ def adopt(args: Any) -> int:
         record = state.load(args.id)
         if record["status"] not in ("planned", "active"):
             raise LaneError(f"adopt refused: lane {args.id} is {record['status']}")
-        adopt_worktree(record, args.worktree, args.branch)
+        adopt_worktree(record, args.worktree, args.branch, agent=getattr(args, "agent", None))
     print(f"Lane {args.id} adopted {record['worktree']} on {args.branch}")
     print("\n".join(next_lines(record)))
     return 0

@@ -23,6 +23,7 @@ from . import (
     checks,
     config,
     done,
+    events,
     gc,
     history,
     land,
@@ -153,6 +154,14 @@ def add(root: Parser, commands: Any, name: str, details: str = "") -> Parser:
     return child
 
 
+def agent_kind(value: str) -> str:
+    cleaned = value.strip().lower()
+    if not events.AGENT_KIND_RE.fullmatch(cleaned):
+        raise argparse.ArgumentTypeError(
+            f"invalid agent kind {value!r}: use lowercase letters, digits, '.', '_' or '-'")
+    return cleaned
+
+
 def parser() -> Parser:
     prog = config.prog()
     root = Parser(prog=prog, tool=prog, usage="%(prog)s [--config PATH] <command> ...",
@@ -177,6 +186,8 @@ def parser() -> Parser:
     p.add_argument("--create", action="store_true", help="create the worktree now instead of adopting one")
     p.add_argument("--fix-of", action="append", metavar="ID,ID",
                    help="a fix lane for the review findings of these landed lanes: its land is exempt from review")
+    p.add_argument("--agent", type=agent_kind,
+                   help="the agent starting the lane (e.g. claude-code, codex, antigravity, t3-code)")
     p.add_argument("--force-reason", help="start despite the lane cap, disk or load; logged")
     p.set_defaults(run=lanes.start)
     p = add(root, commands, "next", "Prints the first ready entry of the ranked queue as a brief header.")
@@ -189,14 +200,16 @@ def parser() -> Parser:
     p.add_argument("id")
     p.add_argument("worktree")
     p.add_argument("branch")
+    p.add_argument("--agent", type=agent_kind,
+                   help="the agent adopting the worktree (e.g. claude-code, codex, antigravity, t3-code)")
     p.set_defaults(run=lanes.adopt)
     p = add(root, commands, "check", "In the lane's worktree, on a clean committed tree: the checks the tree's plan "
             "selects for the lane's diff, and the receipt for the tree (lanefather.checks).")
     p.add_argument("id")
     p.add_argument("--rerun", action="store_true", help="run every suite even if a receipt covers the tree")
-    p.add_argument("--agent", choices=("claude-code", "codex"),
-                   help="the agent that built the lane, for the review's implementer family (default: the agent "
-                        "session this check runs in)")
+    p.add_argument("--agent", type=agent_kind,
+                   help="the agent that built the lane, e.g. claude-code, codex, antigravity, t3-code "
+                        "(default: the agent session this check runs in)")
     p.add_argument("--slots", type=int, choices=range(1, 5),
                    help="verification worker budget passed as verify --jobs (default: slotfather advise, at most "
                         f"{CHECK_MAX_JOBS})")

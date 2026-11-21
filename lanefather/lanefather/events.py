@@ -16,6 +16,7 @@ A project whose state directory is in a temporary directory (a test's) writes no
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 import contextlib
 import datetime
 import fcntl
@@ -117,17 +118,130 @@ def timestamp(moment: datetime.datetime) -> str:
 
 
 # The agent sessions a process can run for, the most specific first: a Codex thread started from a Claude Code
-# session inherits CLAUDE_CODE_SESSION_ID, never the other way round (fathers#150 review).
-AGENTS = (("CODEX_THREAD_ID", "codex"), ("CLAUDE_CODE_SESSION_ID", "claude-code"))
+# session inherits CLAUDE_CODE_SESSION_ID, never the other way round (fathers#150 review); Antigravity inside T3 Code
+# carries ANTIGRAVITY_CONVERSATION_ID alongside T3_THREAD_ID (fathers#200).
+AGENTS = (
+    ("ANTIGRAVITY_CONVERSATION_ID", "antigravity"),
+    ("ANTIGRAVITY_SESSION_ID", "antigravity"),
+    ("CODEX_THREAD_ID", "codex"),
+    ("CLAUDE_CODE_SESSION_ID", "claude-code"),
+    ("T3_THREAD_ID", "t3-code"),
+    ("T3_CODE_THREAD_ID", "t3-code"),
+    ("T3_SESSION_ID", "t3-code"),
+)
+AGENT_KIND_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
 
-def agent_session() -> tuple[str, str] | None:
+def _first_env(env: Mapping[str, str], names: tuple[str, ...]) -> str | None:
+    for name in names:
+        value = env.get(name, "").strip()
+        if value:
+            return value
+    return None
+
+
+def agent_session(env: Mapping[str, str] | None = None) -> tuple[str, str] | None:
     """(agent name, session id) of the agent this process runs for, or None."""
+    source = os.environ if env is None else env
+    explicit_kind = source.get("LANEFATHER_AGENT_KIND", "").strip().lower()
+    if explicit_kind and AGENT_KIND_RE.fullmatch(explicit_kind):
+        explicit_session = _first_env(source, ("LANEFATHER_AGENT_SESSION", *(var for var, _ in AGENTS)))
+        if explicit_session:
+            return explicit_kind, explicit_session
     for variable, name in AGENTS:
-        session = os.environ.get(variable, "").strip()
+        session = source.get(variable, "").strip()
         if session:
             return name, session
     return None
+
+
+def agent_context(explicit_kind: str | None = None, env: Mapping[str, str] | None = None) -> dict[str, Any] | None:
+    """Structured metadata for the agent running this command (fathers#200), or None when no agent is known."""
+    source = os.environ if env is None else env
+    detected = agent_session(source)
+    kind = (explicit_kind or "").strip().lower() or source.get("LANEFATHER_AGENT_KIND", "").strip().lower()
+    if not kind:
+        kind = detected[0] if detected else ""
+    if not kind or not AGENT_KIND_RE.fullmatch(kind):
+        return None
+
+    session_id = _first_env(source, ("LANEFATHER_AGENT_SESSION",)) or (detected[1] if detected else None)
+    subagent_id = _first_env(source, (
+        "LANEFATHER_AGENT_SUBAGENT_ID",
+        "CLAUDE_CODE_SUBAGENT_ID",
+        "CLAUDE_AGENT_ID",
+        "CODEX_SUBAGENT_ID",
+        "ANTIGRAVITY_SUBAGENT_ID",
+    ))
+    thread_id = _first_env(source, (
+        "LANEFATHER_AGENT_THREAD_ID",
+        "T3_THREAD_ID",
+        "T3_CODE_THREAD_ID",
+    ))
+    transcript_path = _first_env(source, (
+        "LANEFATHER_AGENT_TRANSCRIPT",
+        "AGENT_TRANSCRIPT_PATH",
+        "ANTIGRAVITY_TRANSCRIPT_PATH",
+        "CLAUDE_CODE_TRANSCRIPT_PATH",
+        "CLAUDE_TRANSCRIPT_PATH",
+        "CODEX_TRANSCRIPT_PATH",
+    ))
+    if not transcript_path and kind == "antigravity" and session_id:
+        app_data = _first_env(source, ("ANTIGRAVITY_APP_DATA_DIR",))
+        if app_data:
+            transcript_path = str(Path(app_data).expanduser() / "brain" / session_id
+                                  / ".system_generated" / "logs" / "transcript.jsonl")
+
+    model = _first_env(source, (
+        "LANEFATHER_AGENT_MODEL",
+        "ANTIGRAVITY_MODEL",
+        "T3_MODEL",
+        "CODEX_MODEL",
+        "CLAUDE_MODEL",
+        "ANTHROPIC_MODEL",
+    ))
+
+    options: dict[str, Any] = {}
+    raw_options = source.get("LANEFATHER_AGENT_OPTIONS", "").strip()
+    if raw_options:
+        with contextlib.suppress(ValueError):
+            parsed = json.loads(raw_options)
+            if isinstance(parsed, dict):
+                for key, val in cast(dict[Any, Any], parsed).items():
+                    if isinstance(key, str) and key and val is not None and val != "":
+                        options[clean(key, 1, 64)] = clean(val, 2, 200)
+    effort = _first_env(source, (
+        "LANEFATHER_AGENT_EFFORT",
+        "CLAUDE_CODE_EFFORT_LEVEL",
+        "CLAUDE_EFFORT",
+        "CODEX_REASONING_EFFORT",
+        "CODEX_EFFORT",
+        "T3_EFFORT",
+    ))
+    if effort:
+        options["effort"] = clean(effort, 1, 64)
+    thought_level = _first_env(source, (
+        "LANEFATHER_AGENT_THOUGHT_LEVEL",
+        "ANTIGRAVITY_THOUGHT_LEVEL",
+        "THOUGHT_LEVEL",
+    ))
+    if thought_level:
+        options["thought_level"] = clean(thought_level, 1, 64)
+
+    info: dict[str, Any] = {"kind": kind}
+    if session_id:
+        info["session_id"] = clean(session_id, 1, 200)
+    if subagent_id:
+        info["subagent_id"] = clean(subagent_id, 1, 200)
+    if thread_id:
+        info["thread_id"] = clean(thread_id, 1, 200)
+    if transcript_path:
+        info["transcript_path"] = clean(os.path.expanduser(transcript_path), 1, MAX_STRING)
+    if model:
+        info["model"] = clean(model, 1, 200)
+    if options:
+        info["options"] = options
+    return info
 
 
 def actor() -> dict[str, Any]:
