@@ -108,8 +108,7 @@ def fix_parent(record: Record) -> str | None:
 
 
 def admit(record: Record, force_reason: str | None, repaired: str | None) -> tuple[admission.Decision, list[str]]:
-    """Under the state lock: the refusals that end start at once (an existing lane, --after), then the cap, disk and
-    load decision and its refusals; a claim overlap raises."""
+    """Under the state lock: the existing-lane, dependency, cap, disk and claim rules for registration."""
     prog = config.prog()
     lane_id, lane_claims, after = record["id"], record["claims"], record["after"]
     existing = state.read_json(state.record_path(lane_id))
@@ -139,7 +138,7 @@ def admit(record: Record, force_reason: str | None, repaired: str | None) -> tup
 
 def register(record: Record, rules: list[dict[str, Any]], force_reason: str | None, create: bool,
              *, agent: str | None = None) -> None:
-    """Enforce the cap, disk, load and claims, save the record and print its brief header. When the disk floor is
+    """Enforce the cap, disk and claims, save the record and print its brief header. When the disk floor is
     the only refusal left, start's disk repair runs first (fathers#157), outside the state lock each done takes,
     and the decision is taken again; `review --fix-lane` registers through here, so it repairs too."""
     repaired: str | None = None
@@ -153,6 +152,10 @@ def register(record: Record, rules: list[dict[str, Any]], force_reason: str | No
                 break
         repaired = done.repair_disk(decision.machine["disk_free_gb"], decision.floor)
     print(header(record, rules))
+    machine = decision.machine
+    if machine["load15"] > machine["load_limit"]:
+        print(f"lane: load15 is {machine['load15']:.1f}, above the advisory limit of {machine['load_limit']:.1f}. "
+              "Checks may wait for a Slotfather slot.", file=sys.stderr)
     warning = tickets.no_ticket_warning(record)
     if warning:
         print(warning, file=sys.stderr)
@@ -271,7 +274,8 @@ def receipt_state(record: Record) -> str:
 
 
 def list_lanes(args: Any) -> int:
-    records = state.Store(config.current()).lanes(strict=True)
+    store = state.Store(config.current())
+    records = store.lanes(strict=True)
     shown = [r for r in records if args.all or r["status"] != "done"]
     decision = admission.evaluate(config.current(), records, admission.running_common(config.current()))
     cap, source, machine = decision.cap, decision.source, decision.machine
@@ -303,4 +307,9 @@ def list_lanes(args: Any) -> int:
     if git_ok(os.getcwd(), "rev-parse", "--git-dir"):
         for line in promote.ahead_lines(os.getcwd()):
             print(line)
+    pending = list(review.unmarked_reviews(records, store))
+    label = "review" if len(pending) == 1 else "reviews"
+    references = [f"{lane['id']}#{finding['n']}" for lane, findings in pending for finding in findings]
+    summary = f"{len(pending)} finished {label} with unmarked findings"
+    print(f"{summary}: {', '.join(references)}" if references else summary)
     return 0

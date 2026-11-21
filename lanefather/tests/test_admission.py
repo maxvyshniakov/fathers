@@ -124,6 +124,33 @@ print(json.dumps(answer))
         self.assertIn("unreadable", output)
         self.assertFalse((self.state / "first.json").exists())
 
+    def test_slotfather_load_refusal_is_advisory_for_registration(self):
+        self.provider()
+        self.env.update(ADMISSION_CAP="1", LANEFATHER_LOAD15="25")
+        self.write(self.state.parent, "queue/queue.toml", '[[lane]]\nid="next"\nticket=2\nclaims=["lib/**"]\n')
+        with patch.dict("os.environ", self.env, clear=True):
+            readiness = Project(config.load(self.integration / ".lanefather.toml")).readiness()
+        self.assertTrue(readiness.can_start, readiness.blocked)
+
+        output = self.lane("next", "--start", "--create")
+        self.assertIn("load15 is 25.0, above the advisory limit of 9.0", output)
+        self.assertIn("Checks may wait for a Slotfather slot.", output)
+        self.assertEqual(self.record("next")["overrides"], [])
+        self.assertIn("the cap is 1", self.start("blocked", "other/**", ok=False))
+
+    def test_check_uses_slot_admission_at_high_load_while_start_succeeds(self):
+        self.env.update(LANEFATHER_LOAD15="25", LANEFATHER_CORES="6")
+        worktree = self.created("loaded", "lib/loaded.txt")
+        self.commit(worktree, {"lib/loaded.txt": "ok\n"})
+        self.env["FAKE_SLOTFATHER_BUSY"] = "1"
+        blocked = self.lane("check", "loaded", "--wait", "1", ok=False)
+        self.assertIn("slot", blocked.lower())
+        del self.env["FAKE_SLOTFATHER_BUSY"]
+        self.lane("check", "loaded")
+        self.assertEqual(json.loads((self.state / "loaded.receipt.json").read_text())["status"], "green")
+        log_entries = [json.loads(line)["command"] for line in (self.tmp / "slotfather.log").read_text().splitlines() if line]
+        self.assertIn("advise", log_entries)
+
     def test_known_refusals_are_audited_but_claims_remain_non_bypassable(self):
         self.provider()
         self.env["ADMISSION_CAP"] = "1"
@@ -133,11 +160,11 @@ print(json.dumps(answer))
         output = self.start("blocked", "other/**", ok=False)
         self.assertIn("the cap is 1", output)
         self.assertIn("free disk is 20 GB (10^9), under the floor of 43 GB", output)
-        self.assertIn("load15 is 9.0", output)
+        self.assertNotIn("load15", output)
         self.start("forced", "other/**", extra=("--force-reason", "owner decision"))
         audit = self.record("forced")["overrides"][0]
         self.assertEqual("owner decision", audit["reason"])
-        self.assertEqual(3, len(audit["refusals"]))
+        self.assertEqual(2, len(audit["refusals"]))
         output = self.start("collision", "src/**", extra=("--force-reason", "owner decision"), ok=False)
         self.assertIn("claims overlap lane first", output)
         self.assertFalse((self.state / "collision.json").exists())

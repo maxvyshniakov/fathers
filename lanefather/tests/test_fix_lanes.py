@@ -106,7 +106,7 @@ class FixLaneTests(LaneCase):
 
 class FixLaneCapTests(LaneCase):
     """fathers#45 (a): a fix lane takes its landed, kept parent's place, so a full cap does not stall the fix round;
-    new queue work is still refused, and disk and load still apply."""
+    new queue work is still refused, and the disk floor still applies."""
 
     def landed_with_findings(self) -> None:
         self.review_text.write_text(TWO_FINDINGS)
@@ -142,14 +142,12 @@ class FixLaneCapTests(LaneCase):
         self.assertNotIn("lanes are planned or active", output)
         self.assertFalse((self.state / "a-review-fixes.json").exists())
 
-    def test_load_still_refuses_a_fix_lane_and_the_global_ceiling_does_not(self):
+    def test_a_fix_lane_can_register_at_high_load_and_the_global_ceiling(self):
         self.landed_with_findings()
         self.env.update(LANEFATHER_LOAD15="9.5", LANEFATHER_GLOBAL_CAP="3")
-        output = self.lane("review", "a", "--fix-lane", ok=False)
-        self.assertIn("load15 is 9.5", output)
+        output = self.lane("review", "a", "--fix-lane")
+        self.assertIn("load15 is 9.5, above the advisory limit of 9.0", output)
         self.assertNotIn("lanes are planned or active", output)
-        self.env["LANEFATHER_LOAD15"] = "0.1"
-        self.lane("review", "a", "--fix-lane")
         self.assertEqual(json.loads((self.state / "a-review-fixes.json").read_text())["cap_source"],
                          "fix-lane of a")
 

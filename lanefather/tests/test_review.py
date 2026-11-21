@@ -217,6 +217,56 @@ class ReviewGateTests(ReviewGateCase):
     """#570: promote moves dev only once every lane landed since dev has a finished review with each finding marked;
     --ship runs one overall review."""
 
+    def test_land_reports_another_lanes_finished_findings_and_audits_the_override(self):
+        self.review_text.write_text(SPREAD_FINDINGS)
+        self.landed("a", "lib/api.txt", "foo\nbaz\n")
+        self.lane("review", "a")
+        worktree = self.created("b", "lib/b.txt")
+        self.commit(worktree, {"lib/b.txt": "b\n"})
+        self.lane("check", "b")
+        previous = self.tip()
+        blocked = self.lane("land", "b", ok=False)
+        self.assertEqual(self.tip(), previous)
+        for n in (1, 2):
+            self.assertIn(f"lanefather review a --mark {n} fixed:<merge>", blocked)
+            self.assertIn(f"lanefather review a --mark {n} rejected:<reason>", blocked)
+        self.assertIn("lanefather review a --fix-lane", blocked)
+        self.assertIn("lanefather start <fix-id> --fix-of a", blocked)
+        self.assertIn("P3, does not block", blocked)
+        queue = self.lane("list")
+        self.assertEqual(queue.splitlines()[-1], "1 finished review with unmarked findings: a#1, a#2, a#3, a#4")
+
+        self.lane("land", "b", "--force-reason", "owner requested an urgent land")
+        audit = self.record("b")["overrides"][-1]
+        self.assertEqual(audit["reason"], "owner requested an urgent land")
+        self.assertEqual(len(audit["refusals"]), 2)
+        self.assertIn("override land b: owner requested an urgent land", (self.state / "ledger.log").read_text())
+
+        self.lane("review", "a", "--mark", "1", "rejected:known", "--mark", "2", "rejected:known")
+        worktree = self.created("c", "lib/c.txt")
+        self.commit(worktree, {"lib/c.txt": "c\n"})
+        self.lane("check", "c")
+        self.assertIn("P3, does not block", self.lane("land", "c"))
+        self.assertEqual(self.record("c")["overrides"], [])
+
+        # Plural list summary and fix lane blocked by an unrelated open review.
+        self.review_text.write_text(TWO_FINDINGS)
+        self.lane("review", "c")
+        plural = self.lane("list")
+        self.assertIn("2 finished reviews with unmarked findings:", plural.splitlines()[-1])
+        self.lane("review", "a", "--mark", "1", "rejected:known")  # still has #3, #4 P3; reopen blocking via c
+        self.lane("start", "fix-a", "--fix-of", "a", "--ticket", "1", "--claims", "lib/fix-a.txt", "--create")
+        fix_wt = self.record("fix-a")["worktree"]
+        self.commit(fix_wt, {"lib/fix-a.txt": "fix\n"})
+        self.lane("check", "fix-a")
+        fix_blocked = self.lane("land", "fix-a", ok=False)
+        self.assertIn("--fix-of a,c", fix_blocked)
+        for n in (1, 2):
+            self.lane("review", "c", "--mark", str(n), "rejected:known")
+        for n in (3, 4):
+            self.lane("review", "a", "--mark", str(n), "rejected:known")
+        self.assertEqual(self.lane("list").splitlines()[-1], "0 finished reviews with unmarked findings")
+
     def test_promote_refuses_while_a_finding_is_unmarked_and_moves_dev_once_each_is_marked(self):
         self.landed("clean", "lib/clean.txt", "clean\n")
         self.lane("review", "clean")
@@ -303,9 +353,10 @@ class ReviewGateTests(ReviewGateCase):
     def test_a_batch_fix_lane_for_several_parents_lands_exempt_and_its_merge_marks_their_findings(self):
         # fathers#174: one fix lane, started with --fix-of, fixes the findings of several landed lanes.
         self.review_text.write_text(TWO_FINDINGS)
+        # Both land while their reviews are pending. The later fix can pass the finished reviews of its parents.
         self.landed("a", "lib/api.txt", "foo\nbaz\n")
-        self.lane("review", "a")
         self.landed("b", "lib/b.txt", "b\n")
+        self.lane("review", "a")
         self.lane("review", "b")
         output = self.start("review-fixes-r3", "calls/**",
                             extra=("--base", self.tip(), "--fix-of", "a,b", "--create"))

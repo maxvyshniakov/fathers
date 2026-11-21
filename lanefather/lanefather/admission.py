@@ -282,7 +282,7 @@ def evaluate(project: config.Config, records: list[state.Record], common: str | 
     """Whether one more lane of the repository whose Git common directory is `common` may be registered: the cap
     counts that repository's planned and active lanes (all of `records` when `common` is None), the global ceiling
     every project's. `cap_exempt` admits a lane outside both (a fix lane in its landed parent's place, fathers#45);
-    disk and load still apply. `repaired` says what start's disk repair did (fathers#157), for a disk refusal."""
+    the disk floor still applies. Load is advisory here. `repaired` describes start's disk repair (fathers#157)."""
     if project.admission_provider not in ("legacy", "slotfather"):
         raise LaneError("unknown lifetime admission provider")
     active = state.occupying(state.of_project(records, common))
@@ -291,11 +291,7 @@ def evaluate(project: config.Config, records: list[state.Record], common: str | 
     if project.admission_provider == "legacy":
         cap, source = host.lane_cap(project)
         machine = host.host(project)
-        codes: list[str] = []
-        if len(active) >= cap:
-            codes.append("cap")
-        if machine["load15"] > host.load_limit(machine["cores"]):
-            codes.append("load15")
+        machine["load_limit"] = host.load_limit(machine["cores"])
     else:
         answer = ask(project, len(active))
         cap = int(answer["cap"])
@@ -303,11 +299,10 @@ def evaluate(project: config.Config, records: list[state.Record], common: str | 
         machine = {key: answer["host"][key]["value"] for key in ("cores", "load15")}
         machine["load_limit"] = answer["load_limit"]
         machine["disk_free_gb"] = host.disk_free_gb(project)
-        codes = answer["refusals"]
         for warning in answer["warnings"]:
             print(f"lane: warning: {warning}; the cap is {cap}", file=sys.stderr)
     refusals: list[str] = []
-    if "cap" in codes and not cap_exempt:
+    if len(active) >= cap and not cap_exempt:
         where = f" in {state.project_name(common)}" if common else ""
         refusals.append(f"{len(active)} lanes are planned or active{where} ({', '.join(r['id'] for r in active)}); "
                         f"the cap is {cap} ({source}): land one to make room under the lane cap")
@@ -320,8 +315,4 @@ def evaluate(project: config.Config, records: list[state.Record], common: str | 
         refusals.append(f"free disk is {machine['disk_free_gb']:.0f} GB (10^9), under the floor of {floor.words()}: "
                         + (f"{repaired}; free the rest outside finished lanes" if repaired else
                            f"run {project.command} done --finished, or done on landed lanes"))
-    if "load15" in codes:
-        limit = (f"{host.LOAD_FACTOR}x{machine['cores']} cores" if project.admission_provider == "legacy"
-                 else f"the Slotfather admission limit {machine['load_limit']:.1f}")
-        refusals.append(f"load15 is {machine['load15']:.1f}, above {limit}")
     return Decision(cap, source, machine, tuple(refusals), tuple(active), tuple(everywhere), ceiling, floor, short)

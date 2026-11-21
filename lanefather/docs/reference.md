@@ -70,6 +70,17 @@ parent's ID in the string `review_fix_of` for older Lanefather versions. The com
 A lane started with `--fix-of` has its own worktree, counts toward the cap like any lane, and runs its own check
 plan even with one parent. `start` warns when an id that reads `review-fixes` names no parent.
 
+### Review findings before landing
+
+`land` refuses if another lane in the same repository has a finished review with an unmarked P1 or P2 finding
+(fathers#177). The refusal gives the exact commands to mark each finding and shows how to start the fix round.
+Unmarked P3 findings are printed as warnings. A running or missing review can finish alongside later lands.
+A fix lane may land while its valid parents have unmarked findings. A finished review of an unrelated lane can
+still hold the merge. When several landed reviews need a fix, the refusal suggests one batch with `--fix-of`.
+`--force-reason` logs the reason and the blocking findings in the override record.
+The text output from `list` ends with the count of finished reviews with unmarked findings and their
+`lane#number` references. The separate batch gate uses its configured `[review] blocks` severities.
+
 ### Finishing lanes
 
 A lane is finished when it is landed (or released), its post-merge smoke is green, its review is finished or exempt
@@ -87,11 +98,15 @@ of its last unmarked finding. `[done] auto = false` turns that off; the lane the
   landed lanes that are not finished with the reason, and removes nothing.
 - `start` (and `next --start`, and `review --fix-lane`, which registers through it) whose only refusal is the
   free-disk floor first runs `done --finished` over the registry, leaving the projects whose `[done] auto` is false,
-  then decides again. An existing lane, an unknown `--after`, the cap, the load or a claim overlap refuses first,
+  then decides again. An existing lane, an unknown `--after`, the cap or a claim overlap refuses first,
   without the repair. The repair runs at most once in 10 minutes on the machine: a start within that window reuses
   the last result (`disk-repair.json` beside the project registry), and a second start waits for a running one. If
   the disk is still short, the refusal says what the repair freed. A failing repair never fails start.
   `--force-reason` skips it.
+
+High load prints an advisory on successful registration. The project's checks wait for Slotfather capacity where
+the verifier uses execution leases. `start --create` runs `git worktree add`. The project's check adapter handles
+dependency installation and builds. `capabilities --json` advertises `lane.load_advisory` (fathers#172).
 
 The free-disk floor (fathers#157) is `40 GB reserve + lane cap x lane peak`, in decimal GB (10^9); the lane peak is
 the largest lane `done` freed among the 20 last done in the state directory (3 GB before any). Refusals give the
