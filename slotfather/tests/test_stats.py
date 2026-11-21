@@ -9,15 +9,18 @@ import unittest
 from test_slotfather import TOOL, SlotCase
 from test_usage import load
 
-stats = load(TOOL + "-stats", "slotfather_stats_under_test")
+stats: Any = load(TOOL + "-stats", "slotfather_stats_under_test")
 
 
-V1 = {"label": "old", "cmd": "make build", "cwd": "/w", "count": 1, "pid": 1, "queued": "2026-11-02T10:00:00Z",
-      "granted": "2026-11-02T10:01:00Z", "ended": "2026-11-02T10:11:00Z", "outcome": "released", "waited": 60,
-      "ran": 600, "status": 0}
+V1: dict[str, Any] = {
+    "label": "old", "cmd": "make build", "cwd": "/w", "count": 1, "pid": 1, "queued": "2026-11-02T10:00:00Z",
+    "granted": "2026-11-02T10:01:00Z", "ended": "2026-11-02T10:11:00Z", "outcome": "released", "waited": 60,
+    "ran": 600, "status": 0,
+}
 
 
-def v2(label, cmd, count, waited, ran, cpu, ended="2026-11-02T12:00:00Z", **extra):
+def v2(label: str, cmd: str, count: int, waited: float | None, ran: float | None, cpu: float,
+       ended: str = "2026-11-02T12:00:00Z", **extra: Any) -> dict[str, Any]:
     return {"v": 2, "label": label, "cmd": cmd, "cwd": "/w", "count": count, "pid": 2, "queued": None,
             "granted": "2026-11-02T11:00:00Z", "ended": ended, "outcome": "released", "waited": waited, "ran": ran,
             "status": 0, "cores": 12, "capacity": 4, "cpu": cpu, "cpu_detached": 0.0, "wall": ran,

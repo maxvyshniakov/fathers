@@ -10,7 +10,7 @@ import signal
 import sys
 import threading
 import time
-from typing import Any, cast
+from typing import Any, Callable, cast
 
 from . import config as _config
 from . import entry as _entry
@@ -34,29 +34,32 @@ class TreeUsage:
     between two samples outside the attached tree are not seen, nor is a child that exits unwaited-for before its parent exits (launchd reaps that zombie). Resident
     memory is the sum over the tree's processes (shared pages count once per process)."""
 
-    def __init__(self, root: int, since: float, marked=None, uid: int | None = None):
+    def __init__(self, root: int, since: float, marked: Callable[[list[int]], set[int]] | None = None,
+                 uid: int | None = None) -> None:
         self.root, self.since = root, since
-        self.marked = marked or (lambda pids: set())
+        def _none_marked(pids: list[int]) -> set[int]:
+            return set()
+        self.marked: Callable[[list[int]], set[int]] = marked or _none_marked
         self.uid = os.getuid() if uid is None else uid
-        self.root_start = None
+        self.root_start: str | None = None
         self.root_gone = False  # set once wait4 has reaped the command: its pid may then be another process
         self.members: dict[tuple[int, str], list[Any]] = {}  # (pid, start) -> [own CPU seconds at the last sample, attached]
-        self.checked = set()  # (pid, start) of launchd children already considered
+        self.checked: set[tuple[int, str]] = set()  # (pid, start) of launchd children already considered
         self.detached_gone = 0.0
         self.processes = self.samples = 0
         self.rss_peak = 0  # KB
         self.rss_area = self.span = 0.0  # KB x seconds, seconds
-        self.last = None  # (moment, resident KB) of the previous sample
+        self.last: tuple[float, int] | None = None  # (moment, resident KB) of the previous sample
 
-    def candidates(self, table: dict) -> list[int]:
+    def candidates(self, table: dict[int, tuple[Any, ...]]) -> list[int]:
         """Children of launchd started during the lease that have not been considered yet; each is returned once,
         for `marked` to say whether it carries the lease."""
-        fresh = []
+        fresh: list[int] = []
         for pid, row in table.items():
-            key = (pid, row[1])
+            key = (pid, str(row[1]))
             if row[0] == 1 and row[2] == self.uid and key not in self.members and key not in self.checked:
                 self.checked.add(key)
-                begun = _platform.started_at(row[1])
+                begun = _platform.started_at(str(row[1]))
                 if begun is not None and begun >= self.since - 1:
                     fresh.append(pid)
         return fresh
@@ -66,7 +69,8 @@ class TreeUsage:
         it observe asks `marked` itself."""
         if adopted is None:
             fresh = self.candidates(table)
-            adopted = self.marked(fresh) if fresh else set()
+            empty_adopted: set[int] = set()
+            adopted = self.marked(fresh) if fresh else empty_adopted
         for key in list(self.members):
             row = table.get(key[0])
             if row is None or row[1] != key[1]:
@@ -103,14 +107,16 @@ class TreeUsage:
         """CPU seconds of processes that left the attached tree: gone, and still running at the last sample."""
         return self.detached_gone + sum(cpu for cpu, attached in self.members.values() if not attached)
 
-    def result(self, reaped_cpu: float, reaped_peak_kb: int = 0, wall: float | None = None) -> dict:
+    def result(self, reaped_cpu: float, reaped_peak_kb: int = 0, wall: float | None = None) -> dict[str, Any]:
         """Usage for the history, once the command has exited and the last sample was taken after its exit:
         `reaped_cpu` and `reaped_peak_kb` come from the command's rusage."""
         detached = self.detached()
         mean = self.rss_area / self.span if self.span > 0 else (self.last[1] if self.last else 0)
-        found = {"cpu": round(reaped_cpu + detached, 2), "cpu_detached": round(detached, 2),
-                 "rss_peak_mb": round(max(self.rss_peak, reaped_peak_kb) / 1024, 1),
-                 "rss_mean_mb": round(mean / 1024, 1), "processes": self.processes, "samples": self.samples}
+        found: dict[str, Any] = {
+            "cpu": round(reaped_cpu + detached, 2), "cpu_detached": round(detached, 2),
+            "rss_peak_mb": round(max(self.rss_peak, reaped_peak_kb) / 1024, 1),
+            "rss_mean_mb": round(mean / 1024, 1), "processes": self.processes, "samples": self.samples,
+        }
         if wall is not None:
             found["wall"] = round(wall, 2)
         return found
@@ -134,7 +140,8 @@ class Watch(threading.Thread):
         moment, table = time.time(), _process.usage_table()
         with self.lock:
             fresh = self.usage.candidates(table)
-        adopted = self.usage.marked(fresh) if fresh else set()
+        empty_adopted: set[int] = set()
+        adopted = self.usage.marked(fresh) if fresh else empty_adopted
         with self.lock:
             self.usage.observe(moment, table, adopted)
 
@@ -196,34 +203,40 @@ class Watch(threading.Thread):
             self.lock.release()
 
 
-def machine_facts(directory: Path) -> dict:
+def machine_facts(directory: Path) -> dict[str, Any]:
     """One machine sample: load, cumulative CPU ticks (busy is the change between two samples), memory pressure,
     swap and the slots held."""
     held = [e for _, e in _state.entries(directory) if _entry.is_held(e)]
     linux_facts = _platform.linux_memory() if _platform.linux() else None
+    swap: tuple[float, float] | None
+    level: float | None
+    free: int | None
     if linux_facts is None:
         swap = _platform.swap_usage()
         level = _platform.pressure_level()
-        free = _platform.sysctl("kern.memorystatus_level")
-        free = int(free) if free and free.isdigit() else None
+        raw_free = _platform.sysctl("kern.memorystatus_level")
+        free = int(raw_free) if raw_free and raw_free.isdigit() else None
     else:  # Linux: free memory is MemAvailable's share; no pressure level, PSI instead
-        swap = None if linux_facts["swap_total"] is None else (linux_facts["swap_total"], linux_facts["swap_free"] or 0)
+        swap = None if linux_facts["swap_total"] is None else (float(linux_facts["swap_total"]), float(linux_facts["swap_free"] or 0.0))
         level = None
-        free = round(100 * linux_facts["available"] / linux_facts["total"]) \
+        free = round(100 * float(linux_facts["available"]) / float(linux_facts["total"])) \
             if linux_facts["available"] is not None and linux_facts["total"] else None
-    item = {"v": _config.MACHINE_VERSION, "t": _config.now(), "at": round(time.time(), 2),
-            "load": [round(v, 2) for v in os.getloadavg()], "ticks": _platform.cpu_ticks(), "cores": _config.cores(),
-            "pressure": level, "memory_free_pct": free,
-            "swap_total_mb": None if swap is None else round(swap[0]),
-            "swap_free_mb": None if swap is None else round(swap[1]),
-            "held": sum(e["count"] for e in held), "leases": len(held)}
+    item: dict[str, Any] = {
+        "v": _config.MACHINE_VERSION, "t": _config.now(), "at": round(time.time(), 2),
+        "load": [round(v, 2) for v in os.getloadavg()], "ticks": _platform.cpu_ticks(), "cores": _config.cores(),
+        "pressure": level, "memory_free_pct": free,
+        "swap_total_mb": None if swap is None else round(swap[0]),
+        "swap_free_mb": None if swap is None else round(swap[1]),
+        "held": sum(int(e["count"]) for e in held), "leases": len(held),
+    }
     if linux_facts is not None:
-        item.update(memory_available_mb=None if linux_facts["available"] is None else round(linux_facts["available"]),
+        avail = linux_facts["available"]
+        item.update(memory_available_mb=None if avail is None else round(float(avail)),
                     psi_some=linux_facts["psi_some"], psi_full=linux_facts["psi_full"])
         if linux_facts["cgroup"]:
-            item.update(cgroup=linux_facts["cgroup"], cgroup_max_mb=round(linux_facts["cgroup_max"]),
-                        cgroup_available_mb=None if linux_facts["cgroup_available"] is None
-                        else round(linux_facts["cgroup_available"]))
+            cg_avail = linux_facts["cgroup_available"]
+            item.update(cgroup=linux_facts["cgroup"], cgroup_max_mb=round(float(linux_facts["cgroup_max"])),
+                        cgroup_available_mb=None if cg_avail is None else round(float(cg_avail)))
     with contextlib.suppress(_config.SlotError):
         item["capacity"] = _settings.total()
     return item

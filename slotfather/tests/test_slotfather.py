@@ -12,8 +12,6 @@ from slotfather import client, config, query
 from slotfather import platform as sf_platform
 
 
-import importlib.machinery
-import importlib.util
 import fcntl
 import io
 import json

@@ -164,29 +164,14 @@ def launchd_pids(text: str, how: str) -> set[int]:
     return found
 
 
-def service_of(cgroup_lines: list[str]) -> tuple[bool, str] | None:
-    """(in a user's manager, unit) of a process's cgroup v2 path when it is a .service, else None."""
-    path = next((line.split(":", 2)[2] for line in cgroup_lines if line.startswith("0::")), "")
-    unit = path.rstrip("/").rsplit("/", 1)[-1]
-    if not unit.endswith(".service"):
-        return None
-    return ("/user@" in path, unit)
-
-
+service_of = _platform.service_of
 Run = Callable[..., "subprocess.CompletedProcess[str]"]
 
 
 def main_pid(user: bool, unit: str, run: Run = subprocess.run) -> int:
     """The unit's MainPID from its manager (`systemctl --user` for a user's), or -1 when it cannot be asked: then
     every process in the service is taken as the service's."""
-    try:
-        result = run(["systemctl", *(["--user"] if user else []), "show", "--property", "MainPID", "--value", unit],
-                     capture_output=True, text=True, timeout=TIMEOUT)
-        if result.returncode == 0:
-            return int(result.stdout.strip() or 0)
-    except (OSError, subprocess.TimeoutExpired, ValueError):
-        pass
-    return -1
+    return _platform.main_pid(user, unit, run, TIMEOUT)
 
 
 def snapshot() -> Snapshot:

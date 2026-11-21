@@ -52,9 +52,9 @@ from . import process as _process
 from . import query as _query
 from . import settings as _settings
 from . import state as _state
-from . import sweep_os, sweep_plan
+from . import sweep_disk, sweep_os, sweep_plan
 from .sweep_os import SweepError, stop
-from .config import SWEEP_CLASSES as CLASSES
+from .config import SWEEP_CLASSES as CLASSES, SWEEP_DISK_CLASSES as DISK_CLASSES
 from .sweep_plan import Carriers
 
 
@@ -123,6 +123,13 @@ def config_command(argv: list[str], directory: Path) -> int:
                 raise SweepError(f"unknown setting {key}; settings: {', '.join(DEFAULTS)}")
             try:
                 if key == "classes":
+                    chosen = [] if value in ("none", "") else [c.strip() for c in value.split(",") if c.strip()]
+                    unknown_cls = set(chosen) - set(_config.SWEEP_ALL_CLASSES)
+                    if unknown_cls:
+                        raise ValueError(f"classes are some of {', '.join(_config.SWEEP_ALL_CLASSES)}, not {chosen!r}")
+                    changes["classes"] = [c for c in CLASSES if c in chosen]
+                    changes["disk_classes"] = [c for c in DISK_CLASSES if c in chosen]
+                elif key in ("disk_classes", "docker_superseded"):
                     changes[key] = [] if value in ("none", "") else [c.strip() for c in value.split(",") if c.strip()]
                 else:
                     changes[key] = _durations.span(value) if key in _settings.SWEEP_DURATIONS else float(value)
@@ -135,21 +142,23 @@ def config_command(argv: list[str], directory: Path) -> int:
     print(f"sweep settings ({'saved in ' + str(directory / 'sweep.json') if found['saved'] else 'defaults'}):")
     for key in DEFAULTS:
         value = found[key]
-        text = ",".join(value) or "none" if key == "classes" else (
+        text_val = (",".join(cast(list[str], value)) or "none") if isinstance(value, list) else (
             _config.duration(value) if key in _settings.SWEEP_DURATIONS and key != "container_minutes"
             else f"{value:g}")
-        print(f"  {key:<18} {text}")
+        print(f"  {key:<18} {text_val}")
     return 0
 
 
 def read_state(directory: Path) -> dict[str, Any]:
     try:
-        data = json.loads((directory / "sweep-state.json").read_text())
+        data: object = json.loads((directory / "sweep-state.json").read_text())
     except (OSError, ValueError):
         return {}
-    gone = data.get("gone_since") if isinstance(data, dict) else None
-    return {"gone_since": {str(k): float(v) for k, v in gone.items() if isinstance(v, (int, float))}} \
-        if isinstance(gone, dict) else {}
+    gone: object = cast(dict[str, Any], data).get("gone_since") if isinstance(data, dict) else None
+    if not isinstance(gone, dict):
+        return {}
+    gone_map = cast(dict[object, object], gone)
+    return {"gone_since": {str(k): float(v) for k, v in gone_map.items() if isinstance(v, (int, float))}}
 
 
 # The sweep
@@ -182,6 +191,7 @@ def sweep(directory: Path, live: bool = False, dev_servers: bool = False, only: 
     docker: dict[str, Any] = sweep_os.containers(found_settings) if "container" in enabled and only is None else \
         {"available": None, "items": []}
     memory = sweep_os.memory_report(sweep_os.memory_facts(), snap, found_settings, items, protected) if "memory" in enabled else {}
+    disk = sweep_disk.sweep_disk(snap, found_settings, live=live, only=only)
     waits = sweep_plan.self_matching_waits(snap, only)
     counts = {c: sum(i["class"] == c for i in items) for c in PROCESS_CLASSES}
     counts["container"] = len(docker["items"])
@@ -192,14 +202,14 @@ def sweep(directory: Path, live: bool = False, dev_servers: bool = False, only: 
               "notes": snap.notes + found_settings["warnings"] + (
                   [found_settings["error"] + ("; the live sweep stopped nothing" if refused else "")]
                   if "error" in found_settings else []),
-              "items": items, "containers": docker, "memory": memory, "found": counts,
+              "items": items, "containers": docker, "memory": memory, "disk": disk, "found": counts,
               "stopped": {c: sum(i["class"] == c and i["action"] in ("stopped", "killed") for i in items)
                           for c in PROCESS_CLASSES},
               "would_stop": sum(i["action"] == "would-stop" for i in items),
               "spared": sum(i["action"] == "spared" for i in items),
               "under_session": sum(bool(i.get("under_session")) for i in items),
               "self_matching": waits,
-              "failed": sum(i["action"] == "failed" for i in items),
+              "failed": sum(i["action"] == "failed" for i in items) + int(disk["failed"]),
               "freed_mb": round(sum(i["rss_mb"] for i in items if i["action"] in ("stopped", "killed")), 1)}
     if logged and _state.foreign_owner(directory) is None:
         with contextlib.suppress(OSError):
@@ -210,15 +220,23 @@ def sweep(directory: Path, live: bool = False, dev_servers: bool = False, only: 
 
 
 ACTIONS = {"would-stop": "would stop", "stop": "stop", "stopped": "stopped", "killed": "killed", "gone": "gone",
-           "failed": "FAILED", "spared": "spared", "report": "report"}
+           "failed": "FAILED", "spared": "spared", "report": "report",
+           "would-remove": "would remove", "remove": "remove", "removed": "removed",
+           "would-prune": "would prune", "prune": "prune", "pruned": "pruned",
+           "would-notify": "would notify", "notified": "notified"}
 
 
-def text(report: dict, quiet: bool = False) -> str:
-    lines = []
-    items = report["items"]
+def text(report: dict[str, Any], quiet: bool = False) -> str:
+    lines: list[str] = []
+    items = cast(list[dict[str, Any]], report["items"])
+    disk = cast(dict[str, Any], report.get("disk") or {})
+    disk_items = cast(list[dict[str, Any]], disk.get("items") or [])
     if quiet:
-        return "\n".join(f"slotfather sweep: {ACTIONS[i['action']]} {i['class']} pid {i['pid']} {i['kind']}: "
-                         f"{i['cmd'][:120]}" for i in items if i["action"] in ("stopped", "killed", "failed"))
+        proc_lines = [f"slotfather sweep: {ACTIONS[i['action']]} {i['class']} pid {i['pid']} {i['kind']}: "
+                      f"{i['cmd'][:120]}" for i in items if i["action"] in ("stopped", "killed", "failed")]
+        disk_lines = [f"slotfather sweep: {ACTIONS[d['action']]} {d['class']} {d['name']}: {d['reason']}"
+                      for d in disk_items if d["action"] in ("removed", "pruned", "notified", "failed")]
+        return "\n".join([*proc_lines, *disk_lines])
     when = time.strftime("%Y-%m-%d %H:%M", time.localtime(report["at"]))
     mode = "live" + (" with dev servers" if report["dev_servers"] else "") if report["live"] else \
         ("dry run (live refused: settings)" if report.get("live_refused") else "dry run")
@@ -236,7 +254,7 @@ def text(report: dict, quiet: bool = False) -> str:
         lines.append(f"  {'':<10} {'':<10} {detail}")
     if not items:
         lines.append("  no removed-directory processes, orphans or stale dev servers")
-    sessions = {}
+    sessions: dict[Any, list[dict[str, Any]]] = {}
     for item in items:
         if item.get("under_session"):
             sessions.setdefault(item.get("session"), []).append(item)
@@ -247,9 +265,9 @@ def text(report: dict, quiet: bool = False) -> str:
             gone = f" cwd gone {_config.duration(item['gone_for'])}" if item.get("cwd_gone") else ""
             lines.append(f"    {item['class']:<10} pid {item['pid']:<6} {_config.duration(item['age']):>7}{gone}  "
                          f"{sweep_plan.loop_head(item['cmd'])[:100]}")
-    patterns = {}
-    for wait in report.get("self_matching") or []:
-        patterns.setdefault(wait["pattern"], []).append(wait)
+    patterns: dict[str, list[dict[str, Any]]] = {}
+    for wait in cast(list[dict[str, Any]], report.get("self_matching") or []):
+        patterns.setdefault(str(wait["pattern"]), []).append(wait)
     for pattern, group in patterns.items():
         oldest = max((w["age"] or 0) for w in group)
         pids = [w["pid"] for w in group]
@@ -273,16 +291,32 @@ def text(report: dict, quiet: bool = False) -> str:
                              f"{entry['cmd'][:100]}")
         elif swap:
             lines.append(f"  memory: {swap}, not short")
+    docker_disk = cast(dict[str, Any], disk.get("docker") or {})
+    if docker_disk.get("available") is False:
+        lines.append(f"  disk docker: not checked ({docker_disk.get('note')})")
+    for entry in disk_items:
+        lines.append(f"  {entry['class']:<22} {ACTIONS[entry['action']]:<12} {entry['name']} — {entry['reason']}")
+        if entry["class"] == "low-disk":
+            for consumer in cast(list[dict[str, Any]], entry.get("top") or []):
+                lines.append(f"    {sweep_disk.gb_text(consumer['size_bytes']):>9}  {consumer['path']}")
     for note in report["notes"]:
         lines.append(f"  note: {note}")
+    disk_tail = ""
+    if disk_items:
+        acted_count = sum(cast(dict[str, int], disk.get("acted") or {}).values())
+        if report["live"]:
+            disk_tail = f"; disk acted {acted_count}, freed {sweep_disk.gb_text(disk.get('freed_bytes') or 0)}"
+        else:
+            disk_tail = f"; disk {disk.get('would_act', 0)} would act with --live"
     if report["live"]:
         stopped = sum(report["stopped"].values())
         lines.append(f"stopped {stopped} tree(s), {report['freed_mb']:.0f} MB resident; spared {report['spared']} "
-                     f"({report.get('under_session', 0)} under a live session), failed {report['failed']}")
+                     f"({report.get('under_session', 0)} under a live session), failed {report['failed']}{disk_tail}")
     else:
         lines.append(f"dry run: nothing was signalled; {report['would_stop']} would be stopped with --live"
                      + ("" if report["dev_servers"] else " (dev servers only with --live --dev-servers)")
-                     + f"; spared {report['spared']} ({report.get('under_session', 0)} under a live session)")
+                     + f"; spared {report['spared']} ({report.get('under_session', 0)} under a live session)"
+                     + disk_tail)
     return "\n".join(lines)
 
 
@@ -310,7 +344,8 @@ def main(argv: list[str] | None = None) -> int:
             return config_command(argv[1:], directory)
         live = dev = as_json = quiet = as_plist = False
         logged = True
-        only, interval = None, 3600
+        only: set[int] | None = None
+        interval = 3600
         while argv:
             option = argv.pop(0)
             if option == "--live":
@@ -328,7 +363,8 @@ def main(argv: list[str] | None = None) -> int:
             elif option == "--interval" and argv and argv[0].isdigit() and int(argv[0]) >= 60:
                 interval = int(argv.pop(0))
             elif option == "--pid" and argv and argv[0].isdigit():
-                only = (only or set()) | {int(argv.pop(0))}
+                empty_pids: set[int] = set()
+                only = (only or empty_pids) | {int(argv.pop(0))}
             elif option in ("-h", "--help"):
                 print(__doc__)
                 return 0

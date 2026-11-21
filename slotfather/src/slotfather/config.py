@@ -185,7 +185,12 @@ META_VALUE_MAX = 200
 
 
 META_KEYS_MAX = 16
-SWEEP_CLASSES = ("removed", "orphan", "dev-server", "container", "memory")  # the sweep's classes (sweep_plan)
+SWEEP_CLASSES = ("removed", "orphan", "dev-server", "container", "memory")  # the sweep's base classes (sweep_plan)
+SWEEP_DISK_CLASSES = (
+    "docker-anonymous", "docker-dangling-images", "docker-superseded",
+    "claude-scratch", "package-caches", "low-disk",
+)  # disk hygiene classes (sweep_disk, fathers#6)
+SWEEP_ALL_CLASSES = SWEEP_CLASSES + SWEEP_DISK_CLASSES
 CACHE_VALUES = ("hit", "miss", "partial")  # --meta cache=: whether the work reused a cache (fathers#97)
 
 
@@ -242,7 +247,7 @@ def sample_max() -> float:
 
 
 def legacy_dirs() -> list[Path]:
-    value = setting("LEGACY_DIRS", DEFAULT_LEGACY_DIRS)
+    value = setting("LEGACY_DIRS", DEFAULT_LEGACY_DIRS) or ""
     own = state_dir().resolve()
     paths = [Path(os.path.expanduser(p)) for p in value.split(":") if p]
     return [p for p in paths if p.resolve() != own]

@@ -18,6 +18,7 @@ Definitions: [glossary](../GLOSSARY.md). Naming and wire aliases: [terminology](
 | `cli` | Table-driven argument parsing, per-command `--help`, `--version`, and command dispatch. |
 | `client` | The waiting client: `Lease`, `acquire()`, `held_again()` and `yield_now()`, one wait loop (`wait_until()`) with the poll settings read once. Requests share `wait_held()`, including runs joining a measurement session. The library's entry point. |
 | `config` | Environment settings, installation defaults, constants, shared errors and the clock helpers. |
+| `contract` | `TypedDict` definitions for JSON snapshots (`status --json`, `status --json --full` `dashboard` block) and `events.jsonl` envelopes and payloads (`KINDS`), checked against `docs/api.md` (fathers#125). |
 | `durations` | The three duration grammars: `clock()` (`1h30m`: order, settings, sessions), `span()` (`1d`: sweep config), `since()` (ages and dates: stats). |
 | `entry` | A queue entry: its persisted fields, the accessors that read them whoever wrote the file, its phase, and the one definition of each transition (new request, grant and resume, yield, priority change, outcome). Pure: callers read and write the files and log. |
 | `estimates` | Run-time estimates from the history's finished runs (`Estimates`), their `estimates.json` cache and `estimator()`, which asks a run type's expectations first. Loaded only when an estimate is first asked (`leases.estimator()`), off the admission path. |
@@ -43,7 +44,8 @@ Definitions: [glossary](../GLOSSARY.md). Naming and wire aliases: [terminology](
 | `settings_cli` | `settings --json/check/set/reset`: the shared settings as data; labels, checks and previews the Settings panel shares. |
 | `state` | Queue locking, atomic files, bounded journals and persisted schema contracts; it imports no admission code (no `leases`, `schedule`, `runtype`, `events` or `platform`). |
 | `stats` | Historical analysis of `history.jsonl`, `machine.jsonl` and `sweep.jsonl` (`slotfather stats` / `slotfather-stats`). |
-| `sweep` | Guarded leftover-process cleanup command, settings, report and launchd plist (`slotfather sweep` / `slotfather-sweep`). |
+| `sweep` | Guarded leftover-process and disk-hygiene command, settings, report and launchd plist (`slotfather sweep` / `slotfather-sweep`). |
+| `sweep_disk` | Machine-wide disk hygiene (`docker-anonymous`, `docker-dangling-images`, `docker-superseded`, `claude-scratch`, `package-caches`, `low-disk`) with Junkfather scratchpad sparing (fathers#6). |
 | `sweep_os` | Machine adapters for `sweep`: `ps`, `lsof`, `/proc`, `launchd`, `systemd`, `docker`, memory inspection, and signalling. |
 | `sweep_plan` | Pure process classifier and cleanup planner operating on a `sweep_os` snapshot. |
 | `usage` | Process-tree accounting and machine sampling while work runs. |

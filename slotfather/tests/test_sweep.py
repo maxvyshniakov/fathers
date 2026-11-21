@@ -21,35 +21,38 @@ import subprocess
 import sys
 import textwrap
 import time
+from typing import Any, Iterable
 import unittest
 import unittest.mock
 
 from test_slotfather import TOOL, SlotCase
 from test_usage import load
 
-sweep = load(TOOL + "-sweep", "slotfather_sweep_under_test")
+sweep: Any = load(TOOL + "-sweep", "slotfather_sweep_under_test")
 sweep_plan = importlib.import_module("slotfather.sweep_plan")  # the classifier and planner (fathers#38)
 sweep_os = importlib.import_module("slotfather.sweep_os")  # the adapters
 
 NOW = 1_800_000_000.0
 UID = 501
 HOME = os.path.expanduser("~")
-SETTINGS = {**sweep.DEFAULTS, "classes": list(sweep.CLASSES)}
+SETTINGS: dict[str, Any] = {**sweep.DEFAULTS, "classes": list(sweep.CLASSES)}
 
 
-def proc(pid, ppid, cmd, age=36000.0, uid=UID, tty="", rss=10240):
+def proc(pid: int, ppid: int, cmd: str, age: float = 36000.0, uid: int = UID, tty: str = "",
+         rss: int = 10240) -> Any:
     return sweep_plan.Proc(pid, ppid, uid, rss, tty, f"start-{pid}", NOW - age, cmd)
 
 
-def snap(procs, cwds=None, managed=(), gone=(), me=(999,)):
+def snap(procs: Iterable[Any], cwds: dict[int, Any] | None = None, managed: Iterable[int] = (),
+         gone: Iterable[str] = (), me: Iterable[int] = (999,)) -> Any:
     """A snapshot of `procs`; directories listed in `gone` (and below them) do not exist."""
-    def isdir(path):
+    def isdir(path: str) -> bool:
         return not any(path == g or path.startswith(g.rstrip("/") + "/") for g in gone)
-    return sweep_plan.Snapshot({p.pid: p for p in procs}, cwds or {}, managed, moment=NOW, uid=UID, me=me, isdir=isdir)
+    return sweep_plan.Snapshot({p.pid: p for p in procs}, cwds or {}, set(managed), moment=NOW, uid=UID, me=tuple(me), isdir=isdir)
 
 
-def plan(s, settings=None, **options):
-    return {i["pid"]: i for i in sweep_plan.plan(s, settings or SETTINGS, **options)}
+def plan(s: Any, settings: dict[str, Any] | None = None, **options: Any) -> dict[int, dict[str, Any]]:
+    return {int(i["pid"]): i for i in sweep_plan.plan(s, settings or SETTINGS, **options)}
 
 
 SHELL = proc(50, 1, "/usr/bin/some-daemon")  # a live parent that is no session
@@ -173,9 +176,9 @@ class PlanTests(unittest.TestCase):
                  proc(103, 1, "node /w/verify.mjs"), proc(104, 50, "sleep 1"),
                  proc(105, 50, "sh -c y"), proc(106, 105, "tmux new -s z")]
         s = snap(procs, cwds={p.pid: sweep_plan.Cwd(gone, True) for p in procs}, gone=(gone,))
-        asked = []
+        asked: list[list[int]] = []
 
-        def carriers(pids):
+        def carriers(pids: list[int]) -> dict[int, str | None]:
             asked.append(pids)
             return {103: "lane-650"} if 103 in pids else {}
         found = plan(s, protected={100: "gate", 102: "lane-7"}, carriers=carriers, live=True)
@@ -320,7 +323,10 @@ class ReviewTests(unittest.TestCase):
 
     def test_lists_and_output_paths_are_no_removed_directory(self):
         gone = f"{HOME}/sweep-fixture-gone"
-        isdir = (lambda path: not path.startswith(gone))
+
+        def isdir(path: str) -> bool:
+            return not path.startswith(gone)
+
         within = sweep_plan.roots()
         for cmd in (f"java -cp {HOME}/a.jar:{HOME}/b.jar Main", f"env NODE_PATH={HOME}/a:{HOME}/b node x.js",
                     f"PATH={HOME}/.local/bin:/usr/bin make", f"tool --paths={HOME}/x,{HOME}/y"):
@@ -354,18 +360,18 @@ class ReviewTests(unittest.TestCase):
         s = snap([SHELL, proc(100, 50, "node verify.mjs")], {100: sweep_plan.Cwd(str(locked / "inside"), None)})
         self.assertEqual({}, plan(s))
 
-    def tmp_dir(self):
+    def tmp_dir(self) -> str:
         import tempfile
         path = tempfile.mkdtemp(prefix="sweep-review-")
         self.addCleanup(__import__("shutil").rmtree, path, ignore_errors=True)
         return path
 
-    def test_linux_cwds_come_from_the_same_mount_namespace_and_the_kernels_word_only(self):
+    def test_linux_cwds_come_from_the_same_mount_namespace_and_the_kernels_word_only(self) -> None:
         fake = pathlib.Path(self.tmp_dir())
         real = fake / "real-dir"
         real.mkdir()
 
-        def process(pid, cwd, ns="mnt:[4026531840]"):
+        def process(pid: int | str, cwd: str, ns: str = "mnt:[4026531840]") -> None:
             (fake / str(pid) / "ns").mkdir(parents=True)
             (fake / str(pid) / "ns" / "mnt").symlink_to(ns)
             (fake / str(pid) / "cwd").symlink_to(cwd)
@@ -393,16 +399,18 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual((False, "actions.runner.x.service"), sweep_os.service_of(
             ["0::/ci.slice/ci-runners.slice/actions.runner.x.service"]))
         self.assertIsNone(sweep_os.service_of(["0::/user.slice/user-1000.slice/session-3.scope"]))
-        asked = []
+        asked: list[list[str]] = []
 
-        def run(command, **_):
+        def run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
             asked.append(command)
             return subprocess.CompletedProcess(command, 0, "4242\n", "")
         self.assertEqual(4242, sweep_os.main_pid(True, "app.service", run))
         self.assertEqual(["systemctl", "--user", "show", "--property", "MainPID", "--value", "app.service"], asked[0])
         sweep_os.main_pid(False, "x.service", run)
         self.assertNotIn("--user", asked[1])
-        self.assertEqual(-1, sweep_os.main_pid(True, "x.service", lambda c, **_: subprocess.CompletedProcess(c, 1, "", "")))
+        def fail_run(c: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(c, 1, "", "")
+        self.assertEqual(-1, sweep_os.main_pid(True, "x.service", fail_run))
         printed = ("gui/501 = {\n\tservices = {\n\t\t    1329      - \tapplication.bt\n\t\t       0      0 \tidle\n"
                    "\t\t   65817   (pe) \tcom.apple.x\n\t}\n\tother = {\n\t\t  77 x\n\t}\n}\n")
         self.assertEqual({1329, 65817}, sweep_os.launchd_pids(printed, "print"))
@@ -421,25 +429,30 @@ class ReviewTests(unittest.TestCase):
 class StopTests(unittest.TestCase):
     """stop() with a fake process table: pids whose start time changed are never signalled."""
 
-    def run_stop(self, looks, grace=1.0):
+    def run_stop(self, looks: list[dict[int, tuple[str, bool]]],
+                 grace: float = 1.0) -> tuple[dict[str, Any], list[tuple[int, int]]]:
         s = snap([proc(100, 1, "x"), proc(101, 100, "y")])
-        sent, clock = [], [0.0]
+        sent: list[tuple[int, int]] = []
+        clock = [0.0]
         answers = iter(looks)
-        last = [None]
+        last: list[dict[int, tuple[str, bool]]] = [{}]
 
-        def look(pids):
-            try:
+        def look(pids: Iterable[int]) -> dict[int, tuple[str, bool]]:
+            pid_set = set(pids)
+            with __import__("contextlib").suppress(StopIteration):
                 last[0] = next(answers)
-            except StopIteration:
-                pass
-            return {p: v for p, v in last[0].items() if p in pids}
+            return {p: v for p, v in last[0].items() if p in pid_set}
 
-        def now():
+        def now() -> float:
             return clock[0]
 
-        def pause(seconds):
+        def pause(seconds: float) -> None:
             clock[0] += seconds
-        result = sweep.stop({"tree": [100, 101]}, s, grace, now, pause, look, lambda pid, sig: sent.append((pid, sig)))
+
+        def record_sig(pid: int, sig: int) -> None:
+            sent.append((pid, sig))
+
+        result: dict[str, Any] = sweep.stop({"tree": [100, 101]}, s, grace, now, pause, look, record_sig)
         return result, sent
 
     def test_a_start_time_changed_before_the_term_is_not_signalled(self):
@@ -463,9 +476,10 @@ class StopTests(unittest.TestCase):
 
 
 class ReportTests(unittest.TestCase):
-    def test_containers_in_a_restart_loop(self):
-        def container(name, restarts, status="restarting", restarting=True, started="2027-01-15T07:55:00Z",
-                      policy="unless-stopped", created="2027-01-10T00:00:00Z"):
+    def test_containers_in_a_restart_loop(self) -> None:
+        def container(name: str, restarts: int, status: str = "restarting", restarting: bool = True,
+                      started: str = "2027-01-15T07:55:00Z", policy: str = "unless-stopped",
+                      created: str = "2027-01-10T00:00:00Z") -> dict[str, Any]:
             return {"Id": "abcdef0123456789", "Name": "/" + name, "RestartCount": restarts, "Created": created,
                     "State": {"Status": status, "Restarting": restarting, "StartedAt": started, "ExitCode": 1},
                     "HostConfig": {"RestartPolicy": {"Name": policy}},
@@ -511,7 +525,7 @@ class ReportTests(unittest.TestCase):
                   "memory": {"swap_total_mb": 8192, "swap_free_mb": 1000, "short": "free swap low",
                              "top": [{"pid": 100, "rss_mb": 12, "class": "removed", "cmd": "node cli.mjs verify"}]},
                   "would_stop": 1, "spared": 0, "stopped": {}, "failed": 0, "freed_mb": 0}
-        text = sweep.text(report)
+        text: str = sweep.text(report)
         self.assertRegex(text, r"removed +would stop pid 100 +1h00m +12 MB  runner +node cli\.mjs verify")
         self.assertIn("cwd /w is gone; 2 process(es)", text)
         self.assertIn("container  report     app-1 (demo): restarting, 9 restarts", text)
@@ -522,33 +536,38 @@ class ReportTests(unittest.TestCase):
 
 
 class SweepCase(SlotCase):
-    def sweep(self, *args, ok=True):
+    tmp: pathlib.Path
+    state: pathlib.Path
+    env: dict[str, str]
+    processes: list[subprocess.Popen[Any]]
+
+    def sweep(self, *args: str, ok: bool = True) -> subprocess.CompletedProcess[str]:
         result = self.tool("sweep", *args)
         if ok:
             self.assertIn(result.returncode, (0, 1), result.stdout + result.stderr)
         return result
 
-    def configure(self, *pairs):
+    def configure(self, *pairs: str) -> str:
         result = self.tool("sweep", "config", *pairs)
         self.assertEqual(0, result.returncode, result.stderr)
         return result.stdout
 
-    def report(self, *args):
+    def report(self, *args: str) -> dict[str, Any]:
         result = self.sweep("--json", *args)
         return json.loads(result.stdout)
 
-    def alive(self, pid):
+    def alive(self, pid: int) -> bool:
         """Running (not a zombie) by ps."""
         found = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
         return bool(found) and not found.startswith("Z")
 
-    def wait_gone(self, pid, timeout=10):
+    def wait_gone(self, pid: int, timeout: float = 10) -> bool:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline and self.alive(pid):
             time.sleep(0.05)
         return not self.alive(pid)
 
-    def pid_file(self, path, timeout=10):
+    def pid_file(self, path: pathlib.Path, timeout: float = 10) -> int:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if path.exists() and path.read_text().strip().isdigit():
@@ -556,7 +575,7 @@ class SweepCase(SlotCase):
             time.sleep(0.05)
         self.fail(f"no pid in {path}")
 
-    def orphan(self, name, extra_env=None, wrap=()):
+    def orphan(self, name: str, extra_env: dict[str, str] | None = None, wrap: Iterable[str] = ()) -> int:
         """A python `verify.py` that sleeps, double-forked so that launchd/init adopts it; returns its pid."""
         work = self.tmp / name
         work.mkdir()
@@ -581,7 +600,7 @@ class SweepCase(SlotCase):
         self.addCleanup(lambda: os.kill(pid, signal.SIGKILL) if self.alive(pid) else None)
         return pid
 
-    def in_removed_directory(self, name, script="exec sleep 120"):
+    def in_removed_directory(self, name: str, script: str = "exec sleep 120") -> subprocess.Popen[bytes]:
         """A process (its own session, no terminal) whose working directory the test then removes."""
         work = self.tmp / name
         work.mkdir()
@@ -794,7 +813,7 @@ class CommandTests(SweepCase):
         self.assertEqual(2, self.tool("sweep", "--live", "--no-log").returncode)
         self.assertEqual(2, self.tool("sweep", "--bogus").returncode)
 
-    def processes_now(self):
+    def processes_now(self) -> set[int]:
         return {p.pid for p in self.processes if p.poll() is None}
 
     def test_the_launchd_agent(self):

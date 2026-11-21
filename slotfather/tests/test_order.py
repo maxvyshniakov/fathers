@@ -359,7 +359,9 @@ class EstimateTests(unittest.TestCase):
                 self.assertEqual(expected, sf_runtype.family(label))
 
     def test_the_closest_kind_that_ran_gives_the_median_of_its_recent_runs(self):
-        checks = lambda n: "/w/verify.sh --checks " + ",".join(f"c{i}" for i in range(n)) + " --jobs 1"
+        def checks(n: int) -> str:
+            return "/w/verify.sh --checks " + ",".join(f"c{i}" for i in range(n)) + " --jobs 1"
+
         found = sf_estimates.Estimates([("lane-1-a", checks(140), 4000), ("lane-1-a", checks(140), 5000),
                               ("lane-2-b", checks(130), 4600), ("lane-3-c", checks(4), 60),
                               ("post-merge-1-a", checks(140), 700), ("sid-kit", "bun x.mjs", 30)])

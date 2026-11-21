@@ -6,6 +6,17 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- `slotfather.contract` defines `TypedDict` contracts for `status --json` (`StatusSnapshot`, `StatusEntry`),
+  `status --json --full` (`FullSnapshot`, `DashboardBlock`, `DashboardRow`, `DashboardUnknown`, `DashboardEvent`), and
+  `events.jsonl` (`Event`, `Subject`, `Actor`, `KINDS`), checked against `docs/api.md`, with strict Pyright typing
+  across `stats`, `usage`, and `install.py` (fathers#125).
+
+- `slotfather sweep` owns machine-wide disk hygiene across six disk classes (`docker-anonymous`,
+  `docker-dangling-images`, `docker-superseded`, `claude-scratch` sparing running Junkfather entries' working
+  directories, `package-caches` for uv/Homebrew/npm/bun, and `low-disk` consumer notices), reporting by default,
+  acting only with `--live`, configured through `slotfather sweep config`, and preserving `sweep.json` bytes when
+  no disk setting is changed (fathers#6).
+
 - `slotfather run -n MIN-MAX` queues as a `MIN`-slot request (scheduling order treats it as `MIN`) and grants up
   to `MAX` of what is free at grant time. The granted slot count is exported as `SLOTFATHER_SLOTS` and recorded on
   the entry, in `status --json`, and in the `lease.granted` event; `capabilities --json` advertises `slot-range`
@@ -179,6 +190,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- On Linux, `procs --json --cwd` omits non-dumpable long-lived managed services (`systemd --user`, `(sd-pam)`, and
+  systemd `.service` `MainPID`s) whose `/proc` links fail with `EACCES`, while any non-dumpable process started
+  inside a worktree or outside a service's `MainPID` remains in `cwd_unknown` (fathers#164).
 - The holder's `.idle` record now includes its recent CPU rate (`cpu_pct`, cores × 100), and on Linux the
   dashboard block uses it for held leases' `cpu` (falling back to `ps %cpu` for older clients or on macOS), so
   an idle lease is no longer also marked hot from `ps`'s lifetime average (fathers#20).

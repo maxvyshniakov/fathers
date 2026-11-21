@@ -64,9 +64,10 @@ def loads() -> tuple[float, float, float]:
     value = (_config.setting("LOADAVG") or "").split()
     with contextlib.suppress(ValueError):
         if len(value) == 1:
-            return (float(value[0]),) * 3
+            one = float(value[0])
+            return (one, one, one)
         if len(value) == 3:
-            return tuple(float(v) for v in value)
+            return (float(value[0]), float(value[1]), float(value[2]))
     return os.getloadavg()
 
 
@@ -201,7 +202,7 @@ def memory_level() -> tuple[str, str | None]:
         except (OSError, ValueError):
             return "normal", None
     elif linux():
-        return linux_level(cast(dict[str, Any], linux_memory()))
+        return linux_level(linux_memory())
     else:
         free, level = swap_free_mb(), pressure_level()
     pressed = None
@@ -227,6 +228,27 @@ def proc_path(*parts: str) -> Path:
     return Path(_config.setting("PROC") or "/proc", *parts)
 
 
+def service_of(cgroup_lines: list[str]) -> tuple[bool, str] | None:
+    """(in a user's manager, unit) of a process's cgroup v2 path when it is a .service, else None."""
+    path = next((line.split(":", 2)[2].strip() for line in cgroup_lines if line.startswith("0::")), "")
+    unit = path.rstrip("/").rsplit("/", 1)[-1]
+    if not unit.endswith(".service"):
+        return None
+    return ("/user@" in path, unit)
+
+
+def main_pid(user: bool, unit: str, run: Any = subprocess.run, timeout: float = 10) -> int:
+    """The unit's MainPID from its manager (`systemctl --user` for a user's), or -1 when it cannot be asked."""
+    try:
+        result = run(["systemctl", *(["--user"] if user else []), "show", "--property", "MainPID", "--value", unit],
+                     capture_output=True, text=True, timeout=timeout)
+        if result.returncode == 0:
+            return int(result.stdout.strip() or 0)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        pass
+    return -1
+
+
 def meminfo(text: str | None = None) -> dict[str, int]:
     """/proc/meminfo as name -> kB (counts without a unit as they are); {} where it cannot be read."""
     if text is None:
@@ -234,7 +256,7 @@ def meminfo(text: str | None = None) -> dict[str, int]:
             text = proc_path("meminfo").read_text()
         except OSError:
             return {}
-    found = {}
+    found: dict[str, int] = {}
     for line in text.splitlines():
         name, _, rest = line.partition(":")
         value = rest.split()
@@ -251,7 +273,7 @@ def psi(text: str | None = None) -> dict[str, float] | None:
             text = proc_path("pressure", "memory").read_text()
         except OSError:
             return None
-    found = {}
+    found: dict[str, float] = {}
     for line in text.splitlines():
         kind, *fields = line.split()
         for field in fields:
@@ -328,8 +350,8 @@ def memory_cgroup() -> str | None:
     return limited_cgroup()
 
 
-def linux_memory(info: dict[str, int] | None = None, pressure: dict | None = None,
-                 group: str | None = None) -> dict:
+def linux_memory(info: dict[str, int] | None = None, pressure: dict[str, float] | None = None,
+                 group: str | None = None) -> dict[str, Any]:
     """The Linux memory facts in MB and percent: total, available, swap_total, swap_free, psi_some, psi_full, and
     for the queue's cgroup (memory_cgroup(), or `group`) cgroup, cgroup_max and cgroup_available (None where not
     reported). PSI is the cgroup's memory.pressure where there is one, else /proc/pressure/memory's."""
@@ -340,25 +362,28 @@ def linux_memory(info: dict[str, int] | None = None, pressure: dict | None = Non
         with contextlib.suppress(OSError):
             pressure = psi((cgroup_path(group) / "memory.pressure").read_text())
     pressure = psi() if pressure is None else pressure
-    megabytes = {key: (info[name] / 1024 if name in info else None)
-                 for key, name in (("total", "MemTotal"), ("available", "MemAvailable"),
-                                   ("swap_total", "SwapTotal"), ("swap_free", "SwapFree"))}
+    megabytes: dict[str, float | None] = {
+        key: (info[name] / 1024 if name in info else None)
+        for key, name in (("total", "MemTotal"), ("available", "MemAvailable"),
+                          ("swap_total", "SwapTotal"), ("swap_free", "SwapFree"))
+    }
     if megabytes["available"] is None and "MemFree" in info:  # kernels before 3.14 have no MemAvailable
         megabytes["available"] = (info["MemFree"] + info.get("Cached", 0) + info.get("Buffers", 0)) / 1024
     used = cgroup_value(group, "memory.current") if limit is not None else None
-    if used is not None:  # the working set: the cgroup's page cache it can drop at once does not count
+    if used is not None and group is not None:  # the working set: the cgroup's page cache it can drop at once does not count
         with contextlib.suppress(OSError, ValueError):
             for line in (cgroup_path(group) / "memory.stat").read_text().splitlines():
                 if line.startswith("inactive_file "):
                     used = max(0, used - int(line.split()[1]))
-    return {**megabytes, "psi_some": (pressure or {}).get("some"), "psi_full": (pressure or {}).get("full"),
+    psi_map: dict[str, float] = pressure or {}
+    return {**megabytes, "psi_some": psi_map.get("some"), "psi_full": psi_map.get("full"),
             "cgroup": group if limit is not None else None, "cgroup_max": None if limit is None else limit / (1 << 20),
-            "cgroup_available": None if used is None else max(0, limit - used) / (1 << 20)}
+            "cgroup_available": None if (used is None or limit is None) else max(0, limit - used) / (1 << 20)}
 
 
-def linux_short(facts: dict) -> str | None:
+def linux_short(facts: dict[str, Any]) -> str | None:
     """Why new leases should wait, from linux_memory(), at warning or above (linux_level())."""
-    return linux_level(cast(dict[str, Any], facts))[1]
+    return linux_level(facts)[1]
 
 
 def linux_level(facts: dict[str, Any]) -> tuple[str, str | None]:
@@ -398,12 +423,14 @@ def swap_usage(report: str | None = None) -> tuple[float, float] | None:
     report it."""
     if report is None and linux():
         facts = linux_memory(pressure={})
-        return None if facts["swap_total"] is None else (facts["swap_total"], facts["swap_free"] or 0.0)
+        return None if facts["swap_total"] is None else (float(facts["swap_total"]), float(facts["swap_free"] or 0.0))
     found = re.search(r"total = ([\d.]+)([MG]).*?free = ([\d.]+)([MG])",
                       (sysctl("vm.swapusage") or "") if report is None else report)
     if not found:
         return None
-    return tuple(float(found[n]) * (1024 if found[n + 1] == "G" else 1) for n in (1, 3))
+    total_mb = float(found[1]) * (1024 if found[2] == "G" else 1)
+    free_mb = float(found[3]) * (1024 if found[4] == "G" else 1)
+    return (total_mb, free_mb)
 
 
 def swap_free_mb(report: str | None = None) -> float | None:

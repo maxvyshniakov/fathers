@@ -211,12 +211,19 @@ class TraceTests(unittest.TestCase):
         self.dir = pathlib.Path(tempfile.mkdtemp(prefix="slotfather-replay-"))
         self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
 
-    def history(self, label, count, queued, granted, ended, pid, outcome="released"):
-        at = lambda clock: None if clock is None else f"2026-11-02T{clock}Z"
-        ran = None if granted is None else int(sf_config.seconds(at(ended)) - sf_config.seconds(at(granted)))
+    def history(self, label: str, count: int, queued: str, granted: str | None, ended: str, pid: int,
+                outcome: str = "released") -> dict[str, object]:
+        def at(clock: str | None) -> str | None:
+            return None if clock is None else f"2026-11-02T{clock}Z"
+
+        ended_s = sf_config.seconds(at(ended)) or 0.0
+        granted_s = sf_config.seconds(at(granted)) or 0.0
+        queued_s = sf_config.seconds(at(queued)) or 0.0
+        first_s = sf_config.seconds(at(granted or ended)) or 0.0
+        ran = None if granted is None else int(ended_s - granted_s)
         return {"label": label, "cmd": f"make {label}", "count": count, "pid": pid, "queued": at(queued),
                 "granted": at(granted), "ended": at(ended), "outcome": outcome, "ran": ran,
-                "waited": int(sf_config.seconds(at(granted or ended)) - sf_config.seconds(at(queued)))}
+                "waited": int(first_s - queued_s)}
 
     def test_recorded_and_unrecorded_requests_join_in_queue_order(self):
         items = [self.history("first", 1, "10:00:00", "10:00:00", "10:10:00", 11),

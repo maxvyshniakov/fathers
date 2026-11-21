@@ -126,8 +126,41 @@ def read_leases(processes: dict[int, Process], entries: list[tuple[Path, dict[st
     return leases
 
 
-def read_cwds(processes: dict[int, Process], uid: int) -> dict[int, str]:
-    """Read local working directories; inaccessible processes remain explicitly unknown."""
+def _adopted_by_manager(process: Process, processes: dict[int, Process]) -> bool:
+    if process.ppid == 1:
+        return True
+    parent = processes.get(process.ppid)
+    return parent is not None and os.path.basename(_lineage.program(parent.cmd)) == "systemd"
+
+
+def _non_dumpable_service(pid: int, process: Process, processes: dict[int, Process], uid: int, proc: Path,
+                          units: dict[tuple[bool, str], int]) -> bool:
+    """Whether a same-user Linux process whose /proc cwd or mount namespace answered EACCES/EPERM is a managed
+    system or user service main process (systemd --user, (sd-pam), or a systemd .service MainPID; fathers#164).
+    Unlike sweep_os.managed_jobs, an unanswerable systemctl (-1) never exempts a process: fail closed."""
+    if not _adopted_by_manager(process, processes):
+        return False
+    try:
+        lines = (proc / str(pid) / "cgroup").read_text().splitlines()
+    except OSError:
+        return False
+    cgroup = next((line.split(":", 2)[2].strip() for line in lines if line.startswith("0::")), "").rstrip("/")
+    manager_unit = f"/user@{uid}.service"
+    if cgroup.endswith((manager_unit, f"{manager_unit}/init.scope")):
+        exe = os.path.basename(_lineage.program(process.cmd))
+        if exe == "systemd" or process.cmd.strip().startswith("(sd-pam)"):
+            return True
+    key = platform.service_of(lines)
+    if key is None:
+        return False
+    if key not in units:
+        units[key] = platform.main_pid(*key, subprocess.run, timeout=5)
+    return units[key] == pid
+
+
+def read_cwds(processes: dict[int, Process], uid: int, exempt: set[int] | None = None) -> dict[int, str]:
+    """Read local working directories; inaccessible processes remain explicitly unknown unless they are non-dumpable
+    long-lived managed services on Linux (`exempt` receives their PIDs; fathers#164)."""
     found: dict[int, str] = {}
     if sys.platform.startswith("linux"):
         proc = Path(os.environ.get("SLOTFATHER_PROC", "/proc"))
@@ -135,6 +168,7 @@ def read_cwds(processes: dict[int, Process], uid: int) -> dict[int, str]:
             namespace = os.readlink(proc / "self/ns/mnt")
         except OSError as error:
             raise ProcsError(f"cannot read own mount namespace: {error}") from None
+        units: dict[tuple[bool, str], int] = {}
         for pid, process in processes.items():
             if process.uid != uid:
                 continue
@@ -142,6 +176,10 @@ def read_cwds(processes: dict[int, Process], uid: int) -> dict[int, str]:
                 if os.readlink(proc / str(pid) / "ns/mnt") != namespace:
                     continue
                 path = os.readlink(proc / str(pid) / "cwd")
+            except PermissionError:
+                if exempt is not None and _non_dumpable_service(pid, process, processes, uid, proc, units):
+                    exempt.add(pid)
+                continue
             except OSError:
                 continue
             if path.endswith(" (deleted)"):
@@ -202,13 +240,15 @@ def query(pid: int | None = None, cwd: str | None = None, directory: Path | None
                         f"({_entry.unknown(entry, _entry.IDENTITY)}) whose "
                         f"holder is not running; remove the file to clear it")
     selected = sorted(processes) if pid is None else ([pid] if pid in processes else [])
-    cwds = read_cwds(processes, os.geteuid()) if cwd is not None else {}
+    exempt_cwds: set[int] = set()
+    cwds = read_cwds(processes, os.geteuid(), exempt_cwds) if cwd is not None else {}
     unknown: list[int] = []
     if cwd is not None:
         cwd = os.path.realpath(os.path.expanduser(cwd))
         own = {os.getpid(), *ancestors(processes, os.getpid())}
         unknown = sorted(number for number, process in processes.items()
-                         if process.uid == os.geteuid() and number not in cwds and number not in own)
+                         if process.uid == os.geteuid() and number not in cwds and number not in own
+                         and number not in exempt_cwds)
         selected = [number for number in selected if processes[number].uid == os.geteuid() and number not in own
                     and number in cwds and (cwds[number] == cwd or cwds[number].startswith(cwd.rstrip("/") + "/"))]
     parents = {number: process.ppid for number, process in processes.items()}

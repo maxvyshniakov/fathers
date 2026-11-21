@@ -17,7 +17,6 @@ import sys
 import unittest
 
 from test_slotfather import TOOL, WORK, SlotCase
-from test_usage import load
 
 
 # Work that writes its own pid, its lease and its process group before it waits for its release file.
