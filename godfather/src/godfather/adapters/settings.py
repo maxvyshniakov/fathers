@@ -49,6 +49,51 @@ class Contract:
         return None
 
 
+def validate_reply(tool: str, reply: dict[str, Any]) -> dict[str, Any]:
+    """Checks the required fields of a v1 `settings --json` document so malformed rows fail visibly."""
+    if reply.get("v") not in SETTINGS_VERSIONS:
+        raise SettingsError(f"{tool} settings version {reply.get('v')!r}; needs a newer godfather")
+    sections: Any = reply.get("sections")
+    if not isinstance(sections, list):
+        raise SettingsError(f"{tool} settings: sections is missing; update {tool}")
+    status: Any = reply.get("status")
+    if status is not None and (not isinstance(status, list) or any(
+            not isinstance(item, dict) or not isinstance(cast(dict[str, Any], item).get("label"), str)
+            or not isinstance(cast(dict[str, Any], item).get("value"), str) for item in cast(list[Any], status))):
+        raise SettingsError(f"{tool} settings: malformed status; update {tool}")
+    for part in cast(list[Any], sections):
+        if not isinstance(part, dict) or not isinstance(cast(dict[str, Any], part).get("settings"), list):
+            raise SettingsError(f"{tool} settings: malformed section; update {tool}")
+        section = cast(dict[str, Any], part)
+        for raw_item in cast(list[Any], section["settings"]):
+            if not isinstance(raw_item, dict):
+                raise SettingsError(f"{tool} settings: a setting has no key; update {tool}")
+            item = cast(dict[str, Any], raw_item)
+            raw_key: Any = item.get("key")
+            if not isinstance(raw_key, str) or not raw_key.strip():
+                raise SettingsError(f"{tool} settings: a setting has no key; update {tool}")
+            key: str = raw_key
+            kind: Any = item.get("type")
+            if not isinstance(kind, str) or not kind.strip():
+                raise SettingsError(f"{tool} settings: {key} has no type; update {tool}")
+            if "value" not in item:
+                raise SettingsError(f"{tool} settings: {key} has no value; update {tool}")
+            if item.get("label") is not None and not isinstance(item.get("label"), str):
+                raise SettingsError(f"{tool} settings: {key} has a malformed label; update {tool}")
+            if kind == "choice":
+                choices: Any = item.get("choices")
+                if not isinstance(choices, list) or not choices or any(
+                        not isinstance(choice, dict) or "value" not in cast(dict[str, Any], choice)
+                        for choice in cast(list[Any], choices)):
+                    raise SettingsError(f"{tool} settings: {key} has malformed choices; update {tool}")
+            elif kind in ("integer", "number", "duration") and item["value"] is not None:
+                if not isinstance(item["value"], (int, float)) or isinstance(item["value"], bool):
+                    raise SettingsError(f"{tool} settings: {key} has a non-numeric value; update {tool}")
+            elif kind == "boolean" and item["value"] is not None and not isinstance(item["value"], bool):
+                raise SettingsError(f"{tool} settings: {key} has a non-boolean value; update {tool}")
+    return reply
+
+
 class SettingsClient:
     """`<tool> settings ...` through sources.run_json(), with `--json` last."""
 
@@ -72,10 +117,7 @@ class SettingsClient:
         code, value = self.call([])
         if code != DONE or not isinstance(value, dict):
             raise SettingsError(self.error(value, f"{self.tool} settings cannot be read"))
-        reply = cast(dict[str, Any], value)
-        if reply.get("v") not in SETTINGS_VERSIONS:
-            raise SettingsError(f"{self.tool} settings version {reply.get('v')!r}; needs a newer godfather")
-        return reply
+        return validate_reply(self.tool, cast(dict[str, Any], value))
 
     def check(self, key: str, value: str) -> dict[str, Any]:
         """{"ok", "error", "preview", "slots"?}; a refusal (exit 2, 4 or 5) is an answer, not an error."""
@@ -87,12 +129,13 @@ class SettingsClient:
     def changed(self, code: int, value: Any) -> dict[str, Any]:
         if code == CONFLICT:
             found = cast(dict[str, Any], value) if isinstance(value, dict) else {}
-            raise Conflict(found if found.get("sections") else None, self.error(value, "changed elsewhere"))
+            raise Conflict(validate_reply(self.tool, found) if found.get("sections") else None,
+                           self.error(value, "changed elsewhere"))
         if code in READ_ONLY:
             raise ReadOnly(self.error(value, f"{self.tool} settings are read-only here"))
         if code != DONE or not isinstance(value, dict):
             raise SettingsError(self.error(value, "not saved"))
-        return cast(dict[str, Any], value)
+        return validate_reply(self.tool, cast(dict[str, Any], value))
 
     def set(self, key: str, value: str, revision: Optional[str] = None) -> dict[str, Any]:
         """Saves one value; the settings as they are now. Raises Conflict, ReadOnly or SettingsError."""
