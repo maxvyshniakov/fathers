@@ -24,7 +24,7 @@ import sys
 import time
 from typing import Any, cast
 
-from . import claims, config, done, journal, lanes, lifecycle, receipts, reviewer, settings, state, worktrees
+from . import claims, config, journal, lanes, lifecycle, receipts, reviewer, settings, state, worktrees
 from .errors import LaneError
 from .gitops import common_dir, current_branch, git, git_ok, main_checkout
 from .state import Record
@@ -403,16 +403,17 @@ def start_lane_review(record: Record) -> str:
     return f"review started in the background (pid {receipt['pid']}, log {receipt['log']})"
 
 
-def review_complete_finish(lane_id: str) -> None:
+def review_complete_finish(lane_id: str, store: state.Store | None = None) -> None:
     """After the lane's review is clean or fully marked: finish the lane as land would have (auto-done,
     fathers#157), unless land is still running its smoke (land finishes it then) or its smoke was red; a kept lane
     and `[done] auto = false` only say so."""
-    record = state.load(lane_id)
+    store = store or state.Store(config.current())
+    record = store.load(lane_id)
     if not lifecycle.awaiting_done(record):
         return
-    if (record.get("post_merge") or {}).get("status") != "green" and not done.kept(record):
+    if (record.get("post_merge") or {}).get("status") != "green" and not lifecycle.kept(record):
         return
-    done.finish_landed(lane_id, False)
+    lifecycle.finish_landed(store, lane_id, False)
 
 
 def review_lane(args: Any) -> int:

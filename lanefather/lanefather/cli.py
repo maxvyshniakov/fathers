@@ -234,6 +234,8 @@ def parser() -> Parser:
                         "(default: slotfather advise --max 3)")
     p.add_argument("--keep", action="store_true",
                    help="leave the landed lane for done (another lane needs its artifacts)")
+    p.add_argument("--repair", action="store_true",
+                   help="finish landing an active lane whose branch is already merged into the integration worktree")
     p.add_argument("--force-reason", help="override a missing green receipt or a review hold, with a logged reason")
     p.add_argument("--wait", type=float, default=120, metavar="SECONDS", help="wait this long for the landing lock")
     p.set_defaults(run=land.land)

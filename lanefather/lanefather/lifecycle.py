@@ -7,7 +7,7 @@ its agent still locks the worktree), done (cleaned up). Every status change and 
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from . import journal, state
 from .errors import LaneError
@@ -96,6 +96,21 @@ def finished(record: Record | None) -> bool:
 def live(record: Record | None) -> bool:
     """Whether `record` is in any non-done status (`planned`, `active`, `landed`, or `released`)."""
     return bool(record) and record.get("status") in LIVE
+
+
+def kept(record: Record) -> bool:
+    """Whether auto-done and done --finished leave the lane alone (fathers#157): `keep ID` or `land --keep`."""
+    landed_info: Any = record.get("landed")
+    return bool(record.get("keep")) or (
+        isinstance(landed_info, dict) and bool(cast(dict[str, Any], landed_info).get("keep"))
+    )
+
+
+def finish_landed(store: state.Store, lane_id: str, keep: bool = False) -> None:
+    """Trigger post-land/post-review completion through `done` without creating a module import cycle."""
+    from . import done
+
+    done.finish_landed(lane_id, keep, store=store)
 
 
 def register(store: state.Store, record: Record, *, status: str = "planned", worktree: str | None = None,
@@ -193,9 +208,11 @@ def transition(store: state.Store, lane_id: str, event: str, *,
         record["status"] = target
         for key, value in fields.items():
             record[key] = value
-        if event == "land" and isinstance(record.get("landed"), dict) and record.get("keep"):
-            # Preserve a concurrent `lanefather keep` flag set before the land saved.
-            record["landed"]["keep"] = True
+        if event == "land":
+            record.pop("landing", None)
+            if isinstance(record.get("landed"), dict) and record.get("keep"):
+                # Preserve a concurrent `lanefather keep` flag set before the land saved.
+                record["landed"]["keep"] = True
         if overrides:
             existing_overrides: list[dict[str, Any]] = record.setdefault("overrides", [])
             existing_overrides.extend(overrides)

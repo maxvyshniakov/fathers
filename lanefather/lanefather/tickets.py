@@ -20,7 +20,7 @@ import subprocess
 import sys
 from typing import Any
 
-from . import config, journal, receipts, review
+from . import config, journal, receipts, review, state
 from .gitops import common_dir, git, git_ok
 from .state import Record
 
@@ -62,10 +62,11 @@ def fixed_issues(cwd: str, base: str, head: str) -> list[str]:
     return list(dict.fromkeys(FIXES.findall(bodies)))
 
 
-def repository(common: str) -> str | None:
+def repository(common: str, rule: config.Tickets | None = None) -> str | None:
     """owner/name for gh: the configured repo, else origin's GitHub repository."""
-    if rules().repo:
-        return rules().repo
+    active_rule = rule or rules()
+    if active_rule.repo:
+        return active_rule.repo
     found = review.repo_args(common)
     return found[1] if found else None
 
@@ -100,11 +101,12 @@ def remove_label(repo: str, number: str) -> str | None:
     return None if problem and f"'{LABEL}' not found" in problem else problem
 
 
-def warn(what: str, problems: list[str]) -> None:
+def warn(what: str, problems: list[str], *, store: state.Store | None = None) -> None:
     for problem in problems:
         print(f"lane: warning: {what}: {problem}", file=sys.stderr)
     journal.ledger(f"tickets {what} warning: {'; '.join(problems)}".replace("\n", " "), kind="ticket.failed",
-                   level="warn", subject={"type": "ticket", "id": what}, details={"problems": problems})
+                   level="warn", subject={"type": "ticket", "id": what}, details={"problems": problems},
+                   directory=store.directory if store else None, project=store.project if store else None)
 
 
 def on_origin(cwd: str, sha: str) -> list[str]:
@@ -125,8 +127,8 @@ def receipt_line(receipt: dict[str, Any] | None, record: Record) -> str:
 
 
 def land_comment(record: Record, merge: str, branch: str, repo: str, pushed: list[str],
-                 receipt: dict[str, Any] | None, smoke: str) -> str:
-    rule = rules()
+                 receipt: dict[str, Any] | None, smoke: str, *, rule: config.Tickets | None = None) -> str:
+    rule = rule or rules()
     short = merge[:10]
     where = (f"[`{short}`](https://github.com/{repo}/commit/{merge}) (pushed: origin/{', origin/'.join(pushed)})"
              if pushed else f"`{short}` (local only: origin does not have this merge yet)")
@@ -146,21 +148,22 @@ def land_comment(record: Record, merge: str, branch: str, repo: str, pushed: lis
     return "\n".join(lines + ([""] + notes if notes else []))
 
 
-def after_land(record: Record, merge: str, integration: str, branch: str, receipt: dict[str, Any] | None,
-               smoke_status: str, smoke: str) -> None:
+def after_land(store: state.Store, record: Record, merge: str, integration: str, branch: str,
+               receipt: dict[str, Any] | None, smoke_status: str, smoke: str) -> None:
     """Label and comment the lane's issue after its land; a red smoke leaves it for the fix's land."""
-    rule = rules()
+    rule = store.project.tickets
     if not has_ticket(record) or not (rule.integrated_label or rule.land_comment):
         return
     number, what = record["ticket"], f"land {record['id']} #{record['ticket']}"
     if smoke_status != "green":
         journal.ledger(f"tickets {what}: not marked, the post-merge smoke is {smoke_status}",
-                       kind="ticket.skipped", lane=record, details={"issue": number, "smoke": smoke_status})
+                       kind="ticket.skipped", lane=record, details={"issue": number, "smoke": smoke_status},
+                       directory=store.directory, project=store.project)
         print(f"lane: #{number} is not marked integrated: the post-merge smoke is {smoke_status}")
         return
-    repo = repository(record["common_dir"])
+    repo = repository(record["common_dir"], rule)
     if not repo:
-        warn(what, ["no GitHub repository: origin is not on GitHub and [tickets] names no repo"])
+        warn(what, ["no GitHub repository: origin is not on GitHub and [tickets] names no repo"], store=store)
         return
     problems: list[str] = []
     done: list[str] = []
@@ -171,7 +174,7 @@ def after_land(record: Record, merge: str, integration: str, branch: str, receip
         else:
             done.append(f"labelled {LABEL}")
     if rule.land_comment:
-        body = land_comment(record, merge, branch, repo, on_origin(integration, merge), receipt, smoke)
+        body = land_comment(record, merge, branch, repo, on_origin(integration, merge), receipt, smoke, rule=rule)
         problem = gh(repo, "issue", "comment", number, "--body", body)
         if problem:
             problems.append(f"comment: {problem}")
@@ -179,10 +182,11 @@ def after_land(record: Record, merge: str, integration: str, branch: str, receip
             done.append("commented")
     if done:
         journal.ledger(f"tickets {what}: {', '.join(done)} ({repo})", kind="ticket.marked", lane=record,
-                       details={"issue": number, "done": done, "repository": repo})
+                       details={"issue": number, "done": done, "repository": repo},
+                       directory=store.directory, project=store.project)
         print(f"lane: #{number} {' and '.join(done)} in {repo}")
     if problems:
-        warn(what, problems)
+        warn(what, problems, store=store)
 
 
 def release_comments(cwd: str, common: str, base: str, head: str, version: str | None) -> int:
