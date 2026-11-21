@@ -21,10 +21,9 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import time
 from typing import Any
 
-from . import checks, config, events, host, journal, plan, review, slots, state, tickets, worktrees
+from . import config, events, host, journal, plan, review, slots, state, tickets, verify, worktrees
 from . import results as result_store
 from .errors import LaneError
 from .gitops import common_dir, git, git_ok, worktree_list
@@ -120,33 +119,28 @@ def batch_gate(cwd: str, common: str, sha: str, jobs: int | None) -> None:
 def gate_meta(path: Any) -> dict[str, str]:
     """The batch gate's run type (fathers#107): the full plan, and how many checks the tree's plan module defines."""
     known = plan.known_checks(path)
-    return checks.plan_meta(result_store.FULL, path, len(known) if known is not None else None)
+    return verify.plan_meta(result_store.FULL, path, len(known) if known is not None else None)
 
 
 def run_batch_gate(cwd: str, common: str, sha: str, jobs: int | None) -> None:
     path = worktrees.gate_worktree(common, sha)
-    log = journal.log_path(f"promote-{sha[:10]}")
     label = f"promote-{sha[:10]}"
     load_wait = host.wait_for_load(label)
     # Sized once the wait is over (#599 review), so jobs_decision records the load the gate starts under.
     info = host.host()
     decision = host.given_jobs(jobs, "--jobs") if jobs else host.gate_jobs(info)
-    jobs = decision["jobs"]
-    print(f"lane: batch gate: the full gate on {sha[:10]} in {path} with {jobs} jobs (log {log}); "
-          "queue: slotfather status", flush=True)
-    started, clock, load = journal.now(), time.monotonic(), {"start": host.load_averages()}
-    with open(log, "w") as handle:
-        status = subprocess.run([plan.verify_path(path), "--keep-going", "--jobs", str(jobs)], cwd=path,
-                                env=checks.verify_env(label, "gate", sha=sha[:10], **gate_meta(path)), stdout=handle,
-                                stderr=subprocess.STDOUT).returncode
-    seconds = round(time.monotonic() - clock, 1)
-    load["end"] = host.load_averages()
-    text = log.read_text(errors="replace")
-    stamp = checks.stamp_result(text, True) if status == 0 else {"stamped": False, "reason": "the run failed"}
-    reports, report = checks.report_of(text)
-    failed = [row["id"] for row in (report or {}).get("checks", []) if checks.is_executed_failure(row)]
-    blocked = [row["id"] for row in (report or {}).get("checks", []) if checks.is_dependency_blocked(row)]
-    triaged = plan.triage(path, Path(reports[-1].strip()).parent) if status and reports else None
+    job_count = int(decision["jobs"])
+    outcome = verify.Run(
+        path, verify.Selection.full(), label, "gate", job_count,
+        meta={"sha": sha[:10]}, ticket=None, run_type=gate_meta(path),
+        record_history=False, wait_for_load=False, load_wait=load_wait,
+        banner=f"lane: batch gate: the full gate on {sha[:10]} in {path} with {job_count} jobs (log {{log}}); "
+               "queue: slotfather status",
+    ).execute()
+    jobs = job_count
+    status, seconds, load, log = outcome.exit, outcome.seconds, outcome.load, outcome.log
+    stamp, report = outcome.stamp, outcome.report
+    failed, blocked, triaged = outcome.failed_checks, outcome.blocked_checks, outcome.triage
     green = status == 0 and stamp["stamped"] and not blocked
     module = plan.module(path)
     state.write_json(state.state_dir() / f"{label}.gate.json", {
@@ -161,7 +155,7 @@ def run_batch_gate(cwd: str, common: str, sha: str, jobs: int | None) -> None:
         "results": [{"suite": "full gate", "status": "passed" if green else "failed", "seconds": seconds,
                      "load_wait": load_wait, "load": load, "log": str(log), "failed_checks": failed,
                      **({"blocked_checks": blocked} if blocked else {})}],
-        "log": str(log), "host": info, "started": started, "finished": journal.now()})
+        "log": str(log), "host": info, "started": outcome.started, "finished": journal.now()})
     # fathers#91: the gate's result belongs to the tree; a later promote of any commit with it reads why it is verified.
     rows = {row["id"]: row.get("status") for row in (report or {}).get("checks", []) if row.get("id")}
     result_store.record(git(cwd, "rev-parse", sha + "^{tree}"),
@@ -238,25 +232,18 @@ def perf_suite(cwd: str, common: str, sha: str, ship: bool, remote: str = "origi
         return previous
     with state.locked("promote", promote_lock_message()):
         worktree = worktrees.gate_worktree(common, sha)
-        log = journal.log_path(f"perf-{sha[:10]}")
         label = f"perf-{sha[:10]}"
-        print(f"lane: perf suite on {sha[:10]} in {worktree}, alone on the machine (log {log}); "
-              "queue: slotfather status", flush=True)
-        started, clock, load = journal.now(), time.monotonic(), {"start": host.load_averages()}
-        with open(log, "w") as handle:
-            status = subprocess.run([plan.verify_path(worktree), "--suites", suite, "--keep-going", "--jobs", "1"],
-                                    cwd=worktree, env=checks.verify_env(
-                                        label, "perf", sha=sha[:10],
-                                        **checks.plan_meta([f"suite:{suite}"], worktree,
-                                                           checks.suite_count(worktree, [suite]))),
-                                    stdout=handle, stderr=subprocess.STDOUT).returncode
-        seconds = round(time.monotonic() - clock, 1)
-        load["end"] = host.load_averages()
-        text = log.read_text(errors="replace")
-        reports, report = checks.report_of(text)
-        failed = [row["id"] for row in (report or {}).get("checks", []) if checks.is_executed_failure(row)]
-        blocked = [row["id"] for row in (report or {}).get("checks", []) if checks.is_dependency_blocked(row)]
-        triaged = plan.triage(worktree, Path(reports[-1].strip()).parent) if status and reports else None
+        outcome = verify.Run(
+            worktree, verify.Selection.suites([suite]), label, "perf", 1,
+            meta={"sha": sha[:10]}, ticket=None,
+            run_type=verify.plan_meta([f"suite:{suite}"], worktree, verify.suite_count(worktree, [suite])),
+            record_history=False, wait_for_load=False,
+            banner=f"lane: perf suite on {sha[:10]} in {worktree}, alone on the machine (log {{log}}); "
+                   "queue: slotfather status",
+        ).execute()
+        status, seconds, load, log = outcome.exit, outcome.seconds, outcome.load, outcome.log
+        failed, blocked = outcome.failed_checks, outcome.blocked_checks
+        triaged, started = outcome.triage, outcome.started
     info = host.host()
     receipt: dict[str, Any] = {"version": 1, "sha": sha, "tree": tree,
                                "status": "red" if status or blocked else "green",
@@ -338,7 +325,7 @@ def install_and_deploy(common: str, sha: str, deploy: str | None) -> None:
                     argv = slots.wrap(step.lease.slots, f"promote-{sha[:10]}-{step.name}", argv,
                                       priority=priority, ticket=step.lease.ticket, required=True,
                                       meta={"phase": step.name, "kind": "promote", "sha": sha[:10],
-                                            **checks.plan_meta([f"step:{step.name}"], None, 0),
+                                            **verify.plan_meta([f"step:{step.name}"], None, 0),
                                             **slots.priority_meta(priority, source),
                                             "lanefather.state": str(state.state_dir())})
                 except slots.Unavailable as error:
