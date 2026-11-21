@@ -22,7 +22,20 @@ import sys
 import time
 from typing import Any, cast
 
-from . import config, host, journal, lifecycle, postmerge, procs, registry, review, state, tickets, worktrees
+from . import (
+    config,
+    host,
+    journal,
+    lifecycle,
+    postmerge,
+    procs,
+    receipts,
+    registry,
+    review,
+    state,
+    tickets,
+    worktrees,
+)
 from .errors import LaneError
 from .gitops import dirty, git, git_ok, main_checkout, worktree_lock
 from .state import Record
@@ -308,11 +321,15 @@ def finish(lane_id: str, force_reason: str | None, store: state.Store | None = N
               and not (cleared := postmerge.clearing(record, store, integration))):
             refusals.append("its post-merge check is red: fix forward (a follow-up commit on the lane) first, or "
                             f"rerun its smoke on the integration tip with {prog} recheck {lane_id}")
-        elif (state.read_json(store.receipt_path(lane_id, "review")) is not None
-              and not review.review_state(lane_id, store)[0]):
+        elif not isinstance(
+            review_v := receipts.review_verdict(
+                record, receipts.read(store, lane_id, "review"), panel_required=project.review_panel_required
+            ),
+            (receipts.Absent, receipts.Exempt, receipts.Complete),
+        ):
             # The fix round of the review runs in this worktree (#570); a lane landed without a review has none.
-            refusals.append(f"its {review.review_state(lane_id, store)[1]}: mark each finding with "
-                            + review.mark_help(lane_id, prog))
+            _, words = receipts.review_words(lane_id, review_v, prog=prog)
+            refusals.append(f"its {words}: mark each finding with " + review.mark_help(lane_id, prog))
         cleared = cleared or field(record, "post_merge").get("cleared_by")
         if integration is None:
             named = field(record, "landed").get("integration") or record.get("integration")

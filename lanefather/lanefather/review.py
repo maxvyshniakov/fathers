@@ -24,7 +24,7 @@ import sys
 import time
 from typing import Any, cast
 
-from . import claims, config, done, journal, lanes, lifecycle, reviewer, settings, state, worktrees
+from . import claims, config, done, journal, lanes, lifecycle, receipts, reviewer, settings, state, worktrees
 from .errors import LaneError
 from .gitops import common_dir, current_branch, git, git_ok, main_checkout
 from .state import Record
@@ -50,47 +50,18 @@ def repo_args(common: str) -> list[str]:
     return ["-R", found.group(1)] if found else []
 
 
-def alive(pid: Any) -> bool:
-    if not isinstance(pid, int) or pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+alive = receipts.alive
+missing_members = receipts.missing_members
+unmarked_findings = receipts.unmarked_findings
+unmarked_reviews = receipts.unmarked_reviews
 
 
 def review_state(label: str, store: state.Store | None = None) -> tuple[bool, str]:
     """Whether the review lets promote move dev, and its state in words; of the project `store` holds (fathers#157),
     by default the current one."""
-    project = store.project if store is not None else config.current()
-    prog = project.command if store is not None else config.prog()
-    receipt = state.read_json(store.receipt_path(label, "review") if store is not None
-                              else state.receipt_path(label, "review"))
-    if receipt is None:
-        return False, f"no review: run {prog} review {label}"
-    status = receipt.get("status")
-    if status == "exempt":
-        return True, f"review exempt: {receipt.get('exempt')}"
-    if status == "running":
-        if alive(receipt.get("pid")):
-            return False, (f"review running since {receipt.get('started')} (pid {receipt.get('pid')}, "
-                           f"{receipt.get('log')})")
-        return False, f"review died (pid {receipt.get('pid')}, {receipt.get('log')}): rerun {prog} review {label}"
-    if status != "finished":
-        return False, f"review failed: {receipt.get('error')}; rerun {prog} review {label}"
-    findings = receipt.get("findings", [])
-    missing = missing_members(receipt)
-    if missing and project.review_panel_required:
-        return False, (f"panel member {', '.join(missing)} gave no review ([review] panel_required): "
-                       f"{prog} review {label} --force-reason <why> reviews again")
-    unmarked = unmarked_findings(receipt)
-    if unmarked:
-        return False, (f"{len(unmarked)} of {len(findings)} review findings unmarked "
-                       f"({', '.join('#' + str(f['n']) for f in unmarked)})")
-    return True, f"reviewed by {receipt.get('reviewer')}: {len(findings)} findings, all marked"
+    current = store or state.Store(config.current())
+    prog = store.project.command if store is not None else config.prog()
+    return receipts.review_state(current, label, prog=prog)
 
 
 def asked_reviewers(args: Any) -> tuple[str, ...]:
@@ -104,25 +75,18 @@ def asked_reviewers(args: Any) -> tuple[str, ...]:
     return (asked,)
 
 
-def missing_members(receipt: dict[str, Any]) -> list[str]:
-    """The panel members of a finished review that should have answered and did not: a run that failed, or a
-    forced member that could not start. A member skipped by the rules (its condition failed and its fallback is on
-    the panel already) is not missing."""
-    panel: list[dict[str, Any]] = receipt.get("panel") or []
-    return [str(e.get("member")) for e in panel if e.get("status") == "failed"]
-
-
 # The family of the agent that ran the lane's last check (lanefather.events.actor), for the role's `not_family`.
 FAMILIES = {"claude-code": "anthropic", "codex": "openai", "antigravity": "google", "t3-code": "google"}
 
 
 def implementer_family(lane_id: str) -> str | None:
     """The implementer's model family: that of the agent whose `check` wrote the lane's receipt, None unknown."""
-    receipt = state.read_json(state.receipt_path(lane_id)) or {}
+    store = state.Store(config.current())
+    receipt = receipts.read(store, lane_id) or {}
     family = FAMILIES.get(str(receipt.get("agent")))
     if family:
         return family
-    record = state.read_json(state.record_path(lane_id)) or {}
+    record = state.read_json(store.record_path(lane_id)) or {}
     agents: list[Any] = record.get("agents") or []
     for raw_entry in reversed(agents):
         if isinstance(raw_entry, dict):
@@ -152,25 +116,21 @@ def documentation_only(paths: list[str]) -> bool:
                for p in paths)
 
 
-def unmarked_findings(receipt: dict[str, Any]) -> list[dict[str, Any]]:
-    return [finding for finding in receipt.get("findings") or () if not finding.get("mark")]
-
-
 def fix_parent_review(lane_id: str, common: str, refusal: str, *,
                       store: state.Store | None = None) -> dict[str, Any]:
     """A landed lane in this repository with a finished review and an open finding."""
     current = store or state.Store(config.current())
-    parent = state.read_json(current.record_path(lane_id))
-    if parent is None:
+    parent_record = state.read_json(current.record_path(lane_id))
+    if parent_record is None:
         raise LaneError(f"{refusal}: no lane by that name")
-    landed: dict[str, Any] = parent.get("landed") or {}
-    if not lifecycle.landed(parent) or not landed.get("merge"):
-        raise LaneError(f"{refusal}: lane {lane_id} is {parent.get('status')}, not landed; a fix lane fixes the "
-                        "review findings of landed lanes")
-    if parent.get("common_dir") != common:
+    landed: dict[str, Any] = parent_record.get("landed") or {}
+    if not lifecycle.landed(parent_record) or not landed.get("merge"):
+        raise LaneError(f"{refusal}: lane {lane_id} is {parent_record.get('status')}, not landed; a fix lane fixes "
+                        "the review findings of landed lanes")
+    if parent_record.get("common_dir") != common:
         raise LaneError(f"{refusal}: lane {lane_id} is from another repository")
-    receipt = state.read_json(current.receipt_path(lane_id, "review"))
-    if not receipt or receipt.get("status") != "finished" or not unmarked_findings(receipt):
+    receipt = receipts.read(current, lane_id, "review")
+    if not isinstance(receipts.review_verdict(parent_record, receipt), receipts.Unmarked) or receipt is None:
         raise LaneError(f"{refusal}: lane {lane_id} has no finished review with unmarked findings")
     return receipt
 
@@ -251,19 +211,20 @@ def perform_review(label: str, fields: dict[str, Any], main: str, base: str, tip
                    family: str | None = None, reviewers: tuple[str, ...] = ()) -> dict[str, Any]:
     """Review base...tip with Sol, or Opus when Sol may not or cannot run; write and return the receipt.
     `finalize` completes a finished receipt before anyone can read it as finished."""
-    runner = reviewer.Reviewer(config.current())
-    path = state.receipt_path(label, "review")
+    store = state.Store(config.current())
+    runner = reviewer.Reviewer(store.project)
     receipt: dict[str, Any] = {"version": 1, "label": label, **fields, "base": base, "tip": tip,
                                "tree": git(main, "rev-parse", tip + "^{tree}"), "status": "running",
-                               "pid": os.getpid(), "log": config.current().env("REVIEW_LOG"),
+                               "pid": os.getpid(), "log": store.project.env("REVIEW_LOG"),
                                "started": journal.now(), "effort": runner.effort}
-    with state.locked(f"review-{label}"):
-        state.write_json(path, receipt)
-    reviews = state.state_dir() / "reviews"
-    reviews.mkdir(exist_ok=True)
+    with store.locked(f"review-{label}"):
+        receipts.write(store, label, receipt, "review")
+    reviews = store.directory / "reviews"
+    reviews.mkdir(parents=True, exist_ok=True)
     output, log = reviews / f"{label}.md", reviews / f"{label}.log"
     log.write_text("")
     clock = time.monotonic()
+    outcome_status = "finished"
     try:
         with terminable(), worktrees.review_checkout(main, label, tip) as checkout:
             standards = coding_standards(main, tip)
@@ -276,21 +237,22 @@ def perform_review(label: str, fields: dict[str, Any], main: str, base: str, tip
         if finalize:
             finalize(receipt)
     except Exception as error:  # any failure leaves a failed receipt, not a running one
+        outcome_status = "failed"
         receipt.update(status="failed", error=str(error), output=str(output))
     receipt.setdefault("fallback", None)
     receipt.update(seconds=round(time.monotonic() - clock, 1), finished=journal.now())
-    with state.locked(f"review-{label}"):
-        state.write_json(path, receipt)
+    with store.locked(f"review-{label}"):
+        receipts.write(store, label, receipt, "review")
     findings = receipt.get("findings", [])
     counts = " ".join(f"{s.lower()}={sum(1 for f in findings if f['severity'] == s)}" for s in SEVERITIES)
-    journal.ledger(f"review {label} {receipt['status']} reviewer={receipt.get('reviewer', '-')} "
+    journal.ledger(f"review {label} {outcome_status} reviewer={receipt.get('reviewer', '-')} "
                    f"model={receipt.get('model', '-')} effort={receipt['effort']} "
                    f"left={'-' if receipt.get('codex_left') is None else receipt['codex_left']} "
                    f"seconds={receipt['seconds']:.0f} findings={len(findings)} {counts}"
                    + (f" fallback: {receipt['fallback']}" if receipt["fallback"] else ""),
-                   kind="review.finished", level="info" if receipt["status"] == "finished" else "warn",
+                   kind="review.finished", level="info" if outcome_status == "finished" else "warn",
                    **review_about(label, fields),
-                   details={"status": receipt["status"], "reviewer": receipt.get("reviewer"),
+                   details={"status": outcome_status, "reviewer": receipt.get("reviewer"),
                             "provider": receipt.get("provider"), "cli": receipt.get("cli"),
                             "model": receipt.get("model"), "effort": receipt["effort"],
                             "options": receipt.get("options"),
@@ -309,11 +271,12 @@ def perform_review(label: str, fields: dict[str, Any], main: str, base: str, tip
 
 def review_lines(receipt: dict[str, Any]) -> list[str]:
     label = receipt["label"]
-    if receipt["status"] == "exempt":
-        return [f"Review of {label}: exempt ({receipt['exempt']})"]
-    if receipt["status"] == "running":
-        return [f"Review of {label}: running since {receipt.get('started')} (pid {receipt.get('pid')}, log "
-                f"{receipt.get('log')})"]
+    verdict = receipts.review_verdict(None, receipt)
+    if isinstance(verdict, receipts.Exempt):
+        return [f"Review of {label}: exempt ({verdict.reason})"]
+    if isinstance(verdict, (receipts.Running, receipts.Died)):
+        return [f"Review of {label}: running since {verdict.started} (pid {verdict.pid}, log "
+                f"{verdict.log})"]
     left = receipt.get("codex_left")
     forced: dict[str, Any] = receipt.get("forced") or {}
     head = (f"Review of {label} ({receipt.get('base', '')[:10]}...{receipt.get('tip', '')[:10]}) by "
@@ -322,8 +285,9 @@ def review_lines(receipt: dict[str, Any]) -> list[str]:
             + (f"; fallback: {receipt['fallback']}" if receipt.get("fallback") else "")
             + (f"; forced by --reviewer {', '.join(forced['reviewers'])}" if forced.get("by") == "flag" else "")
             + f", {receipt.get('seconds', 0):.0f} s")
-    if receipt["status"] != "finished":
-        return [head, f"review failed: {receipt.get('error')}"]
+    if not isinstance(verdict, (receipts.Unmarked, receipts.Complete)):
+        error = verdict.error if isinstance(verdict, receipts.Failed) else None
+        return [head, f"review failed: {error}"]
     findings = receipt.get("findings", [])
     lines = [head + f": {len(findings)} findings  ({receipt.get('output')})"]
     panel: list[dict[str, Any]] = receipt.get("panel") or []
@@ -389,15 +353,16 @@ def self_env(**extra: str) -> dict[str, str]:
 
 def spawn_review(label: str, fields: dict[str, Any], argv: list[str], cwd: str) -> dict[str, Any]:
     """Start `lanefather review ...` detached, with its own log, and record it as running; nobody waits for it."""
+    store = state.Store(config.current())
     log = journal.log_path(f"review-{label}")
     # The child writes its own receipt under the same lock, so this running one never replaces a finished one.
-    with state.locked(f"review-{label}"), open(log, "w") as out:
+    with store.locked(f"review-{label}"), open(log, "w") as out:
         child = subprocess.Popen([*self_argv(), "review", *argv], cwd=cwd,
                                  stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
                                  start_new_session=True, env=self_env(LANEFATHER_REVIEW_LOG=str(log)))
         receipt = {"version": 1, "label": label, **fields, "status": "running", "pid": child.pid, "log": str(log),
-                   "started": journal.now(), "effort": reviewer.Reviewer(config.current()).effort}
-        state.write_json(state.receipt_path(label, "review"), receipt)
+                   "started": journal.now(), "effort": reviewer.Reviewer(store.project).effort}
+        receipts.write(store, label, receipt, "review")
     journal.ledger(f"review-start {label} pid={child.pid} log={log}", kind="review.started",
                    **review_about(label, fields), details={"pid": child.pid, "log": str(log)})
     return receipt
@@ -405,21 +370,28 @@ def spawn_review(label: str, fields: dict[str, Any], argv: list[str], cwd: str) 
 
 def start_lane_review(record: Record) -> str:
     """At land: an exempt receipt, or the review in the background. The line land prints."""
+    store = state.Store(config.current())
     lane_id = record["id"]
-    current = state.read_json(state.receipt_path(lane_id, "review")) or {}
-    if current.get("status") in ("finished", "exempt") or (current.get("status") == "running"
-                                                          and alive(current.get("pid"))):
+    current = receipts.read(store, lane_id, "review")
+    verdict = receipts.review_verdict(record, current)
+    if isinstance(verdict, (receipts.Running, receipts.Exempt, receipts.Unmarked, receipts.Complete)):
+        assert current is not None
+        kept_status = ("running" if isinstance(verdict, receipts.Running)
+                       else "exempt" if isinstance(verdict, receipts.Exempt) else "finished")
         # Reviewed before landing (onto dev or main), or by hand: one review per lane, kept as it is.
-        journal.ledger(f"review {lane_id} kept at land: {current['status']} since "
+        journal.ledger(f"review {lane_id} kept at land: {kept_status} since "
                        f"{current.get('started') or current.get('finished')}", kind="review.kept", lane=record,
-                       details={"status": current["status"],
+                       details={"status": kept_status,
                                 "since": current.get("started") or current.get("finished")})
-        return f"review kept: {review_state(lane_id)[1]}"
+        return f"review kept: {review_state(lane_id, store)[1]}"
     exempt = review_exemption(record)
     if exempt:
-        state.write_json(state.receipt_path(lane_id, "review"),
-                         {"version": 1, "label": lane_id, "kind": "lane", "lane": lane_id, "ticket": record["ticket"],
-                          "status": "exempt", "exempt": exempt, "finished": journal.now()})
+        receipts.write(
+            store, lane_id,
+            {"version": 1, "label": lane_id, "kind": "lane", "lane": lane_id, "ticket": record["ticket"],
+             "status": "exempt", "exempt": exempt, "finished": journal.now()},
+            "review",
+        )
         journal.ledger(f"review {lane_id} exempt: {exempt}", kind="review.exempted", lane=record,
                        details={"exempt": exempt})
         return f"review exempt: {exempt}"
@@ -444,17 +416,20 @@ def review_complete_finish(lane_id: str) -> None:
 
 
 def review_lane(args: Any) -> int:
-    record = state.load(args.id)
-    current = state.read_json(state.receipt_path(args.id, "review")) or {}
-    status, pid = current.get("status"), current.get("pid")
+    store = state.Store(config.current())
+    record = store.load(args.id)
+    current = receipts.read(store, args.id, "review")
+    verdict = receipts.review_verdict(record, current)
     # The background run land started finds its own pid in the receipt.
-    elsewhere = status == "running" and alive(pid) and pid != os.getpid()
-    if (status in ("finished", "exempt") or elsewhere) and not args.force_reason:
+    elsewhere = isinstance(verdict, receipts.Running) and verdict.pid != os.getpid()
+    already_finished = isinstance(verdict, (receipts.Unmarked, receipts.Complete))
+    if (already_finished or isinstance(verdict, receipts.Exempt) or elsewhere) and not args.force_reason:
+        assert current is not None
         print("\n".join(review_lines(current)))
-        if status == "finished":
+        if already_finished:
             print(f"Lane {args.id} is already reviewed: one review per lane (--force-reason reviews again, logged)")
         return 0
-    if status == "finished":
+    if already_finished:
         journal.ledger(f"override review {args.id}: {args.force_reason} (reviewed again)", kind="override",
                        level="warn", lane=record,
                        details={"command": "review", "reason": args.force_reason, "refusals": ["reviewed again"]})
@@ -468,12 +443,11 @@ def review_lane(args: Any) -> int:
                              main_checkout(record["common_dir"]), base, tip, ticket_text(record),
                              family=implementer_family(args.id), reviewers=asked_reviewers(args))
     if record.get("pre_land_fix"):
-        store = state.Store(config.current())
         store.update(args.id, lambda latest: latest.pop("pre_land_fix", None) is not None)
     print("\n".join(review_lines(receipt)))
-    if receipt["status"] != "finished":
+    if not isinstance(receipts.review_verdict(record, receipt), (receipts.Unmarked, receipts.Complete)):
         return 1
-    if review_state(args.id)[0]:
+    if review_state(args.id, store)[0]:
         review_complete_finish(args.id)
     return 0
 
@@ -488,7 +462,7 @@ def reviewer_views(receipt: dict[str, Any]) -> list[dict[str, Any]]:
                  "provider": receipt.get("provider"), "cli": receipt.get("cli"),
                  "model": receipt.get("model"), "effort": receipt.get("effort"),
                  "options": receipt.get("options"), "seconds": receipt.get("seconds"),
-                 "status": receipt.get("status"), "reason": receipt.get("fallback"), "findings": findings}]
+                 "status": receipts.status_of(receipt), "reason": receipt.get("fallback"), "findings": findings}]
     by_number = {f["n"]: f for f in findings}
     views: list[dict[str, Any]] = []
     for entry in panel:
@@ -507,9 +481,11 @@ def mark_counts(findings: list[dict[str, Any]]) -> dict[str, int]:
 
 def compare(args: Any) -> int:
     """`review <id> --compare`: who found what and what held up, one block per reviewer with its marks."""
-    receipt = state.read_json(state.receipt_path(args.id, "review"))
-    if not receipt or receipt.get("status") != "finished":
-        raise LaneError(f"lane {args.id} has no finished review to compare ({review_state(args.id)[1]})")
+    store = state.Store(config.current())
+    receipt = receipts.read(store, args.id, "review")
+    verdict = receipts.review_verdict(None, receipt)
+    if not isinstance(verdict, (receipts.Unmarked, receipts.Complete)) or receipt is None:
+        raise LaneError(f"lane {args.id} has no finished review to compare ({review_state(args.id, store)[1]})")
     views = reviewer_views(receipt)
     lines = [f"Review of {args.id} ({receipt.get('base', '')[:10]}...{receipt.get('tip', '')[:10]}): "
              f"{len(views)} reviewer{'s' if len(views) != 1 else ''}"]
@@ -558,12 +534,13 @@ def fix_merge(common: str, value: str) -> str:
 
 
 def mark_review(args: Any) -> int:
-    record = state.load(args.id)
-    path = state.receipt_path(args.id, "review")
-    with state.locked(f"review-{args.id}"):
-        receipt = state.read_json(path)
-        if not receipt or receipt.get("status") != "finished":
-            raise LaneError(f"lane {args.id} has no finished review to mark ({review_state(args.id)[1]})")
+    store = state.Store(config.current())
+    record = store.load(args.id)
+    with store.locked(f"review-{args.id}"):
+        receipt = receipts.read(store, args.id, "review")
+        verdict = receipts.review_verdict(record, receipt)
+        if not isinstance(verdict, (receipts.Unmarked, receipts.Complete)) or receipt is None:
+            raise LaneError(f"lane {args.id} has no finished review to mark ({review_state(args.id, store)[1]})")
         by_number = {f["n"]: f for f in receipt.get("findings", [])}
         marks: list[tuple[dict[str, Any], dict[str, Any]]] = []
         for number, value in args.mark:
@@ -596,9 +573,9 @@ def mark_review(args: Any) -> int:
                            kind="finding.marked", lane=args.id,
                            details={"finding": finding["n"], "mark": mark["kind"], "merge": mark.get("merge"),
                                     "reason": mark.get("reason")})
-        state.write_json(path, receipt)
+        receipts.write(store, args.id, receipt, "review")
     print("\n".join(review_lines(receipt)))
-    complete, words = review_state(args.id)
+    complete, words = review_state(args.id, store)
     if complete:
         kinds = [f["mark"]["kind"] for f in receipt.get("findings", [])]
         journal.ledger(f"review-marked {args.id} fixed={kinds.count('fixed')} rejected={kinds.count('rejected')}",
@@ -668,9 +645,10 @@ def pre_land_fix_round(args: Any, record: Record, worktree: str) -> int:
     finding linkage in the lane record and review receipt without landing the defective original or running a second
     blind review."""
     prog = config.prog()
-    receipt = state.read_json(state.receipt_path(args.id, "review"))
-    if (not receipt or receipt.get("status") != "finished"
-            or not any(not finding.get("mark") for finding in receipt.get("findings") or ())):
+    store = state.Store(config.current())
+    receipt = receipts.read(store, args.id, "review")
+    verdict = receipts.review_verdict(record, receipt)
+    if not isinstance(verdict, receipts.Unmarked) or receipt is None:
         raise LaneError(f"hand-over refused: lane {args.id} has no finished review with unmarked findings")
     existing: dict[str, Any] | None = receipt.get("pre_land_fix") or record.get("pre_land_fix")
     if existing:
@@ -682,7 +660,7 @@ def pre_land_fix_round(args: Any, record: Record, worktree: str) -> int:
     if not reviewed_sha or not git_ok(main, "rev-parse", "--verify", "--quiet", reviewed_sha + "^{commit}"):
         raise LaneError(f"hand-over refused: lane {args.id}'s reviewed commit {reviewed_sha[:10] or '(none)'} "
                         "is missing from Git")
-    unmarked = [f["n"] for f in receipt.get("findings", []) if not f.get("mark")]
+    unmarked = [f["n"] for f in verdict.unmarked]
     fix_round: dict[str, Any] = {
         "reviewed_sha": reviewed_sha,
         "branch": record["branch"],
@@ -690,16 +668,15 @@ def pre_land_fix_round(args: Any, record: Record, worktree: str) -> int:
         "findings": unmarked,
         "started": journal.now(),
     }
-    store = state.Store(config.current())
 
     def _set_pre_land_fix(current: Record) -> None:
         current["pre_land_fix"] = dict(fix_round)
 
     record = store.update(args.id, _set_pre_land_fix)
-    with state.locked(f"review-{args.id}"):
-        receipt = state.read_json(state.receipt_path(args.id, "review")) or {}
+    with store.locked(f"review-{args.id}"):
+        receipt = receipts.read(store, args.id, "review") or {}
         receipt["pre_land_fix"] = dict(fix_round)
-        state.write_json(state.receipt_path(args.id, "review"), receipt)
+        receipts.write(store, args.id, receipt, "review")
     journal.ledger(f"review-pre-land-fix {args.id} reviewed_sha={reviewed_sha} worktree={worktree}",
                    kind="review.pre_land_fix", lane=record,
                    details={"reviewed_sha": reviewed_sha, "branch": record["branch"],
@@ -748,10 +725,10 @@ def hand_over(args: Any) -> int:
         worktree=None,
         handed_over={"to": fix_id, "worktree": fix["worktree"], "at": journal.now()},
     )
-    with state.locked(f"review-{args.id}"):
-        receipt = state.read_json(state.receipt_path(args.id, "review")) or {}
+    with store.locked(f"review-{args.id}"):
+        receipt = receipts.read(store, args.id, "review") or {}
         receipt["fix_lane"] = fix_id
-        state.write_json(state.receipt_path(args.id, "review"), receipt)
+        receipts.write(store, args.id, receipt, "review")
     journal.ledger(f"review-hand-over {args.id} to {fix_id} worktree={fix['worktree']}", kind="review.handed_over",
                    lane=record, details={"to": fix_id, "worktree": fix["worktree"]})
     print(f"The fix round runs in {fix['worktree']}: git checkout -B {fix['branch']} {fix['base']}, fix each finding "
@@ -767,15 +744,17 @@ def ship_review_label(sha: str) -> str:
 def start_overall_review(cwd: str, sha: str, base: str) -> str:
     """After promote --ship: the one overall review of base..sha in the background; it never holds the ship."""
     prog = config.prog()
+    store = state.Store(config.current())
     label = ship_review_label(sha)
-    current = state.read_json(state.receipt_path(label, "review")) or {}
-    if current.get("status") == "finished":
+    current = receipts.read(store, label, "review")
+    verdict = receipts.review_verdict(None, current)
+    if isinstance(verdict, (receipts.Unmarked, receipts.Complete)):
         return (f"overall review of {sha[:10]} already ran: " + ticket_state(retry_ticket(label, common_dir(cwd)))
                 + f"; {prog} review --overall {sha[:10]} prints it")
-    if current.get("status") == "running" and alive(current.get("pid")):
-        return f"overall review of {sha[:10]} is running (pid {current['pid']}, log {current.get('log')})"
+    if isinstance(verdict, receipts.Running):
+        return f"overall review of {sha[:10]} is running (pid {verdict.pid}, log {verdict.log})"
     # A failed or killed review keeps its base: after the push, origin/main is the SHA itself.
-    base = current.get("base") or base
+    base = (current or {}).get("base") or base
     if git_ok(cwd, "merge-base", "--is-ancestor", sha, base):
         return f"no overall review: {base[:10]} already holds {sha[:10]}"
     argv = ["--overall", sha, "--since", base]
@@ -820,11 +799,12 @@ def file_ticket(receipt: dict[str, Any], common: str) -> None:
 
 def retry_ticket(label: str, common: str) -> dict[str, Any]:
     """File the ticket of a finished overall review whose filing failed, without reviewing again."""
-    with state.locked(f"review-{label}"):
-        receipt = state.read_json(state.receipt_path(label, "review")) or {}
+    store = state.Store(config.current())
+    with store.locked(f"review-{label}"):
+        receipt = receipts.read(store, label, "review") or {}
         if receipt.get("findings") and not receipt.get("issue"):
             file_ticket(receipt, common)
-            state.write_json(state.receipt_path(label, "review"), receipt)
+            receipts.write(store, label, receipt, "review")
     return receipt
 
 
@@ -837,21 +817,23 @@ def ticket_state(receipt: dict[str, Any]) -> str:
 
 def overall_review(args: Any) -> int:
     prog = config.prog()
+    store = state.Store(config.current())
     cwd = os.getcwd()
     common = common_dir(cwd)
     sha = git(cwd, "rev-parse", "--verify", args.overall + "^{commit}")
     label = ship_review_label(sha)
-    current = state.read_json(state.receipt_path(label, "review")) or {}
-    status, pid = current.get("status"), current.get("pid")
-    if status == "finished" and not args.force_reason:
+    current = receipts.read(store, label, "review")
+    verdict = receipts.review_verdict(None, current)
+    if isinstance(verdict, (receipts.Unmarked, receipts.Complete)) and not args.force_reason:
         receipt = retry_ticket(label, common)
         print("\n".join(review_lines(receipt)))
         return 1 if receipt.get("issue_error") else 0
-    if status == "running" and alive(pid) and pid != os.getpid() and not args.force_reason:
+    if isinstance(verdict, receipts.Running) and verdict.pid != os.getpid() and not args.force_reason:
+        assert current is not None
         print("\n".join(review_lines(current)))
         return 0
     # A rerun of a failed or killed review keeps its base.
-    since = args.since or current.get("base")
+    since = args.since or (current or {}).get("base")
     if not since:
         raise LaneError("give --since <base>: the overall review covers <base>..<sha> "
                         "(promote --ship gives origin/main)")
@@ -861,7 +843,8 @@ def overall_review(args: Any) -> int:
     receipt = perform_review(label, {"kind": "overall", "sha": sha}, main_checkout(common), base, sha, subject,
                              finalize=lambda finished: file_ticket(finished, common), reviewers=asked_reviewers(args))
     print("\n".join(review_lines(receipt)))
-    return 0 if receipt["status"] == "finished" and not receipt.get("issue_error") else 1
+    finished_ok = isinstance(receipts.review_verdict(None, receipt), (receipts.Unmarked, receipts.Complete))
+    return 0 if finished_ok and not receipt.get("issue_error") else 1
 
 
 def review(args: Any) -> int:
@@ -879,14 +862,6 @@ def review(args: Any) -> int:
     if args.fix_lane:
         return hand_over(args)
     return review_lane(args)
-
-
-def unmarked_reviews(records: Iterable[Record], store: state.Store) -> Iterator[tuple[Record, list[dict[str, Any]]]]:
-    """Open findings in each finished lane review, in record order."""
-    for record in records:
-        receipt = state.read_json(store.receipt_path(record["id"], "review"))
-        if receipt and receipt.get("status") == "finished" and (pending := unmarked_findings(receipt)):
-            yield record, pending
 
 
 def landing_findings(record: Record, store: state.Store) -> tuple[list[LaneFinding], list[LaneFinding]]:
@@ -952,11 +927,12 @@ def gate_report(cwd: str, common: str, sha: str, since: str | None = None) -> di
     Each finding entry names the lane, its ticket, severity, file and line, and `text` the two commands that mark
     it."""
     base = since or git(cwd, "rev-parse", "--verify", "--quiet", "refs/heads/dev^{commit}", check=False) or None
-    blocks = config.current().review_blocks
+    store = state.Store(config.current())
+    blocks = store.project.review_blocks
     report: dict[str, Any] = {"v": 1, "sha": sha, "since": base, "blocks": list(blocks), "unfinished": [],
                               "blocking": [], "reported": [], "unknown": []}
     known = 0
-    for record in state.lanes():
+    for record in store.lanes():
         merge = (record.get("landed") or {}).get("merge")
         if not merge or record.get("common_dir") != common:
             continue
@@ -965,18 +941,21 @@ def gate_report(cwd: str, common: str, sha: str, since: str | None = None) -> di
         if base and git_ok(cwd, "merge-base", "--is-ancestor", merge, base):
             continue
         known += 1
-        receipt = state.read_json(state.receipt_path(record["id"], "review"))
-        complete, words = review_state(record["id"])
-        if receipt is None or receipt.get("status") not in ("finished", "exempt"):
+        receipt = receipts.read(store, record["id"], "review")
+        verdict = receipts.review_verdict(record, receipt, panel_required=store.project.review_panel_required)
+        _, words = receipts.review_words(record["id"], verdict, prog=config.prog())
+        if isinstance(verdict, receipts.Exempt):
+            continue
+        if isinstance(verdict, (receipts.Absent, receipts.Running, receipts.Died)):
             report["unfinished"].append({"lane": record["id"], "ticket": record["ticket"],
                                          "text": f"lane {record['id']} (#{record['ticket']}): {words}"})
             continue
-        if complete and receipt.get("status") == "exempt":
-            continue
-        if missing_members(receipt) and config.current().review_panel_required:
+        if isinstance(verdict, receipts.Failed):
             report["unfinished"].append({"lane": record["id"], "ticket": record["ticket"],
                                          "text": f"lane {record['id']} (#{record['ticket']}): {words}"})
-        for finding in receipt.get("findings", []):
+            if not verdict.missing_members:
+                continue
+        for finding in verdict.findings:
             mark = finding.get("mark") or {}
             entry = {"lane": record["id"], "ticket": record["ticket"], "n": finding.get("n"),
                      "severity": finding.get("severity", "P2"), "title": finding.get("title", ""),

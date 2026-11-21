@@ -4,11 +4,10 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
 from typing import Any
 
-from . import config, state
+from . import config, receipts, state
 from .errors import LaneError
 from .gitops import main_checkout
 
@@ -33,30 +32,10 @@ def summary(lane_id: str, directory: Path) -> dict[str, Any]:
     if record.get('id') != lane_id:
         raise LaneError(f'lane id mismatch for {lane_id}')
     root = main_checkout(str(record.get('common_dir', '')))
-    origin = git_read(root, 'remote', 'get-url', 'origin') if root else ''
-    match = re.fullmatch(r'(?:git@github\.com:|https://github\.com/|ssh://git@github\.com/)'
-                         r'([\w.-]+/[\w.-]+?)(?:\.git)?/?', origin)
-    repository = f'https://github.com/{match[1]}' if match else None
-    number = str(record.get('ticket', '')).lstrip('#')
-    ticket = {'number': number, 'url': f'{repository}/issues/{number}' if repository and number.isdigit() else None}
-    receipt = state.read_json(directory / f'{lane_id}.receipt.json')
-    tree = git_read(root, 'rev-parse', '--verify', str(record.get('branch', '')) + '^{tree}') if root else ''
-    tree_match = receipt.get('tree') == tree if receipt and tree else None
-    # A branch-tree mismatch proves staleness. A match cannot certify the toolchain or other
-    # verification conditions without executing project code, which this read-only query never does.
-    checks = {'status': receipt.get('status', 'unknown') if receipt else 'not run',
-              'current': False if tree_match is False else None, 'tree_match': tree_match}
-    review = state.read_json(directory / f'{lane_id}.review.json') or {}
-    findings = review.get('findings', [])
-    config_path = Path(root) / config.CONFIG_NAME
-    cfg = config.load(config_path) if config_path.is_file() else config.Config()
-    return {'version': 1, 'id': lane_id, 'project': cfg.project if cfg.project != 'this project' else Path(root).name,
-            'repository': repository, 'ticket': ticket, 'status': record.get('status'),
-            'branch': record.get('branch'), 'base': record.get('base'), 'worktree': record.get('worktree'),
-            'claims': record.get('claims', []), 'after': record.get('after', []), 'checks': checks,
-            'agents': record.get('agents', []),
-            'review': {'status': review.get('status', 'not started'), 'findings': len(findings),
-                       'unresolved': sum(1 for finding in findings if not finding.get('mark'))}}
+    config_path = Path(root) / config.CONFIG_NAME if root else None
+    cfg = config.load(config_path) if config_path and config_path.is_file() else config.Config()
+    store = state.Store(cfg, directory=directory)
+    return receipts.lane_view(store, record).for_show()
 
 
 def show(args: Any) -> int:

@@ -17,7 +17,22 @@ import re
 import shutil
 from typing import Any
 
-from . import claims, config, events, history, host, journal, plan, queue, settings, slots, state, verify, worktrees
+from . import (
+    claims,
+    config,
+    events,
+    history,
+    host,
+    journal,
+    plan,
+    queue,
+    receipts,
+    settings,
+    slots,
+    state,
+    verify,
+    worktrees,
+)
 from . import results as result_store
 from .errors import LaneError
 from .gitops import current_branch, dirty, git, git_ok
@@ -134,12 +149,7 @@ def reusable(previous: Record, delta: dict[str, Any]) -> dict[str, dict[str, Any
     """The check results of an earlier receipt that a later check of the lane reuses: each passed there, and no
     change since its head (the `delta` plan) selects it. A full delta reuses nothing; nor does a receipt from
     before per-check results."""
-    if delta.get("full") or delta.get("selection") is None:
-        return {}
-    changed = {row["id"] for row in delta["selection"]}
-    return {check: dict(entry, reused_from=entry.get("reused_from") or previous["tree"])
-            for check, entry in (previous.get("check_results") or {}).items()
-            if entry.get("status") == "passed" and check not in changed}
+    return receipts.reusable_checks(previous, delta)
 
 
 def same_tree(wanted: dict[str, str], tree: str, toolchain: Any) -> dict[str, dict[str, Any]]:
@@ -195,18 +205,7 @@ def combined_results(suites: list[str], selected: dict[str, list[str]] | None, f
 def lane_ran(lane_id: str) -> tuple[set[str], set[str], set[str]]:
     """What the lane's check and post-merge receipts ran: the checks, the suites, and the suites they ran whole. A
     result without per-check results ran every check of its suite."""
-    checks: set[str] = set()
-    suites: set[str] = set()
-    whole: set[str] = set()
-    for kind in ("receipt", "post-merge"):
-        receipt = state.read_json(state.receipt_path(lane_id, kind)) or {}
-        for result in receipt.get("results", []):
-            suites.add(result["suite"])
-            if "checks" in result:
-                checks |= set(result["checks"])
-            else:
-                whole.add(result["suite"])
-    return checks, suites, whole
+    return receipts.lane_ran(state.Store(config.current()), lane_id)
 
 
 # Red check classification (#568)
@@ -517,18 +516,8 @@ def classification_lines(classification: dict[str, Any]) -> list[str]:
 def first_receipt(record: Record, previous: Record | None, head: str, tree: str, results: Rows) -> dict[str, Any]:
     """The lane's first receipt, kept per lane in <id>.first.json, whatever the branch's history does later (an
     amend or rebase). A file from an earlier lane of the same id, registered at another time, does not count."""
-    path = state.receipt_path(record["id"], "first")
-    first = state.read_json(path)
-    if first and first.get("lane_created") == record.get("created"):
-        return first
-    # A receipt from before <id>.first.json carries its first receipt, or is the first one itself.
-    first = (previous or {}).get("first") or ({"head": previous.get("head"), "tree": previous.get("tree"),
-                                               "failed_checks": red_checks(previous.get("results", []))}
-                                              if previous and previous.get("tree") else None)
-    first = dict(first or {"head": head, "tree": tree, "failed_checks": red_checks(results)},
-                 lane_created=record.get("created"))
-    state.write_json(path, first)
-    return first
+    store = state.Store(config.current())
+    return receipts.ensure_first(store, record, previous, head, tree, red_checks(results))
 
 
 def changed_red_tests(lane_plan: dict[str, Any], first: dict[str, Any]) -> list[dict[str, Any]]:
@@ -584,7 +573,7 @@ def fix_parent(record: Record) -> dict[str, Any] | None:
     parent = state.hand_over_parent(record)
     if parent is None:
         return None
-    receipt = state.read_json(state.receipt_path(parent))
+    receipt = receipts.read(state.Store(config.current()), parent)
     if not receipt or receipt.get("selection") is None or receipt.get("check_results") is None:
         return None
     return dict(receipt, lane=parent)
@@ -609,7 +598,7 @@ def fix_plan(lane_plan: dict[str, Any], parent: dict[str, Any], known: set[str] 
     outside = sorted(p for p in lane_plan["paths"] if p not in parent_paths)
     # A tree whose plan names whole suites has no checks to join: None, neither inside nor the union.
     union = bool(outside) if lane_plan.get("selection") is not None else (None if outside else False)
-    about: dict[str, Any] = {"lane": parent["lane"], "tree": parent.get("tree"), "outside_parent": outside,
+    about: dict[str, Any] = {"lane": parent["lane"], "tree": receipts.tree_of(parent), "outside_parent": outside,
                              "union": union}
     if not union:
         return about
@@ -718,8 +707,9 @@ def prepare(lane_id: str, *, agent: str | None = None) -> Prepared:
         raise LaneError("commit your work (or set it aside in a WIP commit) first: the receipt covers a committed "
                         "tree\n" + dirty(worktree))
     head, tree = git(worktree, "rev-parse", "HEAD"), git(worktree, "rev-parse", "HEAD^{tree}")
-    path = state.receipt_path(lane_id)
-    previous = state.read_json(path)
+    store = state.Store(config.current())
+    path = receipts.path(store, lane_id)
+    previous = receipts.read(store, lane_id)
     return Prepared(record=record, worktree=worktree, head=head, tree=tree, receipt_path=path,
                     previous=previous, agent_info=agent_info)
 
@@ -729,20 +719,22 @@ def select(prepared: Prepared, *, rerun: bool = False, slots_override: int | Non
     jobs. Returns None when the existing green receipt already certifies the tree."""
     record, worktree, tree = prepared.record, prepared.worktree, prepared.tree
     previous, path = prepared.previous, prepared.receipt_path
+    store = state.Store(config.current())
     # A receipt and its results certify the toolchain they ran with (#571): another one, or none now, voids them.
     toolchain = plan.toolchain_state(worktree)
     # ... and the platform they ran on (owner decision 2026-11-13): a receipt naming another, or none, voids them.
     platform = result_store.host_platform()
-    same_rust = (previous is not None and previous.get("toolchain") == toolchain
-                 and result_store.receipt_platform(previous, worktree) == platform)
-    if previous and previous.get("tree") == tree and previous.get("status") == "green" and not rerun:
-        if same_rust:
+    verdict = receipts.check_verdict(record, previous, tree, toolchain, platform=platform)
+    if not rerun:
+        if isinstance(verdict, receipts.Green):
             _record_check_agent(record["id"], prepared.agent_info)
             print(f"Receipt current: green for tree {tree} on {platform} ({path})")
             return None
-        print(f"lane: the receipt was not made on {platform}; running the checks again"
-              if previous.get("toolchain") == toolchain else
-              "lane: the Rust toolchain changed since the receipt (#571); running the checks again")
+        if isinstance(verdict, receipts.StaleToolchain):
+            print("lane: the Rust toolchain changed since the receipt (#571); running the checks again"
+                  if verdict.toolchain_changed else
+                  f"lane: the receipt was not made on {platform}; running the checks again")
+    same_rust = receipts.same_environment(previous, toolchain, worktree=worktree, platform=platform)
     base = plan_base(record, worktree)
     lane_plan = plan.plan_for(worktree, base)
     # fathers#93: a review-fix lane runs the plan of its fix, widened to both diffs when the fix leaves the parent's.
@@ -765,13 +757,13 @@ def select(prepared: Prepared, *, rerun: bool = False, slots_override: int | Non
         wanted = {c for ids in selected.values() for c in ids}
         reused = {c: e for c, e in reusable(previous, plan.plan_for(worktree, previous["head"])).items()
                   if c in wanted}
-    if (selected is not None and parent and not rerun and parent.get("toolchain") == toolchain
-            and result_store.receipt_platform(parent) == platform
+    if (selected is not None and parent and not rerun
+            and receipts.same_environment(parent, toolchain, platform=platform)
             and parent.get("head") and git_ok(worktree, "cat-file", "-e", parent["head"])):
         # The parent's passes stand for each check no change since the parent's head selects, as an earlier
         # receipt of the lane's own would.
         wanted = {c for ids in selected.values() for c in ids}
-        parent_receipt = str(state.receipt_path(parent["lane"]))
+        parent_receipt = str(receipts.path(store, parent["lane"]))
         reused.update({c: dict(e, reused_by="parent", reused_lane=e.get("reused_lane") or parent["lane"],
                                reused_receipt=e.get("reused_receipt") or parent_receipt) for c, e in
                        reusable(parent, plan.plan_for(worktree, parent["head"])).items()
@@ -837,22 +829,26 @@ def record(prepared: Prepared, selection: Selected, executed: CheckRun) -> int:
     changed_tests = changed_red_tests(lane_plan, first)
     info = host.host()
     agent_kind = prepared.agent_info["kind"] if prepared.agent_info else None
-    state.write_json(path, {"version": 1, "lane": lane_id, "ticket": rec["ticket"], "branch": rec["branch"],
-                            "head": head, "tree": tree, "base": selection.base, "suites": suites,
-                            "reasons": lane_plan["reasons"], "checks": selected, "selection": lane_plan["selection"],
-                            "check_results": check_results, "unowned": lane_plan.get("unowned", []),
-                            "full": lane_plan["full"], "outside_claims": selection.outside,
-                            "claims_added": selection.added, "claim_overlaps": selection.overlaps,
-                            "toolchain": selection.toolchain, "platform": selection.platform,
-                            "jobs": decision["jobs"], "jobs_decision": decision, "results": results,
-                            "triage": triaged, "classification": classification, "first": first,
-                            "changed_red_tests": changed_tests, "stopped": stopped, "status": status, "host": info,
-                            "started": executed.started, "paths": lane_plan["paths"],
-                            **({"fix_of": selection.fix_of} if selection.fix_of else {}),
-                            "leases": leases_of(fresh, classification),
-                            # Who ran the check, which a review takes for the implementer (fathers#150, fathers#200).
-                            **({"agent": agent_kind} if agent_kind else {}),
-                            "finished": journal.now()})
+    store = state.Store(config.current(), directory=path.parent)
+    receipts.write(
+        store, lane_id,
+        {"version": 1, "lane": lane_id, "ticket": rec["ticket"], "branch": rec["branch"],
+         "head": head, "tree": tree, "base": selection.base, "suites": suites,
+         "reasons": lane_plan["reasons"], "checks": selected, "selection": lane_plan["selection"],
+         "check_results": check_results, "unowned": lane_plan.get("unowned", []),
+         "full": lane_plan["full"], "outside_claims": selection.outside,
+         "claims_added": selection.added, "claim_overlaps": selection.overlaps,
+         "toolchain": selection.toolchain, "platform": selection.platform,
+         "jobs": decision["jobs"], "jobs_decision": decision, "results": results,
+         "triage": triaged, "classification": classification, "first": first,
+         "changed_red_tests": changed_tests, "stopped": stopped, "status": status, "host": info,
+         "started": executed.started, "paths": lane_plan["paths"],
+         **({"fix_of": selection.fix_of} if selection.fix_of else {}),
+         "leases": leases_of(fresh, classification),
+         # Who ran the check, which a review takes for the implementer (fathers#150, fathers#200).
+         **({"agent": agent_kind} if agent_kind else {}),
+         "finished": journal.now()},
+    )
     _record_check_agent(lane_id, prepared.agent_info)
     # fathers#91: what ran, and what was reused for this tree, is on record for any later run of the tree. A check
     # that failed and passed rerun by itself stays failed here: the merge runs it again (#640); the history marks it

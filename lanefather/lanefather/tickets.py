@@ -20,7 +20,7 @@ import subprocess
 import sys
 from typing import Any
 
-from . import config, journal, review
+from . import config, journal, receipts, review
 from .gitops import common_dir, git, git_ok
 from .state import Record
 
@@ -121,15 +121,7 @@ def substitute(template: str, values: dict[str, str]) -> str:
 
 
 def receipt_line(receipt: dict[str, Any] | None, record: Record) -> str:
-    if not receipt:
-        return "lane receipt: none"
-    suites = ", ".join(r["suite"] for r in receipt.get("results", []) if r.get("status") == "passed") or "none"
-    count = len(receipt.get("check_results") or {})
-    line = (f"lane receipt {receipt.get('status', '?')} on tree `{str(receipt.get('tree', ''))[:10]}`: suites "
-            f"{suites}" + (f" ({count} checks)" if count else ""))
-    forced = [o["reason"] for o in record.get("overrides", []) if o.get("refusals")
-              and any("receipt" in refusal for refusal in o["refusals"])]
-    return line + (f"; landed with --force-reason: {forced[-1]}" if forced else "")
+    return receipts.check_receipt_line(receipt, record)
 
 
 def land_comment(record: Record, merge: str, branch: str, repo: str, pushed: list[str],

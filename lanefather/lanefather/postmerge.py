@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 from typing import Any, cast
 
-from . import lifecycle, state
+from . import lifecycle, receipts, state
 from . import results as result_store
 from .errors import LaneError
 from .gitops import git, git_ok
@@ -43,9 +43,9 @@ def post_merge(record: Record) -> dict[str, Any]:
 
 def red_receipt(record: Record, store: state.Store) -> Receipt | None:
     """The lane's red post-merge receipt, when it is the smoke of the merge the lane landed as."""
-    receipt = state.read_json(store.receipt_path(record["id"], "post-merge"))
+    receipt = receipts.read(store, record["id"], "post-merge")
     merge = landed(record).get("merge")
-    if not receipt or receipt.get("status") != "red" or not merge or receipt.get("merge") != merge:
+    if not receipt or not receipts.is_red(receipt) or not merge or receipt.get("merge") != merge:
         return None
     return receipt
 
@@ -73,7 +73,7 @@ def uncovered(red: Receipt, green: Receipt) -> list[str]:
     selected, suites = ran(red)
     if not suites:
         return ["(the red smoke names no suites)"]
-    tree = green.get("tree")
+    tree = receipts.tree_of(green)
     rows: list[dict[str, Any]] = green.get("results") or []
     whole = {str(r.get("suite")) for r in rows if r.get("status") == "passed" and "checks" not in r}
     results: dict[str, Any] = green.get("check_results") or {}
@@ -91,8 +91,8 @@ def gate_platform(gate: Receipt, path: Any) -> str | None:
     for this receipt (promote records both); None when neither names one."""
     if gate.get("platform"):
         return str(gate["platform"])
-    tree = gate.get("tree")
-    if not isinstance(tree, str) or not result_store.TREE.match(tree):
+    tree = receipts.tree_of(gate)
+    if tree is None or not result_store.TREE.match(tree):
         return None
     found = [e for e in result_store.entries(tree) if e.get("full") and e.get("receipt") == str(path)]
     return str(found[-1]["platform"]) if found and found[-1].get("platform") else None
@@ -107,6 +107,7 @@ def candidates(record: Record, store: state.Store, integration: str, red: Receip
     # finished within the red smoke's second is not earlier (a fast runner lands the next lane in that second).
     platform = red.get("platform") or result_store.host_platform()
     after = str(red.get("finished") or "")
+    red_path = str(receipts.path(store, record["id"], "post-merge"))
 
     def later(at: str) -> bool:
         return bool(after) and at >= after
@@ -116,26 +117,25 @@ def candidates(record: Record, store: state.Store, integration: str, red: Receip
                 == tree and git_ok(integration, "merge-base", "--is-ancestor", merge, sha)
                 and git_ok(integration, "merge-base", "--is-ancestor", sha, head))
     found: list[dict[str, Any]] = []
-    for path in sorted(store.directory.glob("*.gate.json")):
-        gate = state.read_json(path) or {}
+    for path, gate in receipts.gates(store):
         sha = str(gate.get("sha") or "")
-        if (gate.get("full") is True and gate.get("status") == "green" and later(str(gate.get("finished") or ""))
-                and gate_platform(gate, path) == platform and holds(sha, gate.get("tree"))):
+        if (gate.get("full") is True and receipts.is_green(gate) and later(str(gate.get("finished") or ""))
+                and gate_platform(gate, path) == platform and holds(sha, receipts.tree_of(gate))):
             found.append({"kind": "gate", "receipt": str(path), "sha": sha, "at": str(gate.get("finished") or ""),
-                          "red_receipt": str(store.receipt_path(record["id"], "post-merge"))})
+                          "red_receipt": red_path})
     for other in store.lanes():
         if other["id"] == record["id"] or integration_of(other) != integration:
             continue
-        path = store.receipt_path(other["id"], "post-merge")
-        smoke: Receipt = state.read_json(path) or {}
+        path = receipts.path(store, other["id"], "post-merge")
+        smoke: Receipt = receipts.read(store, other["id"], "post-merge") or {}
         sha = str(smoke.get("merge") or "")
-        if (smoke.get("status") != "green" or sha != landed(other).get("merge")
+        if (not receipts.is_green(smoke) or sha != landed(other).get("merge")
                 or smoke.get("platform") != platform or not later(str(smoke.get("finished") or ""))
-                or uncovered(red, smoke) or not holds(sha, smoke.get("tree"))):
+                or uncovered(red, smoke) or not holds(sha, receipts.tree_of(smoke))):
             continue
         found.append({"kind": "post-merge", "lane": other["id"], "receipt": str(path), "sha": sha,
                       "at": str(smoke.get("finished") or ""),
-                      "red_receipt": str(store.receipt_path(record["id"], "post-merge"))})
+                      "red_receipt": red_path})
     return sorted(found, key=lambda entry: entry["at"])
 
 
@@ -169,11 +169,12 @@ def recheckable(record: Record, store: state.Store) -> tuple[Receipt, str, str]:
         raise LaneError(f"recheck refused: lane {lane_id}'s post-merge smoke is {smoke or 'not run'}: "
                         "nothing to recheck")
     red = red_receipt(record, store)
+    post_path = receipts.path(store, lane_id, "post-merge")
     if red is None:
-        raise LaneError(f"recheck refused: {store.receipt_path(lane_id, 'post-merge')} is not the red smoke of "
+        raise LaneError(f"recheck refused: {post_path} is not the red smoke of "
                         f"the merge {str(landed(record).get('merge'))[:10]}")
     if not ran(red)[1]:
-        raise LaneError(f"recheck refused: the red smoke {store.receipt_path(lane_id, 'post-merge')} names no suites")
+        raise LaneError(f"recheck refused: the red smoke {post_path} names no suites")
     integration = integration_of(record)
     if integration is None:
         raise LaneError(f"recheck refused: lane {lane_id}'s integration worktree is gone")
