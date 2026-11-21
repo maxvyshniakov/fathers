@@ -322,8 +322,21 @@ class ExecutorTests(FixtureCase):
         return next(action for action in actions.for_lane(lane, []) if action.name == name)
 
     def test_the_log_is_checked_then_handed_to_the_screen(self) -> None:
-        done = cast(Any, app.Screen().act(self.lane_action("Open the latest log"), ""))
+        import types
+
+        log = "/fixture/straylight/lanes/logs/lane-710-speech-paste-phase-20261104T095020.log"
+        action = self.lane_action("Open the latest log")
+        done = cast(Any, app.Screen().act(action, ""))
         self.assertIsInstance(done, state_module.HandOff)
+        for pager_env, expected in (({}, ["less", "-R", "+G", log]), ({"PAGER": "cat"}, ["cat", log])):
+            with self.subTest(pager=pager_env):
+                env = {key: value for key, value in os.environ.items() if key != "PAGER"}
+                env.update(pager_env)
+                with mock.patch.dict(os.environ, env, clear=True):
+                    paged = app.Live.page_file(cast(Any, types.SimpleNamespace()), done.action, done.key)
+                self.assertTrue(paged.ok, paged.line)
+                line = json.loads(self.record.read_text().splitlines()[-1])
+                self.assertEqual(expected, line["argv"])
 
     def test_a_malformed_pager_is_a_footer_line(self) -> None:
         import types
@@ -428,9 +441,12 @@ class EveryRowTests(unittest.TestCase):
     """Each row of the actions table in a PTY under fixtures (fathers#88 review 10): the keys to the row and through
     the menu (and the confirmation or the reason), and the argv recorded, never run."""
 
-    CASES = [  # name, keys to the row, keys in the menu and after, the recorded argv's start
-        ("reprioritize", "", "j\r", ["slotfather", "reprioritize", "10000", "interactive", "--start"]),
-        ("ask to yield", "j", "jjj\r", ["slotfather", "ask-yield", "10001", "--start"]),
+    LOG = "/fixture/straylight/lanes/logs/lane-644-build-once-20261104T0950110.log"
+    CASES = [  # name, keys to the row, keys in the menu and after, the exact recorded argv
+        ("reprioritize", "", "j\r",
+         ["slotfather", "reprioritize", "10000", "interactive", "--start", "Tue Nov  4 08:40:00 2026"]),
+        ("ask to yield", "j", "jjj\r",
+         ["slotfather", "ask-yield", "10001", "--start", "Tue Nov  4 08:41:00 2026"]),
         ("extend", "3g", "j\r", ["junkfather", "extend", "j3f9a1c", "--ttl", "1h"]),
         ("reap an orphan", "3gjjj", "j\ry", ["junkfather", "reap", "--id", "j7a8b9c", "--reason=godfather: orphan"]),
         ("reap an expired entry", "3gjjjj", "j\ry",
@@ -438,7 +454,7 @@ class EveryRowTests(unittest.TestCase):
         ("reap an unowned process", "3Gkk", "j\ry",
          ["junkfather", "reap", "--pid", "88123", "--force", "--reason=godfather: unowned"]),
         ("open the ticket", "2", "j\r", [actions.opener(), "https://github.com/maxvyshniakov/straylight/issues/644"]),
-        ("open the latest log", "2", "jj\r", [*actions.pager()]),
+        ("open the latest log", "2", "jj\r", ["less", "-R", "+G", LOG]),
         ("open the worktree", "2", "jjj\r", [actions.opener(), "/fixture/straylight/worktrees/644-build-once"]),
         ("park", "2", "G\rlater\ry",
          ["lanefather", "park", "644-build-once", "--state-dir", "/fixture/straylight/lanes", "--reason=later"]),
@@ -471,7 +487,7 @@ class EveryRowTests(unittest.TestCase):
                 screen.until(lambda _, written=record: written.exists() and written.read_text().endswith("\n"),
                              what=f"{name} recorded")
                 line = json.loads(record.read_text().splitlines()[-1])
-                self.assertEqual(argv, line["argv"][:len(argv)])
+                self.assertEqual(argv, line["argv"])
                 self.assertTrue(line["env"]["GODFATHER_ACTOR"].startswith("godfather/"))
                 self.assertEqual(0, screen.quit())
 
