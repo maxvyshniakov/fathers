@@ -179,6 +179,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- On Linux, `procs --json --cwd` omits non-dumpable long-lived managed services (`systemd --user`, `(sd-pam)`, and
+  systemd `.service` `MainPID`s) whose `/proc` links fail with `EACCES`, while any non-dumpable process started
+  inside a worktree or outside a service's `MainPID` remains in `cwd_unknown` (fathers#164).
 - The holder's `.idle` record now includes its recent CPU rate (`cpu_pct`, cores × 100), and on Linux the
   dashboard block uses it for held leases' `cpu` (falling back to `ps %cpu` for older clients or on macOS), so
   an idle lease is no longer also marked hot from `ps`'s lifetime average (fathers#20).

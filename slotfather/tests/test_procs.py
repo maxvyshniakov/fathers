@@ -200,10 +200,10 @@ class TransientUnknownTests(unittest.TestCase):
     def test_a_process_that_exits_before_its_cwd_is_read_is_not_unknown(self):
         real = self.procs.read_cwds
 
-        def exit_first(processes: dict[int, object], uid: int) -> dict[int, str]:
+        def exit_first(processes: dict[int, object], uid: int, exempt: set[int] | None = None) -> dict[int, str]:
             self.assertIn(self.child.pid, processes, "the child was enumerated")
             self.stop_child()
-            return real(processes, uid)
+            return real(processes, uid, exempt)
 
         with mock.patch.object(self.procs, "read_cwds", exit_first):
             found = self.procs.query(cwd=self.work)
@@ -213,8 +213,8 @@ class TransientUnknownTests(unittest.TestCase):
     def test_a_live_process_whose_cwd_cannot_be_read_is_still_unknown_and_named(self):
         real = self.procs.read_cwds
 
-        def hide_child(processes: dict[int, object], uid: int) -> dict[int, str]:
-            found = real(processes, uid)
+        def hide_child(processes: dict[int, object], uid: int, exempt: set[int] | None = None) -> dict[int, str]:
+            found = real(processes, uid, exempt)
             found.pop(self.child.pid, None)
             return found
 
@@ -280,6 +280,149 @@ class RecheckTests(unittest.TestCase):
                     mock.patch("subprocess.run", side_effect=[self.table, self.hidden, answer]), \
                     self.assertRaises(self.procs.ProcsError):
                 self.procs.query()
+
+
+class LinuxNonDumpableTests(unittest.TestCase):
+    """fathers#164: non-dumpable systemd user-session managers and managed service MainPIDs are omitted from
+    cwd_unknown, while any non-dumpable process started inside a lane's worktree still counts as unknown."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory(prefix="slotfather-procs-164-")
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(os.path.realpath(self.tmp.name))
+        self.directory = self.root / "state"
+        self.worktree = self.root / "worktree"
+        self.worktree.mkdir()
+        self.proc = self.root / "proc"
+        (self.proc / "self/ns").mkdir(parents=True)
+        (self.proc / "self/ns/mnt").symlink_to("mnt:[111]")
+        self.environment = mock.patch.dict(os.environ, {
+            "SLOTFATHER_DIR": str(self.directory),
+            "SLOTFATHER_LEGACY_DIRS": "",
+            "SLOTFATHER_PROC": str(self.proc),
+        })
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        self.procs = importlib.import_module("slotfather.procs")
+
+    def add_proc(self, pid: int, cgroup: str, cwd: str | None = None, ns: str = "mnt:[111]") -> None:
+        entry = self.proc / str(pid)
+        (entry / "ns").mkdir(parents=True, exist_ok=True)
+        (entry / "cgroup").write_text(f"0::{cgroup}\n")
+        if cwd is not None:
+            (entry / "ns/mnt").symlink_to(ns)
+            (entry / "cwd").symlink_to(cwd)
+
+    def test_non_dumpable_systemd_user_sd_pam_and_service_main_pid_are_omitted_while_worktree_process_refuses(
+            self) -> None:
+        import errno
+        uid = os.geteuid()
+        # 850: systemd --user, 851: (sd-pam), 860: ssh-agent.service MainPID,
+        # 870: detached non-dumpable child inside actions.runner.service (not MainPID),
+        # 880: non-dumpable process started inside a lane's worktree under shell 879,
+        # 890: readable process inside the worktree.
+        self.add_proc(850, f"/user.slice/user-{uid}.slice/user@{uid}.service/init.scope")
+        self.add_proc(851, f"/user.slice/user-{uid}.slice/user@{uid}.service/init.scope")
+        self.add_proc(860, f"/user.slice/user-{uid}.slice/user@{uid}.service/app.slice/ssh-agent.service")
+        self.add_proc(870, "/ci.slice/actions.runner.x.service")
+        self.add_proc(879, f"/user.slice/user-{uid}.slice/session-3.scope", cwd=str(self.worktree))
+        self.add_proc(880, f"/user.slice/user-{uid}.slice/session-3.scope")
+        self.add_proc(890, f"/user.slice/user-{uid}.slice/session-3.scope", cwd=str(self.worktree))
+
+        real_readlink = os.readlink
+        denied = {
+            str(self.proc / str(pid) / sub)
+            for pid in (850, 851, 860, 870, 880)
+            for sub in ("ns/mnt", "cwd")
+        }
+
+        def fake_readlink(path: os.PathLike[str] | str) -> str:
+            if os.fspath(path) in denied:
+                raise PermissionError(errno.EACCES, "Permission denied", os.fspath(path))
+            return real_readlink(path)
+
+        ps_table = subprocess.CompletedProcess([], 0, "\n".join([
+            f"850 1 {uid} ?? S Wed Nov  4 10:00:00 2026 /usr/lib/systemd/systemd --user",
+            f"851 850 {uid} ?? S Wed Nov  4 10:00:00 2026 (sd-pam)",
+            f"860 850 {uid} ?? S Wed Nov  4 10:00:01 2026 /usr/bin/ssh-agent -D",
+            f"870 1 {uid} ?? S Wed Nov  4 10:00:02 2026 /work/secret-helper",
+            f"879 1 {uid} ?? S Wed Nov  4 10:00:03 2026 /bin/bash",
+            f"880 879 {uid} ?? S Wed Nov  4 10:00:04 2026 ./non-dumpable-in-lane",
+            f"890 879 {uid} ?? S Wed Nov  4 10:00:05 2026 python3 test.py",
+        ]) + "\n", "")
+        recheck_ps = subprocess.CompletedProcess([], 0, "\n".join([
+            "870 S Wed Nov  4 10:00:02 2026",
+            "880 S Wed Nov  4 10:00:04 2026",
+        ]) + "\n", "")
+
+        def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            if argv[0] == "systemctl":
+                unit = argv[-1]
+                main = "860\n" if unit == "ssh-agent.service" else "500\n"
+                return subprocess.CompletedProcess(argv, 0, main, "")
+            if "-p" in argv:
+                return recheck_ps
+            return ps_table
+
+        with mock.patch("sys.platform", "linux"), mock.patch("os.readlink", side_effect=fake_readlink), \
+                mock.patch("subprocess.run", side_effect=fake_run):
+            found = self.procs.query(cwd=str(self.worktree))
+
+        self.assertEqual([879, 890], [item["pid"] for item in found["processes"]])
+        self.assertEqual([870, 880], found["cwd_unknown"],
+                         "systemd --user (850), (sd-pam) (851) and ssh-agent MainPID (860) are omitted; "
+                         "non-MainPID service worker (870) and lane process (880) stay unknown")
+        self.assertEqual([870, 880], [item["pid"] for item in found["unknown"]])
+
+    def test_systemctl_failure_fails_closed_keeping_service_process_unknown(self) -> None:
+        import errno
+        uid = os.geteuid()
+        self.add_proc(860, f"/user.slice/user-{uid}.slice/user@{uid}.service/app.slice/ssh-agent.service")
+        real_readlink = os.readlink
+        denied = {str(self.proc / "860/ns/mnt"), str(self.proc / "860/cwd")}
+
+        def fake_readlink(path: os.PathLike[str] | str) -> str:
+            if os.fspath(path) in denied:
+                raise PermissionError(errno.EACCES, "Permission denied", os.fspath(path))
+            return real_readlink(path)
+
+        ps_table = subprocess.CompletedProcess(
+            [], 0, f"860 1 {uid} ?? S Wed Nov  4 10:00:01 2026 /usr/bin/ssh-agent -D\n", "")
+        recheck_ps = subprocess.CompletedProcess([], 0, "860 S Wed Nov  4 10:00:01 2026\n", "")
+
+        def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            if argv[0] == "systemctl":
+                return subprocess.CompletedProcess(argv, 1, "", "Failed to connect to bus")
+            return recheck_ps if "-p" in argv else ps_table
+
+        with mock.patch("sys.platform", "linux"), mock.patch("os.readlink", side_effect=fake_readlink), \
+                mock.patch("subprocess.run", side_effect=fake_run):
+            found = self.procs.query(cwd=str(self.worktree))
+        self.assertEqual([860], found["cwd_unknown"])
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "PR_SET_DUMPABLE is Linux-specific")
+    def test_real_non_dumpable_process_started_in_worktree_counts_as_unknown(self) -> None:
+        script = (
+            "import ctypes, sys, time\n"
+            "libc = ctypes.CDLL(None, use_errno=True)\n"
+            "assert libc.prctl(4, 0, 0, 0, 0) == 0\n"
+            "print('ready', flush=True)\n"
+            "time.sleep(60)\n"
+        )
+        with mock.patch.dict(os.environ, {"SLOTFATHER_PROC": "/proc"}):
+            child = subprocess.Popen([sys.executable, "-c", script], cwd=self.worktree,
+                                     stdout=subprocess.PIPE, text=True)
+            assert child.stdout is not None
+            self.addCleanup(lambda: (child.kill(), child.wait(), child.stdout and child.stdout.close()))
+            self.assertEqual("ready", child.stdout.readline().strip())
+            try:
+                os.readlink(f"/proc/{child.pid}/cwd")
+            except PermissionError:
+                pass
+            else:
+                self.skipTest("CAP_SYS_PTRACE/root allows reading non-dumpable /proc/PID/cwd here")
+            found = self.procs.query(cwd=str(self.worktree))
+        self.assertIn(child.pid, found["cwd_unknown"])
 
 
 if __name__ == "__main__":

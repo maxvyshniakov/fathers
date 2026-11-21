@@ -227,6 +227,27 @@ def proc_path(*parts: str) -> Path:
     return Path(_config.setting("PROC") or "/proc", *parts)
 
 
+def service_of(cgroup_lines: list[str]) -> tuple[bool, str] | None:
+    """(in a user's manager, unit) of a process's cgroup v2 path when it is a .service, else None."""
+    path = next((line.split(":", 2)[2].strip() for line in cgroup_lines if line.startswith("0::")), "")
+    unit = path.rstrip("/").rsplit("/", 1)[-1]
+    if not unit.endswith(".service"):
+        return None
+    return ("/user@" in path, unit)
+
+
+def main_pid(user: bool, unit: str, run: Any = subprocess.run, timeout: float = 10) -> int:
+    """The unit's MainPID from its manager (`systemctl --user` for a user's), or -1 when it cannot be asked."""
+    try:
+        result = run(["systemctl", *(["--user"] if user else []), "show", "--property", "MainPID", "--value", unit],
+                     capture_output=True, text=True, timeout=timeout)
+        if result.returncode == 0:
+            return int(result.stdout.strip() or 0)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        pass
+    return -1
+
+
 def meminfo(text: str | None = None) -> dict[str, int]:
     """/proc/meminfo as name -> kB (counts without a unit as they are); {} where it cannot be read."""
     if text is None:

@@ -370,7 +370,11 @@ the root or a descendant directory: `/work/lane-other` does not match
 `/work/lane`. The query process and its ancestors are omitted. Both filters
 may be combined and intersect. Linux processes in a different or unreadable
 mount namespace are listed in `cwd_unknown`, since their pathnames cannot
-be interpreted safely in the caller's filesystem.
+be interpreted safely in the caller's filesystem; non-dumpable long-lived
+managed services (`systemd --user`, `(sd-pam)`, and systemd `.service`
+`MainPID`s) whose `/proc` links answer `EACCES` are omitted (fathers#164),
+while any non-dumpable process started in or outside a service's `MainPID`
+remains in `cwd_unknown`.
 
 Consumers that decide whether to signal a process or remove a worktree must
 fail closed on query errors and relevant `cwd_unknown` or `lease_unknown`
