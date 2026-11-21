@@ -25,7 +25,8 @@ The installed commands use only Python's standard library (3.9+; Lanefather 3.11
 - The pre-push hook runs it on the pushed commits and a lane's `lanefather check` on the lane's diff
   ([orchestration](orchestration.md)); do not run it again by hand right before either.
 - CI runs the same named checks (`<package> lint`, `<package> tests`) through one reusable workflow, on each
-  package's Python floor and the newest Python ([publishing](publishing.md#ci)).
+  package's Python floor and the newest Python on Ubuntu ([publishing](publishing.md#ci)). On macOS run
+  `FATHERS_CHECKS=all bun run verify` locally; this includes the PTY and detached-process tests on the local Python.
 
 ## Lint gate
 

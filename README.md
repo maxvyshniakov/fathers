@@ -36,7 +36,8 @@ runner installs Slotfather alone (`python3 slotfather/install.py --user runner -
 - [`notes/sha-map.md`](notes/sha-map.md): the packages moved here from their own repositories with their history;
   the map gives the new commit for each old one.
 
-CI runs one job per package on GitHub-hosted runners, triggered by changes under that package or `common/`.
+Each triggered workflow tests on two GitHub-hosted Ubuntu runners: the package's minimum Python on Ubuntu 24.04
+and the newest Python on ubuntu-latest. The [local gate](docs/agents/checks.md#full-gate) covers macOS.
 
 ## Develop
 

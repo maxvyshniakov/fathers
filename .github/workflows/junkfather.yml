@@ -1,7 +1,6 @@
 name: junkfather
 
-# The shared shape: package.yml runs the lint gate and the tests on the floor and the newest Python, on Ubuntu and
-# macOS (fathers#120).
+# package.yml tests both Python versions on Ubuntu and runs lint on the newest.
 on:
   push:
     branches: [main]
