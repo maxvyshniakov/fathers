@@ -200,6 +200,9 @@ class WorkflowTests(unittest.TestCase):
     def test_godfather_declares_requires_python(self) -> None:
         self.declares_requires_python("godfather")
 
+    def test_tokenfather_declares_requires_python(self) -> None:
+        self.declares_requires_python("tokenfather")
+
     def test_the_reusable_workflow_runs_the_floor_and_the_newest_on_both_systems(self) -> None:
         text = (WORKFLOWS / "package.yml").read_text()
         legs = re.findall(r"- os: (\S+)\n\s+python: \$\{\{ inputs\.(floor|newest) \}\}(\n\s+lint: true)?", text)
