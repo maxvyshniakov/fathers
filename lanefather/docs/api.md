@@ -6,7 +6,7 @@ change, a removed or changed one changes `v`.
 | Command | Reader | Contract |
 | --- | --- | --- |
 | `lanefather capabilities --json` | project launchers, Godfather | [reference](reference.md#installed-runtime-contract) |
-| `lanefather status --json` | Godfather | [reference](reference.md) |
+| `lanefather status --json` | Godfather | [reference](reference.md#machine-wide-status) |
 | `lanefather settings --json` | Godfather | Godfather's settings contract |
 | `lanefather results key\|lookup\|record` | Repo-Kit's gates and CI | [results](results.md) |
 | `lanefather stats --json` | people, dashboards | below |

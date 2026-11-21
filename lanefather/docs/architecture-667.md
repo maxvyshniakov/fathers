@@ -1,7 +1,7 @@
 # Architecture pass after the extraction
 
-A historical design record. Lanefather was extracted from the lane tool of a private project (Straylight); this
-pass was tracked there as #667, and the issue numbers and project names below refer to that project.
+A historical design record. Lanefather was extracted from the lane tool of a private project (Straylight); see
+[the commit map](../../notes/sha-map.md) for the repository migration history.
 
 This pass starts at `feef0de`, the reviewed extraction of Straylight's lane engine. It changes no lane,
 receipt, queue or landing-lock representation. Live lanes on older branches keep using those files.
@@ -75,8 +75,8 @@ and PID plus start-time identity. `SlotfatherSource` uses `procs --json --cwd`, 
 keeps command-line-only references, and preserves legacy behavior only when the CLI explicitly declines `procs`.
 An inspection failure or unknown response schema retains the worktree. The standalone adapter deliberately refuses
 PID-only live stopping: the installed receiving CLI cannot carry an earlier `(pid, start)` identity through its
-actual signal boundary. A preflight identity query cannot close that race. This is an external API blocker on
-Straylight #667, not a claim that a new stop flag exists. The existing configured process hook remains compatible,
+actual signal boundary. A preflight identity query cannot close that race. This is an external Slotfather CLI
+limitation, not a claim that a new stop flag exists. The existing configured process hook remains compatible,
 including `stopped`, `killed` and `gone` results. No slotfather source or installed command is modified by this pass.
 
 Collection re-reads the worktree entry and runs the complete retention policy after process cleanup. A termination
@@ -91,4 +91,4 @@ query intentionally omits query ancestry. These cases have real-CLI scratch Git 
 3. Only then deliver the Straylight janitor/config delegate. The delegate refuses an absent/outdated `gc` with a
    diagnostic and no deletion. It does not silently fall back to a second implementation.
 4. Existing Straylight lanes keep their current engine and hook. Switching the default engine and retiring the
-   legacy `tools/lane`/process scan are separate acceptance scopes of Straylight #648, not claimed by this pass.
+   legacy `tools/lane`/process scan are separate rollout steps, not claimed by this pass.

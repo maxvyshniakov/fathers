@@ -6,7 +6,7 @@ names the **platform** it runs on: a tree counts as verified only for the OS and
 the post-merge smoke of `land` and the batch gate of `promote` look the key up before they run, and each reused
 result names where it came from.
 
-This page is the interface other tools build on: Repo-Kit's pre-push gate and CI templates (repo-kit#14) call
+This page is the interface other tools build on: Repo-Kit's pre-push gate and CI templates call
 `lanefather results`; nothing else in Lanefather's state is an interface.
 
 ## The key
