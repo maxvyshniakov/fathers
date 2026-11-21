@@ -363,7 +363,7 @@ class VerifyProgressHeartbeatTests(LaneCase):
             self.assertIsNone(proc.poll(), "lanefather check exited before held child started")
             self.assertLess(time.monotonic(), deadline, "held child did not start")
             time.sleep(0.05)
-        time.sleep(0.35)
+        time.sleep(0.35)  # sleep-ok: let >=2 heartbeat intervals (0.1s) elapse while held child runs
         hold.touch()
         output, _ = proc.communicate(timeout=30)
         self.assertEqual(proc.returncode, 0, output)
@@ -398,7 +398,7 @@ class VerifyProgressHeartbeatTests(LaneCase):
             self.assertIsNone(proc.poll(), "lanefather check exited before entering slotfather queue")
             self.assertLess(time.monotonic(), deadline, "queued check did not enter slotfather")
             time.sleep(0.05)
-        time.sleep(0.45)
+        time.sleep(0.45)  # sleep-ok: let >=2 heartbeat intervals (0.1s) elapse while queued in slotfather
         queue_hold.touch()
         output, _ = proc.communicate(timeout=30)
         self.assertEqual(proc.returncode, 0, output)
