@@ -8,6 +8,12 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- `lanefather land` three-phase split (`merge`, `post_merge`, `after_land`), kill-after-merge recovery, and
+  lock-free `done` cleanup (fathers#72): `land` records a `landing` intent before merging and finishes the `land`
+  transition on re-land if killed between merge and save (with `lanefather land ID --repair` for pre-intent
+  merges); `done` runs `gh`, `du`, and `rmtree` outside the `state` lock; `land` and `review` finish lanes through
+  `lifecycle`.
+
 - Safer release management in `install.py` (fathers#50): pruning keeps every release pinned by a live lane in
   registered state directories and every release in use by a running process (lock or live pid file), plus the
   newest three releases ordered by version and build order rather than mtime; normal installs never move `current`

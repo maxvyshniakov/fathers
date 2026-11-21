@@ -13,6 +13,7 @@ on the project of the Store it is given (store.project), never on a module-wide 
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 import fcntl
 import json
 import os
@@ -84,7 +85,7 @@ def field(record: Record, name: str) -> dict[str, Any]:
 def kept(record: Record) -> bool:
     """Whether auto-done and done --finished leave the lane alone (fathers#157): `keep ID` or `land --keep`. The
     landed lane's flag is the one older installs read."""
-    return bool(record.get("keep")) or bool(field(record, "landed").get("keep"))
+    return lifecycle.kept(record)
 
 
 def keep(args: Any) -> int:
@@ -136,12 +137,12 @@ def refused(lane_id: str, error: Exception, store: state.Store) -> str:
     return text
 
 
-def finish_landed(lane_id: str, keep: bool) -> None:
+def finish_landed(lane_id: str, keep: bool, *, store: state.Store | None = None) -> None:
     """When a lane becomes finished (land of a reviewed or exempt lane, its clean review, the mark of its last
     finding): finish it as done does, unless it is kept or `[done] auto` is false. When its agent still locks the
     worktree, keep the worktree and release the lane; done finishes it later. A landed lane does not count toward
     the lane cap; a refused done only leaves cleanup behind."""
-    store = state.Store(config.current())
+    store = store or state.Store(config.current())
     prog = store.project.command
     record = store.load(lane_id)
     if lifecycle.finished(record):
@@ -287,14 +288,28 @@ def print_removed(removed: list[str]) -> None:
         print(f"  {item}" if item.startswith(("stopped ", "did not stop ")) else f"  removed {item}")
 
 
-def finish(lane_id: str, force_reason: str | None, store: state.Store | None = None, *,
-           unattended: bool = False) -> int:
-    """done ID in the project `store` holds (by default the current one): every refusal, then the removal; the
-    bytes it freed. `unattended` (auto-done, done --finished, the disk repair, fathers#157) also refuses a kept lane
-    under the lock and a missing process source, and takes a lane already done for done. A red post-merge smoke
-    that a later green run on the integration branch clears (lanefather.postmerge, fathers#167) does not refuse;
-    the ledger names that run."""
-    store = store or state.Store(config.current())
+@dataclass(frozen=True)
+class FinishPlan:
+    """What `finish_refusals` gathers under the `state` lock for `cleanup` to act on outside it."""
+
+    record: Record
+    main: str
+    scanner: Any
+    leftover: list[Any]
+    lock: str | None
+    integration: str | None
+    cleared: dict[str, Any] | None
+    refusals: list[str]
+
+
+def finish_refusals(
+    lane_id: str, force_reason: str | None, store: state.Store, *, unattended: bool = False
+) -> FinishPlan | None:
+    """Check status, smoke, review, integration and holders under the `state` lock.
+
+    Returns None when `unattended` sees the lane is already done; raises `LaneError` on refusals unless
+    `force_reason` overrides them; otherwise returns a `FinishPlan` for `cleanup` to execute outside the lock.
+    """
     project = store.project
     prog = project.command
     with store.locked("state"):
@@ -302,7 +317,7 @@ def finish(lane_id: str, force_reason: str | None, store: state.Store | None = N
         refusals: list[str] = []
         if lifecycle.finished(record):
             if unattended:
-                return 0
+                return None
             raise LaneError(f"lane {lane_id} is already done")
         if unattended and kept(record):
             raise LaneError(f"lane {lane_id} is kept ({prog} keep {lane_id} --off releases it)")
@@ -348,32 +363,56 @@ def finish(lane_id: str, force_reason: str | None, store: state.Store | None = N
                 refusals.append(f"{worktree} is at {head[:10]}, with commits that are not in {integration}")
         held, leftover, lock = holders(record, store, scanner, main, unattended=unattended)
         refusals += held
-        if record["ticket"] != "none" and not refusals:
-            missing = ticket_commented(record, project)
-            if missing:
-                refusals.append(missing)
         if refusals and not force_reason:
             raise LaneError("done refused (not landed or not safe to remove):\n- " + "\n- ".join(refusals))
-        if refusals:
-            journal.ledger(f"override done {lane_id}: {force_reason} ({'; '.join(refusals)})", kind="override",
-                           level="warn", lane=record,
-                           details={"command": "done", "reason": force_reason, "refusals": refusals},
-                           directory=store.directory, project=project)
-        holding = git(integration, "rev-parse", "HEAD") if integration else None
-        freed, removed = remove(record, store, scanner, main, leftover, lock, verb="done", holding=holding,
-                                overridden=bool(force_reason))
-        lifecycle.transition(
-            store, lane_id, "finish",
-            force=bool(force_reason),
-            done=journal.now(), freed_bytes=freed,
-            post_merge_cleared_by=cleared,
-            ledger_message=(f"done {lane_id} freed={freed // 2**20} MiB removed={' '.join(removed) or '-'}"
-                            + (f" post-merge red cleared by {postmerge.words(cleared)}" if cleared else "")),
-            ledger_details={"freed_bytes": freed, "removed": removed,
-                            **({"post_merge_cleared_by": cleared} if cleared else {})},
+        return FinishPlan(
+            record=record, main=main, scanner=scanner, leftover=leftover,
+            lock=lock, integration=integration, cleared=cleared, refusals=refusals,
         )
+
+
+def cleanup(plan: FinishPlan, force_reason: str | None, store: state.Store) -> tuple[int, list[str]]:
+    """Run the slow cleanup outside the `state` lock: ticket comment check (`gh`), `du`, worktree/branch/scratch
+    removal (`rmtree`)."""
+    record = plan.record
+    refusals = list(plan.refusals)
+    if record["ticket"] != "none" and not refusals:
+        missing = ticket_commented(record, store.project)
+        if missing:
+            refusals.append(missing)
+    if refusals and not force_reason:
+        raise LaneError("done refused (not landed or not safe to remove):\n- " + "\n- ".join(refusals))
+    if refusals:
+        journal.ledger(f"override done {record['id']}: {force_reason} ({'; '.join(refusals)})", kind="override",
+                       level="warn", lane=record,
+                       details={"command": "done", "reason": force_reason, "refusals": refusals},
+                       directory=store.directory, project=store.project)
+    holding = git(plan.integration, "rev-parse", "HEAD") if plan.integration else None
+    return remove(record, store, plan.scanner, plan.main, plan.leftover, plan.lock, verb="done", holding=holding,
+                  overridden=bool(force_reason))
+
+
+def finish(lane_id: str, force_reason: str | None, store: state.Store | None = None, *,
+           unattended: bool = False) -> int:
+    """done ID in the project `store` holds (by default the current one): refusals under the lock, cleanup outside
+    it, then the `done` transition under the lock; returns the bytes freed."""
+    store = store or state.Store(config.current())
+    plan = finish_refusals(lane_id, force_reason, store, unattended=unattended)
+    if plan is None:
+        return 0
+    freed, removed = cleanup(plan, force_reason, store)
+    lifecycle.transition(
+        store, lane_id, "finish",
+        force=bool(force_reason),
+        done=journal.now(), freed_bytes=freed,
+        post_merge_cleared_by=plan.cleared,
+        ledger_message=(f"done {lane_id} freed={freed // 2**20} MiB removed={' '.join(removed) or '-'}"
+                        + (f" post-merge red cleared by {postmerge.words(plan.cleared)}" if plan.cleared else "")),
+        ledger_details={"freed_bytes": freed, "removed": removed,
+                        **({"post_merge_cleared_by": plan.cleared} if plan.cleared else {})},
+    )
     print(f"Lane {lane_id} done: claims released, {freed / 1e9:.1f} GB freed"
-          + (f"; its red post-merge smoke was cleared by {postmerge.words(cleared)}" if cleared else ""))
+          + (f"; its red post-merge smoke was cleared by {postmerge.words(plan.cleared)}" if plan.cleared else ""))
     print_removed(removed)
     return freed
 

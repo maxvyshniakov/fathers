@@ -13,6 +13,7 @@ the batch gate; each skip's reason is in the output, the receipt (`skipped`) and
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 import fnmatch
 import os
 import subprocess
@@ -22,7 +23,6 @@ from typing import Any
 from . import (
     checks,
     config,
-    done,
     journal,
     lifecycle,
     plan,
@@ -51,11 +51,12 @@ def failed_items(failed: list[dict[str, Any]]) -> list[tuple[str, str]]:
     return list(dict.fromkeys(items)) or [(result["suite"], result["suite"]) for result in failed]
 
 
-def touched_lines(failed: list[tuple[str, str]], integration: str, merge: str) -> list[str]:
+def touched_lines(failed: list[tuple[str, str]], integration: str, merge: str,
+                  *, store: state.Store | None = None) -> list[str]:
     """The lanes in the merge, newest first, whose checks ran each failed (check, suite) item: the check itself, or
     its whole suite (review of #422, finding 1); for a suite item, any check of the suite. A lane that landed after
     the merge, while its smoke ran (#573), is not in it."""
-    store = state.Store(config.current())
+    store = store or state.Store(config.current())
     landed = [r for r in sorted(store.lanes(), key=lambda r: r.get("landed", {}).get("at", ""), reverse=True)
               if r.get("landed", {}).get("integration") == integration
               and git_ok(integration, "merge-base", "--is-ancestor", r["landed"]["merge"], merge)]
@@ -107,17 +108,17 @@ def smoke_reuse(kind: str, rows: list[dict[str, Any]] | None, merge_tree: str, t
     return ("skip" if skips and not kept else kind), kept, reused, skips
 
 
-def merge_problem(args: Any, tip: str, tree: str, receipt: dict[str, Any] | None, *,
+def merge_problem(lane_id: str, tip: str, tree: str, receipt: dict[str, Any] | None, *,
                   record: state.Record | None = None) -> str | None:
     """Why the lane may not land: no receipt, a stale one, or a red one."""
     prog = config.prog()
     # Behaviour preserved in Tidy 3 (#71): land checks tree currency only, ignoring toolchain until #59.
     verdict = receipts.check_verdict(record, receipt, tree)
     if isinstance(verdict, receipts.NoReceipt):
-        return f"no receipt for lane {args.id}: run {prog} check {args.id} in its worktree"
+        return f"no receipt for lane {lane_id}: run {prog} check {lane_id} in its worktree"
     if isinstance(verdict, receipts.StaleTree):
         return (f"the receipt is stale: it covers tree {verdict.receipt_tree}, the lane tip {tip[:10]} has tree "
-                f"{tree}; rerun {prog} check {args.id}")
+                f"{tree}; rerun {prog} check {lane_id}")
     if isinstance(verdict, receipts.Green):
         return None
     assert isinstance(verdict, receipts.Red)
@@ -133,11 +134,35 @@ def merge_problem(args: Any, tip: str, tree: str, receipt: dict[str, Any] | None
     return problem
 
 
-Smoke = tuple[dict[str, Any], list[dict[str, Any]], dict[str, dict[str, Any]], str | None, dict[str, Any], str]
+@dataclass(frozen=True)
+class Landed:
+    """The result of `merge`: the landed lane record and merge metadata passed to `post_merge` and `after_land`."""
+
+    record: state.Record
+    merge: str
+    previous: str
+    integration: str
+    onto: str | None
+    keep: bool
+    receipt: dict[str, Any] | None
+
+
+@dataclass(frozen=True)
+class Smoke:
+    """The result of `post_merge`: the updated record, smoke status, summary line and failure details."""
+
+    record: state.Record
+    status: str
+    summary: str
+    results: list[dict[str, Any]]
+    triaged: str | None
+
+
+SmokeTuple = tuple[dict[str, Any], list[dict[str, Any]], dict[str, dict[str, Any]], str | None, dict[str, Any], str]
 
 
 def run_smoke(record: dict[str, Any], checkout: str, suites: list[str], selected: dict[str, list[str]] | None,
-              label: str, slots: int | None, toolchain: Any) -> Smoke:
+              label: str, slots: int | None, toolchain: Any) -> SmokeTuple:
     """Run a post-merge smoke's suites (land's, or recheck's) in its checkout: (the jobs decision, suite results,
     check results, triage, the verified-tree stamp, green or red)."""
     if not suites:
@@ -160,22 +185,22 @@ def run_smoke(record: dict[str, Any], checkout: str, suites: list[str], selected
     return decision, results, check_results, outcome.triage, outcome.stamp, status
 
 
-def complete(record: dict[str, Any], merge: str, integration: str, onto: str, receipt: dict[str, Any] | None,
-             status: str, smoke: str, keep: bool) -> None:
+def complete(store: state.Store, record: dict[str, Any], merge: str, integration: str, onto: str,
+             receipt: dict[str, Any] | None, status: str, smoke: str, keep: bool) -> None:
     """After a post-merge smoke of the lane's merge (land's, or a recheck's): mark its issue (a red smoke leaves it),
     and after a green one finish the lane once its review is clean or marked, or it is kept."""
     lane_id = record["id"]
-    tickets.after_land(record, merge, integration, onto, receipt, status, smoke)
+    tickets.after_land(store, record, merge, integration, onto, receipt, status, smoke)
     if status != "green":
         return
-    reviewed, words = review.review_state(lane_id)
+    reviewed, words = review.review_state(lane_id, store)
     if reviewed or keep:
-        done.finish_landed(lane_id, keep)
+        lifecycle.finish_landed(store, lane_id, keep)
     else:
         # The fix round runs in the lane's worktree, where a resumed agent keeps its context (#570).
         print(f"Lane {lane_id} kept for its review ({words}): it does not count toward the lane cap; "
               "marking its last finding "
-              f"finishes it (" + review.mark_help(lane_id) + ")")
+              f"finishes it (" + review.mark_help(lane_id, store.project.command) + ")")
 
 
 def recheck(args: Any) -> int:
@@ -243,14 +268,15 @@ def recheck(args: Any) -> int:
         return 1
     print(f"Lane {args.id}: post-merge green on {tip[:10]} (recheck: {what}); it replaces the red smoke of "
           f"{merge[:10]} ({path})")
-    complete(record, merge, integration, current_branch(integration) or integration,
-             receipts.read(store, args.id), status, f"recheck on {tip[:10]}: {what}", done.kept(record))
+    complete(store, record, merge, integration, current_branch(integration) or integration,
+             receipts.read(store, args.id), status, f"recheck on {tip[:10]}: {what}", lifecycle.kept(record))
     return 0
 
 
-def check_other_reviews(record: state.Record, force_reason: str | None) -> dict[str, Any] | None:
+def check_other_reviews(record: state.Record, force_reason: str | None,
+                        *, store: state.Store | None = None) -> dict[str, Any] | None:
     """Under the landing lock, before moving the integration branch (fathers#177)."""
-    store = state.Store(config.current())
+    store = store or state.Store(config.current())
     held, reported = review.landing_findings(record, store)
     for lane, finding in reported:
         print(f"lane: reported ({finding['severity']}, does not block): {review.finding_line(lane, finding)}",
@@ -273,106 +299,174 @@ def check_other_reviews(record: state.Record, force_reason: str | None) -> dict[
     return override
 
 
-def land(args: Any) -> int:
-    store = state.Store(config.current())
+def _find_merge_commit(integration: str, tip: str, since: str | None = None) -> tuple[str, str] | None:
+    """Find the `--no-ff` merge commit in `integration` that merged `tip`, returning `(merge, first_parent)`."""
+    if since is not None:
+        rev_range = f"{since}..HEAD"
+    elif git_ok(integration, "rev-parse", "--verify", "--quiet", f"{tip}^"):
+        rev_range = f"{tip}^..HEAD"
+    else:
+        rev_range = "HEAD"
+    log = git(integration, "log", "--merges", "--format=%H %P", "-n", "200", rev_range, check=False)
+    for line in log.splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and tip in parts[1:]:
+            return parts[0], parts[1]
+    return None
+
+
+def _finish_land_transition(
+    store: state.Store, lane_id: str, *, merge_sha: str, previous: str, tip: str, tree: str,
+    integration: str, onto: str | None, keep: bool, new_overrides: list[dict[str, Any]],
+    receipt: dict[str, Any] | None,
+) -> Landed:
+    record = lifecycle.transition(
+        store, lane_id, "land",
+        landed={"merge": merge_sha, "previous": previous, "tip": tip, "tree": tree,
+                "integration": integration, "at": journal.now(), "keep": keep},
+        overrides=new_overrides or None,
+        ledger_message=f"land {lane_id} merge={merge_sha} previous={previous}",
+        ledger_details={"merge": merge_sha, "previous": previous, "tip": tip, "onto": onto,
+                        "integration": integration, "keep": keep},
+    )
+    return Landed(
+        record=record, merge=merge_sha, previous=previous, integration=integration,
+        onto=onto, keep=bool(record["landed"]["keep"]), receipt=receipt,
+    )
+
+
+def merge(
+    store: state.Store, lane_id: str, into: str | None, message: str | None,
+    keep: bool, force_reason: str | None, wait: float, *, repair: bool = False,
+) -> Landed:
+    """Phase 1 of land: validate, record landing intent, merge `--no-ff`, and transition to `landed`."""
     prog = store.project.command
     new_overrides: list[dict[str, Any]] = []
     with store.locked("land", f"lane: waiting for another land's merge (lock {store.directory / '.land.lock'})"):
-        record = store.load(args.id)
+        record = store.load(lane_id)
         if not lifecycle.active(record):
-            raise LaneError(f"land refused: lane {args.id} is {record['status']}" +
+            raise LaneError(f"land refused: lane {lane_id} is {record['status']}" +
                             ("; it has no worktree yet" if lifecycle.planned(record) else ""))
         for name in record["after"]:
             if not lifecycle.landed(store.load(name)):
-                raise LaneError(f"land refused: lane {args.id} is declared to land after {name}, which has not landed")
+                raise LaneError(f"land refused: lane {lane_id} is declared to land after {name}, which has not landed")
         main = main_checkout(record["common_dir"])
         tip = git(main, "rev-parse", "--verify", record["branch"] + "^{commit}")
         tree = git(main, "rev-parse", tip + "^{tree}")
-        receipt = receipts.read(store, args.id)
-        problem = merge_problem(args, tip, tree, receipt, record=record)
-        if problem and not args.force_reason:
+        receipt = receipts.read(store, lane_id)
+        if not into and not record.get("integration"):
+            raise LaneError(f"no worktree has {record['base']} checked out; give --into <integration worktree>")
+        integration = os.path.realpath(into or record["integration"])
+        onto = current_branch(integration)
+        intent = record.get("landing") if isinstance(record.get("landing"), dict) else None
+        if intent and git_ok(integration, "merge-base", "--is-ancestor", str(intent.get("tip") or tip), "HEAD"):
+            intent_tip = str(intent.get("tip") or tip)
+            intent_prev = str(intent.get("previous") or "")
+            found = _find_merge_commit(integration, intent_tip, intent_prev or None)
+            merge_sha = found[0] if found else git(integration, "rev-parse", "HEAD")
+            previous = found[1] if found else (intent_prev or merge_sha)
+            keep_flag = bool(keep or record.get("keep"))
+            return _finish_land_transition(
+                store, lane_id, merge_sha=merge_sha, previous=previous, tip=tip, tree=tree,
+                integration=integration, onto=onto, keep=keep_flag, new_overrides=new_overrides, receipt=receipt,
+            )
+        problem = merge_problem(lane_id, tip, tree, receipt, record=record)
+        if problem and not force_reason:
             raise LaneError("land refused: " + problem)
         if problem:
-            override = {"at": journal.now(), "reason": args.force_reason, "refusals": [problem]}
+            override = {"at": journal.now(), "reason": force_reason, "refusals": [problem]}
             record.setdefault("overrides", []).append(override)
             new_overrides.append(override)
-            journal.ledger(f"override land {args.id}: {args.force_reason} ({problem})", kind="override",
+            journal.ledger(f"override land {lane_id}: {force_reason} ({problem})", kind="override",
                            level="warn", lane=record,
-                           details={"command": "land", "reason": args.force_reason, "refusals": [problem]})
-        if not args.into and not record.get("integration"):
-            raise LaneError(f"no worktree has {record['base']} checked out; give --into <integration worktree>")
-        integration = os.path.realpath(args.into or record["integration"])
+                           details={"command": "land", "reason": force_reason, "refusals": [problem]})
         if dirty(integration) or os.path.exists(git(integration, "rev-parse", "--git-path", "MERGE_HEAD")):
             raise LaneError(f"land refused: {integration} has uncommitted changes or a merge in progress")
-        onto = current_branch(integration)
         if onto in PROMOTED:
             # promote waits only for lanes not yet in dev (#570): a lane landed on dev or main is reviewed first.
-            reviewed, words = review.review_state(args.id)
+            reviewed, words = review.review_state(lane_id, store)
             if not reviewed and not review.review_exemption(record):
-                if not args.force_reason:
+                if not force_reason:
                     raise LaneError(f"land refused: {integration} is on {onto}, which promote would not hold for "
-                                    f"this lane's review ({words}); run {prog} review {args.id} and mark its "
+                                    f"this lane's review ({words}); run {prog} review {lane_id} and mark its "
                                     "findings first, or land into the integration branch")
-                override = {"at": journal.now(), "reason": args.force_reason,
+                override = {"at": journal.now(), "reason": force_reason,
                             "refusals": [f"unreviewed land onto {onto}"]}
                 record.setdefault("overrides", []).append(override)
                 new_overrides.append(override)
-                journal.ledger(f"override land {args.id} onto {onto} unreviewed: {args.force_reason} ({words})",
+                journal.ledger(f"override land {lane_id} onto {onto} unreviewed: {force_reason} ({words})",
                                kind="override", level="warn", lane=record,
-                               details={"command": "land", "reason": args.force_reason,
+                               details={"command": "land", "reason": force_reason,
                                         "refusals": [f"unreviewed land onto {onto}"], "review": words})
             else:
-                journal.ledger(f"land {args.id} onto {onto}: {words}", kind="landing.reviewed", lane=record,
+                journal.ledger(f"land {lane_id} onto {onto}: {words}", kind="landing.reviewed", lane=record,
                                details={"onto": onto, "review": words})
         previous = git(integration, "rev-parse", "HEAD")
         if git_ok(integration, "merge-base", "--is-ancestor", tip, previous):
-            raise LaneError(f"land refused: {record['branch']} ({tip[:10]}) is already in {integration}")
+            if not repair:
+                raise LaneError(f"land refused: {record['branch']} ({tip[:10]}) is already in {integration}; "
+                                f"if a previous land merged it before saving, run {prog} land {lane_id} --repair")
+            found = _find_merge_commit(integration, tip)
+            if not found:
+                raise LaneError(f"land --repair refused: no merge commit for {record['branch']} ({tip[:10]}) "
+                                f"found in {integration}")
+            merge_sha, prev_sha = found
+            keep_flag = bool(keep or record.get("keep"))
+            return _finish_land_transition(
+                store, lane_id, merge_sha=merge_sha, previous=prev_sha, tip=tip, tree=tree,
+                integration=integration, onto=onto, keep=keep_flag, new_overrides=new_overrides, receipt=receipt,
+            )
         ticket = f" (#{record['ticket']})" if record["ticket"] != "none" else ""
-        message = tickets.merge_message(args.message or f"Merge {record['branch']}{ticket}", record["ticket"])
+        merge_msg = tickets.merge_message(message or f"Merge {record['branch']}{ticket}", record["ticket"])
         merge_config = [part for setting in config.current().merge_config for part in ("-c", setting)]
         # The landing lock lets the merge move an integration worktree that is on dev or main (B2).
         conflicts = ""
-        with landing(record["common_dir"], f"{prog} land {args.id} (pid {os.getpid()})", args.wait) as env:
-            review_override = check_other_reviews(record, args.force_reason)
+        with landing(record["common_dir"], f"{prog} land {lane_id} (pid {os.getpid()})", wait) as env:
+            review_override = check_other_reviews(record, force_reason, store=store)
             if review_override is not None:
                 new_overrides.append(review_override)
-            merged = subprocess.run(["git", *merge_config, "merge", "--no-ff", "-m", message, record["branch"]],
+            landing_intent = {"tip": tip, "integration": integration, "previous": previous, "at": journal.now()}
+            store.update(lane_id, lambda rec: rec.__setitem__("landing", landing_intent))
+            merged = subprocess.run(["git", *merge_config, "merge", "--no-ff", "-m", merge_msg, record["branch"]],
                                     cwd=integration, capture_output=True, text=True, env=env)
             if merged.returncode:
                 conflicts = git(integration, "diff", "--name-only", "--diff-filter=U", check=False)
                 subprocess.run(["git", "merge", "--abort"], cwd=integration, capture_output=True, env=env)
         if merged.returncode:
-            journal.ledger(f"land {args.id} conflict: {conflicts.replace(chr(10), ' ')}", kind="lane.conflict",
+            journal.ledger(f"land {lane_id} conflict: {conflicts.replace(chr(10), ' ')}", kind="lane.conflict",
                            level="error", lane=record,
                            details={"paths": conflicts.split(), "integration": integration, "previous": previous})
             raise LaneError(f"merge conflict, integration left at {previous[:10]}; send it back to the lane:\n"
                             f"{conflicts or merged.stdout + merged.stderr}")
-        merge = git(integration, "rev-parse", "HEAD")
+        merge_sha = git(integration, "rev-parse", "HEAD")
         # `lanefather keep` before the land marks the record; land carries it where older installs read it.
-        keep = bool(args.keep or record.get("keep"))
-        record = lifecycle.transition(
-            store, args.id, "land",
-            landed={"merge": merge, "previous": previous, "tip": tip, "tree": tree,
-                    "integration": integration, "at": journal.now(), "keep": keep},
-            overrides=new_overrides or None,
-            ledger_message=f"land {args.id} merge={merge} previous={previous}",
-            ledger_details={"merge": merge, "previous": previous, "tip": tip, "onto": onto,
-                            "integration": integration, "keep": keep},
+        keep_flag = bool(keep or record.get("keep"))
+        return _finish_land_transition(
+            store, lane_id, merge_sha=merge_sha, previous=previous, tip=tip, tree=tree,
+            integration=integration, onto=onto, keep=keep_flag, new_overrides=new_overrides, receipt=receipt,
         )
-        keep = bool(record["landed"]["keep"])
+
+
+def post_merge(store: state.Store, landed: Landed, slots: int | None) -> Smoke:
+    """Phase 2 of land: run the post-merge smoke (with review started beside it), write the receipt and ledger."""
+    record = landed.record
+    lane_id = record["id"]
+    merge_sha = landed.merge
+    previous = landed.previous
+    receipt = landed.receipt
     # The land lock is free from here on (#573): the next land merges while this merge's smoke runs on its own
     # checkout of the merge, since the integration worktree moves on.
-    with worktrees.smoke_checkout(record["common_dir"], merge) as checkout:
+    with worktrees.smoke_checkout(record["common_dir"], merge_sha) as checkout:
         merge_tree = git(checkout, "rev-parse", "HEAD^{tree}")
         toolchain = plan.toolchain_state(checkout)
         # fathers#198: check exact-tree green receipt reuse before plan_for, which may bootstrap dependencies.
         exact_verified, exact_narrowing, reasons, prep_reason = plan.exact_tree_reuse(
             checkout, receipt, record["landed"], merge_tree, previous, toolchain, record.get("worktree"))
         if exact_verified is not None and exact_narrowing is not None:
-            merged_paths = [p for p in git(checkout, "diff", "--name-only", previous, merge).splitlines() if p]
+            merged_paths = [p for p in git(checkout, "diff", "--name-only", previous, merge_sha).splitlines() if p]
             # The independent review (#570) runs beside the smoke and never holds the land; promote waits for it.
             docs_only = review.documentation_only(merged_paths)
-            record = store.update(args.id, lambda rec: rec["landed"].update(docs_only=docs_only))
+            record = store.update(lane_id, lambda rec: rec["landed"].update(docs_only=docs_only))
             print(f"lane: {review.start_lane_review(record)}", flush=True)
             print(f"lane: post-merge smoke skipped: exact merge tree {merge_tree[:10]} already verified by lane "
                   f"receipt ({len(exact_verified)} checks); no plan bootstrap needed", flush=True)
@@ -384,15 +478,15 @@ def land(args: Any) -> int:
             suites: list[str] = []
             selected: dict[str, list[str]] | None = {}
             decision, results, check_results, triaged, stamp, status = run_smoke(
-                record, checkout, suites, selected, f"post-merge-{args.id}", args.slots, toolchain)
+                record, checkout, suites, selected, f"post-merge-{lane_id}", slots, toolchain)
             jobs = decision["jobs"]
         else:
-            print(f"lane: preparing post-merge plan for {args.id} in {checkout} ({prep_reason}); "
+            print(f"lane: preparing post-merge plan for {lane_id} in {checkout} ({prep_reason}); "
                   "queue: slotfather status", flush=True)
             merged_plan = plan.plan_for(checkout, previous)
             # The independent review (#570) runs beside the smoke and never holds the land; promote waits for it.
             plan_docs_only = review.documentation_only(merged_plan["paths"])
-            record = store.update(args.id, lambda rec: rec["landed"].update(docs_only=plan_docs_only))
+            record = store.update(lane_id, lambda rec: rec["landed"].update(docs_only=plan_docs_only))
             print(f"lane: {review.start_lane_review(record)}", flush=True)
             kind, rows = plan.post_merge_selection(checkout, merged_plan)
             # #640: what the lane's green receipt already verified does not run again.
@@ -406,12 +500,12 @@ def land(args: Any) -> int:
             suites, selected = ((merged_plan["selected"], None) if rows is None
                                 else (plan.suites_of(rows), plan.by_suite(rows)))
             decision, results, check_results, triaged, stamp, status = run_smoke(
-                record, checkout, suites, selected, f"post-merge-{args.id}", args.slots, toolchain)
+                record, checkout, suites, selected, f"post-merge-{lane_id}", slots, toolchain)
             jobs = decision["jobs"]
     info = host()
     post = receipts.write(
-        store, args.id,
-        {"version": 1, "lane": args.id, "merge": merge, "base": previous,
+        store, lane_id,
+        {"version": 1, "lane": lane_id, "merge": merge_sha, "base": previous,
          "tree": merge_tree, "checkout": checkout, "kind": kind,
          "platform": result_store.host_platform(),
          "jobs": jobs, "jobs_decision": decision, "suites": suites, "full": False,
@@ -424,24 +518,24 @@ def land(args: Any) -> int:
         "post-merge",
     )
     result_store.record(merge_tree, checks.recordable({**lane_verified, **tree_verified, **check_results}),
-                   source="post-merge", toolchain=toolchain, lane=args.id, sha=merge, receipt=str(post),
-                   reused=[*lane_verified, *tree_verified],
-                   origins={**checks.origins(lane_verified, str(receipts.path(store, args.id))),
-                            **checks.origins(tree_verified, "")}, phase="post-merge")
+                        source="post-merge", toolchain=toolchain, lane=lane_id, sha=merge_sha, receipt=str(post),
+                        reused=[*lane_verified, *tree_verified],
+                        origins={**checks.origins(lane_verified, str(receipts.path(store, lane_id))),
+                                 **checks.origins(tree_verified, "")}, phase="post-merge")
     # Reloaded: a review hand-over may have changed the record during the smoke.
     def _set_post_merge(rec: state.Record) -> None:
         rec["post_merge"] = {"status": status, "receipt": str(post)}
 
-    record = store.update(args.id, _set_post_merge)
+    record = store.update(lane_id, _set_post_merge)
     verified = len(lane_verified)
-    journal.ledger(f"post-merge {args.id} {status} {kind} jobs={jobs} suites={','.join(suites) or '-'} "
+    journal.ledger(f"post-merge {lane_id} {status} {kind} jobs={jobs} suites={','.join(suites) or '-'} "
                    + (f"lane_verified={verified} " if narrowing.get("narrowed") else "")
                    + (f"not_rerun={len(tree_verified)} " if tree_verified else "")
                    + (f"gate_only={len(skips) - len(tree_verified)} " if len(skips) > len(tree_verified) else "")
-                   + f"{host_fields(info)} merge={merge}",
+                   + f"{host_fields(info)} merge={merge_sha}",
                    kind="lane.post_merge", level="info" if status == "green" else "error", lane=record,
                    details={"status": status, "scope": kind, "jobs": jobs, "suites": suites,
-                            "lane_verified": verified, "skipped": skips, "merge": merge, "receipt": str(post)})
+                            "lane_verified": verified, "skipped": skips, "merge": merge_sha, "receipt": str(post)})
     ids = [c for s in suites for c in selected[s]] if selected is not None else None
     what = (", ".join(ids) if ids is not None and len(ids) <= 8 else f"{len(ids)} checks" if ids is not None
             else ", ".join(suites)) or "no suites affected"
@@ -464,30 +558,49 @@ def land(args: Any) -> int:
         what += f"; whole, since {narrowing['reason']}"
     if skips and kind != "skip":
         what += f"; {len(skips)} not run again ({', '.join(f'{c}: {why}' for c, why in skips.items())})"
-    print(f"Landed {record['branch']} as {merge[:10]} on {current_branch(integration) or integration}; "
+    onto_label = current_branch(landed.integration) or landed.integration
+    print(f"Landed {record['branch']} as {merge_sha[:10]} on {onto_label}; "
           f"post-merge {status} ({prefix}{what})")
-    # #25: the lane's issue shows the land once its smoke is green; a gh failure only warns.
+    return Smoke(record=record, status=status, summary=prefix + what, results=results, triaged=triaged)
+
+
+def after_land(store: state.Store, landed: Landed, smoke: Smoke) -> int:
+    """Phase 3 of land: ticket comments, auto-done via lifecycle, and red-smoke failure report."""
+    receipt = landed.receipt
     if receipt and receipt.get("changed_red_tests"):
         print(checks.changed_red_tests_line(receipt["changed_red_tests"]))
-    complete(record, merge, integration, onto or integration, receipt, status, prefix + what, keep)
-    if status == "green":
+    complete(store, smoke.record, landed.merge, landed.integration, landed.onto or landed.integration,
+             receipt, smoke.status, smoke.summary, landed.keep)
+    if smoke.status == "green":
         return 0
     # A suite whose checks did not start because the first checks were red (#639) is not one of the failures.
-    failed = [r for r in results if r["status"] == "failed"]
+    failed = [r for r in smoke.results if r["status"] == "failed"]
     for result in failed:
         named = ', '.join(result['failed_checks']) or '(see log)'
         blocked = (f" blocked checks: {', '.join(result['blocked_checks'])}"
                    if result.get("blocked_checks") else "")
         print(f"  {result['suite']}: failed checks {named}{blocked}  {result['log']}")
-    for result in results:
+    for result in smoke.results:
         if result["status"] == "blocked":
             blocked = ', '.join(result.get('blocked_checks') or []) or '(see log)'
             print(f"  {result['suite']}: blocked checks: {blocked}  {result['log']}")
-    if triaged:
-        print(triaged)
-    head = git(integration, "rev-parse", "HEAD")
-    if head != merge:
-        print(f"{integration} has moved on to {head[:10]} since; this smoke checked the merge {merge[:10]}.")
-    print(f"The merge {merge[:10]} stays in place, marked red. Lanes in it whose checks ran the failed checks:")
-    print("\n".join(touched_lines(failed_items(failed), integration, merge)))
+    if smoke.triaged:
+        print(smoke.triaged)
+    head = git(landed.integration, "rev-parse", "HEAD")
+    if head != landed.merge:
+        print(f"{landed.integration} has moved on to {head[:10]} since; this smoke checked the merge "
+              f"{landed.merge[:10]}.")
+    print(f"The merge {landed.merge[:10]} stays in place, marked red. Lanes in it whose checks ran the failed checks:")
+    print("\n".join(touched_lines(failed_items(failed), landed.integration, landed.merge, store=store)))
     return 1
+
+
+def land(args: Any) -> int:
+    """Land a green lane in three phases: merge, post-merge smoke, and after-land."""
+    store = state.Store(config.current())
+    landed = merge(
+        store, args.id, args.into, args.message, bool(args.keep), args.force_reason, args.wait,
+        repair=getattr(args, "repair", False) is True,
+    )
+    smoke = post_merge(store, landed, args.slots)
+    return after_land(store, landed, smoke)

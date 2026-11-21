@@ -10,7 +10,6 @@
 """
 from __future__ import annotations
 
-import argparse
 import ast
 import io
 import json
@@ -543,7 +542,7 @@ class ReceiptReadersTableTests(LaneCase):
                 # 4 & 5. `land.merge_problem` and `checks.select`
                 with mock.patch.dict(os.environ, self.env, clear=False):
                     config.use(cfg)
-                    problem = land.merge_problem(argparse.Namespace(id="fx"), tip, tip_tree, fixture, record=rec)
+                    problem = land.merge_problem("fx", tip, tip_tree, fixture, record=rec)
                     self.assertEqual(problem, expected["land_problem"])
 
                     prepared = checks.prepare("fx")
