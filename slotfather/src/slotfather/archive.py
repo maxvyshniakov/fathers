@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import fcntl
 import json
-import os
 from pathlib import Path
 import re
 import sys
-import tempfile
 from typing import IO, Any, Iterable
+
+from fathers_common.atomic import atomic_write
 
 from . import config as _config
 from . import state as _state
@@ -63,10 +63,7 @@ def merge(host: str, lines: Iterable[str | bytes], directory: Path | None = None
                 new.append(item)
         if new:
             merged = sorted(kept + new, key=lambda i: (_config.seconds(i.get("ended")) or 0.0))
-            fd, name = tempfile.mkstemp(dir=target.parent, prefix=".history-")
-            with os.fdopen(fd, "w") as handle:
-                handle.writelines(json.dumps(item) + "\n" for item in merged)
-            os.replace(name, target)
+            atomic_write(target, "".join(json.dumps(item) + "\n" for item in merged))
     return len(new), len(kept)
 
 
