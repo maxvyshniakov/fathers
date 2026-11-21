@@ -4,10 +4,14 @@ that defines it, so a patch reaches the code that reads it."""
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
+import sys
 from types import ModuleType
 from typing import Any
 
-import helpers  # noqa: F401 - puts src/ on sys.path
+_SRC = str(Path(__file__).resolve().parents[1] / "src")
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
 
 NAMES = ("godfather.views.overview", "godfather.views.queue", "godfather.views.details", "godfather.views.events",
          "godfather.views.machine", "godfather.views.overlays", "godfather.overlay_text", "godfather.views.common",
@@ -19,6 +23,7 @@ NAMES = ("godfather.views.overview", "godfather.views.queue", "godfather.views.d
 
 class View:
     __slots__ = ("_modules",)
+    _modules: list[ModuleType]
 
     def __init__(self, modules: list[ModuleType]) -> None:
         object.__setattr__(self, "_modules", modules)
@@ -52,7 +57,7 @@ class View:
 
 def fresh() -> Any:
     """Every module reloaded, in import order, so module state (theme, marks, what's new) starts over."""
-    modules = []
+    modules: list[ModuleType] = []
     for name in ("godfather.theme", "godfather.keys", "godfather.tui", "godfather.layout", "godfather.widgets",
                  "godfather.news", "godfather.views.common", "godfather.views.queue", "godfather.views.events", "godfather.views.details",
                  "godfather.views.machine", "godfather.overlay_text", "godfather.views.overlays", "godfather.settings_model",

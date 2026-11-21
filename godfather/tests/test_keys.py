@@ -1,7 +1,6 @@
 """Dashboard hotkeys on any keyboard layout (#13)."""
 from __future__ import annotations
 
-import helpers  # noqa: F401 - src/ on sys.path
 import view as _view
 
 import os

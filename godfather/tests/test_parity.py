@@ -25,7 +25,7 @@ from unittest import mock
 
 from helpers import ROOT, timezone
 
-from godfather import app, entries, layout, overlay_text, sources, state, tui
+from godfather import app, entries, layout, overlay_text, sources, state, theme, tui
 from godfather.adapters import slotfather as adapter
 from godfather.layout import Rect
 from godfather.model import Dashboard
@@ -115,7 +115,7 @@ class ParityTests(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, dict(keep, GODFATHER_FIXTURES=str(self.out)), clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.theme = app._theme.from_environment(environ={})
+        self.theme = theme.from_environment(environ={})
 
     def model(self) -> Dashboard:
         with app.Screen() as screen:

@@ -8,9 +8,8 @@ from typing import Any
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-import helpers  # noqa: F401 - src/ on sys.path
-import view as _view
 from helpers import drawn_state
+import view as _view
 view = _view.current()
 
 

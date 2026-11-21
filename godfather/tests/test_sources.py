@@ -16,7 +16,7 @@ from unittest import mock
 import view as _view
 from helpers import ROOT, FakeSlotfather
 
-from godfather import app, entries, sources, tui
+from godfather import app, entries, sources, theme, tui
 from godfather.adapters import slotfather as adapter
 from godfather import settings_model
 from godfather.views import overlays, overview
@@ -39,7 +39,7 @@ class FixtureCase(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         self.addCleanup(_view.fresh)
-        tui.set_theme(app._theme.from_environment(environ={}))
+        tui.set_theme(theme.from_environment(environ={}))
 
     def reply(self, argv: str, value: dict[str, Any]) -> None:
         found = replies(self.root)
@@ -122,7 +122,7 @@ class FailingTests(FixtureCase):
         self.assertIn("● stale", footer)
         self.assertRegex(footer, r"refresh failed: slot\w*…", "the reason, cut to the footer's room")
         self.assertEqual("slotfather: queue unreadable", screen.source.problem)
-        self.assertEqual({"dim"}, {cell[1] for row in self.canvas.cells[:-1] for cell in row if cell[0].strip()},
+        self.assertEqual({"dim"}, {cell[1] for row in self.canvas.cells[:-1] for cell in row if str(cell[0]).strip()},
                          "every panel dimmed")
         self.assertEqual("stale", screen.source.state)
         context = settings_model.Context(problem=screen.source.problem, width=100, height=40)
@@ -211,7 +211,7 @@ class RecordTests(FixtureCase):
         os.environ["GODFATHER_FIXTURES_RECORD"] = str(record)
         self.reply("settings set order.safety 4 --json", {"code": 0, "json": replies(self.root)["settings --json"]["json"]})
         before = len(sources.recorded)
-        code, value, _ = sources.run_json("slotfather", ["settings", "set", "order.safety", "4", "--json"], 1)
+        code, _, _ = sources.run_json("slotfather", ["settings", "set", "order.safety", "4", "--json"], 1)
         self.assertEqual(0, code)
         self.assertEqual(["slotfather", "settings", "set", "order.safety", "4", "--json"], sources.recorded[before])
         self.assertEqual([["slotfather", "settings", "set", "order.safety", "4", "--json"]],

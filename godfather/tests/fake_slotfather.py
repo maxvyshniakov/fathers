@@ -217,7 +217,7 @@ def settings(state: dict[str, Any]) -> dict[str, Any]:
     rev, order_rev = revision(state), order_revision(state)
     writable = bool(state["writable"])
     effective_order = os.environ.get("SLOTFATHER_QUEUE") or None
-    knobs = []
+    knobs: list[dict[str, Any]] = []
     for name in ORDER_FIELDS:
         default = ORDER_DEFAULTS[name]
         value = state["order"].get(name, default)
