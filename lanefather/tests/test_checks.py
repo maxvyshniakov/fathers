@@ -695,5 +695,258 @@ class ToolchainAndEnvironmentReceiptTests(LaneCase):
         self.assertFalse(any(r.get("reused_from") for r in self.receipt("a")["results"]))
 
 
+class DependencyBlockedTests(LaneCase):
+    """fathers#195: checks skipped/blocked because a dependency failed stay separate from executed failures, never
+    consume rerun budget, are never labeled independent regressions, and never turn green."""
+
+    def receipt(self, lane_id: str) -> dict[str, Any]:
+        return json.loads((self.state / f"{lane_id}.receipt.json").read_text())
+
+    def install_dep_verify(self) -> pathlib.Path:
+        """A consumer verify script (like Repo-Kit, no plan_module) with 1 failed prerequisite, 3 dependency-blocked
+        children (two `blocked`, one `skipped` with `blocked_by`), and 2 unrelated executed failures."""
+        runs_log = self.tmp / "dep-verify-runs.log"
+        config = (self.integration / ".lanefather.toml").read_text().replace(
+            'plan_module = "tools/verification_plan.py"\n', "")
+        script = textwrap.dedent(f"""\
+            #!/usr/bin/env python3
+            import json, os, pathlib, sys, uuid
+            args = sys.argv[1:]
+            root = pathlib.Path(__file__).resolve().parent
+            checks = [
+                ("verify:unit", "verify"),
+                ("verify:typecheck", "verify"),
+                ("verify:lint", "verify"),
+                ("browser:build", "browser"),
+                ("browser:storybook", "browser"),
+                ("browser:story-baseline", "browser"),
+            ]
+            if args[:1] == ["--changed"]:
+                paths = ["src/unit.test.ts", "src/app.ts"]
+                rows = [{{"id": cid, "suite": suite, "paths": paths, "producer": False}} for cid, suite in checks]
+                print(json.dumps({{"full": True, "paths": paths, "unowned": [], "suites": ["verify", "browser"],
+                                   "reasons": {{"verify": paths, "browser": paths}}, "checks": rows}}))
+                sys.exit(0)
+            ids = args[args.index("--checks") + 1].split(",") if "--checks" in args else [c for c, _ in checks]
+            label = os.environ.get("LANEFATHER_SLOT_LABEL", "")
+            with open({str(runs_log)!r}, "a") as handle:
+                handle.write(label + " " + ",".join(ids) + "\\n")
+            run = root / ".build" / "verification-runs" / ("dep-" + uuid.uuid4().hex[:8])
+            run.mkdir(parents=True)
+            rows = []
+            exit_code = 0
+            flaky = os.environ.get("DEP_FLAKY_ALONE") == "1"
+            alone_blocked = os.environ.get("DEP_ALONE_BLOCKED", "")
+            for cid in ids:
+                if label.endswith("-base"):
+                    st, bb = "passed", []
+                elif label.endswith("-alone"):
+                    if cid == alone_blocked:
+                        st, bb = "blocked", ["verify:unit"]
+                    elif flaky:
+                        st, bb = "passed", []
+                    else:
+                        st, bb = "failed", []
+                else:
+                    if cid in ("verify:unit", "verify:typecheck", "verify:lint"):
+                        st, bb = "failed", []
+                    elif cid == "browser:story-baseline":
+                        st, bb = "skipped", ["verify:unit"]
+                    else:
+                        st, bb = "blocked", ["verify:unit"]
+                if st in ("failed", "blocked") or (st == "skipped" and bb):
+                    exit_code = 1
+                rows.append({{"id": cid, "status": st, "exit": 0 if st == "passed" else 1,
+                             "log": str(run / (cid.replace(":", "_") + ".log")), "seconds": 0.01,
+                             **({{"blocked_by": bb}} if bb else {{}})}})
+            report = {{"exit": exit_code, "checks": rows, "stopped": None}}
+            (run / "report.json").write_text(json.dumps(report))
+            print("Verification report: " + str(run / "report.json"))
+            sys.exit(exit_code)
+            """)
+        self.commit(self.integration, {".lanefather.toml": config, "verify.sh": script},
+                    "install dependency-blocked verify fixture")
+        return runs_log
+
+    def test_dependency_blocked_children_do_not_consume_rerun_budget_or_become_regressions(self):
+        runs_log = self.install_dep_verify()
+        self.env["LANEFATHER_RERUNS"] = "3"
+        worktree = self.created("a", "src/**")
+        self.commit(worktree, {"src/unit.test.ts": "expect(1).toBe(2)\n", "src/app.ts": "export const x = 1\n"})
+        output = self.lane("check", "a", ok=False)
+        receipt = self.receipt("a")
+        self.assertEqual(receipt["status"], "red")
+
+        # Only the 3 actual executed failures were rerun on alone and base; none of the 3 blocked browser checks.
+        logged = runs_log.read_text().splitlines()
+        self.assertEqual(len(logged), 3, logged)
+        self.assertEqual(logged[1], "lane-a-alone verify:unit,verify:typecheck,verify:lint")
+        self.assertEqual(logged[2], "lane-a-base verify:unit,verify:typecheck,verify:lint")
+
+        # Suite results separate executed failures from blocked suites.
+        by_suite = {r["suite"]: r for r in receipt["results"]}
+        self.assertEqual(by_suite["verify"]["status"], "failed")
+        self.assertEqual(by_suite["verify"]["failed_checks"], ["verify:unit", "verify:typecheck", "verify:lint"])
+        self.assertEqual(by_suite["browser"]["status"], "blocked")
+        self.assertEqual(by_suite["browser"]["failed_checks"], [])
+        self.assertEqual(by_suite["browser"]["blocked_checks"],
+                         ["browser:build", "browser:storybook", "browser:story-baseline"])
+
+        # Per-check results preserve blocked status and blocked_by (including skipped-with-blocked_by).
+        for child in ("browser:build", "browser:storybook", "browser:story-baseline"):
+            self.assertEqual(receipt["check_results"][child]["status"], "blocked")
+            self.assertEqual(receipt["check_results"][child]["blocked_by"], ["verify:unit"])
+
+        # Classification: executed failures are regressions; blocked children are dependency-blocked, never regressions.
+        entries = {e["check"]: e for e in receipt["classification"]["checks"]}
+        for real in ("verify:unit", "verify:typecheck", "verify:lint"):
+            self.assertEqual(entries[real]["class"], "regression")
+        for child in ("browser:build", "browser:storybook", "browser:story-baseline"):
+            self.assertEqual(entries[child]["class"], "dependency-blocked")
+            self.assertEqual(entries[child]["blocked_by"], ["verify:unit"])
+            self.assertIn("skipped because dependency failed (verify:unit)", entries[child]["reason"])
+            self.assertIn(f"{child}: dependency-blocked: skipped because dependency failed (verify:unit)", output)
+
+        # First receipt and changed_red_tests attribute only executed failures, never blocked browser checks.
+        self.assertEqual(receipt["first"]["failed_checks"], ["verify:unit", "verify:typecheck", "verify:lint"])
+        self.assertEqual({t["check"] for t in receipt["changed_red_tests"]},
+                         {"verify:unit", "verify:typecheck", "verify:lint"})
+
+    def test_dependency_blocked_children_keep_receipt_red_even_when_executed_failures_pass_alone(self):
+        self.install_dep_verify()
+        self.env.update(LANEFATHER_RERUNS="3", DEP_FLAKY_ALONE="1")
+        worktree = self.created("a", "src/**")
+        self.commit(worktree, {"src/app.ts": "export const x = 2\n"})
+        self.lane("check", "a", ok=False)
+        receipt = self.receipt("a")
+        self.assertEqual(receipt["status"], "red")
+        self.assertFalse(receipt["classification"]["green"])
+        entries = {e["check"]: e for e in receipt["classification"]["checks"]}
+        self.assertEqual(entries["verify:unit"]["class"], "flaky-under-load")
+        self.assertEqual(entries["browser:build"]["class"], "dependency-blocked")
+
+    def test_check_blocked_during_alone_rerun_is_not_labeled_regression(self):
+        runs_log = self.install_dep_verify()
+        self.env.update(LANEFATHER_RERUNS="3", DEP_ALONE_BLOCKED="verify:typecheck")
+        worktree = self.created("a", "src/**")
+        self.commit(worktree, {"src/app.ts": "export const x = 3\n"})
+        self.lane("check", "a", ok=False)
+        receipt = self.receipt("a")
+        entries = {e["check"]: e for e in receipt["classification"]["checks"]}
+        self.assertEqual(entries["verify:typecheck"]["class"], "dependency-blocked")
+        self.assertEqual(entries["verify:typecheck"]["blocked_by"], ["verify:unit"])
+        # verify:typecheck was blocked on alone, so it did not run on base.
+        logged = runs_log.read_text().splitlines()
+        self.assertEqual(logged[2], "lane-a-base verify:unit,verify:lint")
+
+
+class MinSlotsTests(LaneCase):
+    """fathers#173: a lane check honours a step's declared minimum slots (from --plan --json or [checks.min_slots])
+    instead of falling to 1 slot on a busy machine."""
+
+    def receipt(self, lane_id: str) -> dict[str, Any]:
+        return json.loads((self.state / f"{lane_id}.receipt.json").read_text())
+
+    def test_plan_declared_slots_floor_prevents_falling_to_one_slot_on_busy_machine(self):
+        # Mark lib-check as declaring slots=2 in --plan --json.
+        verify = (self.integration / "verify.sh").read_text().replace(
+            'rows = [dict(row, producer=not row["paths"]) for row in rows if full or row["paths"]]',
+            'rows = [dict(row, producer=not row["paths"], **({"slots": 2} if row["id"] == "lib-check" else {})) '
+            'for row in rows if full or row["paths"]]')
+        self.commit(self.integration, {"verify.sh": verify}, "declare slots=2 for lib-check")
+        # 3 of 4 slots held -> slotfather advise returns jobs=1.
+        self.env.update(FAKE_SLOTFATHER_HELD="3")
+        worktree = self.created("a", "lib/**", "README.md")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        receipt = self.receipt("a")
+        self.assertEqual(receipt["jobs"], 2)
+        self.assertEqual(receipt["jobs_decision"]["advised_jobs"], 1)
+        self.assertEqual(receipt["jobs_decision"]["min_slots"], 2)
+        self.assertEqual(receipt["jobs_decision"]["min_slots_for"], ["lib-check"])
+        leases = pathlib.Path(str(self.verify_log) + ".leases").read_text().splitlines()
+        self.assertEqual(leases[-1], "lane-a --jobs 2")
+
+        # When lib-check is reused (not remaining), only structure-check runs -> falls back to advise (1 slot).
+        self.commit(worktree, {"README.md": "docs edit\n"})
+        self.lane("check", "a")
+        receipt2 = self.receipt("a")
+        self.assertEqual(receipt2["jobs"], 1)
+        self.assertNotIn("min_slots", receipt2["jobs_decision"])
+
+        # Explicit --slots 1 override still wins over declared min_slots.
+        self.lane("check", "a", "--rerun", "--slots", "1")
+        receipt3 = self.receipt("a")
+        self.assertEqual(receipt3["jobs"], 1)
+        self.assertEqual(receipt3["jobs_decision"], {"jobs": 1, "override": "--slots"})
+
+    def test_config_min_slots_pattern_honours_floor_on_busy_machine(self):
+        config = (self.integration / ".lanefather.toml").read_text() + '\n[checks.min_slots]\n"lib-*" = 2\n'
+        self.commit(self.integration, {".lanefather.toml": config}, "configure [checks.min_slots]")
+        self.env.update(FAKE_SLOTFATHER_HELD="3")
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        receipt = self.receipt("a")
+        self.assertEqual(receipt["jobs"], 2)
+        self.assertEqual(receipt["jobs_decision"]["advised_jobs"], 1)
+        self.assertEqual(receipt["jobs_decision"]["min_slots"], 2)
+        self.assertEqual(receipt["jobs_decision"]["min_slots_for"], ["lib-check"])
+
+    def test_min_slots_is_capped_at_machine_total_slot_capacity(self):
+        from lanefather import host, slots
+        with unittest.mock.patch.object(slots, "advise", return_value={"jobs": 1, "slots": 1, "held": 0, "free": 1}):
+            decision = host.check_jobs({"disk_free_gb": 500, "load15": 0.1, "cores": 2}, minimum=2,
+                                       min_for=["browser:story-checks"])
+        self.assertEqual(decision["jobs"], 1)
+        self.assertEqual(decision["min_slots"], 1)
+
+    def test_classify_reruns_honour_declared_min_slots(self):
+        from lanefather import checks
+        lane_plan: dict[str, Any] = {
+            "selection": [{"id": "browser:e2e", "suite": "browser", "paths": ["a.ts"], "min_slots": 4}],
+        }
+        fresh = [{"suite": "browser", "status": "failed", "failed_checks": ["browser:e2e"]}]
+        report = {"checks": [{"id": "browser:e2e", "status": "failed"}]}
+        seen_jobs: list[int] = []
+
+        class FakeRerun:
+            def __init__(self, root: Any, ids: list[str], label: str, jobs: int, **kwargs: Any) -> None:
+                seen_jobs.append(jobs)
+                self.run_id = f"run-{label}"
+
+        @contextlib.contextmanager
+        def fake_base(*_args: Any, **_kwargs: Any) -> Any:
+            yield "/tmp"
+
+        with (unittest.mock.patch.object(checks, "Rerun", FakeRerun),
+              unittest.mock.patch.object(checks, "run_rerun", return_value=(report, pathlib.Path("/tmp/l"), None, None)),
+              unittest.mock.patch.object(checks.worktrees, "base_checkout", side_effect=fake_base),
+              unittest.mock.patch.object(checks.plan, "known_checks", return_value={"browser:e2e"})):
+            checks.classify({"id": "a", "ticket": "1"}, "/tmp", "deadbeef", fresh, report, jobs=4,
+                            lane_plan=lane_plan)
+        self.assertEqual(seen_jobs, [4, 4])
+
+    def test_fix_plan_preserves_min_slots_on_added_parent_checks(self):
+        from lanefather import checks
+        lane_plan: dict[str, Any] = {
+            "paths": ["src/new.ts"],
+            "selection": [{"id": "unit", "suite": "verify", "paths": ["src/new.ts"]}],
+            "selected": ["verify"],
+            "by_suite": {"verify": ["unit"]},
+        }
+        parent: dict[str, Any] = {
+            "lane": "p",
+            "tree": "abc",
+            "paths": ["src/old.ts"],
+            "selection": [{"id": "browser:e2e", "suite": "browser", "paths": ["src/old.ts"], "min_slots": 4}],
+        }
+        about = checks.fix_plan(lane_plan, parent, known={"unit", "browser:e2e"})
+        self.assertTrue(about["union"])
+        selection: list[dict[str, Any]] = lane_plan["selection"]
+        added = next(r for r in selection if r["id"] == "browser:e2e")
+        self.assertEqual(added.get("min_slots"), 4)
+
+
 if __name__ == "__main__":
     unittest.main()

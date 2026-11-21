@@ -187,6 +187,30 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- Pre-land review fix rounds and clearer hand-over refusals (fathers#197): `lanefather review ID --fix-lane` now
+  supports one truthful pre-land fix round on a reviewed `active` candidate in its existing worktree, preserving
+  the reviewed commit SHA and unmarked finding linkage in both the lane record and review receipt (`pre_land_fix`,
+  event `review.pre_land_fix`) without landing the defective original or running a second blind review; marking a
+  finding `fixed:<sha>` in a pre-land fix round refuses a commit that does not advance past the reviewed SHA, and
+  `--fix-lane` refusals now distinguish unsupported lane status from a missing or nonexistent worktree.
+
+- Lane checks honour a step's declared minimum slots instead of falling to 1 slot on a busy machine (fathers#173):
+  a check row in `--plan --json` may declare `min_slots` or `slots`, and `.lanefather.toml` accepts
+  `[checks.min_slots]` mapping check or suite fnmatch patterns to a positive slot floor; `check` leases at least that
+  floor (capped at the machine's total slot capacity, while an explicit `--slots` override still wins) and records
+  `min_slots`, `advised_jobs` and `min_slots_for` in `jobs_decision`.
+
+- Dependency-blocked checks (`status: "blocked"`, or `status: "skipped"` with `blocked_by`) are preserved separately
+  from executed check failures across the check receipt, suite results and red-check classifier (fathers#195): only
+  checks that actually ran and failed consume the rerun budget or enter `first.failed_checks`, dependency-blocked
+  children are classified as `dependency-blocked` with their `blocked_by` prerequisites instead of `regression`, and
+  the receipt stays red until those checks actually run and pass.
+
+- `lanefather land` checks exact-tree green receipt reuse before running `plan_for` (fathers#198): when the merge
+  tree matches the lane's current green receipt under the same toolchain and platform and the receipt covers every
+  post-merge check, land takes the skip path without invoking the plan adapter's dependency bootstrap; when plan
+  preparation is genuinely required, land prints the preparation stage, reason and `queue: slotfather status`.
+
 - Usage errors follow argparse's handling of option values. A quoted merge message or force reason starting with
   a dash works again (fathers#175).
 

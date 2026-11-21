@@ -202,8 +202,14 @@ def recheck(args: Any) -> int:
         print(f"Lane {args.id}: post-merge still red on {tip[:10]} (recheck: {what}); {path}")
         for result in results:
             if result["status"] != "passed":
-                named = ", ".join(result.get("failed_checks") or []) or "(see log)"
-                print(f"  {result['suite']}: failed checks {named}  {result['log']}")
+                if result["status"] == "blocked":
+                    blocked = ", ".join(result.get("blocked_checks") or []) or "(see log)"
+                    print(f"  {result['suite']}: blocked checks: {blocked}  {result['log']}")
+                else:
+                    named = ", ".join(result.get("failed_checks") or []) or "(see log)"
+                    blocked = (f" blocked checks: {', '.join(result['blocked_checks'])}"
+                               if result.get("blocked_checks") else "")
+                    print(f"  {result['suite']}: failed checks {named}{blocked}  {result['log']}")
         if triaged:
             print(triaged)
         return 1
@@ -316,35 +322,62 @@ def land(args: Any) -> int:
     # The land lock is free from here on (#573): the next land merges while this merge's smoke runs on its own
     # checkout of the merge, since the integration worktree moves on.
     with worktrees.smoke_checkout(record["common_dir"], merge) as checkout:
-        merged_plan = plan.plan_for(checkout, previous)
-        # The independent review (#570) runs beside the smoke and never holds the land; promote waits for it.
-        with state.locked("state"):
-            record = state.load(args.id)
-            record["landed"].update(docs_only=review.documentation_only(merged_plan["paths"]))
-            state.save(record)
-        print(f"lane: {review.start_lane_review(record)}", flush=True)
-        kind, rows = plan.post_merge_selection(checkout, merged_plan)
         merge_tree = git(checkout, "rev-parse", "HEAD^{tree}")
-        # #640: what the lane's green receipt already verified does not run again.
-        kind, rows, narrowing = plan.narrow_smoke(checkout, receipt, record["landed"], merge_tree, kind, rows,
-                                                  record.get("worktree"))
-        lane_verified = narrowing.pop("lane_verified", {})
-        # fathers#91: a smoke check that already passed on the merge tree, under this toolchain, does not run again.
         toolchain = plan.toolchain_state(checkout)
-        kind, rows, tree_verified, skips = smoke_reuse(kind, rows, merge_tree, toolchain, merged_plan,
-                                                       git(checkout, "rev-parse", previous + "^{tree}"))
-        suites, selected = ((merged_plan["selected"], None) if rows is None
-                            else (plan.suites_of(rows), plan.by_suite(rows)))
-        decision, results, check_results, triaged, stamp, status = run_smoke(
-            record, checkout, suites, selected, f"post-merge-{args.id}", args.slots, toolchain)
-        jobs = decision["jobs"]
+        # fathers#198: check exact-tree green receipt reuse before plan_for, which may bootstrap dependencies.
+        exact_verified, exact_narrowing, reasons, prep_reason = plan.exact_tree_reuse(
+            checkout, receipt, record["landed"], merge_tree, previous, toolchain, record.get("worktree"))
+        if exact_verified is not None and exact_narrowing is not None:
+            merged_paths = [p for p in git(checkout, "diff", "--name-only", previous, merge).splitlines() if p]
+            # The independent review (#570) runs beside the smoke and never holds the land; promote waits for it.
+            with state.locked("state"):
+                record = state.load(args.id)
+                record["landed"].update(docs_only=review.documentation_only(merged_paths))
+                state.save(record)
+            print(f"lane: {review.start_lane_review(record)}", flush=True)
+            print(f"lane: post-merge smoke skipped: exact merge tree {merge_tree[:10]} already verified by lane "
+                  f"receipt ({len(exact_verified)} checks); no plan bootstrap needed", flush=True)
+            kind = "skip"
+            rows: list[dict[str, Any]] | None = []
+            lane_verified, narrowing = exact_verified, exact_narrowing
+            tree_verified: dict[str, dict[str, Any]] = {}
+            skips: dict[str, str] = {}
+            suites: list[str] = []
+            selected: dict[str, list[str]] | None = {}
+            decision, results, check_results, triaged, stamp, status = run_smoke(
+                record, checkout, suites, selected, f"post-merge-{args.id}", args.slots, toolchain)
+            jobs = decision["jobs"]
+        else:
+            print(f"lane: preparing post-merge plan for {args.id} in {checkout} ({prep_reason}); "
+                  "queue: slotfather status", flush=True)
+            merged_plan = plan.plan_for(checkout, previous)
+            # The independent review (#570) runs beside the smoke and never holds the land; promote waits for it.
+            with state.locked("state"):
+                record = state.load(args.id)
+                record["landed"].update(docs_only=review.documentation_only(merged_plan["paths"]))
+                state.save(record)
+            print(f"lane: {review.start_lane_review(record)}", flush=True)
+            kind, rows = plan.post_merge_selection(checkout, merged_plan)
+            # #640: what the lane's green receipt already verified does not run again.
+            kind, rows, narrowing = plan.narrow_smoke(checkout, receipt, record["landed"], merge_tree, kind, rows,
+                                                      record.get("worktree"))
+            lane_verified = narrowing.pop("lane_verified", {})
+            # fathers#91: a smoke check that already passed on the merge tree, under this toolchain, does not run again.
+            kind, rows, tree_verified, skips = smoke_reuse(kind, rows, merge_tree, toolchain, merged_plan,
+                                                           git(checkout, "rev-parse", previous + "^{tree}"))
+            reasons = merged_plan["reasons"]
+            suites, selected = ((merged_plan["selected"], None) if rows is None
+                                else (plan.suites_of(rows), plan.by_suite(rows)))
+            decision, results, check_results, triaged, stamp, status = run_smoke(
+                record, checkout, suites, selected, f"post-merge-{args.id}", args.slots, toolchain)
+            jobs = decision["jobs"]
     post = state.receipt_path(args.id, "post-merge")
     info = host()
     state.write_json(post, {"version": 1, "lane": args.id, "merge": merge, "base": previous,
                             "tree": merge_tree, "checkout": checkout, "kind": kind,
                             "platform": result_store.host_platform(),
                             "jobs": jobs, "jobs_decision": decision, "suites": suites, "full": False,
-                            "reasons": merged_plan["reasons"], "checks": selected, "selection": rows,
+                            "reasons": reasons, "checks": selected, "selection": rows,
                             "narrowing": narrowing, "skipped": skips,
                             "check_results": {**lane_verified, **tree_verified, **check_results},
                             "results": results, "triage": triaged, "status": status, "verified_tree": stamp,
@@ -403,7 +436,13 @@ def land(args: Any) -> int:
     failed = [r for r in results if r["status"] == "failed"]
     for result in failed:
         named = ', '.join(result['failed_checks']) or '(see log)'
-        print(f"  {result['suite']}: failed checks {named}  {result['log']}")
+        blocked = (f" blocked checks: {', '.join(result['blocked_checks'])}"
+                   if result.get("blocked_checks") else "")
+        print(f"  {result['suite']}: failed checks {named}{blocked}  {result['log']}")
+    for result in results:
+        if result["status"] == "blocked":
+            blocked = ', '.join(result.get('blocked_checks') or []) or '(see log)'
+            print(f"  {result['suite']}: blocked checks: {blocked}  {result['log']}")
     if triaged:
         print(triaged)
     head = git(integration, "rev-parse", "HEAD")

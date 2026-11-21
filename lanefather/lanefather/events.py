@@ -62,6 +62,7 @@ KINDS: dict[str, str] = {
     "finding.marked": "review --mark marked one finding",
     "review.marked": "every finding of a review is marked",
     "review.handed_over": "review --fix-lane handed the worktree to the fix lane",
+    "review.pre_land_fix": "review --fix-lane opened one pre-land fix round on an active candidate",
     "review.ticket_filed": "the overall review filed its ticket (warn when filing failed)",
     "gate.finished": "the batch gate finished (error when red)",
     "perf.finished": "the perf suite finished (error when red)",

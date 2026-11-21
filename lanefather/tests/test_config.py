@@ -322,6 +322,14 @@ class SeamTests(ConfigCase):
         os.environ["LANEFATHER_MODELS"] = str(self.tmp / "missing.toml")
         self.assertEqual(reviewer.Reviewer(config.current()).choices, list(reviewer.DEFAULTS))
 
+    def test_checks_min_slots_parses_and_rejects_invalid_entries(self):
+        cfg = self.use('[checks.min_slots]\n"browser:*" = 2\nlib = 3\n')
+        self.assertEqual(cfg.min_slots, (("browser:*", 2), ("lib", 3)))
+        for bad in ('[checks]\nmin_slots = 2\n', '[checks.min_slots]\n"browser:*" = 0\n',
+                    '[checks.min_slots]\n"browser:*" = true\n', '[checks.min_slots]\n"" = 2\n'):
+            with self.subTest(bad=bad), self.assertRaises(LaneError):
+                self.use(bad)
+
 
 if __name__ == "__main__":
     unittest.main()

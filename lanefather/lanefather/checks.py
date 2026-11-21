@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 import contextlib
+import fnmatch
 import os
 from pathlib import Path
 import re
@@ -30,7 +31,7 @@ from .state import Record
 
 Rows = list[dict[str, Any]]
 
-# verify report statuses that are not a failure.
+# verify report statuses that are not a failure (a skipped row with blocked_by is dependency-blocked, fathers#195).
 PASSING = ("passed", "not_run", "skipped")
 STAMPED = re.compile(r"^Verified tree ([0-9a-f]+) stamped\b", re.M)
 NOT_STAMPED = re.compile(r"^Verified tree not stamped: (.+?)\.?$", re.M)
@@ -45,9 +46,19 @@ DEFAULT_RERUN_WAIT = float(settings.DEFAULT_RERUN_WAIT)
 # A rerun's most slots (lanefather#4): the lane check's own lease size, never the whole machine; only the perf suite
 # measures alone.
 RERUN_MAX_JOBS = 2
-# A check is red alone when it failed, or its producer failed alone (blocked). On the base only a failure of the
-# check itself is pre-existing.
-RED_ALONE = ("failed", "blocked")
+
+
+def is_dependency_blocked(row: dict[str, Any]) -> bool:
+    """Whether a verify report row was skipped or blocked because a dependency failed (fathers#195)."""
+    status = row.get("status")
+    if status == "blocked":
+        return True
+    return status == "skipped" and bool(row.get("blocked_by"))
+
+
+def is_executed_failure(row: dict[str, Any]) -> bool:
+    """Whether a verify report row actually ran and failed (neither passing nor dependency-blocked, fathers#195)."""
+    return row.get("status") not in PASSING and not is_dependency_blocked(row)
 
 
 def stamp_result(text: str, full: bool) -> dict[str, Any]:
@@ -151,45 +162,67 @@ def run_suites(root: Any, suites: list[str], label: str, jobs: int, full: bool =
     seconds = round(time.monotonic() - started, 1)
     load["end"] = host.load_averages()
     failed_checks: list[str] = []
+    blocked_by_id: dict[str, list[str]] = {}
     text = log.read_text(errors="replace")
     reports, report = report_of(text)
     history.record_run(report, lane=(meta or {}).get("lane"), phase=phase, tree=tree, run=run_id, started=started_at,
                        finished=journal.now(), seconds=seconds, checks=ids)
     lease = {"run": run_id, **({"lease": report["lease"]} if report and report.get("lease") else {})}
     if report:
-        failed_checks = [row["id"] for row in report.get("checks", []) if row.get("status") not in PASSING]
+        failed_checks = [row["id"] for row in report.get("checks", []) if is_executed_failure(row)]
+        blocked_by_id = {row["id"]: list(row.get("blocked_by") or []) for row in report.get("checks", [])
+                         if is_dependency_blocked(row)}
     # verify voids a run whose environment failed (the toolchain refused or changed, #571): no suite of it passed,
     # so a later check reuses none of its results.
     environment = ((report or {}).get("environment") or {}).get("class")
-    owners = plan.suite_owners(root, suites) if status or environment else None
+    owners = plan.suite_owners(root, suites) if status or environment or blocked_by_id else None
     failing = {s: [c for c in failed_checks if plan.owned(owners, s, c)] for s in suites}
-    # A failure no check accounts for (setup, slot limiter) fails every suite of the run.
-    failed = list(suites) if environment else [s for s in suites if failing[s]] or suites if status else []
+    blocking = {s: [c for c in blocked_by_id if plan.owned(owners, s, c)] for s in suites}
+    # A failure no check accounts for (setup, slot limiter) fails every suite of the run; dependency-blocked checks
+    # keep their own suite status rather than becoming executed failures (fathers#195).
+    failed = (list(suites) if environment
+              else ([s for s in suites if failing[s]] or ([] if any(blocking.values()) else suites)) if status else [])
+    blocked_suites = [s for s in suites if s not in failed and blocking[s]]
     rows = {row.get("id"): row for row in (report or {}).get("checks", [])}
     # A run that stopped at its first checks (#639) did not start the others: a suite with one of them not run and
     # none red neither passed nor failed.
     stopped = (report or {}).get("stopped")
-    unstarted = [s for s in suites if stopped and s not in failed and (
+    unstarted = [s for s in suites if stopped and s not in failed and s not in blocked_suites and (
         selected is None or ids is None
         or any(rows.get(c, {}).get("status", "not_run") == "not_run" for c in selected[s]))]
     if stopped:
         print(f"lane: verify stopped at its first checks (#639): {', '.join(stopped['failed'])} red; "
               f"{stopped['not_run']} heavier checks did not start ({log})", flush=True)
-    results: Rows = [{"suite": suite, "status": "failed" if suite in failed else "not_run" if suite in unstarted
-                      else "passed", "exit": status,
+    results: Rows = [{"suite": suite,
+                      "status": ("failed" if suite in failed else "blocked" if suite in blocked_suites
+                                 else "not_run" if suite in unstarted else "passed"),
+                      "exit": status,
                       "seconds": seconds, "load_wait": load_wait, "load": load, "log": str(log), **lease,
                       "failed_checks": failing[suite] if suite in failed else [],
+                      **({"blocked_checks": blocking[suite]} if blocking[suite] else {}),
                       **({"report": reports[-1].strip()} if reports else {}),
                       **({"environment": environment} if environment else {}),
                       **({"checks": selected[suite]} if selected is not None else {})}
                      for suite in suites]
-    void = bool(environment) or (bool(status) and not any(failing.values()))
+    void = bool(environment) or (bool(status) and not any(failing.values()) and not any(blocking.values()))
+
+    def check_entry(suite: str, check: str) -> dict[str, Any]:
+        row = rows.get(check, {})
+        blocked = not void and is_dependency_blocked(row)
+        entry: dict[str, Any] = {
+            "suite": suite,
+            "status": "void" if void else "blocked" if blocked else row.get("status", "not_run"),
+            "log": str(log),
+            **lease,
+        }
+        if blocked and row.get("blocked_by"):
+            entry["blocked_by"] = list(row["blocked_by"])
+        if isinstance(row.get("seconds"), (int, float)):
+            entry["seconds"] = row["seconds"]
+        return entry
+
     checks: dict[str, dict[str, Any]] = {} if ids is None or selected is None else {
-        check: {"suite": suite, "status": "void" if void else rows.get(check, {}).get("status", "not_run"),
-                "log": str(log), **lease,
-                **({"seconds": rows[check]["seconds"]} if isinstance(rows.get(check, {}).get("seconds"), (int, float))
-                   else {})}
-        for suite in suites for check in selected[suite]}
+        check: check_entry(suite, check) for suite in suites for check in selected[suite]}
     stamp = {"stamped": False, "reason": "the run failed"} if status or environment else stamp_result(text, full)
     return results, checks, plan.triage(root, Path(reports[-1].strip()).parent) if status and reports else None, stamp
 
@@ -327,10 +360,59 @@ def rerun_wait() -> float:
     return seconds if seconds > 0 else DEFAULT_RERUN_WAIT
 
 
-def rerun_jobs(jobs: int) -> int:
-    """A rerun's lease size (lanefather#4): the lane check's own, 1 to RERUN_MAX_JOBS slots. A lease of the whole
-    machine never came within its wait while one-slot lane checks ran, and as the queue head held them back."""
-    return max(1, min(RERUN_MAX_JOBS, jobs))
+def required_min_slots(lane_plan: dict[str, Any], remaining: dict[str, list[str]] | None,
+                       suites: list[str]) -> tuple[int, list[str]]:
+    """The minimum slot floor declared by the checks/suites that will actually run (fathers#173), from the plan's
+    per-check `min_slots`/`slots` fields or `.lanefather.toml` `[checks.min_slots]` patterns."""
+    needs: dict[str, int] = {}
+    patterns = config.current().min_slots
+    if remaining is None:
+        top = plan.declared_slots(lane_plan)
+        if top is not None and suites:
+            needs["plan"] = top
+        for suite in suites:
+            for pattern, count in patterns:
+                if fnmatch.fnmatchcase(suite, pattern):
+                    needs[suite] = max(needs.get(suite, 0), count)
+    else:
+        running = {c for ids in remaining.values() for c in ids}
+        for row in lane_plan.get("selection") or ():
+            cid = row["id"]
+            if cid not in running:
+                continue
+            declared = plan.declared_slots(row)
+            if declared is not None:
+                needs[cid] = max(needs.get(cid, 0), declared)
+            for pattern, count in patterns:
+                if fnmatch.fnmatchcase(cid, pattern) or fnmatch.fnmatchcase(row["suite"], pattern):
+                    needs[cid] = max(needs.get(cid, 0), count)
+    if not needs:
+        return 1, []
+    floor = max(needs.values())
+    return floor, [name for name, count in needs.items() if count == floor]
+
+
+def rerun_min_slots(check_ids: list[str], lane_plan: dict[str, Any] | None, fresh: Rows) -> int:
+    """Minimum slots required for a rerun of `check_ids` (fathers#173)."""
+    if lane_plan is not None and lane_plan.get("selection") is not None:
+        return required_min_slots(lane_plan, {"_": check_ids}, [])[0]
+    floor = 1
+    if lane_plan is not None:
+        suites = [r["suite"] for r in fresh if r["status"] != "passed"]
+        floor = max(floor, required_min_slots(lane_plan, None, suites)[0])
+    patterns = config.current().min_slots
+    for cid in check_ids:
+        for pattern, count in patterns:
+            if fnmatch.fnmatchcase(cid, pattern):
+                floor = max(floor, count)
+    return floor
+
+
+def rerun_jobs(jobs: int, minimum: int = 1) -> int:
+    """A rerun's lease size (lanefather#4): the lane check's own, 1 to RERUN_MAX_JOBS slots (or the step's declared
+    minimum slots, fathers#173). A lease of the whole machine never came within its wait while one-slot lane checks
+    ran, and as the queue head held them back."""
+    return max(1, min(max(RERUN_MAX_JOBS, minimum), jobs))
 
 
 class Rerun:
@@ -438,14 +520,16 @@ def keep_run(run: Path | None, label: str) -> Path | None:
 
 
 def classify(record: Record, worktree: str, base: str, fresh: Rows,
-             report: dict[str, Any] | None, jobs: int = 1, toolchain: Any = UNRESOLVED) -> dict[str, Any] | None:
+             report: dict[str, Any] | None, jobs: int = 1, toolchain: Any = UNRESOLVED,
+             lane_plan: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Rerun the red checks of a lane check (at most LANEFATHER_RERUNS) and classify each; None when nothing is red.
     `green` is true when every red check is flaky-under-load or pre-existing.
 
     A run that stopped at its first checks (#639, the report's `stopped`) has only those red: static checks of
     seconds, which load does not make red, so they rerun only on the base, as verify queues them."""
     failed = [r for r in fresh if r["status"] == "failed"]
-    if not failed:
+    blocked_suites = [r for r in fresh if r["status"] == "blocked"]
+    if not failed and not blocked_suites:
         return None
     first = bool((report or {}).get("stopped"))
     environment = next((r["environment"] for r in failed if r.get("environment")), None)
@@ -453,8 +537,11 @@ def classify(record: Record, worktree: str, base: str, fresh: Rows,
         return {"skipped": f"environment: {environment}: the run's results do not count, so nothing reran",
                 "checks": [], "green": False}
     candidates = red_checks(failed)
+    # fathers#195: dependency-blocked checks stay separate from executed failures and never consume rerun budget.
+    blocked_rows = {row["id"]: list(row.get("blocked_by") or []) for row in (report or {}).get("checks", [])
+                    if is_dependency_blocked(row)}
     # A red row no suite owns (setup, cleanup) or a failed suite without a red check cannot be rerun.
-    unaccounted = sorted({row["id"] for row in (report or {}).get("checks", []) if row.get("status") not in PASSING}
+    unaccounted = sorted({row["id"] for row in (report or {}).get("checks", []) if is_executed_failure(row)}
                          - set(candidates)) + [r["suite"] for r in failed if not r.get("failed_checks")]
     cap = rerun_cap()
     rerun = candidates[:cap]
@@ -470,7 +557,8 @@ def classify(record: Record, worktree: str, base: str, fresh: Rows,
                 "status": "not rerun", "reason": "a first check (#639): static, so load does not make it red"}}
     still_red: list[str] = list(rerun) if first else []
     if rerun and not first:
-        alone = Rerun(worktree, rerun, f"lane-{record['id']}-alone", rerun_jobs(jobs), meta=lane_meta(record),
+        alone_jobs = rerun_jobs(jobs, minimum=rerun_min_slots(rerun, lane_plan, fresh))
+        alone = Rerun(worktree, rerun, f"lane-{record['id']}-alone", alone_jobs, meta=lane_meta(record),
                       ticket=lane_ticket(record), toolchain=toolchain)
         runs.append({"run": alone.run_id, "rerun": "alone"})
         alone_report, log, _, problem = run_rerun(alone)
@@ -484,11 +572,17 @@ def classify(record: Record, worktree: str, base: str, fresh: Rows,
                 entries[check_id] = {"check": check_id, "class": "flaky-under-load", "load": load,
                                      "alone": {"status": "passed", "log": str(log)},
                                      **({"junit": first_row["junit"]} if first_row.get("junit") else {})}
-            elif row["status"] in RED_ALONE:
+            elif is_dependency_blocked(row):
+                blockers = list(row.get("blocked_by") or [])
+                entries[check_id] = {
+                    "check": check_id, "class": "dependency-blocked", "blocked_by": blockers,
+                    "reason": (f"skipped because dependency failed ({', '.join(blockers)})"
+                               if blockers else "skipped because dependency failed"),
+                    "alone": {"status": row["status"], "log": str(log),
+                              **({"blocked_by": blockers} if blockers else {})}}
+            elif row["status"] == "failed":
                 still_red.append(check_id)
-                entries[check_id] = {"check": check_id, "alone": {"status": row["status"], "log": str(log),
-                                                                  **({"blocked_by": row["blocked_by"]}
-                                                                     if row.get("blocked_by") else {})}}
+                entries[check_id] = {"check": check_id, "alone": {"status": row["status"], "log": str(log)}}
             else:
                 entries[check_id] = {"check": check_id, "class": "unclassified",
                                      "reason": f"the lane's rerun did not run it ({not_run(row)}): {log}"}
@@ -504,9 +598,10 @@ def classify(record: Record, worktree: str, base: str, fresh: Rows,
             if present:
                 base_label = f"lane-{record['id']}-base"
                 # The cheap first checks rerun as verify queues them; others under a lease like the lane's rerun.
-                on_base = Rerun(path, present, base_label, 1 if first else rerun_jobs(jobs),
-                                            queued=not first, meta={**lane_meta(record), "on": "base"},
-                                            ticket=lane_ticket(record))
+                base_jobs = 1 if first else rerun_jobs(jobs, minimum=rerun_min_slots(present, lane_plan, fresh))
+                on_base = Rerun(path, present, base_label, base_jobs,
+                                queued=not first, meta={**lane_meta(record), "on": "base"},
+                                ticket=lane_ticket(record))
                 runs.append({"run": on_base.run_id, "rerun": "base"})
                 base_side = run_rerun(on_base)
                 kept = keep_run(base_side[2], base_label)
@@ -531,7 +626,15 @@ def classify(record: Record, worktree: str, base: str, fresh: Rows,
                 # Blocked behind a failed producer, not run or unrun: the base says nothing about the check.
                 entries[check_id].update({"class": "unclassified", "base": evidence,
                                           "reason": f"the base did not run it ({not_run(row)})"})
-    checks = [entries[c] for c in candidates]
+    for check_id, blockers in blocked_rows.items():
+        if check_id not in entries:
+            entries[check_id] = {
+                "check": check_id, "class": "dependency-blocked", "blocked_by": blockers,
+                "reason": (f"skipped because dependency failed ({', '.join(blockers)})"
+                           if blockers else "skipped because dependency failed"),
+            }
+    ordered = [*candidates, *[c for c in blocked_rows if c not in candidates]]
+    checks = [entries[c] for c in ordered]
     green = bool(checks) and not unaccounted and all(e["class"] in LANDABLE for e in checks)
     return {"base": base, "checks": checks, "load": load, "unaccounted": unaccounted, "green": green, "runs": runs,
             **({"first": True} if first else {})}
@@ -669,7 +772,9 @@ def fix_plan(lane_plan: dict[str, Any], parent: dict[str, Any], known: set[str] 
     added = [row for row in parent["selection"] if row["id"] not in rows and (known is None or row["id"] in known)]
     dropped = [row["id"] for row in parent["selection"] if known is not None and row["id"] not in known]
     lane_plan["selection"] = [*lane_plan["selection"],
-                              *({"id": r["id"], "suite": r["suite"], "paths": r.get("paths", [])} for r in added)]
+                              *({"id": r["id"], "suite": r["suite"], "paths": r.get("paths", []),
+                                 **({"min_slots": need} if (need := plan.declared_slots(r)) is not None else {})}
+                                for r in added)]
     lane_plan["selected"] = plan.suites_of(lane_plan["selection"])
     lane_plan["by_suite"] = plan.by_suite(lane_plan["selection"])
     about["added"] = [r["id"] for r in added]
@@ -793,11 +898,12 @@ def check(args: Any) -> int:
     if args.slots:
         decision = host.given_jobs(args.slots, "--slots")
     elif remaining is None or any(remaining.values()):
-        decision = host.check_jobs(host.host())
+        min_slots, min_for = required_min_slots(lane_plan, remaining, suites)
+        decision = host.check_jobs(host.host(), minimum=min_slots, min_for=min_for)
     else:
         decision: dict[str, Any] = {"jobs": 1, "reason": "nothing to run"}
     fresh, ran, triaged, classification, stopped = lane_run(record, worktree, base, suites, remaining,
-                                                            decision["jobs"], toolchain)
+                                                            decision["jobs"], toolchain, lane_plan=lane_plan)
     results = combined_results(suites, selected, fresh, reused)
     check_results = {} if selected is None else {
         c: reused.get(c) or ran.get(c) or {"suite": s, "status": "not_run"} for s, ids in selected.items() for c in ids}
@@ -850,7 +956,8 @@ def check(args: Any) -> int:
                 else f" ({len(result['reused'])} of {len(result['checks'])} checks reused)" if result.get("reused")
                 else "")
         failed = f" failed checks: {', '.join(result['failed_checks'])}" if result.get("failed_checks") else ""
-        print(f"  {result['suite']}: {result['status']}{note}{failed}  {result['log']}")
+        blocked = f" blocked checks: {', '.join(result['blocked_checks'])}" if result.get("blocked_checks") else ""
+        print(f"  {result['suite']}: {result['status']}{note}{failed}{blocked}  {result['log']}")
     if triaged:
         print(triaged)
     if classification:
@@ -878,7 +985,7 @@ def leases_of(fresh: Rows, classification: dict[str, Any] | None = None) -> list
 
 
 def lane_run(record: Record, worktree: str, base: str, suites: list[str], remaining: dict[str, list[str]] | None,
-             jobs: int, toolchain: Any = UNRESOLVED,
+             jobs: int, toolchain: Any = UNRESOLVED, lane_plan: dict[str, Any] | None = None,
              ) -> tuple[Rows, dict[str, dict[str, Any]], str | None, dict[str, Any] | None, Any]:
     """Run the lane's checks that are left and classify the red ones (#568): (results, check results, triage,
     classification, stopped).
@@ -896,7 +1003,8 @@ def lane_run(record: Record, worktree: str, base: str, suites: list[str], remain
             run = next((Path(r["report"]).parent for r in fresh if r.get("report")), None)
             report = state.read_json(run / "report.json") if run else None
             with terminable():
-                classification = classify(record, worktree, base, fresh, report, jobs, toolchain)
+                classification = classify(record, worktree, base, fresh, report, jobs, toolchain,
+                                          lane_plan=lane_plan)
             if classification and run:
                 # The project's gate triage reads the classification beside the run's report (rerun.json).
                 state.write_json(run / "rerun.json", classification)

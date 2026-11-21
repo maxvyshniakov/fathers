@@ -36,6 +36,15 @@ def verify_path(root: Any) -> str:
     return os.path.join(root, config.current().verify)
 
 
+def declared_slots(row: dict[str, Any]) -> int | None:
+    """Minimum slots a check row declares (`min_slots` or `slots`, fathers#173), or None."""
+    for key in ("min_slots", "slots"):
+        value = row.get(key)
+        if type(value) is int and value > 0:
+            return value
+    return None
+
+
 def plan_for(root: Any, base: str) -> dict[str, Any]:
     """The tree's own verification plan since `base`.
 
@@ -54,11 +63,13 @@ def plan_for(root: Any, base: str) -> dict[str, Any]:
     # A full plan (a path no check reads, or a change that selects every check) runs every check of the gate; its
     # rows that no changed path chose run for the paths no check reads, or for every changed path.
     full_why = plan.get("unowned") or plan["paths"]
-    plan["selection"] = [{"id": row["id"], "suite": row["suite"],
-                          "paths": row["paths"] or (full_why if plan.get("full") else [])}
-                         for row in rows if plan.get("full") or not row["producer"]]
-    plan["selected"] = suites_of(plan["selection"])
-    plan["by_suite"] = by_suite(plan["selection"])
+    selection: Rows = [{"id": row["id"], "suite": row["suite"],
+                        "paths": row["paths"] or (full_why if plan.get("full") else []),
+                        **({"min_slots": need} if (need := declared_slots(row)) is not None else {})}
+                       for row in rows if plan.get("full") or not row["producer"]]
+    plan["selection"] = selection
+    plan["selected"] = suites_of(selection)
+    plan["by_suite"] = by_suite(selection)
     return plan
 
 
@@ -189,6 +200,62 @@ def lane_basis(receipt: dict[str, Any] | None, landed: dict[str, Any], toolchain
     if results.receipt_platform(receipt, worktree) != results.host_platform():
         return f"the lane check did not run on {results.host_platform()}"
     return None
+
+
+def exact_tree_reuse(checkout: Any, receipt: dict[str, Any] | None, landed: dict[str, Any], merge_tree: str,
+                     previous: str, toolchain: Any, worktree: Any = None,
+                     ) -> tuple[dict[str, dict[str, Any]] | None, dict[str, Any] | None, dict[str, Any], str | None]:
+    """Check whether the lane's green receipt already covers the exact merge tree before running `plan_for`
+    (fathers#198). A consumer whose plan adapter bootstraps dependencies (such as bun install under a heavy slot)
+    would otherwise wait in the slot queue only to discover that nothing needs to run.
+
+    Returns (lane_verified, narrowing, reasons, fallback_reason). When `lane_verified` is not None, every check the
+    post-merge selection would run already passed on this exact merge tree under the same toolchain and platform;
+    otherwise `fallback_reason` names why plan preparation is still required."""
+    reason = lane_basis(receipt, landed, toolchain, worktree)
+    if reason or receipt is None:
+        return None, None, {}, reason or "the lane has no receipt"
+    if merge_tree != receipt["tree"]:
+        return None, None, {}, f"merge tree {merge_tree[:10]} differs from lane receipt {receipt['tree'][:10]}"
+    results: dict[str, Any] = receipt["check_results"]
+    passed = {c for c, e in results.items() if e.get("status") == "passed"}
+    receipt_base = receipt.get("base")
+    same_base = bool(receipt_base) and (
+        receipt_base == previous
+        or (gitops.git_ok(checkout, "cat-file", "-e", f"{receipt_base}^{{tree}}")
+            and gitops.git(checkout, "rev-parse", f"{previous}^{{tree}}")
+            == gitops.git(checkout, "rev-parse", f"{receipt_base}^{{tree}}")))
+    ids = smoke_checks(checkout)
+    found = module(checkout)
+    rows: Rows
+    if ids and found is not None:
+        if same_base and set(receipt.get("suites") or ()) <= {"structure"} and receipt.get("selection") is not None:
+            rows = list(receipt["selection"])
+        else:
+            try:
+                every = found.checks(Path(checkout), Path("/nonexistent"), set(found.SUITES), True, False, 4,
+                                     bundle=False)
+            except Exception:
+                return None, None, {}, "plan module could not list smoke checks"
+            suite = {check.id: check.suite for check in every}
+            order = {s: n for n, s in enumerate(found.SUITES)}
+            rows = sorted([{"id": i, "suite": suite[i], "paths": []} for i in ids if i in suite],
+                          key=lambda row: order.get(row["suite"], len(order)))
+    else:
+        if receipt.get("selection") is None:
+            return None, None, {}, "the lane's receipt has no per-check selection"
+        if not receipt.get("full") and not same_base:
+            return None, None, {}, "merge base differs from the lane receipt's base"
+        rows = list(receipt["selection"])
+    missing = [row["id"] for row in rows if row["id"] not in passed]
+    if missing:
+        listed = ", ".join(missing[:3]) + ("..." if len(missing) > 3 else "")
+        return None, None, {}, f"lane receipt did not verify {listed}"
+    lane_verified = {row["id"]: dict(results[row["id"]], reused_from=results[row["id"]].get("reused_from")
+                                     or receipt["tree"]) for row in rows}
+    narrowing = {"receipt_tree": receipt["tree"], "receipt_head": receipt.get("head"), "lane_tip": landed["tip"],
+                 "narrowed": True, "integration_paths": [], "dropped": list(lane_verified)}
+    return lane_verified, narrowing, dict(receipt.get("reasons") or {}), None
 
 
 def narrow_smoke(checkout: Any, receipt: dict[str, Any] | None, landed: dict[str, Any], merge_tree: str, kind: str,

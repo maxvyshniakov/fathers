@@ -229,10 +229,22 @@ def gate_jobs(info: dict[str, Any]) -> dict[str, Any]:
     return jobs_decision(info, GATE_MAX_JOBS)
 
 
-def check_jobs(info: dict[str, Any]) -> dict[str, Any]:
-    """A lane check shares the machine like the batch gate: at most CHECK_MAX_JOBS and no more than the free
-    slots."""
-    return jobs_decision(info, CHECK_MAX_JOBS)
+def check_jobs(info: dict[str, Any], minimum: int = 1, min_for: list[str] | None = None) -> dict[str, Any]:
+    """A lane check shares the machine like the batch gate: at most CHECK_MAX_JOBS (or `minimum` when a selected
+    step declares a higher slot floor, fathers#173) and no more than the free slots, except that it honours a step's
+    declared minimum slots (capped at the machine's total slot capacity) instead of falling to 1 slot on a busy
+    machine."""
+    maximum = max(CHECK_MAX_JOBS, minimum)
+    decision = jobs_decision(info, maximum)
+    if minimum > 1:
+        total_slots = decision.get("slots")
+        effective = min(minimum, total_slots) if type(total_slots) is int and total_slots > 0 else minimum
+        extra: dict[str, Any] = {"min_slots": effective, **({"min_slots_for": list(min_for)} if min_for else {})}
+        if decision["jobs"] < effective:
+            decision = dict(decision, advised_jobs=decision["jobs"], jobs=effective, **extra)
+        else:
+            decision = dict(decision, **extra)
+    return decision
 
 
 def given_jobs(jobs: int, option: str) -> dict[str, Any]:
