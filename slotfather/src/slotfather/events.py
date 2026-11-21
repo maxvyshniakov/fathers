@@ -58,6 +58,8 @@ class Peer(TypedDict, total=False):
 
 class Granted(TypedDict, total=False):
     count: int
+    min_count: int
+    max_count: int
     priority: str
     waited: Optional[int]
     served: str

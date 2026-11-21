@@ -138,6 +138,7 @@ class Plan:
 
     def __init__(self) -> None:
         self.grants: list[Entry] = []
+        self.granted_counts: dict[int, int] = {}  # id(entry) -> granted slots (for -n MIN-MAX range requests, fathers#128)
         self.reason: str | None = None
         self.head: Entry | None = None
         self.start: float | None = None
@@ -148,6 +149,20 @@ class Plan:
         # fathers#160: waiters that gave way, (entry, the leases that blocked it), past their reserved start by
         # `reservation_timeout` while such leases held their slots: they hold nobody back
         self.dropped: list[tuple[Entry, list[Entry]]] = []
+
+    def granted_count(self, entry: Entry) -> int:
+        """The slots granted to `entry` in this plan (its range grant, else its requested count)."""
+        return self.granted_counts.get(id(entry), int(entry["count"]))
+
+
+def _grant_size(entry: Entry, limit: int, slots: int) -> int:
+    """The slots granted to `entry` when `limit` slots are free: `entry['count']` for a fixed request, or up to
+    `max_count` (capped by `limit` and `slots`) for a `-n MIN-MAX` range request (fathers#128)."""
+    base = int(entry["count"])
+    upper = entry.get("max_count")
+    if type(upper) is int and upper > base:
+        return max(base, min(upper, limit, slots))
+    return base
 
 
 
@@ -329,16 +344,18 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
             run = estimate(entry)
             run = fallback if run is None else run
             if moment + run * safety <= min(bound, deadline):
-                pass  # ends before the head's reserved start (and before it has waited the limit)
+                take = _grant_size(entry, free, slots)  # ends before the head's reserved start
             elif entry["count"] <= extra:
-                extra -= entry["count"]
+                take = _grant_size(entry, min(extra, free), slots)
+                extra -= take
             elif found.blocked and found.start is not None and moment >= bound and \
                     moment + longest(entry, p90, run) <= min(found.start, deadline):
-                pass  # its promise broke on ends nobody knows: what ends by its projected start passes (#160)
+                take = _grant_size(entry, free, slots)  # its promise broke on ends nobody knows (#160)
             else:
                 continue
             found.grants.append(entry)
-            used += entry["count"]
+            found.granted_counts[id(entry)] = take
+            used += take
             continue
         # A batch waiter defers while normal or interactive work waits (#5): it is no head then, and one for the
         # whole machine does not take it either, since that would shut the waiting work out for its whole run.
@@ -355,8 +372,10 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
                                             f"which gave way")
             continue
         if entry["count"] <= free:
+            take = _grant_size(entry, free, slots)
             found.grants.append(entry)
-            used += entry["count"]
+            found.granted_counts[id(entry)] = take
+            used += take
             continue
         queued = _config.seconds(entry.get("since"))
         passable = queued is not None and moment - queued < window
@@ -576,7 +595,8 @@ WARNING_WAIT = "memory pressure warning: one 1-slot lease at a time"
 
 def memory_gate(grants: list[Entry], held: list[Entry], used: int, memory: tuple[str, str | None],
                 settings: dict[str, Any], *, memory_estimate: Estimate | None = None,
-                ram_mb: float | None = None) -> list[tuple[Entry, str | None]]:
+                ram_mb: float | None = None,
+                granted_counts: dict[int, int] | None = None) -> list[tuple[Entry, str | None]]:
     """Which of plan()'s `grants` memory lets start now beside `held` (`used` slots held in all), in their order:
     (entry, None) starts, (entry, why) waits. Normal memory starts them all unless expected peak memory exceeds
     `memory_share` of `ram_mb` (fathers#9). While memory is short nothing starts beside a running lease. Under
@@ -599,11 +619,12 @@ def memory_gate(grants: list[Entry], held: list[Entry], used: int, memory: tuple
     held_mb = sum(expected_mb(e) for e in held) if budget_mb is not None else 0.0
     found: list[tuple[Entry, str | None]] = []
     for entry in grants:
+        grant_count = (granted_counts or {}).get(id(entry), int(entry["count"]))
         reason = None
         if used and kind != "normal":
             if not allowance:
                 reason = why
-            elif entry["count"] != 1 or entry.get("all") or pressed:
+            elif grant_count != 1 or entry.get("all") or pressed:
                 reason = WARNING_WAIT
         if reason is None and used and budget_mb is not None and ram_mb is not None:
             need_mb = expected_mb(entry)
@@ -611,7 +632,7 @@ def memory_gate(grants: list[Entry], held: list[Entry], used: int, memory: tuple
                 reason = (f"expected memory {held_mb + need_mb:.0f} MB exceeds "
                           f"{budget_mb:.0f} MB ({share * 100:.0f}% of {ram_mb:.0f} MB)")
         if reason is None:
-            used += max(1, int(entry["count"]))
+            used += max(1, grant_count)
             if budget_mb is not None:
                 held_mb += expected_mb(entry)
             pressed = pressed or kind != "normal"

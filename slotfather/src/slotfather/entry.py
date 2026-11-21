@@ -22,6 +22,8 @@ class Entry(TypedDict, total=False):
     start: str  # the holder's start as `ps -o lstart` prints it for its writer
     started: int  # the holder's start in epoch seconds (fathers#122)
     count: int
+    min_count: int  # `-n MIN-MAX`: minimum slots requested while waiting (fathers#128)
+    max_count: int  # `-n MIN-MAX`: maximum slots granted if free at grant time (fathers#128)
     label: str
     cmd: str
     cwd: str
@@ -314,7 +316,8 @@ def new_request(pid: int, start: str, count: int, label: str, command: str, cwd:
                 lease_id: str, *, started: int | None = None, ticket: str | None = None, whole: bool = False,
                 meta: dict[str, str] | None = None, naming: Mapping[str, str] | None = None,
                 session: dict[str, Any] | None = None, git: dict[str, Any] | None = None, yieldable: bool = False,
-                until: str | None = None, yield_after: float | None = None) -> Record:
+                until: str | None = None, yield_after: float | None = None,
+                max_count: int | None = None) -> Record:
     """A request as it enters the queue, waiting. Fields an older client does not know follow the ones it does,
     in the order clients have always written them."""
     entry: Entry = {"pid": pid, "start": start, "count": count, "label": label, "cmd": command, "cwd": cwd,
@@ -343,6 +346,9 @@ def new_request(pid: int, start: str, count: int, label: str, command: str, cwd:
         entry["until"] = until  # when its client gives up (plan(): such a head holds nobody back)
     if yield_after is not None:
         entry["yield_after"] = yield_after  # this client asks later or never; others' looks read it
+    if max_count is not None and max_count > count:
+        entry["min_count"] = count
+        entry["max_count"] = max_count
     return found
 
 
@@ -361,10 +367,14 @@ def resume(entry: Record, moment: float | None = None) -> None:
         entry.pop(key, None)
 
 
-def to_held(entry: Record, granted: str, moment: float, pressed: bool = False, served: str | None = None) -> None:
+def to_held(entry: Record, granted: str, moment: float, pressed: bool = False, served: str | None = None,
+            count: int | None = None) -> None:
     """A waiter granted at `granted` (a now() stamp of `moment`): `pressed` while memory is not normal, `aged` when
-    it is served in class `served` (ageing) rather than its own, and resumed if it had yielded."""
+    it is served in class `served` (ageing) rather than its own, `count` for a range request (`-n MIN-MAX`) granted
+    at what is free, and resumed if it had yielded."""
     entry.update(state=HELD, granted=granted)
+    if count is not None and count >= 1:
+        entry["count"] = count
     lock_taken(entry)  # a lease an older client granted while it waited for a lock: the mark is stale
     if pressed:
         entry[PRESSED] = True  # under warning, the one lease at a time until it releases
@@ -379,6 +389,8 @@ def to_yielded(entry: Record, moment: float, rank: float | None) -> None:
     """A held lease back among the waiters at `moment`, queued at `rank`, just behind the waiter it yields to."""
     entry.update(state=WAITING, yields=int(entry.get("yields") or 0) + 1, yielded_at=round(moment, 3),
                  first_granted=entry.get("granted"), rank=rank)
+    if type(entry.get("min_count")) is int and entry["min_count"] >= 1:
+        entry["count"] = entry["min_count"]  # a range lease waits as its MIN again until re-granted
     entry.pop("reserved", None)  # a reservation an older client granted it with is no promise now
     entry.pop(PRESSED, None)  # back in the queue it is no lease of a warning; its next grant decides
 

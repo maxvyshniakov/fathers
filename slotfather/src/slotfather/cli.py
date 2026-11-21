@@ -427,6 +427,22 @@ def parse_count(value: str) -> int:
     return int(value)
 
 
+def parse_slots(value: str) -> tuple[int | str, int | None]:
+    """Parse `run -n`: `all`, a positive count `N`, or a range `MIN-MAX` (1 <= MIN <= MAX, fathers#128)."""
+    if value == "all":
+        return "all", None
+    if "-" in value:
+        left, sep, right = value.partition("-")
+        if sep and left.isascii() and right.isascii() and left.isdigit() and right.isdigit():
+            low, high = int(left), int(right)
+            if low >= 1 and high >= low:
+                return low, (high if high > low else None)
+        raise UsageError(f"-n takes a positive count, MIN-MAX range, or all, not {value!r}", "run")
+    if not value.isascii() or not value.isdigit() or int(value) < 1:
+        raise UsageError(f"-n takes a positive count, MIN-MAX range, or all, not {value!r}", "run")
+    return int(value), None
+
+
 def run_command(values: dict[str, Any], positionals: list[str], after_dash: list[str]) -> int:
     from . import runner as _runner
     cmd = positionals or after_dash
@@ -434,9 +450,9 @@ def run_command(values: dict[str, Any], positionals: list[str], after_dash: list
         raise UsageError("no command to run", "run")
     counted = "--slots" in values
     count: int | str = 1
+    max_count: int | None = None
     if counted:
-        raw_count = str(values["--slots"])
-        count = "all" if raw_count == "all" else parse_count(raw_count)
+        count, max_count = parse_slots(str(values["--slots"]))
     labelled = "--label" in values
     label = str(values["--label"]) if labelled else os.path.basename(os.getcwd())
     pairs: list[str] = list(values.get("--meta") or [])
@@ -462,7 +478,7 @@ def run_command(values: dict[str, Any], positionals: list[str], after_dash: list
         from .session import run_inside
         return run_inside(session, cmd, label if labelled else None, parse_meta(pairs))
     return _runner.run(count, label, cmd, wait, parse_meta(pairs), yieldable, priority=priority, ticket=ticket,
-                       labelled=labelled)
+                       labelled=labelled, max_count=max_count)
 
 
 def yield_command(values: dict[str, Any], positionals: list[str], after_dash: list[str]) -> int:

@@ -281,6 +281,8 @@ def entry_item(path: Path, entry: dict[str, Any], table: dict[int, tuple[int, st
             "cwd": entry.get("cwd"), "meta": _entry.meta_of(entry), "tree": _lineage.descendants(table, pid),
             "priority": _entry.priority_of(entry), "ticket": _entry.ticket_of(entry),
             "yieldable": bool(entry.get("yieldable")), "yields": int(entry.get("yields") or 0),
+            **({"min_count": entry["min_count"], "max_count": entry["max_count"]}
+               if type(entry.get("max_count")) is int and type(entry.get("min_count")) is int else {}),
             **({"lock": _entry.lock_of(entry)} if _entry.lock_of(entry) is not None else {})}
 
 

@@ -394,7 +394,7 @@ def grant(directory: Path, table: _queue.Table) -> str | None:
     ram_mb = None if ram_gib is None else ram_gib * 1024.0
     gated = _schedule.memory_gate(found.grants, held, used, memory, settings,
                                   memory_estimate=_queue.memory_estimator(directory) if ram_mb is not None else None,
-                                  ram_mb=ram_mb)
+                                  ram_mb=ram_mb, granted_counts=found.granted_counts)
     starting = [entry for entry, why in gated if not why]
     for entry in _schedule.reservations(waiters, keeper):
         if not any(entry is g for g in starting):  # a grant is written below; one memory holds back keeps its own
@@ -425,12 +425,16 @@ def grant(directory: Path, table: _queue.Table) -> str | None:
         waited_from = back if back is not None else _config.seconds(entry.get("since"))
         granted = _config.now()
         began = _config.seconds(granted) or time.time()  # resume() puts a yielded lease's first grant back
-        _entry.to_held(entry, granted, time.time(), pressed=memory[0] != "normal", served=served)
+        take = found.granted_count(entry)
+        _entry.to_held(entry, granted, time.time(), pressed=memory[0] != "normal", served=served, count=take)
         _state.write(paths[id(entry)], entry)
         used += entry["count"]
         details: _events.Granted = {"count": entry["count"], "priority": _entry.priority_of(entry),
                                     "waited": None if waited_from is None else
                                     round(max(0.0, began - waited_from))}
+        if type(entry.get("max_count")) is int:
+            details["min_count"] = int(entry.get("min_count", entry["count"]))
+            details["max_count"] = int(entry["max_count"])
         if served != _entry.priority_of(entry):
             details["served"] = served
         if back is not None:
@@ -470,7 +474,7 @@ def next_sequence(directory: Path) -> int:
 def enqueue(directory: Path, count: int | str, table: _queue.Table, label: str, command: str, cwd: str,
             priority: str, ticket: str | None, meta: dict[str, str], naming: dict[str, str] | None,
             session: dict[str, Any] | None, git: dict[str, Any] | None, yieldable: bool,
-            wait: float | None) -> tuple[Path, int]:
+            wait: float | None, *, max_count: int | None = None) -> tuple[Path, int]:
     """A new request of this process in the queue at `directory`: (its entry's path, the slots it asks, the
     capacity at most). Admission and capacity changes share the queue lock; `all` resolves only now (and again at
     the grant: plan()). A live request of the same session name refuses it."""
@@ -486,7 +490,9 @@ def enqueue(directory: Path, count: int | str, table: _queue.Table, label: str, 
                                             f"{other.get('state')}): stop it first (slotfather session stop "
                                             f"{session['name']})")
         whole = count == "all"
-        count = _settings.total() if whole else min(cast(int, count), _settings.total())
+        cap = _settings.total()
+        count = cap if whole else min(cast(int, count), cap)
+        upper = None if (whole or max_count is None) else max(count, max_count)
         sequence = next_sequence(directory)
         path = directory / "queue" / f"{sequence:010d}-{me}.json"
         own = _settings.order_settings(directory)["yield_after"]
@@ -497,7 +503,8 @@ def enqueue(directory: Path, count: int | str, table: _queue.Table, label: str, 
             # when this client gives up (plan(): a head that would give up before its expected start holds nobody back)
             until=None if wait is None else time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + wait)),
             # this client asks later or never (SLOTFATHER_YIELD_AFTER)
-            yield_after=own if own != _settings.order_settings(directory, environment=False)["yield_after"] else None)
+            yield_after=own if own != _settings.order_settings(directory, environment=False)["yield_after"] else None,
+            max_count=upper)
         _state.write(path, entry)
     return path, count
 

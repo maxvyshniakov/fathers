@@ -86,7 +86,7 @@ def execute(argv: list[str], environment: dict[str, str], background: bool = Fal
 
 def run(count: int | str, label: str, argv: list[str], wait: float | None = None, meta: dict[str, str] | None = None,
         yieldable: bool = False, *, priority: str | None = None, ticket: str | int | None = None,
-        labelled: bool = True) -> int:
+        labelled: bool = True, max_count: int | None = None) -> int:
     """Run argv under a lease of `count` slots; the command's exit status. Without `labelled` (no --label), `label`
     (the directory's name) gives way to one derived from the project, the command and the metadata (labels.py); a
     label that says little gets the derived parts appended, with a hint."""
@@ -115,7 +115,8 @@ def run(count: int | str, label: str, argv: list[str], wait: float | None = None
         lease = _client.acquire(count, label, " ".join(argv), wait=wait, note=note, meta=meta,
                         yieldable=yieldable, priority=priority, ticket=ticket,
                         naming={k: naming[k] for k in ("given", "derived", "project")
-                                if naming.get(k) and (k != "given" or naming[k] != label)} if naming else None)
+                                if naming.get(k) and (k != "given" or naming[k] != label)} if naming else None,
+                        max_count=max_count)
     except _config.SlotTimeout as error:
         print(f"slot: {label}: {error}", file=sys.stderr)
         return _config.TIMED_OUT
@@ -132,6 +133,7 @@ def run(count: int | str, label: str, argv: list[str], wait: float | None = None
     with lease:
         marker = lease.path if lease.path is not None and not lease.inherited else None
         child_env = lease.environment()
+        child_env["SLOTFATHER_SLOTS"] = str(lease.count)
         child_env["SLOTFATHER_LEASE_CORES"] = str(lease_cores(lease.count))
         lease.status, lease.usage = execute(argv, child_env, background, marker)
     return lease.status

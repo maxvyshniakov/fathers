@@ -6,6 +6,11 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- `slotfather run -n MIN-MAX` queues as a `MIN`-slot request (scheduling order treats it as `MIN`) and grants up
+  to `MAX` of what is free at grant time. The granted slot count is exported as `SLOTFATHER_SLOTS` and recorded on
+  the entry, in `status --json`, and in the `lease.granted` event; `capabilities --json` advertises `slot-range`
+  support (fathers#128).
+
 - `slotfather run` automatically tags leases with `lane` (from `LANEFATHER_LANE` or the worktree's Lanefather
   record/path) and `agent_session` (from `CLAUDE_CODE_SESSION_ID`) unless set by the caller, trimming auto-tags
   to 200 characters and dropping them with a warning at the 16-key limit while still refusing over-limit caller
