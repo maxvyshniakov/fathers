@@ -86,6 +86,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- `events.jsonl` strips Unicode line and paragraph separators (`U+2028`, `U+2029`), caps general strings at 1000
+  characters (400 for commands) and bounds the `events.lock` wait to 1 s, and `install.py` serializes installs under
+  `.install.lock` and verifies existing releases through the shared `fathers_common` kit (fathers#117).
 - `junkfather changelog --json --since` accepts build-suffixed versions and orders matching release headings by file
   order, and unindented prose ends a bullet's continuation lines as the shared changelog contract requires
   (fathers#119).

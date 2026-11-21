@@ -27,15 +27,31 @@ import shlex
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from typing import Any, Dict, List, cast
 
 sys.dont_write_bytecode = True
-MIN_PYTHON = (3, 9)
-KEEP_RELEASES = 3
 SOURCE = Path(__file__).resolve().parent
 COMMON = SOURCE.parent / "common" / "fathers_common"
+if str(SOURCE.parent / "common") not in sys.path:
+    sys.path.insert(0, str(SOURCE.parent / "common"))
+
+from fathers_common.atomic import atomic_write  # noqa: E402
+from fathers_common.installer import (  # noqa: E402
+    InstallError,
+    committed_head,
+    copy_python_tree,
+    install_lock,
+    resolve_interpreter,
+    stage_release,
+    switch_symlink,
+    write_launcher,
+)
+
+__all__ = ["InstallError", "allow_rule", "install", "interpreter", "launchd", "main", "mastack", "write_atomic"]
+
+MIN_PYTHON = (3, 9)
+KEEP_RELEASES = 3
 LAUNCHER = """#!{python}
 # junkfather's command (install.py): the release share/current points at, on the interpreter it was installed for.
 import sys
@@ -48,33 +64,14 @@ HOOK = "{command} hook"
 # The Bash hook an earlier build of this lane registered in ~/.claude/settings.json itself; Mastack removes it.
 DIRECT_HOOK = """sh -c '[ -x "$0" ] || exit 0; exec "$0" hook' {command}"""
 EVENTS = ("SubagentStop", "SessionEnd", "Stop")
-# Runs the hook, and nothing once the command is gone (an uninstall leaves no failing hook behind).
-
-
-class InstallError(Exception):
-    pass
 
 
 def interpreter(python: str | None) -> str:
-    chosen = python or sys.executable
-    result = subprocess.run([chosen, "-c", f"import sys; print(sys.version_info[:2] >= {MIN_PYTHON})"],
-                            capture_output=True, text=True)
-    if result.returncode or result.stdout.strip() != "True":
-        raise InstallError(f"{chosen} is not Python {'.'.join(map(str, MIN_PYTHON))} or newer")
-    return os.path.abspath(shutil.which(chosen) or chosen)
+    return resolve_interpreter(python, MIN_PYTHON, tool="junkfather", allow_venv=True, resolve_which=True)
 
 
 def commit() -> str:
-    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    head = subprocess.run(["git", "rev-parse", "--verify", "HEAD"], cwd=SOURCE, capture_output=True, text=True,
-                          env=environment)
-    if head.returncode:
-        raise InstallError("install from a committed Git checkout")
-    changed = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all", "--", "junkfather",
-                              "install.py", str(COMMON)], cwd=SOURCE, capture_output=True, text=True, env=environment)
-    if changed.returncode or changed.stdout.strip():
-        raise InstallError("uncommitted shipping inputs: commit them before installing; nothing was changed")
-    return head.stdout.strip()
+    return committed_head(SOURCE, ("junkfather", "install.py", str(COMMON)))
 
 
 def version() -> str:
@@ -85,36 +82,28 @@ def version() -> str:
 
 
 def write_atomic(path: Path, text: str, mode: int) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", dir=path.parent, prefix=".junkfather-", delete=False) as handle:
-        handle.write(text)
-        os.fchmod(handle.fileno(), mode)
-    os.replace(handle.name, path)
+    atomic_write(path, text, mode=mode)
 
 
 def install(share: Path, bin_dir: Path, python: str) -> Path:
     built = commit()
-    release = share / "releases" / f"{version()}-{built[:12]}"
-    if not release.exists():
-        pending = share / "releases" / f".pending-{os.getpid()}"
-        shutil.rmtree(pending, ignore_errors=True)
-        shutil.copytree(SOURCE / "junkfather", pending / "junkfather",
-                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-        shutil.copytree(COMMON, pending / COMMON.name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    release_name = f"{version()}-{built[:12]}"
+
+    def populate(pending: Path) -> None:
+        copy_python_tree(SOURCE / "junkfather", pending / "junkfather")
+        copy_python_tree(COMMON, pending / COMMON.name)
         shutil.copy2(SOURCE / "CHANGELOG.md", pending / "CHANGELOG.md")
         (pending / "junkfather" / "COMMIT").write_text(built + "\n")
-        pending.rename(release)
-    link = share / f".current-{os.getpid()}"
-    if link.is_symlink() or link.exists():
-        link.unlink()
-    link.symlink_to(release.relative_to(share))
-    os.replace(link, share / "current")
-    write_atomic(bin_dir / "junkfather", LAUNCHER.format(python=python, current=str(share / "current")), 0o755)
-    releases = sorted((p for p in (share / "releases").iterdir() if not p.name.startswith(".")),
-                      key=lambda p: p.stat().st_mtime, reverse=True)
-    for old in releases[KEEP_RELEASES:]:
-        if old.resolve() != release.resolve():
-            shutil.rmtree(old, ignore_errors=True)
+
+    with install_lock(share / ".install.lock"):
+        release = stage_release(share / "releases", release_name, populate)
+        switch_symlink(share / "current", release, relative_to=share)
+        write_launcher(bin_dir / "junkfather", LAUNCHER.format(python=python, current=str(share / "current")), 0o755)
+        releases = sorted((p for p in (share / "releases").iterdir() if not p.name.startswith(".")),
+                          key=lambda p: p.stat().st_mtime, reverse=True)
+        for old in releases[KEEP_RELEASES:]:
+            if old.resolve() != release.resolve():
+                shutil.rmtree(old, ignore_errors=True)
     return release
 
 
