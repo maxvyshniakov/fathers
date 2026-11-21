@@ -24,7 +24,7 @@ import sys
 import time
 from typing import Any, cast
 
-from . import claims, config, done, journal, lanes, reviewer, settings, state, worktrees
+from . import claims, config, done, journal, lanes, lifecycle, reviewer, settings, state, worktrees
 from .checks import terminable
 from .errors import LaneError
 from .gitops import common_dir, current_branch, git, git_ok, main_checkout
@@ -164,7 +164,7 @@ def fix_parent_review(lane_id: str, common: str, refusal: str, *,
     if parent is None:
         raise LaneError(f"{refusal}: no lane by that name")
     landed: dict[str, Any] = parent.get("landed") or {}
-    if parent.get("status") not in state.LANDED or not landed.get("merge"):
+    if not lifecycle.landed(parent) or not landed.get("merge"):
         raise LaneError(f"{refusal}: lane {lane_id} is {parent.get('status')}, not landed; a fix lane fixes the "
                         "review findings of landed lanes")
     if parent.get("common_dir") != common:
@@ -436,7 +436,7 @@ def review_complete_finish(lane_id: str) -> None:
     fathers#157), unless land is still running its smoke (land finishes it then) or its smoke was red; a kept lane
     and `[done] auto = false` only say so."""
     record = state.load(lane_id)
-    if record["status"] not in ("landed", "released"):
+    if not lifecycle.awaiting_done(record):
         return
     if (record.get("post_merge") or {}).get("status") != "green" and not done.kept(record):
         return
@@ -468,10 +468,8 @@ def review_lane(args: Any) -> int:
                              main_checkout(record["common_dir"]), base, tip, ticket_text(record),
                              family=implementer_family(args.id), reviewers=asked_reviewers(args))
     if record.get("pre_land_fix"):
-        with state.locked("state"):
-            latest = state.load(args.id)
-            if latest.pop("pre_land_fix", None) is not None:
-                state.save(latest)
+        store = state.Store(config.current())
+        store.update(args.id, lambda latest: latest.pop("pre_land_fix", None) is not None)
     print("\n".join(review_lines(receipt)))
     if receipt["status"] != "finished":
         return 1
@@ -548,7 +546,7 @@ def fix_merge(common: str, value: str) -> str:
     record = state.read_json(state.record_path(value)) if state.ID.match(value) else None
     if record and (record.get("landed") or {}).get("merge"):
         return record["landed"]["merge"]
-    if record and record.get("status") == "active" and record.get("pre_land_fix"):
+    if record and lifecycle.active(record) and record.get("pre_land_fix"):
         tip = git(main_checkout(common), "rev-parse", "--verify", "--quiet", record["branch"] + "^{commit}",
                   check=False)
         if tip:
@@ -692,10 +690,12 @@ def pre_land_fix_round(args: Any, record: Record, worktree: str) -> int:
         "findings": unmarked,
         "started": journal.now(),
     }
-    with state.locked("state"):
-        record = state.load(args.id)
-        record["pre_land_fix"] = dict(fix_round)
-        state.save(record)
+    store = state.Store(config.current())
+
+    def _set_pre_land_fix(current: Record) -> None:
+        current["pre_land_fix"] = dict(fix_round)
+
+    record = store.update(args.id, _set_pre_land_fix)
     with state.locked(f"review-{args.id}"):
         receipt = state.read_json(state.receipt_path(args.id, "review")) or {}
         receipt["pre_land_fix"] = dict(fix_round)
@@ -719,10 +719,11 @@ def hand_over(args: Any) -> int:
     where the resumed agent keeps its context (a resumed agent is fenced to its own worktree); its land is the fix
     and gets no review of its own. For an active reviewed candidate (fathers#197), opens one truthful pre-land fix
     round on the same active lane, preserving the reviewed SHA and finding linkage."""
-    prog = config.prog()
-    record = state.load(args.id)
+    store = state.Store(config.current())
+    prog = store.project.command
+    record = store.load(args.id)
     status = record["status"]
-    if status not in ("active", "landed", "released"):
+    if not (lifecycle.active(record) or lifecycle.awaiting_done(record)):
         raise LaneError(f"hand-over refused: lane {args.id} has unsupported status {status!r} "
                         "(must be active, landed or released)")
     worktree = record.get("worktree")
@@ -730,7 +731,7 @@ def hand_over(args: Any) -> int:
         raise LaneError(f"hand-over refused: lane {args.id} ({status}) has no worktree to hand over")
     if not os.path.isdir(worktree):
         raise LaneError(f"hand-over refused: lane {args.id}'s worktree {worktree} does not exist")
-    if status == "active":
+    if lifecycle.active(record):
         return pre_land_fix_round(args, record, worktree)
     receipt = fix_parent_review(args.id, record["common_dir"], "hand-over refused")
     fix_id = f"{args.id}-review-fixes"
@@ -742,10 +743,11 @@ def hand_over(args: Any) -> int:
     lanes.register(fix, rules, args.force_reason, False)
     for line in held:
         print(f"lane: {line}")
-    with state.locked("state"):
-        record = state.load(args.id)
-        record.update(worktree=None, handed_over={"to": fix_id, "worktree": fix["worktree"], "at": journal.now()})
-        state.save(record)
+    record = lifecycle.transition(
+        store, args.id, "hand_over",
+        worktree=None,
+        handed_over={"to": fix_id, "worktree": fix["worktree"], "at": journal.now()},
+    )
     with state.locked(f"review-{args.id}"):
         receipt = state.read_json(state.receipt_path(args.id, "review")) or {}
         receipt["fix_lane"] = fix_id
@@ -920,7 +922,7 @@ def fix_round_commands(records: Iterable[Record], alongside: Iterable[str] = ())
     if len(parents) == 1:
         [parent] = landed
         ticket = parent["ticket"]
-        if parent["status"] in ("landed", "released") and parent.get("worktree") and os.path.isdir(parent["worktree"]):
+        if lifecycle.awaiting_done(parent) and parent.get("worktree") and os.path.isdir(parent["worktree"]):
             lines.append(f"{prog} review {parent['id']} --fix-lane")
     lines.append(f"{prog} start <fix-id> --fix-of {','.join(parents)} --ticket {ticket} --claims <paths> --create")
     return lines

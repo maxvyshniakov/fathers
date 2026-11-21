@@ -13,11 +13,10 @@ import sys
 import time
 from typing import Any
 
-from . import config, state
+from . import config, lifecycle, state
 from .state import Record
 
 TARGETS = ("registered", "landed", "done")
-LIVE = ("planned", "active", "landed", "released")
 DEFAULT_TIMEOUT = 3600.0
 FIRST, GROWTH, LONGEST = 0.2, 1.5, 5.0
 REACHED, TIMEOUT, NEVER, INTERRUPTED = 0, 75, 3, 130
@@ -29,19 +28,19 @@ def reached(record: Record | None, target: str, first: Record | None) -> bool | 
     not take for the one awaited."""
     if record is None:
         return False
-    status = record.get("status")
     if target == "registered":
-        if status in LIVE:
+        if lifecycle.live(record):
             return True
-        return status == "done" and not (first is not None and first.get("status") == "done"
-                                          and first.get("created") == record.get("created"))
+        return lifecycle.finished(record) and not (lifecycle.finished(first)
+                                                   and first is not None
+                                                   and first.get("created") == record.get("created"))
     if target == "landed":
-        if status in ("landed", "released"):
+        if lifecycle.awaiting_done(record):
             return True
-        if status == "done":
+        if lifecycle.finished(record):
             return True if record.get("landed") else None
         return False
-    return status == "done"
+    return lifecycle.finished(record)
 
 
 def wait_for(lane_id: str, target: str, timeout: float, *, sleep: Callable[[float], None] = time.sleep,
@@ -75,7 +74,7 @@ def reached_line(lane_id: str, target: str, record: Record) -> str:
         landed: dict[str, Any] = record.get("landed") or {}
         merge = str(landed.get("merge") or "")
         return f"Lane {lane_id} is {status} (merge {merge[:10]})" if merge else f"Lane {lane_id} is {status}"
-    if target == "registered" and status != "done":
+    if target == "registered" and not lifecycle.finished(record):
         where = f", worktree {record['worktree']}" if record.get("worktree") else ""
         return f"Lane {lane_id} is registered ({status}{where})"
     return f"Lane {lane_id} is {status}"

@@ -22,8 +22,8 @@ from __future__ import annotations
 import os
 from typing import Any, cast
 
+from . import lifecycle, state
 from . import results as result_store
-from . import state
 from .errors import LaneError
 from .gitops import git, git_ok
 from .state import Record
@@ -162,7 +162,7 @@ def recheckable(record: Record, store: state.Store) -> tuple[Receipt, str, str]:
     """What `recheck` reruns (lanefather.land.recheck), under the state lock: the red smoke receipt, the integration
     worktree and its tip, which holds the merge; else why not."""
     lane_id = record["id"]
-    if record["status"] not in ("landed", "released"):
+    if not lifecycle.awaiting_done(record):
         raise LaneError(f"recheck refused: lane {lane_id} is {record['status']}, not landed")
     smoke = post_merge(record).get("status")
     if smoke != "red":

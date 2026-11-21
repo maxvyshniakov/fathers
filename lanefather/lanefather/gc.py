@@ -26,7 +26,7 @@ import subprocess
 import time
 from typing import Any, cast
 
-from . import config, procs, state, worktrees
+from . import config, lifecycle, procs, state, worktrees
 from .errors import LaneError
 from .gitops import common_dir, git, git_ok, main_checkout, worktree_list
 
@@ -67,7 +67,7 @@ class Project:
             if not targets:
                 result.kept.append({"path": self._root, "reason": "no merge target refs"})
                 return result
-            records = [r for r in self._store.lanes(strict=True) if r.get("status") != "done"]
+            records = [r for r in self._store.lanes(strict=True) if not lifecycle.finished(r)]
             entries = worktree_list(self._root)
             removed: set[str] = set()
             for entry in entries:
@@ -192,7 +192,7 @@ class Project:
             # Termination handlers can change HEAD, ownership or the retention lock. Re-run the entire policy
             # after stopping, rather than duplicating selected predicates from _keep.
             current = next((w for w in worktree_list(self._root) if w["path"] == path), None)
-            records = [r for r in self._store.lanes(strict=True) if r.get("status") != "done"]
+            records = [r for r in self._store.lanes(strict=True) if not lifecycle.finished(r)]
             reason = self._keep(current, targets, records) if current else "worktree disappeared"
             if reason:
                 raise LaneError(f"retained after process cleanup: {reason}")

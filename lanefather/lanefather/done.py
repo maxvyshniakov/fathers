@@ -22,7 +22,7 @@ import sys
 import time
 from typing import Any, cast
 
-from . import config, host, journal, postmerge, procs, registry, review, state, tickets, worktrees
+from . import config, host, journal, lifecycle, postmerge, procs, registry, review, state, tickets, worktrees
 from .errors import LaneError
 from .gitops import dirty, git, git_ok, main_checkout, worktree_lock
 from .state import Record
@@ -81,13 +81,14 @@ def keep(args: Any) -> int:
     store = state.Store(config.current())
     prog = store.project.command
     with store.locked("state"):
-        record = store.load(args.id)
-        if record["status"] == "done":
-            raise LaneError(f"lane {args.id} is already done")
-        record["keep"] = not args.off
-        if record.get("landed"):
-            record["landed"]["keep"] = not args.off
-        store.save(record)
+        def _set_keep(record: Record) -> None:
+            if lifecycle.finished(record):
+                raise LaneError(f"lane {args.id} is already done")
+            record["keep"] = not args.off
+            if record.get("landed"):
+                record["landed"]["keep"] = not args.off
+
+        record = store.update(args.id, _set_keep)
         journal.ledger(f"{'unkeep' if args.off else 'keep'} {args.id}", kind="lane.kept", lane=record,
                        details={"keep": not args.off}, directory=store.directory, project=store.project)
     if args.off:
@@ -103,7 +104,7 @@ def unfinished(record: Record, store: state.Store) -> str | None:
     """None when the lane is finished (fathers#157): landed, its smoke green (or red and cleared by a later green
     run, fathers#167), its review finished or exempt with every finding (each panel member's) marked, and not kept;
     else why not."""
-    if record["status"] not in ("landed", "released"):
+    if not lifecycle.awaiting_done(record):
         return f"it is {record['status']}"
     smoke = field(record, "post_merge").get("status")
     if smoke != "green" and not (smoke == "red" and postmerge.clearing(record, store)):
@@ -130,7 +131,7 @@ def finish_landed(lane_id: str, keep: bool) -> None:
     store = state.Store(config.current())
     prog = store.project.command
     record = store.load(lane_id)
-    if record["status"] == "done":
+    if lifecycle.finished(record):
         # land and the lane's review both finish a reviewed lane; whichever comes second has nothing left to do.
         return
     if keep or kept(record):
@@ -148,12 +149,15 @@ def finish_landed(lane_id: str, keep: bool) -> None:
     if lock is not None:
         with store.locked("state"):
             record = store.load(lane_id)
-            record.update(status="released", released=journal.now())
-            store.save(record)
-            journal.ledger(f"release {lane_id}: worktree {worktree} is locked ({lock}); "
-                           "lane cap space and claims freed", kind="lane.released", lane=record,
-                           details={"worktree": worktree, "lock": lock}, directory=store.directory,
-                           project=store.project)
+            if lifecycle.finished(record):
+                return
+            lifecycle.transition(
+                store, lane_id, "release",
+                released=journal.now(),
+                ledger_message=f"release {lane_id}: worktree {worktree} is locked ({lock}); "
+                               "lane cap space and claims freed",
+                ledger_details={"worktree": worktree, "lock": lock},
+            )
         print(f"Lane {lane_id} released: it no longer counts toward the lane cap or holds claims. "
               f"Its agent still holds {worktree} "
               f"(locked: {lock}); once the agent exits, remove it with {prog} done {lane_id}")
@@ -183,7 +187,7 @@ def holders(record: Record, store: state.Store, scanner: Any, main: str, *, unat
     worktree = record.get("worktree")
     refusals: list[str] = []
     # A fix lane works in its parent's worktree (review --fix-lane): it keeps the worktree while not done.
-    sharing = [r["id"] for r in store.lanes() if r["id"] != lane_id and r.get("status") != "done"
+    sharing = [r["id"] for r in store.lanes() if r["id"] != lane_id and not lifecycle.finished(r)
                and worktree and r.get("worktree") == worktree]
     if sharing:
         refusals.append(f"lane {', '.join(sharing)} works in {worktree} too")
@@ -283,7 +287,7 @@ def finish(lane_id: str, force_reason: str | None, store: state.Store | None = N
     with store.locked("state"):
         record = store.load(lane_id)
         refusals: list[str] = []
-        if record["status"] == "done":
+        if lifecycle.finished(record):
             if unattended:
                 return 0
             raise LaneError(f"lane {lane_id} is already done")
@@ -298,7 +302,7 @@ def finish(lane_id: str, force_reason: str | None, store: state.Store | None = N
         if not integration or not os.path.isdir(integration):
             integration = None
         cleared: dict[str, Any] | None = None
-        if record["status"] not in ("landed", "released"):
+        if not lifecycle.awaiting_done(record):
             refusals.append(f"lane {lane_id} is {record['status']}, not landed")
         elif (field(record, "post_merge").get("status") == "red"
               and not (cleared := postmerge.clearing(record, store, integration))):
@@ -315,7 +319,7 @@ def finish(lane_id: str, force_reason: str | None, store: state.Store | None = N
             refusals.append(f"its integration worktree {named or '(none)'} is gone: nothing to check its "
                             "commits against")
         tip = git(main, "rev-parse", "--verify", "--quiet", record["branch"], check=False)
-        if (integration and tip and record["status"] in ("landed", "released")
+        if (integration and tip and lifecycle.awaiting_done(record)
                 and not git_ok(integration, "merge-base", "--is-ancestor", tip, "HEAD")):
             refusals.append(f"{record['branch']} has commits that are not in {integration}")
         scanner = procs.source(project)
@@ -341,16 +345,16 @@ def finish(lane_id: str, force_reason: str | None, store: state.Store | None = N
         holding = git(integration, "rev-parse", "HEAD") if integration else None
         freed, removed = remove(record, store, scanner, main, leftover, lock, verb="done", holding=holding,
                                 overridden=bool(force_reason))
-        record.update(status="done", done=journal.now(), freed_bytes=freed)
-        if cleared:
-            record["post_merge"]["cleared_by"] = cleared
-        store.save(record)
-        journal.ledger(f"done {lane_id} freed={freed // 2**20} MiB removed={' '.join(removed) or '-'}"
-                       + (f" post-merge red cleared by {postmerge.words(cleared)}" if cleared else ""),
-                       kind="lane.done", lane=record,
-                       details={"freed_bytes": freed, "removed": removed,
-                                **({"post_merge_cleared_by": cleared} if cleared else {})},
-                       directory=store.directory, project=project)
+        lifecycle.transition(
+            store, lane_id, "finish",
+            force=bool(force_reason),
+            done=journal.now(), freed_bytes=freed,
+            post_merge_cleared_by=cleared,
+            ledger_message=(f"done {lane_id} freed={freed // 2**20} MiB removed={' '.join(removed) or '-'}"
+                            + (f" post-merge red cleared by {postmerge.words(cleared)}" if cleared else "")),
+            ledger_details={"freed_bytes": freed, "removed": removed,
+                            **({"post_merge_cleared_by": cleared} if cleared else {})},
+        )
     print(f"Lane {lane_id} done: claims released, {freed / 1e9:.1f} GB freed"
           + (f"; its red post-merge smoke was cleared by {postmerge.words(cleared)}" if cleared else ""))
     print_removed(removed)
@@ -385,9 +389,9 @@ def drop(args: Any) -> int:
     project, prog, lane_id = store.project, store.project.command, args.id
     with store.locked("state"):
         record = store.load(lane_id)
-        if record["status"] in ("landed", "released"):
+        if lifecycle.awaiting_done(record):
             raise LaneError(f"drop refused: lane {lane_id} is {record['status']}: {prog} done {lane_id} finishes it")
-        if record["status"] not in ("planned", "active"):
+        if not lifecycle.occupying(record):
             raise LaneError(f"drop refused: lane {lane_id} is already {record['status']}")
         common = record.get("common_dir")
         if not common or not os.path.isdir(common):
@@ -426,13 +430,15 @@ def drop(args: Any) -> int:
                             "commits on the lane first; drop removes only a lane that adds nothing")
         why = whys[0] if whys else "no branch and no commits"
         freed, removed = remove(record, store, scanner, main, leftover, lock, verb="drop", holding=bases[0][1])
-        record.update(status="done", done=journal.now(), freed_bytes=freed,
-                      dropped={"at": journal.now(), "why": why, "tip": tip, "base": bases[0][1]})
-        store.save(record)
-        journal.ledger(f"drop {lane_id}: {why} freed={freed // 2**20} MiB removed={' '.join(removed) or '-'}",
-                       kind="lane.dropped", lane=record,
-                       details={"why": why, "tip": tip, "base": bases[0][1], "freed_bytes": freed,
-                                "removed": removed}, directory=store.directory, project=project)
+        now = journal.now()
+        lifecycle.transition(
+            store, lane_id, "drop",
+            done=now, freed_bytes=freed,
+            dropped={"at": now, "why": why, "tip": tip, "base": bases[0][1]},
+            ledger_message=f"drop {lane_id}: {why} freed={freed // 2**20} MiB removed={' '.join(removed) or '-'}",
+            ledger_details={"why": why, "tip": tip, "base": bases[0][1], "freed_bytes": freed,
+                            "removed": removed},
+        )
     print(f"Lane {lane_id} dropped ({why}): claims released, {freed / 1e9:.1f} GB freed")
     print_removed(removed)
     return 0
@@ -467,7 +473,7 @@ def finish_finished(dry_run: bool, *, skip_auto_off: bool) -> tuple[int, int, li
             continue
         for record in records:
             key = (str(where.directory), str(record.get("id")))
-            if key in seen or record.get("status") not in ("landed", "released"):
+            if key in seen or not lifecycle.awaiting_done(record):
                 continue
             seen.add(key)
             try:
