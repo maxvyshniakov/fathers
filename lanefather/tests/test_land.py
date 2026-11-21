@@ -618,7 +618,7 @@ class SmokeNarrowingTests(LaneCase):
         self.env["FIXTURE_RUST"] = "1.99.0"
         self.lane("land", "a")
         self.assertEqual(self.verify_runs()[-1], "checks structure-check,lib-check")
-        self.assertEqual(self.post("a")["narrowing"]["reason"], "the Rust toolchain changed since the lane check")
+        self.assertEqual(self.post("a")["narrowing"]["reason"], "the toolchain changed since the lane check")
 
     def test_exact_tree_reuse_skips_plan_bootstrap_before_verify_runs(self):
         # fathers#198: a consumer whose plan adapter bootstraps dependencies (e.g. bun install under a heavy slot)
