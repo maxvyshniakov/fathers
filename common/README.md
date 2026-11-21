@@ -1,12 +1,27 @@
 # common
 
-Code more than one package uses today. The Lanefather and Junkfather installers copy `fathers_common/` into
-the release alongside the tool. In a checkout, links in the package directories expose the same source to Python.
+Code shared across the fathers packages (`fathers#117`, `fathers#118`, `fathers#119`). Each package's `install.py`
+vendors `fathers_common/` into its immutable release beside the tool's package, so every tool still installs and runs
+standalone; in a checkout, symlinks expose the same `fathers_common/` directory to Python.
 
-- `eventcheck.py`: the validator for the shared event schema, version 1 ([godfather/docs/events.md](../godfather/docs/events.md)).
-  Every package's tests check their `events.jsonl` with it in strict mode. One standard-library file with an MIT
-  header; another project may copy it unchanged and record its SHA-256 beside the copy.
-- `cliconvention.py`: the conformance check of the CLI convention ([docs/cli.md](../docs/cli.md)). Each package's
-  `tests/test_cli_convention.py` runs it against that package's command, with the cases it does not pass yet listed
-  as expected failures. Its own tests are `tests/` here (`python3 -m unittest discover -s common/tests`).
-- `fathers_common/cli.py`: the argparse parser Lanefather and Junkfather use for usage errors.
+- `fathers_common/`: the vendored runtime kit (Python 3.9+, standard library only):
+  - `cli.py`: `UsageParser` — the `argparse` subclass that turns option errors into CLI-convention usage errors.
+  - `errors.py`: `Refused`, `Usage`, `say`, `pointer`, `refuse`, and the shared exit-code constants (`docs/cli.md`).
+  - `atomic.py`: `atomic_write`, `atomic_symlink`, `sync_directory` — unique temp file, `fsync`, rename, dir `fsync`,
+    and temp cleanup on failure.
+  - `events.py`: schema-v1 event sanitizer, encoder, and bounded-lock rotating log writer
+    ([godfather/docs/events.md](../godfather/docs/events.md)).
+  - `changelog.py`: shared `changelog --json` parser and contract builder
+    ([godfather/docs/contracts/changelog.md](../godfather/docs/contracts/changelog.md)).
+  - `installer.py`: shared release installer primitives (interpreter validation, Git checkout/dirty checks, source
+    digests, immutable release staging, atomic symlink switching, and rollback-safe wrapper swapping).
+- `eventcheck.py`: standalone validator for the shared event schema, version 1. Every package's tests check their
+  `events.jsonl` with it in strict mode.
+- `cliconvention.py`: conformance harness for [docs/cli.md](../docs/cli.md).
+
+Run `common`'s checks from the repository root:
+
+```sh
+python3 tools/checks.py run "common lint"
+python3 tools/checks.py run "common tests"
+```
