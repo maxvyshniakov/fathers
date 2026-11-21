@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+from typing import Any, Optional
 import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -779,3 +780,125 @@ class PackageInstallTests(unittest.TestCase):
         for path in release.rglob('*'):
             self.assertEqual(0o755 if path.is_dir() else 0o644, path.stat().st_mode & 0o777,
                              f'{path}: service users must read code but cannot replace it')
+
+    def _install_version(self, tag: str, *, broken: Optional[str] = None) -> subprocess.CompletedProcess[str]:
+        package = self.source / 'src' / 'slotfather'
+        if not package.exists():
+            self.package()
+        if broken == 'version':
+            body = (
+                'import sys\n'
+                'def main():\n'
+                '    if "--version" in sys.argv:\n'
+                '        print("broken version", file=sys.stderr)\n'
+                '        return 1\n'
+                '    print("{}")\n'
+                '    return 0\n'
+            )
+        elif broken == 'capabilities':
+            body = (
+                'import sys\n'
+                'def main():\n'
+                '    if "capabilities" in sys.argv:\n'
+                '        print("not-json")\n'
+                '        return 0\n'
+                '    print("slotfather 0.1.0")\n'
+                '    return 0\n'
+            )
+        else:
+            body = (
+                'from pathlib import Path\nimport json, sys\nfrom . import config\n'
+                'def main():\n'
+                f'    if "--version" in sys.argv:\n        print("slotfather 0.1.0-{tag}")\n        return 0\n'
+                f'    print(json.dumps({{"v": 1, "tag": {tag!r}, "state": config.DEFAULT_DIR, '
+                '"cgroup": config.DEFAULT_CGROUP, '
+                '"version": json.loads(Path(__file__).with_name("version.json").read_text())}))\n'
+                '    return 0\n'
+            )
+        (package / 'cli.py').write_text(body)
+        return self.run_install('--python', sys.executable)
+
+    def test_failed_smoke_check_swaps_nothing(self):
+        first = self._install_version('v1')
+        self.assertEqual(0, first.returncode, first.stdout + first.stderr)
+        before = {name: (self.bin / name).read_bytes() for name in ('slotfather', 'slotfather-stats', 'slotfather-sweep')}
+        for broken in ('version', 'capabilities'):
+            with self.subTest(broken=broken):
+                failed = self._install_version(f'bad-{broken}', broken=broken)
+                self.assertEqual(2, failed.returncode, failed.stdout + failed.stderr)
+                self.assertIn('smoke check failed', failed.stderr)
+                after = {name: (self.bin / name).read_bytes() for name in before}
+                self.assertEqual(before, after, 'existing wrappers must stay untouched when smoke fails')
+
+    def test_wrapper_swap_failure_restores_previous_set(self):
+        import importlib.util
+        first = self._install_version('v1')
+        self.assertEqual(0, first.returncode, first.stdout + first.stderr)
+        before = {name: (self.bin / name).read_bytes() for name in ('slotfather', 'slotfather-stats', 'slotfather-sweep')}
+        spec = importlib.util.spec_from_file_location('slotfather_swap_test', self.source / 'install.py')
+        assert spec and spec.loader
+        module: Any = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        original_install_binary = module.install_binary
+        calls = 0
+
+        def fail_on_second(source: Path, target: Path, python: str, state: Optional[Path] = None,
+                           cgroup: Optional[str] = None) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError('disk full on second wrapper')
+            original_install_binary(source, target, python, state, cgroup)
+
+        module.install_binary = fail_on_second
+        (self.source / 'src/slotfather/cli.py').write_text(
+            'import json, sys\ndef main():\n    print("slotfather 0.1.0-v2" if "--version" in sys.argv else json.dumps({"v": 1, "tag": "v2"}))\n    return 0\n')
+        with self.assertRaises(module.InstallError) as ctx:
+            module.install(self.home, self.source / 'slotfather', sys.executable)
+        self.assertIn('restored previous commands', str(ctx.exception))
+        after = {name: (self.bin / name).read_bytes() for name in before}
+        self.assertEqual(before, after, 'first swapped wrapper must be rolled back on second failure')
+
+    def test_rollback_restores_previous_release_and_refuses_when_none_left(self):
+        self.assertEqual(0, self._install_version('v1').returncode)
+        self.assertEqual(0, self._install_version('v2').returncode)
+        current = subprocess.run([str(self.bin / 'slotfather'), '--version'], env=self.env, capture_output=True, text=True, check=True)
+        self.assertIn('v2', current.stdout)
+        rolled = self.run_install('--rollback')
+        self.assertEqual(0, rolled.returncode, rolled.stdout + rolled.stderr)
+        self.assertIn('Rolled back', rolled.stdout)
+        after = subprocess.run([str(self.bin / 'slotfather'), '--version'], env=self.env, capture_output=True, text=True, check=True)
+        self.assertIn('v1', after.stdout)
+        again = self.run_install('--rollback')
+        self.assertEqual(2, again.returncode)
+        self.assertIn('no previous release', again.stderr)
+
+    def test_prune_keeps_current_previous_and_in_use_releases(self):
+        self.assertEqual(0, self._install_version('v1').returncode)
+        releases = self.home / '.local/lib/slotfather/releases'
+        r1 = next(releases.iterdir())
+        self.assertEqual(0, self._install_version('v2').returncode)
+        r2 = next(p for p in releases.iterdir() if p != r1)
+        self.assertEqual(0, self._install_version('v3').returncode)
+        r3 = next(p for p in releases.iterdir() if p not in (r1, r2))
+        self.assertEqual(0, self._install_version('v4').returncode)
+        r4 = next(p for p in releases.iterdir() if p not in (r1, r2, r3))
+        # Start a live process running from r1 (older than previous=r3, current=r4); r2 is unused and should be pruned.
+        holder = subprocess.Popen([sys.executable, '-c', f'import time; _ = {str(r1)!r}; time.sleep(60)'])
+        self.addCleanup(lambda: (holder.terminate(), holder.wait()))
+        pruned = self.run_install('--prune')
+        self.assertEqual(0, pruned.returncode, pruned.stdout + pruned.stderr)
+        remaining = {p.name for p in releases.iterdir() if p.is_dir()}
+        self.assertEqual({r1.name, r3.name, r4.name}, remaining)
+        self.assertFalse(r2.exists(), 'unused older release must be pruned')
+        self.assertIn('spared 1 in-use', pruned.stdout)
+
+    def test_uninstall_removes_commands_and_releases_and_preserves_state(self):
+        self.assertEqual(0, self._install_version('v1').returncode)
+        (self.new / 'capacity.json').write_text('{"slots":5}\n')
+        result = self.run_install('--uninstall')
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        for name in ('slotfather', 'slotfather-stats', 'slotfather-sweep'):
+            self.assertFalse((self.bin / name).exists())
+        self.assertFalse((self.home / '.local/lib/slotfather').exists())
+        self.assertEqual('{"slots":5}\n', (self.new / 'capacity.json').read_text(), 'queue state must stay')

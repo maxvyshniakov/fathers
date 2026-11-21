@@ -6,6 +6,10 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- `install.py` smoke-checks a staged release (`--version` and `capabilities --json`) before swapping any wrapper,
+  restores the previous wrapper set if a swap fails, and adds `--rollback`, `--prune` (keeping current, previous,
+  and in-use releases), and `--uninstall` (fathers#126).
+
 - A detached measurement session can yield its slots while its only active run waits on a foreground lock.
   Slots stay held for a background lock, a busy sibling or uncertain membership. Slotfather reconsiders a
   recorded wait when a sibling finishes, and a lock command waits for a grant before starting work. (fathers#183)

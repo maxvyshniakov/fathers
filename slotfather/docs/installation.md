@@ -18,6 +18,32 @@ The installed commands run on the interpreter that ran the installer: their `#!/
 The installer takes the queue's lock for the swap. Clients hold it for moments at a time, so a held lock is retried
 for 15 seconds (`SLOTFATHER_INSTALL_LOCK_WAIT`) before the installer refuses, having changed nothing.
 
+Before replacing any command wrapper, the installer runs a smoke check (`--version` and `capabilities --json`) against
+the newly staged release; if the smoke check fails, nothing is swapped. The three wrappers (`slotfather`,
+`slotfather-stats`, `slotfather-sweep`) are replaced together, and if any swap fails the previous set is restored.
+
+## Upgrade, rollback, prune and uninstall
+
+```sh
+python3 install.py               # upgrade: smoke-checks new release, swaps all three wrappers
+python3 install.py --rollback    # switch wrappers back to the previous release
+python3 install.py --prune       # remove old releases, keeping current, previous, and any in-use release
+python3 install.py --uninstall   # remove installed commands and unused releases; keeps queue state
+```
+
+- **Upgrade**: re-running `install.py` stages a new immutable release under `lib/slotfather/releases/`, verifies it
+  with `--version` and `capabilities --json`, and swaps the three wrappers while recording the previous release in
+  `lib/slotfather/history.json`. Running processes keep using the release they started with.
+- **Rollback**: `--rollback` smoke-checks the previous release from `history.json` and swaps all three wrappers back to
+  it. It refuses if no previous release is recorded or its directory is gone.
+- **Prune**: `--prune` deletes older release directories while keeping the current release, the previous release, any
+  release referenced by installed wrappers, and any release a live process is still running from.
+- **Uninstall**: `--uninstall` removes the installed commands (`slotfather`, `slotfather-stats`, `slotfather-sweep`)
+  and unused release directories (sparing any in-use release with a note on stderr). Queue state under
+  `~/.local/state/slotfather` is preserved.
+
+All four operations accept `--user NAME`, `--bin DIR` and `--host SSH_ALIAS`.
+
 ## Request-format cutover
 
 Update callers before replacing the installed runtime: priority is a top-level
