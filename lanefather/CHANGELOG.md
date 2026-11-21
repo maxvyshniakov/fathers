@@ -187,6 +187,11 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- `lanefather land` checks exact-tree green receipt reuse before running `plan_for` (fathers#198): when the merge
+  tree matches the lane's current green receipt under the same toolchain and platform and the receipt covers every
+  post-merge check, land takes the skip path without invoking the plan adapter's dependency bootstrap; when plan
+  preparation is genuinely required, land prints the preparation stage, reason and `queue: slotfather status`.
+
 - Usage errors follow argparse's handling of option values. A quoted merge message or force reason starting with
   a dash works again (fathers#175).
 

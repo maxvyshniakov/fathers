@@ -191,6 +191,62 @@ def lane_basis(receipt: dict[str, Any] | None, landed: dict[str, Any], toolchain
     return None
 
 
+def exact_tree_reuse(checkout: Any, receipt: dict[str, Any] | None, landed: dict[str, Any], merge_tree: str,
+                     previous: str, toolchain: Any, worktree: Any = None,
+                     ) -> tuple[dict[str, dict[str, Any]] | None, dict[str, Any] | None, dict[str, Any], str | None]:
+    """Check whether the lane's green receipt already covers the exact merge tree before running `plan_for`
+    (fathers#198). A consumer whose plan adapter bootstraps dependencies (such as bun install under a heavy slot)
+    would otherwise wait in the slot queue only to discover that nothing needs to run.
+
+    Returns (lane_verified, narrowing, reasons, fallback_reason). When `lane_verified` is not None, every check the
+    post-merge selection would run already passed on this exact merge tree under the same toolchain and platform;
+    otherwise `fallback_reason` names why plan preparation is still required."""
+    reason = lane_basis(receipt, landed, toolchain, worktree)
+    if reason or receipt is None:
+        return None, None, {}, reason or "the lane has no receipt"
+    if merge_tree != receipt["tree"]:
+        return None, None, {}, f"merge tree {merge_tree[:10]} differs from lane receipt {receipt['tree'][:10]}"
+    results: dict[str, Any] = receipt["check_results"]
+    passed = {c for c, e in results.items() if e.get("status") == "passed"}
+    receipt_base = receipt.get("base")
+    same_base = bool(receipt_base) and (
+        receipt_base == previous
+        or (gitops.git_ok(checkout, "cat-file", "-e", f"{receipt_base}^{{tree}}")
+            and gitops.git(checkout, "rev-parse", f"{previous}^{{tree}}")
+            == gitops.git(checkout, "rev-parse", f"{receipt_base}^{{tree}}")))
+    ids = smoke_checks(checkout)
+    found = module(checkout)
+    rows: Rows
+    if ids and found is not None:
+        if same_base and set(receipt.get("suites") or ()) <= {"structure"} and receipt.get("selection") is not None:
+            rows = list(receipt["selection"])
+        else:
+            try:
+                every = found.checks(Path(checkout), Path("/nonexistent"), set(found.SUITES), True, False, 4,
+                                     bundle=False)
+            except Exception:
+                return None, None, {}, "plan module could not list smoke checks"
+            suite = {check.id: check.suite for check in every}
+            order = {s: n for n, s in enumerate(found.SUITES)}
+            rows = sorted([{"id": i, "suite": suite[i], "paths": []} for i in ids if i in suite],
+                          key=lambda row: order.get(row["suite"], len(order)))
+    else:
+        if receipt.get("selection") is None:
+            return None, None, {}, "the lane's receipt has no per-check selection"
+        if not receipt.get("full") and not same_base:
+            return None, None, {}, "merge base differs from the lane receipt's base"
+        rows = list(receipt["selection"])
+    missing = [row["id"] for row in rows if row["id"] not in passed]
+    if missing:
+        listed = ", ".join(missing[:3]) + ("..." if len(missing) > 3 else "")
+        return None, None, {}, f"lane receipt did not verify {listed}"
+    lane_verified = {row["id"]: dict(results[row["id"]], reused_from=results[row["id"]].get("reused_from")
+                                     or receipt["tree"]) for row in rows}
+    narrowing = {"receipt_tree": receipt["tree"], "receipt_head": receipt.get("head"), "lane_tip": landed["tip"],
+                 "narrowed": True, "integration_paths": [], "dropped": list(lane_verified)}
+    return lane_verified, narrowing, dict(receipt.get("reasons") or {}), None
+
+
 def narrow_smoke(checkout: Any, receipt: dict[str, Any] | None, landed: dict[str, Any], merge_tree: str, kind: str,
                  rows: Rows | None, worktree: Any = None) -> tuple[str, Rows | None, dict[str, Any]]:
     """The part of the post-merge selection `rows` that the merge still needs after the lane's green receipt

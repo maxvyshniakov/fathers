@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+from typing import Any
 import unittest
 
 from support import RUST_STUB, LaneCase, load_lane, project
@@ -440,7 +441,7 @@ class SmokeNarrowingTests(LaneCase):
     """#640: a post-merge smoke runs only what the merge changed beyond the tree the lane's green receipt verified.
     56 of 200 post-merge trees equalled their lane's receipt tree, and smokes took 71.5 h of receipt time."""
 
-    def post(self, lane_id):
+    def post(self, lane_id: str) -> dict[str, Any]:
         return json.loads((self.state / f"{lane_id}.post-merge.json").read_text())
 
     def receipt(self, lane_id):
@@ -615,6 +616,42 @@ class SmokeNarrowingTests(LaneCase):
         self.lane("land", "a")
         self.assertEqual(self.verify_runs()[-1], "checks structure-check,lib-check")
         self.assertEqual(self.post("a")["narrowing"]["reason"], "the Rust toolchain changed since the lane check")
+
+    def test_exact_tree_reuse_skips_plan_bootstrap_before_verify_runs(self):
+        # fathers#198: a consumer whose plan adapter bootstraps dependencies (e.g. bun install under a heavy slot)
+        # must not be invoked when the lane's green receipt already covers the exact merge tree.
+        bootstrap_log = self.tmp / "plan-bootstrap.log"
+        # Wrap verify.sh to log every --plan call, and remove plan_module so the consumer looks like Repo-Kit.
+        config = (self.integration / ".lanefather.toml").read_text().replace(
+            'plan_module = "tools/verification_plan.py"\n', "")
+        verify = (self.integration / "verify.sh").read_text().replace(
+            'if args[:1] == ["--changed"]:\n',
+            f'if args[:1] == ["--changed"]:\n    open({str(bootstrap_log)!r}, "a").write(str(root) + "\\n")\n')
+        self.commit(self.integration, {".lanefather.toml": config, "verify.sh": verify},
+                    "log plan bootstrap without plan_module")
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        # check called --plan once in the lane worktree.
+        self.assertEqual(len(bootstrap_log.read_text().splitlines()), 1)
+        output = self.lane("land", "a")
+        # Exact merge tree: land skips plan_for completely, so no second bootstrap occurs.
+        self.assertEqual(len(bootstrap_log.read_text().splitlines()), 1)
+        self.assertIn("no plan bootstrap needed", output)
+        self.assertEqual(self.post("a")["kind"], "skip")
+        self.assertEqual(self.post("a")["status"], "green")
+
+        # When the merge tree differs (integration moved), land prints preparation progress and calls plan_for.
+        worktree_b = self.created("b", "calls/**")
+        self.commit(worktree_b, {"calls/main.txt": "foo\n\n"})
+        self.lane("check", "b")
+        before_land = len(bootstrap_log.read_text().splitlines())
+        self.integration_moves()
+        output_b = self.lane("land", "b")
+        self.assertGreater(len(bootstrap_log.read_text().splitlines()), before_land)
+        self.assertIn("preparing post-merge plan for b", output_b)
+        self.assertIn("queue: slotfather status", output_b)
+        self.assertEqual(self.post("b")["status"], "green")
 
 
 if __name__ == "__main__":
