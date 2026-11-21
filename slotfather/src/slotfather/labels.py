@@ -8,13 +8,14 @@ one family as before, while estimates still prefer the whole label.
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import re
 import shlex
 import subprocess
 import tempfile
-from typing import Any, Callable
+from typing import Any, Callable, Mapping, cast
 
 from . import config as _config
 
@@ -423,3 +424,80 @@ def git(cwd: str) -> dict[str, Any] | None:
     if changed.returncode:
         return None
     return {"head": lines[0], "tree": lines[1], "dirty": bool(changed.stdout.strip())}
+
+
+# Auto-tags for `slotfather run` (fathers#11): lane and agent_session metadata, trimmed to limits.
+
+def detect_lane(cwd: str, env: Mapping[str, str] | None = None) -> str | None:
+    """Detect the Lanefather lane for `cwd` from LANEFATHER_LANE, a worktree's `.claude/worktrees/lane-*` path,
+    or a `.lanefather.json` / `.lanefather/lane.json` record walking up from `cwd`."""
+    source = os.environ if env is None else env
+    from_env = source.get("LANEFATHER_LANE")
+    if isinstance(from_env, str) and from_env.strip():
+        return from_env.strip()
+    if not cwd:
+        return None
+    for candidate in (cwd, os.path.realpath(cwd)):
+        parts = Path(candidate).parts
+        for idx in range(len(parts) - 2):
+            if parts[idx] == ".claude" and parts[idx + 1] == "worktrees" and parts[idx + 2].startswith("lane-"):
+                name = parts[idx + 2][len("lane-"):].strip()
+                if name:
+                    return name
+        current = Path(candidate)
+        for directory in (current, *current.parents):
+            for rel in (".lanefather.json", os.path.join(".lanefather", "lane.json")):
+                record_path = directory / rel
+                if record_path.is_file():
+                    try:
+                        data: object = json.loads(record_path.read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        continue
+                    if isinstance(data, dict):
+                        record = cast(dict[str, Any], data)
+                        val: object = record.get("id") or record.get("lane")
+                        if isinstance(val, str) and val.strip():
+                            return val.strip()
+    return None
+
+
+def detect_agent_session(env: Mapping[str, str] | None = None) -> str | None:
+    """Detect the Claude Code agent session id from CLAUDE_CODE_SESSION_ID."""
+    source = os.environ if env is None else env
+    value = source.get("CLAUDE_CODE_SESSION_ID")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def trim_meta_value(value: str, limit: int = _config.META_VALUE_MAX) -> tuple[str, bool]:
+    """Normalize and trim an auto-generated metadata value to `limit` printable characters: (value, was_trimmed)."""
+    cleaned = CONTROL.sub(" ", value).strip()
+    if len(cleaned) > limit:
+        return cleaned[:limit], True
+    return cleaned, cleaned != value
+
+
+def auto_tags(cwd: str, caller_meta: Mapping[str, str] | None = None, *,
+              env: Mapping[str, str] | None = None) -> tuple[dict[str, str], list[str]]:
+    """Merge auto-detected `lane` and `agent_session` tags into `caller_meta` without overwriting caller keys.
+    Caller metadata is assumed already validated; auto-tags are trimmed to META_VALUE_MAX and dropped with a
+    warning when adding them would exceed META_KEYS_MAX (fathers#11)."""
+    merged: dict[str, str] = dict(caller_meta or {})
+    if env is None and (_config.setting("AUTO_TAGS") or "1") == "0":
+        return merged, []
+    warnings: list[str] = []
+    candidates = (("lane", detect_lane(cwd, env)), ("agent_session", detect_agent_session(env)))
+    for key, raw in candidates:
+        if not raw or key in merged:
+            continue
+        if len(merged) >= _config.META_KEYS_MAX:
+            warnings.append(f"auto-tag {key!r} dropped: metadata already has {_config.META_KEYS_MAX} keys")
+            continue
+        cleaned, trimmed = trim_meta_value(raw)
+        if not cleaned:
+            continue
+        if trimmed:
+            warnings.append(f"auto-tag {key!r} trimmed to {_config.META_VALUE_MAX} characters")
+        merged[key] = cleaned
+    return merged, warnings

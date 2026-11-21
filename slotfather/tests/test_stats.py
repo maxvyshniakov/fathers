@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 import unittest
 
 from test_slotfather import TOOL, SlotCase
@@ -24,11 +25,11 @@ def v2(label, cmd, count, waited, ran, cpu, ended="2026-11-02T12:00:00Z", **extr
 
 
 class StatsTests(SlotCase):
-    def write(self, name, items):
+    def write(self, name: str, items: list[Any]) -> None:
         self.state.mkdir(parents=True, exist_ok=True)
         (self.state / name).write_text("".join(json.dumps(i) + "\n" for i in items))
 
-    def stats(self, *args):
+    def stats(self, *args: str) -> str:
         result = self.tool("stats", *args)
         self.assertEqual(0, result.returncode, result.stderr)
         return result.stdout
@@ -95,6 +96,39 @@ class StatsTests(SlotCase):
         for args in (("--since", "yesterday"), ("--by", "pid"), ("--top",), ("--nonsense",)):
             with self.subTest(args=args):
                 self.assertEqual(2, self.tool("stats", *args).returncode)
+
+    def test_outcomes_four_way_split_in_json_and_text(self) -> None:
+        self.write("history.jsonl", [
+            v2("job", "make test", 1, 5, 100, 100.0, status=0),
+            v2("job", "make test", 1, 5, 80, 80.0, status=1),
+            v2("job", "make test", 1, 10, 50, 50.0, outcome="reaped", was_held=True, status=None),
+            {**v2("job", "make test", 1, 20, 0, 0.0, outcome="reaped", was_held=False, status=None),
+             "granted": None, "ran": None},
+            {**v2("job", "make test", 1, 30, 0, 0.0, outcome="left", reason="timeout", status=None),
+             "granted": None, "ran": None},
+            {**v2("job", "make test", 1, 0, 0, 0.0, outcome="refused", reason="memory", status=None),
+             "granted": None, "ran": None},
+        ])
+        summary = json.loads(self.stats("--json"))
+        overall = summary["overall"]
+        self.assertEqual(2, overall["released"])
+        self.assertEqual(1, overall["exit_nonzero"])
+        self.assertEqual(1, overall["failed"])
+        self.assertEqual(2, overall["reaped"])
+        self.assertEqual(1, overall["reaped_held"])
+        self.assertEqual(1, overall["reaped_waiting"])
+        self.assertEqual(1, overall["left"])
+        self.assertEqual(1, overall["refused"])
+        self.assertEqual({
+            "exit_nonzero": 1,
+            "reaped": {"total": 2, "held": 1, "waiting": 1},
+            "gave_up": 1,
+            "refused": 1,
+        }, overall["outcomes"])
+        group = summary["groups"][0]
+        self.assertEqual(overall["outcomes"], group["outcomes"])
+        text = self.stats()
+        self.assertIn("ran 2 (exit nonzero 1), reaped 2 (1 held, 1 waiting), gave up 1, refused 1", text)
 
 
 class KindTests(unittest.TestCase):

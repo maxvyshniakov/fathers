@@ -35,4 +35,5 @@ def capabilities() -> dict[str, Any]:
     found = changelog()
     if found is not None:
         dashboard["changelog"] = found
-    return {"v": VERSION, "tool": "slotfather", "version": _version.VERSION, "dashboard": dashboard}
+    return {"v": VERSION, "tool": "slotfather", "version": _version.VERSION, "dashboard": dashboard,
+            "features": ["slot-range"], "run": {"slot_range": True}}

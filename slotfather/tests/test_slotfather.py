@@ -47,9 +47,10 @@ class SlotCase(unittest.TestCase):
         self.memory.write_text("8000 1\n")
         # COLORFGBG: the runner's terminal must not pick the dashboard's colours (#14)
         self.env = {k: v for k, v in os.environ.items()
-                    if not k.startswith(("SLOTFATHER", "STRAYLIGHT_SLOT")) and k != "COLORFGBG"}
+                    if not k.startswith(("SLOTFATHER", "STRAYLIGHT_SLOT"))
+                    and k not in ("COLORFGBG", "CLAUDE_CODE_SESSION_ID", "LANEFATHER_LANE")}
         self.env.update(SLOTFATHER_DIR=str(self.state), SLOTFATHER_LEGACY_DIRS="", SLOTFATHER_POLL="0.05", SLOTFATHER_POLL_MAX="0.5",
-                        SLOTFATHER_OVERTAKE_WINDOW="0",
+                        SLOTFATHER_OVERTAKE_WINDOW="0", SLOTFATHER_AUTO_TAGS="0",
                         SLOTFATHER_CORES="12", SLOTFATHER_MEMORY_GIB="64", SLOTFATHER_MEMORY_FILE=str(self.memory),
                         LOG=str(self.log),
                         RELEASE=str(self.release_dir))

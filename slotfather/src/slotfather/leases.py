@@ -390,7 +390,11 @@ def grant(directory: Path, table: _queue.Table) -> str | None:
                                    _settings.order_settings(directory, environment=False), window, p90)
     used = sum(_entry.holds(e, slots) for e in held) + other
     memory = _platform.memory_level() if found.grants else ("normal", None)
-    gated = _schedule.memory_gate(found.grants, held, used, memory, settings)
+    ram_gib = _platform.memory_gib() if (found.grants and used) else None
+    ram_mb = None if ram_gib is None else ram_gib * 1024.0
+    gated = _schedule.memory_gate(found.grants, held, used, memory, settings,
+                                  memory_estimate=_queue.memory_estimator(directory) if ram_mb is not None else None,
+                                  ram_mb=ram_mb, granted_counts=found.granted_counts)
     starting = [entry for entry, why in gated if not why]
     for entry in _schedule.reservations(waiters, keeper):
         if not any(entry is g for g in starting):  # a grant is written below; one memory holds back keeps its own
@@ -421,12 +425,16 @@ def grant(directory: Path, table: _queue.Table) -> str | None:
         waited_from = back if back is not None else _config.seconds(entry.get("since"))
         granted = _config.now()
         began = _config.seconds(granted) or time.time()  # resume() puts a yielded lease's first grant back
-        _entry.to_held(entry, granted, time.time(), pressed=memory[0] != "normal", served=served)
+        take = found.granted_count(entry)
+        _entry.to_held(entry, granted, time.time(), pressed=memory[0] != "normal", served=served, count=take)
         _state.write(paths[id(entry)], entry)
         used += entry["count"]
         details: _events.Granted = {"count": entry["count"], "priority": _entry.priority_of(entry),
                                     "waited": None if waited_from is None else
                                     round(max(0.0, began - waited_from))}
+        if type(entry.get("max_count")) is int:
+            details["min_count"] = int(entry.get("min_count", entry["count"]))
+            details["max_count"] = int(entry["max_count"])
         if served != _entry.priority_of(entry):
             details["served"] = served
         if back is not None:
@@ -466,7 +474,7 @@ def next_sequence(directory: Path) -> int:
 def enqueue(directory: Path, count: int | str, table: _queue.Table, label: str, command: str, cwd: str,
             priority: str, ticket: str | None, meta: dict[str, str], naming: dict[str, str] | None,
             session: dict[str, Any] | None, git: dict[str, Any] | None, yieldable: bool,
-            wait: float | None) -> tuple[Path, int]:
+            wait: float | None, *, max_count: int | None = None) -> tuple[Path, int]:
     """A new request of this process in the queue at `directory`: (its entry's path, the slots it asks, the
     capacity at most). Admission and capacity changes share the queue lock; `all` resolves only now (and again at
     the grant: plan()). A live request of the same session name refuses it."""
@@ -482,7 +490,9 @@ def enqueue(directory: Path, count: int | str, table: _queue.Table, label: str, 
                                             f"{other.get('state')}): stop it first (slotfather session stop "
                                             f"{session['name']})")
         whole = count == "all"
-        count = _settings.total() if whole else min(cast(int, count), _settings.total())
+        cap = _settings.total()
+        count = cap if whole else min(cast(int, count), cap)
+        upper = None if (whole or max_count is None) else max(count, max_count)
         sequence = next_sequence(directory)
         path = directory / "queue" / f"{sequence:010d}-{me}.json"
         own = _settings.order_settings(directory)["yield_after"]
@@ -493,12 +503,14 @@ def enqueue(directory: Path, count: int | str, table: _queue.Table, label: str, 
             # when this client gives up (plan(): a head that would give up before its expected start holds nobody back)
             until=None if wait is None else time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + wait)),
             # this client asks later or never (SLOTFATHER_YIELD_AFTER)
-            yield_after=own if own != _settings.order_settings(directory, environment=False)["yield_after"] else None)
+            yield_after=own if own != _settings.order_settings(directory, environment=False)["yield_after"] else None,
+            max_count=upper)
         _state.write(path, entry)
     return path, count
 
 
-def release(path: Path, count: int, status: int | None, usage: dict[str, Any] | None) -> None:
+def release(path: Path, count: int, status: int | None, usage: dict[str, Any] | None, *,
+            held: bool | None = None, left_reason: str | None = None) -> None:
     """Takes the request at `path` out of the queue, records it in the history (released, or left when it never
     ran), and hands its slots on at once. Its outliers and trends are judged after, outside the queue lock."""
     directory = path.parent.parent
@@ -518,17 +530,20 @@ def release(path: Path, count: int, status: int | None, usage: dict[str, Any] | 
         _idle.path(path).unlink(missing_ok=True)
         if isinstance(entry, dict):
             entry = cast(dict[str, Any], entry)
-            outcome = _entry.outcome(entry)  # a yielded lease ran
-            item = _state.record(directory, entry, outcome, status, usage, path=path, expected=expected,
+            result = _entry.decide_outcome(entry, held_seen=held, status=status, left_reason=left_reason)
+            item = _state.record(directory, entry, result, status, usage, path=path, expected=expected,
                                  capacity=_settings.total, above=_queue.run_above)
-            if outcome == "released":
+            if isinstance(result, _entry.Ran):
                 _events.record(directory, None, "lease.released", _events.request(entry, path),
                                {"count": count, "exit": item.get("status"), "ran": item.get("ran"),
                                 "cpu": item.get("cpu"), "rss_peak_mb": item.get("rss_peak_mb")},
                                _events.holder(entry))
             else:
+                left_details: _events.Left = {"count": count, "gave_up_after": item.get("waited")}
+                if isinstance(result, (_entry.Left, _entry.Refused)):
+                    left_details["reason"] = result.reason
                 _events.record(directory, None, "request.left", _events.request(entry, path),
-                               {"count": count, "gave_up_after": item.get("waited")}, _events.holder(entry))
+                               left_details, _events.holder(entry))
         else:  # the entry was gone already: queue.log has its release, nothing more is known
             _events.record(directory, None, "lease.released", {"type": "request", "id": path.stem},
                            {"count": count, "unknown": True})

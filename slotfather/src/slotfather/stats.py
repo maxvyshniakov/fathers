@@ -43,9 +43,9 @@ class StatsError(Exception):
     pass
 
 
-def percentile(values: list[float], q: float) -> float | None:
+def percentile(values: Iterable[Any], q: float) -> float | None:
     """The q-th percentile (0-100) by linear interpolation, or None for no values."""
-    ordered = sorted(v for v in values if v is not None)
+    ordered: list[float] = sorted(float(v) for v in values if v is not None)
     if not ordered:
         return None
     rank = (len(ordered) - 1) * q / 100
@@ -65,7 +65,7 @@ def parse_since(text: str, moment: float | None = None) -> float:
         raise StatsError(f"--since takes an age like 36h or 7d or a date like 2026-11-02, not {text!r}") from None
 
 
-def wall_of(item: dict) -> float | None:
+def wall_of(item: dict[str, Any]) -> float | None:
     """Seconds the lease held its slots: its wall (else its run) less the time it yielded them back (#643)."""
     value = item.get("wall")
     if not isinstance(value, (int, float)):
@@ -76,24 +76,46 @@ def wall_of(item: dict) -> float | None:
     return max(0.0, float(value) - (float(away) if isinstance(away, (int, float)) else 0.0))
 
 
-def measured(item: dict) -> bool:
+def measured(item: dict[str, Any]) -> bool:
     return isinstance(item.get("cpu"), (int, float)) and bool(wall_of(item))
 
 
-def usage_of(items: list[dict]) -> dict:
+def usage_of(items: list[dict[str, Any]]) -> dict[str, Any]:
     """Waits, runs and use of a set of requests."""
     ran = [i for i in items if i.get("granted") and isinstance(i.get("ran"), (int, float))]
     counted = [i for i in items if measured(i)]
-    cpu = sum(i["cpu"] for i in counted)
-    wall = sum(wall_of(i) for i in counted)
-    slot_wall = sum(wall_of(i) * (i.get("count") or 1) for i in counted)
-    per_lease = [i["cpu"] / wall_of(i) for i in counted]
-    found = {
+    cpu = sum(float(i["cpu"]) for i in counted)
+    wall = sum(wall_of(i) or 0.0 for i in counted)
+    slot_wall = sum((wall_of(i) or 0.0) * (int(i.get("count") or 1)) for i in counted)
+    per_lease = [float(i["cpu"]) / (wall_of(i) or 1.0) for i in counted]
+    exit_nonzero = sum(i.get("outcome") == "released" and i.get("status") not in (0, None) for i in items)
+    reaped_held = sum(
+        i.get("outcome") == "reaped" and (bool(i["was_held"]) if "was_held" in i else bool(i.get("granted")))
+        for i in items
+    )
+    reaped_waiting = sum(
+        i.get("outcome") == "reaped" and not (bool(i["was_held"]) if "was_held" in i else bool(i.get("granted")))
+        for i in items
+    )
+    left_count = sum(i.get("outcome") == "left" for i in items)
+    refused_count = sum(i.get("outcome") == "refused" for i in items)
+    reaped_total = reaped_held + reaped_waiting
+    found: dict[str, Any] = {
         "requests": len(items),
         "released": sum(i.get("outcome") == "released" for i in items),
-        "left": sum(i.get("outcome") == "left" for i in items),
-        "reaped": sum(i.get("outcome") == "reaped" for i in items),
-        "failed": sum(i.get("outcome") == "released" and i.get("status") not in (0, None) for i in items),
+        "left": left_count,
+        "reaped": reaped_total,
+        "reaped_held": reaped_held,
+        "reaped_waiting": reaped_waiting,
+        "refused": refused_count,
+        "exit_nonzero": exit_nonzero,
+        "failed": exit_nonzero,
+        "outcomes": {
+            "exit_nonzero": exit_nonzero,
+            "reaped": {"total": reaped_total, "held": reaped_held, "waiting": reaped_waiting},
+            "gave_up": left_count,
+            "refused": refused_count,
+        },
         "wait_p50": percentile([i.get("waited") for i in items], 50),
         "wait_p90": percentile([i.get("waited") for i in items], 90),
         "run_p50": percentile([i["ran"] for i in ran], 50),
@@ -107,6 +129,10 @@ def usage_of(items: list[dict]) -> dict:
         "cores_per_slot": round(cpu / slot_wall, 2) if slot_wall else None,
         "rss_peak_mb": max((i["rss_peak_mb"] for i in counted if isinstance(i.get("rss_peak_mb"), (int, float))),
                            default=None),
+        "rss_peak_mb_p50": percentile([i.get("rss_peak_mb") for i in counted
+                                       if isinstance(i.get("rss_peak_mb"), (int, float))], 50),
+        "rss_peak_mb_p90": percentile([i.get("rss_peak_mb") for i in counted
+                                       if isinstance(i.get("rss_peak_mb"), (int, float))], 90),
         "rss_mean_mb_p50": percentile([i.get("rss_mean_mb") for i in counted
                                        if isinstance(i.get("rss_mean_mb"), (int, float))], 50),
     }
@@ -144,7 +170,7 @@ def held_time(items: list[dict], since: float | None, until: float, capacity: in
             "all_held": round(full / busy, 3) if busy else None}
 
 
-def machine(samples: list[dict], cores: int, capacity: int) -> dict:
+def machine(samples: list[dict[str, Any]], cores: int, capacity: int) -> dict[str, Any]:
     """The machine while leases ran: each sample stands for the time to the next one, at most GAP seconds."""
     samples = sorted((s for s in samples if isinstance(s.get("at"), (int, float))), key=lambda s: s["at"])
     if not samples:
@@ -306,7 +332,11 @@ def report(summary: dict[str, Any], top: int = 25) -> str:
              + (f" ended {local(summary['first'])} to {local(summary['last'])}" if summary["first"] else "")
              + f" · {summary['cores']} cores, {summary['capacity']} slots "
              + ("(saved; automatic " + str(summary["automatic"]) + ")" if summary["saved"] else "(automatic)")]
-    lines.append(f"ran {o['released']}, gave up {o['left']}, reaped {o['reaped']}, failed {o['failed']} · "
+    reaped_detail = (f" ({o['reaped_held']} held, {o['reaped_waiting']} waiting)"
+                     if o["reaped"] else "")
+    lines.append(f"ran {o['released']} (exit nonzero {o['exit_nonzero']}), "
+                 f"reaped {o['reaped']}{reaped_detail}, "
+                 f"gave up {o['left']}, refused {o['refused']} · "
                  f"wait p50 {span(o['wait_p50'])} p90 {span(o['wait_p90'])} · {o['slot_hours']:.1f} slot-hours held"
                  f" · usage measured for {o['measured']}")
     if h["busy_hours"]:

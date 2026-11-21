@@ -6,6 +6,29 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- `slotfather run -n MIN-MAX` queues as a `MIN`-slot request (scheduling order treats it as `MIN`) and grants up
+  to `MAX` of what is free at grant time. The granted slot count is exported as `SLOTFATHER_SLOTS` and recorded on
+  the entry, in `status --json`, and in the `lease.granted` event; `capabilities --json` advertises `slot-range`
+  support (fathers#128).
+
+- `slotfather run` automatically tags leases with `lane` (from `LANEFATHER_LANE` or the worktree's Lanefather
+  record/path) and `agent_session` (from `CLAUDE_CODE_SESSION_ID`) unless set by the caller, trimming auto-tags
+  to 200 characters and dropping them with a warning at the 16-key limit while still refusing over-limit caller
+  metadata. `run` also exports `SLOTFATHER_LEASE_CORES` (`max(1, floor(min(count, total) * cores / total))`) to
+  the child process (fathers#11).
+
+- Memory-aware admission estimates each request's peak RSS from history by run type, tag, and label family
+  (`estimates.py`), falling back to `memory_default_mb` (default 2048 MB), and defers concurrent grants in
+  `schedule.memory_gate` when held plus candidate expected peaks exceed `memory_share` of RAM (default 0.85,
+  0 disables). `status --json`, the `dashboard` block, and `stats --json` expose the peak memory estimates
+  (fathers#9).
+
+- `slotfather stats` and `stats --json` split request outcomes into four groups: command exit nonzero, reaped
+  (held vs waiting), gave up waiting, and refused. Request outcomes are decided once from what the client observed
+  (`entry.decide_outcome`), so a request granted concurrently at timeout or termination is recorded as `left` with
+  its `reason` rather than `released` and does not feed runtime estimates; reaped lines record `was_held`
+  (fathers#10).
+
 - `install.py` smoke-checks a staged release (`--version` and `capabilities --json`) before swapping any wrapper,
   restores the previous wrapper set if a swap fails, and adds `--rollback`, `--prune` (keeping current, previous,
   and in-use releases), and `--uninstall` (fathers#126).

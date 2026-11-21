@@ -121,6 +121,7 @@ def requests(directory: Path, moment: float) -> list[dict]:
         granted = sf_config.seconds(item.get("granted"))
         request = {"label": item.get("label"), "cmd": item.get("cmd"), "count": item["count"], "arrival": arrival,
                    "run": item.get("ran") if granted is not None else None,
+                   "rss_peak_mb": item.get("rss_peak_mb"),
                    "patience": item.get("waited") if granted is None else None,
                    "waited": item.get("waited"), "source": "history", "outcome": item.get("outcome"),
                    "priority": recorded_priority(item),
@@ -306,6 +307,7 @@ class Replay:
         self.assumed = assumed or {}
         self.classes: list[str] = [recorded_priority(r) or classify(r, slots) for r in requests]
         self.asks = self.yields = 0
+        self.memory_deferred = 0  # grants deferred by expected peak memory (fathers#9)
 
     def run_of(self, request: dict) -> float:
         """The run a request has in the replay: recorded, or for one that never ran the median of its kind over the
@@ -365,6 +367,16 @@ class Replay:
                                  window=sf_config.overtake_window(), p90=self.p90)
         if settings.get("keep"):  # the head keeps its reservation from look to look, as grant() keeps it
             sf_schedule.reservations(waiting, found)
+        policy_dict = cast(dict[str, Any], cast(Any, self).policy)
+        ram_mb: object = policy_dict.get("memory_ram_mb")
+        if isinstance(ram_mb, (int, float)) and ram_mb > 0 and found.grants:
+            used = sum(int(e["count"]) for e in held)
+            gated = sf_schedule.memory_gate(
+                found.grants, held, used, ("normal", None), settings,
+                memory_estimate=lambda e: self.estimates.peak_mb(e.get("label"), e.get("cmd")),
+                ram_mb=float(ram_mb))
+            self.memory_deferred += sum(1 for _, why in gated if why)
+            return [e for e, why in gated if not why]
         return found.grants
 
     def simulate(self) -> list[dict]:
@@ -441,6 +453,10 @@ class Replay:
                 if request.get("outcome") not in sf_config.UNFINISHED or self.policy.get("reaped_estimates"):
                     # history_estimates() leaves reaped leases out (before d9e5904 it counted them)
                     self.estimates.add(entry["label"], entry["cmd"], self.run_of(request))
+                    req_dict = cast(dict[str, Any], request)
+                    peak: object = req_dict.get("rss_peak_mb")
+                    if isinstance(peak, (int, float)) and not isinstance(peak, bool) and peak > 0:
+                        self.estimates.add_memory(entry["label"], entry["cmd"], float(peak))
                 result[number]["ended"] = moment
             elif kind == "yield":
                 if number not in held or number not in asked or generation.get(number) != extra or \
@@ -550,6 +566,7 @@ def measure(requests: list[dict], results: list[dict], start: float, until: floa
                         "delay_total_h": sum(c["delays"]) / 3600}
                  for name, c in classes.items()}
     return {"classes": per_class, "yields": int(yields), "yielded_slot_h": yielded / 3600,
+            "memory_deferred": replay.memory_deferred,
             "requests": len(waits), "total_h": sum(waits) / 3600, "mean_s": sum(waits) / max(1, len(waits)),
             "p90_s": percentile(waits, 90), "max_s": max(waits, default=0),
             "large_mean_s": sum(large) / max(1, len(large)), "large_max_s": max(large, default=0),

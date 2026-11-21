@@ -34,6 +34,7 @@ class SettingsCliTests(SlotCase):
         self.assertEqual(["capacity.mode", "capacity.slots", "capacity.gib_per_slot", "order.order", "order.safety",
                           "order.fallback", "order.overrun", "order.limit", "order.interactive", "order.batch",
                           "order.aging_batch", "order.aging_normal", "order.warn_wait", "order.reservation_timeout",
+                          "order.memory_share", "order.memory_default_mb",
                           "order.idle_cpu", "order.idle_after", "order.yield_after"], list(rows(document)))
         status = {row["label"]: row["value"] for row in document["status"]}
         self.assertEqual("4 total · 4 free · 0 held · 0 waiting", status["slots"])

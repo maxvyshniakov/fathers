@@ -72,7 +72,7 @@ def reap(directory: Path, table: Table) -> list[tuple[Path, dict[str, Any]]]:
             # queue.log first, as before the one writer: a crash before the history keeps the line (fathers#37 review)
             _events.record(directory, f"reaped {entry.get('state')} lease of {entry.get('count')} for "
                            f"{entry.get('label')} (pid {entry.get('pid')} exited)")
-            item = _state.record(directory, entry, _entry.outcome(entry, reaped=True), path=path,
+            item = _state.record(directory, entry, _entry.decide_outcome(entry, reaped=True), path=path,
                                  capacity=_settings.total, above=run_above)
             _events.record(directory, None, "lease.reaped" if _entry.is_held(entry) else "request.reaped",
                            _events.request(entry, path),
@@ -181,5 +181,17 @@ def estimator(directory: Path, p90: bool = False) -> _schedule.Estimate:
         if not loaded:
             from . import estimates as _estimates
             loaded.append(_estimates.p90_estimator(directory) if p90 else _estimates.estimator(directory))
+        return loaded[0](entry)
+    return estimate
+
+
+def memory_estimator(directory: Path) -> _schedule.Estimate:
+    """estimates.memory_estimator(directory), imported lazily on first memory estimate lookup (fathers#9)."""
+    loaded: list[_schedule.Estimate] = []
+
+    def estimate(entry: _schedule.Entry) -> float | None:
+        if not loaded:
+            from . import estimates as _estimates
+            loaded.append(_estimates.memory_estimator(directory))
         return loaded[0](entry)
     return estimate

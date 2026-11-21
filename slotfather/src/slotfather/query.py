@@ -183,7 +183,12 @@ def expected(directory: Path, entries: list[dict[str, Any]], slots: int, other: 
     memory = _platform.memory_level() if found.grants else ("normal", None)
     used = sum(_entry.holds(e, slots) for e in held) + other
     shared = _settings.order_settings(directory, environment=False)  # the queue's rule, not this reader's
-    held_back = {id(e): why for e, why in _schedule.memory_gate(found.grants, held, used, memory, shared) if why}
+    ram_gib = _platform.memory_gib() if (found.grants and used) else None
+    ram_mb = None if ram_gib is None else ram_gib * 1024.0
+    held_back = {id(e): why for e, why in _schedule.memory_gate(
+        found.grants, held, used, memory, shared,
+        memory_estimate=_queue.memory_estimator(directory) if ram_mb is not None else None,
+        ram_mb=ram_mb) if why}
     warn = float(settings.get("warn_wait") or 0)
     # fathers#160: the slots no request takes now, and the leases with no end estimate a head waits on
     idle = max(0, slots - used - sum(_entry.holds(e, slots) for e in found.grants))
@@ -276,6 +281,8 @@ def entry_item(path: Path, entry: dict[str, Any], table: dict[int, tuple[int, st
             "cwd": entry.get("cwd"), "meta": _entry.meta_of(entry), "tree": _lineage.descendants(table, pid),
             "priority": _entry.priority_of(entry), "ticket": _entry.ticket_of(entry),
             "yieldable": bool(entry.get("yieldable")), "yields": int(entry.get("yields") or 0),
+            **({"min_count": entry["min_count"], "max_count": entry["max_count"]}
+               if type(entry.get("max_count")) is int and type(entry.get("min_count")) is int else {}),
             **({"lock": _entry.lock_of(entry)} if _entry.lock_of(entry) is not None else {})}
 
 
@@ -455,11 +462,18 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
         with contextlib.suppress(Exception):
             from . import runtype as _runtype
             known = _runtype.cached(directory)
+    mem_est = _queue.memory_estimator(directory) if (pid is None and live) else None
+    default_mb = float(settings.get("memory_default_mb", _config.ORDER_DEFAULTS["memory_default_mb"]))
     for (_, entry), item in zip(live, entries_found):
         if known is not None:
             with contextlib.suppress(Exception):  # the dashboard's poll never fails for it
                 from . import runtype as _runtype
                 item.update(_runtype.entry_view(entry, known, moment))
+        if mem_est is not None:
+            with contextlib.suppress(Exception):
+                peak = mem_est(entry)
+                item["est_memory_mb"] = round(peak if peak is not None else default_mb, 1)
+                item["est_memory_source"] = "history" if peak is not None else "default"
         item["position"] = places.get(id(entry))  # waiters: their place in the order the queue serves them
         found = expect.get(id(entry))
         aged_to = entry.get("aged") if entry.get("aged") in _config.PRIORITIES else None

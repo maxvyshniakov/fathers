@@ -216,6 +216,8 @@ def checked_order(data: Any) -> dict[str, Any]:
                 raise ValueError(f"{key} must be a number of at least {least:g}, not {value!r}")
             if key == "warning_admits" and value not in (0, 1):
                 raise ValueError(f"warning_admits must be 1 or 0, not {value!r}")
+            if key == "memory_share" and value > 1.0:
+                raise ValueError(f"memory_share must be at most 1, not {value!r}")
         found[key] = value
     return found
 
