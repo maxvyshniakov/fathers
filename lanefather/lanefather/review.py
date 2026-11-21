@@ -814,7 +814,7 @@ def fix_round_commands(records: Iterable[Record], alongside: Iterable[str] = ())
     if len(parents) == 1:
         [parent] = landed
         ticket = parent["ticket"]
-        if parent["status"] in ("landed", "released") and parent.get("worktree"):
+        if parent["status"] in ("landed", "released") and parent.get("worktree") and os.path.isdir(parent["worktree"]):
             lines.append(f"{prog} review {parent['id']} --fix-lane")
     lines.append(f"{prog} start <fix-id> --fix-of {','.join(parents)} --ticket {ticket} --claims <paths> --create")
     return lines

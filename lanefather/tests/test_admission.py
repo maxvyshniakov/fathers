@@ -138,6 +138,19 @@ print(json.dumps(answer))
         self.assertEqual(self.record("next")["overrides"], [])
         self.assertIn("the cap is 1", self.start("blocked", "other/**", ok=False))
 
+    def test_check_uses_slot_admission_at_high_load_while_start_succeeds(self):
+        self.env.update(LANEFATHER_LOAD15="25", LANEFATHER_CORES="6")
+        worktree = self.created("loaded", "lib/loaded.txt")
+        self.commit(worktree, {"lib/loaded.txt": "ok\n"})
+        self.env["FAKE_SLOTFATHER_BUSY"] = "1"
+        blocked = self.lane("check", "loaded", "--wait", "1", ok=False)
+        self.assertIn("slot", blocked.lower())
+        del self.env["FAKE_SLOTFATHER_BUSY"]
+        self.lane("check", "loaded")
+        self.assertEqual(json.loads((self.state / "loaded.receipt.json").read_text())["status"], "green")
+        log_entries = [json.loads(line)["command"] for line in (self.tmp / "slotfather.log").read_text().splitlines() if line]
+        self.assertIn("advise", log_entries)
+
     def test_known_refusals_are_audited_but_claims_remain_non_bypassable(self):
         self.provider()
         self.env["ADMISSION_CAP"] = "1"

@@ -249,6 +249,24 @@ class ReviewGateTests(ReviewGateCase):
         self.assertIn("P3, does not block", self.lane("land", "c"))
         self.assertEqual(self.record("c")["overrides"], [])
 
+        # Plural list summary and fix lane blocked by an unrelated open review.
+        self.review_text.write_text(TWO_FINDINGS)
+        self.lane("review", "c")
+        plural = self.lane("list")
+        self.assertIn("2 finished reviews with unmarked findings:", plural.splitlines()[-1])
+        self.lane("review", "a", "--mark", "1", "rejected:known")  # still has #3, #4 P3; reopen blocking via c
+        self.lane("start", "fix-a", "--fix-of", "a", "--ticket", "1", "--claims", "lib/fix-a.txt", "--create")
+        fix_wt = self.record("fix-a")["worktree"]
+        self.commit(fix_wt, {"lib/fix-a.txt": "fix\n"})
+        self.lane("check", "fix-a")
+        fix_blocked = self.lane("land", "fix-a", ok=False)
+        self.assertIn("--fix-of a,c", fix_blocked)
+        for n in (1, 2):
+            self.lane("review", "c", "--mark", str(n), "rejected:known")
+        for n in (3, 4):
+            self.lane("review", "a", "--mark", str(n), "rejected:known")
+        self.assertEqual(self.lane("list").splitlines()[-1], "0 finished reviews with unmarked findings")
+
     def test_promote_refuses_while_a_finding_is_unmarked_and_moves_dev_once_each_is_marked(self):
         self.landed("clean", "lib/clean.txt", "clean\n")
         self.lane("review", "clean")
