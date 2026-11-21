@@ -291,10 +291,13 @@ lease id, also allowed at the report's top level). Lanefather hands each run its
 
 Authenticate the reviewer CLIs you intend to use according to their own documentation. Without a models file
 Lanefather prefers Codex (`gpt-6.1-sol`, medium effort) when it can determine at least 15% weekly quota remains;
-otherwise it tries Claude (`claude-opus-5-5`, medium effort). A models file's review role sets the order. A failed or empty Codex run can also fall back to Claude. Quota,
+otherwise it tries Claude (`claude-opus-5-5`, medium effort). A models file's review role sets the order across
+Codex, Claude and Antigravity / Google (`gemini-4-neon`, `gemini-4-argon`, `gemini-4-carbon`, `gemini-3.8-flash`).
+A failed or empty reviewer run can fall back to the next choice in the role. Quota,
 provider availability and account charges remain outside Lanefather.
 
-Set `LANEFATHER_CODEX` and `LANEFATHER_CLAUDE` to explicit executable paths if PATH discovery is unsuitable.
+Set `LANEFATHER_CODEX`, `LANEFATHER_CLAUDE` and `LANEFATHER_ANTIGRAVITY` (or `LANEFATHER_AGY`) to explicit executable
+paths if PATH discovery (`codex`, `claude`, `agy` or `antigravity`) is unsuitable.
 `LANEFATHER_MODELS=/path/to/models.toml` selects model configuration. For example:
 
 ```toml
@@ -327,10 +330,10 @@ With Mastack's `role` command beside the models file (`<models dir>/bin/role`), 
 the receipt's `role` (fathers#150); the choices after role's are its fallbacks. `role` reads the Codex limit with the
 CLI the review runs (`MASTACK_CODEX`) and the same models file (`MASTACK_MODELS`); Lanefather reuses that read. The
 implementer's family is that of the lane's builder as its last `check` recorded it in the receipt's `agent`:
-`check --agent claude-code|codex`, else the agent session the check runs in (`CODEX_THREAD_ID` before
-`CLAUDE_CODE_SESSION_ID`, since a Codex thread started from Claude Code carries both); `claude-code` is anthropic,
-`codex` is openai. Unknown, the flag is left out and `role`'s caution is shown. A `role` that fails or gives no
-choice leaves the choice to the models file.
+`check --agent claude-code|codex|antigravity|t3-code`, else the agent session the check runs in
+(`ANTIGRAVITY_CONVERSATION_ID`, `CODEX_THREAD_ID`, `CLAUDE_CODE_SESSION_ID`, `T3_THREAD_ID`); `claude-code` is
+anthropic, `codex` is openai, `antigravity` and `t3-code` are google. Unknown, the flag is left out and `role`'s
+caution is shown. A `role` that fails or gives no choice leaves the choice to the models file.
 
 A review panel runs several reviewers on every lane at once:
 
@@ -358,11 +361,13 @@ a member the rules skipped is not missing. The receipt's `panel` lists each memb
 `reviewer`; `review --mark N` and the gate read that list as before. `review ID --compare` prints each reviewer's
 findings with their marks, and `stats --json` gives per-reviewer totals.
 
-`lanefather review ID --reviewer sol|opus|both` (also with `--overall`) chooses the reviewer of that one review:
-an alias of the models file runs whatever the Codex limit says and with no stand-in (a missing CLI fails it), and
-`both` runs the configured panel (Sol and Opus without one) the same way. Only then does the receipt carry `forced`
-(`{"by": "flag", "reviewers": [...]}`), which `review` shows. `--reviewer` does not combine with `--mark`,
-`--compare` or `--fix-lane`.
+`lanefather review ID --reviewer ALIAS|both` (also with `--overall`) chooses the reviewer of that one review:
+an alias of the models file (`sol`, `opus`, `neon`, `argon`, `carbon`, `flash`), a provider or CLI name (`antigravity`,
+`google`, `agy`, `claude`, `codex`) or a model spec (`gemini-4-neon`, `gemini-4-argon:high`) runs whatever the Codex
+limit says and with no stand-in (a missing CLI fails it), and `both` runs the configured panel (Sol and Opus without
+one) the same way. Only then does the receipt carry `forced` (`{"by": "flag", "reviewers": [...]}`), which `review`
+shows. The receipt records the reviewer's actual `provider`, `cli`, `model`, `effort` and `options` (`effort`,
+`model_reasoning_effort` or `thought_level`). `--reviewer` does not combine with `--mark`, `--compare` or `--fix-lane`.
 
 Receipts from this release add keys (`agent` in a check receipt; `panel`, `forced`, `role`, `prompt_sha256` and a
 finding's `reviewer` in a review receipt) that an earlier release reads past: it lists, shows, marks and gates them.

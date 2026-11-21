@@ -1,13 +1,13 @@
 """The configured reviewer: model choice, real CLI adapters and the fallback, without lane state or GitHub writes.
 
 Review receipts and their lifecycle belong to review.py. This module needs a Project config, the frozen checkout
-and a request; it owns how Codex and Claude receive that request and how their answer is interpreted.
+and a request; it owns how Codex, Claude and Antigravity receive that request and how their answer is interpreted.
 
 One pipeline serves a single review and a panel (fathers#151): `Conditions` says whether a model may review now
 (Mastack's `role` answer when present, fathers#150, else the review role's own conditions), `_candidates` orders the
 review role's choices whose conditions hold (fathers#155), and `_execute` runs every member's next candidate at
 once, each on the same prompt, until each has an answer or no candidate left. A single review is a panel of one
-whose candidates are its primary choice and the next one, its fallback.
+whose candidates are its primary choice and the next ones, its fallbacks.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -46,6 +47,24 @@ CATEGORIES = ("bug", "standards", "docs", "package-misuse", "design")
 # incident: a review on credits); a Codex review never runs without a limit read.
 DEFAULT_MIN_LEFT = 15
 
+# Provider/CLI option names and known model presets matching Mastack's models.toml (fathers#201).
+CLI_OPTIONS: dict[str, str] = {
+    "codex": "model_reasoning_effort",
+    "claude": "effort",
+    "antigravity": "thought_level",
+}
+PROVIDER_OPTIONS: dict[str, str] = {
+    "openai": "model_reasoning_effort",
+    "anthropic": "effort",
+    "google": "thought_level",
+    "antigravity": "thought_level",
+}
+CLI_FAMILIES: dict[str, str] = {
+    "codex": "openai",
+    "claude": "anthropic",
+    "antigravity": "google",
+}
+
 
 @dataclass(frozen=True)
 class Request:
@@ -53,7 +72,7 @@ class Request:
     subject: str
     base: str
     tip: str
-    # The implementer's model family (anthropic, openai) for `not_family`; None when not known.
+    # The implementer's model family (anthropic, openai, google) for `not_family`; None when not known.
     family: str | None = None
     # `review --reviewer` (fathers#155): the reviewers this review must run, whatever the Codex limit; () chooses.
     reviewers: tuple[str, ...] = ()
@@ -67,9 +86,11 @@ class Answer:
 
 @dataclass(frozen=True)
 class Model:
-    """One review choice: the model's alias in the models file, its id, CLI (codex or claude) and effort, the share
-    of the weekly Codex limit it needs (`when.limit.codex_weekly`), its family, `when.not_family` and the choice's
-    `note` for the person reading the review ("same family as the implementer: fresh context only")."""
+    """One review choice: the model's alias in the models file, its id, CLI (codex, claude or antigravity) and effort,
+    the share of the weekly Codex limit it needs (`when.limit.codex_weekly`), its family, `when.not_family`, the
+    choice's `note` for the person reading the review ("same family as the implementer: fresh context only"), its
+    provider option name (`effort`, `model_reasoning_effort`, `thought_level`), and an optional `[cli.<cli>].review`
+    or `run` command template."""
     alias: str
     id: str
     cli: str
@@ -78,10 +99,121 @@ class Model:
     family: str | None = None
     not_family: bool = False
     note: str | None = None
+    option: str | None = None
+    review_argv: tuple[str, ...] = ()
+
+    @property
+    def provider(self) -> str:
+        return self.family or CLI_FAMILIES.get(self.cli, self.cli)
+
+    @property
+    def option_name(self) -> str:
+        return (self.option
+                or CLI_OPTIONS.get(self.cli)
+                or (PROVIDER_OPTIONS.get(self.family) if self.family else None)
+                or "effort")
+
+    @property
+    def options(self) -> dict[str, str]:
+        return {self.option_name: self.effort}
 
 
-DEFAULTS = (Model("sol", "gpt-6.1-sol", "codex", "medium", DEFAULT_MIN_LEFT, "openai"),
-            Model("opus", "claude-opus-5-5", "claude", "medium", None, "anthropic"))
+DEFAULTS = (Model("sol", "gpt-6.1-sol", "codex", "medium", DEFAULT_MIN_LEFT, "openai",
+                  option="model_reasoning_effort"),
+            Model("opus", "claude-opus-5-5", "claude", "medium", None, "anthropic",
+                  option="effort"))
+KNOWN_MODELS: tuple[Model, ...] = (
+    *DEFAULTS,
+    Model("fable", "claude-fable-5-1", "claude", "medium", None, "anthropic", option="effort"),
+    Model("sonnet", "claude-sonnet-5-5", "claude", "medium", None, "anthropic", option="effort"),
+    Model("neon", "gemini-4-neon", "antigravity", "medium", None, "google", option="thought_level"),
+    Model("argon", "gemini-4-argon", "antigravity", "medium", None, "google", option="thought_level"),
+    Model("carbon", "gemini-4-carbon", "antigravity", "medium", None, "google", option="thought_level"),
+    Model("flash", "gemini-3.8-flash", "antigravity", "medium", None, "google", option="thought_level"),
+)
+REVIEWER_ALIASES: dict[str, str] = {
+    "antigravity": "neon",
+    "google": "neon",
+    "agy": "neon",
+    "claude": "opus",
+    "anthropic": "opus",
+    "codex": "sol",
+    "openai": "sol",
+}
+
+
+def _normalize_cli(cli: str) -> str:
+    cleaned = cli.strip().lower()
+    return "antigravity" if cleaned in ("antigravity", "agy", "google") else cleaned
+
+
+def _resolve_reviewer(spec: str, models: dict[str, Model], choices: list[Model]) -> Model | None:
+    """Resolve an explicit reviewer alias, provider/CLI name (`antigravity`, `google`, `agy`), or model id/spec
+    (`gemini-4-neon`, `gemini-4-argon:high`, `antigravity:gemini-4-carbon`) to a Model (fathers#201)."""
+    raw = spec.strip()
+    if not raw:
+        return None
+    if raw in models:
+        return models[raw]
+    lower = raw.lower()
+    if lower in models:
+        return models[lower]
+
+    # For provider/CLI shorthand (`antigravity`, `google`, `agy`), prefer the first matching review choice in the
+    # loaded table, else the first matching model in the table, else the built-in default (neon).
+    if lower in ("antigravity", "google", "agy"):
+        for choice in choices:
+            if choice.cli == "antigravity" or choice.family == "google":
+                return choice
+        for candidate in models.values():
+            if candidate.cli == "antigravity" or candidate.family == "google":
+                return candidate
+    mapped = REVIEWER_ALIASES.get(lower)
+    if mapped and mapped in models:
+        return models[mapped]
+
+    # Match by model id in the loaded table or KNOWN_MODELS.
+    for candidate in (*models.values(), *KNOWN_MODELS):
+        if candidate.id == raw or candidate.id.lower() == lower or candidate.alias == lower:
+            return candidate
+
+    # Support `<provider-or-model>:<model-or-effort>` or `<provider>/<model>[:<effort>]` specs.
+    effort_override: str | None = None
+    target = raw
+    if ":" in target:
+        head, tail = target.rsplit(":", 1)
+        if tail.lower() in ("minimal", "low", "medium", "high", "xhigh", "max"):
+            target, effort_override = head, tail.lower()
+    provider_prefix: str | None = None
+    for sep in ("/", ":"):
+        if sep in target:
+            left, right = target.split(sep, 1)
+            if left.lower() in ("antigravity", "google", "agy", "claude", "anthropic", "codex", "openai"):
+                provider_prefix, target = left.lower(), right
+                break
+
+    base = (_resolve_reviewer(target, models, choices) if target != raw else None)
+    if base is not None:
+        return Model(base.alias, base.id, base.cli, effort_override or base.effort, base.min_left,
+                     base.family, base.not_family, base.note, base.option, base.review_argv)
+
+    if provider_prefix in ("antigravity", "google", "agy") or target.lower().startswith("gemini-"):
+        model_id = target if target.lower() not in ("antigravity", "google", "agy") else "gemini-4-neon"
+        alias = next((m.alias for m in (*models.values(), *KNOWN_MODELS) if m.id == model_id),
+                     "neon" if model_id == "gemini-4-neon" else model_id)
+        return Model(alias, model_id, "antigravity", effort_override or "medium", None, "google",
+                     option="thought_level")
+    if provider_prefix in ("claude", "anthropic") or target.lower().startswith("claude-"):
+        model_id = target if target.lower() not in ("claude", "anthropic") else "claude-opus-5-5"
+        alias = next((m.alias for m in (*models.values(), *KNOWN_MODELS) if m.id == model_id), model_id)
+        return Model(alias, model_id, "claude", effort_override or "medium", None, "anthropic",
+                     option="effort")
+    if provider_prefix in ("codex", "openai") or target.lower().startswith("gpt-"):
+        model_id = target if target.lower() not in ("codex", "openai") else "gpt-6.1-sol"
+        alias = next((m.alias for m in (*models.values(), *KNOWN_MODELS) if m.id == model_id), model_id)
+        return Model(alias, model_id, "codex", effort_override or "medium", DEFAULT_MIN_LEFT, "openai",
+                     option="model_reasoning_effort")
+    return None
 
 
 @dataclass(frozen=True)
@@ -100,7 +232,9 @@ class Conditions:
 
     def __init__(self, project: Config, family: str | None, role: Role | None):
         self.project, self.family, self.role = project, family, role
-        self.codex, self.claude = _codex_cli(project), _claude_cli(project)
+        self.codex = _codex_cli(project)
+        self.claude = _claude_cli(project)
+        self.antigravity = _antigravity_cli(project)
         self.quota: dict[str, Any] | None = role.quota if role else None
 
     def limit(self) -> dict[str, Any]:
@@ -116,7 +250,10 @@ class Conditions:
             return f"no Codex CLI ({self.project.env_names('CODEX')}, CODEX_CLI_PATH, codex on PATH)"
         if model.cli == "claude" and not self.claude:
             return f"no claude CLI on PATH ({self.project.env_names('CLAUDE')})"
-        if model.cli not in ("codex", "claude"):
+        if model.cli == "antigravity" and not self.antigravity and not model.review_argv:
+            return (f"no Antigravity CLI ({self.project.env_names('ANTIGRAVITY')}, "
+                    f"{self.project.env_names('AGY')}, ANTIGRAVITY_CLI_PATH, agy or antigravity on PATH)")
+        if model.cli not in ("codex", "claude", "antigravity"):
             return f"{model.alias} runs on {model.cli}, which Lanefather cannot start"
         if forced:
             return None
@@ -169,7 +306,7 @@ class Reviewer:
             # A forced panel takes no stand-in, so it needs no choice evaluated (and no limit read).
             ordered, skipped = ([], []) if forced else _candidates(self.choices, conditions, role, bool(panel))
             slots = (self._panel(panel, models, ordered, conditions, forced) if panel
-                     else [Slot({"member": None, "reason": "; ".join(skipped) or None}, ordered[:2])])
+                     else [Slot({"member": None, "reason": "; ".join(skipped) or None}, ordered[:3])])
             for slot in slots:
                 if slot.entry["member"] and (slot.entry.get("reason") or slot.entry.get("error")):
                     print(f"lane: review {label}: panel member {slot.entry['member']}: "
@@ -178,8 +315,10 @@ class Reviewer:
             answer = self._execute(label, checkout, request, slots, output, log, evidence)
             if not panel:
                 entry = slots[0].entry
-                evidence.update({k: entry.get(k) for k in ("reviewer", "model", "effort")},
-                                fallback=entry.get("fallback") or entry.get("reason"))
+                evidence.update(
+                    {k: entry.get(k) for k in ("reviewer", "model", "effort", "provider", "cli", "options")},
+                    fallback=entry.get("fallback") or entry.get("reason"),
+                )
             else:
                 evidence["panel"] = [s.entry for s in slots]
             return answer
@@ -197,18 +336,19 @@ class Reviewer:
         stand_in = ordered[0] if ordered else None
         role_choice = ordered[0] if ordered and conditions.role is not None else None
         for alias in panel:
-            known = models.get(alias)
+            known = models.get(alias) or _resolve_reviewer(alias, models, self.choices)
+            resolved_alias = known.alias if known is not None else alias
             if known is None:
                 model: Model | None = None
                 why: str | None = (f"{alias} is not a model of the models file "
                                    f"({_models_path(self.project) or 'the defaults'})")
             elif forced:
                 model, why = known, conditions.reason(known, forced=True)
-            elif role_choice is not None and role_choice.alias == alias:
+            elif role_choice is not None and role_choice.alias == resolved_alias:
                 model, why = role_choice, None
             else:
                 model, why = _pick(self.choices, known, conditions, panel=True)
-            entry: dict[str, Any] = {"member": alias, "reviewer": alias, "status": "pending", "reason": None}
+            entry: dict[str, Any] = {"member": alias, "reviewer": resolved_alias, "status": "pending", "reason": None}
             if why is None and model is not None:
                 slots.append(Slot(_noted(entry, model, conditions.family), [model]))
                 continue
@@ -224,7 +364,8 @@ class Reviewer:
                              reason=(f"{why}; its fallback {stand_in.alias} is already on the panel" if stand_in
                                      else f"{why}; no other choice can review"))
             if known is not None:
-                entry.update(model=known.id, effort=known.effort)
+                entry.update(model=known.id, effort=known.effort, provider=known.provider, cli=known.cli,
+                             options=known.options)
             slots.append(Slot(entry, []))
         return slots
 
@@ -236,6 +377,15 @@ class Reviewer:
         project = self.project
         pending = [s for s in slots if s.candidates]
         if not pending:
+            entry0 = slots[0].entry
+            if len(slots) == 1 and entry0.get("member") is None:
+                for candidate in self.choices[:1]:
+                    entry0.setdefault("reviewer", candidate.alias)
+                    entry0.setdefault("model", candidate.id)
+                    entry0.setdefault("effort", candidate.effort)
+                    entry0.setdefault("provider", candidate.provider)
+                    entry0.setdefault("cli", candidate.cli)
+                    entry0.setdefault("options", candidate.options)
             return Answer(evidence, "no reviewer can review: " + "; ".join(
                 f"{s.entry['member'] or 'review'}: {s.entry.get('error') or s.entry.get('reason')}" for s in slots))
         prompt = _review_prompt(project, request, _inline_diff(checkout, request))
@@ -254,7 +404,8 @@ class Reviewer:
                     stem = private / f"{attempt}-{model.alias}"
                     answer_path, job_log = stem.with_suffix(".md"), stem.with_suffix(".log")
                     job_log.write_text("")
-                    slot.entry.update(reviewer=model.alias, model=model.id, effort=model.effort, cli=model.cli,
+                    slot.entry.update(reviewer=model.alias, model=model.id, effort=model.effort,
+                                      provider=model.provider, cli=model.cli, options=model.options,
                                       answer=str(answer_path), job_log=str(job_log))
                     why = slot.entry.get("fallback") or slot.entry.get("reason")
                     left = evidence.get("codex_left")
@@ -262,9 +413,14 @@ class Reviewer:
                           + (f" ({left}% of the weekly Codex limit left)" if model.cli == "codex" and left is not None
                              else f" ({why})" if why else "")
                           + f" on {request.base[:10]}...{request.tip[:10]}", flush=True)
-                    jobs.append((_codex_argv(self.codex(), model, checkout, answer_path), job_log, job_log)
-                                if model.cli == "codex"
-                                else (_claude_argv(self.claude(), model), answer_path, job_log))
+                    if model.cli == "codex":
+                        jobs.append((_codex_argv(self.codex(), model, checkout, answer_path), job_log, job_log))
+                    elif model.cli == "antigravity":
+                        argv, writes_output = _antigravity_argv(self.antigravity(), model, checkout,
+                                                                answer_path, prompt_path)
+                        jobs.append((argv, job_log if writes_output else answer_path, job_log))
+                    else:
+                        jobs.append((_claude_argv(self.claude(), model), answer_path, job_log))
                 results = _run_together(jobs, checkout, prompt_path)
                 retry: list[Slot] = []
                 for slot, (status, seconds) in zip(pending, results, strict=True):
@@ -318,9 +474,20 @@ class Reviewer:
         answered = [s.entry for s in slots if s.entry.get("status") == "finished"]
         if members:
             efforts = sorted({str(e["effort"]) for e in answered})
+            providers = [str(e["provider"]) for e in answered if e.get("provider")]
+            clis = [str(e["cli"]) for e in answered if e.get("cli")]
+            combined_options: dict[str, str] = {}
+            for e in answered:
+                raw_opts: Any = e.get("options")
+                if isinstance(raw_opts, dict):
+                    for opt_k, opt_v in cast(dict[str, Any], raw_opts).items():
+                        combined_options[str(opt_k)] = str(opt_v)
             evidence.update(reviewer="+".join(str(e["reviewer"]) for e in answered) or None,
                             model=", ".join(str(e["model"]) for e in answered) or None,
                             effort="/".join(efforts) or evidence["effort"],
+                            provider="+".join(dict.fromkeys(providers)) or None,
+                            cli="+".join(dict.fromkeys(clis)) or None,
+                            options=combined_options or None,
                             fallback="; ".join(f"{e['member']}: {e.get('error') or e['reason']}" for e in members
                                                if e.get("status") != "finished" or e.get("reason")) or None)
         if not answered:
@@ -335,6 +502,9 @@ class Reviewer:
 
     def claude(self) -> str:
         return _claude_cli(self.project) or "claude"
+
+    def antigravity(self) -> str:
+        return _antigravity_cli(self.project) or "agy"
 
 
 def _pick(choices: list[Model], model: Model, conditions: Conditions, panel: bool) -> tuple[Model | None, str | None]:
@@ -368,14 +538,20 @@ def _candidates(choices: list[Model], conditions: Conditions, role: Role | None,
                 panel: bool = False) -> tuple[list[Model], list[str]]:
     """The review role's choices whose conditions hold, in order and one per model: role's choice first when role
     answered (it stays authoritative), then the choices after it; and why each choice before the first was skipped
-    (fathers#155). Under the panel's family policy (`panel`), a model no choice admits on the strict conditions may
+    (fathers#155). When `role` chose a model whose local CLI cannot run (e.g. `role` evaluated quota/family without
+    checking the reviewer's binary), its reason is recorded in `skipped` and the choices after it in the table take
+    over. Under the panel's family policy (`panel`), a model no choice admits on the strict conditions may
     still stand in on its own family's choice (_pick), after every model the strict conditions admit."""
     ordered: list[Model] = []
     skipped: list[str] = []
     start = 0
     if role is not None:
-        ordered.append(role.chosen)
         skipped = list(role.skipped.values())
+        role_why = conditions.reason(role.chosen)
+        if role_why is None:
+            ordered.append(role.chosen)
+        else:
+            skipped.append(f"{role.chosen.alias}: {role_why}")
         start = next((i + 1 for i, c in enumerate(choices) if c.alias == role.chosen.alias), len(choices))
     for choice in choices[start:]:
         if any(c.alias == choice.alias for c in ordered):
@@ -403,8 +579,41 @@ def _claude_argv(claude: str, model: Model) -> list[str]:
     return [claude, "-p", "--model", model.id, "--effort", model.effort, "--allowedTools", OPUS_TOOLS]
 
 
+def _antigravity_argv(antigravity: str, model: Model, checkout: str, output: Path,
+                      prompt: Path) -> tuple[list[str], bool]:
+    """Build the command line for an Antigravity / Google reviewer (fathers#201): uses `[cli.antigravity].review`
+    (or `run`) from `models.toml` when configured, else the `agy` / `antigravity` headless CLI contract
+    (`-p --model <id> --thought-level <effort>`). Returns `(argv, writes_output_file)`."""
+    if model.review_argv:
+        substitutions = {
+            "{cli}": antigravity,
+            "{id}": model.id,
+            "{model}": model.id,
+            "{effort}": model.effort,
+            "{thought_level}": model.effort,
+            "{option}": model.option_name,
+            "{checkout}": checkout,
+            "{output}": str(output),
+            "{prompt}": str(prompt),
+        }
+        argv: list[str] = []
+        writes_output = False
+        for index, token in enumerate(model.review_argv):
+            if "{output}" in token:
+                writes_output = True
+            expanded = token
+            for key, value in substitutions.items():
+                expanded = expanded.replace(key, value)
+            if index == 0 and expanded in ("antigravity", "agy") and antigravity:
+                expanded = antigravity
+            argv.append(expanded)
+        return argv, writes_output
+    base = shlex.split(antigravity) if " " in antigravity and not os.path.exists(antigravity) else [antigravity]
+    return [*base, "-p", "--model", model.id, "--thought-level", model.effort], False
+
+
 def _inline_diff(checkout: str, request: Request) -> str:
-    """The diff itself, for a reviewer without a shell beyond git (Claude) and for every panel member alike."""
+    """The diff itself, for a reviewer without a shell beyond git (Claude, Antigravity) and for every panel member."""
     diff = git(checkout, "diff", f"{request.base}...{request.tip}")
     if len(diff) > MAX_INLINE_DIFF:
         diff = diff[:MAX_INLINE_DIFF] + "\n[diff truncated: read the rest with git diff]"
@@ -422,25 +631,64 @@ def _models_path(project: Config) -> Path | None:
     return None
 
 
+def _cli_option(data: dict[str, Any], cli: str, family: str | None) -> str:
+    cli_table = data.get("cli")
+    if isinstance(cli_table, dict):
+        cli_entry = cast(dict[str, Any], cli_table).get(cli)
+        if isinstance(cli_entry, dict):
+            opt = cast(dict[str, Any], cli_entry).get("option")
+            if isinstance(opt, str) and opt:
+                return opt
+    providers_table = data.get("providers")
+    if family and isinstance(providers_table, dict):
+        prov_entry = cast(dict[str, Any], providers_table).get(family)
+        if isinstance(prov_entry, dict):
+            opt = cast(dict[str, Any], prov_entry).get("option")
+            if isinstance(opt, str) and opt:
+                return opt
+    return CLI_OPTIONS.get(cli) or (PROVIDER_OPTIONS.get(family) if family else None) or "effort"
+
+
+def _cli_review_template(data: dict[str, Any], cli: str) -> tuple[str, ...]:
+    cli_table = data.get("cli")
+    if not isinstance(cli_table, dict):
+        return ()
+    cli_entry = cast(dict[str, Any], cli_table).get(cli)
+    if not isinstance(cli_entry, dict):
+        return ()
+    entry = cast(dict[str, Any], cli_entry)
+    for key in ("review", "run"):
+        raw = entry.get(key)
+        if isinstance(raw, list) and raw and all(isinstance(item, str) for item in raw):  # pyright: ignore[reportUnknownVariableType]
+            return tuple(str(item) for item in cast(list[Any], raw))
+    return ()
+
+
 def _models(project: Config) -> tuple[dict[str, Model], list[Model]]:
     """The models file: every model by alias (with the effort and limit of its first review choice), and the review
-    role's choices in their order, a priority list (fathers#155); the defaults, Sol then Opus, when no file is
-    found or it has no readable review role."""
+    role's choices in their order, a priority list (fathers#155); the defaults, Sol then Opus (with Known models
+    registered for explicit `--reviewer`), when no file is found or it has no readable review role."""
     sol, opus = DEFAULTS
+    default_models: dict[str, Model] = {m.alias: m for m in KNOWN_MODELS}
+    default_choices: list[Model] = [sol, opus]
     path = _models_path(project)
     if path is None:
-        return {"sol": sol, "opus": opus}, [sol, opus]
+        return default_models, default_choices
     try:
         data = tomllib.loads(path.read_text())
         table: dict[str, Any] = data["models"]
-        found: dict[str, Model] = {}
+        found: dict[str, Model] = dict(default_models)
         for alias, model in table.items():
             entry = cast(dict[str, Any], model) if isinstance(model, dict) else {}
             if isinstance(entry.get("id"), str) and isinstance(entry.get("cli"), str):
-                family = entry.get("family")
-                found[alias] = Model(alias, entry["id"], entry["cli"], "medium",
-                                     DEFAULT_MIN_LEFT if entry["cli"] == "codex" else None,
-                                     family if isinstance(family, str) else None)
+                cli = _normalize_cli(entry["cli"])
+                raw_family = entry.get("family")
+                family = raw_family if isinstance(raw_family, str) else CLI_FAMILIES.get(cli)
+                option = _cli_option(data, cli, family)
+                review_argv = _cli_review_template(data, cli) if cli == "antigravity" else ()
+                found[alias] = Model(alias, entry["id"], cli, "medium",
+                                     DEFAULT_MIN_LEFT if cli == "codex" else None,
+                                     family, option=option, review_argv=review_argv)
         choices: list[Model] = []
         for choice in data["roles"]["review"]["choices"]:
             base = found[choice["model"]]
@@ -452,7 +700,8 @@ def _models(project: Config) -> tuple[dict[str, Model], list[Model]]:
                         else DEFAULT_MIN_LEFT if base.cli == "codex" else None)
             note = choice.get("note")
             choices.append(Model(base.alias, base.id, base.cli, str(choice.get("effort", "medium")), min_left,
-                                 base.family, bool(when.get("not_family")), note if isinstance(note, str) else None))
+                                 base.family, bool(when.get("not_family")), note if isinstance(note, str) else None,
+                                 base.option, base.review_argv))
         if not choices:
             raise ValueError("the review role lists no choices")
         for model in reversed(choices):
@@ -460,7 +709,7 @@ def _models(project: Config) -> tuple[dict[str, Model], list[Model]]:
         return found, choices
     except (OSError, KeyError, TypeError, ValueError, tomllib.TOMLDecodeError) as error:
         print(f"lane: warning: {path}: no review role ({error}); reviewing with the defaults", file=sys.stderr)
-        return {"sol": sol, "opus": opus}, [sol, opus]
+        return default_models, default_choices
 
 
 def _role_command(project: Config) -> tuple[str, Path] | None:
@@ -520,9 +769,21 @@ def _role(project: Config, codex: str | None, family: str | None, evidence: dict
               + (f"; skipped {'; '.join(reasons)}" if skips else "")
               + (f"; {chosen['caution']}" if chosen.get("caution") else ""), flush=True)
     note = chosen.get("note")
-    model = Model(alias, str(chosen["id"]), str(chosen.get("cli")), str(chosen.get("effort") or "medium"),
-                  None, chosen.get("family") if isinstance(chosen.get("family"), str) else None,
-                  note=note if isinstance(note, str) else None)
+    cli = _normalize_cli(str(chosen.get("cli") or ""))
+    chosen_family = chosen.get("family") if isinstance(chosen.get("family"), str) else CLI_FAMILIES.get(cli)
+    chosen_option = chosen.get("option") if isinstance(chosen.get("option"), str) else None
+    review_argv: tuple[str, ...] = ()
+    raw_argv = chosen.get("argv")
+    if cli == "antigravity" and isinstance(raw_argv, dict):
+        argv_map = cast(dict[str, Any], raw_argv)
+        for key in ("review", "run"):
+            candidate = argv_map.get(key)
+            if isinstance(candidate, list) and candidate and all(isinstance(x, str) for x in candidate):  # pyright: ignore[reportUnknownVariableType]
+                review_argv = tuple(str(x) for x in cast(list[Any], candidate))
+                break
+    model = Model(alias, str(chosen["id"]), cli, str(chosen.get("effort") or "medium"),
+                  None, chosen_family, note=note if isinstance(note, str) else None,
+                  option=chosen_option, review_argv=review_argv)
     return Role(model, skipped, quota)
 
 
@@ -615,7 +876,28 @@ def _codex_limit(codex: str) -> dict[str, Any]:
 
 
 def _claude_cli(project: Config) -> str | None:
-    return project.env("CLAUDE") or shutil.which("claude")
+    explicit = project.env("CLAUDE")
+    if explicit is not None:
+        return explicit if explicit and os.access(explicit, os.X_OK) else None
+    return shutil.which("claude")
+
+
+def _antigravity_cli(project: Config) -> str | None:
+    """The Antigravity CLI or harness adapter the review runs (fathers#201): LANEFATHER_ANTIGRAVITY or
+    LANEFATHER_AGY; else ANTIGRAVITY_CLI_PATH or AGY_CLI_PATH from the environment; else `agy` or `antigravity` on
+    PATH."""
+    for setting in ("ANTIGRAVITY", "AGY"):
+        explicit = project.env(setting)
+        if explicit is not None:
+            if not explicit:
+                return None
+            first = shlex.split(explicit)[0] if " " in explicit and not os.path.exists(explicit) else explicit
+            return explicit if (os.access(first, os.X_OK) or shutil.which(first)) else None
+    for env_var in ("ANTIGRAVITY_CLI_PATH", "AGY_CLI_PATH"):
+        candidate = os.environ.get(env_var)
+        if candidate is not None:
+            return candidate if candidate and os.access(candidate, os.X_OK) else None
+    return shutil.which("agy") or shutil.which("antigravity")
 
 
 

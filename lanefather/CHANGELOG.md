@@ -8,6 +8,13 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Antigravity / Google reviewer backend (fathers#201): `lanefather review` supports the third reviewer family
+  (`antigravity` / `google` / `agy` CLI or configured `[cli.antigravity]` harness adapter from Mastack's `models.toml`,
+  with `gemini-4-neon`, `gemini-4-argon`, `gemini-4-carbon`, `gemini-3.8-flash` and `thought_level`), selectable via
+  `--reviewer` (`antigravity`, `google`, `agy`, model alias or `<model>[:<thought_level>]` spec) and automatic
+  `not_family = true` cross-family routing across `anthropic`, `openai` and `google`. Review receipts record the
+  actual `provider`, `cli`, `model`, `effort` and `options` (`effort`, `model_reasoning_effort`, `thought_level`).
+
 - Multi-provider agent attribution on lanes (fathers#200): `start`, `adopt` and every `check` record each agent that
   worked the lane (`claude-code`, `codex`, `antigravity`, `t3-code`, or any configured harness/provider kind) with its
   session id, subagent/thread id, transcript path, model and options (`effort`, `thought_level`) on the lane record

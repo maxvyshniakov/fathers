@@ -37,7 +37,7 @@ checks or builds. You can also use protected-branch promotion with your own pre-
 - macOS or Linux/POSIX process and filesystem tools. Windows-native operation is not supported.
 - Your project's verification adapter for `check`/`land`; project-specific build, install and deployment commands remain configuration.
 - Authenticated Git/GitHub access for remote publication and the GitHub operations you use.
-- Authenticated Codex and/or Claude CLIs for automatic AI reviews; `gh` for issue/comment integration.
+- Authenticated Codex, Claude and/or Antigravity (`agy`) CLIs for automatic AI reviews; `gh` for issue/comment integration.
 - Slotfather when enabling its admission provider or configured execution leases.
 
 Admission is intentionally conservative. The disk guard requires free space on the home filesystem of **40 GB plus

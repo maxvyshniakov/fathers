@@ -237,16 +237,18 @@ def parser() -> Parser:
     p.add_argument("--force-reason", help="override a missing green receipt or a review hold, with a logged reason")
     p.add_argument("--wait", type=float, default=120, metavar="SECONDS", help="wait this long for the landing lock")
     p.set_defaults(run=land.land)
-    p = add(root, commands, "review", "The lane's one independent review (Sol, or Opus when Codex is low; or the "
-            "[review] panel), its marks and its fix lane; --overall for promote --ship (lanefather.review).")
+    p = add(root, commands, "review", "The lane's one independent review (Sol, Opus, or Neon when another family "
+            "or quota calls for it; or the [review] panel), its marks and its fix lane; --overall for promote "
+            "--ship (lanefather.review).")
     p.add_argument("id", nargs="?")
     p.add_argument("--mark", nargs=2, action="append", metavar=("N", "fixed:MERGE|rejected:REASON"),
                    help="mark finding N fixed by a follow-up merge (or the fix lane's id) or rejected with a reason")
     p.add_argument("--fix-lane", action="store_true",
                    help="register <id>-review-fixes on the landed lane's worktree for the fix round")
     p.add_argument("--reviewer", metavar="ALIAS|both",
-                   help="run this reviewer (a model alias of the models file, such as sol or opus) whatever the "
-                        "Codex limit, or both: the configured panel, else sol and opus")
+                   help="run this reviewer (a model alias, provider/CLI name or model id of the models file, such as "
+                        "sol, opus, neon, antigravity, google, agy or gemini-4-neon) whatever the Codex limit, or "
+                        "both: the configured panel, else sol and opus")
     p.add_argument("--compare", action="store_true",
                    help="each reviewer's findings side by side with their marks (fixed or rejected)")
     p.add_argument("--overall", metavar="SHA",
