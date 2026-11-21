@@ -711,7 +711,7 @@ def hand_over(args: Any) -> int:
         raise LaneError(f"hand-over refused: lane {args.id}'s worktree {worktree} does not exist")
     if lifecycle.active(record):
         return pre_land_fix_round(args, record, worktree)
-    receipt = fix_parent_review(args.id, record["common_dir"], "hand-over refused")
+    receipt = fix_parent_review(args.id, record["common_dir"], "hand-over refused", store=store)
     fix_id = f"{args.id}-review-fixes"
     main = main_checkout(record["common_dir"])
     fix_paths, held = fix_claims(receipt, fix_id, record["common_dir"])

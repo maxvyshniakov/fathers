@@ -122,7 +122,7 @@ def admit(record: Record, force_reason: str | None, repaired: str | None) -> tup
             raise LaneError(f"--after {name}: no lane that is not done by that name")
     for fix_id in state.fix_parents(record):
         prefix = f"--fix-of {fix_id}" if state.batch_fix(record) else "hand-over refused"
-        receipts.fix_parent_review(fix_id, record["common_dir"], prefix)
+        receipts.fix_parent_review(fix_id, record["common_dir"], prefix, store=state.Store(config.current()))
     parent = fix_parent(record)
     decision = admission.evaluate(config.current(), others, record["common_dir"], cap_exempt=parent is not None,
                                   repaired=repaired)

@@ -417,6 +417,8 @@ def smoke_basis(
     landed: dict[str, Any],
     toolchain: Any,
     worktree: Any = None,
+    *,
+    toolchain_name: str = "toolchain",
 ) -> str | None:
     """Why `receipt` cannot stand for part of its merge's smoke (#640), or `None` when it can."""
     effective_record: Record | None = (
@@ -436,7 +438,7 @@ def smoke_basis(
         return "the lane's receipt has no per-check results"
     if isinstance(verdict, StaleToolchain):
         if verdict.toolchain_changed:
-            return f"the {config.current().toolchain_name} changed since the lane check"
+            return f"the {toolchain_name} changed since the lane check"
         return f"the lane check did not run on {verdict.platform}"
     return None
 
@@ -634,10 +636,9 @@ def mark_help(lane_id: str = "{id}", prog: str | None = None) -> str:
 
 
 def fix_parent_review(lane_id: str, common: str, refusal: str, *,
-                      store: state.Store | None = None) -> dict[str, Any]:
+                      store: state.Store) -> dict[str, Any]:
     """A landed lane in this repository with a finished review and an open finding."""
-    current = store or state.Store(config.current())
-    parent_record = state.read_json(current.record_path(lane_id))
+    parent_record = state.read_json(store.record_path(lane_id))
     if parent_record is None:
         raise LaneError(f"{refusal}: no lane by that name")
     landed: dict[str, Any] = parent_record.get("landed") or {}
@@ -646,7 +647,7 @@ def fix_parent_review(lane_id: str, common: str, refusal: str, *,
                         "the review findings of landed lanes")
     if parent_record.get("common_dir") != common:
         raise LaneError(f"{refusal}: lane {lane_id} is from another repository")
-    receipt = read(current, lane_id, "review")
+    receipt = read(store, lane_id, "review")
     if not isinstance(review_verdict(parent_record, receipt), Unmarked) or receipt is None:
         raise LaneError(f"{refusal}: lane {lane_id} has no finished review with unmarked findings")
     return receipt
