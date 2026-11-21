@@ -166,6 +166,8 @@ def holder(entry: Mapping[str, Any]) -> Actor:
 def line(kind: str, subject: Mapping[str, Any], details: Mapping[str, Any], who: Mapping[str, Any],
          level: str | None = None) -> bytes:
     built = _common_events.build_event("slotfather", kind, subject, who, details, level=level)
+    built["time"] = moment()
+    built["host"] = host()
     return _common_events.encode_event(built, compact=False)
 
 
