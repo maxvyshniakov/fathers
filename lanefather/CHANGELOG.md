@@ -187,6 +187,12 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- Lane checks honour a step's declared minimum slots instead of falling to 1 slot on a busy machine (fathers#173):
+  a check row in `--plan --json` may declare `min_slots` or `slots`, and `.lanefather.toml` accepts
+  `[checks.min_slots]` mapping check or suite fnmatch patterns to a positive slot floor; `check` leases at least that
+  floor (capped at the machine's total slot capacity, while an explicit `--slots` override still wins) and records
+  `min_slots`, `advised_jobs` and `min_slots_for` in `jobs_decision`.
+
 - Dependency-blocked checks (`status: "blocked"`, or `status: "skipped"` with `blocked_by`) are preserved separately
   from executed check failures across the check receipt, suite results and red-check classifier (fathers#195): only
   checks that actually ran and failed consume the rerun budget or enter `first.failed_checks`, dependency-blocked

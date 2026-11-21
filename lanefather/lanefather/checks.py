@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 import contextlib
+import fnmatch
 import os
 from pathlib import Path
 import re
@@ -359,10 +360,43 @@ def rerun_wait() -> float:
     return seconds if seconds > 0 else DEFAULT_RERUN_WAIT
 
 
-def rerun_jobs(jobs: int) -> int:
-    """A rerun's lease size (lanefather#4): the lane check's own, 1 to RERUN_MAX_JOBS slots. A lease of the whole
-    machine never came within its wait while one-slot lane checks ran, and as the queue head held them back."""
-    return max(1, min(RERUN_MAX_JOBS, jobs))
+def required_min_slots(lane_plan: dict[str, Any], remaining: dict[str, list[str]] | None,
+                       suites: list[str]) -> tuple[int, list[str]]:
+    """The minimum slot floor declared by the checks/suites that will actually run (fathers#173), from the plan's
+    per-check `min_slots`/`slots` fields or `.lanefather.toml` `[checks.min_slots]` patterns."""
+    needs: dict[str, int] = {}
+    patterns = config.current().min_slots
+    if remaining is None:
+        top = plan.declared_slots(lane_plan)
+        if top is not None and suites:
+            needs["plan"] = top
+        for suite in suites:
+            for pattern, count in patterns:
+                if fnmatch.fnmatchcase(suite, pattern):
+                    needs[suite] = max(needs.get(suite, 0), count)
+    else:
+        running = {c for ids in remaining.values() for c in ids}
+        for row in lane_plan.get("selection") or ():
+            cid = row["id"]
+            if cid not in running:
+                continue
+            declared = plan.declared_slots(row)
+            if declared is not None:
+                needs[cid] = max(needs.get(cid, 0), declared)
+            for pattern, count in patterns:
+                if fnmatch.fnmatchcase(cid, pattern) or fnmatch.fnmatchcase(row["suite"], pattern):
+                    needs[cid] = max(needs.get(cid, 0), count)
+    if not needs:
+        return 1, []
+    floor = max(needs.values())
+    return floor, [name for name, count in needs.items() if count == floor]
+
+
+def rerun_jobs(jobs: int, minimum: int = 1) -> int:
+    """A rerun's lease size (lanefather#4): the lane check's own, 1 to RERUN_MAX_JOBS slots (or the step's declared
+    minimum slots, fathers#173). A lease of the whole machine never came within its wait while one-slot lane checks
+    ran, and as the queue head held them back."""
+    return max(1, min(max(RERUN_MAX_JOBS, minimum), jobs))
 
 
 class Rerun:
@@ -843,7 +877,8 @@ def check(args: Any) -> int:
     if args.slots:
         decision = host.given_jobs(args.slots, "--slots")
     elif remaining is None or any(remaining.values()):
-        decision = host.check_jobs(host.host())
+        min_slots, min_for = required_min_slots(lane_plan, remaining, suites)
+        decision = host.check_jobs(host.host(), minimum=min_slots, min_for=min_for)
     else:
         decision: dict[str, Any] = {"jobs": 1, "reason": "nothing to run"}
     fresh, ran, triaged, classification, stopped = lane_run(record, worktree, base, suites, remaining,

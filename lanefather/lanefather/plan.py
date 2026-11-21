@@ -36,6 +36,15 @@ def verify_path(root: Any) -> str:
     return os.path.join(root, config.current().verify)
 
 
+def declared_slots(row: dict[str, Any]) -> int | None:
+    """Minimum slots a check row declares (`min_slots` or `slots`, fathers#173), or None."""
+    for key in ("min_slots", "slots"):
+        value = row.get(key)
+        if type(value) is int and value > 0:
+            return value
+    return None
+
+
 def plan_for(root: Any, base: str) -> dict[str, Any]:
     """The tree's own verification plan since `base`.
 
@@ -54,11 +63,13 @@ def plan_for(root: Any, base: str) -> dict[str, Any]:
     # A full plan (a path no check reads, or a change that selects every check) runs every check of the gate; its
     # rows that no changed path chose run for the paths no check reads, or for every changed path.
     full_why = plan.get("unowned") or plan["paths"]
-    plan["selection"] = [{"id": row["id"], "suite": row["suite"],
-                          "paths": row["paths"] or (full_why if plan.get("full") else [])}
-                         for row in rows if plan.get("full") or not row["producer"]]
-    plan["selected"] = suites_of(plan["selection"])
-    plan["by_suite"] = by_suite(plan["selection"])
+    selection: Rows = [{"id": row["id"], "suite": row["suite"],
+                        "paths": row["paths"] or (full_why if plan.get("full") else []),
+                        **({"min_slots": need} if (need := declared_slots(row)) is not None else {})}
+                       for row in rows if plan.get("full") or not row["producer"]]
+    plan["selection"] = selection
+    plan["selected"] = suites_of(selection)
+    plan["by_suite"] = by_suite(selection)
     return plan
 
 

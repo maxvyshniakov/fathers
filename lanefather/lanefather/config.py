@@ -97,6 +97,8 @@ class Config:
     slot_env: str = "LANEFATHER_SLOT"
     # Check ids (fnmatch patterns) the post-merge smoke leaves to the batch gate: tooling self-tests (fathers#94).
     gate_only: tuple[str, ...] = ()
+    # [checks.min_slots] (fathers#173): fnmatch check/suite pattern -> minimum slots a lane check leases.
+    min_slots: tuple[tuple[str, int], ...] = ()
     # The severities of an unmarked review finding that hold the batch gate, promote and a publish (fathers#109).
     review_blocks: tuple[str, ...] = ("P1", "P2")
     # [review] panel (fathers#151): the reviewers (model aliases of the models file) that review every lane at once
@@ -251,7 +253,7 @@ TOP_KEYS = ("project", "command", "state_dir", "legacy_env_prefix", "shared_env"
             "promote", "hooks", "env", "gc", "admission", "tickets", "slots", "review", "done")
 TABLE_KEYS = {
     "admission": ("provider", "cap"),
-    "checks": ("verify", "plan_module", "triage", "toolchain", "toolchain_pin", "slot_env", "gate_only"),
+    "checks": ("verify", "plan_module", "triage", "toolchain", "toolchain_pin", "slot_env", "gate_only", "min_slots"),
     "lane": ("cache_name", "targets", "cache_partitions"),
     "gate": ("stamp_tool", "stamp_file", "pre_push_hook"),
     "promote": ("ship_refuses", "ship_refusal", "install", "deploy", "install_env_drop", "after"),
@@ -262,6 +264,19 @@ TABLE_KEYS = {
     "review": ("blocks", "panel", "panel_required"),
     "done": ("auto",),
 }
+
+
+def _min_slots(checks: dict[str, Any]) -> tuple[tuple[str, int], ...]:
+    """`[checks.min_slots]`: fnmatch check/suite pattern -> minimum slot count (fathers#173)."""
+    raw = checks.get("min_slots", {})
+    if not isinstance(raw, dict):
+        raise LaneError(f"{CONFIG_NAME}: [checks.min_slots] must be a table of pattern = positive integer")
+    table = cast(dict[str, Any], raw)
+    for key, value in table.items():
+        if not key or not key.strip() or type(value) is not int or value < 1:
+            raise LaneError(f"{CONFIG_NAME}: [checks.min_slots] {key!r} = {value!r} must map a non-empty pattern "
+                            "to a positive integer")
+    return tuple(sorted((str(key), int(value)) for key, value in table.items()))
 
 
 def _severities(table: dict[str, Any]) -> tuple[str, ...]:
@@ -390,6 +405,7 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         toolchain_pin=_string(checks, "toolchain_pin", default.toolchain_pin),
         slot_env=_string(checks, "slot_env", default.slot_env),
         gate_only=_strings(checks, "gate_only", default.gate_only),
+        min_slots=_min_slots(checks),
         review_blocks=_severities(review),
         review_panel=_panel(review),
         review_panel_required=panel_required,

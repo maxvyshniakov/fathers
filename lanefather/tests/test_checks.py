@@ -840,5 +840,67 @@ class DependencyBlockedTests(LaneCase):
         self.assertEqual(logged[2], "lane-a-base verify:unit,verify:lint")
 
 
+class MinSlotsTests(LaneCase):
+    """fathers#173: a lane check honours a step's declared minimum slots (from --plan --json or [checks.min_slots])
+    instead of falling to 1 slot on a busy machine."""
+
+    def receipt(self, lane_id: str) -> dict[str, Any]:
+        return json.loads((self.state / f"{lane_id}.receipt.json").read_text())
+
+    def test_plan_declared_slots_floor_prevents_falling_to_one_slot_on_busy_machine(self):
+        # Mark lib-check as declaring slots=2 in --plan --json.
+        verify = (self.integration / "verify.sh").read_text().replace(
+            'rows = [dict(row, producer=not row["paths"]) for row in rows if full or row["paths"]]',
+            'rows = [dict(row, producer=not row["paths"], **({"slots": 2} if row["id"] == "lib-check" else {})) '
+            'for row in rows if full or row["paths"]]')
+        self.commit(self.integration, {"verify.sh": verify}, "declare slots=2 for lib-check")
+        # 3 of 4 slots held -> slotfather advise returns jobs=1.
+        self.env.update(FAKE_SLOTFATHER_HELD="3")
+        worktree = self.created("a", "lib/**", "README.md")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        receipt = self.receipt("a")
+        self.assertEqual(receipt["jobs"], 2)
+        self.assertEqual(receipt["jobs_decision"]["advised_jobs"], 1)
+        self.assertEqual(receipt["jobs_decision"]["min_slots"], 2)
+        self.assertEqual(receipt["jobs_decision"]["min_slots_for"], ["lib-check"])
+        leases = pathlib.Path(str(self.verify_log) + ".leases").read_text().splitlines()
+        self.assertEqual(leases[-1], "lane-a --jobs 2")
+
+        # When lib-check is reused (not remaining), only structure-check runs -> falls back to advise (1 slot).
+        self.commit(worktree, {"README.md": "docs edit\n"})
+        self.lane("check", "a")
+        receipt2 = self.receipt("a")
+        self.assertEqual(receipt2["jobs"], 1)
+        self.assertNotIn("min_slots", receipt2["jobs_decision"])
+
+        # Explicit --slots 1 override still wins over declared min_slots.
+        self.lane("check", "a", "--rerun", "--slots", "1")
+        receipt3 = self.receipt("a")
+        self.assertEqual(receipt3["jobs"], 1)
+        self.assertEqual(receipt3["jobs_decision"], {"jobs": 1, "override": "--slots"})
+
+    def test_config_min_slots_pattern_honours_floor_on_busy_machine(self):
+        config = (self.integration / ".lanefather.toml").read_text() + '\n[checks.min_slots]\n"lib-*" = 2\n'
+        self.commit(self.integration, {".lanefather.toml": config}, "configure [checks.min_slots]")
+        self.env.update(FAKE_SLOTFATHER_HELD="3")
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        receipt = self.receipt("a")
+        self.assertEqual(receipt["jobs"], 2)
+        self.assertEqual(receipt["jobs_decision"]["advised_jobs"], 1)
+        self.assertEqual(receipt["jobs_decision"]["min_slots"], 2)
+        self.assertEqual(receipt["jobs_decision"]["min_slots_for"], ["lib-check"])
+
+    def test_min_slots_is_capped_at_machine_total_slot_capacity(self):
+        from lanefather import host, slots
+        with unittest.mock.patch.object(slots, "advise", return_value={"jobs": 1, "slots": 1, "held": 0, "free": 1}):
+            decision = host.check_jobs({"disk_free_gb": 500, "load15": 0.1, "cores": 2}, minimum=2,
+                                       min_for=["browser:story-checks"])
+        self.assertEqual(decision["jobs"], 1)
+        self.assertEqual(decision["min_slots"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
