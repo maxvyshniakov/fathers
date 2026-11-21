@@ -948,5 +948,93 @@ class MinSlotsTests(LaneCase):
         self.assertEqual(added.get("min_slots"), 4)
 
 
+class SlotRangeWorkerTests(LaneCase):
+    def receipt(self, lane_id: str) -> dict[str, Any]:
+        return json.loads((self.state / f"{lane_id}.receipt.json").read_text())
+
+    def leases(self) -> list[str]:
+        return pathlib.Path(str(self.verify_log) + ".leases").read_text().splitlines()
+
+    def history_entries(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for path in sorted((self.state / "history").glob("*.jsonl")):
+            for line in path.read_text().splitlines():
+                if line:
+                    rows.append(json.loads(line))
+        return rows
+
+    def test_slot_range_requests_range_and_records_granted_count(self):
+        from lanefather import slots
+
+        sf_log_path = self.state / "slotfather.log"
+        self.env.update(
+            FAKE_SLOTFATHER_RANGE="1",
+            FAKE_SLOTFATHER_TOTAL="4",
+            FAKE_SLOTFATHER_HELD="3",
+            FAKE_SLOTFATHER_LOG=str(sf_log_path),
+        )
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/a.txt": "range\n"})
+        self.lane("check", "a")
+
+        receipt = self.receipt("a")
+        self.assertEqual(receipt["jobs"], 1)
+        self.assertTrue(receipt["jobs_decision"]["slot_range"])
+        self.assertEqual(receipt["jobs_decision"]["min_jobs"], 1)
+        self.assertEqual(receipt["jobs_decision"]["max_jobs"], 2)
+        self.assertEqual(receipt["jobs_decision"]["granted"], 1)
+        self.assertEqual(self.leases(), ["lane-a --jobs 2 held 1"])
+
+        sf_log: list[dict[str, Any]] = [json.loads(line) for line in sf_log_path.read_text().splitlines() if line]
+        runs = [entry for entry in sf_log if entry["command"] == "run"]
+        self.assertTrue(any("-n" in entry["args"] and "1-2" in entry["args"] for entry in runs))
+
+        entries = [row for row in self.history_entries() if row["kind"] == "check" and row.get("lane") == "a"]
+        self.assertTrue(entries)
+        self.assertTrue(all(row.get("jobs") == 1 for row in entries))
+
+        # With free capacity and FAKE_SLOTFATHER_GRANTED=2, the same range yields 2 workers.
+        self.env.update(FAKE_SLOTFATHER_HELD="0", FAKE_SLOTFATHER_GRANTED="2")
+        self.commit(worktree, {"lib/a.txt": "range-two\n"})
+        self.lane("check", "a")
+        receipt2 = self.receipt("a")
+        self.assertEqual(receipt2["jobs"], 2)
+        self.assertEqual(receipt2["jobs_decision"]["granted"], 2)
+        latest = [row for row in self.history_entries()
+                  if row["kind"] == "check" and row.get("lane") == "a" and row.get("tree") == receipt2["tree"]]
+        self.assertTrue(latest)
+        self.assertTrue(all(row.get("jobs") == 2 for row in latest))
+
+        with unittest.mock.patch.dict(os.environ, self.env, clear=True):
+            wrapped = slots.wrap(2, "lane-a", ["echo", "hi"], min_count=1)
+        self.assertIn("1-2", wrapped)
+
+    def test_without_slot_range_preserves_exact_argv_receipt_and_history(self):
+        from lanefather import slots
+
+        self.env.pop("FAKE_SLOTFATHER_RANGE", None)
+        self.env.update(FAKE_SLOTFATHER_TOTAL="4", FAKE_SLOTFATHER_HELD="3")
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/a.txt": "legacy\n"})
+        self.lane("check", "a")
+
+        receipt = self.receipt("a")
+        self.assertEqual(receipt["jobs"], 1)
+        self.assertNotIn("slot_range", receipt["jobs_decision"])
+        self.assertNotIn("min_jobs", receipt["jobs_decision"])
+        self.assertNotIn("max_jobs", receipt["jobs_decision"])
+        self.assertNotIn("granted", receipt["jobs_decision"])
+        self.assertEqual(self.leases(), ["lane-a --jobs 1"])
+
+        entries = [row for row in self.history_entries() if row["kind"] == "check" and row.get("lane") == "a"]
+        self.assertTrue(entries)
+        self.assertTrue(all("jobs" not in row for row in entries))
+
+        with unittest.mock.patch.dict(os.environ, self.env, clear=True):
+            wrapped = slots.wrap(2, "lane-a", ["echo", "hi"], min_count=1)
+        self.assertIn("-n", wrapped)
+        self.assertEqual(wrapped[wrapped.index("-n") + 1], "2")
+
+
 if __name__ == "__main__":
     unittest.main()

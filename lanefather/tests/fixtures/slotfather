@@ -73,7 +73,20 @@ def main(argv):
                 continue
             option, value, rest = rest[0], rest[1], rest[2:]
             if option == "-n":
-                count = total if value == "all" else min(int(value), total)
+                if "-" in value:
+                    if not os.environ.get("FAKE_SLOTFATHER_RANGE"):
+                        print(f"slotfather: invalid slot count {value!r}", file=sys.stderr)
+                        return 2
+                    low_s, _, high_s = value.partition("-")
+                    low, high = max(1, int(low_s)), min(int(high_s), total)
+                    high = max(low, high)
+                    raw_granted = os.environ.get("FAKE_SLOTFATHER_GRANTED")
+                    if raw_granted:
+                        count = max(low, min(high, int(raw_granted)))
+                    else:
+                        count = max(low, min(high, max(1, total - held)))
+                else:
+                    count = total if value == "all" else min(int(value), total)
             elif option == "--wait":
                 wait = value
             elif option == "--label":
@@ -99,7 +112,8 @@ def main(argv):
                 except OSError:
                     pass
         if not os.environ.get("FAKE_SLOTFATHER_BYPASS"):
-            os.environ.update(SLOTFATHER_LEASE=f"fake-lease-{os.getpid()}", SLOTFATHER_COUNT=str(count))
+            os.environ.update(SLOTFATHER_LEASE=f"fake-lease-{os.getpid()}", SLOTFATHER_COUNT=str(count),
+                              SLOTFATHER_SLOTS=",".join(str(i + 1) for i in range(count)))
             if yieldable:
                 os.environ["SLOTFATHER_YIELD"] = yield_path()
         os.execvp(rest[0], rest)
@@ -167,7 +181,18 @@ def main(argv):
     if command == "available":
         print(total - held)
         return 0
-    print("usage: fake slotfather run|yield|advise|slots|status|available", file=sys.stderr)
+    if command == "capabilities":
+        if os.environ.get("FAKE_SLOTFATHER_FAIL"):
+            print("slotfather: " + os.environ["FAKE_SLOTFATHER_FAIL"], file=sys.stderr)
+            return 2
+        if rest[:1] == ["--json"]:
+            features = ["slot-range"] if os.environ.get("FAKE_SLOTFATHER_RANGE") else []
+            payload = {"v": 1, "tool": "slotfather", "version": "0.1.0", "features": features}
+            if features:
+                payload["run"] = {"slot_range": True}
+            print(json.dumps(payload))
+            return 0
+    print("usage: fake slotfather run|yield|advise|slots|status|available|capabilities", file=sys.stderr)
     return 2
 
 

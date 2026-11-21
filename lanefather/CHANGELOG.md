@@ -8,6 +8,11 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Dynamic lane check worker count via Slotfather range leases (fathers#43): detects `slot-range` in `slotfather
+  capabilities --json`, passes `--jobs` max with `<slot_env>_MIN_JOBS` (and `slotfather run -n MIN-MAX` in
+  `slots.wrap`), and records the granted worker count from the verify report in the lane receipt and run history
+  (`history.py`) while preserving exact argv and receipts on older Slotfather releases.
+
 - Configurable project policy in `.lanefather.toml` and `capabilities --json` (fathers#131): `[promote] branches`
   (default `["dev", "main"]`), `[lane] worktrees_root` (default `".claude/worktrees"`), `[lane] target_label`
   (default `"Cargo target"`), `[lane] cache_depfiles` (default `["debug/*.d", "release/*.d"]`), and

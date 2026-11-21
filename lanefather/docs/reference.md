@@ -287,6 +287,13 @@ and `finished` (ISO times), `junit` (a JUnit XML file whose failed test cases a 
 lease id, also allowed at the report's top level). Lanefather hands each run its run id and tree in the slot meta
 (`run`, `tree`) with `plan` and `checks` (fathers#107).
 
+When Slotfather advertises `slot-range` via `slotfather capabilities --json` (fathers#43), lane checks pass the
+maximum `--jobs` alongside `<slot_env>_MIN_JOBS` (`1`, or the highest selected `min_slots`) so the verifier can
+request `slotfather run -n MIN-MAX` (and `slots.wrap` issues `-n MIN-MAX`), then record the granted worker count from
+the verify report (`jobs`, `slots`, or `granted_jobs`) in the receipt (`jobs`, `jobs_decision.granted`) and run
+history (`history.py`). When Slotfather does not advertise `slot-range`, the command arguments and receipts stay
+unchanged.
+
 During any quiet verify run (no complete output line for `LANEFATHER_VERIFY_HEARTBEAT` seconds, default `30`, `0` or
 `off` to disable), the shared verify runner emits bounded heartbeat lines naming the state (`queued` when waiting in
 Slotfather, `setup` during setup lines, else `active`), the active suite or check, the last-output age (separately from

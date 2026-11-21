@@ -103,21 +103,27 @@ def junit_failures(path: Any) -> list[str]:
     return names
 
 
+def _positive_int(value: Any) -> int | None:
+    return value if type(value) is int and value > 0 else None
+
+
 def record_run(report: dict[str, Any] | None, *, lane: str | None, phase: str, tree: str | None, run: str,
-               started: str, finished: str, seconds: float, checks: list[str] | None = None) -> None:
+               started: str, finished: str, seconds: float, checks: list[str] | None = None,
+               jobs: int | None = None) -> None:
     """One "check" line per row of a verify report; a run without a report gets one line for the run."""
     given: list[Any] = (report or {}).get("checks", [])
     rows: list[dict[str, Any]] = [r for r in given if isinstance(r, dict) and r.get("id")]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
     lease = (report or {}).get("lease")
+    report_jobs = _positive_int(jobs) or _positive_int((report or {}).get("jobs"))
     if not rows:
         append("check", lane=lane, phase=phase, tree=tree, check=",".join(checks or []) or None, status="no report",
-               seconds=seconds, started=started, finished=finished, run=run, lease=lease)
+               seconds=seconds, started=started, finished=finished, run=run, lease=lease, jobs=report_jobs)
         return
     for row in rows:
         append("check", lane=lane, phase=phase, tree=tree, check=row["id"], status=row.get("status"),
                seconds=row.get("seconds"), started=row.get("started") or started,
                finished=row.get("finished") or finished, run=run, lease=row.get("lease") or lease,
-               junit=row.get("junit"))
+               junit=row.get("junit"), jobs=_positive_int(row.get("jobs")) or report_jobs)
 
 
 def flake(check: str, *, lane: str | None, tree: str, failed_at: str | None, how: str, junit: Any = None,

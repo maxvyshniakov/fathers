@@ -686,6 +686,7 @@ class CheckRun:
     triage: str | None
     classification: dict[str, Any] | None
     stopped: Any
+    granted_jobs: int | None = None
 
 
 def prepare(lane_id: str, *, agent: str | None = None) -> Prepared:
@@ -803,11 +804,12 @@ def select(prepared: Prepared, *, rerun: bool = False, slots_override: int | Non
 def run(prepared: Prepared, selection: Selected) -> CheckRun:
     """Execute the remaining checks through `verify.Run` and classify any red checks."""
     started = journal.now()
-    fresh, ran, triaged, classification, stopped = lane_run(
+    fresh, ran, triaged, classification, stopped, granted_jobs = _execute_lane_run(
         prepared.record, prepared.worktree, selection.base, selection.suites, selection.remaining,
-        selection.decision["jobs"], selection.toolchain, lane_plan=selection.lane_plan)
+        selection.decision["jobs"], selection.toolchain, lane_plan=selection.lane_plan,
+        min_jobs=selection.decision.get("min_jobs"))
     return CheckRun(started=started, fresh=fresh, ran=ran, triage=triaged,
-                    classification=classification, stopped=stopped)
+                    classification=classification, stopped=stopped, granted_jobs=granted_jobs)
 
 
 def record(prepared: Prepared, selection: Selected, executed: CheckRun) -> int:
@@ -817,6 +819,11 @@ def record(prepared: Prepared, selection: Selected, executed: CheckRun) -> int:
     lane_id, head, tree, path = rec["id"], prepared.head, prepared.tree, prepared.receipt_path
     suites, selected, reused = selection.suites, selection.selected, selection.reused
     decision, lane_plan = selection.decision, selection.lane_plan
+    effective_jobs = executed.granted_jobs if executed.granted_jobs is not None else decision["jobs"]
+    recorded_decision = (
+        {**decision, "jobs": effective_jobs, "max_jobs": decision["jobs"], "granted": executed.granted_jobs}
+        if executed.granted_jobs is not None else decision
+    )
     fresh, ran, triaged = executed.fresh, executed.ran, executed.triage
     classification, stopped = executed.classification, executed.stopped
     results = combined_results(suites, selected, fresh, reused)
@@ -841,7 +848,7 @@ def record(prepared: Prepared, selection: Selected, executed: CheckRun) -> int:
          "full": lane_plan["full"], "outside_claims": selection.outside,
          "claims_added": selection.added, "claim_overlaps": selection.overlaps,
          "toolchain": selection.toolchain, "platform": selection.platform,
-         "jobs": decision["jobs"], "jobs_decision": decision, "results": results,
+         "jobs": effective_jobs, "jobs_decision": recorded_decision, "results": results,
          "triage": triaged, "classification": classification, "first": first,
          "changed_red_tests": changed_tests, "stopped": stopped, "status": status, "host": info,
          "started": executed.started, "paths": lane_plan["paths"],
@@ -864,12 +871,12 @@ def record(prepared: Prepared, selection: Selected, executed: CheckRun) -> int:
                           junit=entry.get("junit"), phase="check")
     classes = ",".join(f"{e['check']}={e['class']}" for e in (classification or {}).get("checks", []))
     journal.ledger(f"check {lane_id} tree={tree} {status} suites={','.join(suites) or '-'} "
-                   f"checks={len(check_results) - len(reused)} reused={len(reused)} jobs={decision['jobs']} "
+                   f"checks={len(check_results) - len(reused)} reused={len(reused)} jobs={effective_jobs} "
                    f"classified={classes or '-'} {host.host_fields(info)}",
                    kind="lane.checked", lane=rec, level="info" if status == "green" else "warn",
                    details={"status": status, "tree": tree, "suites": suites,
                             "checks": len(check_results) - len(reused), "reused": len(reused),
-                            "jobs": decision["jobs"], "receipt": str(path)})
+                            "jobs": effective_jobs, "receipt": str(path)})
     for result in results:
         note = (" (passed on this tree before: " + str(result.get("log") or "an earlier run") + ")"
                 if result.get("reused_from") == tree
@@ -914,20 +921,22 @@ def leases_of(fresh: Rows, classification: dict[str, Any] | None = None) -> list
     return list(found.values())
 
 
-def lane_run(record: Record, worktree: str, base: str, suites: list[str], remaining: dict[str, list[str]] | None,
-             jobs: int, toolchain: Any = UNRESOLVED, lane_plan: dict[str, Any] | None = None,
-             ) -> tuple[Rows, dict[str, dict[str, Any]], str | None, dict[str, Any] | None, Any]:
+def _execute_lane_run(
+    record: Record, worktree: str, base: str, suites: list[str], remaining: dict[str, list[str]] | None,
+    jobs: int, toolchain: Any = UNRESOLVED, lane_plan: dict[str, Any] | None = None,
+    min_jobs: int | None = None,
+) -> tuple[Rows, dict[str, dict[str, Any]], str | None, dict[str, Any] | None, Any, int | None]:
     """Run the lane's checks that are left and classify the red ones (#568): (results, check results, triage,
-    classification, stopped).
+    classification, stopped, granted_jobs).
 
     verify stops at its first checks (the preflight and the cheap tier, #639) when one is red, before any heavier
     check starts: `stopped`, from its report, and the lane check is red. Only when every red first check is red on
     the base too (pre-existing) do the heavier checks run, once, in a second run whose results join the first's."""
     def attempt(selection: dict[str, list[str]] | None) -> tuple[Rows, dict[str, dict[str, Any]], str | None,
-                                                                 dict[str, Any] | None, Any]:
+                                                                 dict[str, Any] | None, Any, int | None]:
         active_suites = [s for s in suites if selection is None or selection.get(s)]
         if not active_suites:
-            return [], {}, None, None, None
+            return [], {}, None, None, None, None
         ids = None if selection is None else [c for s in active_suites for c in selection[s]]
         choice = verify.Selection.checks(ids) if ids is not None else verify.Selection.suites(active_suites)
         run_type = (plan_meta(ids, worktree, toolchain=toolchain) if ids is not None
@@ -937,6 +946,7 @@ def lane_run(record: Record, worktree: str, base: str, suites: list[str], remain
         outcome = verify.Run(
             worktree, choice, f"lane-{record['id']}", "check", jobs,
             meta=lane_meta(record), ticket=lane_ticket(record), run_type=run_type,
+            min_jobs=min_jobs,
             banner=f"lane: running {what} in {worktree} (log {{log}}); queue: slotfather status",
         ).execute()
         fresh, ran = suite_outcomes(worktree, active_suites, selection, outcome)
@@ -944,26 +954,39 @@ def lane_run(record: Record, worktree: str, base: str, suites: list[str], remain
         classification, report = None, outcome.report
         if any(r["status"] != "passed" for r in fresh):
             run_dir = outcome.run_dir
+            effective_jobs = outcome.granted_jobs if outcome.granted_jobs is not None else jobs
             with terminable():
-                classification = classify(record, worktree, base, fresh, report, jobs, toolchain,
+                classification = classify(record, worktree, base, fresh, report, effective_jobs, toolchain,
                                           lane_plan=lane_plan)
             if classification and run_dir is not None:
                 # The project's gate triage reads the classification beside the run's report (rerun.json).
                 state.write_json(run_dir / "rerun.json", classification)
                 triaged = plan.triage(worktree, run_dir) or triaged
-        return fresh, ran, triaged, classification, outcome.stopped
+        return fresh, ran, triaged, classification, outcome.stopped, outcome.granted_jobs
 
-    fresh, ran, triaged, classification, stopped = attempt(remaining)
+    fresh, ran, triaged, classification, stopped, granted_jobs = attempt(remaining)
     if not (stopped and classification and classification["green"] and remaining is not None):
-        return fresh, ran, triaged, classification, stopped
+        return fresh, ran, triaged, classification, stopped, granted_jobs
     rest = {s: [c for c in ids if (ran.get(c) or {}).get("status") == "not_run"] for s, ids in remaining.items()}
     if not any(rest.values()):
-        return fresh, ran, triaged, classification, None
+        return fresh, ran, triaged, classification, None, granted_jobs
     print("lane: every red first check is red on the base too (pre-existing); running the heavier checks", flush=True)
-    more, ran_more, triaged_more, classified_more, stopped = attempt(rest)
+    more, ran_more, triaged_more, classified_more, stopped, more_jobs = attempt(rest)
     return (joined_results(fresh, more), {**ran, **ran_more},
             "\n".join(t for t in (triaged, triaged_more) if t) or None,
-            joined_classification(classification, classified_more), stopped)
+            joined_classification(classification, classified_more), stopped,
+            more_jobs if more_jobs is not None else granted_jobs)
+
+
+def lane_run(record: Record, worktree: str, base: str, suites: list[str], remaining: dict[str, list[str]] | None,
+             jobs: int, toolchain: Any = UNRESOLVED, lane_plan: dict[str, Any] | None = None,
+             min_jobs: int | None = None,
+             ) -> tuple[Rows, dict[str, dict[str, Any]], str | None, dict[str, Any] | None, Any]:
+    """Run the lane's checks that are left and classify the red ones (#568): (results, check results, triage,
+    classification, stopped)."""
+    fresh, ran, triaged, classification, stopped, _ = _execute_lane_run(
+        record, worktree, base, suites, remaining, jobs, toolchain, lane_plan=lane_plan, min_jobs=min_jobs)
+    return fresh, ran, triaged, classification, stopped
 
 
 def joined_results(first: Rows, second: Rows) -> Rows:

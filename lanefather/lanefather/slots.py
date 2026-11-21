@@ -138,9 +138,10 @@ def ticket_value(ticket: str | None) -> str | None:
 
 def wrap(count: int | str, label: str, argv: list[str], wait: float | None = None,
          meta: dict[str, Any] | None = None, priority: str = "normal", yieldable: bool = False,
-         ticket: str | None = None, required: bool = False) -> list[str]:
-    """argv run under a lease of `count` slots (a number or "all"); argv itself under a lease or without
-    slotfather. Required executions always enter the real CLI: it validates and deduplicates outer leases."""
+         ticket: str | None = None, required: bool = False, min_count: int | None = None) -> list[str]:
+    """argv run under a lease of `count` slots (a number, `MIN-MAX` when `min_count` is set and supported, or "all");
+    argv itself under a lease or without slotfather. Required executions always enter the real CLI: it validates and
+    deduplicates outer leases."""
     if priority not in PRIORITIES:
         raise ValueError(f"request priority {priority!r} is not one of {', '.join(PRIORITIES)}")
     ticket = ticket_value(ticket)
@@ -150,23 +151,29 @@ def wrap(count: int | str, label: str, argv: list[str], wait: float | None = Non
         raise Unavailable("slotfather is not on PATH; a required execution lease cannot be acquired")
     if found is None or (leased() and not required):
         return list(argv)
+    slot_spec = (f"{max(1, min_count)}-{count}"
+                 if min_count is not None and type(count) is int and 1 <= min_count < count and supports_range()
+                 else str(count))
     flags = [part for key, value in tags.items() for part in ("--meta", f"{key}={value}")]
-    return [found, "run", "-n", str(count), "--label", label, *flags, "--priority", priority,
+    return [found, "run", "-n", slot_spec, "--label", label, *flags, "--priority", priority,
             *(("--ticket", ticket) if ticket else ()),
             *(("--yieldable",) if yieldable else ()), *(("--wait", f"{wait:g}") if wait is not None else ()),
             "--", *argv]
 
 
 def queue_environment(label: str, priority: str = "normal", yieldable: bool = False, *,
-                      ticket: str | None = None, **meta: Any) -> dict[str, str]:
+                      ticket: str | None = None, min_jobs: int | None = None, **meta: Any) -> dict[str, str]:
     """The label, priority, optional ticket and tags for a verify run that queues itself."""
     if priority not in PRIORITIES:
         raise ValueError(f"request priority {priority!r} is not one of {', '.join(PRIORITIES)}")
     prefix = config.current().slot_env
-    return {f"{prefix}_LABEL": label, f"{prefix}_PRIORITY": priority,
-            f"{prefix}_TICKET": ticket_value(ticket) or "",
-            f"{prefix}_META": json.dumps(clean_meta(meta), sort_keys=True),
-            f"{prefix}_YIELDABLE": "1" if yieldable else ""}
+    env = {f"{prefix}_LABEL": label, f"{prefix}_PRIORITY": priority,
+           f"{prefix}_TICKET": ticket_value(ticket) or "",
+           f"{prefix}_META": json.dumps(clean_meta(meta), sort_keys=True),
+           f"{prefix}_YIELDABLE": "1" if yieldable else ""}
+    if min_jobs is not None:
+        env[f"{prefix}_MIN_JOBS"] = str(min_jobs)
+    return env
 
 
 def ask(*args: str) -> str:
@@ -201,6 +208,36 @@ def total() -> int:
     if not found:
         raise Unavailable(f"slotfather slots printed no capacity: {output.strip()[:300]}")
     return int(found.group(1))
+
+
+def capabilities(timeout: float = 2.0) -> dict[str, Any] | None:
+    """Best-effort read of `slotfather capabilities --json`; None when unavailable or unsupported."""
+    found = command()
+    if found is None:
+        return None
+    try:
+        result = subprocess.run([found, "capabilities", "--json"], capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode:
+        return None
+    try:
+        data: Any = json.loads(result.stdout)
+    except ValueError:
+        return None
+    return cast(dict[str, Any], data) if isinstance(data, dict) else None
+
+
+def supports_range() -> bool:
+    """Whether the installed Slotfather advertises ranged slot requests (`run -n MIN-MAX`, fathers#128)."""
+    data = capabilities()
+    if not data:
+        return False
+    features: Any = data.get("features")
+    if isinstance(features, list) and "slot-range" in features:
+        return True
+    run_info: Any = data.get("run")
+    return isinstance(run_info, dict) and cast(dict[str, Any], run_info).get("slot_range") is True
 
 
 def request_status(pid: int, timeout: float = 2.0) -> dict[str, Any] | None:

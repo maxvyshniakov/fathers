@@ -297,12 +297,24 @@ def _read_stamp(text: str, full: bool) -> dict[str, Any]:
     return stamp_result(text, full)
 
 
-def verify_env(label: str, phase: str, *, ticket: str | None = None, **meta: Any) -> dict[str, str]:
+def verify_env(label: str, phase: str, *, ticket: str | None = None, min_jobs: int | None = None,
+               **meta: Any) -> dict[str, str]:
     """The environment of a verify run lanefather starts: its lease's label, the phase's priority (lanefather#24), and
     metadata naming the phase, the priority's source and what the caller adds (lane, check, sha)."""
     priority, source = slots.phase_priority(phase)
     tags: dict[str, Any] = {"phase": phase, **slots.priority_meta(priority, source), **meta}
-    return dict(os.environ, **slots.queue_environment(label, priority, ticket=ticket, **tags))
+    return dict(os.environ, **slots.queue_environment(label, priority, ticket=ticket, min_jobs=min_jobs, **tags))
+
+
+def report_jobs(report: dict[str, Any] | None) -> int | None:
+    """Granted worker count reported by the verify report (fathers#43), or None."""
+    if not report:
+        return None
+    for key in ("jobs", "slots", "granted_jobs"):
+        value = report.get(key)
+        if type(value) is int and value > 0:
+            return value
+    return None
 
 
 def plan_meta(selection: Any, root: Any = None, count: int | None = None, toolchain: Any = UNRESOLVED,
@@ -397,6 +409,7 @@ class Outcome:
     started: str
     finished: str
     tree: str | None = None
+    granted_jobs: int | None = None
 
     @property
     def run_dir(self) -> Path | None:
@@ -432,12 +445,14 @@ class Run:
         banner: str | None = None,
         stoppable: bool = False,
         heartbeat: float | None = UNRESOLVED,
+        min_jobs: int | None = None,
     ) -> None:
         self.root = root
         self.selection = selection
         self.label = label
         self.phase = phase
         self.jobs = jobs
+        self.min_jobs = min_jobs
         self.ticket = ticket
         self.lease = lease
         self.record_history = record_history
@@ -465,10 +480,10 @@ class Run:
                 **self.meta,
             }
             self.argv = slots.wrap(jobs, label, self.verify_argv, wait=lease.wait, meta=wrap_meta,
-                                   priority=priority, ticket=ticket, required=lease.required)
+                                   priority=priority, ticket=ticket, required=lease.required, min_count=min_jobs)
         else:
             self.argv = list(self.verify_argv)
-        self.env = verify_env(label, phase, ticket=ticket, **self.meta)
+        self.env = verify_env(label, phase, ticket=ticket, min_jobs=min_jobs, **self.meta)
         self._child: subprocess.Popen[bytes] | None = None
         self._handle: TextIO | None = None
         self._started_at: str = ""
@@ -494,10 +509,11 @@ class Run:
             raise LeaseTimedOut(f"no lease of {self.jobs} slot(s) within {wait} (slotfather status)")
         report_path = Path(reports[-1].strip()) if reports else None
         ids = list(self.selection.items) if self.selection.kind == "checks" else None
+        granted_jobs = report_jobs(report)
         if self.record_history:
             history.record_run(report, lane=self.meta.get("lane"), phase=self.phase, tree=self.tree,
                                run=self.run_id, started=self._started_at, finished=finished,
-                               seconds=seconds, checks=ids)
+                               seconds=seconds, checks=ids, jobs=granted_jobs)
         failed_checks: list[str] = []
         blocked_by_id: dict[str, list[str]] = {}
         if report:
@@ -532,6 +548,7 @@ class Run:
             started=self._started_at,
             finished=finished,
             tree=self.tree,
+            granted_jobs=granted_jobs,
         )
 
     def status_sample(self, now: float | None = None,
