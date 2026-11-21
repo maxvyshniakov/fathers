@@ -1,4 +1,4 @@
-"""Slotfather platform responsibilities."""
+"""macOS and Linux host inspection: process identity comparison, memory pressure, swap, PSI, load, and cgroup limits."""
 from __future__ import annotations
 
 import contextlib

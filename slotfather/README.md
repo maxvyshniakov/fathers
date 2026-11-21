@@ -144,7 +144,7 @@ slotfather run -n 1 -- python3 -m unittest discover -s tests -v
 
 The dashboard media above are Godfather's (copied from its README); they are made there.
 
-[Verification](docs/testing.md) · [Scheduler experiments](docs/scheduler-experiments.md)
+[Verification](docs/testing.md) · [Architecture](docs/architecture.md)
 
 Lifetime workflow registrations can use the separate, stateless
 [`lane-admission --json` contract](docs/lane-admission.md); it does not reserve

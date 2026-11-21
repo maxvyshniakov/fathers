@@ -1,4 +1,4 @@
-"""Slotfather state responsibilities."""
+"""Queue locking, atomic entry and sequence writes, bounded journals, and persisted state schema contracts."""
 from __future__ import annotations
 
 import contextlib

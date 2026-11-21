@@ -1,4 +1,4 @@
-"""Slotfather config responsibilities."""
+"""Environment settings, installer-pinned defaults, scheduling constants, shared errors, and clock helpers."""
 from __future__ import annotations
 
 import json

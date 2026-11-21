@@ -1,4 +1,4 @@
-"""Slotfather usage responsibilities."""
+"""Process-tree CPU and RSS accounting plus periodic machine-occupancy sampling while a lease runs."""
 from __future__ import annotations
 
 import contextlib

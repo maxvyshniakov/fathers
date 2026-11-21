@@ -6,7 +6,7 @@ cd slotfather
 python3 install.py
 ```
 
-The four commands are thin entry points into a complete, immutable package release. A normal
+The three commands (`slotfather`, `slotfather-stats`, `slotfather-sweep`) are thin entry points into a complete, immutable package release. A normal
 user install keeps releases under `~/.local/lib/slotfather/releases/`; an external system
 `--bin /usr/local/bin` uses `/usr/local/lib/slotfather/releases/`, keeping modules loaded by
 root-owned commands outside the service user's writable home. Each entry point pins its

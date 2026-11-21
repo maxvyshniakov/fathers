@@ -5,19 +5,77 @@ it does not use execution job budgets or reserve slots.
 
 [Domain definitions](../GLOSSARY.md) · [Compatibility aliases](terminology.md)
 
-State lives in `~/.local/state/slotfather/`; `queue.log` records grants, releases, and reaping. `history.jsonl` has one JSON line per request that left the queue: label, command, directory, slots, queue, grant and end times, seconds waited and run, the outcome (`released`, `left` after giving up, or `reaped`), `until` for a request with `--wait` (when it would give up) and, for `run`, the exit status and what the command used (see Statistics). A request in a git checkout adds `git`: `head` and `tree` (HEAD's commit and tree) and `dirty` (tracked files differ from HEAD; untracked ones are not looked at), so repeated checks of one tree can be found; `SLOTFATHER_GIT_FACTS=0` turns it off. `--meta cache=hit|miss|partial` records whether the work reused a cache (other values are refused). A [session](sessions.md)'s line adds `session`. Lines carry `lease_id`, the entry's unique id (fathers#101), as `status --json` entries and the `subject` of every request event give it (capacity, order and sweep events have no lease) (an older client's entry has none in the history; `status` then gives a stable `old-…` id). `label_derived` is the label the request's project, command and lane metadata give (fathers#100; `run` uses it when `--label` is missing, and appends it after a label that says little), and `label_given` the `--label` where the request runs under another label. `history export` prints both files as JSON lines, oldest first; `history import HOST [FILE]` merges another host's lines (stdin without FILE) into `hosts/HOST/history.jsonl`, where `stats --host HOST` reads them. Past 4 MB it becomes `history.jsonl.1`, replacing the previous one, so at most two files' worth is kept; readers take `.1` first. `history [N]` lists the last N (default 20). `status` lists holders and waiters.
+## State and history
 
-**Request fields.** `run --priority interactive|normal|batch` (library:
-`acquire(..., priority="interactive")`) sets scheduling priority; omitted priority
-is `normal`. `--ticket ID` / `ticket=...` sets an optional issue identifier.
-Both are top-level queue and history fields and appear in JSON status/process
-responses (`ticket` is null when absent in query responses). Inherited leases
-keep the outer request's fields. Built-in fields cannot be passed through metadata;
-`--class`, `meta.class`, `meta.priority` and `meta.ticket` are rejected.
+State lives in `~/.local/state/slotfather/` (`SLOTFATHER_DIR` overrides it). `queue.log` records grants, releases, and
+reaping; `status` lists current holders and waiters.
 
-**Lease metadata.** `run --meta key=value` (repeatable; the library's `acquire(..., meta={...})`) adds caller context: `lane`, `phase`, `model`, a `session`, and custom tags. Keys are lowercase words of at most 32 characters (`a-z`, digits, `_ . -`), values printable text of at most 200, at most 16 keys; a later key replaces an earlier one. The metadata is stored on the queue entry and in the request's history line (`"meta": {...}`), and shown by `status` and `history` (`meta=lane=lane-650,phase=check` before `cmd=`), in the dashboard's details panel, and grouped by `stats --by meta.KEY`. A nested `run` that inherits a lease runs under that lease's metadata and adds none of its own. Priority and ticket use dedicated request fields rather than metadata.
+`history.jsonl` stores one JSON line per request that left the queue. Past 4 MB it rotates to `history.jsonl.1`
+(readers take `.1` first). `history [N]` lists the last `N` entries (default 20); `history export` prints both files
+as JSON lines oldest first; `history import HOST [FILE]` merges another host's lines (stdin without `FILE`) into
+`hosts/HOST/history.jsonl`, which `stats --host HOST` reads.
 
-**`status --json`** is the queue for programs, such as a guard that must not kill another holder's lease: `{"v": 2, "slots", "held", "free", "draining", "entries": [...], "legacy": [...]}` (`draining`: slots held above a capacity that shrank under running leases, 0 otherwise; older readers ignore it), each entry `{"id", "lease", "state", "count", "label", "pid", "pgid", "start", "since", "granted", "cmd", "cwd", "meta", "tree", "priority", "ticket", "yieldable", "yields", "yield_asked", "position", "idle_since", "effective_priority", "aged", "reprioritized", "est_start", "head", "reserved", "waited", "long_wait"}` (yieldable to position: see Polite preemption; `idle_since`: since when a held lease has been idle, epoch seconds, or `null`; see Idle leases in scheduling; `effective_priority` to `long_wait`: the class it is served in and whether ageing moved it there, the class it asked before `slotfather reprioritize` or `null`, and for a waiter its expected start, whether it is the head and its reserved start (UTC stamps or `null`), how long it has waited in seconds and whether that is past the warn time; see Ageing in scheduling). `id` is the entry's name, `lease` its path (the value of `SLOTFATHER_LEASE` in the lease's command), `pid` the holder (`slotfather run`, or the process that called `acquire()`), `pgid` its process group, `tree` the holder and its live descendants. Each entry also has `phase`: `waiting`, `yielded` (waiting again after a yield), `held`, `asked` (held, with a yield request standing) or `unknown`. **Unknown entries** (fathers#19): an entry whose `state` is neither `waiting` nor `held`, that has no `state`, or whose `pid` or `count` is not a positive integer or `start` or `since` not text may be a newer client's live lease, so this Slotfather leaves it alone: it is never granted, reaped, ranked or deleted. While its holder runs (its `pid` and `start` name a live process) its `count` is reserved: those slots count in `held` and `used`, not in `free`, and nothing else is granted them. One whose holder cannot be checked (no `pid` or `start`) reserves nothing. `status` lists it last as `unknown: queue/NAME (REASON; label=… pid=…): …`, saying whether its slots stay reserved or, when its holder is gone, to remove the file to clear it; `status --json` lists it after the others with `phase: "unknown"`, `unknown` (the reason), `holds` (the slots it reserves now) and `warning` (the `status` line's text), its fields as written and none of the order's (`position`, `est_start` and the like are `null` or `false`); the dashboard block lists it under `unknown`. `procs --json` reads one whose holder is gone as absent and names its file in `warnings` (an added list); one whose holder runs, like any entry without a valid identity, still fails the query. The installer likewise ignores one whose holder is gone, with a warning, and refuses to install beside one whose holder runs. Nothing removes the file. A head blocked by leases with no end estimate past its reserved start (fathers#160; scheduling, rule 6) has `blocked_by` ([{"label", "pid"}]) and `idle_slots`, and a waiter that gave way as the head `gave_way` (the same list); these keys appear only on such entries. `status --json --pid PID` keeps only the entries PID belongs to, each with `via`: `"tree"` (the holder or one of its descendants) or `"env"` (it left the tree, by a double fork or `setsid` and launchd adopting it, but its environment carries the lease's `SLOTFATHER_LEASE`; macOS shows the environment only of the user's own processes that are not Apple platform binaries), and adds `"query": {"pid", "start"}`, the process's start time as `ps -o lstart=` prints it (`null`: not running), so a guard can check that the pid was not reused before it acts. An empty list means the process belongs to no lease of this queue as far as can be seen. `"lease_unknown": [PID]`, present only when its environment cannot be read (another user's process, an Apple platform binary on macOS), says that whether it carries a lease outside its tree is unknown. `procs --json` and the sweep decide by the same rule (fathers#38), looking at the environment only of a process in no lease's tree; here an earlier queue's lease counts by its tree alone. The extracted version also reads leases in Straylight's earlier queue during migration; old clients do not see new leases, so retire old wrappers before relying on mutual isolation.
+Key fields on a `history.jsonl` record:
+
+- `label`, `cmd`, `cwd`, `count`: request label, command, working directory, and slot count.
+- `queued`, `granted`, `ended`, `waited`, `ran`: queue, grant, and end timestamps plus seconds waited and run.
+- `outcome`: `released`, `left` (gave up), or `reaped`.
+- `until`: deadline timestamp for a request that used `--wait`.
+- `status` and usage fields: for `run`, the exit status and process-tree CPU/RSS measurements (see Statistics).
+- `git`: for a request in a git checkout, `head`, `tree`, and `dirty` (tracked files only; `SLOTFATHER_GIT_FACTS=0` disables it).
+- `lease_id`: unique entry identifier matching `status --json` and request events' `subject` (older clients omit it; `status` synthesizes a stable `old-…` id).
+- `label_derived` / `label_given`: derived label from project, command, and lane metadata, plus the explicit `--label` when different.
+- `session`: present for a measurement [session](sessions.md) record.
+- `meta.cache`: `--meta cache=hit|miss|partial` records cache reuse (other values are refused).
+
+**Request fields.**
+
+- `priority`: set via `run --priority interactive|normal|batch` (library: `acquire(..., priority=...)`); defaults to `normal`.
+- `ticket`: optional issue identifier set via `--ticket ID` / `ticket=...` (`null` when absent in query responses).
+- Both are top-level queue and history fields; inherited leases keep the outer request's fields.
+- Built-in fields cannot be passed through metadata: `--class`, `meta.class`, `meta.priority`, and `meta.ticket` are rejected.
+
+**Lease metadata.**
+
+- Set via repeatable `run --meta key=value` (library: `acquire(..., meta={...})`) for caller context (`lane`, `phase`, `model`, `session`, and custom tags).
+- Keys are lowercase (`a-z`, digits, `_ . -`), at most 32 characters; values are printable text of at most 200 characters; at most 16 keys (later keys replace earlier ones).
+- Stored on the queue entry and history line (`"meta": {...}`), displayed by `status`, `history`, and the dashboard details panel, and grouped via `stats --by meta.KEY`.
+- A nested `run` inheriting a lease runs under the outer lease's metadata and adds none of its own.
+
+## `status --json`
+
+`status --json` prints queue state for programs (such as a guard checking whether a process holds a lease).
+
+Top-level fields:
+
+- `v`: schema version (`2`).
+- `slots`, `held`, `free`: total capacity, held slots, and free slots.
+- `draining`: slots held above a capacity that shrank under running leases (`0` otherwise).
+- `entries`: active holders, waiters, and unknown entries.
+- `legacy`: leases still held in earlier queues during migration.
+- `query` (`--pid PID` only): `{"pid", "start"}` where `start` is `ps -o lstart=` (`null` if not running), so a caller can check against PID reuse.
+- `lease_unknown` (`--pid PID` only, when unreadable): `[PID]` when the process's environment cannot be read (another user's process or an Apple platform binary on macOS).
+
+Per-entry fields:
+
+- `id`, `lease`: entry filename stem and full path (`SLOTFATHER_LEASE`).
+- `state`, `phase`: `state` is `held` or `waiting`; `phase` is `waiting`, `yielded`, `held`, `asked`, or `unknown`.
+- `count`, `label`, `cmd`, `cwd`, `meta`: requested slots, label, command, working directory, and metadata.
+- `pid`, `pgid`, `start`, `tree`: holder PID, process group, process start time, and live descendant PIDs.
+- `since`, `granted`: queue arrival and grant timestamps.
+- `priority`, `ticket`, `effective_priority`, `aged`, `reprioritized`: requested class and ticket, served class, whether ageing promoted it, and original class before `reprioritize` (`null` if unchanged).
+- `yieldable`, `yields`, `yield_asked`, `position`: cooperative-yield settings, yield count, standing yield request, and queue position.
+- `idle_since`: epoch seconds since a held lease became idle, or `null` (see Idle leases in scheduling).
+- `est_start`, `head`, `reserved`, `waited`, `long_wait`: waiter's expected start, head flag, reserved start (UTC or `null`), wait duration in seconds, and whether it passed `warn_wait`.
+- `blocked_by`, `idle_slots`, `gave_way` (only when applicable, fathers#160): leases with no end estimate blocking a head past its reserved start (`[{"label", "pid"}]`), idle slot count, and the blocking list recorded when a head gave way.
+- `via` (`--pid PID` only): `"tree"` (holder or descendant) or `"env"` (detached process carrying `SLOTFATHER_LEASE`). `procs --json` and `sweep` use the same membership rule (fathers#38).
+
+**Unknown entries** (fathers#19): an entry whose `state` is neither `waiting` nor `held`, or whose `pid`, `count`, `start`, or `since` is missing or malformed, may belong to a newer client and is left untouched (never granted, reaped, ranked, or deleted).
+
+- While its holder runs, its `count` stays reserved in `held` and `used`; if its holder cannot be checked, it reserves nothing.
+- `status` lists it last as `unknown: queue/NAME (REASON; label=… pid=…): …`.
+- `status --json` lists it with `phase: "unknown"`, `unknown` (reason), `holds` (reserved slots), and `warning` (`status` line text); scheduling fields are `null` or `false`.
+- `procs --json` and `install.py` ignore an unknown entry whose holder is gone (with a warning) and refuse to proceed beside one whose holder is still running.
 
 ## Dashboard contracts
 
@@ -141,19 +199,21 @@ slotfather settings reset (KEY | --all) [--revision R] --json
   settings object, `ok: false`, `conflict: true` and `error`; 4 another user's queue, with `{"ok": false,
   "error"}` (`settings --json` there has `writable: false`, its `reason`, and every row `writable: false`).
 
-**`events.jsonl`** (beside the queue; `capabilities` gives its absolute path under `dashboard.events`) holds
-the queue's events in Godfather's shared event schema, version 1: one JSON object per line with `v`, `time` (RFC 3339
-UTC with milliseconds), `host`, `source` (`slotfather`), `kind`, `subject`, `actor`, `details` and, for a warning,
-`level`. Each site that writes a queue.log line also appends its event, after the change; queue.log and
-history.jsonl are unchanged, and an event that cannot be written never fails or alters the operation. Lines are
-appended with one write (O_APPEND, mode 0600), carry no control characters, and stay under 16 KiB (a larger
-event keeps `details: {"truncated": true}`, and one still too large is not written); past 4 MiB the log becomes `events.jsonl.1` under an flock on
-`events.lock`. Nothing is written into another user's queue: a process of another user (root through a guest
-agent) that changes that queue leaves its queue.log line without an event. `subject` is the request (`type: request`, `id` its
-entry's name as `status --json` gives it, `label`, `pid`) unless said otherwise; `actor` is the holder process
-(with `lane` from its metadata) for what a lease's own client does, `type: tool` (`name: slotfather`) for what a
-look at the queue decides, the command's process otherwise, with `via: godfather` when `GODFATHER_ACTOR` names
-Godfather. The tests validate every line with the shared `common/eventcheck.py`.
+**`events.jsonl`** (beside the queue; `capabilities` gives its absolute path under `dashboard.events`) holds the
+queue's events in Godfather's shared event schema (version 1, validated by `common/eventcheck.py`). Each site that
+writes a `queue.log` line also appends its event after the change; event write failures never fail or alter an
+operation, and nothing is written into another user's queue.
+
+- **Format & rotation**: one JSON object per line, appended with one `O_APPEND` write (mode `0600`), no control
+  characters, max 16 KiB (larger events keep `details: {"truncated": true}`, or are skipped if still too large). Past
+  4 MiB it rotates to `events.jsonl.1` under an `flock` on `events.lock`.
+- `v`, `time`, `host`, `source`: schema version (`1`), RFC 3339 UTC timestamp with milliseconds, host name, and
+  `"slotfather"`.
+- `kind`, `details`, `level`: event kind (table below), kind-specific payload, and optional `level` (e.g. `"warn"`).
+- `subject`: the request (`type: "request"`, `id` matching `status --json`, `label`, `pid`) unless noted otherwise in
+  the table below.
+- `actor`: holder process (with `lane` from metadata) for client actions, `type: "tool"` (`name: "slotfather"`) for
+  queue-look decisions, or the command's process otherwise (`via: "godfather"` when `GODFATHER_ACTOR` names Godfather).
 
 | Kind | When | `details` |
 | --- | --- | --- |
@@ -178,23 +238,23 @@ Godfather. The tests validate every line with the shared `common/eventcheck.py`.
 | `run.trend` | a run type's trend changes (subject `run_type`; level warn when slower) | `verdict`, `p50_recent`, `p50_before`, `ratio`, `recent`, `before`, `plan_change`, `why` |
 | `session.ended` | a session releases its lease ([sessions](sessions.md)) | `reason` (`idle`, `stopped`), `runs`, `busy`, `held` |
 
-**Run types** (fathers#106, for agents). A run type is the project, `phase` and `plan` meta where a request
-carries a phase (Lanefather passes `phase`, `plan` and `checks`), else its label and command kind. `status --json`
-(and `--full`; not `--pid`) gives each entry `expected`: `key`, `p50`, `p90`, `runs` (the last 20 released runs of the most specific key
-with at least 3: project, phase and plan; project and phase; label and kind; label) and `fallback` (a broader key
-than the first), or null; a held entry also gets `overrun: true` once it has run past that p90 (by more than 10% and
-2 s). A released run's history line adds `run_key` and `verdict` (`normal`, or `pending` above the p90). A pending
-run is settled once 3 later runs of its key land: `outlier` when most of them are normal, `slower` when not; the
-settled verdict goes to `verdicts.jsonl` (`lease_id`, `verdict`, `key`, `ran`, `at`; history lines are never
-rewritten) and an outlier to EVENTS as `run.outlier`. A trend compares the median of a key's last 10 runs with the
-30 before: `slower` or `faster` beyond a factor of 1.25, else `steady`; a changed trend is a `run.trend` event.
+**Run types** (fathers#106, for agents). A run type is keyed by `(project, phase, plan)` when a request carries a
+`phase` meta (Lanefather passes `phase`, `plan`, and `checks`), or by `(label, kind)` otherwise.
 
-`slotfather stats --trend [--project P] [--phase X] [--since WHEN] --json` prints `{"v": 1, "keys": [{"key",
-"project", "phase", "plan", "checks", "runs", "weeks": [{"week": "2026-W46", "count", "p50", "p90"}],
-"plan_changes": [{"at", "from", "to", "checks_from", "checks_to", "checks"}], "trend": {"verdict", "p50_recent",
-"p50_before", "ratio", "recent", "before", "plan_change", "why"} or null, "verdicts": {verdict: count}}]}`; `why` is
-`plan grew: +2 checks`, `plan shrank: ...`, `plan changed`, `same plan` or `no plan recorded`. Without `--json` it
-prints a line per key.
+- `expected` (on `status --json` and `--full`, not `--pid`): `{"key", "p50", "p90", "runs", "fallback"}` from the last
+  20 released runs of the most specific key with at least 3 runs (`project+phase+plan`, `project+phase`, `label+kind`,
+  `label`), or `null`.
+- `overrun` (held entries): `true` once a running lease passes its `p90` by more than 10% and 2 s.
+- `run_key` / `verdict` (on released `history.jsonl` lines): the matched key and initial verdict (`"normal"`, or
+  `"pending"` above `p90`).
+- `verdicts.jsonl`: once 3 later runs of the key land, a `"pending"` run settles to `"outlier"` (most later runs
+  normal, emitting `run.outlier`) or `"slower"`; recorded as `{"lease_id", "verdict", "key", "ran", "at"}` without
+  rewriting `history.jsonl`.
+- Trends (`slotfather stats --trend [--project P] [--phase X] [--since WHEN] --json`): compares the median of the last
+  10 runs against the 30 before (`"slower"`/`"faster"` beyond 1.25×, else `"steady"`; changes emit `run.trend`).
+  Returns `{"v": 1, "keys": [...]}` with per-key `project`, `phase`, `plan`, `checks`, `runs`, weekly `weeks`
+  (`week`, `count`, `p50`, `p90`), `plan_changes`, `trend` (including `why`: `plan grew: +N checks`, `plan shrank: ...`,
+  `plan changed`, `same plan`, or `no plan recorded`), and `verdicts`. Without `--json`, prints one line per key.
 
 **Changelog** (fathers#103): `slotfather changelog --json [--since VERSION]` prints the installed release's
 CHANGELOG.md as `{"v": 1, "tool": "slotfather", "version", "source": its path or null, "entries": [{"version",
