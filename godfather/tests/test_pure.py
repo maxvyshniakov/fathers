@@ -26,8 +26,8 @@ class PureRenderingTests(unittest.TestCase):
         """The golden scene as the live view holds it: loaded, its first lease's lane loaded, at the scene's moment."""
         tool, goldens = self.tool, goldens_tool()
         scene = json.loads((goldens.SCENE / "scene.json").read_text())
-        with goldens.environment(None):
-            model, error = tool.Screen().load()
+        with goldens.environment(None), tool.Screen() as screen:
+            model, error = screen.load()
         self.assertIsNone(error)
         assert model is not None
         moment = tool.parse_time(scene["moment"])

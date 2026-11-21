@@ -7,6 +7,7 @@ that real Slotfather (SF-2) in an isolated SLOTFATHER_DIR.
 Snapshots live in tests/snapshots/; `SNAPSHOT_UPDATE=1` rewrites them after a deliberate layout change."""
 from __future__ import annotations
 
+import copy
 import dataclasses
 import json
 import os
@@ -223,7 +224,9 @@ class PanelCase(unittest.TestCase):
         return [argv for argv in (fake or self.fake).argv() if argv[:2] in (["settings", "set"], ["settings", "reset"])]
 
     def open(self, interval: float = 1.0, **fields: Any) -> Settings:
-        return Settings(self.clock, interval, **fields)
+        found = Settings(self.clock, interval, **fields)
+        self.addCleanup(found.screen.close)
+        return found
 
     def assert_snapshot(self, name: str, text: str) -> None:
         path = SNAPSHOTS / f"settings-{name}.txt"
@@ -1071,6 +1074,249 @@ class ModelTests(unittest.TestCase):
             self.assertIn(key, modes.SETTINGS)
         source = Path(settings_view.__file__).read_text()
         self.assertNotIn("def key", source, "the view handles no key")
+
+
+class CompatibilityTests(unittest.TestCase):
+    """Provider compatibility matrix (fathers#181), separate from the sibling checkout's exact row-order parity in
+    test_contract.py:
+
+    - Sibling checkouts (../slotfather, ../lanefather, ../junkfather): exact schema and row-order parity with
+      tests/fake_slotfather.py and tests/fake_tool.py.
+    - Any external provider advertising capabilities v1 with `dashboard.settings.versions` containing 1:
+      - Older v1 providers that omit later additive rows (such as `order.reservation_timeout`, `host.min_disk_gb`, or
+        `own.background_ttl`) render only the rows the provider supplies, from the provider's values, without
+        synthesizing omitted rows from copied defaults.
+      - Extended v1 providers that add new supported rows (`choice`, `boolean`, `integer`, `number`, `duration`,
+        conditional `when` rows) or reorder sections/rows render and edit generically using the provider's keys and
+        revisions, while keeping unknown future types read-only.
+      - Providers returning malformed required v1 fields (`sections`, `settings`, or a row's `key`, `type`, `value`,
+        or `choices`) fail visibly in the section rather than silently dropping rows or crashing.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory(prefix="godfather-settings-compat-")
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.record = self.root / "writes.jsonl"
+        self.clock = Clock()
+        patcher = mock.patch.dict(os.environ, {"GODFATHER_FIXTURES": str(self.root),
+                                               "GODFATHER_FIXTURES_RECORD": str(self.record),
+                                               "HOME": str(self.root),
+                                               "XDG_CONFIG_HOME": str(self.root / "config")}, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def write_provider(self, tool: str, reply: Any, replies: Optional[dict[str, Any]] = None) -> None:
+        folder = self.root / tool
+        folder.mkdir(parents=True, exist_ok=True)
+        capabilities = {"v": 1, "tool": tool, "version": "0.1.5", "dashboard": {
+            "v": 1, "tag": tool[:4], "snapshot": {"argv": ["status", "--json", "--full"], "versions": [2], "poll": 1},
+            "settings": {"versions": [1]}}}
+        table: dict[str, Any] = {"capabilities --json": {"code": 0, "json": capabilities},
+                                 "settings --json": {"code": 0, "json": reply}}
+        if replies:
+            table.update(replies)
+        (folder / "replies.json").write_text(json.dumps(table))
+
+    def recorded_argvs(self) -> list[list[str]]:
+        if not self.record.exists():
+            return []
+        return [json.loads(line) for line in self.record.read_text().splitlines()]
+
+    def open_settings(self, width: int = 96, height: int = 48) -> Settings:
+        found = Settings(self.clock, width=width, height=height)
+        self.addCleanup(found.screen.close)
+        return found
+
+    def test_older_provider_omitting_optional_additive_rows_renders_without_copied_defaults(self) -> None:
+        import fake_slotfather
+        import fake_tool
+
+        slot_doc = fake_slotfather.settings({"cores": 12, "memory_gib": 64, "capacity": None,
+                                             "order": {"safety": 4.5, "warn_wait": 900.0, "idle_cpu": 0.25},
+                                             "environment": [], "writable": True})
+        for section in slot_doc["sections"]:
+            section["settings"] = [row for row in section["settings"] if row["key"] != "order.reservation_timeout"]
+            for row in section["settings"]:
+                if row["key"].startswith("order."):
+                    row["revision"] = "rev-older-order"
+        lane_doc = fake_tool.document({"tool": "lanefather", "values": {"rerun.wait": 1200},
+                                       "environment": {}, "writable": True})
+        lane_doc["sections"] = [section for section in lane_doc["sections"] if section["id"] != "host"]
+        junk_doc = fake_tool.document({"tool": "junkfather", "values": {"own.default_ttl": 5400},
+                                       "environment": {}, "writable": True})
+        for section in junk_doc["sections"]:
+            section["settings"] = [row for row in section["settings"] if row["key"] != "own.background_ttl"]
+
+        updated_slot = copy.deepcopy(slot_doc)
+        for section in updated_slot["sections"]:
+            for row in section["settings"]:
+                if row["key"] == "order.idle_cpu":
+                    row["value"] = 0.3
+                if row["key"].startswith("order."):
+                    row["revision"] = "rev-older-order-2"
+        self.write_provider("slotfather", slot_doc, {
+            "settings check order.idle_cpu 0.3 --json": {"code": 0, "json": {"ok": True, "error": None, "preview": None}},
+            "settings set order.idle_cpu 0.3 --revision rev-older-order --json": {"code": 0, "json": updated_slot},
+        })
+        self.write_provider("lanefather", lane_doc)
+        self.write_provider("junkfather", junk_doc)
+
+        settings = self.open_settings(width=96, height=70)
+        text = settings.text(idle(), width=96, height=70)
+        for omitted in ("Reservation timeout", "Free disk floor", "Background command TTL"):
+            self.assertNotIn(omitted, text, f"omitted additive row {omitted!r} must not be synthesized")
+        focus_keys = [row.focus for row in settings_model.selectable(settings.panel, settings.context())]
+        self.assertNotIn(("slotfather", "order.reservation_timeout"), focus_keys)
+        self.assertNotIn(("lanefather", "host.min_disk_gb"), focus_keys)
+        self.assertNotIn(("junkfather", "own.background_ttl"), focus_keys)
+        self.assertRegex(text, r"Backfill margin +4\.5×")
+        self.assertRegex(text, r"Warn after waiting +15m")
+        self.assertRegex(text, r"Idle when below +0\.25 cores")
+        self.assertRegex(text, r"Rerun waits +20m")
+        self.assertRegex(text, r"Default TTL +1h30m")
+
+        # Moving down from warn_wait steps directly to idle_cpu and edits it using the provider's key and revision.
+        settings.select(("slotfather", "order.warn_wait"))
+        settings.key("down")
+        self.assertEqual(("slotfather", "order.idle_cpu"), settings.focus)
+        settings.key("right", "\r")
+        self.assertIn(["slotfather", "settings", "set", "order.idle_cpu", "0.3", "--revision", "rev-older-order",
+                       "--json"], self.recorded_argvs())
+
+    def test_extended_v1_provider_with_added_reordered_and_unsupported_rows(self) -> None:
+        extended: dict[str, Any] = {
+            "v": 1, "tool": "slotfather", "writable": True, "reason": None,
+            "basis": {"saved": False, "cores": 12, "cpu_slots": 4, "memory_gib": 64.0, "gib_per_slot": None,
+                      "memory_slots": 16, "slots": 4, "mode": "automatic"},
+            "status": [{"label": "queue", "value": "/compat/state"}],
+            "sections": [
+                {"id": "order", "title": "Queue order", "settings": [
+                    {"key": "order.lease_grace", "label": "Lease grace window", "type": "duration",
+                     "value": 45, "default": 30, "min": 0, "max": 300, "step": 45, "unit": "s",
+                     "zero": "immediate", "writable": True, "source": "saved", "revision": "rev-ext-1",
+                     "description": "Extra grace before an idle lease expires.",
+                     "warning": "Applies to future grants only."},
+                    {"key": "order.strict_fairness", "label": "Strict fairness", "type": "boolean",
+                     "value": True, "default": False, "writable": True, "source": "saved", "revision": "rev-ext-1",
+                     "description": "Enforce strict class fairness across projects."},
+                    {"key": "order.fairness_burst", "label": "Fairness burst", "type": "integer",
+                     "value": 2, "default": 1, "min": 1, "max": 8, "step": 1, "unit": "jobs",
+                     "when": {"order.strict_fairness": [True]}, "writable": True, "source": "saved",
+                     "revision": "rev-ext-1", "description": "Consecutive same-project grants allowed."},
+                    {"key": "order.schedule_curve", "label": "Schedule curve", "type": "histogram",
+                     "value": "p90", "default": "p90", "writable": True, "source": "default",
+                     "revision": "rev-ext-1", "description": "Future curve type."},
+                    {"key": "order.order", "label": "Queue order", "type": "choice",
+                     "value": "window", "default": "backfill",
+                     "choices": [{"value": "backfill", "label": "Backfill"}, {"value": "window", "label": "Arrival"}],
+                     "writable": True, "source": "saved", "revision": "rev-ext-1",
+                     "description": "Queue admission discipline."},
+                ]},
+                {"id": "capacity", "title": "Capacity", "settings": [
+                    {"key": "capacity.mode", "label": "Capacity", "type": "choice",
+                     "value": "automatic", "default": "automatic",
+                     "choices": [{"value": "automatic", "label": "Automatic"}, {"value": "fixed", "label": "Fixed"}],
+                     "writable": True, "source": "default", "revision": "rev-cap-1",
+                     "description": "Shared slot budget."},
+                ]},
+            ],
+        }
+        after_grace = copy.deepcopy(extended)
+        after_grace["sections"][0]["settings"][0]["value"] = 90
+        after_grace["sections"][0]["settings"][0]["revision"] = "rev-ext-2"
+        self.write_provider("slotfather", extended, {
+            "settings check order.lease_grace 0 --json": {
+                "code": 0, "json": {"ok": True, "error": None, "preview": "grace disabled"}},
+            "settings check order.lease_grace 90 --json": {
+                "code": 0, "json": {"ok": True, "error": None, "preview": "lease_grace would be 90s"}},
+            "settings set order.lease_grace 90 --revision rev-ext-1 --json": {"code": 0, "json": after_grace},
+            "settings reset order.lease_grace --revision rev-ext-2 --json": {"code": 0, "json": extended},
+        })
+
+        settings = self.open_settings(width=96, height=48)
+        focus_keys = [row.focus for row in settings_model.selectable(settings.panel, settings.context())]
+        self.assertEqual([
+            INTERVAL, THEME,
+            ("slotfather", "order.lease_grace"),
+            ("slotfather", "order.strict_fairness"),
+            ("slotfather", "order.fairness_burst"),
+            ("slotfather", "order.order"),
+            ("slotfather", "capacity.mode"),
+        ], focus_keys, "provider row order and additive rows are preserved; unsupported type is excluded")
+        self.assertEqual(("slotfather", "order.lease_grace"), settings.focus, "first provider row gets initial focus")
+
+        text = settings.text(idle(), width=96, height=48)
+        self.assertLess(text.index("Lease grace window"), text.index("Capacity"), "reordered sections render in order")
+        self.assertRegex(text, r"Lease grace window +45s")
+        self.assertIn("Applies to future grants only.", text)
+        self.assertIn("Extra grace before an idle lease expires.", text)
+        self.assertRegex(text, r"Strict fairness +On")
+        self.assertRegex(text, r"Fairness burst +2 jobs")
+        self.assertRegex(text, r"Schedule curve +p90 +read-only here: needs a newer godfather")
+        self.assertRegex(text, r"Queue order +Arrival")
+
+        # Stepping the additive duration row to 0 uses the provider's `zero` word; stepping up and saving uses its key.
+        settings.key("left")
+        self.assertRegex(settings.text(idle(), width=96, height=48), r"Lease grace window +immediate +pending")
+        settings.key("esc", "right")
+        self.assertIn("lease_grace would be 90s", settings.text(idle(), width=96, height=48))
+        settings.key("\r")
+        self.assertRegex(settings.text(idle(), width=96, height=48), r"Lease grace window +1m30s")
+        settings.key("d")
+        self.assertIn(["slotfather", "settings", "set", "order.lease_grace", "90", "--revision", "rev-ext-1", "--json"],
+                      self.recorded_argvs())
+        self.assertIn(["slotfather", "settings", "reset", "order.lease_grace", "--revision", "rev-ext-2", "--json"],
+                      self.recorded_argvs())
+
+        # Toggling the additive boolean row hides its conditional `when` follower.
+        settings.select(("slotfather", "order.strict_fairness"))
+        settings.key("right")
+        after_toggle = [row.focus for row in settings_model.selectable(settings.panel, settings.context())]
+        self.assertNotIn(("slotfather", "order.fairness_burst"), after_toggle)
+
+    def test_malformed_required_fields_fail_visibly(self) -> None:
+        from godfather.adapters.settings import SettingsClient, SettingsError
+
+        valid_row = {"key": "order.safety", "label": "Backfill margin", "type": "number", "value": 3.0,
+                     "writable": True, "revision": "r1"}
+        cases: list[tuple[str, dict[str, Any], str]] = [
+            ("unknown version", {"v": 2, "sections": []}, "settings version 2; needs a newer godfather"),
+            ("missing sections", {"v": 1, "tool": "slotfather"}, "sections is missing"),
+            ("malformed section", {"v": 1, "sections": [{"id": "order"}]}, "malformed section"),
+            ("missing key", {"v": 1, "sections": [{"id": "order", "settings": [{"type": "number", "value": 1}]}]},
+             "has no key"),
+            ("missing type", {"v": 1, "sections": [{"id": "order", "settings": [{"key": "order.safety", "value": 1}]}]},
+             "order.safety has no type"),
+            ("missing value",
+             {"v": 1, "sections": [{"id": "order", "settings": [{"key": "order.safety", "type": "number"}]}]},
+             "order.safety has no value"),
+            ("choice without choices",
+             {"v": 1, "sections": [{"id": "order", "settings": [
+                 {"key": "order.order", "type": "choice", "value": "backfill", "choices": []}]}]},
+             "order.order has malformed choices"),
+            ("non-numeric duration value",
+             {"v": 1, "sections": [{"id": "order", "settings": [
+                 {"key": "order.warn_wait", "type": "duration", "value": "thirty"}]}]},
+             "order.warn_wait has a non-numeric value"),
+            ("non-boolean boolean value",
+             {"v": 1, "sections": [{"id": "order", "settings": [
+                 {"key": "order.strict", "type": "boolean", "value": "yes"}]}]},
+             "order.strict has a non-boolean value"),
+            ("malformed status",
+             {"v": 1, "status": [{"label": "queue"}], "sections": [{"id": "order", "settings": [valid_row]}]},
+             "malformed status"),
+        ]
+        for name, document, expected in cases:
+            with self.subTest(name=name):
+                self.write_provider("slotfather", document)
+                with self.assertRaisesRegex(SettingsError, expected):
+                    SettingsClient(tool="slotfather").read()
+                settings = self.open_settings()
+                text = settings.text(idle(), width=96, height=40)
+                self.assertIn(expected, text)
+                self.assertEqual([INTERVAL, THEME],
+                                 [row.focus for row in settings_model.selectable(settings.panel, settings.context())])
 
 
 if __name__ == "__main__":

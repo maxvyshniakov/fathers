@@ -441,9 +441,8 @@ def render(name: str, theme: str | None) -> str:
     found, everything, unread = scene_news()
     read = everything if name.startswith(("overview-", "help-", "settings-", "expected", "focus-")) else unread
     scene = json.loads((folder / "scene.json").read_text())
-    with environment(theme, folder):
+    with environment(theme, folder), app.Screen() as screen:
         palette = themes.from_environment()
-        screen = app.Screen()
         model, error = screen.load()
         assert model is not None and error is None, error
         entries.dashboard_colours(model, {}, palette.holders())
@@ -459,11 +458,8 @@ def render(name: str, theme: str | None) -> str:
             from godfather.views.events import draw_events
 
             canvas = tui.Canvas(width, height, palette, common.marks_for(False))
-            try:
-                draw_events(canvas, Rect(0, 0, height, width), model, moment)
-                return canvas.render(theme is not None)
-            finally:
-                screen.feed.close()
+            draw_events(canvas, Rect(0, 0, height, width), model, moment)
+            return canvas.render(theme is not None)
         shown: object = None
         if overlay == "settings":
             from godfather import settings_model

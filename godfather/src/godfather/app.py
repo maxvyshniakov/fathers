@@ -21,6 +21,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, cast
@@ -120,11 +121,14 @@ class Screen:
         self.others = others if others is not None else [Source(name, _events.EventsContract(name))
                                                          for name in _sources.TOOLS if name != "slotfather"]
         self.feed = _events.Feed()
+        self.lock = threading.Lock()
+        self.closed = False
         # Settings' own view of the tools (fathers#87 review): discovered and read on Settings' worker alone, never on
         # the screen's thread nor on the Source objects the model loader uses
         self.settings_found = [Source(name, _settings_adapter.Contract(name)) for name in _sources.TOOLS]
         self.rows: list[dict[str, Any]] = []
         self.followed: tuple[tuple[str, str], ...] = ()
+        self.skipped: dict[str, dict[str, int]] = {}
         # The other tools as sources (fathers#85): each polled on its own worker, on Source objects of its own
         self.tool_sources = {name: Source(name, adapter) for name, adapter in TOOL_ADAPTERS.items()}
         # The action worker's own view of every tool (fathers#88 review): its re-checks never touch the loaders'
@@ -132,35 +136,71 @@ class Screen:
                                **{name: Source(name, adapter) for name, adapter in TOOL_ADAPTERS.items()}}
         self.fresh: set[str] = set()  # the sources whose log gained a line in the last load: polled again soon
 
-    def follow(self) -> tuple[tuple[str, str], ...]:
-        """Every present source with an event log followed, the others not: (name, tag) each, in TOOLS order."""
+    def close(self) -> None:
+        """Closes every followed event-log handle; an in-flight load cannot reopen or read one after this."""
+        with self.lock:
+            self.closed = True
+            self.feed.close()
+
+    def __enter__(self) -> Screen:
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self.close()
+
+    def _follow_locked(self) -> tuple[tuple[str, str], ...]:
         found: list[tuple[str, str]] = []
         for source in [self.source, *self.others]:
-            if source is not self.source and source.due():
-                source.discover()
             log = _events.log_path(source.capabilities) if source.state in ("ok", "stale") else None
             self.feed.follow(source.name, str(_sources.event_log(source.name, log)) if log else None)
             if log:
                 found.append((source.name, source.tag))
         return tuple(found)
 
+    def follow(self) -> tuple[tuple[str, str], ...]:
+        """Every present source with an event log followed, the others not: (name, tag) each, in TOOLS order."""
+        if self.closed:
+            return ()
+        for source in self.others:
+            if self.closed:
+                return ()
+            if source.due():
+                source.discover()
+        with self.lock:
+            if self.closed:
+                return ()
+            return self._follow_locked()
+
     def events(self) -> list[dict[str, Any]]:
         """EVENTS' rows from every followed log, built again only when a log gained a line or a source came or
         went."""
-        followed = self.follow()
-        polled = self.feed.poll()
-        self.fresh = {event.source for event in polled}
-        if polled or followed != self.followed:
-            self.followed = followed
-            self.rows = _events.rows(self.feed.events(), dict(followed))
-        return self.rows
+        if self.closed:
+            return self.rows
+        for source in self.others:
+            if self.closed:
+                return self.rows
+            if source.due():
+                source.discover()
+        with self.lock:
+            if self.closed:
+                return self.rows
+            followed = self._follow_locked()
+            polled = self.feed.poll()
+            self.fresh = {event.source for event in polled}
+            self.skipped = self.feed.skipped()
+            if polled or followed != self.followed:
+                self.followed = followed
+                self.rows = _events.rows(self.feed.events(), dict(followed))
+            return self.rows
 
     def load(self, _: Any = None) -> tuple[Dashboard | None, str | None]:
         """(the model to draw, the refresh error for the footer); discovery first when it is due."""
+        if self.closed:
+            return None, None
         source = self.source
         if source.due():
             source.discover()
-        if source.state in ("absent", "unsupported"):
+        if self.closed or source.state in ("absent", "unsupported"):
             return None, None
         try:
             source.took(_slotfather.decode(source.poll()), None)
@@ -174,7 +214,7 @@ class Screen:
         # capabilities name no log shows none and says why
         model["events"] = self.events()
         model["sources"] = list(self.followed)
-        model["events_skipped"] = self.feed.skipped()
+        model["events_skipped"] = dict(self.skipped)
         model["fresh_sources"] = sorted(self.fresh)  # an event polls its source at once, debounced (SPEC 9)
         model["uid"] = os.geteuid()  # whose requests can be reprioritized (fathers#88)
         model["actions"] = list(_actions.offered(_lanefather.dashboard_block(source.capabilities).get("actions")))
@@ -401,8 +441,10 @@ class Live:
         self.fetched = 0.0
 
     def close(self) -> None:
+        self.screen.close()
         for fd in (self.wake_read, self.wake_write):
-            os.close(fd)
+            with contextlib.suppress(OSError):
+                os.close(fd)
 
     def apply_theme(self) -> None:
         self.theme = _theme.from_environment(answers=self.answers, mode=self.state.theme)
@@ -677,26 +719,26 @@ def once(width: int | None, height: int | None, colour: bool | None, interval: f
     with the row the first request links to selected, else its first row. A page whose tool is absent is the
     overview, as its key would leave it."""
     theme = theme if theme is not None else _theme.from_environment()
-    screen = Screen()
-    model, error = screen.load()
-    items: list[Request] = (model["holders"] + model["waiters"]) if model else []
-    tools = {name: screen.load_tool(name) for name in TOOL_ADAPTERS}
-    cwd = None
-    if model:
-        _entries.dashboard_colours(model, {}, theme.holders())
-        if items:
-            cwd = _sources.process_cwd(items[0]["pid"]) if items[0]["kind"] != "waiting" else None
-            lanes = screen.tool_sources["lanefather"]
-            if _lanefather.lane_of(items[0], lanes.snapshot, cwd) is None:
-                _details.enrich_details(items[0], lanes.capabilities)
-    state = _pages.open_page(_state.settle(_state.AppState(model=model, tools=tools), 0.0)[0], page)
-    ascii_only = "utf" not in (sys.stdout.encoding or "").lower()
-    size_now = shutil.get_terminal_size((120, 40))
-    canvas = Canvas(width or size_now.columns, height or size_now.lines, theme, _common.marks_for(ascii_only))
-    canvas.focus = state.focus
-    _overview.dashboard_draw(canvas, model, error=error, cwd=cwd, notice=screen.notice(),
-                             moment=datetime.datetime.now(datetime.timezone.utc), tools=tools, page=state.page,
-                             page_row=_pages.page_index(state, state.page) if state.page != "overview" else None)
+    with Screen() as screen:
+        model, error = screen.load()
+        items: list[Request] = (model["holders"] + model["waiters"]) if model else []
+        tools = {name: screen.load_tool(name) for name in TOOL_ADAPTERS}
+        cwd = None
+        if model:
+            _entries.dashboard_colours(model, {}, theme.holders())
+            if items:
+                cwd = _sources.process_cwd(items[0]["pid"]) if items[0]["kind"] != "waiting" else None
+                lanes = screen.tool_sources["lanefather"]
+                if _lanefather.lane_of(items[0], lanes.snapshot, cwd) is None:
+                    _details.enrich_details(items[0], lanes.capabilities)
+        state = _pages.open_page(_state.settle(_state.AppState(model=model, tools=tools), 0.0)[0], page)
+        ascii_only = "utf" not in (sys.stdout.encoding or "").lower()
+        size_now = shutil.get_terminal_size((120, 40))
+        canvas = Canvas(width or size_now.columns, height or size_now.lines, theme, _common.marks_for(ascii_only))
+        canvas.focus = state.focus
+        _overview.dashboard_draw(canvas, model, error=error, cwd=cwd, notice=screen.notice(),
+                                 moment=datetime.datetime.now(datetime.timezone.utc), tools=tools, page=state.page,
+                                 page_row=_pages.page_index(state, state.page) if state.page != "overview" else None)
     tty = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
     print(canvas.render(colour if colour is not None else tty, ascii_only))
     return 1 if model is None else 0  # the frame says why: no tool, no contract, or a failed snapshot

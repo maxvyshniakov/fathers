@@ -30,7 +30,8 @@ class ReplayTests(unittest.TestCase):
         with tool.environment(None):
             from godfather import app
 
-            model, error = app.Screen().load()
+            with app.Screen() as screen:
+                model, error = screen.load()
         self.assertIsNone(error)
         assert model is not None
         rows = model["events"]
@@ -60,7 +61,8 @@ class ReplayTests(unittest.TestCase):
         with tool.environment(None, folder / "scene"):
             from godfather import app
 
-            model, _ = app.Screen().load()
+            with app.Screen() as screen:
+                model, _ = screen.load()
         assert model is not None
         self.assertEqual(([], [], "slotfather too old for events"),
                          (model["events"], model.get("sources"), model.get("events_note")),
@@ -82,7 +84,8 @@ class ReplayTests(unittest.TestCase):
         with tool.environment(None, folder / "scene"):
             from godfather import app
 
-            model, _ = app.Screen().load()
+            with app.Screen() as screen:
+                model, _ = screen.load()
         assert model is not None
         self.assertEqual("slotfather's events need a newer godfather", model.get("events_note"))
 
@@ -107,6 +110,59 @@ class ReplayTests(unittest.TestCase):
                 feed.close()
         self.assertEqual(keys[0][1], keys[1][0], "the same event, the same identity")
         self.assertNotEqual(keys[0][0], keys[0][1])
+
+    def test_screen_and_live_close_event_tails_even_with_a_load_in_flight(self) -> None:
+        """fathers#187: one-shot, golden and live screens close their event tails deterministically, and a snapshot
+        load in flight when Live closes cannot reopen or read a tail after close."""
+        import gc
+        import threading
+        import warnings
+        from unittest import mock
+
+        from godfather import app
+
+        tool = goldens_tool()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ResourceWarning)
+            with tool.environment(None, tool.MIXED):
+                with app.Screen() as screen:
+                    model, error = screen.load()
+                    self.assertIsNone(error)
+                    assert model is not None
+                    self.assertEqual({"slotfather", "lanefather", "junkfather"}, set(screen.feed.tails))
+                    self.assertTrue(all(tail.handle is not None for tail in screen.feed.tails.values()))
+                self.assertTrue(screen.closed)
+                self.assertTrue(all(tail.handle is None for tail in screen.feed.tails.values()))
+
+                # Live teardown while a background model load is in flight before its event-tail poll.
+                screen = app.Screen()
+                entered = threading.Event()
+                release = threading.Event()
+                real_poll = screen.source.poll
+
+                def delayed_poll() -> Any:
+                    found = real_poll()
+                    entered.set()
+                    release.wait(5)
+                    return found
+
+                with mock.patch.object(screen.source, "poll", side_effect=delayed_poll):
+                    live = app.Live(0, 1, screen, 1.0, "auto")
+                    live.load_model()
+                    self.assertTrue(entered.wait(5), "model loader entered poll")
+                    live.close()
+                    self.assertTrue(screen.closed)
+                    release.set()
+                    deadline = __import__("time").monotonic() + 5
+                    while live.models.wants("model") and __import__("time").monotonic() < deadline:
+                        __import__("time").sleep(0.01)
+                self.assertTrue(all(tail.handle is None for tail in screen.feed.tails.values()),
+                                "in-flight load must not reopen a tail after close")
+                self.assertEqual((None, None), screen.load(), "a closed screen does not load again")
+            tool.render("mixed-156x43", None)
+            gc.collect()
+        resource_warnings = [item for item in caught if issubclass(item.category, ResourceWarning)]
+        self.assertEqual([], resource_warnings)
 
     def test_every_slotfather_kind_today_has_a_result(self) -> None:
         log = [logged("lease.granted", NOW, "a", 1, count=1, waited=3),
@@ -251,6 +307,73 @@ class LogViewTests(unittest.TestCase):
             detail = self.tool.Canvas(100, 15)
             self.tool.draw_event_detail(detail, Rect(0, 0, 15, 100), row, NOW)
             self.assertIn(full_text, detail.render(False))
+        head_detail = self.tool.Canvas(100, 18)
+        self.tool.draw_event_detail(head_detail, Rect(0, 0, 18, 100), rows[2], NOW)
+        head_text = head_detail.render(False)
+        self.assertRegex(head_text, r"blocked_by +compiler checks · id 128 · pid 450")
+        self.assertRegex(head_text, r"\n│ +package link · id 129 · pid 451")
+
+    def test_event_details_wrap_lock_paths_and_render_each_blocker_row_at_narrow_widths(self) -> None:
+        """fathers#182: full lock paths wrap without splitting their filename, and each blocker gets its own
+        detail row with its identity (including repeated labels, null peer on yield, and missing optional fields),
+        with scroll and resize bounds preserved."""
+        lock = "/tmp/build-cache/worktrees/lane-linux/compiled-assets/cache.lock"
+        yielded, ended, dropped = rows_of([
+            logged("lease.yielded", NOW, "linux build", 112, count=1, lock=lock, to={"id": None}),
+            logged("lease.lock_ended", NOW, "linux build", 112, lock=lock, why="resumed", yielded=True, waited=12),
+            logged("request.head_dropped", NOW, "all-slots test", 113, count=8, late=1800,
+                   blocked_by=[{"label": "compiler checks", "id": "128", "pid": 450},
+                               {"label": "compiler checks", "id": "129", "pid": 451},
+                               {"label": "compiler\nchecks", "id": None, "pid": 452},
+                               {"label": None, "id": "130\x1b", "pid": None},
+                               {"label": None, "id": None, "pid": 453},
+                               {"label": None, "id": None, "pid": None}]),
+        ], TAGS)
+        # Null peer on lock yield produces no `to.id` row; narrow width wraps the lock path and keeps `cache.lock`.
+        for row in (yielded, ended):
+            canvas = self.tool.Canvas(46, 18)
+            self.tool.draw_event_detail(canvas, Rect(0, 0, 18, 46), row, NOW)
+            rendered = canvas.render(False)
+            self.assertNotIn("to.id", rendered)
+            self.assertIn("/tmp/build-cache/", rendered)
+            self.assertIn("cache.lock", rendered)
+            for line in rendered.splitlines():
+                self.assertEqual(46, len(line))
+
+        # Wide details show each blocker on its own row under `blocked_by`, with control characters stripped.
+        wide = self.tool.Canvas(90, 20)
+        self.tool.draw_event_detail(wide, Rect(0, 0, 20, 90), dropped, NOW)
+        wide_text = wide.render(False)
+        self.assertNotIn("\x1b", wide_text)
+        expected_rows = [
+            "compiler checks · id 128 · pid 450",
+            "compiler checks · id 129 · pid 451",
+            "compiler checks · pid 452",
+            "id 130",
+            "pid 453",
+        ]
+        for item in expected_rows:
+            self.assertIn(item, wide_text)
+
+        # Narrow layout wraps blocker rows without horizontal overflow, scrolls to the end, and clamps on resize.
+        narrow = self.tool.Canvas(44, 11)
+        self.tool.draw_event_detail(narrow, Rect(0, 0, 11, 44), dropped, NOW)
+        for line in narrow.render(False).splitlines():
+            self.assertEqual(44, len(line))
+        meta = narrow.tables["details"]
+        self.assertGreater(meta["count"], meta["visible"])
+        max_offset = meta["count"] - meta["visible"]
+
+        scrolled = self.tool.Canvas(44, 11)
+        scrolled.scroll = {"details": 999}
+        self.tool.draw_event_detail(scrolled, Rect(0, 0, 11, 44), dropped, NOW)
+        self.assertEqual(max_offset, scrolled.tables["details"]["offset"], "scroll is bounded at the bottom")
+        self.assertIn("pid 453", scrolled.render(False))
+
+        resized = self.tool.Canvas(90, 20)
+        resized.scroll = {"details": 999}
+        self.tool.draw_event_detail(resized, Rect(0, 0, 20, 90), dropped, NOW)
+        self.assertEqual(0, resized.tables["details"]["offset"], "enlarging clamps scroll back to 0")
 
     def test_slots_log_is_the_default_one_row_per_run_its_title_the_switch(self) -> None:
         canvas, lines = self.draw(120)
