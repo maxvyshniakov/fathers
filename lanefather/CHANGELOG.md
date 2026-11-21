@@ -8,6 +8,12 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Bounded verify progress heartbeats during quiet runs (fathers#190): `lanefather.verify.Run` samples log silence,
+  Slotfather queue state (`slotfather status --json --pid`), and process tree CPU/child activity during quiet
+  intervals (`LANEFATHER_VERIFY_HEARTBEAT`, default 30 s) and prints bounded progress lines distinguishing `queued`,
+  `setup`, and `active` states, active suite/check, last-output age, and activity evidence without fabricating test
+  names, while preserving command outcomes and receipts.
+
 - `lanefather land` three-phase split (`merge`, `post_merge`, `after_land`), kill-after-merge recovery, and
   lock-free `done` cleanup (fathers#72): `land` records a `landing` intent before merging and finishes the `land`
   transition on re-land if killed between merge and save (with `lanefather land ID --repair` for pre-intent

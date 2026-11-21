@@ -6,6 +6,9 @@ import json
 import os
 import pathlib
 import signal
+import subprocess
+import sys
+import time
 from typing import Any
 import unittest
 import unittest.mock
@@ -276,6 +279,153 @@ class VerifyCallSitePinTests(LaneCase):
             # Re-selecting the same green tree short-circuits to None.
             again = checks.prepare("stages")
             self.assertIsNone(checks.select(again, rerun=False, slots_override=None))
+
+
+class VerifyProgressHeartbeatTests(LaneCase):
+    """fathers#190: bounded progress heartbeats during quiet verify runs, held children, and Slotfather queue waits."""
+
+    def receipt(self, lane_id: str) -> dict[str, Any]:
+        return json.loads((self.state / f"{lane_id}.receipt.json").read_text())
+
+    def test_quiet_active_fixture_without_newlines_emits_heartbeats_and_preserves_receipt(self):
+        self.env["LANEFATHER_VERIFY_HEARTBEAT"] = "0.1"
+        # A streaming verifier that writes dots without newlines across several heartbeat intervals while working.
+        verifier = (self.integration / "verify.sh").read_text().replace(
+            '    with open(check_log, "w") as out:\n'
+            '        code = subprocess.call(["bash", str(script)], cwd=root, stdout=out, stderr=subprocess.STDOUT) if script.exists() else 0\n'
+            '    sys.stdout.write(check_log.read_text())',
+            '    with open(check_log, "w") as out:\n'
+            '        if script.exists():\n'
+            '            proc = subprocess.Popen(["bash", str(script)], cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)\n'
+            '            assert proc.stdout is not None\n'
+            '            while True:\n'
+            '                ch = proc.stdout.read(1)\n'
+            '                if not ch:\n'
+            '                    break\n'
+            '                text = ch.decode(errors="replace")\n'
+            '                out.write(text); out.flush()\n'
+            '                sys.stdout.write(text); sys.stdout.flush()\n'
+            '            code = proc.wait()\n'
+            '            sys.stdout.write("\\n"); sys.stdout.flush()\n'
+            '        else:\n'
+            '            code = 0',
+        )
+        script = (
+            "python3 - <<'EOF'\n"
+            "import sys, time\n"
+            "for _ in range(6):\n"
+            "    _ = sum(range(150000))\n"
+            "    sys.stdout.write('.')\n"
+            "    sys.stdout.flush()\n"
+            "    time.sleep(0.08)\n"
+            "EOF\n"
+        )
+        self.commit(self.integration, {"verify.sh": verifier, "checks/lib.sh": script},
+                    "quiet active dots without newlines")
+        wt = self.created("quiet", "lib/**")
+        self.commit(wt, {"lib/api.txt": "foo\nbaz\n"})
+        output = self.lane("check", "quiet")
+        heartbeats = [line for line in output.splitlines() if "[active]" in line]
+        self.assertGreaterEqual(len(heartbeats), 2, output)
+        for line in heartbeats:
+            self.assertIn("lane-quiet [active]", line)
+            self.assertIn("cpu ", line)
+            self.assertNotIn("; test ", line)
+        self.assertTrue(any("no newline for" in line for line in heartbeats), heartbeats)
+        receipt = self.receipt("quiet")
+        self.assertEqual(receipt["status"], "green")
+        self.assertEqual(receipt["check_results"]["lib-check"]["status"], "passed")
+
+    def test_held_child_reports_stale_output_age_and_activity_without_fabricating_test_name(self):
+        self.env["LANEFATHER_VERIFY_HEARTBEAT"] = "0.1"
+        hold = self.tmp / "child-hold"
+        started = self.tmp / "child-hold.started"
+        script = (
+            "echo 'lib-check'\n"
+            "python3 - <<EOF\n"
+            "import pathlib, time\n"
+            f"pathlib.Path({str(started)!r}).write_text('ok')\n"
+            f"while not pathlib.Path({str(hold)!r}).exists():\n"
+            "    time.sleep(0.05)\n"
+            "EOF\n"
+        )
+        self.commit(self.integration, {"checks/lib.sh": script}, "held child check")
+        wt = self.created("held", "lib/**")
+        self.commit(wt, {"lib/api.txt": "foo\nbaz\n"})
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "lanefather", "check", "held"],
+            cwd=wt, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        self.addCleanup(hold.touch)
+        self.addCleanup(lambda: (proc.kill(), proc.wait()) if proc.poll() is None else None)
+        deadline = time.monotonic() + 30
+        while not started.exists():
+            self.assertIsNone(proc.poll(), "lanefather check exited before held child started")
+            self.assertLess(time.monotonic(), deadline, "held child did not start")
+            time.sleep(0.05)
+        time.sleep(0.35)
+        hold.touch()
+        output, _ = proc.communicate(timeout=30)
+        self.assertEqual(proc.returncode, 0, output)
+        heartbeats = [line for line in output.splitlines() if "lane-held [active]" in line]
+        self.assertGreaterEqual(len(heartbeats), 2, output)
+        self.assertTrue(any("last output " in line and "child" in line for line in heartbeats), heartbeats)
+        for line in heartbeats:
+            self.assertNotIn("; test ", line)
+        self.assertEqual(self.receipt("held")["status"], "green")
+
+    def test_queued_check_shows_slotfather_queue_wait_as_its_own_state(self):
+        self.env["LANEFATHER_VERIFY_HEARTBEAT"] = "0.1"
+        queue_hold = self.tmp / "queue-hold"
+        self.env["FAKE_SLOTFATHER_QUEUE_HOLD"] = str(queue_hold)
+        # Make verify.sh wrap its check execution under `slotfather run` like a real queued verifier.
+        verifier = (self.integration / "verify.sh").read_text().replace(
+            '        code = subprocess.call(["bash", str(script)], cwd=root, stdout=out, stderr=subprocess.STDOUT) if script.exists() else 0',
+            '        code = subprocess.call(["slotfather", "run", "-n", "1", "--label", os.environ.get("LANEFATHER_SLOT_LABEL", "check"), "--", "bash", str(script)], cwd=root, stdout=out, stderr=subprocess.STDOUT) if script.exists() else 0',
+        )
+        self.commit(self.integration, {"verify.sh": verifier}, "queue check via slotfather run")
+        wt = self.created("queued", "lib/**")
+        self.commit(wt, {"lib/api.txt": "foo\nbaz\n"})
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "lanefather", "check", "queued"],
+            cwd=wt, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        self.addCleanup(queue_hold.touch)
+        self.addCleanup(lambda: (proc.kill(), proc.wait()) if proc.poll() is None else None)
+        waiting_marker = pathlib.Path(str(queue_hold) + ".waiting")
+        deadline = time.monotonic() + 30
+        while not waiting_marker.exists():
+            self.assertIsNone(proc.poll(), "lanefather check exited before entering slotfather queue")
+            self.assertLess(time.monotonic(), deadline, "queued check did not enter slotfather")
+            time.sleep(0.05)
+        time.sleep(0.45)
+        queue_hold.touch()
+        output, _ = proc.communicate(timeout=30)
+        self.assertEqual(proc.returncode, 0, output)
+        queued_lines = [line for line in output.splitlines() if "lane-queued [queued]" in line]
+        self.assertGreaterEqual(len(queued_lines), 2, output)
+        self.assertTrue(any("slotfather waiting" in line for line in queued_lines), queued_lines)
+        self.assertEqual(self.receipt("queued")["status"], "green")
+
+    def test_tracker_identifies_setup_state_and_observed_unittest_name_without_fabricating(self):
+        from lanefather import verify
+        log = self.tmp / "progress.log"
+        tracker = verify._ProgressTracker(log, verify.Selection.checks(["lib-check", "native-check"]))  # pyright: ignore[reportPrivateUsage]
+        tracker.reset(10.0)
+        log.write_bytes(b"setup: installing dependencies\n")
+        tracker.poll(10.5)
+        self.assertTrue(tracker.in_setup)
+        self.assertIsNone(tracker.observed_test)
+        with open(log, "ab") as handle:
+            handle.write(b"==> lib-check\ntest_slow (test_mod.SlowTests) ... ")
+        tracker.poll(11.0)
+        self.assertFalse(tracker.in_setup)
+        self.assertEqual(tracker.active_target, "lib-check")
+        self.assertEqual(tracker.observed_test, "test_slow (test_mod.SlowTests)")
+        with open(log, "ab") as handle:
+            handle.write(b"ok\n....")
+        tracker.poll(11.5)
+        self.assertIsNone(tracker.observed_test)
 
 
 if __name__ == "__main__":

@@ -287,6 +287,11 @@ and `finished` (ISO times), `junit` (a JUnit XML file whose failed test cases a 
 lease id, also allowed at the report's top level). Lanefather hands each run its run id and tree in the slot meta
 (`run`, `tree`) with `plan` and `checks` (fathers#107).
 
+During any quiet verify run (no complete output line for `LANEFATHER_VERIFY_HEARTBEAT` seconds, default `30`, `0` or
+`off` to disable), the shared verify runner emits bounded heartbeat lines naming the state (`queued` when waiting in
+Slotfather, `setup` during setup lines, else `active`), the active suite or check, the last-output age (separately from
+process CPU and child-process activity), and any reliably observed test name without fabricating one (fathers#190).
+
 ## Reviewer configuration
 
 Authenticate the reviewer CLIs you intend to use according to their own documentation. Without a models file

@@ -23,7 +23,7 @@ import os
 import re
 import shutil
 import subprocess
-from typing import Any
+from typing import Any, cast
 
 from . import config, settings
 from .errors import LaneError
@@ -201,3 +201,22 @@ def total() -> int:
     if not found:
         raise Unavailable(f"slotfather slots printed no capacity: {output.strip()[:300]}")
     return int(found.group(1))
+
+
+def request_status(pid: int, timeout: float = 2.0) -> dict[str, Any] | None:
+    """Best-effort read of `slotfather status --json --pid <pid>` for progress reporting; None when unavailable."""
+    found = command()
+    if found is None or pid <= 0:
+        return None
+    try:
+        result = subprocess.run([found, "status", "--json", "--pid", str(pid)],
+                                capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode:
+        return None
+    try:
+        data: Any = json.loads(result.stdout)
+    except ValueError:
+        return None
+    return cast(dict[str, Any], data) if isinstance(data, dict) else None
