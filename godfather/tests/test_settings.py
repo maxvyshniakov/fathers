@@ -428,7 +428,8 @@ class KeyTests(PanelCase):
         settings = self.open()
         self.assertEqual([INTERVAL, THEME, MODE] + [("slotfather", "order." + name) for name in (
             "order", "safety", "fallback", "overrun", "limit", "interactive", "batch", "aging_batch",
-            "aging_normal", "warn_wait", "reservation_timeout", "idle_cpu", "idle_after", "yield_after")],
+            "aging_normal", "warn_wait", "reservation_timeout", "memory_share", "memory_default_mb",
+            "idle_cpu", "idle_after", "yield_after")],
             [row.focus for row in settings_model.selectable(settings.panel, settings.context())])
         text = settings.text(idle(), height=60)
         for label, value in (("Capacity", "Automatic"), ("Queue order", "Backfill"), ("Backfill margin", "3×"),
@@ -1136,7 +1137,10 @@ class CompatibilityTests(unittest.TestCase):
                                              "order": {"safety": 4.5, "warn_wait": 900.0, "idle_cpu": 0.25},
                                              "environment": [], "writable": True})
         for section in slot_doc["sections"]:
-            section["settings"] = [row for row in section["settings"] if row["key"] != "order.reservation_timeout"]
+            section["settings"] = [
+                row for row in section["settings"]
+                if row["key"] not in {"order.reservation_timeout", "order.memory_share", "order.memory_default_mb"}
+            ]
             for row in section["settings"]:
                 if row["key"].startswith("order."):
                     row["revision"] = "rev-older-order"

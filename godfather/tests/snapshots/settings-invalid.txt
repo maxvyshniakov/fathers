@@ -1,33 +1,34 @@
 ╭─ SETTINGS ────────────────────── a change saves after a second, or on Enter ─╮
 │                                                                              │
-│  GODFATHER · this dashboard only                                             │
-│    Refresh every             1s                                              │
-│    Colour theme              Auto                                            │
-│  ──────────────────────────────────────────────────────────────────────────  │
-│  SLOTFATHER · status read-only, live                                         │
-│    queue        ~/.local/state/slotfather                                    │
-│    slots        4 total · 4 free · 0 held · 0 waiting                        │
-│    capacity     4 slots · saved, fixed count                                 │
-│    budgets      CPU 4 (12 cores) · memory 16 (64 GiB)                        │
-│    draining     none                                                         │
-│    environment  SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB                      │
-│    Capacity                  Fixed                                           │
-┃  ▶ Slots                     [0▏]                                            ┃
-┃      ✗ Enter a whole number of slots, at least 1.                            ┃
-│    Queue order               Backfill                                        │
-│    Backfill margin           3×                                              │
-│    Unknown job runtime       1h                                              │
-│    Overrun estimate          0.5×                                            │
-│    Overtaking stops after    never                                           │
-│    Interactive head start    30m                                             │
-│    Batch held back           30m                                             │
-│    Batch promoted after      30m                                             │
-│    Normal promoted after     1h                                              │
-│    Warn after waiting        30m                                             │
-│    Reservation timeout       30m                                             │
-│    Idle when below           0.1 cores                                       │
+│  GODFATHER · this dashboard only                                            ┃│
+│    Refresh every             1s                                             ┃│
+│    Colour theme              Auto                                           ┃│
+│  ────────────────────────────────────────────────────────────────────────── ┃│
+│  SLOTFATHER · status read-only, live                                        ┃│
+│    queue        ~/.local/state/slotfather                                   ┃│
+│    slots        4 total · 4 free · 0 held · 0 waiting                       ┃│
+│    capacity     4 slots · saved, fixed count                                ┃│
+│    budgets      CPU 4 (12 cores) · memory 16 (64 GiB)                       ┃│
+│    draining     none                                                        ┃│
+│    environment  SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB                     ┃│
+│    Capacity                  Fixed                                          ┃│
+┃  ▶ Slots                     [0▏]                                           ┃┃
+┃      ✗ Enter a whole number of slots, at least 1.                           ┃┃
+│    Queue order               Backfill                                       ┃│
+│    Backfill margin           3×                                             ┃│
+│    Unknown job runtime       1h                                             ┃│
+│    Overrun estimate          0.5×                                           ┃│
+│    Overtaking stops after    never                                          ┃│
+│    Interactive head start    30m                                            ┃│
+│    Batch held back           30m                                            ┃│
+│    Batch promoted after      30m                                            ┃│
+│    Normal promoted after     1h                                             ┃│
+│    Warn after waiting        30m                                            ┃│
+│    Reservation timeout       30m                                            ┃│
+│    Memory admission share    0.85                                           ┃│
+│    Default job peak memory   2048 MB                                        ┃│
+│    Idle when below           0.1 cores                                      ┃│
 │    Idle for                  5m                                              │
-│    Ask to yield after        2m                                              │
 │                                                                              │
 │  ──────────────────────────────────────────────────────────────────────────  │
 │  Total slots for every client. Applies at the next grant; a shrink drains.   │

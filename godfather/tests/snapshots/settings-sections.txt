@@ -23,6 +23,8 @@
 │    Normal promoted after     1h                                              │
 │    Warn after waiting        30m                                             │
 │    Reservation timeout       30m                                             │
+│    Memory admission share    0.85                                            │
+│    Default job peak memory   2048 MB                                         │
 │    Idle when below           0.1 cores                                       │
 │    Idle for                  5m                                              │
 │    Ask to yield after        2m                                              │
