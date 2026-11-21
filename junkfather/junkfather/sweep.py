@@ -178,13 +178,18 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
             report["gone"].append({"id": entry["id"], "how": how})
             continue
         reason = None
-        if now >= float(entry.get("expires") or 0):
+        guard: Optional[Callable[[Entry], bool]] = None
+        if _entry.due(entry, now):
             reason = "ttl expired"
+
+            def still_due(e: Entry, at: float = now) -> bool:
+                return _entry.due(e, at)
+            guard = still_due
         elif _owner.alive(entry.get("owner") or {}, table, sessions) is False:
             reason = f"owner gone ({_owner.describe(entry.get('owner') or {})})"
         if reason:
             result = _reap.reap(store, entry["id"], reason, grace=grace, dry_run=dry_run,
-                                table=table if dry_run else None, actor=_events.tool("sweep"))
+                                table=table if dry_run else None, actor=_events.tool("sweep"), allowed=guard)
             report["reaped"].append(result)
             if result["result"] in _reap.STOPPED:
                 continue
@@ -321,12 +326,18 @@ def sweep_resource(store: Store, entry: Entry, snapshot: "_resources.Snapshot", 
         report["notes"].append(f"{entry['id']}: whether {_resources.describe(resource)} runs cannot be told")
         return
     reason = None
-    if now >= float(entry.get("expires") or 0):
+    guard: Optional[Callable[[Entry], bool]] = None
+    if _entry.due(entry, now):
         reason = "ttl expired"
+
+        def still_due(e: Entry, at: float = now) -> bool:
+            return _entry.due(e, at)
+        guard = still_due
     elif _owner.alive(entry.get("owner") or {}, snapshot.table, sessions) is False:
         reason = f"owner gone ({_owner.describe(entry.get('owner') or {})})"
     if reason:
-        result = _reap.reap(store, entry["id"], reason, grace=grace, dry_run=dry_run, actor=_events.tool("sweep"))
+        result = _reap.reap(store, entry["id"], reason, grace=grace, dry_run=dry_run, actor=_events.tool("sweep"),
+                            allowed=guard)
         report["reaped"].append(result)
         snapshot.listed.pop(str(resource.get("kind")), None)  # the report lists that kind again, after the stop
         if result["result"] in _reap.STOPPED:

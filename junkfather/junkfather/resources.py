@@ -730,8 +730,10 @@ def reap(store: Store, entry: Entry, reason: str, grace: float, dry_run: bool,
     me = _entry.begin_reap(store, entry_id, reason, allowed=allowed)
     if me is None:
         current = store.load(entry_id)
-        why = ("owner changed" if current is not None and current.get("state") == _entry.RUNNING
-               and allowed is not None and not allowed(current) else "another reaper has it")
+        why = ("another reaper has it"
+               if current is None or current.get("state") != _entry.RUNNING or allowed is None or allowed(current)
+               else "not expired" if not _entry.due(current) and reason.startswith("ttl expired")
+               else "owner changed")
         return {"id": entry_id, "result": "skipped", "reason": why, "pids": [],
                 "how": describe(resource)}
     outcome = stop(resource, grace, alive)

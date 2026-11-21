@@ -239,7 +239,17 @@ def revived(store: Store, entry_id: str) -> Optional[Entry]:
 def extended(store: Store, entry_id: str, ttl: float, now: Optional[float] = None) -> Optional[Entry]:
     """A new TTL from now, for a running or starting entry."""
     at = time.time() if now is None else now
-    return _move(store, entry_id, _from(*OPEN), lambda e: e.update({"ttl": ttl, "expires": at + ttl}))
+
+    def change(e: Entry) -> None:
+        e.update({"ttl": ttl, "expires": at + ttl})
+        e.pop("no_ttl", None)
+    return _move(store, entry_id, _from(*OPEN), change)
+
+
+def due(entry: Entry, now: Optional[float] = None) -> bool:
+    """Whether `entry` has a finite TTL whose deadline has passed."""
+    at = time.time() if now is None else now
+    return not entry.get("no_ttl") and at >= float(entry.get("expires") or 0)
 
 
 def handed(store: Store, entry_id: str, target: Dict[str, Any], now: Optional[float] = None

@@ -63,6 +63,9 @@ class TransitionTests(Case):
         self.assertEqual((entry.RUNNING, None), (revived["state"], revived["ended"]))
         extended = got(entry.extended(self.store, ident, 60.0, now=100.0))
         self.assertEqual((60.0, 160.0), (extended["ttl"], extended["expires"]))
+        no_ttl_id = self.make(entry.RUNNING, no_ttl=True)
+        cleared = got(entry.extended(self.store, no_ttl_id, 60.0, now=100.0))
+        self.assertNotIn("no_ttl", cleared)
         target = {"kind": "claude", "session": "s2", "lane": None}
         moved = entry.handed(self.store, ident, target, now=7.0)
         assert moved is not None

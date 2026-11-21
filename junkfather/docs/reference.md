@@ -121,8 +121,9 @@ Slotfather's "another user's queue" (fathers#118) and is not used here.
 ## Ending an entry
 
 - **Who ends it**: its owner's end (the `SubagentStop` hook for a subagent's explicit entries with `keep: owner`,
-  the `SessionEnd` hook for all of a session's), its TTL (the supervisor, the `Stop` hook at the end of a turn,
-  or the sweep), the sweep when the owner's session is gone, a signal to an attached junkfather, or `junkfather reap`.
+  the `SessionEnd` hook for all of a session's), its TTL (the supervisor or watcher, the `Stop` hook at the end of a
+  turn, or the sweep), the sweep when the owner's session is gone, a signal to an attached junkfather, or
+  `junkfather reap`.
 - **Which processes**: the leader when its pid still has the recorded start time and command (same command line,
   or the same program, as `seen` or as `known_seen` last recorded it; `--force` skips the command check, never the
   start time); with a verified leader of its own group, the whole group, which the live leader pins; without one,
@@ -272,16 +273,19 @@ none (`no_ttl: true`, `expires` a hundred years on, which older readers take as 
 session. The agent's command then runs in the same shell: its output, exit status and shell state are unchanged, and
 the line prints nothing. `SubagentStop` fires at the end of a turn, including a turn that ends to wait for this call.
 The entry survives it, including when it runs inside an explicit entry being reaped on that turn. Cleanup happens
-at `SessionEnd`, at the TTL (the `Stop` hook or the sweep), or when the sweep finds the session is gone. An
-explicit `reap` can still stop the entry.
+at `SessionEnd`, at the TTL (the watcher, the `Stop` hook or the sweep), or when the sweep finds the session is
+gone. An explicit `reap` can still stop the entry.
 `list` and `status` show the owner with its subagent; rows carry
 `agent_type`, `auto` and `no_ttl`.
 
 - **The watcher**: the line also forks a watcher, the entry's `supervisor`, and waits until it watches the shell
   (the shell, its parent, waits for it, so the watched process is that shell). It watches the shell and then what
   it leaves, each by pid and start time, with the kernel reporting exec and exit (kqueue on macOS, a pidfd on Linux;
-  elsewhere a look every 2 s), and wakes every 2 minutes. After each event the entry's known members are the watched
-  processes that run, with their commands as they are now, so a reap recognizes one that `exec`'d. A process joins
+  elsewhere a look every 2 s), and wakes at least every 2 minutes (or at the entry's TTL deadline). After each event
+  the entry's known members are the watched processes that run, with their commands as they are now, so a reap
+  recognizes one that `exec`'d. When the entry's finite TTL passes, the watcher reaps it through the ordinary reap
+  path (rechecking expiry under the store lock so a concurrent extension or `no_ttl` wins). A finite `extend` on a
+  main-session background entry clears `no_ttl` so its new deadline applies. A process joins
   only through an identity that ties it to the shell: a descendant of a watched process in the same table, or a
   member of the shell's group while a watched member of that group runs (the group still exists, so its id cannot
   have been taken again); when the last such member exits under the kernel's eye, the group's processes that

@@ -15,7 +15,7 @@ forks a watcher (`watch`) that follows the shell, so an `exec` and what the shel
 entry's. Then the agent's command runs in that same shell, so its output, exit status and shell state are what they
 would have been: the line prints nothing, and its failure (no junkfather, no claim) only leaves the command unowned.
 A `SubagentStop` can be the end of a turn while the call is still running. Lifecycle cleanup waits for the
-session's end or the TTL (the `Stop` hook, the sweep). An explicit `reap` can still stop it.
+session's end or the TTL (the watcher, the `Stop` hook, the sweep). An explicit `reap` can still stop it.
 
 Left alone: a foreground call, a call that is one explicit `junkfather own`, `own-resource` or `adopt`
 (`owns_itself`: it owns what it starts, and the claim is the one `own` reads), a call without a session or a tool-use
@@ -40,6 +40,8 @@ import time
 from typing import Any, Callable, Dict, List, Mapping, Optional, Protocol, Tuple, cast
 
 from . import entry as _entry
+from . import events as _events
+from . import launch as _launch
 from . import owner as _owner
 from . import procs as _procs
 from . import reap as _reap
@@ -228,26 +230,44 @@ def watchable() -> bool:
     return os.environ.get("JUNKFATHER_WATCH") != "off"
 
 
+def _wait_step(entry: Optional[Entry], now: float, retry_at: Optional[float], now_mono: float) -> float:
+    """How long the watcher waits before its next look: at most WAKE, shortened to the entry's TTL deadline (or the
+    retry backoff after a failed TTL reap)."""
+    wait = WAKE
+    if entry is not None and not entry.get("no_ttl"):
+        wait = min(wait, max(0.0, float(entry.get("expires") or 0) - now))
+    if retry_at is not None:
+        wait = max(wait, 0.0, retry_at - now_mono)
+    return min(WAKE, wait)
+
+
 def watch(store: Store, entry_id: str, pid: int, start: str, ready: Callable[[], None] = lambda: None,
-          mode: Optional[str] = None, eyes: Optional[Events] = None) -> None:
+          mode: Optional[str] = None, eyes: Optional[Events] = None,
+          wall: Callable[[], float] = time.time, clock: Callable[[], float] = time.monotonic,
+          pause: Callable[[float], None] = time.sleep,
+          reader: Callable[[], _procs.Table] = _procs.Table.read,
+          reaper: Optional[Callable[..., Dict[str, Any]]] = None) -> None:
     """Follow the shell and what it leaves until none of it runs or the entry ends.
 
     The watched processes are the shell and, as they are found, the processes of its group and their descendants:
     each one by its pid and start time, with the kernel reporting its exec and exit (kqueue on macOS, a pidfd on
-    Linux; elsewhere a look every POLL_EVERY s). After every event, and every WAKE s, the entry's known members
-    become the watched processes that run, with their commands as they are now, so a reap recognizes an `exec`'d
-    one. A process joins only through an identity that ties it to the shell: a descendant (parent chain, in the
-    same table) of a watched process, or a member of the shell's group while a watched member of that group runs,
-    so the group still exists and its id cannot have been taken again. When the last watched member of the group
-    exits under the kernel's eye, the group's processes that started no later than that second join too (`sleep
-    600 &` after the shell's exit). What another entry holds directly is left to it.
+    Linux; elsewhere a look every POLL_EVERY s). After every event, and every WAKE s (or at the entry's TTL
+    deadline), the entry's known members become the watched processes that run, with their commands as they are
+    now, so a reap recognizes an `exec`'d one. When the entry's finite TTL passes, the watcher reaps it through the
+    ordinary reap path (rechecking expiry under the store lock so a concurrent extension or no-TTL wins). A process
+    joins only through an identity that ties it to the shell: a descendant (parent chain, in the same table) of a
+    watched process, or a member of the shell's group while a watched member of that group runs, so the group still
+    exists and its id cannot have been taken again. When the last watched member of the group exits under the
+    kernel's eye, the group's processes that started no later than that second join too (`sleep 600 &` after the
+    shell's exit). What another entry holds directly is left to it.
 
     When the entry was reaped (or failed) while some of it still runs (an `exec` the reap did not recognize yet),
     the watcher stops those of its processes the reap policy allows (reap.targets_of: never what another entry
     holds more firmly) and ends. With nothing left it marks the entry gone."""
     eyes = eyes or Eyes(mode or os.environ.get("JUNKFATHER_WATCH") or "")
+    reap_entry = reaper or _reap.reap
     try:
-        table = _procs.Table.read()
+        table = reader()
         shell = table.get(pid)
         if shell is None or shell.start != _procs.norm(start) or not eyes.add(pid):
             return
@@ -256,19 +276,22 @@ def watch(store: Store, entry_id: str, pid: int, start: str, ready: Callable[[],
     finally:
         ready()
     watched: Dict[int, Tuple[str, int]] = {pid: (shell.start, shell.pgid)}  # pid -> (start, group id)
+    failures = 0
+    retry_at: Optional[float] = None
     while True:
-        events = eyes.wait(WAKE)
-        seen_at = time.time()
+        current = store.load(entry_id)
+        events = eyes.wait(_wait_step(current, wall(), retry_at, clock()))
+        seen_at = wall()
         entry = store.load(entry_id)
         if entry is None:
             return
         while entry is not None and entry.get("state") == _entry.REAPING:  # a reap is at work: let it finish
-            time.sleep(0.5)
+            pause(0.5)
             entry = store.load(entry_id)
         if entry is None:
             return
         try:
-            table = _procs.Table.read()
+            table = reader()
         except _procs.ProcError:
             continue
         if entry.get("state") != _entry.RUNNING:
@@ -286,8 +309,40 @@ def watch(store: Store, entry_id: str, pid: int, start: str, ready: Callable[[],
         if running:
             _entry.known(store, entry_id, running)
         else:
-            _entry.gone(store, entry_id)
+            _entry.gone(store, entry_id, now=seen_at)
             return
+        entry = store.load(entry_id)
+        if entry is None:
+            return
+        if entry.get("state") != _entry.RUNNING:
+            if entry.get("state") in (_entry.REAPED, _entry.FAILED):
+                _stop_left(store, entry, table, watched)
+            return
+        now = wall()
+        if not _entry.due(entry, now):
+            failures = 0
+            retry_at = None
+            continue
+        if retry_at is not None and clock() < retry_at:
+            continue
+        def still_due(e: Entry) -> bool:
+            return _entry.due(e, wall())
+
+        result = reap_entry(store, entry_id, "ttl expired", reader=reader,
+                            actor=_events.tool("supervisor"), report_failure=not failures, allowed=still_due)
+        if result["result"] in _reap.STOPPED:
+            return
+        if result["result"] == "failed":
+            failures += 1
+            retry_at = clock() + _launch.retry_delay(failures)
+        else:
+            failures = 0
+            retry_at = None
+            after = store.load(entry_id)
+            if after is None or after.get("state") != _entry.RUNNING:
+                if after is not None and after.get("state") in (_entry.REAPED, _entry.FAILED):
+                    _stop_left(store, after, table, watched)
+                return
 
 
 def _joining(store: Store, entry: Entry, table: _procs.Table, watched: Dict[int, Tuple[str, int]], exited_group: bool,

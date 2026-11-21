@@ -236,7 +236,7 @@ class BackgroundTests(Case):
 
     def test_its_ttl_reaps_it_after_the_subagent_turn(self):
         self.cli("settings", "set", "own.background_ttl", "30m")
-        shell = self.run_as_claude(self.rewritten(call("sleep 600")))
+        shell = self.run_as_claude(self.rewritten(call("sleep 600")), {**self.session_env, "JUNKFATHER_WATCH": "off"})
         entry = self.adopted()
         self.assertEqual(1800, entry["ttl"], "the own.background_ttl setting")
         self.store.update(entry["id"], lambda e: e.update(expires=time.time() - 1))  # its TTL passed
@@ -441,3 +441,160 @@ class WatcherTests(Case):
             result = reap.reap(self.store, "jw", "subagent-stop", grace=1)
         self.assertEqual(("stopped", [child.pid]), (result["result"], result["pids"]))
         self.assertIsNotNone(child.wait(15))
+
+    def test_the_watcher_enforces_ttl_expiry_while_agents_are_quiet(self):
+        child = self.spawn("sleep", "600", start_new_session=True)
+        now = [1000.0]
+        entry = self.entry(child, seen="sleep 600", created=now[0], ttl=30.0, expires=now[0] + 30.0)
+        waited: List[float] = []
+
+        class ClockEyes(FakeEyes):
+            def wait(self, timeout: float) -> List[Tuple[str, int]]:
+                waited.append(timeout)
+                now[0] += timeout
+                return []
+
+        background.watch(self.store, "jw", child.pid, entry["start"], eyes=ClockEyes(), wall=lambda: now[0])
+        self.assertEqual([30.0], waited)
+        self.assertEqual("reaped", self.state_of("jw"))
+        self.assertEqual("ttl expired", self.loaded("jw")["end"]["reason"])
+        self.assertIsNotNone(child.wait(10))
+
+    def test_an_extension_at_the_old_deadline_wins_and_bounds_the_next_wait(self):
+        from junkfather import entry as entry_module
+        child = self.spawn("sleep", "600", start_new_session=True)
+        now = [1000.0]
+        entry = self.entry(child, seen="sleep 600", created=now[0], ttl=20.0, expires=now[0] + 20.0)
+        waited: List[float] = []
+        reads = [0]
+
+        class ClockEyes(FakeEyes):
+            def wait(self, timeout: float) -> List[Tuple[str, int]]:
+                waited.append(timeout)
+                now[0] += timeout
+                return []
+
+        def reader() -> procs.Table:
+            reads[0] += 1
+            if reads[0] == 3:
+                # Inside reap.reap, after the watcher saw the entry due at 1020 and before begin_reap marks it:
+                self.assertIsNotNone(entry_module.extended(self.store, "jw", 45.0, now=now[0]))
+            return procs.Table.read()
+
+        background.watch(self.store, "jw", child.pid, entry["start"], eyes=ClockEyes(), wall=lambda: now[0],
+                         reader=reader)
+        self.assertEqual([20.0, 45.0], waited, "the extension at 1020 wins; the watcher waits for 1065 and reaps then")
+        self.assertEqual("reaped", self.state_of("jw"))
+        self.assertIsNotNone(child.wait(10))
+
+    def test_a_handoff_preserves_and_enforces_the_current_ttl(self):
+        from junkfather import entry as entry_module
+        child = self.spawn("sleep", "600", start_new_session=True)
+        now = [1000.0]
+        entry = self.entry(child, seen="sleep 600", created=now[0], ttl=25.0, expires=now[0] + 25.0)
+        waited: List[float] = []
+        store = self.store
+
+        class ClockEyes(FakeEyes):
+            def wait(self, timeout: float) -> List[Tuple[str, int]]:
+                waited.append(timeout)
+                if len(waited) == 1:
+                    now[0] += 10.0
+                    entry_module.handed(store, "jw", {"kind": "claude", "session": "s2"}, now=now[0])
+                else:
+                    now[0] += timeout
+                return []
+
+        background.watch(self.store, "jw", child.pid, entry["start"], eyes=ClockEyes(), wall=lambda: now[0])
+        self.assertEqual([25.0, 15.0], waited)
+        self.assertEqual(("reaped", "s2"), (self.state_of("jw"), self.loaded("jw")["owner"]["session"]))
+        self.assertIsNotNone(child.wait(10))
+
+    def test_a_no_ttl_main_session_entry_stays_unexpired_until_extended_with_a_finite_ttl(self):
+        import json
+        child = self.spawn("sleep", "600", start_new_session=True)
+        now = [1000.0]
+        entry = self.entry(child, seen="sleep 600", created=now[0], ttl=defaults.NO_TTL,
+                           expires=now[0] + defaults.NO_TTL, no_ttl=True)
+        waited: List[float] = []
+        case = self
+
+        class ClockEyes(FakeEyes):
+            def wait(self, timeout: float) -> List[Tuple[str, int]]:
+                waited.append(timeout)
+                if len(waited) == 1:
+                    now[0] += timeout
+                    result = case.cli("extend", "jw", "--ttl", "30s")
+                    case.assertEqual(0, result.returncode, result.stderr)
+                    # Sync the entry's expires with our injected clock:
+                    case.store.update("jw", lambda e: e.update(expires=now[0] + 30.0))
+                    (row,) = json.loads(case.cli("list", "--json").stdout)["entries"]
+                    case.assertFalse(row["no_ttl"])
+                    case.assertEqual(30.0, row["ttl"])
+                    case.assertNotIn(" - ", case.cli("list").stdout.splitlines()[1])
+                else:
+                    now[0] += timeout
+                return []
+
+        background.watch(self.store, "jw", child.pid, entry["start"], eyes=ClockEyes(), wall=lambda: now[0])
+        self.assertEqual([defaults.WAKE, 30.0], waited)
+        self.assertEqual("reaped", self.state_of("jw"))
+        self.assertIsNotNone(child.wait(10))
+
+    def test_duplicate_watcher_and_sweep_ttl_reaps_signal_once(self):
+        from unittest import mock
+        from junkfather import resources, sweep
+        child = self.spawn("sleep", "600", start_new_session=True)
+        now = [1000.0]
+        entry = self.entry(child, seen="sleep 600", created=now[0], ttl=10.0, expires=now[0] + 10.0)
+        swept: List[Dict[str, Any]] = []
+        store = self.store
+
+        class ClockEyes(FakeEyes):
+            def wait(self, timeout: float) -> List[Tuple[str, int]]:
+                now[0] += timeout
+                with mock.patch.object(resources, "unowned", return_value=([], [])):
+                    swept.append(sweep.sweep(store, cwds={}, sessions=[], now=now[0], grace=1))
+                return []
+
+        background.watch(self.store, "jw", child.pid, entry["start"], eyes=ClockEyes(), wall=lambda: now[0])
+        self.assertEqual(["stopped"], [r["result"] for r in swept[0]["reaped"]])
+        self.assertEqual("reaped", self.state_of("jw"))
+        events = [json.loads(line) for line in (self.state / "events.jsonl").read_text().splitlines()]
+        self.assertEqual(1, len([e for e in events if e["kind"] == "entry.reaped"]))
+
+    def test_an_unreadable_process_table_at_expiry_causes_no_unsafe_signal_and_retries_with_backoff(self):
+        child = self.spawn("sleep", "600", start_new_session=True)
+        now = [1000.0]
+        mono = [0.0]
+        entry = self.entry(child, seen="sleep 600", created=now[0], ttl=10.0, expires=now[0] + 10.0)
+        waited: List[float] = []
+        calls = [0]
+
+        class ClockEyes(FakeEyes):
+            def wait(self, timeout: float) -> List[Tuple[str, int]]:
+                waited.append(timeout)
+                now[0] += timeout
+                mono[0] += timeout
+                return []
+
+        def reader() -> procs.Table:
+            calls[0] += 1
+            if calls[0] in (2, 4):  # 2: watcher loop read; 4: reap's first table read
+                raise procs.ProcError("ps failed")
+            return procs.Table.read()
+
+        background.watch(self.store, "jw", child.pid, entry["start"], eyes=ClockEyes(), wall=lambda: now[0],
+                         clock=lambda: mono[0], reader=reader)
+        self.assertEqual([10.0, 0.0, 1.0], waited)
+        self.assertEqual("reaped", self.state_of("jw"))
+        self.assertIsNotNone(child.wait(10))
+
+    def test_fallback_poll_watcher_mode_enforces_expiry(self):
+        child = self.spawn("sleep", "600", start_new_session=True)
+        now = [1000.0]
+        entry = self.entry(child, seen="sleep 600", created=now[0], ttl=0.05, expires=now[0] + 0.05)
+        background.watch(self.store, "jw", child.pid, entry["start"], mode="poll",
+                         wall=lambda: now[0] + 1.0)
+        self.assertEqual("reaped", self.state_of("jw"))
+        self.assertIsNotNone(child.wait(10))

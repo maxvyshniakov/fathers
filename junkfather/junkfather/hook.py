@@ -51,7 +51,7 @@ def plan(data: Dict[str, Any], store: Store, now: Optional[float] = None) -> Opt
         return ["reap", "--owner", session, "--lifecycle", _reap.Lifecycle.SESSION_END.value,
                 "--reason", f"session-end ({data.get('reason') or '?'})", "--quiet", "--via", "hook"]
     if event == "Stop":
-        if not any(now >= float(e.get("expires") or 0) for e in running):
+        if not any(_entry.due(e, now) for e in running):
             return None
         return ["reap", "--owner", session, "--expired", "--reason", "ttl expired (stop)", "--quiet", "--via", "hook"]
     return None

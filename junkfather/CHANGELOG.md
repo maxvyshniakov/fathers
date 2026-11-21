@@ -86,6 +86,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- The background-shell watcher enforces the entry's finite TTL deadline while the owning agents are quiet, rechecking
+  expiry under the store lock so a concurrent `extend` wins, and `junkfather extend` clears `no_ttl` on a
+  main-session background entry (fathers#180).
 - A lifecycle reap (`SubagentStop`, `SessionEnd`) rechecks the entry's owner under the store lock before marking it
   for reap, so an entry handed to another session after selection is skipped (fathers#189).
 - Auto-owned background Bash calls survive `SubagentStop`, even when the hook reaps an explicitly owned runner

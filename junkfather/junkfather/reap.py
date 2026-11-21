@@ -299,8 +299,10 @@ def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None
     me = _entry.begin_reap(store, entry_id, reason, table, allowed=guard)
     if me is None:
         current = store.load(entry_id)
-        why = ("owner changed" if current is not None and current.get("state") == _entry.RUNNING
-               and guard is not None and not guard(current) else "another reaper has it")
+        why = (" another reaper has it"
+               if current is None or current.get("state") != _entry.RUNNING or guard is None or guard(current)
+               else "not expired" if not _entry.due(current) and reason.startswith("ttl expired")
+               else "owner changed").strip()
         return {"id": entry_id, "result": "skipped", "reason": why, "pids": [], "how": how}
     # The entry as it was marked: its members can have changed since it was read (a background shell's watcher
     # records an exec'd leader's new command), and no one changes them while it is reaping.
