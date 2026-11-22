@@ -25,10 +25,12 @@ from typing import Any, cast
 from . import (
     claims,
     config,
+    done,
     github,
     journal,
     lanes,
     lifecycle,
+    postmerge,
     receipts,
     review_record,
     reviewer,
@@ -516,13 +518,6 @@ def start_lane_review(record: Record) -> str:
     return f"review started in the background (pid {started_raw.get('pid')}, log {started_raw.get('log')})"
 
 
-def review_complete_finish(lane_id: str, store: state.Store | None = None) -> None:
-    """After the lane's review is clean or fully marked: finish the lane as land would have (auto-done,
-    fathers#157), unless land is still running its smoke (land finishes it then) or its smoke is red and
-    uncleared; a kept lane and `[done] auto = false` only say so."""
-    lifecycle.finish_reviewed(store or state.Store(config.current()), lane_id)
-
-
 def review_lane(args: Any) -> int:
     store = state.Store(config.current())
     record = store.load(args.id)
@@ -575,7 +570,7 @@ def review_lane(args: Any) -> int:
     if not isinstance(completed.verdict, (review_record.Unmarked, review_record.Complete)):
         return 1
     if completed.allows_promote:
-        review_complete_finish(args.id, store)
+        done.settle_lane(store, args.id, mode=postmerge.CompletionMode.AUTO_AFTER_REVIEW)
     return 0
 
 
@@ -652,7 +647,7 @@ def mark_review(args: Any) -> int:
             lane=args.id,
             details={"fixed": result.fixed_count, "rejected": result.rejected_count},
         )
-        review_complete_finish(args.id, store)
+        done.settle_lane(store, args.id, mode=postmerge.CompletionMode.AUTO_AFTER_REVIEW)
     else:
         print(f"Lane {args.id}: {words}")
     return 0

@@ -1,8 +1,9 @@
 """Lane, gate and perf receipts, their verdicts, and the one lane view (fathers#71).
 
 Every lane receipt kind (`check`/`receipt`, `first`, `post-merge`, `recheck`), batch-gate receipt (`gate`)
-and perf receipt (`perf`) is read and written here against an explicit `state.Store` — never `config.current()`.
-Review receipt transitions and verdicts live in `review_record.py`; `receipts.write` refuses `kind == "review"`.
+and perf receipt (`perf`) is read here against an explicit `state.Store` — never `config.current()`.
+Review receipt transitions and verdicts live in `review_record.py`, and post-merge smoke / recheck receipt
+writes live in `postmerge.py`; `receipts.write` refuses `kind in ("review", "post-merge", "recheck")`.
 `results.py` keeps the tree/plan results store and platform resolution; `receipts` calls it for the environment rule.
 
 - `check_verdict(record, receipt, tip_tree, toolchain)` -> `NoReceipt | Green | Red | StaleTree | StaleToolchain`
@@ -60,9 +61,11 @@ def read(store: state.Store, name: str, kind: ReceiptKind = "receipt") -> Receip
 
 
 def write(store: state.Store, name: str, data: Receipt, kind: ReceiptKind = "receipt") -> Path:
-    """Atomically write a non-review receipt in `store` and return its path."""
+    """Atomically write a check, first, gate or perf receipt in `store` and return its path."""
     if kind == "review":
         raise ValueError("review receipts must be written through lanefather.review_record")
+    if kind in ("post-merge", "recheck"):
+        raise ValueError(f"{kind} receipts must be written through lanefather.postmerge")
     store.directory.mkdir(parents=True, exist_ok=True)
     target = path(store, name, kind)
     state.write_json(target, data)

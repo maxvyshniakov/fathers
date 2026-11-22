@@ -208,8 +208,8 @@ class AutoDoneTests(LaneCase):
 
 
 class DoneReadinessUnifiedTests(LaneCase):
-    """fathers#213: `done.unfinished`, `done.finish_refusals` and `review.review_complete_finish` share
-    `done.done_readiness` and agree across `Absent` review receipts, unrun/cleared post-merge smokes, and kept lanes."""
+    """fathers#213, fathers#227: `done.unfinished`, `done.finish_refusals` and `done.settle_lane` share
+    `postmerge.decide_completion` and agree across `Absent` review receipts, unrun/cleared post-merge smokes, and kept lanes."""
 
     def _landed_lane(self, lane_id: str = "a", path: str = "lib/a.txt", *, keep: bool = False) -> pathlib.Path:
         wt = pathlib.Path(self.created(lane_id, path))
@@ -224,7 +224,7 @@ class DoneReadinessUnifiedTests(LaneCase):
         import os
         from unittest import mock
 
-        from lanefather import config, done, review, state
+        from lanefather import config, done, postmerge, state
         from lanefather.errors import LaneError
 
         wt = self._landed_lane("a")
@@ -239,14 +239,14 @@ class DoneReadinessUnifiedTests(LaneCase):
             rec = store.load("a")
 
             # Absent review: explicit `done <id>` allows it, while `done --finished`, unattended `finish_refusals`
-            # and `review_complete_finish` refuse it.
+            # and `settle_lane(..., mode=AUTO_AFTER_REVIEW)` refuse or ignore it.
             self.assertTrue(done.done_readiness(rec, store, allow_absent_review=True, allow_kept=True).ready)
             self.assertFalse(done.done_readiness(rec, store, allow_absent_review=False, allow_kept=True).ready)
             self.assertIn("no review", done.unfinished(rec, store) or "")
             with self.assertRaises(LaneError) as unattended_err:
                 done.finish_refusals("a", None, store, unattended=True)
             self.assertIn("no review", str(unattended_err.exception))
-            review.review_complete_finish("a", store)
+            done.settle_lane(store, "a", mode=postmerge.CompletionMode.AUTO_AFTER_REVIEW)
             self.assertEqual(self.record("a")["status"], "landed")
             self.assertTrue(wt.exists())
 
@@ -268,14 +268,14 @@ class DoneReadinessUnifiedTests(LaneCase):
             (self.state / "a.json").write_text(json.dumps(rec_kept_unrun))
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                review.review_complete_finish("a", store)
+                done.settle_lane(store, "a", mode=postmerge.CompletionMode.AUTO_AFTER_REVIEW)
             self.assertEqual(buf.getvalue(), "")
 
             rec_kept_red = dict(rec, keep=True, post_merge={"status": "red"})
             (self.state / "a.json").write_text(json.dumps(rec_kept_red))
             buf_red = io.StringIO()
             with contextlib.redirect_stdout(buf_red):
-                review.review_complete_finish("a", store)
+                done.settle_lane(store, "a", mode=postmerge.CompletionMode.AUTO_AFTER_REVIEW)
             self.assertEqual(buf_red.getvalue(), "")
 
     def test_review_auto_done_finishes_lane_with_cleared_red_post_merge_smoke(self) -> None:

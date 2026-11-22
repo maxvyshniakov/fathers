@@ -23,6 +23,7 @@ from typing import Any
 from . import (
     checks,
     config,
+    done,
     journal,
     lifecycle,
     plan,
@@ -70,6 +71,22 @@ def touched_lines(failed: list[tuple[str, str]], integration: str, merge: str,
         names = [f"{r['id']} (#{r['ticket']})" for r in landed if covers(r["id"], item, suite)]
         lines.append(f"  {item}: {', '.join(names) or 'no recorded lane'}")
     return lines
+
+
+def _print_smoke_failures(results: list[dict[str, Any]], triaged: str | None) -> list[dict[str, Any]]:
+    """Print failed and blocked suite lines plus triage; return the failed suite rows (excluding `not_run`, #639)."""
+    failed = [r for r in results if r["status"] == "failed"]
+    for result in failed:
+        named = ", ".join(result.get("failed_checks") or []) or "(see log)"
+        blocked = f" blocked checks: {', '.join(result['blocked_checks'])}" if result.get("blocked_checks") else ""
+        print(f"  {result['suite']}: failed checks {named}{blocked}  {result['log']}")
+    for result in results:
+        if result["status"] == "blocked":
+            blocked = ", ".join(result.get("blocked_checks") or []) or "(see log)"
+            print(f"  {result['suite']}: blocked checks: {blocked}  {result['log']}")
+    if triaged:
+        print(triaged)
+    return failed
 
 
 def smoke_reuse(kind: str, rows: list[dict[str, Any]] | None, merge_tree: str, toolchain: Any,
@@ -184,24 +201,6 @@ def run_smoke(record: dict[str, Any], checkout: str, suites: list[str], selected
     return decision, results, check_results, outcome.triage, outcome.stamp, status
 
 
-def complete(store: state.Store, record: dict[str, Any], merge: str, integration: str, onto: str,
-             receipt: dict[str, Any] | None, status: str, smoke: str, keep: bool) -> None:
-    """After a post-merge smoke of the lane's merge (land's, or a recheck's): mark its issue (a red smoke leaves it),
-    and after a green one finish the lane once its review is clean or marked, or it is kept."""
-    lane_id = record["id"]
-    tickets.after_land(store, record, merge, integration, onto, receipt, status, smoke)
-    if status != "green":
-        return
-    reviewed, words = review_record.ReviewRecord.load(store, lane_id).summary(prog=store.project.command)
-    if reviewed or keep:
-        lifecycle.finish_landed(store, lane_id, keep)
-    else:
-        # The fix round runs in the lane's worktree, where a resumed agent keeps its context (#570).
-        print(f"Lane {lane_id} kept for its review ({words}): it does not count toward the lane cap; "
-              "marking its last finding "
-              f"finishes it (" + review_record.mark_help(lane_id, store.project.command) + ")")
-
-
 def recheck(args: Any) -> int:
     """`recheck ID` (fathers#167): the checks the lane's red post-merge smoke ran, again, on the integration tip when
     it holds the merge; green, its receipt replaces the red result and the lane is completed as land completes it.
@@ -210,65 +209,83 @@ def recheck(args: Any) -> int:
     with store.locked(f"recheck-{args.id}", f"lane: waiting for another recheck of {args.id}"):
         with store.locked("state"):
             record = store.load(args.id)
-            red, integration, tip = postmerge.recheckable(record, store)
-        selected, suites = postmerge.ran(red)
-        merge = str(red["merge"])
-        with worktrees.smoke_checkout(record["common_dir"], tip) as checkout:
-            toolchain = plan.toolchain_state(checkout)
-            decision, results, check_results, triaged, _stamp, status = run_smoke(
-                record, checkout, suites, selected, f"recheck-{args.id}", args.slots, toolchain)
-            tree = git(checkout, "rev-parse", "HEAD^{tree}")
-        status = status if results else "red"
-        red_path = str(receipts.path(store, args.id, "post-merge"))
-        path = receipts.write(
-            store, args.id,
-            {"version": 1, "lane": args.id, "kind": "recheck", "merge": merge, "sha": tip,
-             "tree": tree, "checkout": checkout, "platform": result_store.host_platform(),
-             "red_receipt": red_path, "suites": suites, "checks": selected,
-             "check_results": check_results, "results": results, "triage": triaged,
-             "status": status, "jobs": decision["jobs"], "jobs_decision": decision,
-             "leases": checks.leases_of(results), "host": host(), "finished": journal.now()},
-            "recheck",
-        )
-        result_store.record(tree, checks.recordable(check_results), source="post-merge", toolchain=toolchain,
-                            lane=args.id, sha=tip, receipt=str(path), phase="post-merge")
-        if status == "green":
-            def _clear_post_merge(current: state.Record) -> None:
-                current["post_merge"] = {"status": "green", "receipt": str(path),
-                                         "cleared_by": {"kind": "recheck", "receipt": str(path), "sha": tip,
-                                                        "red_receipt": red_path}}
-
-            record = store.update(args.id, _clear_post_merge)
+            rplan = postmerge.PostMergeRecord.recheck_plan(store, record)
+        suites, selected = rplan.suites, rplan.selected
+        merge, integration = rplan.merge, rplan.integration
+        red_path = str(rplan.red_path)
+        if rplan.recovered is not None:
+            pm, path = postmerge.PostMergeRecord.recover_crashed_recheck(store, args.id, rplan)
+            record = pm.record
+            tip = rplan.recovered.sha
+            status = "green"
+            results: list[dict[str, Any]] = []
+            triaged: str | None = None
+            journal.ledger(
+                f"recheck {args.id} green sha={tip} merge={merge} receipt={path} replaces red {red_path}",
+                kind="lane.rechecked",
+                level="info",
+                lane=record,
+                details={
+                    "status": "green", "sha": tip, "merge": merge, "receipt": str(path),
+                    "red_receipt": red_path, "suites": suites, "recovered": True,
+                },
+                directory=store.directory,
+                project=store.project,
+            )
         else:
-            with store.locked("state"):
-                record = store.load(args.id)
-        journal.ledger(f"recheck {args.id} {status} sha={tip} merge={merge} receipt={path}"
-                       + (f" replaces red {red_path}" if status == "green" else ""),
-                       kind="lane.rechecked", level="info" if status == "green" else "error", lane=record,
-                       details={"status": status, "sha": tip, "merge": merge, "receipt": str(path),
-                                "red_receipt": red_path, "suites": suites},
-                       directory=store.directory, project=store.project)
+            tip = rplan.tip
+            with worktrees.smoke_checkout(record["common_dir"], tip) as checkout:
+                toolchain = plan.toolchain_state(checkout)
+                decision, results, check_results, triaged, _stamp, status = run_smoke(
+                    record, checkout, suites, selected, f"recheck-{args.id}", args.slots, toolchain)
+                tree = git(checkout, "rev-parse", "HEAD^{tree}")
+            status = status if results else "red"
+            payload: dict[str, Any] = {
+                "version": 1, "lane": args.id, "kind": "recheck", "merge": merge, "sha": tip,
+                "tree": tree, "checkout": checkout, "platform": result_store.host_platform(store.project),
+                "red_receipt": red_path, "suites": suites, "checks": selected,
+                "check_results": check_results, "results": results, "triage": triaged,
+                "status": status, "jobs": decision["jobs"], "jobs_decision": decision,
+                "leases": checks.leases_of(results), "host": host(), "finished": journal.now(),
+            }
+            pm, path = postmerge.PostMergeRecord.record_recheck(
+                store, args.id, merge_sha=merge, tip=tip, status=status, payload=payload, red_receipt_path=red_path,
+            )
+            record = pm.record
+            result_store.record(tree, checks.recordable(check_results), source="post-merge", toolchain=toolchain,
+                                lane=args.id, sha=tip, receipt=str(path), phase="post-merge")
+            journal.ledger(
+                f"recheck {args.id} {status} sha={tip} merge={merge} receipt={path}"
+                + (f" replaces red {red_path}" if status == "green" else ""),
+                kind="lane.rechecked",
+                level="info" if status == "green" else "error",
+                lane=record,
+                details={
+                    "status": status, "sha": tip, "merge": merge, "receipt": str(path),
+                    "red_receipt": red_path, "suites": suites,
+                },
+                directory=store.directory,
+                project=store.project,
+            )
     ids = [c for s in suites for c in (selected or {}).get(s, [])] if selected is not None else None
     what = ", ".join(ids) if ids is not None and len(ids) <= 8 else f"{len(ids)} checks" if ids else ", ".join(suites)
     if status != "green":
         print(f"Lane {args.id}: post-merge still red on {tip[:10]} (recheck: {what}); {path}")
-        for result in results:
-            if result["status"] != "passed":
-                if result["status"] == "blocked":
-                    blocked = ", ".join(result.get("blocked_checks") or []) or "(see log)"
-                    print(f"  {result['suite']}: blocked checks: {blocked}  {result['log']}")
-                else:
-                    named = ", ".join(result.get("failed_checks") or []) or "(see log)"
-                    blocked = (f" blocked checks: {', '.join(result['blocked_checks'])}"
-                               if result.get("blocked_checks") else "")
-                    print(f"  {result['suite']}: failed checks {named}{blocked}  {result['log']}")
-        if triaged:
-            print(triaged)
+        _print_smoke_failures(results, triaged)
         return 1
     print(f"Lane {args.id}: post-merge green on {tip[:10]} (recheck: {what}); it replaces the red smoke of "
           f"{merge[:10]} ({path})")
-    complete(store, record, merge, integration, current_branch(integration) or integration,
-             receipts.read(store, args.id), status, f"recheck on {tip[:10]}: {what}", lifecycle.kept(record))
+    done.after_smoke(
+        store,
+        record,
+        merge,
+        integration,
+        current_branch(integration) or integration,
+        receipts.read(store, args.id),
+        status,
+        f"recheck on {tip[:10]}: {what}",
+        keep_override=lifecycle.kept(record),
+    )
     return 0
 
 
@@ -502,30 +519,27 @@ def post_merge(store: state.Store, landed: Landed, slots: int | None) -> Smoke:
                 record, checkout, suites, selected, f"post-merge-{lane_id}", slots, toolchain)
             jobs = decision["jobs"]
     info = host()
-    post = receipts.write(
-        store, lane_id,
-        {"version": 1, "lane": lane_id, "merge": merge_sha, "base": previous,
-         "tree": merge_tree, "checkout": checkout, "kind": kind,
-         "platform": result_store.host_platform(),
-         "jobs": jobs, "jobs_decision": decision, "suites": suites, "full": False,
-         "reasons": reasons, "checks": selected, "selection": rows,
-         "narrowing": narrowing, "skipped": skips,
-         "check_results": {**lane_verified, **tree_verified, **check_results},
-         "results": results, "triage": triaged, "status": status, "verified_tree": stamp,
-         "leases": checks.leases_of(results),
-         "host": info, "finished": journal.now()},
-        "post-merge",
+    payload: dict[str, Any] = {
+        "version": 1, "lane": lane_id, "merge": merge_sha, "base": previous,
+        "tree": merge_tree, "checkout": checkout, "kind": kind,
+        "platform": result_store.host_platform(store.project),
+        "jobs": jobs, "jobs_decision": decision, "suites": suites, "full": False,
+        "reasons": reasons, "checks": selected, "selection": rows,
+        "narrowing": narrowing, "skipped": skips,
+        "check_results": {**lane_verified, **tree_verified, **check_results},
+        "results": results, "triage": triaged, "status": status, "verified_tree": stamp,
+        "leases": checks.leases_of(results),
+        "host": info, "finished": journal.now(),
+    }
+    pm, post = postmerge.PostMergeRecord.record_smoke(
+        store, lane_id, merge_sha=merge_sha, status=status, payload=payload,
     )
+    record = pm.record
     result_store.record(merge_tree, checks.recordable({**lane_verified, **tree_verified, **check_results}),
                         source="post-merge", toolchain=toolchain, lane=lane_id, sha=merge_sha, receipt=str(post),
                         reused=[*lane_verified, *tree_verified],
                         origins={**checks.origins(lane_verified, str(receipts.path(store, lane_id))),
                                  **checks.origins(tree_verified, "")}, phase="post-merge")
-    # Reloaded: a review hand-over may have changed the record during the smoke.
-    def _set_post_merge(rec: state.Record) -> None:
-        rec["post_merge"] = {"status": status, "receipt": str(post)}
-
-    record = store.update(lane_id, _set_post_merge)
     verified = len(lane_verified)
     journal.ledger(f"post-merge {lane_id} {status} {kind} jobs={jobs} suites={','.join(suites) or '-'} "
                    + (f"lane_verified={verified} " if narrowing.get("narrowed") else "")
@@ -564,27 +578,24 @@ def post_merge(store: state.Store, landed: Landed, slots: int | None) -> Smoke:
 
 
 def after_land(store: state.Store, landed: Landed, smoke: Smoke) -> int:
-    """Phase 3 of land: ticket comments, auto-done via lifecycle, and red-smoke failure report."""
+    """Phase 3 of land: ticket comments, auto-done via `done.after_smoke`, and red-smoke failure report."""
     receipt = landed.receipt
     if receipt and receipt.get("changed_red_tests"):
         print(checks.changed_red_tests_line(receipt["changed_red_tests"]))
-    complete(store, smoke.record, landed.merge, landed.integration, landed.onto or landed.integration,
-             receipt, smoke.status, smoke.summary, landed.keep)
+    done.after_smoke(
+        store,
+        smoke.record,
+        landed.merge,
+        landed.integration,
+        landed.onto or landed.integration,
+        receipt,
+        smoke.status,
+        smoke.summary,
+        keep_override=landed.keep,
+    )
     if smoke.status == "green":
         return 0
-    # A suite whose checks did not start because the first checks were red (#639) is not one of the failures.
-    failed = [r for r in smoke.results if r["status"] == "failed"]
-    for result in failed:
-        named = ', '.join(result['failed_checks']) or '(see log)'
-        blocked = (f" blocked checks: {', '.join(result['blocked_checks'])}"
-                   if result.get("blocked_checks") else "")
-        print(f"  {result['suite']}: failed checks {named}{blocked}  {result['log']}")
-    for result in smoke.results:
-        if result["status"] == "blocked":
-            blocked = ', '.join(result.get('blocked_checks') or []) or '(see log)'
-            print(f"  {result['suite']}: blocked checks: {blocked}  {result['log']}")
-    if smoke.triaged:
-        print(smoke.triaged)
+    failed = _print_smoke_failures(smoke.results, smoke.triaged)
     head = git(landed.integration, "rev-parse", "HEAD")
     if head != landed.merge:
         print(f"{landed.integration} has moved on to {head[:10]} since; this smoke checked the merge "

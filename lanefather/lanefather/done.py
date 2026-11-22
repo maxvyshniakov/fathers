@@ -4,12 +4,10 @@ its build directories, its scratch and the shared cache partitions built from it
 A lane whose agent still locks its worktree is released instead. It no longer counts toward the lane cap or holds
 claims; done finishes it once the agent exits.
 
-Auto-done (fathers#157): a lane that becomes finished (landed, its smoke green, its review finished or exempt with
-every finding marked) runs done by itself, unless it is kept (`keep ID`, `land --keep`) or `[done] auto` is false.
-`done --finished` runs done on every finished lane of the registered projects, and start below the disk floor does
-so first (at most once per REPAIR_WINDOW); neither skips a refusal of done. Unattended (auto-done, done --finished,
-the repair), done also needs a process source that answers and re-reads `keep` under the lock. Every function acts
-on the project of the Store it is given (store.project), never on a module-wide current project.
+Auto-done (fathers#157, fathers#227): `settle_lane` and `after_smoke` drive every completion path (`done`, `done
+--finished`, post-smoke auto-done, and post-review auto-done) through `postmerge.decide_completion` and re-evaluate
+under `store.locked("state")` before releasing or cleaning up. Every function acts on the project of the Store it is
+given (`store.project`), never on a module-wide current project.
 """
 from __future__ import annotations
 
@@ -92,17 +90,7 @@ def keep(args: Any) -> int:
     is no `landed` to set (an older promote reads every `landed` as a merge), and land carries the flag."""
     store = state.Store(config.current())
     prog = store.project.command
-    with store.locked("state"):
-        def _set_keep(record: Record) -> None:
-            if lifecycle.finished(record):
-                raise LaneError(f"lane {args.id} is already done")
-            record["keep"] = not args.off
-            if record.get("landed"):
-                record["landed"]["keep"] = not args.off
-
-        record = store.update(args.id, _set_keep)
-        journal.ledger(f"{'unkeep' if args.off else 'keep'} {args.id}", kind="lane.kept", lane=record,
-                       details={"keep": not args.off}, directory=store.directory, project=store.project)
+    lifecycle.set_keep(store, args.id, not args.off)
     if args.off:
         print(f"Lane {args.id} no longer kept: once it is finished, done runs by itself "
               f"(or {prog} done --finished)")
@@ -122,6 +110,68 @@ class DoneReadiness:
     cleared: dict[str, Any] | None = None
 
 
+def _worktree_lock_for(record: Record) -> str | None:
+    """Agent lock reason on `record`'s worktree when both `common_dir` and `worktree` exist, else `None`."""
+    common = record.get("common_dir")
+    worktree = record.get("worktree")
+    if (
+        not isinstance(common, str)
+        or not common
+        or not os.path.isdir(common)
+        or not isinstance(worktree, str)
+        or not worktree
+        or not os.path.isdir(worktree)
+    ):
+        return None
+    return worktree_lock(main_checkout(common), worktree)
+
+
+def evaluate_completion(
+    store: state.Store,
+    record: Record,
+    *,
+    mode: postmerge.CompletionMode,
+    keep_override: bool = False,
+    integration: str | None = None,
+    check_lock: bool = True,
+) -> postmerge.CompletionDecision:
+    """Load post-merge and review state from `store`, guard `common_dir`, and run pure `decide_completion`."""
+    lane_id = str(record["id"])
+    prog = store.project.command
+    pm = postmerge.PostMergeRecord.load(store, record, integration=integration)
+    rev = review_record.ReviewRecord.load(store, lane_id)
+    is_kept = bool(keep_override or kept(record))
+    done_auto = store.project.done_auto
+    needs_lock_probe = (
+        check_lock
+        and lifecycle.awaiting_done(record)
+        and pm.phase in (postmerge.PostMergePhase.GREEN, postmerge.PostMergePhase.CLEARED)
+        and isinstance(
+            rev.verdict,
+            (review_record.Absent, review_record.Exempt, review_record.Complete)
+            if mode is postmerge.CompletionMode.INTERACTIVE
+            else (review_record.Exempt, review_record.Complete),
+        )
+        and (not is_kept or mode is postmerge.CompletionMode.INTERACTIVE)
+        and (done_auto or mode in (postmerge.CompletionMode.INTERACTIVE, postmerge.CompletionMode.FINISHED))
+    )
+    lock = _worktree_lock_for(record) if needs_lock_probe else None
+    stage = str(record["status"]) if record.get("status") is not None else None
+    return postmerge.decide_completion(
+        stage,
+        pm.phase,
+        rev.verdict,
+        kept=is_kept,
+        done_auto=done_auto,
+        worktree_lock=lock,
+        mode=mode,
+        lane_id=lane_id,
+        prog=prog,
+        raw_smoke=pm.raw_status,
+        cleared_by=pm.cleared_by,
+    )
+
+
 def done_readiness(
     record: Record,
     store: state.Store,
@@ -130,66 +180,50 @@ def done_readiness(
     allow_absent_review: bool = False,
     allow_kept: bool = False,
 ) -> DoneReadiness:
-    """Evaluate status, post-merge smoke, review verdict and keep flag for `done`.
-
-    - `allow_absent_review`: explicit `done <id>` permits a landed lane without a review receipt (`Absent`),
-      while `done --finished` and unattended auto-done require a completed or exempt review.
-    - `allow_kept`: explicit `done <id>` cleans up a kept lane, and post-review auto-done lets `finish_landed`
-      print the kept notice once status, smoke and review are ready; `done --finished` and unattended `done`
-      skip or refuse kept lanes.
-    """
+    """Evaluate status, post-merge smoke, review verdict and keep flag for `done` via `decide_completion`."""
     lane_id = str(record["id"])
     prog = store.project.command
-    if not lifecycle.awaiting_done(record):
-        lane_state = record.get("status")
+    pm = postmerge.PostMergeRecord.load(store, record, integration=integration)
+    rev = review_record.ReviewRecord.load(store, lane_id)
+    is_kept = False if allow_kept else kept(record)
+    mode = (
+        postmerge.CompletionMode.INTERACTIVE
+        if allow_absent_review and isinstance(rev.verdict, review_record.Absent)
+        else postmerge.CompletionMode.FINISHED
+    )
+    stage = str(record["status"]) if record.get("status") is not None else None
+    decision = postmerge.decide_completion(
+        stage,
+        pm.phase,
+        rev.verdict,
+        kept=is_kept,
+        done_auto=True,
+        worktree_lock=None,
+        mode=mode,
+        lane_id=lane_id,
+        prog=prog,
+        raw_smoke=pm.raw_status,
+        cleared_by=pm.cleared_by,
+    )
+    if decision.already_done:
         return DoneReadiness(
             ready=False,
-            reason=f"it is {lane_state}",
-            refusal=f"lane {lane_id} is {lane_state}, not landed",
+            reason="it is done",
+            refusal=f"lane {lane_id} is done, not landed",
         )
-    post = field(record, "post_merge")
-    smoke = post.get("status")
-    raw_cleared: Any = post.get("cleared_by")
-    cleared: dict[str, Any] | None = cast(dict[str, Any], raw_cleared) if isinstance(raw_cleared, dict) else None
-    if smoke == "red":
-        cleared = postmerge.clearing(record, store, integration)
-        if cleared is None:
-            return DoneReadiness(
-                ready=False,
-                reason="its post-merge smoke is red",
-                refusal=(
-                    "its post-merge check is red: fix forward (a follow-up commit on the lane) first, or "
-                    f"rerun its smoke on the integration tip with {prog} recheck {lane_id}"
-                ),
-            )
-    elif smoke != "green":
-        words = f"its post-merge smoke is {smoke or 'not run'}"
-        return DoneReadiness(ready=False, reason=words, refusal=words)
-
-    rev = review_record.ReviewRecord.load(store, lane_id)
-    review_v = rev.verdict
-    allowed_verdicts: tuple[type[Any], ...] = (
-        (review_record.Absent, review_record.Exempt, review_record.Complete)
-        if allow_absent_review
-        else (review_record.Exempt, review_record.Complete)
-    )
-    if not isinstance(review_v, allowed_verdicts):
-        _, words = rev.summary(prog=prog)
-        refusal = (
-            words
-            if isinstance(review_v, review_record.Absent)
-            else f"its {words}: mark each finding with {review_record.mark_help(lane_id, prog)}"
-        )
-        return DoneReadiness(ready=False, reason=words, refusal=refusal, cleared=cleared)
-
-    if not allow_kept and kept(record):
+    if allow_absent_review and not allow_kept and kept(record) and decision.ready:
         return DoneReadiness(
             ready=False,
             reason="kept",
             refusal=f"lane {lane_id} is kept ({prog} keep {lane_id} --off releases it)",
-            cleared=cleared,
+            cleared=decision.cleared_by,
         )
-    return DoneReadiness(ready=True, cleared=cleared)
+    return DoneReadiness(
+        ready=decision.ready,
+        reason=decision.reason,
+        refusal=decision.refusal,
+        cleared=decision.cleared_by,
+    )
 
 
 def unfinished(record: Record, store: state.Store) -> str | None:
@@ -197,16 +231,6 @@ def unfinished(record: Record, store: state.Store) -> str | None:
     run, fathers#167), its review finished or exempt with every finding (each panel member's) marked, and not kept;
     else why not."""
     return done_readiness(record, store, allow_absent_review=False, allow_kept=False).reason
-
-
-def finish_reviewed(lane_id: str, *, store: state.Store | None = None) -> None:
-    """After a lane's review is clean or fully marked: finish it via `finish_landed` when `done_readiness` says
-    status, smoke (green or cleared red) and review are ready; kept lanes print the kept notice."""
-    store = store or state.Store(config.current())
-    record = store.load(lane_id)
-    if not done_readiness(record, store, allow_absent_review=False, allow_kept=True).ready:
-        return
-    finish_landed(lane_id, False, store=store)
 
 
 def refused(lane_id: str, error: Exception, store: state.Store) -> str:
@@ -217,52 +241,137 @@ def refused(lane_id: str, error: Exception, store: state.Store) -> str:
     return text
 
 
-def finish_landed(lane_id: str, keep: bool, *, store: state.Store | None = None) -> None:
-    """When a lane becomes finished (land of a reviewed or exempt lane, its clean review, the mark of its last
-    finding): finish it as done does, unless it is kept or `[done] auto` is false. When its agent still locks the
-    worktree, keep the worktree and release the lane; done finishes it later. A landed lane does not count toward
-    the lane cap; a refused done only leaves cleanup behind."""
-    store = store or state.Store(config.current())
+def _print_hold_notice(
+    store: state.Store,
+    record: Record,
+    decision: postmerge.CompletionDecision,
+) -> None:
+    lane_id = str(record["id"])
     prog = store.project.command
-    record = store.load(lane_id)
-    if lifecycle.finished(record):
-        # land and the lane's review both finish a reviewed lane; whichever comes second has nothing left to do.
-        return
-    if keep or kept(record):
+    if decision.action is postmerge.CompletionAction.HOLD_KEPT:
         how = "--keep" if field(record, "landed").get("keep") and not record.get("keep") else f"{prog} keep"
         print(f"Lane {lane_id} kept ({how}): it does not count toward the lane cap; "
               f"finish it with {prog} done {lane_id}")
-        return
-    if not store.project.done_auto:
+    elif decision.action is postmerge.CompletionAction.HOLD_REVIEW:
+        print(
+            f"Lane {lane_id} kept for its review ({decision.reason}): it does not count toward the lane cap; "
+            f"marking its last finding finishes it ({review_record.mark_help(lane_id, prog)})"
+        )
+    elif decision.action is postmerge.CompletionAction.HOLD_AUTO_OFF:
         print(f"Lane {lane_id} is finished; auto-done is off ([done] auto = false): "
               f"finish it with {prog} done {lane_id} or {prog} done --finished")
-        return
-    worktree = record.get("worktree")
-    lock = (worktree_lock(main_checkout(record["common_dir"]), worktree)
-            if worktree and os.path.isdir(worktree) else None)
-    if lock is not None:
+
+
+def settle_lane(
+    store: state.Store,
+    lane_id: str,
+    *,
+    mode: postmerge.CompletionMode,
+    keep_override: bool = False,
+) -> postmerge.CompletionDecision:
+    """Unify lane completion across post-smoke auto-done, post-review auto-done, `done`, and `done --finished`.
+
+    Re-evaluates `evaluate_completion` under `store.locked("state")` before releasing or holding, guards `common_dir`
+    existence, serializes per-lane cleanup without holding `state` across `gh`/`du`/`rmtree`, and suppresses duplicate
+    output on idempotent repeats.
+    """
+    prog = store.project.command
+    decision = evaluate_completion(store, store.load(lane_id), mode=mode, keep_override=keep_override)
+    if decision.action is postmerge.CompletionAction.NOOP:
+        return decision
+
+    if decision.action is not postmerge.CompletionAction.CLEANUP:
+        released_notice: str | None = None
+        hold_record: Record | None = None
         with store.locked("state"):
             record = store.load(lane_id)
-            if lifecycle.finished(record):
-                return
-            lifecycle.transition(
-                store, lane_id, "release",
-                released=journal.now(),
-                ledger_message=f"release {lane_id}: worktree {worktree} is locked ({lock}); "
-                               "lane cap space and claims freed",
-                ledger_details={"worktree": worktree, "lock": lock},
-            )
-        print(f"Lane {lane_id} released: it no longer counts toward the lane cap or holds claims. "
-              f"Its agent still holds {worktree} "
-              f"(locked: {lock}); once the agent exits, remove it with {prog} done {lane_id}")
-        return
+            decision = evaluate_completion(store, record, mode=mode, keep_override=keep_override)
+            if decision.action is postmerge.CompletionAction.NOOP:
+                return decision
+            if decision.action is postmerge.CompletionAction.REFUSE:
+                raise LaneError(decision.refusal or decision.reason or f"done {lane_id} refused")
+            if decision.action is postmerge.CompletionAction.RELEASE:
+                if not lifecycle.released(record):
+                    worktree = record.get("worktree")
+                    lock = decision.worktree_lock
+                    lifecycle.transition(
+                        store,
+                        lane_id,
+                        "release",
+                        released=journal.now(),
+                        post_merge_cleared_by=decision.cleared_by,
+                        ledger_message=(
+                            f"release {lane_id}: worktree {worktree} is locked ({lock}); "
+                            "lane cap space and claims freed"
+                        ),
+                        ledger_details={
+                            "worktree": worktree,
+                            "lock": lock,
+                            **({"post_merge_cleared_by": decision.cleared_by} if decision.cleared_by else {}),
+                        },
+                    )
+                    released_notice = (
+                        f"Lane {lane_id} released: it no longer counts toward the lane cap or holds claims. "
+                        f"Its agent still holds {worktree} (locked: {lock}); once the agent exits, remove it "
+                        f"with {prog} done {lane_id}"
+                    )
+            elif decision.action in (
+                postmerge.CompletionAction.HOLD_KEPT,
+                postmerge.CompletionAction.HOLD_REVIEW,
+                postmerge.CompletionAction.HOLD_AUTO_OFF,
+            ):
+                hold_record = record
+        if released_notice is not None:
+            print(released_notice)
+            return decision
+        if hold_record is not None:
+            _print_hold_notice(store, hold_record, decision)
+            return decision
+        if decision.action is not postmerge.CompletionAction.CLEANUP:
+            return decision
+
+    if mode is postmerge.CompletionMode.INTERACTIVE:
+        with store.locked(f"done-{lane_id}"):
+            finish(lane_id, None, store, unattended=False)
+        return decision
+
     try:
-        finish(lane_id, None, store, unattended=True)
+        with store.locked(f"done-{lane_id}"):
+            finish(lane_id, None, store, unattended=True)
     except LaneError as error:
+        if mode is postmerge.CompletionMode.FINISHED:
+            raise
         refused(lane_id, error, store)
-        print(f"{prog} done {lane_id} did not run after landing; "
-              "the lane stays landed and does not count toward the lane cap.\n"
-              f"{error}\nFix that, then run {prog} done {lane_id}")
+        print(
+            f"{prog} done {lane_id} did not run after landing; "
+            "the lane stays landed and does not count toward the lane cap.\n"
+            f"{error}\nFix that, then run {prog} done {lane_id}"
+        )
+    return decision
+
+
+def after_smoke(
+    store: state.Store,
+    record: Record,
+    merge: str,
+    integration: str,
+    onto: str,
+    receipt: dict[str, Any] | None,
+    smoke_status: str,
+    smoke_summary: str,
+    *,
+    keep_override: bool = False,
+) -> postmerge.CompletionDecision | None:
+    """After a post-merge smoke or recheck: update the lane's ticket, then settle the lane when green."""
+    tickets.after_land(store, record, merge, integration, onto, receipt, smoke_status, smoke_summary)
+    if smoke_status != "green":
+        return None
+    return settle_lane(
+        store,
+        str(record["id"]),
+        mode=postmerge.CompletionMode.AUTO_AFTER_SMOKE,
+        keep_override=keep_override,
+    )
 
 
 def removal_paths(record: Record) -> list[str]:
@@ -618,7 +727,8 @@ def finish_finished(dry_run: bool, *, skip_auto_off: bool) -> tuple[int, int, li
                     print(f"  {where.name} {record['id']}: {size / 1e9:.1f} GB  {record.get('worktree') or '-'}")
                     continue
                 print(f"{where.name}: done {record['id']}", flush=True)
-                freed += finish(record["id"], None, store, unattended=True)
+                with store.locked(f"done-{record['id']}"):
+                    freed += finish(record["id"], None, store, unattended=True)
                 finished += 1
             except Exception as error:  # a lane that cannot be finished is refused; the next goes on
                 text = refused(str(record.get("id")), error, store)

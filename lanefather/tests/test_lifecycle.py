@@ -75,6 +75,10 @@ class LifecycleTableTests(unittest.TestCase):
             ("active", "drop"): "done",
             ("landed", "hand_over"): "landed",
             ("released", "hand_over"): "released",
+            ("landed", "record_smoke"): "landed",
+            ("released", "record_smoke"): "released",
+            ("landed", "record_recheck"): "landed",
+            ("released", "record_recheck"): "released",
         }
         idempotent: set[tuple[str, str]] = {
             ("active", "adopt"),
@@ -94,6 +98,12 @@ class LifecycleTableTests(unittest.TestCase):
                         if event == "hand_over":
                             result = lifecycle.transition(self.store, lane_id, event,
                                                           worktree=None, handed_over={"to": "fix"})
+                        elif event in ("record_smoke", "record_recheck"):
+                            result = lifecycle.transition(
+                                self.store, lane_id, event,
+                                post_merge={"status": "green", "receipt": "/tmp/r.json"},
+                            )
+                            self.assertEqual(result["post_merge"]["status"], "green")
                         else:
                             result = lifecycle.transition(self.store, lane_id, event)
                         self.assertEqual(result["status"], want)
@@ -134,7 +144,23 @@ class LifecycleTableTests(unittest.TestCase):
         self._seed("x", "planned")
         with mock.patch.object(config, "current", side_effect=AssertionError("must not call config.current()")):
             result = lifecycle.transition(self.store, "x", "adopt", worktree="/tmp/wt", branch="lane/x")
+            kept_rec = lifecycle.set_keep(self.store, "x", True)
         self.assertEqual(result["status"], "active")
+        self.assertTrue(kept_rec["keep"])
+
+    def test_set_keep_updates_landed_flag_and_refuses_done(self) -> None:
+        from lanefather import lifecycle
+        from lanefather.errors import LaneError
+        self._seed("k", "landed", landed={"merge": "a" * 40, "keep": False})
+        rec_on = lifecycle.set_keep(self.store, "k", True)
+        self.assertTrue(rec_on["keep"])
+        self.assertTrue(rec_on["landed"]["keep"])
+        rec_off = lifecycle.set_keep(self.store, "k", False)
+        self.assertFalse(rec_off["keep"])
+        self.assertFalse(rec_off["landed"]["keep"])
+        self._seed("d", "done")
+        with self.assertRaises(LaneError):
+            lifecycle.set_keep(self.store, "d", True)
 
 
 class LifecycleGuardTests(unittest.TestCase):
@@ -144,10 +170,27 @@ class LifecycleGuardTests(unittest.TestCase):
     def test_no_direct_status_mutation_or_record_save_outside_lifecycle_and_state(self) -> None:
         from lanefather import lifecycle
         status_literals = set(lifecycle.STATUSES)
-        transition_kinds = {"lane.started", *lifecycle.EVENT_KINDS.values()}
+        transition_kinds = {"lane.started", "lane.kept", *lifecycle.EVENT_KINDS.values()}
         violations: list[str] = []
 
         for path in sorted(PKG.glob("*.py")):
+            if path.name != "lifecycle.py":
+                rec_tree = ast.parse(path.read_text(), filename=str(path))
+                for node in ast.walk(rec_tree):
+                    if isinstance(node, ast.Assign):
+                        for target in node.targets:
+                            if (isinstance(target, ast.Subscript) and isinstance(target.slice, ast.Constant)
+                                    and target.slice.value in ("post_merge", "keep")):
+                                violations.append(f"{path.name}:{node.lineno}: direct [{target.slice.value!r}] = assignment")
+                    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                            and node.func.attr in ("update", "setdefault", "pop", "__setitem__")):
+                        for kw in node.keywords:
+                            if kw.arg in ("post_merge", "keep"):
+                                violations.append(f"{path.name}:{node.lineno}: .{node.func.attr}({kw.arg}=...) call")
+                        if (node.func.attr in ("setdefault", "pop", "__setitem__") and node.args
+                                and isinstance(node.args[0], ast.Constant)
+                                and node.args[0].value in ("post_merge", "keep")):
+                            violations.append(f"{path.name}:{node.lineno}: .{node.func.attr}({node.args[0].value!r}) call")
             if path.name in ("state.py", "lifecycle.py"):
                 continue
             tree = ast.parse(path.read_text(), filename=str(path))
@@ -232,15 +275,16 @@ class LifecycleRaceTests(LaneCase):
         self.addCleanup(config.use, None)
         return cfg
 
-    def test_concurrent_finish_landed_with_locked_worktree_ends_done(self) -> None:
-        from lanefather import done, state
+    def test_concurrent_settle_lane_with_locked_worktree_ends_done(self) -> None:
+        from lanefather import done, postmerge, state
         self._prepare_active_lane("r")
         self.lane("land", "r", "--keep")
-        # Mark review exempt/finished and unkeep so finish_landed will run done.
+        # Mark review exempt/finished and unkeep so settle_lane will run done.
         self.lane("keep", "r", "--off")
         state.write_json(self.state / "r.review.json", {"version": 1, "lane": "r", "status": "exempt",
                                                         "reason": "test"})
-        self._in_process_context()
+        cfg = self._in_process_context()
+        store = state.Store(cfg, directory=self.state)
 
         lock_seen = threading.Event()
         finish_done = threading.Event()
@@ -266,14 +310,14 @@ class LifecycleRaceTests(LaneCase):
         def run_a() -> None:
             thread_a_id.append(threading.get_ident())
             try:
-                done.finish_landed("r", False)
+                done.settle_lane(store, "r", mode=postmerge.CompletionMode.AUTO_AFTER_REVIEW)
             except BaseException as exc:  # pragma: no cover
                 errors.append(exc)
 
         def run_b() -> None:
             lock_seen.wait(timeout=10.0)
             try:
-                done.finish_landed("r", False)
+                done.settle_lane(store, "r", mode=postmerge.CompletionMode.AUTO_AFTER_REVIEW)
             except BaseException as exc:  # pragma: no cover
                 errors.append(exc)
 

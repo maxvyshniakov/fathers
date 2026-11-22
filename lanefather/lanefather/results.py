@@ -58,11 +58,12 @@ def canonical(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
-def host_platform() -> str:
+def host_platform(project: Any = None) -> str:
     """This host's platform, `<os>-<arch>` (darwin-arm64, linux-x64); LANEFATHER_PLATFORM stands in for it. The
     machine's architecture counts: Python under Rosetta reports x86_64 on an Apple silicon Mac."""
     from . import config
-    given = config.current().env("PLATFORM")
+    cfg = project if project is not None else config.current()
+    given = cfg.env("PLATFORM")
     if given:
         return checked_platform(given, "LANEFATHER_PLATFORM")
     system, machine = host.system().lower(), host.machine().lower()

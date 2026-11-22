@@ -58,7 +58,7 @@ class ReceiptGuardTests(unittest.TestCase):
 
     def test_receipts_module_never_uses_ambient_config_or_state_dir(self) -> None:
         violations: list[str] = []
-        for mod_name in ("receipts.py", "review_record.py"):
+        for mod_name in ("receipts.py", "review_record.py", "postmerge.py"):
             tree = ast.parse((PKG / mod_name).read_text(encoding="utf-8"), filename=mod_name)
             for node in ast.walk(tree):
                 if isinstance(node, ast.Attribute) and node.attr in ("current", "state_dir"):
@@ -68,7 +68,7 @@ class ReceiptGuardTests(unittest.TestCase):
     def test_no_receipt_file_access_outside_receipts_and_state(self) -> None:
         violations: list[str] = []
         for path in sorted(PKG.glob("*.py")):
-            if path.name in ("receipts.py", "review_record.py", "state.py"):
+            if path.name in ("receipts.py", "review_record.py", "postmerge.py", "state.py"):
                 continue
             source = path.read_text(encoding="utf-8")
             tree = ast.parse(source, filename=str(path))
@@ -108,7 +108,7 @@ class ReceiptGuardTests(unittest.TestCase):
             return None
 
         for path in sorted(PKG.glob("*.py")):
-            if path.name in ("receipts.py", "review_record.py"):
+            if path.name in ("receipts.py", "review_record.py", "postmerge.py"):
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             # Track Assign targets so `x["status"] = ...` is distinguished from reads.
@@ -154,7 +154,7 @@ class ReceiptStoreAndVerdictUnitTests(unittest.TestCase):
         self.store_b = state.Store(config.Config(project="Beta"), directory=self.dir_b)
 
     def test_reads_and_writes_every_receipt_kind_against_explicit_store(self) -> None:
-        from lanefather import receipts, review_record
+        from lanefather import postmerge, receipts, review_record
 
         # Reading from a missing store directory never creates it.
         for kind in ("check", "receipt", "first", "post-merge", "recheck", "review", "gate", "perf"):
@@ -166,8 +166,6 @@ class ReceiptStoreAndVerdictUnitTests(unittest.TestCase):
             ("check", "lane1", "lane1.receipt.json"),
             ("receipt", "lane1", "lane1.receipt.json"),
             ("first", "lane1", "lane1.first.json"),
-            ("post-merge", "lane1", "lane1.post-merge.json"),
-            ("recheck", "lane1", "lane1.recheck.json"),
             ("gate", sha, f"promote-{sha[:10]}.gate.json"),
             ("perf", sha, f"perf-{sha[:10]}.perf.json"),
         ]
@@ -181,8 +179,30 @@ class ReceiptStoreAndVerdictUnitTests(unittest.TestCase):
                 self.assertIsNone(receipts.read(self.store_b, target, kind))
                 self.assertFalse(self.dir_b.exists())
 
-        with self.assertRaises(ValueError):
-            receipts.write(self.store_a, "lane1", {"status": "exempt"}, "review")
+        for guarded_kind in ("review", "post-merge", "recheck"):
+            with self.subTest(refused=guarded_kind), self.assertRaises(ValueError):
+                receipts.write(self.store_a, "lane1", {"status": "green"}, guarded_kind)  # type: ignore[arg-type]
+
+        self.store_a.save({
+            "id": "lane1",
+            "status": "landed",
+            "ticket": "none",
+            "claims": [],
+            "after": [],
+            "landed": {"merge": sha},
+        })
+        _, pm_written = postmerge.PostMergeRecord.record_smoke(
+            self.store_a, "lane1", merge_sha=sha, status="red", payload={"tree": "a" * 40}
+        )
+        self.assertEqual(pm_written, self.dir_a / "lane1.post-merge.json")
+        self.assertEqual((receipts.read(self.store_a, "lane1", "post-merge") or {}).get("status"), "red")
+        _, rc_written = postmerge.PostMergeRecord.record_recheck(
+            self.store_a, "lane1", merge_sha=sha, tip=sha, status="green", payload={"tree": "a" * 40}
+        )
+        self.assertEqual(rc_written, self.dir_a / "lane1.recheck.json")
+        self.assertEqual((receipts.read(self.store_a, "lane1", "recheck") or {}).get("status"), "green")
+        self.assertFalse(self.dir_b.exists())
+
         review_record.ReviewRecord.exempt(self.store_a, "lane1", "docs only")
 
         self.assertEqual(len(receipts.gates(self.store_a)), 1)

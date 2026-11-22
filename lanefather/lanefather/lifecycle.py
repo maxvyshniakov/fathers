@@ -1,9 +1,9 @@
-"""The lane lifecycle: one transition table, status predicates, and `lane.*` transition events (fathers#69, #55).
+"""The lane lifecycle: one transition table, status predicates, and `lane.*` transition events (fathers#69, #55, #227).
 
 Statuses: planned (registered), active (has a worktree), landed (merged), released (merged with a green smoke while
-its agent still locks the worktree), done (cleaned up). Every status change and its ledger/event entry goes through
-`register` or `transition` under the Store's `state` lock, taking an explicit `state.Store` rather than
-`config.current()`.
+its agent still locks the worktree), done (cleaned up). Every status, `keep`, and `post_merge` mutation and its
+ledger/event entry goes through `register`, `set_keep`, or `transition` under the Store's `state` lock, taking an
+explicit `state.Store` rather than `config.current()`.
 """
 from __future__ import annotations
 
@@ -29,6 +29,10 @@ TRANSITIONS: dict[tuple[str, str], str] = {
     ("active", "drop"): "done",
     ("landed", "hand_over"): "landed",
     ("released", "hand_over"): "released",
+    ("landed", "record_smoke"): "landed",
+    ("released", "record_smoke"): "released",
+    ("landed", "record_recheck"): "landed",
+    ("released", "record_recheck"): "released",
 }
 
 # Repeating an event when the lane is already in its target status is a no-op.
@@ -47,7 +51,18 @@ EVENT_KINDS: dict[str, str] = {
     "drop": "lane.dropped",
 }
 
-ALL_EVENTS: tuple[str, ...] = ("adopt", "land", "release", "finish", "drop", "park", "abandon", "hand_over")
+ALL_EVENTS: tuple[str, ...] = (
+    "adopt",
+    "land",
+    "release",
+    "finish",
+    "drop",
+    "park",
+    "abandon",
+    "hand_over",
+    "record_smoke",
+    "record_recheck",
+)
 
 
 def planned(record: Record | None) -> bool:
@@ -98,18 +113,29 @@ def kept(record: Record) -> bool:
     )
 
 
-def finish_landed(store: state.Store, lane_id: str, keep: bool = False) -> None:
-    """Trigger post-land/post-review completion through `done` without creating a module import cycle."""
-    from . import done
+def set_keep(store: state.Store, lane_id: str, keep: bool) -> Record:
+    """Set or clear `keep` on `lane_id` under `store`'s `state` lock and emit `lane.kept`."""
+    flag = bool(keep)
 
-    done.finish_landed(lane_id, keep, store=store)
+    def _apply(record: Record) -> bool:
+        if finished(record):
+            raise LaneError(f"lane {lane_id} is already done")
+        record["keep"] = flag
+        if isinstance(record.get("landed"), dict):
+            record["landed"]["keep"] = flag
+        return True
 
-
-def finish_reviewed(store: state.Store, lane_id: str) -> None:
-    """Trigger post-review completion through `done` when readiness holds, without a module import cycle."""
-    from . import done
-
-    done.finish_reviewed(lane_id, store=store)
+    with store.locked("state"):
+        record = store.update(lane_id, _apply)
+        journal.ledger(
+            f"{'keep' if flag else 'unkeep'} {lane_id}",
+            kind="lane.kept",
+            lane=record,
+            details={"keep": flag},
+            directory=store.directory,
+            project=store.project,
+        )
+        return record
 
 
 def register(store: state.Store, record: Record, *, status: str = "planned", worktree: str | None = None,
@@ -176,6 +202,7 @@ def transition(store: state.Store, lane_id: str, event: str, *,
                agent: dict[str, Any] | None = None,
                agent_now: str | None = None,
                overrides: list[dict[str, Any]] | None = None,
+               post_merge: dict[str, Any] | None = None,
                post_merge_cleared_by: dict[str, Any] | None = None,
                ledger_message: str | None = None,
                ledger_details: dict[str, Any] | None = None,
@@ -215,6 +242,8 @@ def transition(store: state.Store, lane_id: str, event: str, *,
         if overrides:
             existing_overrides: list[dict[str, Any]] = record.setdefault("overrides", [])
             existing_overrides.extend(overrides)
+        if post_merge is not None:
+            record["post_merge"] = dict(post_merge)
         if post_merge_cleared_by is not None and isinstance(record.get("post_merge"), dict):
             record["post_merge"]["cleared_by"] = post_merge_cleared_by
         if agent is not None:

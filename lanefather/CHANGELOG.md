@@ -238,6 +238,14 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- Unified post-merge smoke, clearing, and lane-completion lifecycle (fathers#227): post-merge smoke, `lanefather
+  recheck`, `lanefather done`, `lanefather done --finished`, and automatic completion after `land` and `review` now
+  share one phase and completion model, recover a green `<id>.recheck.json` written before an interrupted `recheck`
+  could update the lane record, fence late smoke or recheck writes after `done` or a superseded merge commit, resolve
+  legacy batch-gate platforms from each registered project's own results directory during `done --finished`, and
+  re-check lane state under the state lock before releasing a locked worktree so concurrent completions never emit
+  duplicate release output or fail on an already-finished lane.
+
 - Single-location `pre_land_fix` storage and stale review worker protection (fathers#216): review receipt
   transitions now enforce lifecycle phase rules under `<label>.review.json`'s lock, separate partial-panel
   completion under `[review] panel_required = true` from hard review failures, fence `finish` and `fail` by worker

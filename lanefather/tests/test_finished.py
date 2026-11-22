@@ -292,7 +292,7 @@ class FinishedLaneTests(LaneCase):
                       "lane peak", output)
 
     def test_the_repair_runs_once_per_window_and_a_lane_done_meanwhile_is_no_refusal(self):
-        from lanefather import done
+        from lanefather import config, done, postmerge, state
         self.landed_unfinished("a", "lib/a.txt")
         with self.below_floor():
             self.start_n(ok=False)
@@ -304,6 +304,9 @@ class FinishedLaneTests(LaneCase):
         self.assertEqual(self.record("b")["status"], "landed")
         self.assertTrue(worktree.exists())
         with unittest.mock.patch.dict(os.environ, self.env), project(self.repo):
+            store = state.Store(config.current(), directory=self.state)
+            decision = done.settle_lane(store, "a", mode=postmerge.CompletionMode.AUTO_AFTER_REVIEW)
+            self.assertEqual(decision.action, postmerge.CompletionAction.NOOP)
             self.assertEqual(done.finish("a", None, unattended=True), 0)
         # Only the refusal the fixture made when a became finished: done on a lane already done is no refusal.
         self.assertEqual((self.state / "ledger.log").read_text().count("auto-done a refused"), 1)

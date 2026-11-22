@@ -16,7 +16,18 @@ from support import LaneCase, close_process
 from lanefather import config, github
 
 PKG_DIR = Path(__file__).resolve().parent.parent / "lanefather"
-CORE_MODULES = {"lanes", "review", "done", "tickets", "checks", "history", "review_record"}
+CORE_MODULES = {
+    "lanes",
+    "review",
+    "done",
+    "tickets",
+    "checks",
+    "history",
+    "review_record",
+    "lifecycle",
+    "postmerge",
+    "land",
+}
 
 
 def _imported_internal_modules(path: Path) -> tuple[set[str], set[str]]:
@@ -100,6 +111,33 @@ class Tidy6ArchitectureTests(LaneCase):
                             if py_file.name == "review_record.py" or '"review"' in target_src or "'review'" in target_src:
                                 writers.append((py_file.name, node.name))
         self.assertEqual(writers, [("review_record.py", "_transition")])
+
+    def test_post_merge_and_recheck_receipts_written_only_by_postmerge(self):
+        writers: list[tuple[str, str]] = []
+        for py_file in sorted(PKG_DIR.glob("*.py")):
+            tree = ast.parse(py_file.read_text(), filename=str(py_file))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef):
+                    for inner in ast.walk(node):
+                        if not isinstance(inner, ast.Call) or not isinstance(inner.func, ast.Attribute):
+                            continue
+                        if (inner.func.attr == "write"
+                                and isinstance(inner.func.value, ast.Name)
+                                and inner.func.value.id == "receipts"):
+                            kinds = [
+                                *(inner.args[3:4]),
+                                *(kw.value for kw in inner.keywords if kw.arg == "kind"),
+                            ]
+                            for kind_arg in kinds:
+                                if isinstance(kind_arg, ast.Constant) and kind_arg.value in ("post-merge", "recheck"):
+                                    self.fail(f"{py_file.name}:{node.name} calls receipts.write(..., {kind_arg.value!r})")
+                        if inner.func.attr == "write_json":
+                            target_src = ast.unparse(inner.args[0]) if inner.args else ""
+                            if py_file.name == "postmerge.py" or any(
+                                k in target_src for k in ('"post-merge"', "'post-merge'", '"recheck"', "'recheck'")
+                            ):
+                                writers.append((py_file.name, node.name))
+        self.assertEqual(writers, [("postmerge.py", "_write_receipt")])
 
     def test_github_adapter_origin_repo_and_gh_command(self):
         config.use(config.load(config.find(self.repo)))

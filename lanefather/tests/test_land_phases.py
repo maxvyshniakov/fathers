@@ -226,19 +226,6 @@ class Tidy4StructureTests(unittest.TestCase):
                     arg_names = [a.arg for a in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs)]
                     self.assertNotIn("args", arg_names, f"{filename}:{node.name} must not take namespace `args`")
 
-    def test_land_and_review_do_not_import_done(self) -> None:
-        for filename in ("land.py", "review.py"):
-            tree = ast.parse((PKG / filename).read_text())
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    for alias in node.names:
-                        self.assertNotIn("done", alias.name.split("."))
-                elif isinstance(node, ast.ImportFrom):
-                    if node.module and "done" in node.module.split("."):
-                        self.fail(f"{filename} imports from {node.module}")
-                    for alias in node.names:
-                        self.assertNotEqual(alias.name, "done", f"{filename} imports done")
-
 
 if __name__ == "__main__":
     unittest.main()
