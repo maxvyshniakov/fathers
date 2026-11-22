@@ -234,7 +234,7 @@ class UnownedTests(Case):
         env = {**self.env, "JUNKFATHER_SCRATCH_ROOTS": str(scratch)}
         # A browser left behind: its launcher exited, so launchd adopted it (ppid 1).
         launcher = subprocess.run(["sh", "-c", "sleep 600 >/dev/null 2>&1 & echo $!"], cwd=scratch / "session",
-                                  capture_output=True, text=True)
+                                  capture_output=True, text=True, start_new_session=True)
         orphan = int(launcher.stdout.strip())
         self.addCleanup(lambda: os.kill(orphan, 9) if self.runs(orphan) else None)
         self.wait_for(lambda: (procs.Table.read().get(orphan) or procs.Proc(0, 0, 0, 0, "", "", "")).ppid == 1,

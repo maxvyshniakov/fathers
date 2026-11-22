@@ -33,8 +33,8 @@ from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGES = ("slotfather", "lanefather", "junkfather", "godfather", "tokenfather")
-# Packages whose test files use isolated tempdirs and can safely run in parallel across workers (fathers#209).
-PARALLEL_TEST_PACKAGES = frozenset({"lanefather"})
+# Packages whose test files use isolated tempdirs and can safely run in parallel across workers (fathers#209, #219).
+PARALLEL_TEST_PACKAGES = frozenset({"slotfather", "lanefather", "junkfather", "godfather"})
 MAX_DEFAULT_TEST_WORKERS = 4
 RAN_TESTS_RE = re.compile(r"^Ran (\d+) tests? in ", re.M)
 SKIPPED_TESTS_RE = re.compile(r"\bskipped=(\d+)\b")

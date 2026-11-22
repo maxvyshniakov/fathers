@@ -2,6 +2,9 @@
 hold the four packages to one lint gate (fathers#116). Run: python3 -m unittest discover -s tools -p 'test_*.py'."""
 from __future__ import annotations
 
+import ast
+import difflib
+import io
 import json
 import os
 from pathlib import Path
@@ -10,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -242,14 +246,136 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn(f"{name} tests", checks.NAMES)
 
 
+RECURSIVE_CHECK_OK_RE = re.compile(r"#[ \t]*recursive-check-ok:[ \t]*\S+")
+COPY_OK_RE = re.compile(r"#[ \t]*copy-ok:[ \t]*\S+")
+NEAR_COPY_THRESHOLD = 0.85
+PACKAGE_NAME_RE = re.compile(r"(?i)\b(?:" + "|".join(checks.PACKAGES) + r")\b")
+
+
+def find_recursive_checks_run_violations(source: str) -> list[str]:
+    """Lines in `source` that spawn `checks.py run ...` without `# recursive-check-ok: <reason>`."""
+    lines = source.splitlines()
+    tree = ast.parse(source)
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func_text = ast.unparse(node.func)
+        subprocess_calls = ("run", "Popen", "call", "check_output", "check_call")
+        if not (func_text.startswith("subprocess.") or func_text in subprocess_calls):
+            continue
+        if not node.args:
+            continue
+        first_arg = ast.unparse(node.args[0])
+        if "checks.py" not in first_arg:
+            continue
+        if not re.search(r"""['"]run['"]""", first_arg):
+            continue
+        start = node.lineno
+        end = getattr(node, "end_lineno", start) or start
+        snippet = "\n".join(lines[start - 1 : end])
+        if not RECURSIVE_CHECK_OK_RE.search(snippet):
+            violations.append(f"line {start}: {lines[start - 1].strip()}")
+    return violations
+
+
+def normalize_test_source(text: str) -> str:
+    """Normalize package names and strip comments/blank lines for cross-package near-copy detection."""
+    replaced = PACKAGE_NAME_RE.sub("PACKAGE", text)
+    kept = [
+        line.strip()
+        for line in replaced.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    return "\n".join(kept)
+
+
+def find_near_copy_test_files(
+    files_by_package: dict[str, dict[str, str]],
+    threshold: float = NEAR_COPY_THRESHOLD,
+) -> list[tuple[str, str, float]]:
+    """Cross-package test file pairs whose normalized similarity exceeds `threshold` without `# copy-ok: <reason>`."""
+    entries: list[tuple[str, str, str, list[str]]] = []
+    for pkg, pkg_files in sorted(files_by_package.items()):
+        for rel_path, raw_text in sorted(pkg_files.items()):
+            if COPY_OK_RE.search(raw_text):
+                continue
+            norm = normalize_test_source(raw_text)
+            entries.append((pkg, rel_path, norm, norm.splitlines()))
+
+    violations: list[tuple[str, str, float]] = []
+    for index, (pkg_a, path_a, norm_a, lines_a) in enumerate(entries):
+        for pkg_b, path_b, norm_b, lines_b in entries[index + 1 :]:
+            if pkg_a == pkg_b:
+                continue
+            line_matcher = difflib.SequenceMatcher(None, lines_a, lines_b)
+            if line_matcher.real_quick_ratio() <= 0.5 or line_matcher.quick_ratio() <= 0.5:
+                continue
+            matcher = difflib.SequenceMatcher(None, norm_a, norm_b)
+            if matcher.real_quick_ratio() <= threshold or matcher.quick_ratio() <= threshold:
+                continue
+            ratio = matcher.ratio()
+            if ratio > threshold:
+                violations.append((path_a, path_b, ratio))
+    return violations
+
+
 class CommandTests(unittest.TestCase):
-    def test_common_tests_runs_commons_own_tests(self) -> None:
-        result = subprocess.run([sys.executable, str(ROOT / "tools/checks.py"), "run", "common tests"], cwd=ROOT,
-                                capture_output=True, text=True, timeout=300)
-        self.assertEqual(0, result.returncode, result.stderr[-2000:])
-        ran = re.search(r"^Ran (\d+) tests?", result.stderr, re.M)
-        assert ran, result.stderr[-2000:]
-        self.assertGreater(int(ran[1]), 0)
+    def test_commands_maps_checks_to_their_working_directory_and_argv(self) -> None:
+        self.assertEqual(
+            (ROOT, [[sys.executable, "-m", "unittest", "discover", "-s", "common/tests"]]),
+            checks.commands("common tests"),
+        )
+        self.assertEqual(
+            (ROOT / "slotfather", [[sys.executable, "tools/check.py"]]),
+            checks.commands("slotfather lint"),
+        )
+        self.assertEqual(
+            (ROOT / "godfather", [[sys.executable, "-m", "unittest", "discover", "-s", "tests", "-t", "tests"]]),
+            checks.commands("godfather tests"),
+        )
+        with self.assertRaisesRegex(ValueError, "unknown check"):
+            checks.commands("nosuch check")
+
+    def test_run_dispatches_in_process_without_spawning_real_suites(self) -> None:
+        calls: list[tuple[list[str], Path, dict[str, str]]] = []
+
+        def fake_run(argv: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+            calls.append((argv, cwd, env))
+            return subprocess.CompletedProcess(argv, 0)
+
+        with mock.patch.object(checks.subprocess, "run", side_effect=fake_run), \
+                mock.patch("sys.stdout", new_callable=io.StringIO):
+            self.assertEqual(0, checks.run("common tests"))
+
+        self.assertEqual(1, len(calls))
+        argv, cwd, env = calls[0]
+        self.assertEqual([sys.executable, "-m", "unittest", "discover", "-s", "common/tests"], argv)
+        self.assertEqual(ROOT, cwd)
+        self.assertEqual("1", env.get("PYRIGHT_PYTHON_IGNORE_WARNINGS"))
+
+        with mock.patch.object(checks, "run_unittest_parallel", return_value=0) as parallel_mock, \
+                mock.patch.dict(os.environ, {"FATHERS_TEST_WORKERS": "3"}):
+            for pkg in ("slotfather", "lanefather", "junkfather", "godfather"):
+                self.assertIn(pkg, checks.PARALLEL_TEST_PACKAGES)
+                self.assertEqual(0, checks.run(f"{pkg} tests"))
+            self.assertEqual(4, parallel_mock.call_count)
+
+    def test_no_recursive_checks_run_subprocesses_in_test_checks(self) -> None:
+        own_source = Path(__file__).read_text(encoding="utf-8")
+        self.assertEqual([], find_recursive_checks_run_violations(own_source))
+
+        bad_source = (
+            "import subprocess, sys\n"
+            'subprocess.run([sys.executable, "tools/checks.py", "run", "common tests"])\n'
+        )
+        self.assertEqual(1, len(find_recursive_checks_run_violations(bad_source)))
+
+        empty_reason = bad_source.strip() + "  # recursive-check-ok:   \n"
+        self.assertEqual(1, len(find_recursive_checks_run_violations(empty_reason)))
+
+        exempt_source = bad_source.strip() + "  # recursive-check-ok: intentional recursion test\n"
+        self.assertEqual([], find_recursive_checks_run_violations(exempt_source))
 
 
 class ParallelRunnerTests(unittest.TestCase):
@@ -370,6 +496,53 @@ class RepositoryRuleTests(unittest.TestCase):
                 text = (ROOT / name / "pyproject.toml").read_text()
                 self.assertIn('extend = "../tools/ruff.toml"', text)
                 self.assertNotRegex(text, r"(?m)^(extend-)?select\s*=")
+
+    def test_no_cross_package_near_copy_test_files(self) -> None:
+        files_by_package: dict[str, dict[str, str]] = {}
+        for pkg in checks.PACKAGES:
+            pkg_files: dict[str, str] = {}
+            for path in sorted((ROOT / pkg / "tests").rglob("test_*.py")):
+                pkg_files[path.relative_to(ROOT).as_posix()] = path.read_text(encoding="utf-8")
+            files_by_package[pkg] = pkg_files
+
+        violations = find_near_copy_test_files(files_by_package)
+        self.assertEqual(
+            [],
+            [f"{a} <-> {b} ({ratio:.3f} > {NEAR_COPY_THRESHOLD})" for a, b, ratio in violations],
+        )
+
+        sample_a = (
+            "import unittest\n"
+            "class ChangelogLayoutTests(unittest.TestCase):\n"
+            "    def test_title(self) -> None:\n"
+            "        self.assertEqual('# Slotfather Changelog', 'x')\n"
+        )
+        sample_b = sample_a.replace("Slotfather", "Godfather")
+        synthetic = {
+            "slotfather": {"slotfather/tests/test_dup.py": sample_a},
+            "godfather": {"godfather/tests/test_dup.py": sample_b},
+        }
+        self.assertEqual(1, len(find_near_copy_test_files(synthetic)))
+        self.assertEqual(
+            1,
+            len(
+                find_near_copy_test_files(
+                    {
+                        "slotfather": {"slotfather/tests/test_dup.py": "# copy-ok:   \n" + sample_a},
+                        "godfather": {"godfather/tests/test_dup.py": sample_b},
+                    }
+                )
+            ),
+        )
+        self.assertEqual(
+            [],
+            find_near_copy_test_files(
+                {
+                    "slotfather": {"slotfather/tests/test_dup.py": "# copy-ok: shared contract wrapper\n" + sample_a},
+                    "godfather": {"godfather/tests/test_dup.py": sample_b},
+                }
+            ),
+        )
 
 
 if __name__ == "__main__":

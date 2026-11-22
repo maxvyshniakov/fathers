@@ -225,16 +225,15 @@ class MoreGuardTests(WorktreeCase):
     def test_a_process_whose_working_directory_cannot_be_read_counts_as_inside(self):
         from junkfather import procs
         path = self.worktree("unknown", "unknown")
-        here = procs.Table.read()
         child = self.spawn("sleep", "600")
         self.wait_for(lambda: child.pid in procs.Table.read().procs, what="the child")
-        cwds = {pid: "/" for pid in procs.Table.read().procs}
+        here = procs.Table.read()
+        cwds = {pid: "/" for pid in here.procs}
         cwds.pop(child.pid)
         items = worktrees.listing(str(self.repo)) or []
         item = next(i for i in items if i["path"] == str(path))
-        found = worktrees.refusal(item, str(self.repo), procs.Table.read(), cwds, items)
+        found = worktrees.refusal(item, str(self.repo), here, cwds, items)
         self.assertIn(f"pid {child.pid} (sleep 600; its working directory is unknown)", found or "")
-        self.assertIsNotNone(here)
 
 
 class OwnedTests(WorktreeCase):
