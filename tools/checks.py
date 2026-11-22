@@ -17,17 +17,27 @@ everything. A tree without changes since its base verifies everything.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+import fnmatch
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
+import time
 from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGES = ("slotfather", "lanefather", "junkfather", "godfather", "tokenfather")
+# Packages whose test files use isolated tempdirs and can safely run in parallel across workers (fathers#209).
+PARALLEL_TEST_PACKAGES = frozenset({"lanefather"})
+MAX_DEFAULT_TEST_WORKERS = 4
+RAN_TESTS_RE = re.compile(r"^Ran (\d+) tests? in ", re.M)
+SKIPPED_TESTS_RE = re.compile(r"\bskipped=(\d+)\b")
 DEFAULT_BASE = "origin/main"
 # Paths that no check reads: they select only the root checks every selection runs.
 DOCUMENTATION = ("LICENSE", ".gitignore", ".github/dependabot.yml")
@@ -209,11 +219,160 @@ def commands(name: str) -> tuple[Path, list[list[str]]]:
     raise ValueError(f"unknown check {name!r}; one of: {', '.join(NAMES)}")
 
 
+@dataclass(frozen=True)
+class FileTestResult:
+    index: int
+    relative: str
+    returncode: int
+    stdout: str
+    stderr: str
+    elapsed: float
+    ran: int
+    skipped: int
+
+
+def test_workers(environment: Mapping[str, str] | None = None) -> int:
+    """Bounded worker count for parallel test-file execution; FATHERS_TEST_WORKERS overrides the default."""
+    env = os.environ if environment is None else environment
+    raw = env.get("FATHERS_TEST_WORKERS", "").strip()
+    if not raw:
+        return min(MAX_DEFAULT_TEST_WORKERS, os.cpu_count() or 1)
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"FATHERS_TEST_WORKERS must be a positive integer, not {raw!r}") from None
+    if value < 1:
+        raise ValueError(f"FATHERS_TEST_WORKERS must be a positive integer, not {raw!r}")
+    return value
+
+
+def discover_test_files(directory: Path, discover_args: list[str]) -> tuple[list[Path], str | None]:
+    """Test files under `directory` matching `unittest discover` arguments, plus any `-t` top-level directory."""
+    start = "."
+    pattern = "test*.py"
+    top_level: str | None = None
+    index = 0
+    while index < len(discover_args):
+        arg = discover_args[index]
+        if arg in ("-s", "--start-directory") and index + 1 < len(discover_args):
+            start = discover_args[index + 1]
+            index += 2
+        elif arg in ("-p", "--pattern") and index + 1 < len(discover_args):
+            pattern = discover_args[index + 1]
+            index += 2
+        elif arg in ("-t", "--top-level-directory") and index + 1 < len(discover_args):
+            top_level = discover_args[index + 1]
+            index += 2
+        else:
+            index += 1
+    base = directory / start
+    if not base.is_dir():
+        return [], top_level
+    found: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(base):
+        current = Path(dirpath)
+        if current != base and not (current / "__init__.py").is_file():
+            dirnames[:] = []
+            continue
+        dirnames[:] = sorted(d for d in dirnames if d != "__pycache__" and (current / d / "__init__.py").is_file())
+        for filename in sorted(filenames):
+            if fnmatch.fnmatchcase(filename, pattern):
+                found.append(current / filename)
+    return sorted(found), top_level
+
+
+def _file_unittest_argv(directory: Path, file: Path, top_level: str | None) -> list[str]:
+    start_dir = file.parent.relative_to(directory).as_posix()
+    argv = [sys.executable, "-m", "unittest", "discover", "-s", start_dir]
+    if top_level is not None:
+        argv.extend(["-t", top_level])
+    argv.extend(["-p", file.name])
+    return argv
+
+
+def _parse_unittest_counts(stderr: str) -> tuple[int, int]:
+    ran_match = RAN_TESTS_RE.search(stderr)
+    ran = int(ran_match.group(1)) if ran_match else 0
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    skipped = 0
+    if lines and lines[-1].startswith(("OK", "FAILED")):
+        skip_match = SKIPPED_TESTS_RE.search(lines[-1])
+        if skip_match:
+            skipped = int(skip_match.group(1))
+    return ran, skipped
+
+
+def run_unittest_parallel(directory: Path, discover_args: list[str], environment: dict[str, str],
+                          workers: int) -> int:
+    """Run independent unittest files across a bounded subprocess pool with deterministic output and exit code."""
+    files, top_level = discover_test_files(directory, discover_args)
+    if workers <= 1 or len(files) <= 1:
+        argv = [sys.executable, "-m", "unittest", "discover", *discover_args]
+        print("+", " ".join(argv), flush=True)
+        return subprocess.run(argv, cwd=directory, env=environment).returncode
+
+    pool_size = min(workers, len(files))
+    print(f"+ {sys.executable} -m unittest discover {' '.join(discover_args)} "
+          f"({len(files)} files, {pool_size} workers)", flush=True)
+    # Schedule largest test files first (LPT) to avoid a long tail while reporting in deterministic sorted order.
+    schedule = sorted(range(len(files)), key=lambda i: (-files[i].stat().st_size, i))
+    started = time.monotonic()
+
+    def run_one(index: int) -> FileTestResult:
+        file = files[index]
+        argv = _file_unittest_argv(directory, file, top_level)
+        file_started = time.monotonic()
+        completed = subprocess.run(argv, cwd=directory, env=environment, capture_output=True, text=True)
+        file_elapsed = time.monotonic() - file_started
+        ran, skipped = _parse_unittest_counts(completed.stderr)
+        return FileTestResult(index=index, relative=file.relative_to(directory).as_posix(),
+                              returncode=completed.returncode, stdout=completed.stdout, stderr=completed.stderr,
+                              elapsed=file_elapsed, ran=ran, skipped=skipped)
+
+    with ThreadPoolExecutor(max_workers=pool_size) as pool:
+        results = sorted(pool.map(run_one, schedule), key=lambda item: item.index)
+
+    elapsed = time.monotonic() - started
+    total_ran = sum(item.ran for item in results)
+    total_skipped = sum(item.skipped for item in results)
+    failed = [item for item in results if item.returncode != 0]
+
+    for item in failed:
+        print(f"=== FAIL: {item.relative} (exit {item.returncode}, {item.elapsed:.2f}s) ===", file=sys.stderr)
+        if item.stdout:
+            sys.stderr.write(item.stdout)
+            if not item.stdout.endswith("\n"):
+                sys.stderr.write("\n")
+        if item.stderr:
+            sys.stderr.write(item.stderr)
+            if not item.stderr.endswith("\n"):
+                sys.stderr.write("\n")
+
+    print("-" * 70, file=sys.stderr)
+    test_word = "test" if total_ran == 1 else "tests"
+    print(f"Ran {total_ran} {test_word} in {elapsed:.3f}s ({len(files)} files, {pool_size} workers)", file=sys.stderr)
+    print(file=sys.stderr)
+    if failed:
+        names = ", ".join(item.relative for item in failed)
+        print(f"FAILED (files={len(failed)}: {names})", file=sys.stderr)
+        return failed[0].returncode
+    if total_skipped:
+        print(f"OK (skipped={total_skipped})", file=sys.stderr)
+    else:
+        print("OK", file=sys.stderr)
+    return 0
+
+
 def run(name: str) -> int:
+    owner, _, kind = name.partition(" ")
+    environment = {**os.environ, "PYRIGHT_PYTHON_IGNORE_WARNINGS": "1"}
+    if owner in PARALLEL_TEST_PACKAGES and kind == "tests":
+        workers = test_workers(environment)
+        if workers > 1:
+            return run_unittest_parallel(ROOT / owner, TESTS[owner], environment, workers)
     directory, argvs = commands(name)
     for argv in argvs:
         print("+", " ".join(argv), flush=True)
-        environment = {**os.environ, "PYRIGHT_PYTHON_IGNORE_WARNINGS": "1"}
         status = subprocess.run(argv, cwd=directory, env=environment).returncode
         if status:
             return status

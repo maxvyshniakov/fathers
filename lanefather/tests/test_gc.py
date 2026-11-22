@@ -81,6 +81,7 @@ class GcTests(GcCase):
         self.assertTrue(any(a["kind"] == "branch" for a in report["removed"]))
 
     def test_gc_keeps_dirty_young_unmerged_retained_owned_and_used_worktrees_of_every_family(self):
+        self.use_real_process_scan()
         for kind in ("agent", "session"):
             with self.subTest(kind):
                 dirty, young, unmerged, retained, owned, used = (
@@ -121,6 +122,7 @@ class GcTests(GcCase):
         self.assertTrue(old.exists(), "a collector must not remove its own working directory")
 
     def test_gc_keeps_an_ancestor_using_the_candidate_even_when_the_child_runs_elsewhere(self):
+        self.use_real_process_scan()
         old = self.candidate()
         script = ("import os,subprocess,sys; "
                   "raise SystemExit(subprocess.call([sys.executable,'-m','lanefather','gc','--json'], "
@@ -172,6 +174,7 @@ class GcTests(GcCase):
         self.assertTrue(any("process source" in a["reason"] for a in report["kept"]))
 
     def test_gc_keeps_a_process_naming_a_worktree_outside_its_working_directory(self):
+        self.use_real_process_scan()
         old = self.candidate()
         child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", str(old.resolve())], cwd=self.repo)
         self.addCleanup(lambda: (child.kill(), child.wait()))

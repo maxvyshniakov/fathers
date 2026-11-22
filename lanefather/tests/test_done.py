@@ -72,6 +72,7 @@ class DoneTests(LaneCase):
 
     def test_done_stops_through_slotfather_sweep_what_the_lane_left_in_its_worktree(self):
         # #661: a verify outlived the lane that started it, holding memory for a day.
+        self.use_real_process_scan()
         worktree, *_ = self.landed_agent_lane()
         left = self.process_in(worktree / "desktop", "orphan-661")
         self.env["FAKE_SLOTFATHER_SWEEP_STOP"] = "orphan-661"
@@ -86,6 +87,7 @@ class DoneTests(LaneCase):
 
     def test_done_refuses_while_a_process_slotfather_sweep_does_not_stop_works_in_the_worktree(self):
         # Review of #661: a session, a terminal, a lease or a process of no known kind holds the worktree.
+        self.use_real_process_scan()
         worktree, *_ = self.landed_agent_lane()
         held = self.process_in(worktree, "held-661")
         self.env["FAKE_SLOTFATHER_SWEEP_SPARE"] = "held-661"
@@ -100,6 +102,7 @@ class DoneTests(LaneCase):
 
     def test_done_refuses_without_a_verdict_or_when_the_stop_fails(self):
         # Review of #661: a sweep that fails, or a stop it cannot confirm, keeps the worktree.
+        self.use_real_process_scan()
         worktree, *_ = self.landed_agent_lane()
         stubborn = self.process_in(worktree, "orphan-661", ignore_term=True)
         self.env.update(FAKE_SLOTFATHER_SWEEP_STOP="orphan-661", FAKE_SLOTFATHER_SWEEP_FAIL="queue unreadable")
