@@ -417,22 +417,68 @@ class WatcherTests(Case):
 
     def test_only_what_is_tied_to_the_shell_joins(self):
         shell = proc(500, pgid=500, start="Mon Nov 16 10:00:00 2026", cmd="sh -c x")
-        entry = as_entry({"id": "jw", "pid": 500, "pgid": 500, "group": True, "start": shell.start, "known": []})
-        child = proc(501, ppid=500, pgid=500, start="Mon Nov 16 10:00:01 2026")
-        orphan = proc(502, ppid=1, pgid=500, start="Mon Nov 16 10:00:02 2026")
-        late = proc(503, ppid=1, pgid=500, start="Mon Nov 16 10:00:09 2026")
+        child = proc(501, ppid=500, pgid=500, start="Mon Nov 16 10:00:01 2026", cmd="sleep 600")
+        orphan = proc(502, ppid=1, pgid=500, start="Mon Nov 16 10:00:02 2026", cmd="sleep 601")
+        late = proc(503, ppid=1, pgid=500, start="Mon Nov 16 10:00:09 2026", cmd="sleep 602")
         exited_at = procs.started_at("Mon Nov 16 10:00:05 2026") or 0.0
-        with_shell = table(shell, child, orphan)
-        self.assertEqual([501, 502], sorted(p.pid for p in background._joining(  # pyright: ignore[reportPrivateUsage]
-            self.store, entry, with_shell, {500: (shell.start, 500)}, False, exited_at)), "the shell's group")
-        after = table(orphan, late)
-        self.assertEqual([502], [p.pid for p in background._joining(  # pyright: ignore[reportPrivateUsage]
-            self.store, entry, after, {}, True, exited_at)], "the group as the kernel saw it end: not what came later")
-        self.assertEqual([], background._joining(  # pyright: ignore[reportPrivateUsage]
-            self.store, entry, after, {}, False, exited_at), "no witness and no exit seen: nothing")
-        reused = table(proc(500, pgid=500, start="Mon Nov 16 11:00:00 2026", cmd="vim"), orphan)
-        self.assertEqual([], background._joining(  # pyright: ignore[reportPrivateUsage]
-            self.store, entry, reused, {}, True, exited_at), "the group's id leads another process: nothing")
+
+        def run_case(name: str, second_table: procs.Table, events: List[Tuple[str, int]],
+                     precise: bool = True) -> Dict[str, Any]:
+            entry_id = f"jw_{name}"
+            self.store.save(as_entry({
+                "id": entry_id, "state": "running", "mode": "adopted", "auto": "background", "keep": "owner",
+                "pid": 500, "pgid": 500, "group": True, "start": shell.start, "seen": shell.cmd,
+                "known": [[500, shell.start]], "known_seen": [[500, shell.start, shell.cmd]],
+                "created": exited_at - 5.0, "expires": exited_at + 3600.0,
+                "owner": {"kind": "claude", "session": "s1"},
+            }))
+            snapshots = [table(shell), second_table]
+            case = self
+
+            class ScriptedEyes:
+                def __init__(self) -> None:
+                    self.precise = precise
+                    self.waits = 0
+
+                def add(self, pid: int) -> bool:
+                    return True
+
+                def wait(self, timeout: float) -> List[Tuple[str, int]]:
+                    self.waits += 1
+                    if self.waits == 1:
+                        return list(events)
+                    case.store.update(entry_id, lambda e: e.update(state="gone"))
+                    return []
+
+            def fake_identities(pids: List[int], command: bool = False) -> Dict[int, Any]:
+                out: Dict[int, Any] = {}
+                for p in pids:
+                    found = second_table.get(p)
+                    if found is not None:
+                        out[p] = (found.start, found.cmd) if command else found.start
+                return out
+
+            background.watch(
+                self.store, entry_id, 500, shell.start,
+                eyes=ScriptedEyes(), wall=lambda: exited_at,
+                reader=lambda: snapshots.pop(0) if snapshots else second_table,
+                identities=fake_identities,
+            )
+            return self.loaded(entry_id)
+
+        with_shell = run_case("group", table(shell, child, orphan), [])
+        self.assertEqual([500, 501, 502], sorted(int(item[0]) for item in with_shell["known"]), "the shell's group")
+
+        after_exit = run_case("exit", table(orphan, late), [("exit", 500)], precise=True)
+        self.assertEqual([502], [int(item[0]) for item in after_exit["known"]],
+                         "the group as the kernel saw it end: not what came later")
+
+        no_exit_event = run_case("no_event", table(orphan, late), [], precise=True)
+        self.assertEqual("gone", no_exit_event["state"], "no witness and no exit seen: nothing joins")
+
+        reused_leader = run_case("reused", table(proc(500, pgid=500, start="Mon Nov 16 11:00:00 2026", cmd="vim"),
+                                                 orphan), [("exit", 500)], precise=True)
+        self.assertEqual("gone", reused_leader["state"], "the group's id leads another process: nothing joins")
 
     def test_a_reap_takes_the_members_recorded_while_it_read(self):
         """The watcher records the exec'd leader's command after the reaper read the entry and before it marked it
@@ -453,57 +499,13 @@ class WatcherTests(Case):
         self.assertEqual(("stopped", [child.pid]), (result["result"], result["pids"]))
         self.assertIsNotNone(child.wait(15))
 
-    def test_the_watcher_enforces_ttl_expiry_while_agents_are_quiet(self):
-        child = self.spawn("sleep", "600", start_new_session=True)
-        now = [1000.0]
-        entry = self.entry(child, seen="sleep 600", created=now[0], ttl=30.0, expires=now[0] + 30.0)
-        waited: List[float] = []
-
-        class ClockEyes(FakeEyes):
-            def wait(self, timeout: float) -> List[Tuple[str, int]]:
-                waited.append(timeout)
-                now[0] += timeout
-                return []
-
-        background.watch(self.store, "jw", child.pid, entry["start"], eyes=ClockEyes(), wall=lambda: now[0])
-        self.assertEqual([30.0], waited)
-        self.assertEqual("reaped", self.state_of("jw"))
-        self.assertEqual("ttl expired", self.loaded("jw")["end"]["reason"])
-        self.assertIsNotNone(child.wait(10))
-
-    def test_an_extension_at_the_old_deadline_wins_and_bounds_the_next_wait(self):
-        from junkfather import entry as entry_module
-        child = self.spawn("sleep", "600", start_new_session=True)
-        now = [1000.0]
-        entry = self.entry(child, seen="sleep 600", created=now[0], ttl=20.0, expires=now[0] + 20.0)
-        waited: List[float] = []
-        reads = [0]
-
-        class ClockEyes(FakeEyes):
-            def wait(self, timeout: float) -> List[Tuple[str, int]]:
-                waited.append(timeout)
-                now[0] += timeout
-                return []
-
-        def reader() -> procs.Table:
-            reads[0] += 1
-            if reads[0] == 3:
-                # Inside reap.reap, after the watcher saw the entry due at 1020 and before begin_reap marks it:
-                self.assertIsNotNone(entry_module.extended(self.store, "jw", 45.0, now=now[0]))
-            return procs.Table.read()
-
-        background.watch(self.store, "jw", child.pid, entry["start"], eyes=ClockEyes(), wall=lambda: now[0],
-                         reader=reader)
-        self.assertEqual([20.0, 45.0], waited, "the extension at 1020 wins; the watcher waits for 1065 and reaps then")
-        self.assertEqual("reaped", self.state_of("jw"))
-        self.assertIsNotNone(child.wait(10))
-
-    def test_a_handoff_preserves_and_enforces_the_current_ttl(self):
+    def test_watcher_enforces_ttl_across_handoff_and_concurrent_extension(self):
         from junkfather import entry as entry_module
         child = self.spawn("sleep", "600", start_new_session=True)
         now = [1000.0]
         entry = self.entry(child, seen="sleep 600", created=now[0], ttl=25.0, expires=now[0] + 25.0)
         waited: List[float] = []
+        reads = [0]
         store = self.store
 
         class ClockEyes(FakeEyes):
@@ -516,9 +518,20 @@ class WatcherTests(Case):
                     now[0] += timeout
                 return []
 
-        background.watch(self.store, "jw", child.pid, entry["start"], eyes=ClockEyes(), wall=lambda: now[0])
-        self.assertEqual([25.0, 15.0], waited)
-        self.assertEqual(("reaped", "s2"), (self.state_of("jw"), self.loaded("jw")["owner"]["session"]))
+        def reader() -> procs.Table:
+            reads[0] += 1
+            if reads[0] == 4:
+                # Inside reap.reap at the old deadline (1025), before begin_reap marks it:
+                self.assertIsNotNone(entry_module.extended(self.store, "jw", 45.0, now=now[0]))
+            return procs.Table.read()
+
+        background.watch(self.store, "jw", child.pid, entry["start"], eyes=ClockEyes(), wall=lambda: now[0],
+                         reader=reader)
+        self.assertEqual([25.0, 15.0, 45.0], waited,
+                         "handoff keeps the old deadline; concurrent extension at 1025 wins and bounds the next wait")
+        self.assertEqual(("reaped", "ttl expired", "s2"),
+                         (self.state_of("jw"), self.loaded("jw")["end"]["reason"],
+                          self.loaded("jw")["owner"]["session"]))
         self.assertIsNotNone(child.wait(10))
 
     def test_a_no_ttl_main_session_entry_stays_unexpired_until_extended_with_a_finite_ttl(self):
@@ -597,7 +610,7 @@ class WatcherTests(Case):
 
         background.watch(self.store, "jw", child.pid, entry["start"], eyes=ClockEyes(), wall=lambda: now[0],
                          clock=lambda: mono[0], reader=reader)
-        self.assertEqual([10.0, 0.0, 1.0], waited)
+        self.assertEqual([10.0, 1.0, 1.0], waited)
         self.assertEqual("reaped", self.state_of("jw"))
         self.assertIsNotNone(child.wait(10))
 
@@ -653,7 +666,6 @@ class WatcherTests(Case):
     def test_a_child_that_exits_or_changes_start_identity_during_registration_stays_excluded(self):
         """fathers#186: a child in the snapshot that exits or changes start time before post-registration identity
         verification is never added to watched or known_seen."""
-        from unittest import mock
         shell = self.spawn("sleep", "600", start_new_session=True)
         entry = self.entry(shell, seen="sleep 600")
         shell_proc = procs.Table.read().get(shell.pid)
@@ -685,8 +697,79 @@ class WatcherTests(Case):
                     self.case.store.update("jw", lambda e: e.update(state="gone"))
                 return []
 
-        with mock.patch.object(procs, "identities", side_effect=fake_identities):
-            background.watch(self.store, "jw", shell.pid, entry["start"], eyes=OneTurnEyes(self),
-                             reader=lambda: snapshots.pop(0) if snapshots else table(shell_proc))
+        background.watch(self.store, "jw", shell.pid, entry["start"], eyes=OneTurnEyes(self),
+                         reader=lambda: snapshots.pop(0) if snapshots else table(shell_proc),
+                         identities=fake_identities)
         recorded = self.loaded("jw")
         self.assertEqual([[shell.pid, shell_proc.start, "sleep 600"]], recorded["known_seen"])
+
+    def test_detached_agent_browser_daemon_retains_entry_after_shell_exits(self):
+        """A detached agent-browser daemon (and its Chrome descendant) started by a background shell joins
+        `entry['daemons']` and keeps the entry running after the shell exits, until the daemon exits too."""
+        browser_dir = self.tmp / "agent-browser"
+        browser_dir.mkdir()
+        os.environ["JUNKFATHER_AGENT_BROWSER"] = str(browser_dir)
+        (browser_dir / "check-500.pid").write_text("600")
+
+        shell_start = "Mon Nov 16 10:00:00 2026"
+        daemon_start = "Mon Nov 16 10:00:02 2026"
+        daemon_cmd = "/opt/homebrew/lib/node_modules/agent-browser/bin/agent-browser-darwin-arm64"
+        shell = proc(500, pgid=500, start=shell_start, cmd="sh -c browser")
+        daemon = proc(600, ppid=1, pgid=600, start=daemon_start, cmd=daemon_cmd)
+        chrome = proc(601, ppid=600, pgid=600, start=daemon_start, cmd="Google Chrome for Testing --headless")
+        now = procs.started_at("Mon Nov 16 10:00:05 2026") or 1000.0
+
+        self.store.save(as_entry({
+            "id": "jw_browser", "state": "running", "mode": "adopted", "auto": "background", "keep": "owner",
+            "pid": 500, "pgid": 500, "group": True, "start": shell_start, "seen": shell.cmd,
+            "known": [[500, shell_start]], "known_seen": [[500, shell_start, shell.cmd]],
+            "created": now - 5.0, "expires": now + 3600.0,
+            "owner": {"kind": "claude", "session": "s1"},
+        }))
+        snapshots = [
+            table(shell),                  # startup
+            table(shell, daemon, chrome),  # tick 1: daemon starts under shell 500
+            table(daemon, chrome),         # tick 2: shell 500 exits, daemon + chrome remain
+            table(),                       # tick 3: daemon + chrome exit
+        ]
+        current_table = [snapshots[0]]
+        states_seen: List[Tuple[str, List[int]]] = []
+        case = self
+
+        class DaemonEyes:
+            precise = True
+
+            def __init__(self) -> None:
+                self.waits = 0
+
+            def add(self, pid: int) -> bool:
+                return True
+
+            def wait(self, timeout: float) -> List[Tuple[str, int]]:
+                self.waits += 1
+                if self.waits > 1:
+                    saved = case.loaded("jw_browser")
+                    states_seen.append((saved["state"], sorted(int(item[0]) for item in saved["known"])))
+                if self.waits == 2:
+                    return [("exit", 500)]
+                return []
+
+        def reader() -> procs.Table:
+            if snapshots:
+                current_table[0] = snapshots.pop(0)
+            return current_table[0]
+
+        def fake_identities(pids: List[int], command: bool = False) -> Dict[int, Any]:
+            out: Dict[int, Any] = {}
+            for p in pids:
+                found = current_table[0].get(p)
+                if found is not None:
+                    out[p] = (found.start, found.cmd) if command else found.start
+            return out
+
+        background.watch(self.store, "jw_browser", 500, shell_start, eyes=DaemonEyes(),
+                         wall=lambda: now, reader=reader, identities=fake_identities)
+        self.assertEqual([("running", [500, 600, 601]), ("running", [600, 601])], states_seen)
+        saved = self.loaded("jw_browser")
+        self.assertEqual("gone", saved["state"])
+        self.assertEqual([[600, daemon_start, daemon_cmd]], saved["daemons"])

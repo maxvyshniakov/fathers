@@ -87,6 +87,11 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- An attached command whose process-table read fails transiently as it exits now retries cleanly to the exited state
+  instead of reporting zero remaining processes, a background-shell watcher backs off for 1 s rather than spinning when
+  the process table cannot be read at expiry, shortening an entry's TTL during reap-failure backoff takes effect at the
+  new deadline, and detached agent-browser daemons keep an auto-owned background entry alive after its shell exits
+  (fathers#226).
 - `junkfather reap --owner` and `junkfather reap --lane` now recheck ownership and lane under the store lock even
   without `--expired` or `--lifecycle`, and resource TTL retry streaks record `last_error` without repeating
   `resource.stop_failed` events while avoiding redundant process-table reads (fathers#217).

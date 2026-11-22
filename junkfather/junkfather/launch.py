@@ -22,7 +22,7 @@ import signal
 import subprocess
 import sys
 import time
-from typing import Any, Callable, Dict, List, Mapping, Optional, TextIO, cast
+from typing import Any, Callable, Dict, List, Mapping, Optional, TextIO, Tuple, cast
 
 from . import entry as _entry
 from . import events as _events
@@ -30,19 +30,15 @@ from . import owner as _owner
 from . import procs as _procs
 from . import reap as _reap
 from . import safety as _safety
+from . import supervise as _supervise
 from .errors import NOT_FOUND, REFUSED, Refused
-from .defaults import DETACH_WAIT, KNOWN_EVERY, POLL, RETRY_FIRST, RETRY_MAX, SIGNAL_GRACE
-from .entry import new as new_entry
+from .defaults import DETACH_WAIT, KNOWN_EVERY, POLL, SIGNAL_GRACE
+from .entry import Entry, new as new_entry
 from .release import PACKAGE_ROOT
-from .text import duration
-from .entry import Entry
 from .state import Store
+from .text import duration
 
-
-
-def retry_delay(failures: int) -> float:
-    """How long the supervisor waits after the `failures`-th failed TTL reap in a row."""
-    return min(RETRY_MAX, RETRY_FIRST * 2 ** min(max(failures - 1, 0), 16))
+retry_delay = _supervise.retry_delay
 
 
 def self_command(*args: str) -> List[str]:
@@ -66,18 +62,22 @@ def end_child(child: subprocess.Popen[bytes], grace: float = SIGNAL_GRACE) -> No
             pass
 
 
-def record_child(store: Store, entry_id: str, child: subprocess.Popen[bytes], supervisor: int) -> Optional[Entry]:
+def record_child(store: Store, entry_id: str, child: subprocess.Popen[bytes], supervisor: int,
+                 timer: Optional[_supervise.Timer] = None,
+                 reader: Callable[[], _procs.Table] = _procs.Table.read) -> Optional[Entry]:
     """Fill in the leader's identity right after it started (Popen returns once the exec succeeded). Without a
     readable process table, or when the entry stopped starting meanwhile (a reap of its owner), the child is
     stopped and the entry fails: an entry whose identity is unknown could never be reaped safely."""
+    timer = timer or _supervise.Timer()
     table = proc = None
     for attempt in range(3):
         try:
-            table = _procs.Table.read()
+            table = reader()
             proc = table.get(child.pid)
             break
         except _procs.ProcError:
-            time.sleep(0.2 * (attempt + 1))
+            if attempt < 2:
+                timer.pause(0.2 * (attempt + 1))
     me = table.get(supervisor) if table is not None else None
     if proc is None:
         entry = _entry.failed(store, entry_id, "its identity could not be read")
@@ -93,85 +93,62 @@ def record_child(store: Store, entry_id: str, child: subprocess.Popen[bytes], su
     return entry
 
 
-class Supervisor:
-    """Waits on the leader, enforces the TTL, keeps `known` fresh, and stops the group on a signal. A TTL reap that
-    fails is tried again after a capped backoff (retry_delay), and only the first failure of a streak is an event.
-    Tests inject `clock` (monotonic: the backoff and the refresh of `known`), `wall` (epoch seconds: the TTL against
-    the entry's `expires`), `pause` and `reaper`."""
+class ChildDriver:
+    """Supervision driver for a child process started by `junkfather own` (attached or detached)."""
 
-    def __init__(self, store: Store, entry_id: str, child: subprocess.Popen[bytes], quiet: bool = False,
+    max_wait = POLL
+    wait_first = False
+
+    def __init__(self, entry_id: str, child: subprocess.Popen[bytes], *, quiet: bool = False,
                  attached: bool = True, catcher: Optional["Catcher"] = None,
-                 clock: Callable[[], float] = time.monotonic, pause: Callable[[float], None] = time.sleep,
-                 reaper: Optional[Callable[..., Dict[str, Any]]] = None, wall: Callable[[], float] = time.time):
-        self.store, self.id, self.child, self.quiet, self.attached = store, entry_id, child, quiet, attached
+                 timer: Optional[_supervise.Timer] = None,
+                 reaper: Optional[_supervise.Reaper] = None,
+                 reader: Callable[[], _procs.Table] = _procs.Table.read):
+        self.id = entry_id
+        self.child = child
+        self.quiet = quiet
+        self.attached = attached
         self.catcher = catcher or Catcher()
-        self.clock, self.wall, self.pause, self.reaper = clock, wall, pause, reaper or _reap.reap
+        self.timer = timer or _supervise.Timer()
+        self.reaper = reaper or _reap.reap
+        self.reader = reader
+        self.next_known = self.timer.clock() + KNOWN_EVERY
+        self.code: Optional[int] = None
+        self._exit_handled = False
 
-    def say(self, text: str) -> None:
+    def notice(self, message: str) -> None:
         if not self.quiet:
-            print(f"junkfather: {text}", file=sys.stderr, flush=True)
+            print(f"junkfather: {message}", file=sys.stderr, flush=True)
 
-    def run(self) -> int:
-        next_known = self.clock() + KNOWN_EVERY
-        code: Optional[int] = None
-        failures, retry_at = 0, 0.0
-        while True:
-            signalled = self.catcher.signum
-            if signalled is not None:
-                name = signal.Signals(signalled).name
-                result = _reap.reap(self.store, self.id, f"junkfather got {name}", grace=SIGNAL_GRACE,
-                                    actor=_events.tool("supervisor"))
-                if self.child.poll() is None and result["result"] not in _reap.STOPPED + ("skipped",):
-                    end_child(self.child, SIGNAL_GRACE)
-                self.say(f"{self.id} stopped on {name}: {result['result']}")
-                self.child.poll()
-                return 128 + signalled
-            exited_now = False
-            if code is None:
-                code = self.child.poll()
-                exited_now = code is not None
-            entry = self.store.load(self.id)
-            if entry is not None and entry.get("state") == _entry.GONE and code is None:
-                # A sweep took it for ended while our child runs: it is still ours.
-                _entry.revived(self.store, self.id)
-                continue
-            if entry is None or entry.get("state") not in _entry.ACTIVE:
-                if code is None:
-                    end_child(self.child)  # ended on the record (reaped, failed) while ours still runs
-                    code = self.child.poll()
-                if entry is not None and entry.get("state") == _entry.REAPED:
-                    self.say(f"{self.id} reaped ({(entry.get('end') or {}).get('reason')})")
-                return status(code)
-            if entry.get("state") == _entry.RUNNING and _entry.due(entry, self.wall()) \
-                    and self.clock() >= retry_at:
-                result = self.reaper(self.store, self.id, "ttl expired", actor=_events.tool("supervisor"),
-                                     report_failure=not failures, allowed=_entry.require_due(self.wall))
-                if result["result"] != "failed":
-                    self.say(f"{self.id} reached its TTL: {result['result']}")
-                    continue
-                failures += 1
-                retry_at = self.clock() + retry_delay(failures)
-                if failures == 1:
-                    self.say(f"{self.id} reached its TTL: failed ({result['reason']}); trying again with a backoff "
-                             f"up to {RETRY_MAX:.0f} s")
-            if exited_now or self.clock() >= next_known:
-                next_known = self.clock() + KNOWN_EVERY
-                done, left = self.refresh(code)
-                if done:
-                    return status(code)
-                if exited_now and self.attached and entry.get("state") == _entry.RUNNING:
-                    self.say(f"{self.id}: the command exited; {left} process(es) it left keep the entry running "
-                             f"until its owner ends or its TTL passes (now: junkfather reap --id {self.id})")
-                    return status(code)
-            self.pause(POLL)
+    def _poll_child(self) -> Optional[int]:
+        if self.code is None:
+            self.code = self.child.poll()
+        return self.code
 
-    def refresh(self, code: Optional[int]) -> "tuple[bool, int]":
-        """Refresh `known`. Returns (the entry exited: the leader is gone and nothing of it remains, how many
-        processes remain)."""
-        try:
-            table = _procs.Table.read()
-        except _procs.ProcError:
-            return False, 0
+    def holds_leader(self) -> bool:
+        return self._poll_child() is None
+
+    def check_interrupt(self, store: Store, entry_id: str) -> Optional[int]:
+        signalled = self.catcher.signum
+        if signalled is None:
+            return None
+        name = signal.Signals(signalled).name
+        result = self.reaper(store, entry_id, f"junkfather got {name}", grace=SIGNAL_GRACE,
+                             actor=_events.tool("supervisor"))
+        if self.child.poll() is None and result["result"] not in _reap.STOPPED + ("skipped",):
+            end_child(self.child, SIGNAL_GRACE)
+        self.notice(f"{entry_id} stopped on {name}: {result['result']}")
+        self.child.poll()
+        return 128 + signalled
+
+    def wait(self, timeout: float) -> None:
+        self.timer.pause(timeout)
+
+    def refresh_members(self, store: Store, code: Optional[int], now: Optional[float] = None
+                        ) -> Tuple[Optional[Entry], bool, int]:
+        """Refresh `known` and `daemons`. Raises `ProcError` when the process table cannot be read."""
+        table = self.reader()
+
         def members_of(e: Entry) -> List[_procs.Proc]:
             # While our child runs unwaited its pid cannot be reused: it is the leader whatever command it shows now
             # (a launcher such as /usr/bin/python3 execs another program), and known_seen records that command.
@@ -182,10 +159,85 @@ class Supervisor:
                 members, _ = _reap.members(e, table, ours=code is None and self.child.poll() is None)
             return [p for p in members if p.pid != os.getpid()]
 
-        entry, done, left = _entry.refreshed(self.store, self.id, members_of, code)
-        if done and entry is not None:
-            _events.write(self.store.root, "entry.exited", _events.subject(entry), _events.tool("supervisor"),
+        updated, done, left = _entry.refreshed(store, self.id, members_of, code, now=now)
+        if done and updated is not None:
+            _events.write(store.root, "entry.exited", _events.subject(updated), _events.tool("supervisor"),
                           {"exit": code})
+        return updated, done, left
+
+    def refresh(self, store: Store, entry: Entry, seen_at: float) -> Optional[int]:
+        code = self._poll_child()
+        exited_now = code is not None and not self._exit_handled
+        if not exited_now and self.timer.clock() < self.next_known:
+            return None
+        updated, done, left = self.refresh_members(store, code, now=seen_at)
+        self.next_known = self.timer.clock() + KNOWN_EVERY
+        if done:
+            self._exit_handled = True
+            return status(code)
+        if exited_now and updated is not None and left > 0:
+            self._exit_handled = True
+            if self.attached:
+                self.notice(f"{self.id}: the command exited; {left} process(es) it left keep the entry running "
+                            f"until its owner ends or its TTL passes (now: junkfather reap --id {self.id})")
+                return status(code)
+        return None
+
+    def finish_external(self, store: Store, entry: Optional[Entry]) -> int:
+        if self._poll_child() is None:
+            end_child(self.child)  # ended on the record (reaped, failed) while ours still runs
+            self.code = self.child.poll()
+        return status(self.code)
+
+    def finish_ttl(self, store: Store, entry_id: str, result: Dict[str, Any]) -> int:
+        self.notice(f"{entry_id} reached its TTL: {result['result']}")
+        if self._poll_child() is None:
+            end_child(self.child)
+            self.code = self.child.poll()
+        return status(self.code)
+
+
+class Supervisor:
+    """Waits on the leader, enforces the TTL, keeps `known` fresh, and stops the group on a signal. Delegates the
+    shared supervision loop to `supervise.run` through `ChildDriver`. Tests inject `clock`, `wall`, `pause`,
+    `reaper` and `reader`."""
+
+    def __init__(self, store: Store, entry_id: str, child: subprocess.Popen[bytes], quiet: bool = False,
+                 attached: bool = True, catcher: Optional["Catcher"] = None,
+                 clock: Callable[[], float] = time.monotonic, pause: Callable[[float], None] = time.sleep,
+                 reaper: Optional[Callable[..., Dict[str, Any]]] = None, wall: Callable[[], float] = time.time,
+                 reader: Callable[[], _procs.Table] = _procs.Table.read):
+        self.store, self.id, self.child, self.quiet, self.attached = store, entry_id, child, quiet, attached
+        self.timer = _supervise.Timer(clock=clock, wall=wall, pause=pause)
+        self.reaper = reaper or _reap.reap
+        self.reader = reader
+        self.driver = ChildDriver(
+            entry_id,
+            child,
+            quiet=quiet,
+            attached=attached,
+            catcher=catcher,
+            timer=self.timer,
+            reaper=self.reaper,
+            reader=reader,
+        )
+
+    def say(self, text: str) -> None:
+        self.driver.notice(text)
+
+    def run(self) -> int:
+        reader = None if self.reader is _procs.Table.read else self.reader
+        return _supervise.run(
+            self.store, self.id, self.driver, timer=self.timer, reaper=self.reaper, reader=reader,
+        )
+
+    def refresh(self, code: Optional[int]) -> Tuple[bool, int]:
+        """Refresh `known`. Returns (the entry exited: the leader is gone and nothing of it remains, how many
+        processes remain)."""
+        try:
+            _, done, left = self.driver.refresh_members(self.store, code)
+        except _procs.ProcError:
+            return False, 0
         return done, left
 
 
@@ -244,16 +296,22 @@ def announce(entry: Entry, pid: int, out: Optional[TextIO] = None) -> None:
           file=out or sys.stderr, flush=True)
 
 
-def start_detached(store: Store, entry: Entry, quiet: bool) -> int:
+def start_detached(store: Store, entry: Entry, quiet: bool,
+                   timer: Optional[_supervise.Timer] = None,
+                   starter: Optional[Callable[[Entry, Path], None]] = None) -> int:
     if entry["log"] is None:
         raise ValueError(f"{entry['id']}: a detached entry needs a log")  # own --detach always gives it one
     log = Path(entry["log"])
     log.parent.mkdir(parents=True, exist_ok=True)
-    with open(os.devnull, "rb") as null, open(log, "ab") as out:
-        subprocess.Popen(self_command("supervise", entry["id"]), stdin=null, stdout=out, stderr=out,
-                         start_new_session=True, close_fds=True, cwd=entry["cwd"])
-    deadline = time.monotonic() + DETACH_WAIT
-    while time.monotonic() < deadline:
+    if starter is not None:
+        starter(entry, log)
+    else:
+        with open(os.devnull, "rb") as null, open(log, "ab") as out:
+            subprocess.Popen(self_command("supervise", entry["id"]), stdin=null, stdout=out, stderr=out,
+                             start_new_session=True, close_fds=True, cwd=entry["cwd"])
+    timer = timer or _supervise.Timer()
+
+    def check() -> Optional[int]:
         current = store.load(entry["id"])
         if current is not None and current.get("state") == _entry.FAILED:
             print(f"junkfather: cannot start {shlex.join(entry['argv'])}: {current.get('error')}", file=sys.stderr)
@@ -263,7 +321,11 @@ def start_detached(store: Store, entry: Entry, quiet: bool) -> int:
             if not quiet:
                 announce(current, pid, out=sys.stdout)
             return 0
-        time.sleep(0.05)
+        return None
+
+    code = timer.poll_until(check, DETACH_WAIT, 0.05)
+    if code is not None:
+        return code
     print(f"junkfather: the supervisor of {entry['id']} did not start the command in {DETACH_WAIT:.0f} s; "
           f"see {log}", file=sys.stderr)
     return 1

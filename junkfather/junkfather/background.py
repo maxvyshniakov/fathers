@@ -40,13 +40,12 @@ import time
 from typing import Any, Callable, Dict, List, Mapping, Optional, Protocol, Tuple, cast
 
 from . import entry as _entry
-from . import events as _events
-from . import launch as _launch
 from . import owner as _owner
 from . import procs as _procs
 from . import reap as _reap
 from . import safety as _safety
 from . import settings as _settings
+from . import supervise as _supervise
 from .defaults import CLAIM_WINDOW, HANDSHAKE, NO_TTL, POLL_EVERY, WAKE
 from .errors import NOT_FOUND, REFUSED, Refused
 from .entry import Entry
@@ -230,15 +229,108 @@ def watchable() -> bool:
     return os.environ.get("JUNKFATHER_WATCH") != "off"
 
 
-def _wait_step(entry: Optional[Entry], now: float, retry_at: Optional[float], now_mono: float) -> float:
-    """How long the watcher waits before its next look: at most WAKE, shortened to the entry's TTL deadline (or the
-    retry backoff after a failed TTL reap)."""
-    wait = WAKE
-    if entry is not None and not entry.get("no_ttl"):
-        wait = min(wait, max(0.0, float(entry.get("expires") or 0) - now))
-    if retry_at is not None:
-        wait = max(wait, 0.0, retry_at - now_mono)
-    return min(WAKE, wait)
+class IdentityReader(Protocol):
+    """Lookup callable matching `procs.identities` (injectable by tests)."""
+
+    def __call__(self, pids: List[int], command: bool = False) -> Dict[int, Any]: ...
+
+
+def _live_daemons(store: Store, entry: Entry, table: _procs.Table) -> List[_procs.Proc]:
+    """Live detached agent-browser daemons recorded on `entry` and their signallable descendants."""
+    raw = entry.get("daemons") or []
+    if not raw:
+        return []
+    found: Dict[int, _procs.Proc] = {}
+    for item in raw:
+        with contextlib.suppress(TypeError, ValueError):
+            d_pid, d_start, d_cmd = item
+            proc = table.get(int(d_pid))
+            if proc is not None and proc.start == _procs.norm(d_start) and _procs.command_matches(proc.cmd, d_cmd):
+                found[proc.pid] = proc
+    if not found:
+        return []
+    for pid in list(found):
+        for proc in table.descendants(pid, prune=_safety.unsafe):
+            found.setdefault(proc.pid, proc)
+    claimed = _reap.claimed_elsewhere(store, entry, table)
+    return [p for p in _safety.signallable(found.values(), table)
+            if (claimed.get(p.pid) or (0, False))[0] < _reap.DIRECT]
+
+
+class BackgroundDriver:
+    """Supervision driver for a background Bash command's watcher (`background.watch`)."""
+
+    max_wait = WAKE
+    wait_first = True
+
+    def __init__(self, entry_id: str, watched: Dict[int, Tuple[str, int]], eyes: Events,
+                 reader: Callable[[], _procs.Table] = _procs.Table.read,
+                 identities: IdentityReader = _procs.identities):
+        self.entry_id = entry_id
+        self.watched = watched
+        self.eyes = eyes
+        self.reader = reader
+        self.identities = identities
+        self._events: List[Tuple[str, int]] = []
+        self._last_table: Optional[_procs.Table] = None
+
+    def notice(self, message: str) -> None:
+        pass  # a background watcher has stdin/stdout/stderr on /dev/null
+
+    def holds_leader(self) -> bool:
+        return False
+
+    def check_interrupt(self, store: Store, entry_id: str) -> Optional[bool]:
+        return None
+
+    def wait(self, timeout: float) -> None:
+        self._last_table = None
+        self._events = self.eyes.wait(timeout)
+
+    def refresh(self, store: Store, entry: Entry, seen_at: float) -> Optional[bool]:
+        table = self.reader()
+        self._last_table = table
+        group = int(entry.get("pgid") or 0) if entry.get("group") else 0
+        exited_group = self.eyes.precise and any(
+            event == "exit" and which in self.watched and self.watched[which][1] == group
+            for event, which in self._events
+        )
+        self.watched = {p: held for p, held in self.watched.items() if table.alive(p, held[0])}
+        for proc in _joining(store, entry, table, self.watched, exited_group, seen_at):
+            if self.eyes.add(proc.pid):
+                current_identity = self.identities([proc.pid], command=True).get(proc.pid)
+                if current_identity is not None and current_identity[0] == proc.start:
+                    self.watched[proc.pid] = (proc.start, proc.pgid)
+                    table.procs[proc.pid] = proc._replace(cmd=current_identity[1])
+        running_by_pid: Dict[int, _procs.Proc] = {p: table.procs[p] for p in self.watched if p in table.procs}
+        new_daemons = _reap.daemons_started(entry, table, list(running_by_pid.values()))
+        if new_daemons:
+            updated = _entry.daemons(store, self.entry_id, new_daemons)
+            entry = updated if updated is not None else _entry.with_daemons(entry, new_daemons)
+        for proc in _live_daemons(store, entry, table):
+            if proc.pid not in running_by_pid:
+                running_by_pid[proc.pid] = proc
+                if proc.pid not in self.watched and self.eyes.add(proc.pid):
+                    current_identity = self.identities([proc.pid], command=True).get(proc.pid)
+                    if current_identity is not None and current_identity[0] == proc.start:
+                        self.watched[proc.pid] = (proc.start, proc.pgid)
+                        running_by_pid[proc.pid] = proc._replace(cmd=current_identity[1])
+                        table.procs[proc.pid] = running_by_pid[proc.pid]
+        running = list(running_by_pid.values())
+        if running:
+            _entry.known(store, self.entry_id, running)
+            return None
+        _entry.gone(store, self.entry_id, now=seen_at)
+        return True
+
+    def finish_external(self, store: Store, entry: Optional[Entry]) -> bool:
+        if entry is not None and entry.get("state") in (_entry.REAPED, _entry.FAILED):
+            table = self._last_table if self._last_table is not None else self.reader()
+            _stop_left(store, entry, table, self.watched)
+        return True
+
+    def finish_ttl(self, store: Store, entry_id: str, result: Dict[str, Any]) -> bool:
+        return True
 
 
 def watch(store: Store, entry_id: str, pid: int, start: str, ready: Callable[[], None] = lambda: None,
@@ -246,26 +338,27 @@ def watch(store: Store, entry_id: str, pid: int, start: str, ready: Callable[[],
           wall: Callable[[], float] = time.time, clock: Callable[[], float] = time.monotonic,
           pause: Callable[[float], None] = time.sleep,
           reader: Callable[[], _procs.Table] = _procs.Table.read,
-          reaper: Optional[Callable[..., Dict[str, Any]]] = None) -> None:
+          reaper: Optional[Callable[..., Dict[str, Any]]] = None,
+          identities: Optional[IdentityReader] = None) -> None:
     """Follow the shell and what it leaves until none of it runs or the entry ends.
 
     The watched processes are the shell and, as they are found, the processes of its group and their descendants:
     each one by its pid and start time, with the kernel reporting its exec and exit (kqueue on macOS, a pidfd on
     Linux; elsewhere a look every POLL_EVERY s). After every event, and every WAKE s (or at the entry's TTL
-    deadline), the entry's known members become the watched processes that run, with their commands as they are
-    now, so a reap recognizes an `exec`'d one. When the entry's finite TTL passes, the watcher reaps it through the
-    ordinary reap path (rechecking expiry under the store lock so a concurrent extension or no-TTL wins). A process
-    joins only through an identity that ties it to the shell: a descendant (parent chain, in the same table) of a
-    watched process, or a member of the shell's group while a watched member of that group runs, so the group still
-    exists and its id cannot have been taken again. When the last watched member of the group exits under the
-    kernel's eye, the group's processes that started no later than that second join too (`sleep 600 &` after the
-    shell's exit). What another entry holds directly is left to it.
+    deadline), the entry's known members become the watched processes (and any detached agent-browser daemons they
+    started and their descendants) that run, with their commands as they are now, so a reap recognizes an `exec`'d
+    one. When the entry's finite TTL passes, the watcher reaps it through the ordinary reap path (rechecking expiry
+    under the store lock so a concurrent extension or no-TTL wins). A process joins only through an identity that
+    ties it to the shell: a descendant (parent chain, in the same table) of a watched process, or a member of the
+    shell's group while a watched member of that group runs, so the group still exists and its id cannot have been
+    taken again. When the last watched member of the group exits under the kernel's eye, the group's processes that
+    started no later than that second join too (`sleep 600 &` after the shell's exit). What another entry holds
+    directly is left to it.
 
     When the entry was reaped (or failed) while some of it still runs (an `exec` the reap did not recognize yet),
     the watcher stops those of its processes the reap policy allows (reap.targets_of: never what another entry
     holds more firmly) and ends. With nothing left it marks the entry gone."""
     eyes = eyes or Eyes(mode or os.environ.get("JUNKFATHER_WATCH") or "")
-    reap_entry = reaper or _reap.reap
     try:
         table = reader()
         shell = table.get(pid)
@@ -275,75 +368,21 @@ def watch(store: Store, entry_id: str, pid: int, start: str, ready: Callable[[],
         _entry_supervised(store, entry_id, {"pid": os.getpid(), "start": me.start if me else None})
     finally:
         ready()
-    watched: Dict[int, Tuple[str, int]] = {pid: (shell.start, shell.pgid)}  # pid -> (start, group id)
-    failures = 0
-    retry_at: Optional[float] = None
-    while True:
-        current = store.load(entry_id)
-        events = eyes.wait(_wait_step(current, wall(), retry_at, clock()))
-        seen_at = wall()
-        entry = store.load(entry_id)
-        if entry is None:
-            return
-        while entry is not None and entry.get("state") == _entry.REAPING:  # a reap is at work: let it finish
-            pause(0.5)
-            entry = store.load(entry_id)
-        if entry is None:
-            return
-        try:
-            table = reader()
-        except _procs.ProcError:
-            continue
-        if entry.get("state") != _entry.RUNNING:
-            if entry.get("state") in (_entry.REAPED, _entry.FAILED):
-                _stop_left(store, entry, table, watched)
-            return
-        group = int(entry.get("pgid") or 0) if entry.get("group") else 0
-        exited_group = eyes.precise and any(event == "exit" and which in watched and watched[which][1] == group
-                                            for event, which in events)
-        watched = {p: held for p, held in watched.items() if table.alive(p, held[0])}
-        for proc in _joining(store, entry, table, watched, exited_group, seen_at):
-            if eyes.add(proc.pid):
-                current_identity = _procs.identities([proc.pid], command=True).get(proc.pid)
-                if current_identity is not None and current_identity[0] == proc.start:
-                    watched[proc.pid] = (proc.start, proc.pgid)
-                    table.procs[proc.pid] = proc._replace(cmd=current_identity[1])
-        running = [table.procs[p] for p in watched if p in table.procs]
-        if running:
-            _entry.known(store, entry_id, running)
-        else:
-            _entry.gone(store, entry_id, now=seen_at)
-            return
-        entry = store.load(entry_id)
-        if entry is None:
-            return
-        if entry.get("state") != _entry.RUNNING:
-            if entry.get("state") in (_entry.REAPED, _entry.FAILED):
-                _stop_left(store, entry, table, watched)
-            return
-        now = wall()
-        if not _entry.due(entry, now):
-            failures = 0
-            retry_at = None
-            continue
-        if retry_at is not None and clock() < retry_at:
-            continue
-        result = reap_entry(store, entry_id, "ttl expired", reader=reader,
-                            actor=_events.tool("supervisor"), report_failure=not failures,
-                            allowed=_entry.require_due(wall))
-        if result["result"] in _reap.STOPPED:
-            return
-        if result["result"] == "failed":
-            failures += 1
-            retry_at = clock() + _launch.retry_delay(failures)
-        else:
-            failures = 0
-            retry_at = None
-            after = store.load(entry_id)
-            if after is None or after.get("state") != _entry.RUNNING:
-                if after is not None and after.get("state") in (_entry.REAPED, _entry.FAILED):
-                    _stop_left(store, after, table, watched)
-                return
+    driver = BackgroundDriver(
+        entry_id,
+        watched={pid: (shell.start, shell.pgid)},
+        eyes=eyes,
+        reader=reader,
+        identities=identities or _procs.identities,
+    )
+    _supervise.run(
+        store,
+        entry_id,
+        driver,
+        timer=_supervise.Timer(clock=clock, wall=wall, pause=pause),
+        reaper=reaper,
+        reader=reader,
+    )
 
 
 def _joining(store: Store, entry: Entry, table: _procs.Table, watched: Dict[int, Tuple[str, int]], exited_group: bool,
@@ -372,7 +411,12 @@ def _joining(store: Store, entry: Entry, table: _procs.Table, watched: Dict[int,
 def _stop_left(store: Store, entry: Entry, table: _procs.Table, watched: Dict[int, Tuple[str, int]]) -> None:
     """The entry ended while some of it runs: stop what the reap policy allows of the watched processes (pid and
     start time as watched, the command as it is now, all read again just before each signal)."""
-    left = [table.procs[p] for p in watched if p in table.procs and table.alive(p, watched[p][0])]
+    left_by_pid: Dict[int, _procs.Proc] = {
+        p: table.procs[p] for p in watched if p in table.procs and table.alive(p, watched[p][0])
+    }
+    for proc in _live_daemons(store, entry, table):
+        left_by_pid.setdefault(proc.pid, proc)
+    left = list(left_by_pid.values())
     if not left:
         return
     ended = cast(Entry, {**entry, "known": [[p.pid, p.start] for p in left],

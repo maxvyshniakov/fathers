@@ -25,6 +25,7 @@ POLL = 0.5  # between checks of the child and the entry
 SIGNAL_GRACE = 3.0  # a signalled junkfather gives its command this long before SIGKILL
 RETRY_FIRST = 1.0  # before a failed TTL reap is tried again; doubled per failure
 RETRY_MAX = 60.0  # the longest wait between two tries
+READ_BACKOFF = 1.0  # before retrying after an unreadable process table (prevents 0.0 s spin at expiry)
 
 # Reaping
 GRACE = 10.0  # between SIGTERM and SIGKILL (`reap --grace`; setting reap.grace)

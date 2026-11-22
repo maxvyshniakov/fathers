@@ -1,17 +1,19 @@
-"""The supervisor's loop, driven by injected clocks: the TTL, a failing TTL reap backs off, a `gone` entry is
-revived."""
+"""`launch.ChildDriver` / `Supervisor` tests: `gone` revival, foreground signal handling, and transient `ProcError`
+recovery on attached leader exit. Shared TTL/backoff loop mechanics are tested in `test_supervise.py`."""
 from __future__ import annotations
 
-import itertools
+import contextlib
+import io
 import json
 import os
+import signal
 import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 import unittest
 
 from support import Case
 
-from junkfather import launch
+from junkfather import launch, procs
 from junkfather.state import Store
 
 
@@ -20,62 +22,17 @@ class Quiet(launch.Catcher):
         self.signum = None
 
 
-class SupervisorLoopTests(Case):
-    def supervised(self, ttl: float = 3600.0) -> Tuple[subprocess.Popen[Any], str]:
-        child = self.spawn("sleep", "600", start_new_session=True)
-        record = launch.new_entry(self.store, ["sleep", "600"], ttl, "owner", None, {"kind": "process"}, "attached",
+class SupervisorDriverTests(Case):
+    def supervised(self, *argv: str, ttl: float = 3600.0) -> Tuple[subprocess.Popen[Any], str]:
+        command = list(argv) if argv else ["sleep", "600"]
+        child = self.spawn(*command, start_new_session=True)
+        record = launch.new_entry(self.store, command, ttl, "owner", None, {"kind": "process"}, "attached",
                                   str(self.tmp))
         self.store.save(record)
         self.assertIsNotNone(launch.record_child(self.store, record["id"], child, os.getpid()))
         return child, record["id"]
 
-    def test_a_failing_ttl_reap_backs_off_and_reports_once_per_streak(self):
-        child, entry_id = self.supervised(ttl=0)
-        clock = [100.0]
-        attempts: List[Tuple[float, bool]] = []
-
-        def reaper(store: Store, ident: str, reason: str, **options: Any) -> Dict[str, Any]:
-            attempts.append((clock[0], options.get("report_failure", True)))
-            if len(attempts) < 4:
-                return {"id": ident, "result": "failed", "reason": reason, "pids": [], "how": "leader"}
-            child.kill()
-            child.wait()
-            store.update(ident, lambda e: e.update(state="reaped"))
-            return {"id": ident, "result": "killed", "reason": reason, "pids": [child.pid], "how": "leader"}
-
-        supervisor = launch.Supervisor(self.store, entry_id, child, quiet=True, catcher=Quiet(), reaper=reaper,
-                                       clock=lambda: clock[0], pause=lambda s: clock.__setitem__(0, clock[0] + s))
-        supervisor.run()
-        self.assertEqual(4, len(attempts), "one attempt per backoff step, not one per loop")
-        gaps = [later[0] - earlier[0] for earlier, later in itertools.pairwise(attempts)]
-        self.assertEqual(gaps, sorted(gaps))
-        self.assertLess(gaps[0], gaps[-1])
-        for gap, delay in zip(gaps, [launch.RETRY_FIRST * 2 ** n for n in range(3)], strict=True):
-            self.assertGreaterEqual(gap, delay)
-        self.assertEqual([True, False, False, False], [report for _, report in attempts])
-        self.assertLessEqual(launch.retry_delay(50), launch.RETRY_MAX)
-
-    def test_the_ttl_is_read_on_the_injected_wall_clock(self):
-        child, entry_id = self.supervised(ttl=3600)
-        expires = float(self.loaded(entry_id)["expires"])
-        wall = [expires - 3 * launch.POLL]
-        reaped_at: List[float] = []
-
-        def reaper(store: Store, ident: str, reason: str, **options: Any) -> Dict[str, Any]:
-            reaped_at.append(wall[0])
-            child.kill()
-            child.wait()
-            store.update(ident, lambda e: e.update(state="reaped"))
-            return {"id": ident, "result": "killed", "reason": reason, "pids": [child.pid], "how": "leader"}
-
-        launch.Supervisor(self.store, entry_id, child, quiet=True, catcher=Quiet(), reaper=reaper,
-                          clock=lambda: 0.0, wall=lambda: wall[0],
-                          pause=lambda s: wall.__setitem__(0, wall[0] + s)).run()
-        self.assertEqual(1, len(reaped_at), "one TTL reap, after an hour that took no time")
-        self.assertGreaterEqual(reaped_at[0], expires)
-        self.assertLess(reaped_at[0], expires + launch.POLL)
-
-    def test_a_gone_entry_whose_child_still_runs_is_revived(self):
+    def test_a_gone_entry_whose_child_still_runs_is_revived(self) -> None:
         child, entry_id = self.supervised()
         self.store.update(entry_id, lambda e: e.update(state="gone", ended=1.0))
         seen: List[Optional[str]] = []
@@ -89,6 +46,61 @@ class SupervisorLoopTests(Case):
                           pause=pause).run()
         self.assertEqual("running", seen[0])
         self.assertEqual("exited", self.state_of(entry_id))
+        kinds = [json.loads(line)["kind"] for line in (self.state / "events.jsonl").read_text().splitlines()]
+        self.assertEqual(["entry.owned", "entry.exited"], kinds)
+
+    def test_sigterm_stops_through_reaper_and_exits_143(self) -> None:
+        child, entry_id = self.supervised()
+        catcher = Quiet()
+        catcher.signum = signal.SIGTERM
+        reap_calls: List[Tuple[str, str, Dict[str, Any]]] = []
+
+        def fake_reaper(store: Store, ident: str, reason: str, **options: Any) -> Dict[str, Any]:
+            reap_calls.append((ident, reason, options))
+            child.kill()
+            child.wait()
+            store.update(ident, lambda e: e.update(state="reaped"))
+            return {"id": ident, "result": "stopped", "reason": reason, "pids": [child.pid], "how": "leader"}
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = launch.Supervisor(self.store, entry_id, child, quiet=False, catcher=catcher,
+                                     reaper=fake_reaper, clock=lambda: 0.0, pause=lambda _s: None).run()
+        self.assertEqual(128 + signal.SIGTERM, code)
+        self.assertEqual(143, code)
+        self.assertEqual(1, len(reap_calls))
+        ident, reason, options = reap_calls[0]
+        self.assertEqual((entry_id, "junkfather got SIGTERM"), (ident, reason))
+        self.assertEqual(launch.SIGNAL_GRACE, options["grace"])
+        self.assertIn(f"{entry_id} stopped on SIGTERM: stopped", err.getvalue())
+
+    def test_transient_proc_error_on_attached_leader_exit_retries_cleanly_to_exited(self) -> None:
+        child, entry_id = self.supervised()
+        child.terminate()
+        child.wait(5)
+        clock = [0.0]
+        pauses: List[float] = []
+        reads = [0]
+
+        def flaky_reader() -> procs.Table:
+            reads[0] += 1
+            if reads[0] == 1:
+                raise procs.ProcError("ps failed")
+            return procs.Table.read()
+
+        def pause(seconds: float) -> None:
+            pauses.append(seconds)
+            clock[0] += seconds
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = launch.Supervisor(self.store, entry_id, child, quiet=False, attached=True, catcher=Quiet(),
+                                     clock=lambda: clock[0], pause=pause, reader=flaky_reader).run()
+        self.assertEqual(launch.status(child.returncode), code)
+        self.assertEqual(2, reads[0])
+        self.assertEqual([launch.POLL], pauses)
+        self.assertEqual("exited", self.state_of(entry_id))
+        self.assertNotIn("0 process(es) it left", err.getvalue())
         kinds = [json.loads(line)["kind"] for line in (self.state / "events.jsonl").read_text().splitlines()]
         self.assertEqual(["entry.owned", "entry.exited"], kinds)
 
