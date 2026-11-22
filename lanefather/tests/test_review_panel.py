@@ -147,6 +147,40 @@ class PanelTests(ReviewCase):
         compare = self.lane("review", "a", "--compare")
         self.assertIn("opus  claude-opus-5-5 medium: failed: the Opus run failed", compare)
 
+    def test_required_panel_member_failure_exits_nonzero_and_holds_auto_done_until_forced_rerun(self) -> None:
+        self.review_text.write_text(TWO_FINDINGS)
+        self.env["FIXTURE_CLAUDE_FAIL"] = "1"
+        self.panel(required=True)
+        worktree = pathlib.Path(self.landed())
+
+        # Initial review exits 1 because opus failed under panel_required, keeping sol's findings.
+        output = self.lane("review", "a", ok=False)
+        self.assertIn("panel opus: failed: the Opus run failed (exit 1)", output)
+        self.assertIn("panel member opus gave no review ([review] panel_required)", output)
+        self.assertEqual(self.record("a")["status"], "landed")
+        self.assertTrue(worktree.exists())
+
+        # Re-running without --force-reason preserves sol's review and exits 1 naming --force-reason.
+        codex_before = len([c for c in self.codex_calls() if c[2] == "exec"])
+        repeat = self.lane("review", "a", ok=False)
+        self.assertIn("panel member opus gave no review ([review] panel_required)", repeat)
+        self.assertEqual(len([c for c in self.codex_calls() if c[2] == "exec"]), codex_before)
+
+        # Marking all of sol's findings is allowed, and still holds auto-done while opus is missing.
+        marked = self.lane("review", "a", "--mark", "1", "rejected:ok", "--mark", "2", "rejected:ok")
+        self.assertIn("panel member opus gave no review ([review] panel_required)", marked)
+        self.assertEqual(self.record("a")["status"], "landed")
+        self.assertTrue(worktree.exists())
+
+        # Once Claude recovers, --force-reason logs the override, runs the full panel cleanly, and auto-finishes.
+        del self.env["FIXTURE_CLAUDE_FAIL"]
+        self.review_text.write_text(NO_FINDINGS)
+        rerun = self.lane("review", "a", "--force-reason", "opus recovered")
+        self.assertIn("Lane a done", rerun)
+        self.assertEqual(self.record("a")["status"], "done")
+        self.assertFalse(worktree.exists())
+        self.assertIn("override review a: opus recovered", (self.state / "ledger.log").read_text())
+
     def test_a_used_up_codex_week_without_role_skips_sol_and_a_required_panel_does_not_wait_for_it(self):
         self.env["FIXTURE_CODEX_USED"] = "95"
         self.panel(required=True)

@@ -64,10 +64,6 @@ def resolve(cwd: Any, ref: str) -> str | None:
     return git(cwd, "rev-parse", "--verify", "--quiet", ref + "^{commit}", check=False) or None
 
 
-def is_ancestor(cwd: Any, ancestor: str, descendant: str) -> bool:
-    return git_ok(cwd, "merge-base", "--is-ancestor", ancestor, descendant)
-
-
 def commits(count: int) -> str:
     return f"{count} commit" + ("" if count == 1 else "s")
 

@@ -323,6 +323,30 @@ class ReceiptStoreAndVerdictUnitTests(unittest.TestCase):
             panel_v,
             receipts.Failed(error=None, missing_members=("opus",), findings=(), raw_status="finished"),
         )
+        self.assertTrue(receipts.has_finished_receipt(panel_v))
+        self.assertFalse(receipts.has_finished_receipt(receipts.Failed(error="boom", raw_status="failed")))
+
+    def test_check_status_word_covers_all_verdicts_and_defaults(self) -> None:
+        from dataclasses import replace
+
+        from lanefather import receipts
+
+        rec: dict[str, Any] = {"id": "a", "status": "active", "ticket": "none", "claims": [], "after": []}
+        base_view = receipts.lane_view(self.store_a, rec, tip_tree=None, repository=None)
+        cases: list[tuple[receipts.CheckVerdict, str]] = [
+            (receipts.NoReceipt(), "not run"),
+            (receipts.Green(tree="t1"), "green"),
+            (receipts.StaleToolchain(tree="t1"), "green"),
+            (receipts.Red(status="red"), "red"),
+            (receipts.Red(status=None), "fallback"),
+            (receipts.StaleTree(receipt_tree="t0", tip_tree="t1", status="green"), "green"),
+            (receipts.StaleTree(receipt_tree="t0", tip_tree="t1", status="red"), "red"),
+            (receipts.StaleTree(receipt_tree="t0", tip_tree="t1", status=None), "fallback"),
+        ]
+        for verdict, expected in cases:
+            with self.subTest(verdict=verdict):
+                view = replace(base_view, check=verdict)
+                self.assertEqual(view._check_status_word(default="fallback"), expected)  # pyright: ignore[reportPrivateUsage]
 
 
 class ReceiptReadersTableTests(LaneCase):

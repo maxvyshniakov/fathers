@@ -40,9 +40,6 @@ from .gitops import current_branch, dirty, git, git_ok, main_checkout
 from .host import given_jobs, host, host_fields, post_merge_jobs
 from .landing import landing
 
-# The branches only promote moves; promote's review gate covers lanes that are not yet promoted (#570).
-PROMOTED = config.Config().promoted
-
 
 def failed_items(failed: list[dict[str, Any]]) -> list[tuple[str, str]]:
     """Each failed check of the failed results with its suite, once each; a suite whose failure no check accounts

@@ -719,6 +719,16 @@ class ReviewFixRoundTests(ReviewGateCase):
         self.assertIn("unsupported status 'done'", done_out)
         self.assertNotIn("no worktree", done_out)
 
+    def test_start_overall_review_names_settings_source_when_manual_comes_from_settings(self) -> None:
+        self.landed("a", "lib/api.txt", "foo\nbaz\n")
+        self.lane("review", "a")
+        tip = self.tip()
+        del self.env["LANEFATHER_REVIEW_START"]
+        self.lane("settings", "set", "review.start", "manual")
+        out = self.lane("promote", tip, "--ship", "--no-push", "--wait", "0")
+        self.assertIn("overall review not started (lanefather settings review.start=manual):", out)
+        self.assertNotIn("LANEFATHER_REVIEW_START=manual", out)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -205,12 +205,6 @@ def combined_results(suites: list[str], selected: dict[str, list[str]] | None, f
     return results
 
 
-def lane_ran(lane_id: str) -> tuple[set[str], set[str], set[str]]:
-    """What the lane's check and post-merge receipts ran: the checks, the suites, and the suites they ran whole. A
-    result without per-check results ran every check of its suite."""
-    return receipts.lane_ran(state.Store(config.current()), lane_id)
-
-
 # Red check classification (#568)
 
 def rerun_cap() -> int:
@@ -725,13 +719,6 @@ def plan_base(record: Record, worktree: str) -> str:
 
 # The command
 
-def implementer(args: Any) -> str | None:
-    """The agent that built the lane, for the review's implementer family (fathers#150, fathers#200): `check --agent`,
-    else the agent session this check runs in (events.agent_context), else None."""
-    context = events.agent_context(getattr(args, "agent", None))
-    return context["kind"] if context else None
-
-
 def _record_check_agent(lane_id: str, agent_info: dict[str, Any] | None) -> None:
     if not agent_info:
         return
@@ -1065,17 +1052,6 @@ def _execute_lane_run(
             "\n".join(t for t in (triaged, triaged_more) if t) or None,
             joined_classification(classification, classified_more), stopped,
             more_jobs if more_jobs is not None else granted_jobs)
-
-
-def lane_run(record: Record, worktree: str, base: str, suites: list[str], remaining: dict[str, list[str]] | None,
-             jobs: int, toolchain: Any = UNRESOLVED, lane_plan: dict[str, Any] | None = None,
-             min_jobs: int | None = None,
-             ) -> tuple[Rows, dict[str, dict[str, Any]], str | None, dict[str, Any] | None, Any]:
-    """Run the lane's checks that are left and classify the red ones (#568): (results, check results, triage,
-    classification, stopped)."""
-    fresh, ran, triaged, classification, stopped, _ = _execute_lane_run(
-        record, worktree, base, suites, remaining, jobs, toolchain, lane_plan=lane_plan, min_jobs=min_jobs)
-    return fresh, ran, triaged, classification, stopped
 
 
 def joined_results(first: Rows, second: Rows) -> Rows:

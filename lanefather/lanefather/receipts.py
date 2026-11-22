@@ -593,6 +593,22 @@ def review_verdict(
     )
 
 
+def has_finished_receipt(verdict: ReviewVerdict) -> bool:
+    """Whether `verdict` comes from a finished review receipt (even when `panel_required` failed it)."""
+    return isinstance(verdict, (Unmarked, Complete)) or (
+        isinstance(verdict, Failed) and bool(verdict.missing_members)
+    )
+
+
+def open_findings_of(verdict: ReviewVerdict) -> tuple[dict[str, Any], ...]:
+    """Unmarked findings on a finished review receipt, including partial required panels."""
+    if isinstance(verdict, Unmarked):
+        return verdict.unmarked
+    if isinstance(verdict, Failed) and verdict.missing_members:
+        return tuple(f for f in verdict.findings if not f.get("mark"))
+    return ()
+
+
 def review_words(label: str, verdict: ReviewVerdict, *, prog: str = "lanefather") -> tuple[bool, str]:
     """Map `verdict` onto `(lets_promote_move_dev, human_words)`."""
     if isinstance(verdict, Absent):
@@ -648,7 +664,8 @@ def fix_parent_review(lane_id: str, common: str, refusal: str, *,
     if parent_record.get("common_dir") != common:
         raise LaneError(f"{refusal}: lane {lane_id} is from another repository")
     receipt = read(store, lane_id, "review")
-    if not isinstance(review_verdict(parent_record, receipt), Unmarked) or receipt is None:
+    verdict = review_verdict(parent_record, receipt, panel_required=store.project.review_panel_required)
+    if not open_findings_of(verdict) or receipt is None:
         raise LaneError(f"{refusal}: lane {lane_id} has no finished review with unmarked findings")
     return receipt
 
@@ -657,9 +674,9 @@ def unmarked_reviews(records: Iterable[Record], store: state.Store) -> Iterator[
     """Open findings in each finished lane review, in record order."""
     for record in records:
         found = read(store, str(record["id"]), "review")
-        verdict = review_verdict(record, found)
-        if isinstance(verdict, Unmarked):
-            yield record, list(verdict.unmarked)
+        verdict = review_verdict(record, found, panel_required=store.project.review_panel_required)
+        if pending := open_findings_of(verdict):
+            yield record, list(pending)
 
 
 # ---------------------------------------------------------------------------
@@ -719,8 +736,6 @@ class LaneView:
             return "not run"
         if isinstance(self.check, (Green, StaleToolchain)):
             return "green"
-        if isinstance(self.check, Red):
-            return self.check.status if self.check.status is not None else default
         return self.check.status if self.check.status is not None else default
 
     def _tree_match(self) -> bool | None:
