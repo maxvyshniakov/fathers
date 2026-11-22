@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, TypedDict
 
 Moment = Optional[datetime.datetime]
 TreeRow = Tuple[int, float, int, str]  # pid, cpu %, rss KB, name
+PsRow = Tuple[int, int, float, int, str]  # pid, parent pid, cpu %, rss KB, name: a row of `ps` (fathers#203)
 
 
 def missing(raw: Mapping[str, Any], required: Tuple[str, ...]) -> Optional[str]:
@@ -117,6 +118,7 @@ class Dashboard(_Dashboard, total=False):
     events_note: str
     stale_since: datetime.datetime
     history_window: float  # the chart's span, set only by the demo scene and its goldens
+    unleased_top: List[TreeRow]  # MACHINE's top processes outside leases while unleased load is high (fathers#203)
 
 
 DASHBOARD_REQUIRED = ("slots", "cores", "used", "free", "advice", "memory", "overtake_window")

@@ -1,16 +1,18 @@
 """MACHINE: load, memory and swap as ramp bars with their health, and the history chart of held slots with its time
-axis; where its parts go is layout.machine()."""
+axis, or, while the load outside leases is high, the processes behind it (fathers#203); where its parts go is
+layout.machine()."""
 from __future__ import annotations
 
 import datetime
 import math
-from typing import Any, NamedTuple, Optional, cast
+from typing import Any, Mapping, NamedTuple, Optional, Sequence, cast
 
 from .. import layout as _layout
 from .. import theme as _theme
 from ..layout import Rect
+from ..model import PsRow, TreeRow
 from ..tui import Canvas
-from ..text import text_width
+from ..text import clip, text_width
 from ..widgets import Panel, Part
 from . import common as _common
 from .common import Model, ramp_bar
@@ -212,7 +214,115 @@ def draw_machine(canvas: Canvas, rect: Rect, model: Model) -> None:
             inside.compact.width, [resource.short for resource in resources], _common.marks_of(canvas),
             canvas.theme.track), inside.compact.width)
     if inside.chart is not None:
-        draw_chart(canvas, inside.chart, model, slots, titled=inside.side)
+        top = unleased_rows(model)
+        if top:
+            draw_unleased(canvas, inside.chart, top, titled=inside.side)
+        else:
+            draw_chart(canvas, inside.chart, model, slots, titled=inside.side)
+
+
+# fathers#203: while the load outside leases is high, the chart's place names the processes behind it
+UNLEASED_SHARE = 0.5  # unleased load at or over this share of the cores is high
+UNLEASED_TOP = 5  # the most processes Godfather keeps for the list
+UNLEASED_TITLE = "top unleased"
+UNLEASED_NAME_MIN = 6  # a process name's least cells before the list drops its pid column
+
+
+def unleased_high(model: Model) -> bool:
+    """Whether the load outside leases is high enough for MACHINE to name the processes behind it (fathers#203):
+    Slotfather's `advice.unleased_load` at or over half the cores."""
+    advice: Any = model.get("advice")
+    value: Any = cast(dict[str, Any], advice).get("unleased_load") if isinstance(advice, dict) else None
+    cores: Any = model.get("cores")
+    if (isinstance(value, bool) or not isinstance(value, (int, float)) or isinstance(cores, bool)
+            or not isinstance(cores, int) or cores <= 0):
+        return False
+    return value >= cores * UNLEASED_SHARE
+
+
+def unleased_top(table: Sequence[PsRow], holders: Sequence[Mapping[str, Any]],
+                 limit: int = UNLEASED_TOP) -> list[TreeRow]:
+    """The busiest processes outside leases, as (pid, cpu %, rss KB, name), the highest cpu first, then the most
+    memory: every process of the machine's table but the running leases' (each holder's pid, the process rows
+    Slotfather gives for it, and their descendants in the table). A waiting request holds no lease: its processes
+    count as unleased, as Slotfather's unleased load counts them."""
+    leased: set[int] = set()
+    for holder in holders:
+        if holder.get("kind") == "waiting":
+            continue
+        tree: Any = holder.get("tree") or []
+        for pid in [holder.get("pid"), *(row[0] for row in cast(list[Any], tree) if row)]:
+            if isinstance(pid, int) and not isinstance(pid, bool) and pid > 1:  # never the whole machine
+                leased.add(pid)
+    children: dict[int, list[int]] = {}
+    for pid, ppid, *_ in table:
+        if pid != ppid:
+            children.setdefault(ppid, []).append(pid)
+    pending = list(leased)
+    while pending:
+        for child in children.get(pending.pop(), []):
+            if child not in leased:
+                leased.add(child)
+                pending.append(child)
+    rows = [(pid, cpu, rss, name) for pid, _, cpu, rss, name in table if pid not in leased]
+    rows.sort(key=lambda row: (-row[1], -row[2], row[0]))
+    return rows[:limit]
+
+
+def unleased_rows(model: Model) -> list[TreeRow]:
+    """The top unleased processes MACHINE lists now: the model's, only while unleased load is high; none without
+    them (an older Godfather's model, a failed `ps`, a fake that gives none), so the chart stays."""
+    return list(model.get("unleased_top") or []) if unleased_high(model) else []
+
+
+def memory_text(rss_kb: float) -> str:
+    """A process's resident memory in four or five cells: 640M, 1.2G."""
+    megabytes = rss_kb / 1024
+    return f"{megabytes / 1024:.1f}G" if megabytes >= 1024 else f"{megabytes:.0f}M"
+
+
+def unleased_lines(rows: Sequence[TreeRow], width: int) -> list[list[Part]]:
+    """The list in `width` cells: a header (`top unleased`, then the column heads where they fit after it), then a
+    line per process: its name, cut to fit, and pid, cpu and memory right-aligned in columns as wide as their widest.
+    A narrow list closes its gaps first, then drops the pid; a cpu over one core is yellow."""
+    pids = [str(pid) for pid, *_ in rows]
+    cpus = [f"{cpu:.0f}%" for _, cpu, *_ in rows]
+    memories = [memory_text(rss) for _, _, rss, _ in rows]
+    columns: list[tuple[str, list[str]]] = [("pid", pids), ("cpu", cpus), ("mem", memories)]
+    widths = [max([text_width(head), *(text_width(value) for value in values)]) for head, values in columns]
+    gap, first, name_width = 1, 1, 0
+    for gap, first in ((2, 0), (1, 0), (1, 1)):
+        name_width = width - sum(column + gap for column in widths[first:])
+        if name_width >= UNLEASED_NAME_MIN:
+            break
+    name_width = max(0, name_width)
+    shown = list(zip(columns[first:], widths[first:]))
+    if text_width(UNLEASED_TITLE) <= name_width:
+        header: list[Part] = [(UNLEASED_TITLE + " " * (name_width - text_width(UNLEASED_TITLE)), "dim")]
+        header += [(" " * gap + head.rjust(column), "dim") for (head, _), column in shown]
+    else:
+        header = [(clip(UNLEASED_TITLE, width), "dim")]
+    lines = [header]
+    for index, (_, cpu, _, name) in enumerate(rows):
+        parts: list[Part] = []
+        if name_width > 0:
+            label = clip(name, name_width)
+            parts.append((label + " " * (name_width - text_width(label)), "text"))
+        for col_index, ((head, values), column) in enumerate(shown):
+            style = "dim" if head == "pid" else "warn" if head == "cpu" and cpu >= 100 else "text"
+            prefix = "" if name_width == 0 and col_index == 0 else " " * gap
+            parts.append((prefix + values[index].rjust(column), style))
+        lines.append(parts)
+    return lines
+
+
+def draw_unleased(canvas: Canvas, area: Rect, rows: Sequence[TreeRow], titled: bool = False) -> None:
+    """The top unleased processes where the chart would be, in its rows and its axis line: beside the gauges
+    (`titled`) the header in the blank row above, as the chart's title; stacked, the header in its first row."""
+    top = area.y - 1 if titled else area.y
+    room = area.height + (2 if titled else 1)
+    for offset, parts in enumerate(unleased_lines(rows, area.width)[:room]):
+        canvas.segments(top + offset, area.x, parts, area.width)
 
 
 def draw_chart(canvas: Canvas, area: Rect, model: Model, slots: int, titled: bool = False) -> None:

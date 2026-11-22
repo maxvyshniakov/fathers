@@ -518,6 +518,38 @@ def admission_screen(name: str, theme: str | None) -> str:
         return canvas.render(theme is not None)
 
 
+# fathers#203: MACHINE while the load outside leases is high, its chart's place naming the processes behind it, beside
+# the gauges and under them
+UNLEASED: dict[str, tuple[int, int]] = {"side": (72, 7), "stacked": (50, 11)}
+UNLEASED_TOP = [(812, 312.4, 2_516_582, "com.apple.Virtualization.VirtualMachine"),
+                (9120, 148.0, 1_153_434, "Google Chrome Helper (Renderer)"), (433, 61.2, 655_360, "Code Helper (Plugin)"),
+                (77, 12.5, 92_160, "WindowServer"), (1500, 4.0, 307_200, "Slack")]
+
+
+def unleased_screen(name: str, theme: str | None) -> str:
+    """MACHINE alone over a model whose unleased load is high, with the top unleased processes (UNLEASED)."""
+    import datetime as dt
+
+    from godfather import theme as themes, tui
+    from godfather.layout import Rect
+    from godfather.model import Dashboard
+    from godfather.views import common, machine
+
+    width, height = UNLEASED[name]
+    with environment(theme):
+        palette = themes.from_environment()
+        moment = dt.datetime(2026, 11, 16, 1, 30, tzinfo=dt.timezone.utc)
+        model: dict[str, Any] = dict(
+            slots=8, cores=12, averages=(14.2, 13.0, 12.1), admission=2, advice={"unleased_load": 11.8, "jobs": 1},
+            memory_block=None, used=1, free=7, holders=[], waiters=[], draining=0,
+            memory={"level": 2, "used": 900, "total": 1024, "swap_total": 1024, "swap_free": 300, "low": False,
+                    "swap_low": False},
+            history=[(moment - dt.timedelta(minutes=1), moment, 1)], unleased_top=UNLEASED_TOP)
+        canvas = tui.Canvas(width, height, palette, common.marks_for(False))
+        machine.draw_machine(canvas, Rect(0, 0, height, width), cast(Dashboard, model))
+        return canvas.render(theme is not None)
+
+
 def goldens() -> dict[str, str]:
     found: dict[str, str] = {}
     for name in SCREENS:
@@ -528,6 +560,10 @@ def goldens() -> dict[str, str]:
         found[f"admission-{name}-72x13.txt"] = admission_screen(name, None) + "\n"
         for theme in THEMES:
             found[f"admission-{name}-72x13.{theme}.ansi"] = admission_screen(name, theme) + "\n"
+    for name, (width, height) in UNLEASED.items():
+        found[f"unleased-{name}-{width}x{height}.txt"] = unleased_screen(name, None) + "\n"
+        for theme in THEMES:
+            found[f"unleased-{name}-{width}x{height}.{theme}.ansi"] = unleased_screen(name, theme) + "\n"
     return found
 
 

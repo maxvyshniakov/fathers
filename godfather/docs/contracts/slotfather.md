@@ -162,8 +162,10 @@ the release within 2 s before it, the run whose release turned the trend.
 What's new reads it as every tool's: [changelog.md](changelog.md).
 
 Godfather fills in what is presentation: the holder colours (`style`), the lane facts for the selected request
-(`lanefather show ID --state-dir DIR --json`, in the background loader as today) and the holder's working
-directory (`lsof -a -p PID -d cwd -Fn`, or `/proc/PID/cwd`).
+(`lanefather show ID --state-dir DIR --json`, in the background loader as today), the holder's working
+directory (`lsof -a -p PID -d cwd -Fn`, or `/proc/PID/cwd`) and, while `advice.unleased_load` is at least half the
+`cores`, MACHINE's top unleased processes (fathers#203): `ps -A -o pid=,ppid=,pcpu=,rss=,comm=` at most every 5 s,
+less each held row's `pid`, its `tree` pids and their descendants. Slotfather's contract does not change.
 
 ## `slotfather settings`
 

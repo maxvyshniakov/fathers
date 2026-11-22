@@ -6,6 +6,13 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Added
 
+- MACHINE names what drives a high load outside leases (fathers#203): while Slotfather's unleased load is at least
+  half the cores, the chart's place lists the top unleased processes, `top unleased` with each one's name, pid, cpu
+  (yellow over one core) and memory, the busiest first. Running leases' processes and their descendants are left
+  out; a waiting request's are not, as Slotfather's unleased load counts them. Godfather reads the machine's
+  process table with `ps` only while the load is high, at most every 5 s, off the screen's thread; at a lower load,
+  or when `ps` fails, the slots-held chart is shown as before.
+
 - Settings lets you edit the reservation timeout when Slotfather advertises it. It shows when older Slotfather
   clients may use Arrival order after a change. (fathers#178)
 
