@@ -198,7 +198,7 @@ class PageTests(Case):
         self.tools = {"junkfather": state_module.Tool("junkfather", "ok", None, decoded(), actions=("reap", "extend"))}
         self.screen([self.lease()])
         self.assertIn("3 procs 5 · 1 orphan · 1 expired · 1 unowned · 2 resources", self.text())
-        # On a narrow border (76 cols), resources drops before unowned, unowned before expired
+        # Without lanes everything fits at 76; with lanes, resources drops first
         self.screen([self.lease()], width=76, height=40)
         border = self.text().splitlines()[4]
         self.assertIn("3 procs 5 · 1 orphan · 1 expired · 1 unowned · 2 resources", border)

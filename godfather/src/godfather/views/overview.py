@@ -92,7 +92,7 @@ def draw_footer(canvas: Canvas, model: Optional[Model], error: Optional[str], me
     else:
         note = ("", "")
     Footer(canvas).draw([(_version.NAME, "title"), (" " + WHATS_NEW + (" ↻" if installed else ""), "dim")],
-                        footer_hints(canvas.focus, pages, bool(actions) and not message and not error),
+                        footer_hints(canvas.focus, pages, bool(actions)),
                         ("● stale", "bad") if error else ("● live", "ok"),
                         clock(model["updated"], moment) if model else "", note)
 

@@ -371,9 +371,11 @@ def separator(row: ProcessTableRow) -> Part:
 def action_summary(row: ProcessRow, available: Sequence[_actions.Action]) -> list[Part]:
     """What `actions` in PROCESS DETAILS says: the available action(s) and their key, or why none apply."""
     if available:
+        by_cmd = {"extend": "extend ttl", "reap": "reap"}
         names: list[str] = []
         for action in available:
-            name = "extend ttl" if action.name.startswith("Extend TTL") else action.name.lower()
+            cmd = action.argv[0] if action.argv else ""
+            name = by_cmd.get(cmd, action.name.lower())
             if name not in names:
                 names.append(name)
         return [(", ".join(names), "text"), (" · a / enter", "dim")]

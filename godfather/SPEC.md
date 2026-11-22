@@ -157,7 +157,8 @@ full pages one key away.
     unowned processes, dead sweep leftovers (`gone since the sweep`, visually de-emphasized) and unowned non-process
     resources (`📦`); columns state, id, label, owner, lane, age, TTL left, pid, processes; PROCESS DETAILS (command,
     directory, log, owner and whether it lives, keep, mode, its lease and lane as links, and the row's available
-    actions or why none apply); an EVENTS strip filtered to that entry.
+    actions or why none apply); an EVENTS strip filtered to that entry. With PROCESSES focused, the footer shows
+    `a actions` when the selected row has actions, else `no actions` on the right; `a` drops with `←→`, first.
 19. Joins, all read-only and computed by Godfather from snapshots:
     - request ↔ lane: the request's `meta.lane` and `meta.lanefather.state` match a lane id in the project whose state
       directory that is; a request with only `meta.lane` matches by its working directory inside the lane's
