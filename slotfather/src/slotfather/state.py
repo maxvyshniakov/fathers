@@ -9,7 +9,7 @@ from pathlib import Path
 import pwd
 import stat
 import time
-from typing import Any, Callable, Iterable, Iterator, cast
+from typing import Any, Callable, Iterable, Iterator, Mapping, cast
 
 from fathers_common.atomic import atomic_write
 
@@ -97,9 +97,20 @@ def read_entry(path: Path) -> dict[str, Any] | None:
     return cast(dict[str, Any], entry) if isinstance(entry, dict) else None
 
 
+YIELD_SUFFIX = ".yield"
+IDLE_SUFFIX = ".idle"
+SESSION_SUFFIX = ".session"
+SIDECAR_SUFFIXES = (YIELD_SUFFIX, IDLE_SUFFIX, SESSION_SUFFIX)
+
+
+def idle_path(path: Path) -> Path:
+    """The idle record beside a queue entry."""
+    return path.with_suffix(IDLE_SUFFIX)
+
+
 def session_path(path: Path) -> Path:
     """A session's run records beside its lease entry."""
-    return path.with_suffix(".session")
+    return path.with_suffix(SESSION_SUFFIX)
 
 
 def session_uses(path: Path) -> dict[str, Any] | None:
@@ -125,6 +136,38 @@ def entries(directory: Path) -> list[tuple[Path, dict[str, Any]]]:
 def write(path: Path, entry: Any) -> None:
     """Writes `entry` as JSON to `path` whole via `fathers_common.atomic.atomic_write` (fathers#123, fathers#117)."""
     atomic_write(path, json.dumps(entry) + "\n")
+
+
+def commit(path: Path, entry: Mapping[str, Any] | None,
+           effect: _entry.SidecarEffect = _entry.NO_EFFECT) -> None:
+    """Atomically commit `entry` (if changed) and apply declarative `SidecarEffect` sidecar mutations."""
+    if effect.unlink_session and (effect.write_session is not None or effect.init_session is not None):
+        raise _entry.IllegalTransitionError("conflicting session write and unlink in SidecarEffect")
+    if effect.write_session is not None and effect.init_session is not None:
+        raise _entry.IllegalTransitionError("conflicting write_session and init_session in SidecarEffect")
+    if effect.unlink_yield and effect.write_yield is not None:
+        raise _entry.IllegalTransitionError("conflicting yield write and unlink in SidecarEffect")
+    if effect.write_session is not None:
+        write(session_path(path), effect.write_session)
+    elif effect.init_session is not None and not session_path(path).exists():
+        write(session_path(path), effect.init_session)
+    if effect.write_yield is not None:
+        write(marker(path), effect.write_yield)
+    if entry is not None:
+        write(path, entry)
+    if effect.unlink_yield:
+        marker(path).unlink(missing_ok=True)
+    if effect.unlink_idle:
+        idle_path(path).unlink(missing_ok=True)
+    if effect.unlink_session:
+        session_path(path).unlink(missing_ok=True)
+
+
+def remove_entry(path: Path) -> None:
+    """Remove the queue entry JSON at `path` along with any `.yield`, `.idle`, and `.session` sidecars."""
+    path.unlink(missing_ok=True)
+    for suffix in SIDECAR_SUFFIXES:
+        path.with_suffix(suffix).unlink(missing_ok=True)
 
 
 def unknown(directory: Path) -> list[tuple[Path, dict[str, Any]]]:
@@ -166,6 +209,9 @@ def record(directory: Path, entry: dict[str, Any], outcome: str | _entry.Outcome
     queue's slots for the line (settings.total()), `above(ran, p90)` whether a run is past its series `expected`
     (runtype.above()): the caller's, so that persistence imports neither. Callers hold the queue lock. Returns the line's
     fields (the events of events.py read them)."""
+    if _entry.stage_of(entry) == _entry.Stage.UNSETTLED:
+        entry = dict(entry)
+        _entry.settle(entry)
     ended = time.time()
     extra_fields: dict[str, Any] = {}
     never_ran = False
@@ -195,10 +241,14 @@ def record(directory: Path, entry: dict[str, Any], outcome: str | _entry.Outcome
     with contextlib.suppress(_config.SlotError, OSError):
         item.update(cores=_config.cores(), capacity=capacity())
     item.update(usage or {})
-    if entry.get("yields"):
+    if not never_ran:
         yielded = _entry.yielded_of(entry)
         away = _entry.epoch(entry.get("yielded_at"))
-        item.update(yields=int(entry["yields"]), yielded=round(yielded + (max(0.0, ended - away) if away else 0), 2))
+        total_yielded = round(yielded + (max(0.0, ended - away) if away is not None else 0.0), 2)
+        if entry.get("yields"):
+            item["yields"] = int(entry["yields"])
+        if entry.get("yields") or total_yielded > 0:
+            item["yielded"] = total_yielded
     if entry.get("until"):
         item["until"] = entry["until"]  # when its client would have given up (run --wait): the replay's patience
     fields = entry
@@ -340,7 +390,7 @@ def history_lines(limit: int, directory: Path | None = None) -> list[str]:
 
 def marker(path: Path) -> Path:
     """The yield request beside a queue entry (SLOTFATHER_YIELD in a yieldable lease's command)."""
-    return path.with_suffix(".yield")
+    return path.with_suffix(YIELD_SUFFIX)
 
 
 def asked(path: Path) -> dict[str, Any] | None:

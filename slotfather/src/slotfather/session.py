@@ -196,8 +196,7 @@ class Holder:
         with _state.editing(lease.path) as entry:
             if entry is None:
                 return 1
-            _state.write(_state.session_path(lease.path), {"active": {}, "runs": 0, "busy": 0.0, "cpu": 0.0,
-                                                          "rss_peak_mb": 0.0, "last_use": round(began, 3)})
+            _state.commit(lease.path, None, _entry.SidecarEffect(init_session=_entry.initial_session_uses(began)))
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         with contextlib.suppress(OSError):  # whoever started it may be gone: the session holds all the same
@@ -218,39 +217,30 @@ class Holder:
             if full:
                 with contextlib.suppress(_config.SlotError):  # no table to trust: no run is pruned this time
                     table = _process.processes()
-            if full:
                 pruned = time.monotonic()
             with _state.editing(path) as entry:
                 if entry is None:
                     return 1  # the lease vanished (removed by hand): nothing is left to release
-                uses = _state.session_uses(path) or {"active": {}, "runs": 0, "busy": 0.0, "cpu": 0.0, "last_use": began}
+                raw_uses = _state.session_uses(path)
                 moment = time.time()
-                pruned_runs = prune(uses, table, moment)
-                if pruned_runs:
-                    _state.write(_state.session_path(path), uses)
-                if self.stop_asked and not entry["session"].get("stopping"):
-                    entry["session"]["stopping"] = True
-                    _state.write(path, entry)
-                if uses.get("active"):
+                pruned_runs = prune(raw_uses, table, moment) if raw_uses is not None else False
+                step = _entry.session_step(entry, raw_uses, moment=moment, began=began, idle=idle,
+                                           stop_asked=self.stop_asked, pruned=pruned_runs)
+                if step.changed or not step.effect.empty:
+                    _state.commit(path, entry if step.changed else None, step.effect)
+                if step.ended_by is None:
                     if pruned_runs:
                         _leases.session_run_ended(directory, entry)
                     continue
-                reason = "stopped" if self.stop_asked else \
-                    "idle" if moment - float(uses.get("last_use") or began) >= idle else None
-                if reason is None:
-                    continue
-                entry["session"].update(stopping=True, runs=int(uses.get("runs") or 0),
-                                        busy=round(float(uses.get("busy") or 0), 1), ended_by=reason)
-                _state.write(path, entry)
-                _state.session_path(path).unlink(missing_ok=True)
                 _events.record(directory, None, "session.ended", _events.request(entry, path),
-                             {"reason": reason, "runs": entry["session"]["runs"], "busy": entry["session"]["busy"],
-                              "held": round(moment - began)}, _events.holder(entry))
+                               {"reason": step.ended_by, "runs": entry["session"]["runs"],
+                                "busy": entry["session"]["busy"], "held": round(moment - began)},
+                               _events.holder(entry))
             break
         assert self.lease is not None
         self.lease.status = 0
-        self.lease.usage = {"cpu": round(float(uses.get("cpu") or 0), 2),
-                            "rss_peak_mb": round(float(uses.get("rss_peak_mb") or 0), 1),
+        self.lease.usage = {"cpu": round(float(step.uses.get("cpu") or 0), 2),
+                            "rss_peak_mb": round(float(step.uses.get("rss_peak_mb") or 0), 1),
                             "wall": round(time.time() - began, 2)}
         self.lease.release()
         return 0
@@ -307,7 +297,8 @@ def stop(argv: list[str]) -> int:
                 _query.look(directory, log=True)
         if not path.exists():
             return True
-        active = len(view(path, entry)["active"])
+        uses = _state.session_uses(path)
+        active = len(mapping(uses.get("active"))) if uses is not None else 0
         if active and not said:
             print(f"slot: session {name} stops once its {active} active run(s) end", file=sys.stderr, flush=True)
             said = True
@@ -390,14 +381,12 @@ def run_inside(name: str, argv: list[str], label: str | None = None, meta: dict[
         ran = time.monotonic() - began
         with _state.editing(path) as current:
             uses = _state.session_uses(path)
-            if uses is not None:
-                mapping(uses.get("active")).pop(str(me), None)
-                uses.update(runs=int(uses.get("runs") or 0) + 1, busy=round(float(uses.get("busy") or 0) + ran, 2),
-                            last_use=round(time.time(), 3))
-                if usage:
-                    uses["cpu"] = round(float(uses.get("cpu") or 0) + float(usage.get("cpu") or 0), 2)
-                    uses["rss_peak_mb"] = max(float(uses.get("rss_peak_mb") or 0), float(usage.get("rss_peak_mb") or 0))
-                _state.write(_state.session_path(path), uses)
+            if current is not None and uses is not None and _entry.stage_of(current) != _entry.Stage.SESSION_ENDED:
+                was_unsettled = _entry.stage_of(current) == _entry.Stage.UNSETTLED
+                effect = _entry.session_finish_run(
+                    current, uses, pid=me, ran_seconds=ran, moment=time.time(), usage=usage
+                )
+                _state.commit(path, current if was_unsettled else None, effect)
             run: dict[str, Any] = {"pid": me, "label": label, "exit": status, "ran": round(ran, 2),
                                    "cpu": (usage or {}).get("cpu")}
             if meta:

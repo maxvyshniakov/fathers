@@ -311,7 +311,10 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
     order = order or settings["order"]
     estimate = estimate or no_estimate
     timeout = float(settings.get("reservation_timeout") or 0)
-    waiters = [entry for entry in waiters if _entry.lock_of(entry) is None]  # waiting on a lock: not grantable
+    waiters = [
+        entry for entry in waiters
+        if _entry.lock_of(entry) is None and _entry.stage_of(entry) != _entry.Stage.SESSION_ENDED
+    ]  # waiting on a lock or session already ending: not grantable
     if order == "backfill":
         waiters = ranked(waiters, settings, moment)
     fallback, safety, overrun, limit = (float(settings[key]) for key in ("fallback", "safety", "overrun", "limit"))
@@ -553,6 +556,7 @@ def yield_asks(waiters: list[Entry], held: list[Entry], slots: int, moment: floa
         if have >= entry["count"] and when - moment <= after:
             continue  # its slots are expected soon anyway
         candidates = [h for h in holding if h.get("yieldable") and level[_entry.priority_of(h)] > level[asking]
+                      and _entry.lock_of(h) is None and _entry.stage_of(h) != _entry.Stage.SESSION_ENDED
                       and int(h.get("yields") or 0) < _config.YIELDS_MAX
                       and moment - (_config.seconds(h.get("resumed") or h.get("granted")) or moment) >= after]
         candidates.sort(key=lambda h: (id(h) not in asked_ids, -level[_entry.priority_of(h)], -ends(h)))
@@ -591,7 +595,12 @@ def idle_asks(waiters: list[Entry], held: list[Entry], idle: list[Entry], slots:
     holding = list(held)
     found: list[tuple[Entry, Entry]] = []
     for lease in idle:
-        if not lease.get("yieldable") or int(lease.get("yields") or 0) >= _config.YIELDS_MAX:
+        if (
+            not lease.get("yieldable")
+            or _entry.lock_of(lease) is not None
+            or _entry.stage_of(lease) == _entry.Stage.SESSION_ENDED
+            or int(lease.get("yields") or 0) >= _config.YIELDS_MAX
+        ):
             continue
         before = plan(waiters, holding, slots, moment, estimate=estimate, other=other, settings=settings,
                       window=window).grants

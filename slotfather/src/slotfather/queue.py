@@ -14,7 +14,6 @@ from typing import Any, Callable, Iterator, Mapping, cast
 from . import config as _config
 from . import entry as _entry
 from . import events as _events
-from . import idle as _idle
 from . import lineage as _lineage
 from . import platform as _platform
 from . import process as _process
@@ -66,10 +65,9 @@ def reap(directory: Path, table: Table) -> list[tuple[Path, dict[str, Any]]]:
                 clear_lock(directory, path, entry)
             live.append((path, entry))
         elif not readonly:
-            path.unlink(missing_ok=True)
-            _state.marker(path).unlink(missing_ok=True)
-            _idle.path(path).unlink(missing_ok=True)
-            _state.session_path(path).unlink(missing_ok=True)
+            _state.remove_entry(path)
+            if _entry.stage_of(entry) == _entry.Stage.UNSETTLED:
+                _entry.settle(entry)
             # queue.log first, as before the one writer: a crash before the history keeps the line (fathers#37 review)
             _events.record(directory, f"reaped {entry.get('state')} lease of {entry.get('count')} for "
                            f"{entry.get('label')} (pid {entry.get('pid')} exited)")
@@ -107,18 +105,40 @@ def stale_lock(entry: dict[str, Any], table: Table) -> bool:
     return owner is None or not _platform.alive({"pid": owner[0], "start": owner[1]}, table)
 
 
-def clear_lock(directory: Path, path: Path, entry: dict[str, Any]) -> None:
-    """Clears a stale lock mark under the queue lock (reap()): a yielded lease is grantable again at this look's
-    grant, a held one no longer says it waits (fathers#159 review)."""
+LOCK_END_WORDS = {
+    "took": "took lock",
+    "stopped": "stopped waiting for lock",
+    "resumed": "work resumed while waiting for lock",
+}
+
+
+def clear_lock(directory: Path, path: Path, entry: dict[str, Any], why: str = "gone") -> bool:
+    """Clear a lock mark under the queue lock (`reap()` when the waiter is gone, `leases.ended()` when the wait
+    ends), commit the transition, and record `lease.lock_ended`. Returns whether the lease was yielded while waiting."""
     lock, owner = _entry.lock_of(entry), _entry.lock_owner(entry)
-    _entry.lock_taken(entry)
-    _state.write(path, entry)
-    who = f"pid {owner[0]}" if owner else "no recorded waiter"
-    _events.record(directory, f"the waiter for lock {lock} is gone ({who}) for {entry.get('label')} "
-                              f"(pid {entry.get('pid')})",
-                   "lease.lock_ended", _events.request(entry, path),
-                   {"lock": lock or "", "why": "gone", "yielded": not _entry.is_held(entry), "waited": None},
-                   _events.actor(kind="tool"), level="warn")
+    if lock is None:
+        return False
+    yielded = not _entry.is_held(entry)
+    waited: int | None = None
+    if why != "gone" and yielded:
+        began = _entry.epoch(entry.get("yielded_at"))
+        if began is not None:
+            waited = round(max(0.0, time.time() - began))
+    effect = _entry.lock_taken(entry)
+    _state.commit(path, entry, effect)
+    if why == "gone":
+        who = f"pid {owner[0]}" if owner else "no recorded waiter"
+        message = f"the waiter for lock {lock} is gone ({who}) for {entry.get('label')} (pid {entry.get('pid')})"
+        actor = _events.actor(kind="tool")
+        level: str | None = "warn"
+    else:
+        again = f"; waiting for {entry['count']} slot(s) again" if yielded else ""
+        message = f"{LOCK_END_WORDS[why]} {lock} for {entry.get('label')} (pid {entry.get('pid')}){again}"
+        actor = _events.holder(entry)
+        level = None
+    _events.record(directory, message, "lease.lock_ended", _events.request(entry, path),
+                   {"lock": lock, "why": why, "yielded": yielded, "waited": waited}, actor, level=level)
+    return yielded
 
 
 def legacy_holders(table: Table) -> list[tuple[Path, dict[str, Any], int]]:

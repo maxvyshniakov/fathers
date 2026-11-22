@@ -7,6 +7,7 @@ read (docs/architecture.md, "State on disk"); a field added here must be one the
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 import hashlib
 import math
 import time
@@ -309,8 +310,247 @@ def held_for(entry: Mapping[str, Any], moment: float) -> float:
     return 0.0 if granted is None else max(0.0, moment - granted - yielded_of(entry))
 
 
-# Transitions: the one definition of each. They change the entry they are given (or return a copy, for a trial),
-# nothing else.
+# Transitions: the explicit lifecycle state machine and declarative sidecar effects.
+# Functions here are pure apart from the dicts they are given: callers commit entry and sidecar mutations under the
+# queue lock (`state.commit()`, `state.remove_entry()`) and log what happened (`queue.log`, `events.jsonl`).
+
+HEAD_DROPPED = "head_dropped"  # when a head gave way to leases with no end estimate (fathers#160; epoch seconds)
+LOCK_OWNER = "lock_owner"  # {"pid", "start"} of the process that waits for the lock (fathers#159 review)
+LOCK_YIELD = "lock_yield"  # a lease that yielded for a lock: its ageing counts on from before (fathers#159 review)
+LOCK = "lock"  # the path a yielded lease's command waits to lock (fathers#159); granted again once it has it
+
+
+class Stage(StrEnum):
+    """Explicit lifecycle stage of a queue entry, lease, or measurement session."""
+    UNKNOWN = "unknown"
+    WAITING = "waiting"
+    HELD = "held"
+    UNSETTLED = "unsettled"
+    YIELDED = "yielded"
+    LOCK_NOTED = "lock-noted"
+    LOCK_YIELDED = "lock-yielded"
+    SESSION_ACTIVE = "session-active"
+    SESSION_STOPPING = "session-stopping"
+    SESSION_ENDED = "session-ended"
+    RELEASED = "released"
+    LEFT = "left"
+    REAPED = "reaped"
+    REFUSED = "refused"
+
+
+LIVE_SESSION_STAGES: frozenset[Stage] = frozenset({
+    Stage.SESSION_ACTIVE,
+    Stage.SESSION_STOPPING,
+    Stage.LOCK_NOTED,
+    Stage.LOCK_YIELDED,
+    Stage.YIELDED,
+})
+
+REPRIORITIZABLE_STAGES: frozenset[Stage] = frozenset({
+    Stage.WAITING,
+    Stage.HELD,
+    Stage.YIELDED,
+    Stage.LOCK_NOTED,
+    Stage.LOCK_YIELDED,
+    Stage.SESSION_ACTIVE,
+    Stage.SESSION_STOPPING,
+})
+
+SETTLED_HELD_STAGES: frozenset[Stage] = frozenset({
+    Stage.HELD,
+    Stage.LOCK_NOTED,
+    Stage.SESSION_ACTIVE,
+    Stage.SESSION_STOPPING,
+})
+
+LEGAL_TRANSITIONS: dict[Stage, frozenset[Stage]] = {
+    Stage.UNKNOWN: frozenset(),
+    Stage.WAITING: frozenset({
+        Stage.WAITING,
+        Stage.HELD,
+        Stage.SESSION_ACTIVE,
+        Stage.SESSION_STOPPING,
+        Stage.LEFT,
+        Stage.REAPED,
+        Stage.REFUSED,
+    }),
+    Stage.HELD: frozenset({
+        Stage.HELD,
+        Stage.YIELDED,
+        Stage.LOCK_NOTED,
+        Stage.LOCK_YIELDED,
+        Stage.RELEASED,
+        Stage.LEFT,
+        Stage.REAPED,
+    }),
+    Stage.UNSETTLED: frozenset({
+        Stage.HELD,
+        Stage.SESSION_ACTIVE,
+        Stage.SESSION_STOPPING,
+        Stage.RELEASED,
+        Stage.LEFT,
+        Stage.REAPED,
+    }),
+    Stage.YIELDED: frozenset({
+        Stage.YIELDED,
+        Stage.HELD,
+        Stage.SESSION_ACTIVE,
+        Stage.SESSION_STOPPING,
+        Stage.SESSION_ENDED,
+        Stage.RELEASED,
+        Stage.LEFT,
+        Stage.REAPED,
+    }),
+    Stage.LOCK_NOTED: frozenset({
+        Stage.LOCK_NOTED,
+        Stage.HELD,
+        Stage.SESSION_ACTIVE,
+        Stage.SESSION_STOPPING,
+        Stage.LOCK_YIELDED,
+        Stage.SESSION_ENDED,
+        Stage.RELEASED,
+        Stage.LEFT,
+        Stage.REAPED,
+    }),
+    Stage.LOCK_YIELDED: frozenset({
+        Stage.LOCK_YIELDED,
+        Stage.YIELDED,
+        Stage.WAITING,
+        Stage.SESSION_ENDED,
+        Stage.RELEASED,
+        Stage.LEFT,
+        Stage.REAPED,
+    }),
+    Stage.SESSION_ACTIVE: frozenset({
+        Stage.SESSION_ACTIVE,
+        Stage.SESSION_STOPPING,
+        Stage.SESSION_ENDED,
+        Stage.LOCK_NOTED,
+        Stage.LOCK_YIELDED,
+        Stage.RELEASED,
+        Stage.LEFT,
+        Stage.REAPED,
+    }),
+    Stage.SESSION_STOPPING: frozenset({
+        Stage.SESSION_STOPPING,
+        Stage.SESSION_ENDED,
+        Stage.LOCK_NOTED,
+        Stage.LOCK_YIELDED,
+        Stage.RELEASED,
+        Stage.LEFT,
+        Stage.REAPED,
+    }),
+    Stage.SESSION_ENDED: frozenset({
+        Stage.RELEASED,
+        Stage.REAPED,
+    }),
+    Stage.RELEASED: frozenset(),
+    Stage.LEFT: frozenset(),
+    Stage.REAPED: frozenset(),
+    Stage.REFUSED: frozenset(),
+}
+
+
+class IllegalTransitionError(ValueError):
+    """Raised when an entry, lock, or session transition violates `LEGAL_TRANSITIONS`."""
+
+
+@dataclass(frozen=True)
+class SidecarEffect:
+    """Declarative sidecar mutations coupled to an entry transition, applied by `state.commit()`."""
+    unlink_yield: bool = False
+    unlink_idle: bool = False
+    unlink_session: bool = False
+    write_session: dict[str, Any] | None = None
+    init_session: dict[str, Any] | None = None
+    write_yield: dict[str, Any] | None = None
+
+    @property
+    def empty(self) -> bool:
+        return (not self.unlink_yield and not self.unlink_idle and not self.unlink_session
+                and self.write_session is None and self.init_session is None and self.write_yield is None)
+
+
+NO_EFFECT = SidecarEffect()
+TERMINAL_EFFECT = SidecarEffect(unlink_yield=True, unlink_idle=True, unlink_session=True)
+
+
+@dataclass(frozen=True)
+class SessionStep:
+    """Result of one measurement-session lifecycle check (`session_step`)."""
+    uses: dict[str, Any]
+    effect: SidecarEffect
+    changed: bool = False
+    ended_by: str | None = None
+
+
+def initial_session_uses(moment: float) -> dict[str, Any]:
+    """Initial `.session` sidecar record for a newly granted measurement session."""
+    return {"active": {}, "runs": 0, "busy": 0.0, "cpu": 0.0, "rss_peak_mb": 0.0, "last_use": round(moment, 3)}
+
+
+def lock_of(entry: Mapping[str, Any]) -> str | None:
+    """The lock a lease's command waits for (`slotfather lock`, fathers#159), or None. On a yielded lease the
+    mark keeps it from a grant (schedule.plan()) until the lock is taken; on a held one (other work runs under
+    the lease, so it keeps its slots) it only says so. An older client reads past the field: it sees a yielded
+    lease and may grant it early, which `settle()` reconciles."""
+    value: object = entry.get(LOCK)
+    return value if isinstance(value, str) and value else None
+
+
+def lock_owner(entry: Mapping[str, Any]) -> tuple[int, str] | None:
+    """The process that waits for the lock (`lock_owner`: its pid and start), whose death clears the mark
+    (queue.reap()); None for a mark without one, which nothing can keep."""
+    owner: object = entry.get(LOCK_OWNER)
+    if isinstance(owner, dict):
+        data = cast(dict[str, Any], owner)
+        pid, start = data.get("pid"), data.get("start")
+        if type(pid) is int and pid > 0 and isinstance(start, str):
+            return pid, start
+    return None
+
+
+def _session_spec(entry: Mapping[str, Any]) -> dict[str, Any] | None:
+    spec: object = entry.get("session")
+    return cast(dict[str, Any], spec) if isinstance(spec, dict) else None
+
+
+def stage_of(entry: Mapping[str, Any]) -> Stage:
+    """Derive the explicit lifecycle `Stage` of a persisted queue entry."""
+    if unknown(entry) is not None:
+        return Stage.UNKNOWN
+    spec = _session_spec(entry)
+    if is_held(entry):
+        if spec is not None and spec.get("ended_by"):
+            return Stage.SESSION_ENDED
+        if "yielded_at" in entry or bool(entry.get(LOCK_YIELD)):
+            return Stage.UNSETTLED
+        if lock_of(entry) is not None:
+            return Stage.LOCK_NOTED
+        if spec is not None:
+            return Stage.SESSION_STOPPING if spec.get("stopping") else Stage.SESSION_ACTIVE
+        return Stage.HELD
+    if spec is not None and spec.get("ended_by"):
+        return Stage.SESSION_ENDED
+    if lock_of(entry) is not None:
+        return Stage.LOCK_YIELDED
+    if "yielded_at" in entry or bool(entry.get("yields")) or bool(entry.get(LOCK_YIELD)):
+        return Stage.YIELDED
+    return Stage.WAITING
+
+
+def can_transition(before: Stage, after: Stage) -> bool:
+    """Whether `before -> after` is a legal transition in `LEGAL_TRANSITIONS`."""
+    return after in LEGAL_TRANSITIONS.get(before, frozenset())
+
+
+def require_transition(before: Stage, after: Stage, *, via: str,
+                       allowed: frozenset[Stage] | None = None) -> Stage:
+    """Validate that `before` is allowed for `via` and `before -> after` is in `LEGAL_TRANSITIONS`."""
+    if (allowed is not None and before not in allowed) or not can_transition(before, after):
+        raise IllegalTransitionError(f"illegal transition in {via}: {before.value} -> {after.value}")
+    return after
+
 
 def new_request(pid: int, start: str, count: int, label: str, command: str, cwd: str, since: str, priority: str,
                 lease_id: str, *, started: int | None = None, ticket: str | None = None, whole: bool = False,
@@ -352,102 +592,155 @@ def new_request(pid: int, start: str, count: int, label: str, command: str, cwd:
     return found
 
 
-def resume(entry: Record, moment: float | None = None) -> None:
-    """A yielded lease that was granted again (at `moment`, else its `granted` stamp): `granted` is its first grant
-    again (waits and runs in the history stay its own), `resumed` this grant, `yielded` the seconds it spent back in
-    the queue. Nothing for a lease that never yielded."""
+def _resume_fields(entry: Record, moment: float | None = None) -> float | None:
+    """Apply resume accounting for a yielded or lock-yielded entry; returns the resolved resume moment if settled."""
     away = epoch(entry.get("yielded_at"))
-    if away is None:
-        return
-    again = entry.get("granted")
-    back = moment if moment is not None else _config.seconds(again) or time.time()
-    entry["yielded"] = round(yielded_of(entry) + max(0.0, back - away), 2)
-    entry.update(resumed=again, granted=entry.get("first_granted") or again)
-    for key in ("yielded_at", "first_granted", "rank", LOCK_YIELD):
+    back: float | None = None
+    if away is not None:
+        again = entry.get("granted")
+        back = moment if moment is not None else _config.seconds(again) or time.time()
+        entry["yielded"] = round(yielded_of(entry) + max(0.0, back - away), 2)
+        entry.update(resumed=again, granted=entry.get("first_granted") or again)
+    for key in ("yielded_at", "first_granted", "rank", LOCK_YIELD, LOCK, LOCK_OWNER):
         entry.pop(key, None)
+    return back
+
+
+def settle(entry: Record, moment: float | None = None) -> SidecarEffect:
+    """Settle an older-client grant (`Stage.UNSETTLED`) into its clean held stage, preserving `first_granted`,
+    accumulated `yielded` time, and clearing stale lock/yield markers and sidecars. Idempotent on already-settled
+    held stages."""
+    before = stage_of(entry)
+    if before in SETTLED_HELD_STAGES:
+        return NO_EFFECT
+    spec = _session_spec(entry)
+    if before != Stage.UNSETTLED or (spec is not None and spec.get("ended_by")):
+        raise IllegalTransitionError(f"illegal transition in settle: {before.value} -> held")
+    back = _resume_fields(entry, moment)
+    after = require_transition(before, stage_of(entry), via="settle", allowed=frozenset({Stage.UNSETTLED}))
+    resolved = back if back is not None else (moment if moment is not None else time.time())
+    session_init = initial_session_uses(resolved) if after in (Stage.SESSION_ACTIVE, Stage.SESSION_STOPPING) else None
+    return SidecarEffect(unlink_yield=True, unlink_idle=True, init_session=session_init)
+
+
+def resume(entry: Record, moment: float | None = None) -> SidecarEffect:
+    """Compatibility alias for `settle()` on a held entry resumed after a yield."""
+    return settle(entry, moment)
 
 
 def to_held(entry: Record, granted: str, moment: float, pressed: bool = False, served: str | None = None,
-            count: int | None = None) -> None:
+            count: int | None = None) -> SidecarEffect:
     """A waiter granted at `granted` (a now() stamp of `moment`): `pressed` while memory is not normal, `aged` when
     it is served in class `served` (ageing) rather than its own, `count` for a range request (`-n MIN-MAX`) granted
     at what is free, and resumed if it had yielded."""
+    before = stage_of(entry)
+    allowed = frozenset({Stage.WAITING, Stage.YIELDED})
+    if before not in allowed:
+        raise IllegalTransitionError(f"illegal transition in to_held: {before.value} -> held")
     entry.update(state=HELD, granted=granted)
     if count is not None and count >= 1:
         entry["count"] = count
-    lock_taken(entry)  # a lease an older client granted while it waited for a lock: the mark is stale
     if pressed:
         entry[PRESSED] = True  # under warning, the one lease at a time until it releases
     else:
         entry.pop(PRESSED, None)
     if served is not None and served != priority_of(entry):
         entry["aged"] = served  # the class ageing moved it to by its grant; status and the history show it
-    resume(entry, moment)
+    if "yielded_at" in entry or bool(entry.get(LOCK_YIELD)):
+        _resume_fields(entry, moment)
+    after = require_transition(before, stage_of(entry), via="to_held", allowed=allowed)
+    if after in (Stage.SESSION_ACTIVE, Stage.SESSION_STOPPING):
+        uses = initial_session_uses(moment)
+        if before == Stage.WAITING:
+            return SidecarEffect(unlink_yield=True, unlink_idle=True, write_session=uses)
+        return SidecarEffect(unlink_yield=True, unlink_idle=True, init_session=uses)
+    return SidecarEffect(unlink_yield=True, unlink_idle=True)
 
 
-def to_yielded(entry: Record, moment: float, rank: float | None) -> None:
-    """A held lease back among the waiters at `moment`, queued at `rank`, just behind the waiter it yields to."""
-    entry.update(state=WAITING, yields=int(entry.get("yields") or 0) + 1, yielded_at=round(moment, 3),
-                 first_granted=entry.get("granted"), rank=rank)
+def _yield_fields(entry: Record, moment: float, rank: float | None, *, polite: bool) -> None:
+    if polite:
+        entry.update(state=WAITING, yields=int(entry.get("yields") or 0) + 1, yielded_at=round(moment, 3),
+                     first_granted=entry.get("granted"), rank=rank)
+    else:
+        yields, previous_rank = entry.get("yields"), entry.get("rank")
+        entry.update(state=WAITING, yields=int(yields or 0) + 1, yielded_at=round(moment, 3),
+                     first_granted=entry.get("granted"), rank=previous_rank)
+        if previous_rank is None:
+            entry.pop("rank", None)
+        if yields is None:
+            entry.pop("yields", None)
+        else:
+            entry["yields"] = yields
     if type(entry.get("min_count")) is int and entry["min_count"] >= 1:
         entry["count"] = entry["min_count"]  # a range lease waits as its MIN again until re-granted
     entry.pop("reserved", None)  # a reservation an older client granted it with is no promise now
     entry.pop(PRESSED, None)  # back in the queue it is no lease of a warning; its next grant decides
 
 
-HEAD_DROPPED = "head_dropped"  # when a head gave way to leases with no end estimate (fathers#160; epoch seconds)
-LOCK_OWNER = "lock_owner"  # {"pid", "start"} of the process that waits for the lock (fathers#159 review)
-LOCK_YIELD = "lock_yield"  # a lease that yielded for a lock: its ageing counts on from before (fathers#159 review)
-LOCK = "lock"  # the path a yielded lease's command waits to lock (fathers#159); granted again once it has it
+def to_yielded(entry: Record, moment: float, rank: float | None) -> SidecarEffect:
+    """A held lease back among the waiters at `moment`, queued at `rank`, just behind the waiter it yields to."""
+    raw_stage = stage_of(entry)
+    if _session_spec(entry) is not None or raw_stage not in (Stage.HELD, Stage.UNSETTLED):
+        raise IllegalTransitionError(f"illegal transition in to_yielded: {raw_stage.value} -> {Stage.YIELDED.value}")
+    if raw_stage == Stage.UNSETTLED:
+        settle(entry)
+    before = stage_of(entry)
+    _yield_fields(entry, moment, rank, polite=True)
+    require_transition(before, stage_of(entry), via="to_yielded", allowed=frozenset({Stage.HELD}))
+    return SidecarEffect(unlink_yield=True, unlink_idle=True)
 
 
-def lock_of(entry: Mapping[str, Any]) -> str | None:
-    """The lock a lease's command waits for (`slotfather lock`, fathers#159), or None. On a yielded lease the
-    mark keeps it from a grant (schedule.plan()) until the lock is taken; on a held one (other work runs under
-    the lease, so it keeps its slots) it only says so. An older client reads past the field: it sees a yielded
-    lease and may grant it early, which only holds the slots as before (to_held() clears the mark)."""
-    value: object = entry.get(LOCK)
-    return value if isinstance(value, str) and value else None
-
-
-def lock_owner(entry: Mapping[str, Any]) -> tuple[int, str] | None:
-    """The process that waits for the lock (`lock_owner`: its pid and start), whose death clears the mark
-    (queue.reap()); None for a mark without one, which nothing can keep."""
-    owner: object = entry.get(LOCK_OWNER)
-    if isinstance(owner, dict):
-        pid, start = cast(dict[str, Any], owner).get("pid"), cast(dict[str, Any], owner).get("start")
-        if type(pid) is int and pid > 0 and isinstance(start, str):
-            return pid, start
-    return None
-
-
-def to_lock_waiting(entry: Record, moment: float, lock: str, owner: tuple[int, str]) -> None:
+def to_lock_waiting(entry: Record, moment: float, lock: str, owner: tuple[int, str]) -> SidecarEffect:
     """A held lease back among the waiters at `moment` while its command (the process `owner`) waits to lock
     `lock`: yielded as to_yielded() writes it (an older client reads it as a lease that yielded), keeping its place
     (its rank, pinned or not, and its ageing, which counts on from before: LOCK_YIELD) and without counting a polite
     yield (`yields`, which YIELDS_MAX caps)."""
-    yields, rank = entry.get("yields"), entry.get("rank")
-    to_yielded(entry, moment, rank)
-    if rank is None:
-        entry.pop("rank", None)
-    if yields is None:
-        entry.pop("yields", None)
-    else:
-        entry["yields"] = yields
+    raw_stage = stage_of(entry)
+    allowed = frozenset({Stage.HELD, Stage.LOCK_NOTED, Stage.SESSION_ACTIVE, Stage.SESSION_STOPPING})
+    spec = _session_spec(entry)
+    if (raw_stage not in (allowed | {Stage.UNSETTLED})) or (spec is not None and spec.get("ended_by")):
+        raise IllegalTransitionError(
+            f"illegal transition in to_lock_waiting: {raw_stage.value} -> {Stage.LOCK_YIELDED.value}"
+        )
+    if raw_stage == Stage.UNSETTLED:
+        settle(entry)
+    before = stage_of(entry)
+    _yield_fields(entry, moment, entry.get("rank"), polite=False)
     entry.update({LOCK: lock, LOCK_OWNER: {"pid": owner[0], "start": owner[1]}, LOCK_YIELD: True})
+    require_transition(before, stage_of(entry), via="to_lock_waiting", allowed=allowed)
+    return SidecarEffect(unlink_yield=True, unlink_idle=True)
 
 
-def to_lock_noted(entry: Record, lock: str, owner: tuple[int, str]) -> None:
+def to_lock_noted(entry: Record, lock: str, owner: tuple[int, str]) -> SidecarEffect:
     """A held lease whose command waits to lock `lock` while other work runs under it: it keeps its slots and only
     says what it waits for (fathers#159 review)."""
+    raw_stage = stage_of(entry)
+    allowed = frozenset({Stage.HELD, Stage.LOCK_NOTED, Stage.SESSION_ACTIVE, Stage.SESSION_STOPPING})
+    spec = _session_spec(entry)
+    if (raw_stage not in (allowed | {Stage.UNSETTLED})) or (spec is not None and spec.get("ended_by")):
+        raise IllegalTransitionError(
+            f"illegal transition in to_lock_noted: {raw_stage.value} -> {Stage.LOCK_NOTED.value}"
+        )
+    settle_effect = settle(entry) if raw_stage == Stage.UNSETTLED else NO_EFFECT
+    before = stage_of(entry)
     entry.update({LOCK: lock, LOCK_OWNER: {"pid": owner[0], "start": owner[1]}})
+    require_transition(before, stage_of(entry), via="to_lock_noted", allowed=allowed)
+    return settle_effect
 
 
-def lock_taken(entry: Record) -> None:
+def lock_taken(entry: Record) -> SidecarEffect:
     """The lock wait is over (taken, given up, or its waiter gone): the mark goes; a yielded lease then waits to be
     granted again as any yielded lease, in its place."""
+    raw_stage = stage_of(entry)
+    if raw_stage == Stage.UNSETTLED and lock_of(entry) is not None:
+        return settle(entry)
+    allowed = frozenset({Stage.LOCK_NOTED, Stage.LOCK_YIELDED})
+    if raw_stage not in allowed:
+        raise IllegalTransitionError(f"illegal transition in lock_taken: {raw_stage.value}")
     entry.pop(LOCK, None)
     entry.pop(LOCK_OWNER, None)
+    require_transition(raw_stage, stage_of(entry), via="lock_taken", allowed=allowed)
+    return NO_EFFECT
 
 
 def trial_yielded(entry: Mapping[str, Any], rank: float | None) -> Record:
@@ -462,13 +755,128 @@ def trial_held(entry: Mapping[str, Any], granted: str) -> Record:
     return found
 
 
-def to_reprioritized(entry: Record, priority: str, moment: float) -> None:
+def to_reprioritized(entry: Record, priority: str, moment: float) -> SidecarEffect:
     """A request moved to class `priority` at `moment`: `reprioritized` keeps the class it asked first, `since` its
     arrival; ageing counts from now."""
+    raw_stage = stage_of(entry)
+    spec = _session_spec(entry)
+    if (raw_stage not in (REPRIORITIZABLE_STAGES | {Stage.UNSETTLED})) or (spec is not None and spec.get("ended_by")):
+        raise IllegalTransitionError(f"illegal transition in to_reprioritized: {raw_stage.value}")
+    settle_effect = settle(entry) if raw_stage == Stage.UNSETTLED else NO_EFFECT
+    before = stage_of(entry)
     entry.setdefault("reprioritized", priority_of(entry))
     entry["priority"] = priority
     entry["reprioritized_at"] = round(moment, 3)  # ageing counts from here (ageing_since())
     entry.pop("aged", None)
+    require_transition(before, stage_of(entry), via="to_reprioritized", allowed=REPRIORITIZABLE_STAGES)
+    return settle_effect
+
+
+def _copy_uses(uses: Mapping[str, Any] | None, began: float) -> dict[str, Any]:
+    if uses is None:
+        return initial_session_uses(began)
+    copied = {**initial_session_uses(began), **dict(uses)}
+    active_raw: object = copied.get("active")
+    copied["active"] = dict(cast(Mapping[str, Any], active_raw)) if isinstance(active_raw, Mapping) else {}
+    return copied
+
+
+def session_start_run(entry: Record, uses: Mapping[str, Any], *, pid: int, start: str, started: int | None,
+                      label: str | None, cmd: str, since: str) -> SidecarEffect:
+    """Register an active run on a held, accepting measurement session."""
+    raw_stage = stage_of(entry)
+    spec = _session_spec(entry)
+    allowed = frozenset({Stage.SESSION_ACTIVE, Stage.LOCK_NOTED})
+    if spec is None or spec.get("stopping") or spec.get("ended_by") or raw_stage not in (allowed | {Stage.UNSETTLED}):
+        raise IllegalTransitionError(f"illegal transition in session_start_run: {raw_stage.value}")
+    settle_effect = settle(entry) if raw_stage == Stage.UNSETTLED else NO_EFFECT
+    before = stage_of(entry)
+    require_transition(before, stage_of(entry), via="session_start_run", allowed=allowed)
+    updated = _copy_uses(uses, 0.0)
+    updated["active"][str(pid)] = {"start": start, "started": started, "label": label, "cmd": cmd, "since": since}
+    return SidecarEffect(
+        unlink_yield=settle_effect.unlink_yield,
+        unlink_idle=settle_effect.unlink_idle,
+        write_session=updated,
+    )
+
+
+def session_finish_run(entry: Record, uses: Mapping[str, Any], *, pid: int, ran_seconds: float, moment: float,
+                       usage: Mapping[str, Any] | None = None) -> SidecarEffect:
+    """Record a completed run inside a live measurement session."""
+    raw_stage = stage_of(entry)
+    spec = _session_spec(entry)
+    if spec is None or spec.get("ended_by") or raw_stage not in (LIVE_SESSION_STAGES | {Stage.UNSETTLED}):
+        raise IllegalTransitionError(f"illegal transition in session_finish_run: {raw_stage.value}")
+    settle_effect = settle(entry, moment) if raw_stage == Stage.UNSETTLED else NO_EFFECT
+    before = stage_of(entry)
+    require_transition(before, stage_of(entry), via="session_finish_run", allowed=LIVE_SESSION_STAGES)
+    updated = _copy_uses(uses, moment)
+    updated["active"].pop(str(pid), None)
+    updated.update(
+        runs=int(updated.get("runs") or 0) + 1,
+        busy=round(float(updated.get("busy") or 0) + ran_seconds, 2),
+        last_use=round(moment, 3),
+    )
+    if usage:
+        updated["cpu"] = round(float(updated.get("cpu") or 0) + float(usage.get("cpu") or 0), 2)
+        updated["rss_peak_mb"] = max(float(updated.get("rss_peak_mb") or 0), float(usage.get("rss_peak_mb") or 0))
+    return SidecarEffect(
+        unlink_yield=settle_effect.unlink_yield,
+        unlink_idle=settle_effect.unlink_idle,
+        write_session=updated,
+    )
+
+
+def session_step(entry: Record, uses: Mapping[str, Any] | None, *, moment: float, began: float, idle: float,
+                 stop_asked: bool = False, pruned: bool = False) -> SessionStep:
+    """Advance a live measurement session by one holder check."""
+    raw_stage = stage_of(entry)
+    spec = _session_spec(entry)
+    if spec is None or spec.get("ended_by") or raw_stage not in (LIVE_SESSION_STAGES | {Stage.UNSETTLED}):
+        raise IllegalTransitionError(f"illegal transition in session_step: {raw_stage.value}")
+    settled = raw_stage == Stage.UNSETTLED
+    settle_effect = settle(entry, moment) if settled else NO_EFFECT
+    before = stage_of(entry)
+    current_uses = _copy_uses(uses, began)
+    changed = settled
+    if stop_asked and not spec.get("stopping"):
+        spec["stopping"] = True
+        changed = True
+    reason = (
+        None if current_uses["active"]
+        else "stopped" if (stop_asked or spec.get("stopping"))
+        else "idle" if moment - float(current_uses.get("last_use") or began) >= idle
+        else None
+    )
+    if reason is None:
+        require_transition(before, stage_of(entry), via="session_step", allowed=LIVE_SESSION_STAGES)
+        write_uses = current_uses if (pruned or uses is None) else None
+        return SessionStep(
+            uses=current_uses,
+            effect=SidecarEffect(
+                unlink_yield=settle_effect.unlink_yield,
+                unlink_idle=settle_effect.unlink_idle,
+                write_session=write_uses,
+            ),
+            changed=changed,
+            ended_by=None,
+        )
+    entry.pop(LOCK, None)
+    entry.pop(LOCK_OWNER, None)
+    spec.update(stopping=True, runs=int(current_uses.get("runs") or 0),
+                busy=round(float(current_uses.get("busy") or 0), 1), ended_by=reason)
+    require_transition(before, stage_of(entry), via="session_step", allowed=LIVE_SESSION_STAGES)
+    return SessionStep(
+        uses=current_uses,
+        effect=SidecarEffect(
+            unlink_yield=settle_effect.unlink_yield,
+            unlink_idle=settle_effect.unlink_idle,
+            unlink_session=True,
+        ),
+        changed=True,
+        ended_by=reason,
+    )
 
 
 @dataclass(frozen=True)
@@ -496,11 +904,33 @@ class Refused:
 
 
 Outcome = Ran | Left | Reaped | Refused
+TERMINAL_STAGES: frozenset[Stage] = frozenset({Stage.RELEASED, Stage.LEFT, Stage.REAPED, Stage.REFUSED})
+
+
+def outcome_stage(result: Outcome) -> Stage:
+    """The terminal `Stage` corresponding to an `Outcome`."""
+    if isinstance(result, Ran):
+        return Stage.RELEASED
+    if isinstance(result, Left):
+        return Stage.LEFT
+    if isinstance(result, Reaped):
+        return Stage.REAPED
+    return Stage.REFUSED
+
+
+def to_terminal(entry: Mapping[str, Any], target: Stage) -> SidecarEffect:
+    """Validate a terminal transition (`RELEASED`, `LEFT`, `REAPED`, `REFUSED`) and return its sidecar cleanup."""
+    if target not in TERMINAL_STAGES:
+        raise IllegalTransitionError(f"illegal terminal target: {target.value}")
+    before = stage_of(entry)
+    require_transition(before, target, via="to_terminal")
+    return TERMINAL_EFFECT
 
 
 def ran(entry: Mapping[str, Any]) -> bool:
-    """Whether a request ran: it holds, or held before it yielded."""
-    return is_held(entry) or bool(entry.get("yields"))
+    """Whether a request ran: it holds now, or held before yielding (politely or for an external lock)."""
+    return (is_held(entry) or bool(entry.get("yields")) or "yielded_at" in entry
+            or yielded_of(entry) > 0 or "resumed" in entry or bool(entry.get(LOCK_YIELD)))
 
 
 def decide_outcome(entry: Mapping[str, Any], *, held_seen: bool | None = None, status: int | None = None,
@@ -509,17 +939,21 @@ def decide_outcome(entry: Mapping[str, Any], *, held_seen: bool | None = None, s
 
     A lease the client never saw as held (`held_seen=False`) is always Left, even if another client granted it
     between the client's last read and its deadline or termination."""
+    result: Outcome
     if refused is not None:
-        return Refused(refused)
-    if reaped:
-        return Reaped(was_held=ran(entry))
-    if held_seen is False:
-        return Left(left_reason or "error")
-    if held_seen is True:
-        return Ran(exit=status)
-    if ran(entry):
-        return Ran(exit=status)
-    return Left(left_reason or "error")
+        result = Refused(refused)
+    elif reaped:
+        result = Reaped(was_held=ran(entry))
+    elif held_seen is False:
+        result = Left(left_reason or "error")
+    elif held_seen is True or ran(entry):
+        result = Ran(exit=status)
+    else:
+        result = Left(left_reason or "error")
+    before = stage_of(entry)
+    if before != Stage.UNKNOWN:
+        require_transition(before, outcome_stage(result), via="decide_outcome")
+    return result
 
 
 def outcome_name(result: Outcome) -> str:

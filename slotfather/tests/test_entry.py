@@ -15,7 +15,7 @@ import random
 import shutil
 import tempfile
 import unittest
-from typing import Any, cast
+from typing import Any, Callable, cast
 from unittest import mock
 
 from slotfather import config as sf_config
@@ -169,6 +169,381 @@ class TransitionTests(unittest.TestCase):
         bare = sf_entry.new_request(1, "s", 2, "l", "c", "/w", "t", "normal", "id")
         self.assertEqual(["pid", "start", "count", "label", "cmd", "cwd", "since", "state", "priority", "lease_id"],
                          list(bare))
+
+
+class StageTransitionTableTests(unittest.TestCase):
+    """Table-driven verification of `Stage`, `LEGAL_TRANSITIONS`, `SidecarEffect`, older-client `settle()`,
+    and lock-only yield accounting (fathers#224)."""
+
+    def _entry_in_stage(self, stage: sf_entry.Stage) -> dict[str, Any]:
+        if stage == sf_entry.Stage.UNKNOWN:
+            return waiter(state="paused")
+        if stage == sf_entry.Stage.WAITING:
+            return waiter()
+        if stage == sf_entry.Stage.HELD:
+            entry = waiter()
+            sf_entry.to_held(entry, stamp(T0), T0)
+            return entry
+        if stage == sf_entry.Stage.UNSETTLED:
+            entry = waiter()
+            sf_entry.to_held(entry, stamp(T0), T0)
+            sf_entry.to_yielded(entry, T0 + 10, T0 - 1)
+            entry.update(state="held", granted=stamp(T0 + 40))
+            return entry
+        if stage == sf_entry.Stage.YIELDED:
+            entry = waiter()
+            sf_entry.to_held(entry, stamp(T0), T0)
+            sf_entry.to_yielded(entry, T0 + 10, T0 - 1)
+            return entry
+        if stage == sf_entry.Stage.LOCK_NOTED:
+            entry = waiter()
+            sf_entry.to_held(entry, stamp(T0), T0)
+            sf_entry.to_lock_noted(entry, "/tmp/x.lock", (7, "Mon Jan  1 00:00:00 2026"))
+            return entry
+        if stage == sf_entry.Stage.LOCK_YIELDED:
+            entry = waiter()
+            sf_entry.to_held(entry, stamp(T0), T0)
+            sf_entry.to_lock_waiting(entry, T0 + 10, "/tmp/x.lock", (7, "Mon Jan  1 00:00:00 2026"))
+            return entry
+        if stage == sf_entry.Stage.SESSION_ACTIVE:
+            entry = waiter(session={"name": "perf", "idle": 60.0})
+            sf_entry.to_held(entry, stamp(T0), T0)
+            return entry
+        if stage == sf_entry.Stage.SESSION_STOPPING:
+            entry = waiter(session={"name": "perf", "idle": 60.0})
+            sf_entry.to_held(entry, stamp(T0), T0)
+            sf_entry.session_step(
+                entry,
+                {"active": {"99": {"start": "s"}}, "runs": 0, "busy": 0.0, "last_use": T0},
+                moment=T0 + 5,
+                began=T0,
+                idle=60.0,
+                stop_asked=True,
+            )
+            return entry
+        if stage == sf_entry.Stage.SESSION_ENDED:
+            entry = waiter(session={"name": "perf", "idle": 60.0})
+            sf_entry.to_held(entry, stamp(T0), T0)
+            sf_entry.session_step(
+                entry,
+                {"active": {}, "runs": 1, "busy": 2.5, "last_use": T0},
+                moment=T0 + 5,
+                began=T0,
+                idle=60.0,
+                stop_asked=True,
+            )
+            return entry
+        raise AssertionError(f"not an entry-backed stage: {stage}")
+
+    def test_legal_transition_table_covers_every_stage_and_leaves_terminals_closed(self) -> None:
+        self.assertEqual(set(sf_entry.Stage), set(sf_entry.LEGAL_TRANSITIONS))
+        for terminal in (sf_entry.Stage.UNKNOWN, *sf_entry.TERMINAL_STAGES):
+            self.assertEqual(frozenset(), sf_entry.LEGAL_TRANSITIONS[terminal], terminal.value)
+        live_stages = (
+            sf_entry.Stage.UNKNOWN,
+            sf_entry.Stage.WAITING,
+            sf_entry.Stage.HELD,
+            sf_entry.Stage.UNSETTLED,
+            sf_entry.Stage.YIELDED,
+            sf_entry.Stage.LOCK_NOTED,
+            sf_entry.Stage.LOCK_YIELDED,
+            sf_entry.Stage.SESSION_ACTIVE,
+            sf_entry.Stage.SESSION_STOPPING,
+            sf_entry.Stage.SESSION_ENDED,
+        )
+        for expected in live_stages:
+            with self.subTest(stage=expected.value):
+                self.assertEqual(expected, sf_entry.stage_of(self._entry_in_stage(expected)))
+
+    def test_legal_transitions_and_declarative_sidecar_effects(self) -> None:
+        owner = (4242, "Wed Nov 11 00:00:00 2026")
+        cases: list[tuple[str, Callable[[], tuple[sf_entry.Stage, sf_entry.Stage, sf_entry.SidecarEffect]],
+                          sf_entry.Stage, sf_entry.Stage, sf_entry.SidecarEffect]] = [
+            (
+                "waiting -> held",
+                lambda: (
+                    (e := waiter()),
+                    before := sf_entry.stage_of(e),
+                    eff := sf_entry.to_held(e, stamp(T0), T0),
+                    (before, sf_entry.stage_of(e), eff),
+                )[-1],
+                sf_entry.Stage.WAITING,
+                sf_entry.Stage.HELD,
+                sf_entry.SidecarEffect(unlink_yield=True, unlink_idle=True),
+            ),
+            (
+                "waiting -> session-active initializes .session",
+                lambda: (
+                    (e := waiter(session={"name": "perf", "idle": 60.0})),
+                    before := sf_entry.stage_of(e),
+                    eff := sf_entry.to_held(e, stamp(T0), T0),
+                    (before, sf_entry.stage_of(e), eff),
+                )[-1],
+                sf_entry.Stage.WAITING,
+                sf_entry.Stage.SESSION_ACTIVE,
+                sf_entry.SidecarEffect(
+                    unlink_yield=True,
+                    unlink_idle=True,
+                    write_session=sf_entry.initial_session_uses(T0),
+                ),
+            ),
+            (
+                "held -> yielded unlinks .yield and .idle",
+                lambda: (
+                    (e := self._entry_in_stage(sf_entry.Stage.HELD)),
+                    before := sf_entry.stage_of(e),
+                    eff := sf_entry.to_yielded(e, T0 + 10, T0 - 1),
+                    (before, sf_entry.stage_of(e), eff),
+                )[-1],
+                sf_entry.Stage.HELD,
+                sf_entry.Stage.YIELDED,
+                sf_entry.SidecarEffect(unlink_yield=True, unlink_idle=True),
+            ),
+            (
+                "held -> lock-yielded unlinks .yield and .idle",
+                lambda: (
+                    (e := self._entry_in_stage(sf_entry.Stage.HELD)),
+                    before := sf_entry.stage_of(e),
+                    eff := sf_entry.to_lock_waiting(e, T0 + 10, "/tmp/x.lock", owner),
+                    (before, sf_entry.stage_of(e), eff),
+                )[-1],
+                sf_entry.Stage.HELD,
+                sf_entry.Stage.LOCK_YIELDED,
+                sf_entry.SidecarEffect(unlink_yield=True, unlink_idle=True),
+            ),
+            (
+                "lock-yielded -> yielded via lock_taken",
+                lambda: (
+                    (e := self._entry_in_stage(sf_entry.Stage.LOCK_YIELDED)),
+                    before := sf_entry.stage_of(e),
+                    eff := sf_entry.lock_taken(e),
+                    (before, sf_entry.stage_of(e), eff),
+                )[-1],
+                sf_entry.Stage.LOCK_YIELDED,
+                sf_entry.Stage.YIELDED,
+                sf_entry.NO_EFFECT,
+            ),
+            (
+                "session yielded -> session-active preserves existing .session via init_session",
+                lambda: (
+                    (e := self._entry_in_stage(sf_entry.Stage.SESSION_ACTIVE)),
+                    sf_entry.to_lock_waiting(e, T0 + 10, "/tmp/x.lock", owner),
+                    sf_entry.lock_taken(e),
+                    before := sf_entry.stage_of(e),
+                    eff := sf_entry.to_held(e, stamp(T0 + 25), T0 + 25),
+                    (before, sf_entry.stage_of(e), eff),
+                )[-1],
+                sf_entry.Stage.YIELDED,
+                sf_entry.Stage.SESSION_ACTIVE,
+                sf_entry.SidecarEffect(
+                    unlink_yield=True,
+                    unlink_idle=True,
+                    init_session=sf_entry.initial_session_uses(T0 + 25),
+                ),
+            ),
+            (
+                "lock-noted -> session-stopping via lock_taken when stopping",
+                lambda: (
+                    (e := self._entry_in_stage(sf_entry.Stage.SESSION_STOPPING)),
+                    sf_entry.to_lock_noted(e, "/tmp/x.lock", owner),
+                    before := sf_entry.stage_of(e),
+                    eff := sf_entry.lock_taken(e),
+                    (before, sf_entry.stage_of(e), eff),
+                )[-1],
+                sf_entry.Stage.LOCK_NOTED,
+                sf_entry.Stage.SESSION_STOPPING,
+                sf_entry.NO_EFFECT,
+            ),
+            (
+                "session-stopping -> session-ended unlinks .session",
+                lambda: (
+                    (e := self._entry_in_stage(sf_entry.Stage.SESSION_STOPPING)),
+                    before := sf_entry.stage_of(e),
+                    step := sf_entry.session_step(
+                        e,
+                        {"active": {}, "runs": 2, "busy": 3.4, "last_use": T0 + 5},
+                        moment=T0 + 10,
+                        began=T0,
+                        idle=60.0,
+                        stop_asked=True,
+                    ),
+                    (before, sf_entry.stage_of(e), step.effect),
+                )[-1],
+                sf_entry.Stage.SESSION_STOPPING,
+                sf_entry.Stage.SESSION_ENDED,
+                sf_entry.SidecarEffect(unlink_session=True),
+            ),
+            (
+                "held -> released terminal cleanup",
+                lambda: (
+                    (e := self._entry_in_stage(sf_entry.Stage.HELD)),
+                    before := sf_entry.stage_of(e),
+                    eff := sf_entry.to_terminal(e, sf_entry.Stage.RELEASED),
+                    (before, sf_entry.Stage.RELEASED, eff),
+                )[-1],
+                sf_entry.Stage.HELD,
+                sf_entry.Stage.RELEASED,
+                sf_entry.TERMINAL_EFFECT,
+            ),
+        ]
+        for label, action, want_before, want_after, want_effect in cases:
+            with self.subTest(case=label):
+                before, after, effect = action()
+                self.assertEqual(want_before, before)
+                self.assertEqual(want_after, after)
+                self.assertTrue(sf_entry.can_transition(before, after))
+                self.assertEqual(want_effect, effect)
+
+    def test_illegal_transitions_are_rejected_without_mutating_the_entry(self) -> None:
+        owner = (4242, "Wed Nov 11 00:00:00 2026")
+        illegal_cases: list[tuple[str, sf_entry.Stage, Callable[[dict[str, Any]], object]]] = [
+            ("unknown -> to_held", sf_entry.Stage.UNKNOWN, lambda e: sf_entry.to_held(e, stamp(T0), T0)),
+            ("unknown -> to_yielded", sf_entry.Stage.UNKNOWN, lambda e: sf_entry.to_yielded(e, T0, None)),
+            ("unknown -> lock_taken", sf_entry.Stage.UNKNOWN, lambda e: sf_entry.lock_taken(e)),
+            ("unknown -> reprioritize", sf_entry.Stage.UNKNOWN, lambda e: sf_entry.to_reprioritized(e, "batch", T0)),
+            ("unknown -> terminal", sf_entry.Stage.UNKNOWN, lambda e: sf_entry.to_terminal(e, sf_entry.Stage.REAPED)),
+            ("held -> to_held", sf_entry.Stage.HELD, lambda e: sf_entry.to_held(e, stamp(T0 + 5), T0 + 5)),
+            ("lock-yielded -> to_held without lock_taken", sf_entry.Stage.LOCK_YIELDED,
+             lambda e: sf_entry.to_held(e, stamp(T0 + 5), T0 + 5)),
+            ("unsettled -> to_held", sf_entry.Stage.UNSETTLED,
+             lambda e: sf_entry.to_held(e, stamp(T0 + 50), T0 + 50)),
+            ("waiting -> to_yielded", sf_entry.Stage.WAITING, lambda e: sf_entry.to_yielded(e, T0, None)),
+            ("yielded -> to_yielded", sf_entry.Stage.YIELDED, lambda e: sf_entry.to_yielded(e, T0 + 20, None)),
+            ("session-active -> polite to_yielded", sf_entry.Stage.SESSION_ACTIVE,
+             lambda e: sf_entry.to_yielded(e, T0 + 10, None)),
+            ("waiting -> to_lock_waiting", sf_entry.Stage.WAITING,
+             lambda e: sf_entry.to_lock_waiting(e, T0, "/tmp/x.lock", owner)),
+            ("yielded -> to_lock_waiting", sf_entry.Stage.YIELDED,
+             lambda e: sf_entry.to_lock_waiting(e, T0 + 20, "/tmp/x.lock", owner)),
+            ("waiting -> to_lock_noted", sf_entry.Stage.WAITING,
+             lambda e: sf_entry.to_lock_noted(e, "/tmp/x.lock", owner)),
+            ("waiting -> lock_taken", sf_entry.Stage.WAITING, lambda e: sf_entry.lock_taken(e)),
+            ("held -> lock_taken", sf_entry.Stage.HELD, lambda e: sf_entry.lock_taken(e)),
+            ("yielded -> lock_taken", sf_entry.Stage.YIELDED, lambda e: sf_entry.lock_taken(e)),
+            ("waiting -> settle", sf_entry.Stage.WAITING, lambda e: sf_entry.settle(e)),
+            ("yielded -> settle", sf_entry.Stage.YIELDED, lambda e: sf_entry.settle(e)),
+            ("lock-yielded -> settle", sf_entry.Stage.LOCK_YIELDED, lambda e: sf_entry.settle(e)),
+            ("waiting -> session_step", sf_entry.Stage.WAITING,
+             lambda e: sf_entry.session_step(e, None, moment=T0, began=T0, idle=60.0)),
+            ("held non-session -> session_step", sf_entry.Stage.HELD,
+             lambda e: sf_entry.session_step(e, None, moment=T0, began=T0, idle=60.0)),
+            ("session-ended -> session_step", sf_entry.Stage.SESSION_ENDED,
+             lambda e: sf_entry.session_step(e, None, moment=T0 + 20, began=T0, idle=60.0)),
+            ("session-stopping -> session_start_run", sf_entry.Stage.SESSION_STOPPING,
+             lambda e: sf_entry.session_start_run(
+                 e, {"active": {}}, pid=88, start="s", started=1, label="r", cmd="true", since=stamp(T0)
+             )),
+            ("session-ended -> session_finish_run", sf_entry.Stage.SESSION_ENDED,
+             lambda e: sf_entry.session_finish_run(e, {"active": {}}, pid=88, ran_seconds=1.0, moment=T0 + 20)),
+            ("session-ended -> to_reprioritized", sf_entry.Stage.SESSION_ENDED,
+             lambda e: sf_entry.to_reprioritized(e, "interactive", T0 + 20)),
+            ("waiting -> released", sf_entry.Stage.WAITING,
+             lambda e: sf_entry.decide_outcome(e, held_seen=True)),
+            ("held -> refused", sf_entry.Stage.HELD,
+             lambda e: sf_entry.decide_outcome(e, refused="memory")),
+            ("session-ended -> left", sf_entry.Stage.SESSION_ENDED,
+             lambda e: sf_entry.to_terminal(e, sf_entry.Stage.LEFT)),
+        ]
+        for label, stage, call in illegal_cases:
+            with self.subTest(case=label):
+                entry = self._entry_in_stage(stage)
+                snapshot = json.dumps(entry, sort_keys=True)
+                with self.assertRaises(sf_entry.IllegalTransitionError):
+                    call(entry)
+                self.assertEqual(snapshot, json.dumps(entry, sort_keys=True))
+
+    def test_lock_wait_keeps_place_and_ageing_and_settle_reconciles_older_client_grants(self) -> None:
+        owner = (4242, "Wed Nov 11 00:00:00 2026")
+        entry = waiter(
+            label="b",
+            since="2026-11-11T00:00:00Z",
+            state="held",
+            priority="batch",
+            granted="2026-11-11T02:00:00Z",
+            rank=1762819000.0,
+        )
+        sf_entry.to_lock_waiting(entry, 1762830000.0, "/tmp/x.lock", owner)
+        self.assertEqual(sf_entry.Stage.LOCK_YIELDED, sf_entry.stage_of(entry))
+        self.assertEqual((1762819000.0, sf_entry.epoch("2026-11-11T00:00:00Z")),
+                         (entry["rank"], sf_entry.ageing_since(entry)))
+        self.assertEqual(owner, sf_entry.lock_owner(entry))
+
+        # Older client grants directly on disk without clearing lock/yield fields -> UNSETTLED
+        older = dict(entry, state="held", granted="2026-11-11T02:01:40Z")
+        self.assertEqual(sf_entry.Stage.UNSETTLED, sf_entry.stage_of(older))
+        # Re-yielding an unsettled older-client grant settles the prior yield first without losing first_granted
+        sf_entry.to_yielded(older, 1762830200.0, 1762819500.0)
+        self.assertEqual("2026-11-11T02:00:00Z", older["first_granted"])
+        self.assertGreater(sf_entry.yielded_of(older), 0.0)
+        self.assertEqual((None, None, None),
+                         (sf_entry.lock_of(older), sf_entry.lock_owner(older), older.get("lock_yield")))
+
+        # Normal current-client path: lock_taken -> yielded -> to_held clears lock_yield and records yielded time
+        sf_entry.lock_taken(entry)
+        self.assertEqual(sf_entry.Stage.YIELDED, sf_entry.stage_of(entry))
+        sf_entry.to_held(entry, "2026-11-11T02:01:40Z", 1762830100.0)
+        self.assertEqual(sf_entry.Stage.HELD, sf_entry.stage_of(entry))
+        self.assertEqual("2026-11-11T02:00:00Z", entry["granted"])
+        self.assertEqual(100.0, entry["yielded"])
+        self.assertEqual((None, None, None),
+                         (sf_entry.lock_of(entry), sf_entry.lock_owner(entry), entry.get("lock_yield")))
+
+    def test_lock_only_yield_records_was_held_and_yielded_duration_without_polite_yields(self) -> None:
+        root = _Path(tempfile.mkdtemp(prefix="slotfather-lock-acct-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        queue = Queue(root)
+        owner = (4242, "Wed Nov 11 00:00:00 2026")
+        with queue.running():
+            # 1) Reaped while lock-yielded (yields unset)
+            entry = waiter(since=stamp(T0 - 120), state="held", granted=stamp(T0 - 60))
+            sf_entry.to_lock_waiting(entry, T0 - 25, "/tmp/x.lock", owner)
+            self.assertNotIn("yields", entry)
+            self.assertTrue(sf_entry.ran(entry))
+            outcome = sf_entry.decide_outcome(entry, reaped=True)
+            self.assertEqual(sf_entry.Reaped(was_held=True), outcome)
+            reaped_item = sf_state.record(
+                queue.directory, entry, outcome, capacity=lambda: 4, above=lambda _r, _p: False
+            )
+            self.assertIs(True, reaped_item["was_held"])
+            self.assertEqual(25.0, reaped_item["yielded"])
+            self.assertNotIn("yields", reaped_item)
+
+            # 2) Released after resuming from a lock-only yield
+            resumed = waiter(since=stamp(T0 - 120), state="held", granted=stamp(T0 - 60))
+            sf_entry.to_lock_waiting(resumed, T0 - 40, "/tmp/x.lock", owner)
+            sf_entry.lock_taken(resumed)
+            sf_entry.to_held(resumed, stamp(T0 - 10), T0 - 10)
+            released_item = sf_state.record(
+                queue.directory,
+                resumed,
+                sf_entry.decide_outcome(resumed, held_seen=True, status=0),
+                capacity=lambda: 4,
+                above=lambda _r, _p: False,
+            )
+            self.assertEqual("released", released_item["outcome"])
+            self.assertEqual(30.0, released_item["yielded"])
+            self.assertNotIn("yields", released_item)
+
+    def test_state_commit_and_remove_entry_manage_all_sidecars(self) -> None:
+        root = _Path(tempfile.mkdtemp(prefix="slotfather-sidecar-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        path = root / "queue" / "0000000001-7.json"
+        path.parent.mkdir(parents=True)
+        entry = waiter(session={"name": "perf", "idle": 60.0})
+        # Pre-seed stale .yield and .idle sidecars before granting
+        sf_state.write(sf_state.marker(path), {"by": "old"})
+        sf_state.write(sf_state.idle_path(path), {"since": T0})
+        effect = sf_entry.to_held(entry, stamp(T0), T0)
+        sf_state.commit(path, entry, effect)
+        self.assertFalse(sf_state.marker(path).exists())
+        self.assertFalse(sf_state.idle_path(path).exists())
+        self.assertTrue(sf_state.session_path(path).exists())
+
+        # Re-create .yield and .idle alongside .session and verify remove_entry cleans all four files
+        sf_state.write(sf_state.marker(path), {"by": "later"})
+        sf_state.write(sf_state.idle_path(path), {"since": T0 + 1})
+        sf_state.remove_entry(path)
+        self.assertEqual([], list(path.parent.iterdir()))
 
 
 class InstallerCopyTests(unittest.TestCase):

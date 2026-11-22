@@ -203,6 +203,10 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- Releasing or aborting a measurement session removes its session record beside the queue entry instead of leaving a
+  stale file behind, finishing a `slotfather lock` wait updates the enclosing lease in one queue step so it cannot
+  clear another waiter's active lock wait, and history and `slotfather stats` count leases that yielded only for a
+  lock as having held slots and record their yielded time (fathers#224).
 - Enforced the `memory_share` expected-peak memory budget on the second and later concurrent grants of an initially
   idle machine, and applied the blocked-head `p90` backfill rule consistently across dashboard admission, `available`,
   `advise`, `ask-yield`, and `yield` (fathers#214).

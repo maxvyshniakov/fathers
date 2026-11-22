@@ -96,9 +96,9 @@ def wait_held(path: Path, again: bool = False, deadline: float | None = None,
                 raise _config.SlotError("the lease vanished from the queue")
             if not _entry.is_held(latest):
                 return None
-            if "yielded_at" in latest:  # an older client granted it
-                _entry.resume(latest)
-                _state.write(path, latest)
+            if _entry.stage_of(latest) == _entry.Stage.UNSETTLED:  # an older client granted it
+                effect = _entry.settle(latest)
+                _state.commit(path, latest, effect)
             return latest
 
     found = wait_until(ready, refresh=refresh, deadline=deadline, between=between, changed=changed, back_off=again)
@@ -194,7 +194,7 @@ def resume_lock_yield(path: Path, entry: dict[str, Any]) -> None:
     lease takes the yield back (its lock mark goes, `why` "resumed") so that it is granted again in its place; the
     work then waits for that grant as under any yielded lease (held_again()). Without this a nested run in the
     lease's tree would wait for a grant the mark forbids, while the lock it waits behind may be its own tree's."""
-    if path.parent.parent == _config.state_dir() and _entry.lock_of(entry) is not None and not _entry.is_held(entry):
+    if path.parent.parent == _config.state_dir() and _entry.stage_of(entry) == _entry.Stage.LOCK_YIELDED:
         _leases.lock_taken(path, "resumed")
 
 

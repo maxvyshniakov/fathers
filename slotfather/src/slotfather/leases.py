@@ -45,8 +45,10 @@ def ask(directory: Path, live: list[tuple[Path, dict[str, Any]]], held: list[dic
             who = asks[id(entry)]
             if place.exists():
                 continue
-            _state.write(place, {"by": paths[id(who)].stem, "label": who.get("label"), "priority": _entry.priority_of(who),
-                          "count": who["count"], "at": _config.now()})
+            _state.commit(path, None, _entry.SidecarEffect(
+                write_yield={"by": paths[id(who)].stem, "label": who.get("label"),
+                             "priority": _entry.priority_of(who), "count": who["count"], "at": _config.now()}
+            ))
             _events.record(directory, f"asked {entry.get('label')} (pid {entry['pid']}) to yield {entry['count']} for "
                            f"{who.get('label')}", "lease.yield_asked", _events.request(entry, path),
                          {"count": entry["count"], "for": {"id": paths[id(who)].stem, "label": who.get("label"),
@@ -55,13 +57,13 @@ def ask(directory: Path, live: list[tuple[Path, dict[str, Any]]], held: list[dic
         elif place.exists():
             if settings["order"] == "backfill" and _entry.is_held(entry) and asked_by_hand(_state.asked(path), live):
                 continue  # `slotfather ask-yield` asked it: it stands while the waiter it names still waits
-            place.unlink(missing_ok=True)
+            _state.commit(path, None, _entry.SidecarEffect(unlink_yield=True))
             _events.record(directory, f"withdrew the yield request to {entry.get('label')} (pid {entry['pid']})", "lease.yield_withdrawn", _events.request(entry, path), {},
                          _events.actor(kind="tool"))
-    for place in [*(directory / "queue").glob("*.yield"), *(directory / "queue").glob("*" + _idle.SUFFIX),
-                  *(directory / "queue").glob("*.session")]:
-        if not place.with_suffix(".json").exists():  # requests and idle records left by entries gone meanwhile
-            place.unlink(missing_ok=True)
+    for suffix in _state.SIDECAR_SUFFIXES:
+        for place in (directory / "queue").glob("*" + suffix):
+            if not place.with_suffix(".json").exists():  # sidecars left by entries removed outside Slotfather
+                place.unlink(missing_ok=True)
 
 
 def asked_by_hand(request: dict[str, Any] | None, live: list[tuple[Path, dict[str, Any]]]) -> bool:
@@ -97,13 +99,17 @@ def claim_session_run(directory: Path, name: str, label: str | None, command: st
         path, entry = found
         require_session_owner(name, entry)
         require_session_accepting(name, entry)
-        uses = _state.session_uses(path) if _entry.is_held(entry) else None
+        if not _entry.is_held(entry):
+            return path, None
+        was_unsettled = _entry.stage_of(entry) == _entry.Stage.UNSETTLED
+        uses = _state.session_uses(path)
         if uses is None:
             return path, None
-        uses.setdefault("active", {})[str(me)] = {"start": table.get(me, (0, ""))[1],
-                                                  "started": _platform.start_epoch(me), "label": label,
-                                                  "cmd": command, "since": _config.now()}
-        _state.write(_state.session_path(path), uses)
+        effect = _entry.session_start_run(
+            entry, uses, pid=me, start=table.get(me, (0, ""))[1],
+            started=_platform.start_epoch(me), label=label, cmd=command, since=_config.now(),
+        )
+        _state.commit(path, entry if was_unsettled else None, effect)
         _events.record(directory, None, "session.run_started", _events.request(entry, path),
                        {"session": name, "run": {"pid": me, "label": label, "cmd": command}})
         return path, entry
@@ -131,6 +137,10 @@ def ask_yield(pid: int, start: str, directory: Path | None = None) -> tuple[dict
         path, entry = found
         if not entry.get("yieldable"):
             raise _config.SlotError(f"{entry.get('label')} (pid {pid}) did not take --yieldable: it cannot yield")
+        if _entry.lock_of(entry) is not None:
+            raise _config.SlotError(f"{entry.get('label')} (pid {pid}) is waiting on a lock: nothing was asked")
+        if _entry.stage_of(entry) == _entry.Stage.SESSION_ENDED:
+            raise _config.SlotError(f"{entry.get('label')} (pid {pid}) session has already ended: nothing was asked")
         if int(entry.get("yields") or 0) >= _config.YIELDS_MAX:
             raise _config.SlotError(f"{entry.get('label')} (pid {pid}) has yielded {_config.YIELDS_MAX} times, the most")
         settings = _settings.order_settings(directory, environment=False)
@@ -169,7 +179,7 @@ def ask_yield(pid: int, start: str, directory: Path | None = None) -> tuple[dict
         request = {"by": paths[id(chosen)].stem, "label": chosen.get("label"),
                    "priority": _schedule.effective_priority(chosen, settings, moment), "count": chosen["count"],
                    "at": _config.now(), "asker": asker.get("via") or f"pid {asker.get('pid')}"}
-        _state.write(_state.marker(path), request)
+        _state.commit(path, None, _entry.SidecarEffect(write_yield=request))
         asked: _events.YieldAsked = {"count": entry["count"], "by_hand": True,
                                      "for": {"id": request["by"], "label": chosen.get("label"),
                                              "priority": str(request["priority"])}}
@@ -192,10 +202,20 @@ def yield_lease(path: Path) -> tuple[dict[str, Any], dict[str, Any]] | None:
         if not _entry.is_held(entry) or request is None:
             return None
         live = _queue.reap(directory, _queue.process_table(directory))
+        fresh = next((e for p, e in live if p == path), None)
+        if fresh is None:
+            raise _config.SlotError("the lease vanished from the queue")
+        entry.clear()
+        entry.update(fresh)
+        if not _entry.is_held(entry) or _entry.stage_of(entry) == _entry.Stage.SESSION_ENDED:
+            return None
         asker = next((e for p, e in live if p.stem == request.get("by") and _entry.is_waiting(e)), None)
         shared = _settings.order_settings(directory, environment=False)
         effective = _settings.order_settings(directory)
-        if effective["order"] != "backfill":
+        if effective["order"] != "backfill" or _entry.stage_of(entry) in (
+            _entry.Stage.LOCK_NOTED,
+            _entry.Stage.SESSION_ENDED,
+        ):
             asker = None
         behind = _schedule.rank_time(asker, shared, time.time()) + _config.YIELD_BEHIND if asker is not None else None
         if asker is not None:  # would the asker start? Things may have changed since it asked.
@@ -208,12 +228,11 @@ def yield_lease(path: Path) -> tuple[dict[str, Any], dict[str, Any]] | None:
             if not any(e is asker for e in trial.grants):
                 asker = None
         if asker is None:  # it started, left or would still not start; the next look would withdraw the request
-            _state.marker(path).unlink(missing_ok=True)
+            _state.commit(path, None, _entry.SidecarEffect(unlink_yield=True))
             _events.record(directory, f"withdrew the yield request to {entry.get('label')} (pid {entry.get('pid')})", "lease.yield_withdrawn", _events.request(entry, path), {}, _events.holder(entry))
             return None
-        _entry.to_yielded(entry, time.time(), behind)
-        _state.write(path, entry)
-        _state.marker(path).unlink(missing_ok=True)
+        effect = _entry.to_yielded(entry, time.time(), behind)
+        _state.commit(path, entry, effect)
         _events.record(directory, f"yielded {entry['count']} ({path.name}) to {asker.get('label')}", "lease.yielded", _events.request(entry, path),
                      {"count": entry["count"], "to": {"id": request.get("by"), "label": asker.get("label")},
                       "yields": entry["yields"]}, _events.holder(entry))
@@ -261,12 +280,14 @@ def reprioritize(target: str, priority: str, directory: Path | None = None,
                 raise _config.SlotError(f"{entry.get('label')} (pid {entry.get('pid')}) runs as uid {owner}: only its "
                                         f"owner may change its priority")
         for path, entry in chosen:
+            if _entry.stage_of(entry) == _entry.Stage.SESSION_ENDED:
+                raise _config.SlotError(f"{entry.get('label')} (pid {entry.get('pid')}) session has already ended")
             before = _entry.priority_of(entry)
             if before == priority:
                 changed.append(entry)
                 continue
-            _entry.to_reprioritized(entry, priority, time.time())
-            _state.write(path, entry)
+            effect = _entry.to_reprioritized(entry, priority, time.time())
+            _state.commit(path, entry, effect)
             _events.record(directory, f"reprioritized {entry.get('label')} (pid {entry.get('pid')}) from {before} to "
                                   f"{priority}", "request.reprioritized", _events.request(entry, path),
                          {"from": before, "to": priority, "state": entry.get("state")})
@@ -286,7 +307,7 @@ def yield_for_lock(path: Path, lock: str, owner: tuple[int, str], idle: bool) ->
     with _state.editing(path) as entry:
         if entry is None:
             return None
-        if not _entry.is_held(entry):
+        if not _entry.is_held(entry) or _entry.stage_of(entry) == _entry.Stage.SESSION_ENDED:
             return None
         if isinstance(entry.get("session"), dict):
             idle = False
@@ -294,8 +315,8 @@ def yield_for_lock(path: Path, lock: str, owner: tuple[int, str], idle: bool) ->
                 table = _queue.process_table(directory)
                 idle = session_lock_idle(path, entry, owner, table)
         if not idle:
-            _entry.to_lock_noted(entry, lock, owner)
-            _state.write(path, entry)
+            effect = _entry.to_lock_noted(entry, lock, owner)
+            _state.commit(path, entry, effect)
             return "noted"
         lock_yield(directory, path, entry, lock, owner)
         with contextlib.suppress(_config.SlotError):  # the next look grants the freed slots otherwise
@@ -312,9 +333,8 @@ def session_lock_idle(path: Path, entry: dict[str, Any], owner: tuple[int, str],
 
 def lock_yield(directory: Path, path: Path, entry: dict[str, Any], lock: str, owner: tuple[int, str]) -> None:
     """Under the queue lock, move a lease back to waiting on its external lock."""
-    _entry.to_lock_waiting(entry, time.time(), lock, owner)
-    _state.write(path, entry)
-    _state.marker(path).unlink(missing_ok=True)
+    effect = _entry.to_lock_waiting(entry, time.time(), lock, owner)
+    _state.commit(path, entry, effect)
     _events.record(directory, f"yielded {entry['count']} ({path.name}) while waiting for lock {lock}",
                    "lease.yielded", _events.request(entry, path),
                    {"count": entry["count"], "to": {"id": None, "label": f"lock {lock}"}, "lock": lock,
@@ -336,34 +356,22 @@ def lock_taken(path: Path, why: str, *, lock: str | None = None, owner: tuple[in
     with _state.editing(path) as entry:
         if entry is None:
             raise _config.SlotError("the lease vanished from the queue")
+        if _entry.lock_of(entry) is None:
+            return
         if why == "resumed":
-            if _entry.phase(entry).name != _entry.YIELDED:
+            if _entry.stage_of(entry) != _entry.Stage.LOCK_YIELDED:
                 return
         elif owner is None or _entry.lock_owner(entry) != owner or _entry.lock_of(entry) != lock:
-            return
+            if _entry.stage_of(entry) != _entry.Stage.LOCK_YIELDED:
+                return
+            why = "resumed"
         ended(directory, path, entry, why)
 
 
 def ended(directory: Path, path: Path, entry: dict[str, Any], why: str) -> None:
-    """lock_taken() under the queue lock: clears the lock mark of `entry` at `path` if it has one, records the end
-    of the wait, and grants (a yielded lease may start again now). A waiter that is gone: queue.clear_lock()."""
-    lock = _entry.lock_of(entry)
-    if lock is None:
-        return
-    yielded = not _entry.is_held(entry)
-    waited = None
-    began = _entry.epoch(entry.get("yielded_at")) if yielded else None
-    if began is not None:
-        waited = round(max(0.0, time.time() - began))
-    _entry.lock_taken(entry)
-    _state.write(path, entry)
-    words = {"took": "took lock", "stopped": "stopped waiting for lock",
-             "resumed": "work resumed while waiting for lock"}[why]
-    again = f"; waiting for {entry['count']} slot(s) again" if yielded else ""
-    _events.record(directory, f"{words} {lock} for {entry.get('label')} (pid {entry.get('pid')}){again}",
-                   "lease.lock_ended", _events.request(entry, path),
-                   {"lock": lock, "why": why, "yielded": yielded, "waited": waited}, _events.holder(entry))
-    if yielded:
+    """lock_taken() under the queue lock: clears the lock mark of `entry` at `path` via `queue.clear_lock()` and
+    grants if the lease was yielded while waiting."""
+    if _queue.clear_lock(directory, path, entry, why):
         with contextlib.suppress(_config.SlotError):
             grant(directory, _queue.process_table(directory))
 
@@ -422,8 +430,8 @@ def grant(directory: Path, table: _queue.Table) -> str | None:
         waited_from = back if back is not None else _config.seconds(entry.get("since"))
         granted = _config.now()
         began = _config.seconds(granted) or time.time()  # resume() puts a yielded lease's first grant back
-        _entry.to_held(entry, granted, time.time(), pressed=item.pressed, served=item.served, count=item.count)
-        _state.write(paths[id(entry)], entry)
+        effect = _entry.to_held(entry, granted, time.time(), pressed=item.pressed, served=item.served, count=item.count)
+        _state.commit(paths[id(entry)], entry, effect)
         details: _events.Granted = {"count": entry["count"], "priority": _entry.priority_of(entry),
                                     "waited": None if waited_from is None else
                                     round(max(0.0, began - waited_from))}
@@ -500,7 +508,7 @@ def enqueue(directory: Path, count: int | str, table: _queue.Table, label: str, 
             # this client asks later or never (SLOTFATHER_YIELD_AFTER)
             yield_after=own if own != _settings.order_settings(directory, environment=False)["yield_after"] else None,
             max_count=upper)
-        _state.write(path, entry)
+        _state.commit(path, entry)
     return path, count
 
 
@@ -515,16 +523,12 @@ def release(path: Path, count: int, status: int | None, usage: dict[str, Any] | 
         expected = _runtype.expected_of(json.loads(path.read_text()), _runtype.cached(directory))
     item = None
     with _state.locked(directory):
-        try:
-            entry = json.loads(path.read_text())
-        except (OSError, ValueError):
-            entry = None
-        path.unlink(missing_ok=True)
+        entry = _state.read_entry(path)
+        _state.remove_entry(path)
         _events.record(directory, f"released {count} ({path.name})")  # queue.log first, before the history
-        _state.marker(path).unlink(missing_ok=True)
-        _idle.path(path).unlink(missing_ok=True)
-        if isinstance(entry, dict):
-            entry = cast(dict[str, Any], entry)
+        if entry is not None:
+            if _entry.stage_of(entry) == _entry.Stage.UNSETTLED:
+                _entry.settle(entry)
             result = _entry.decide_outcome(entry, held_seen=held, status=status, left_reason=left_reason)
             item = _state.record(directory, entry, result, status, usage, path=path, expected=expected,
                                  capacity=_settings.total, above=_queue.run_above)

@@ -7,7 +7,9 @@ from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[2] / "common"))
 import eventcheck  # common/eventcheck.py, the shared event validator
 
+import contextlib
 import fcntl
+import io
 import json
 import os
 import signal
@@ -19,6 +21,11 @@ from unittest import mock
 
 from test_slotfather import TOOL, WORK, SlotCase
 
+from slotfather import client as sf_client
+from slotfather import config as sf_config
+from slotfather import entry as sf_entry
+from slotfather import leases as sf_leases
+from slotfather import lockwait as sf_lockwait
 from slotfather import state as sf_state
 from slotfather import process as sf_process
 
@@ -433,6 +440,101 @@ wait "$reader"'''
         self.finish(running)
         self.finish(stopping)
         self.assertIsNone(self.session("perf"))
+
+    def test_releasing_or_aborting_a_session_unlinks_its_session_sidecar(self) -> None:
+        # 1) Direct Lease.release() on a held session without Holder.hold()'s pre-unlink removes <stem>.session
+        self.start("perf", "--idle", "60")
+        held = self.session("perf")
+        lease_path = _Path(held["lease"])
+        self.assertTrue(sf_state.session_path(lease_path).exists())
+        os.kill(held["pid"], signal.SIGKILL)
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            sf_client.Lease(int(held["count"]), lease_path, held=True).release()
+        self.assertFalse(lease_path.exists())
+        self.assertFalse(sf_state.session_path(lease_path).exists())
+        self.assertEqual([], list((self.state / "queue").iterdir()))
+
+        # 2) Session acquire() aborting on timeout after a concurrent grant initialized <stem>.session
+        real_release = sf_leases.release
+
+        def grant_then_abort_release(path: _Path, count: int, status: int | None, usage: dict[str, Any] | None,
+                                     **kwargs: Any) -> None:
+            with sf_state.locked(self.state):
+                sf_leases.grant(self.state, sf_process.processes())
+            self.assertTrue(sf_state.session_path(path).exists(), "concurrent grant initialized .session")
+            real_release(path, count, status, usage, **kwargs)
+
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(sf_client, "wait_held", side_effect=sf_config.SlotTimeout("timed out")), \
+                mock.patch.object(sf_leases, "release", side_effect=grant_then_abort_release):
+            with self.assertRaises(sf_config.SlotTimeout):
+                sf_client.acquire(1, "aborted-session", "slotfather session aborted-session", wait=0.1,
+                                  session={"name": "aborted-session", "idle": 60.0})
+        self.assertEqual([], list((self.state / "queue").iterdir()))
+
+    def test_reaping_a_lock_yielded_session_records_was_held_and_yielded_time(self) -> None:
+        lock = str(self.tmp / "cache.lock")
+        holder = self.lock_holder(lock)
+        self.start("perf", "--idle", "60")
+        waiting = self.lock_waiter(lock)
+        session = self.session("perf")
+        self.assertEqual("yielded", session["phase"])
+        lease_path = _Path(session["lease"])
+        with mock.patch.dict(os.environ, self.env, clear=True), sf_state.editing(lease_path) as raw:
+            assert raw is not None
+            raw["yielded_at"] = round(float(raw["yielded_at"]) - 12.5, 3)
+            sf_state.write(lease_path, raw)
+
+        os.kill(session["pid"], signal.SIGKILL)
+        self.wait_for(lambda: self.session("perf") is None, "the lock-yielded session to be reaped")
+        self.assertEqual([], list((self.state / "queue").iterdir()))
+        [line] = [h for h in self.history() if h["label"] == "perf"]
+        self.assertEqual("reaped", line["outcome"])
+        self.assertIs(True, line["was_held"])
+        self.assertGreater(float(line["yielded"]), 0.0)
+        self.assertNotIn("yields", line)
+        self.release("holder")
+        self.release("locked")
+        self.finish(holder)
+        out, _ = waiting.communicate(timeout=20)
+        self.assertEqual(2, waiting.returncode, out)
+        self.assertIn("vanished", out)
+
+    def test_lockwait_handoff_is_single_transaction_and_preserves_concurrent_second_lock_yield(self) -> None:
+        self.start("perf", "--idle", "60")
+        lease_path = _Path(self.session("perf")["lease"])
+        first_lock = self.tmp / "first.lock"
+        second_lock = str(self.tmp / "second.lock")
+        owner1 = (os.getpid(), sf_process.processes()[os.getpid()][1])
+        owner2 = (99999, "Wed Nov 11 00:00:00 2026")
+        real_lock_taken = sf_leases.lock_taken
+
+        def lock_taken_then_second_waiter_yields(path: _Path, why: str, **kwargs: Any) -> None:
+            real_lock_taken(path, why, **kwargs)
+            # Simulate a second waiter yielding the lease on `second_lock` immediately after Waiter 1's lock_taken
+            with sf_state.editing(path) as current:
+                assert current is not None
+                effect = sf_entry.to_lock_waiting(current, time.time(), second_lock, owner2)
+                sf_state.commit(path, current, effect)
+
+        handle = os.open(first_lock, os.O_RDWR | os.O_CREAT, 0o666)
+        self.addCleanup(os.close, handle)
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(sf_lockwait, "enclosing", return_value=(lease_path, owner1, True)), \
+                mock.patch.object(sf_leases, "yield_for_lock", return_value="yielded"), \
+                mock.patch.object(sf_leases, "lock_taken", side_effect=lock_taken_then_second_waiter_yields), \
+                mock.patch.object(sf_client, "held_again"), \
+                contextlib.redirect_stderr(io.StringIO()):
+            with sf_state.editing(lease_path) as initial:
+                assert initial is not None
+                eff = sf_entry.to_lock_waiting(initial, time.time(), str(first_lock), owner1)
+                sf_state.commit(lease_path, initial, eff)
+            sf_lockwait.wait(handle, first_lock)
+
+        after = sf_state.read_entry(lease_path)
+        assert after is not None
+        self.assertEqual(second_lock, sf_entry.lock_of(after))
+        self.assertEqual(owner2, sf_entry.lock_owner(after))
 
 
 if __name__ == "__main__":

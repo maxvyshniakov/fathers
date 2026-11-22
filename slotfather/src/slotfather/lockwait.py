@@ -116,7 +116,6 @@ def wait(handle: int, path: Path) -> None:
         if found is not None:
             lease, owner, _ = found
             _leases.lock_taken(lease, why, lock=str(path), owner=owner)
-            _client.resume_lock_yield(lease, _client.read(lease))
             _client.held_again(lease)
 
     try:

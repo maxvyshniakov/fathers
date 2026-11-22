@@ -187,22 +187,13 @@ class OlderClientTests(CutoverCase):
 
 class RuleTests(unittest.TestCase):
     def test_plan_neither_grants_nor_heads_a_lease_waiting_on_a_lock(self) -> None:
-        waiting: dict[str, Any] = {"label": "b", "count": 1, "since": "2026-11-11T00:00:00Z", "state": "waiting",
-                                   "lock": "/tmp/x.lock"}
+        waiting: dict[str, Any] = {"pid": 1, "start": "Wed Nov 11 00:00:00 2026", "label": "b", "count": 1,
+                                   "since": "2026-11-11T00:00:00Z", "state": "held", "granted": "2026-11-11T00:01:00Z"}
+        sf_entry.to_lock_waiting(waiting, 1_800_000_000.0, "/tmp/x.lock", (1, "Wed Nov 11 00:00:00 2026"))
         found = sf_schedule.plan([waiting], [], 2, 1_800_000_000.0)
         self.assertEqual(([], None), (found.grants, found.head))
         sf_entry.lock_taken(waiting)
         self.assertEqual([waiting], sf_schedule.plan([waiting], [], 2, 1_800_000_000.0).grants)
-
-    def test_a_lock_wait_keeps_the_leases_place_and_ageing_and_a_grant_clears_its_mark(self) -> None:
-        entry: dict[str, Any] = {"label": "b", "count": 1, "since": "2026-11-11T00:00:00Z", "state": "held",
-                                 "priority": "batch", "granted": "2026-11-11T02:00:00Z", "rank": 1762819000.0}
-        sf_entry.to_lock_waiting(entry, 1762830000.0, "/tmp/x.lock", (4242, "Wed Nov 11 00:00:00 2026"))
-        self.assertEqual((1762819000.0, sf_entry.epoch("2026-11-11T00:00:00Z") or sf_entry.ageing_since(entry)),
-                         (entry["rank"], sf_entry.ageing_since(entry)), "its rank and its ageing as before")
-        self.assertEqual((4242, "Wed Nov 11 00:00:00 2026"), sf_entry.lock_owner(entry))
-        sf_entry.to_held(entry, "2026-11-11T03:00:00Z", 1762830100.0)  # an older client grants it while it waits
-        self.assertEqual((None, None, None), (sf_entry.lock_of(entry), sf_entry.lock_owner(entry), entry.get("lock_yield")))
 
     def test_only_what_runs_a_container_or_vm_counts_as_work(self) -> None:
         for command in ("docker run --rm alpine true", "/usr/local/bin/docker compose up", "podman exec -it x sh",
