@@ -618,6 +618,41 @@ class FilterReducerTests(unittest.TestCase):
         state = dataclasses.replace(self.state(), frame=self.tool.Frame())
         self.assertEqual(self.tool.Filter(), self.keys(state, "f", "/", "r").events_filter)
 
+    def test_clicks_and_footer_hints_exit_filter_editing_cleanly(self) -> None:
+        """fathers#212: clicking a footer hint or outside the filter field while editing exits filter edit mode
+        cleanly, keeping any typed text and running the click or hint action instead of typing into the filter."""
+        base = self.state()
+        canvas = self.tool.Canvas(156, 43)
+        self.tool.draw_events(canvas, Rect(0, 0, 20, 90), base.model, NOW)
+        self.tool.draw_footer(canvas, None, None, None)
+        canvas.tables["details"] = dict(x=90, y=0, width=66, height=20, top=2, visible=16, count=4, offset=0)
+        base = dataclasses.replace(base, frame=frame_of(canvas))
+        editing = self.keys(base, "/", "7", "1")
+        self.assertEqual((True, "71", "filter"),
+                         (editing.events_filter.editing, editing.events_filter.text, self.tool.mode(editing)))
+
+        # Clicking a footer hint (`? help`, `s settings`, `q quit`, `tab panel`) exits filter editing and runs the hint.
+        row, start, _, _ = next(hint for hint in editing.frame.hints if hint[3] == "?")
+        helped, _ = self.tool.reduce(editing, self.tool.Mouse(0, start, row, True), 0.0)
+        self.assertEqual((False, "71", "help"),
+                         (helped.events_filter.editing, helped.events_filter.text, helped.overlay.kind))
+
+        row, start, _, _ = next(hint for hint in editing.frame.hints if hint[3] == "q")
+        quitting, effects = self.tool.reduce(editing, self.tool.Mouse(0, start, row, True), 0.0)
+        self.assertFalse(quitting.events_filter.editing)
+        self.assertEqual("71", quitting.events_filter.text)
+        self.assertIn(self.tool.QUIT, effects)
+
+        # Clicking a panel or row exits filter editing and allows normal hotkeys afterwards.
+        details = editing.frame.tables["details"]
+        clicked, _ = self.tool.reduce(editing, self.tool.Mouse(0, details["x"] + 2, details["y"] + 2, True), 0.0)
+        self.assertEqual((False, "71", "details", "panel"),
+                         (clicked.events_filter.editing, clicked.events_filter.text, clicked.focus,
+                          self.tool.mode(clicked)))
+        after_q, effects = self.tool.reduce(clicked, self.tool.Key("q"), 0.0)
+        self.assertEqual("71", after_q.events_filter.text)
+        self.assertIn(self.tool.QUIT, effects)
+
     def test_new_rows_count_only_what_the_log_lets_through_and_a_switch_keeps_the_pin(self) -> None:
         rows = rows_of(mixed(), TAGS)
         state = self.keys(self.state(rows[:2], scroll=1), "f")  # LANES LOG, from its top (fathers#88 review 8)

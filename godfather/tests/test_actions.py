@@ -54,6 +54,29 @@ class RequestTests(unittest.TestCase):
                 self.assertNotIn("Ask to yield", names(actions.for_request(dict(lease, **changed), [waiter],
                                                                            self.advertised)))
 
+    def test_ask_to_yield_compares_a_held_leases_own_class_against_a_waiters_served_class(self) -> None:
+        """fathers#212: Slotfather's ask_yield() and yield_asks() compare a held lease by its own `priority` (even if
+        it aged before grant into `served`) against each waiter's effective `served` class."""
+        aged_normal = entry(0, pid=42, start=START, priority="normal", served="interactive", yieldable=True)
+        interactive_waiter = entry(1, "waiting", priority="interactive")
+        self.assertIn("Ask to yield",
+                      names(actions.for_request(aged_normal, [interactive_waiter], self.advertised)),
+                      "an aged normal lease still yields to an interactive waiter")
+
+        aged_batch = entry(0, pid=43, start=START, priority="batch", served="normal", yieldable=True)
+        normal_waiter = entry(1, "waiting", priority="normal")
+        self.assertIn("Ask to yield",
+                      names(actions.for_request(aged_batch, [normal_waiter], self.advertised)),
+                      "an aged batch lease still yields to a normal waiter")
+
+        normal_lease = entry(0, pid=44, start=START, priority="normal", yieldable=True)
+        aged_waiter = entry(1, "waiting", priority="normal", served="interactive")
+        self.assertIn("Ask to yield",
+                      names(actions.for_request(normal_lease, [aged_waiter], self.advertised)),
+                      "a waiter aged to interactive can ask a normal lease to yield")
+        self.assertNotIn("Ask to yield",
+                         names(actions.for_request(normal_lease, [normal_waiter], self.advertised)))
+
     def test_nothing_without_a_start_or_unadvertised(self) -> None:
         self.assertEqual([], actions.for_request(entry(0, pid=42, start=None), [], self.advertised))
         self.assertEqual([], actions.for_request(entry(0, pid=42, start=START), [], ["land", "promote"]))

@@ -928,7 +928,7 @@ def check_done(panel: Panel, context: Context, tool: str, key: str, text: str, r
     change = panel.pending
     if change is not None and change.confirmed and (change.tool, change.key, argument(change.value)) == (
             tool, key, text):
-        return commit_pending(panel, context, now, leaving=True)
+        return commit_pending(panel, context, now, leaving=(change.tool, change.key) != panel.focus)
     row = focused(panel, context)
     if panel.editing and panel.typed_waiting and row is not None and (row.tool, row.key, panel.buffer) == (
             tool, key, text):

@@ -79,8 +79,10 @@ def opener() -> str:
     return "open" if sys.platform == "darwin" else "xdg-open"
 
 
-def class_of(item: dict[str, Any]) -> str:
-    found = str(item.get("served") or item.get("priority") or "normal")
+def class_of(item: dict[str, Any], served: bool = False) -> str:
+    """A request's class: its own (`priority`), or for a waiter the class ageing serves it in (`served`), as
+    Slotfather's ask_yield() and yield_asks() compare them."""
+    found = str((item.get("served") if served else None) or item.get("priority") or "normal")
     return found if found in RANK else "normal"
 
 
@@ -107,7 +109,7 @@ def for_request(item: dict[str, Any], waiters: list[dict[str, Any]], advertised:
                          target=target, identity=identity) for name in PRIORITIES if name != current]
     if "ask-yield" in tools and item.get("kind") == "held" and item.get("yieldable") and not item.get("asked"):
         mine = RANK[class_of(item)]
-        if any(RANK[class_of(waiter)] < mine for waiter in waiters):
+        if any(RANK[class_of(waiter, served=True)] < mine for waiter in waiters):
             found.append(Action("slotfather", "Ask to yield", ("ask-yield", str(pid), "--start", start),
                                 target=target, identity=identity))
     return found

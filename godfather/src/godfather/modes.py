@@ -543,6 +543,12 @@ def click(state: AppState, event: Mouse, now: float) -> Result:
     screen the footer's `Godfather what's new?` opens what's new, a click focuses the panel it lands in and selects a QUEUE row,
     and the wheel scrolls the panel under the pointer. Shift+drag stays the terminal's own selection."""
     overlay, code = state.overlay, event.button & ~28  # Shift / Alt / Ctrl do not change the button
+    if overlay is None and event.pressed and code in (LEFT, RIGHT) and state.events_filter.editing:
+        state = dataclasses.replace(state, events_filter=dataclasses.replace(state.events_filter, editing=False))
+    if event.pressed and code == LEFT:
+        hint = state.frame.hint_at(event.x, event.y)
+        if hint is not None:
+            return press(state, hint, now)
     if isinstance(overlay, SettingsOverlay):
         return settings_click(state, event, now)
     if isinstance(overlay, (ActionMenu, Reason, Confirm)):
@@ -556,6 +562,8 @@ def click(state: AppState, event: Mouse, now: float) -> Result:
             return pick(state, dataclasses.replace(overlay, cursor=row), now)
         return state, []
     if overlay is None and event.pressed and code == RIGHT:  # a right-click on a row: select it, then its actions
+        if state.frame.hint_at(event.x, event.y) is not None:
+            return state, []
         selected, effects = click(state, Mouse(LEFT, event.x, event.y, True), now)
         if selected.overlay is None and mode(selected) in ("main", "page"):
             return open_actions(selected, now), effects
@@ -623,9 +631,6 @@ def panel_at(state: AppState, x: int, y: int) -> Union[str, None]:
 def dispatch(state: AppState, event: Union[Key, Mouse], now: float) -> Result:
     """A key or a mouse event at `now` (Settings times its changes): a click on a footer hint is the hint's key."""
     if isinstance(event, Mouse):
-        hint = state.frame.hint_at(event.x, event.y) if event.pressed and event.button & ~28 == LEFT else None
-        if hint is None:
-            return click(state, event, now)
-        return press(state, hint, now)
+        return click(state, event, now)
     return press(state, event.key, now)
 
