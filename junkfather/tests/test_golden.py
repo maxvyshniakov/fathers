@@ -126,6 +126,27 @@ class GoldenTests(Case):
         self.record.pid(child.pid)
         return child
 
+    def wait_owned(self, *ids: str) -> None:
+        wanted = set(ids)
+        path = self.state / "events.jsonl"
+
+        def seen() -> bool:
+            if not path.exists():
+                return False
+            found: set[str] = set()
+            for line in path.read_text().splitlines():
+                if not line:
+                    continue
+                event = cast(Dict[str, Any], json.loads(line))
+                if event.get("kind") == "entry.owned":
+                    subject = cast(Dict[str, Any], event.get("subject") or {})
+                    entry_id = subject.get("id")
+                    if isinstance(entry_id, str):
+                        found.add(entry_id)
+            return wanted <= found
+
+        self.wait_for(seen, what=f"entry.owned event(s) for {sorted(wanted)}")
+
     def test_own_attached_and_detached_then_reap(self):
         r = self.record
         r.run("own", "--ttl", "1m", "--label", "short-lived", "--", "sh", "-c", "exit 3", env=self.as_claude)
@@ -134,6 +155,7 @@ class GoldenTests(Case):
         entry = self.loaded(owned.stdout.split()[1])
         r.pid(entry["pid"])
         r.pid(entry["supervisor"]["pid"])
+        self.wait_owned(entry["id"])
         r.snapshot("detached running")
         r.run("reap", "--id", entry["id"], "--grace", "2", env=self.as_claude)
         self.wait_for(lambda: not self.runs(entry["supervisor"]["pid"]), what="the supervisor to end")
@@ -445,6 +467,7 @@ class GoldenTests(Case):
         second = [plain(e) for e in self.store.entries() if e["id"] != entry["id"]][0]
         r.pid(second["pid"])
         r.pid(second["supervisor"]["pid"])
+        self.wait_owned(entry["id"], second["id"])
         r.snapshot("owned")
         r.run("reap", "--owner", "s1", "--agent", "agent-a", "--grace", "2", env=self.as_claude)
         r.run("reap", "--owner", "s1", "--grace", "2", env=self.as_claude)
