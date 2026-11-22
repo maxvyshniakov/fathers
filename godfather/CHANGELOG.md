@@ -197,6 +197,9 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Fixed
 
+- Main-session background Junkfather entries with `no_ttl: true` now render `—` in the `PROCESSES` table, `PROCESS
+  DETAILS` and process links instead of a ~100-year TTL from Junkfather's sentinel `ttl`; snapshots from older
+  Junkfather installs without `no_ttl` keep working unchanged (fathers#207).
 - Saved choices (`settings.json`), read changelog marks (`news.json`) and `install.py` now share `fathers_common`'s
   durable atomic writes, changelog parser, CLI refusal formatter and locked release staging (`fathers_common` ships
   beside `godfather` inside each immutable release and is part of its source digest) (fathers#117, fathers#119).

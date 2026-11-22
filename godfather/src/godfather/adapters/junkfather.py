@@ -47,11 +47,11 @@ def unsupported(capabilities: dict[str, Any]) -> Optional[str]:
 
 
 def state_of(entry: Mapping[str, Any]) -> str:
-    """An owned entry as the page tells it: orphan once its owner is gone, expired once its TTL passed (not reaped
-    yet), else running."""
+    """An owned entry as the page tells it: orphan once its owner is gone, expired once its TTL passed and not
+    `no_ttl` (not reaped yet), else running."""
     if entry.get("owner_alive") is False:
         return "orphan"
-    if entry.get("ttl") is not None and (entry.get("ttl_left") or 0) <= 0:
+    if not entry.get("no_ttl") and entry.get("ttl") is not None and (entry.get("ttl_left") or 0) <= 0:
         return "expired"
     return "running"
 
@@ -70,7 +70,8 @@ def _entry(raw: dict[str, Any]) -> Entry:
              "lane": _decoding.text(raw.get("lane")),
              "owner_alive": owner_alive if isinstance(owner_alive, bool) else None,
              "age": _decoding.number(raw.get("age")) or 0.0, "ttl": _decoding.number(raw.get("ttl")),
-             "ttl_left": _decoding.number(raw.get("ttl_left")) or 0.0, "keep": _decoding.text(raw.get("keep")),
+             "ttl_left": _decoding.number(raw.get("ttl_left")) or 0.0,
+             "no_ttl": _decoding.flag(raw.get("no_ttl")) is True, "keep": _decoding.text(raw.get("keep")),
              "pid": _decoding.pid(raw.get("pid")), "pgid": _decoding.pid(raw.get("pgid")),
              "processes": processes if isinstance(processes, int) else None,
              "label": _decoding.text(raw.get("label")), "mode": _decoding.text(raw.get("mode")),
@@ -244,8 +245,8 @@ def lane_of(entry: Mapping[str, Any], lanes_decoded: Decoded) -> Optional[Lane]:
 
 
 def ttl_text(entry: Mapping[str, Any], elapsed: float = 0.0) -> str:
-    """The TTL left as a duration (`1h12m`), `expired` once it passed; a keep-for-session entry without a TTL `—`."""
-    if entry.get("ttl") is None:
+    """The TTL left as a duration (`1h12m`), `expired` once it passed; an entry without a TTL `—`."""
+    if entry.get("no_ttl") or entry.get("ttl") is None:
         return "—"
     left = float(entry.get("ttl_left") or 0) - elapsed
     return minutes(left) if left > 0 else "expired"
