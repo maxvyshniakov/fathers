@@ -1,6 +1,6 @@
 """`tokenfather changelog --json` against Godfather's changelog contract (godfather/docs/contracts/changelog.md).
 
-The fixtures Godfather's cross-tool contract test runs against Slotfather, Lanefather and Junkfather
+The fixtures Godfather's cross-tool contract test runs against Slotfather, Lanefather and Spawnfather
 (godfather/tests/fixtures/changelog/) are run against Tokenfather's reply, through `fathers_common.changelog`
 (fathers#119, fathers#208), and the CLI is checked from the checkout and from an installed release layout.
 """

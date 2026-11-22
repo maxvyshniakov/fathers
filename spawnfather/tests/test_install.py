@@ -316,7 +316,7 @@ class InstallOptionTests(Case):
         with mock.patch.object(self.install_module.time, "sleep") as pause, \
                 self.assertRaises(self.install_module.InstallError):
             self.install_module.launchd(real)
-        self.assertEqual(5, pause.call_count)
+        self.assertEqual(4, pause.call_count)
         self.assertFalse(legacy_plist.exists(), "legacy plist unlinked before bootstrap retry")
 
         os.environ["FAIL_BOOTSTRAP"] = "0"

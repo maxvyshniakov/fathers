@@ -45,7 +45,7 @@ Definitions: [glossary](../GLOSSARY.md). Naming and wire aliases: [terminology](
 | `state` | Queue locking, atomic files, bounded journals and persisted schema contracts; it imports no admission code (no `leases`, `schedule`, `runtype`, `events` or `platform`). |
 | `stats` | Historical analysis of `history.jsonl`, `machine.jsonl` and `sweep.jsonl` (`slotfather stats` / `slotfather-stats`). |
 | `sweep` | Guarded leftover-process and disk-hygiene command, settings, report and launchd plist (`slotfather sweep` / `slotfather-sweep`). |
-| `sweep_disk` | Machine-wide disk hygiene (`docker-anonymous`, `docker-dangling-images`, `docker-superseded`, `claude-scratch`, `package-caches`, `low-disk`) with Junkfather scratchpad sparing (fathers#6). |
+| `sweep_disk` | Machine-wide disk hygiene (`docker-anonymous`, `docker-dangling-images`, `docker-superseded`, `claude-scratch`, `package-caches`, `low-disk`) with Spawnfather scratchpad sparing (fathers#6). |
 | `sweep_os` | Machine adapters for `sweep`: `ps`, `lsof`, `/proc`, `launchd`, `systemd`, `docker`, memory inspection, and signalling. |
 | `sweep_plan` | Pure process classifier and cleanup planner operating on a `sweep_os` snapshot. |
 | `usage` | Process-tree accounting and machine sampling while work runs. |

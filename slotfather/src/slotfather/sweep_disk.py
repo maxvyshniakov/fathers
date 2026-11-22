@@ -149,13 +149,19 @@ def free_disk_gb() -> float:
     return shutil.disk_usage(Path.home()).free / 1e9
 
 
-def junkfather_entries(run: Run = subprocess.run) -> list[dict[str, Any]]:
-    """Active Junkfather entries from `junkfather list --json` (fathers#31); [] if unavailable."""
-    try:
-        result = run(["junkfather", "list", "--json"], capture_output=True, text=True, timeout=TIMEOUT)
-    except (OSError, subprocess.TimeoutExpired):
-        return []
-    if result.returncode != 0 or not result.stdout.strip():
+def spawnfather_entries(run: Run = subprocess.run) -> list[dict[str, Any]]:
+    """Active Spawnfather entries from `spawnfather list --json` (falling back to `junkfather` during #170 transition);
+    [] if unavailable."""
+    result: subprocess.CompletedProcess[str] | None = None
+    for command in ("spawnfather", "junkfather"):
+        try:
+            candidate = run([command, "list", "--json"], capture_output=True, text=True, timeout=TIMEOUT)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if candidate.returncode == 0 and candidate.stdout.strip():
+            result = candidate
+            break
+    if result is None:
         return []
     try:
         parsed: object = json.loads(result.stdout)
@@ -178,6 +184,9 @@ def junkfather_entries(run: Run = subprocess.run) -> list[dict[str, Any]]:
         if isinstance(entry_id, str) and entry_id:
             active.append(entry)
     return active
+
+
+junkfather_entries = spawnfather_entries
 
 
 def _split_repo_tag(ref: str) -> tuple[str, str] | None:
@@ -484,18 +493,18 @@ def sweep_claude_scratch(snap: Snapshot, settings: Mapping[str, Any], live: bool
             })
             continue
         if jf_entries is None:
-            jf_entries = junkfather_entries(run=run)
-        spared_jf = next(
+            jf_entries = spawnfather_entries(run=run)
+        spared_sf = next(
             (str(entry["id"]) for entry in jf_entries
              if isinstance(entry.get("cwd"), str) and _inside(str(entry["cwd"]), str(session))),
             None,
         )
-        if spared_jf is not None:
+        if spared_sf is not None:
             items.append({
                 "class": "claude-scratch", "kind": "scratchpad", "name": str(session), "path": str(session),
-                "age": round(idle), "size_bytes": size, "action": "spared", "junkfather_entry": spared_jf,
+                "age": round(idle), "size_bytes": size, "action": "spared", "spawnfather_entry": spared_sf,
                 "reason": f"{gb_text(size)}, untouched {_config.duration(idle)}; "
-                          f"cwd of running junkfather entry {spared_jf}",
+                          f"cwd of running spawnfather entry {spared_sf}",
             })
             continue
         item: Item = {

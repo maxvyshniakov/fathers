@@ -396,7 +396,11 @@ def launchd(command: Path) -> Path:
     agents = _home() / "Library" / "LaunchAgents"
     plist = agents / f"{LABEL}.plist"
     old_plist = agents / f"{LEGACY_LABEL}.plist"
-    text = subprocess.run([str(command), "sweep", "--plist"], capture_output=True, text=True, check=True).stdout
+    plist_env = dict(os.environ)
+    if not plist_env.get("SPAWNFATHER_STATE"):
+        plist_env.pop("JUNKFATHER_STATE", None)
+    text = subprocess.run([str(command), "sweep", "--plist"], capture_output=True, text=True, check=True,
+                          env=plist_env).stdout
     write_atomic(plist, text, 0o644)
     domain = f"gui/{os.getuid()}"
     # Retire legacy com.junkfather.sweep before bootstrapping com.spawnfather.sweep so two sweeps never overlap.
@@ -408,10 +412,10 @@ def launchd(command: Path) -> Path:
         loaded = subprocess.run(["launchctl", "bootstrap", domain, str(plist)], capture_output=True, text=True)
         if not loaded.returncode:
             break
-        time.sleep(0.5 * (attempt + 1))
         attempt += 1
         if attempt == 5:
             raise InstallError(f"launchctl bootstrap: {loaded.stderr.strip()}")
+        time.sleep(0.5 * attempt)
     return plist
 
 

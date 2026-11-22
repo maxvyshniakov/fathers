@@ -257,22 +257,22 @@ class ScratchCachesAndLowDiskTests(FakeCLICase):
         self.set_du_kb(session, size_kb)
         return session
 
-    def test_claude_scratch_removes_idle_over_2gb_and_spares_young_small_process_and_junkfather_entries(self) -> None:
+    def test_claude_scratch_removes_idle_over_2gb_and_spares_young_small_process_and_spawnfather_entries(self) -> None:
         s_remove = self.make_scratch_session("proj-a", "sess-remove", age_seconds=30 * 3600, size_kb=2_500_000)
         s_young = self.make_scratch_session("proj-a", "sess-young", age_seconds=4 * 3600, size_kb=3_000_000)
         s_small = self.make_scratch_session("proj-a", "sess-small", age_seconds=48 * 3600, size_kb=500_000)
         s_proc = self.make_scratch_session("proj-b", "sess-proc", age_seconds=48 * 3600, size_kb=3_000_000)
-        s_jf = self.make_scratch_session("proj-b", "sess-jf", age_seconds=48 * 3600, size_kb=3_000_000)
+        s_sf = self.make_scratch_session("proj-b", "sess-sf", age_seconds=48 * 3600, size_kb=3_000_000)
 
-        jf_payload = {"v": 1, "entries": [
-            {"id": "jf-firefox-42", "state": "running", "cwd": str(s_jf / "sub")},
-            {"id": "jf-reaped-99", "state": "reaped", "cwd": str(s_remove)},
+        sf_payload = {"v": 1, "entries": [
+            {"id": "sf-firefox-42", "state": "running", "cwd": str(s_sf / "sub")},
+            {"id": "sf-reaped-99", "state": "reaped", "cwd": str(s_remove)},
         ]}
-        write_cli(self.bin_dir, "junkfather", f"""
+        write_cli(self.bin_dir, "spawnfather", f"""
             import json, os, sys
             with open(os.environ["FAKE_CALLS"], "a", encoding="utf-8") as log:
-                log.write(json.dumps(["junkfather", *sys.argv[1:]]) + "\\n")
-            print({json.dumps(json.dumps(jf_payload))})
+                log.write(json.dumps(["spawnfather", *sys.argv[1:]]) + "\\n")
+            print({json.dumps(json.dumps(sf_payload))})
         """)
 
         active_proc = sf_plan.Proc(4242, 1, UID, 1024, "", "Wed Nov 4 01:00:00 2026", NOW - 3600, "node worker.js")
@@ -289,8 +289,8 @@ class ScratchCachesAndLowDiskTests(FakeCLICase):
         self.assertNotIn(str(s_small), by_path)
         self.assertEqual("spared", by_path[str(s_proc)]["action"])
         self.assertIn("pid 4242", by_path[str(s_proc)]["reason"])
-        self.assertEqual("spared", by_path[str(s_jf)]["action"])
-        self.assertEqual("jf-firefox-42", by_path[str(s_jf)]["junkfather_entry"])
+        self.assertEqual("spared", by_path[str(s_sf)]["action"])
+        self.assertEqual("sf-firefox-42", by_path[str(s_sf)]["spawnfather_entry"])
         self.assertEqual("would-remove", by_path[str(s_remove)]["action"])
         self.assertTrue(s_remove.exists())
 
@@ -298,7 +298,7 @@ class ScratchCachesAndLowDiskTests(FakeCLICase):
         live_by_path = {item["path"]: item for item in live["items"]}
         self.assertEqual("removed", live_by_path[str(s_remove)]["action"])
         self.assertFalse(s_remove.exists(), "eligible scratchpad session removed")
-        for kept in (s_young, s_small, s_proc, s_jf):
+        for kept in (s_young, s_small, s_proc, s_sf):
             self.assertTrue(kept.exists(), f"{kept} must remain untouched")
 
     def test_package_caches_report_above_threshold_and_prune_uv_and_brew_below_threshold(self) -> None:
