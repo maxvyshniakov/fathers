@@ -217,7 +217,7 @@ def column(panels: dict[str, Rect], names: tuple[str, ...], heights: dict[str, i
             y += heights[name]
 
 
-FOCUSABLE = ("requests", "details", "events", "lanes", "procs")  # the panels Tab and a click focus
+FOCUSABLE = ("requests", "details", "events", "lanes", "spawns")  # the panels Tab and a click focus
 
 
 def page(width: int, height: int, rows: int, table: str) -> Overview:

@@ -44,7 +44,7 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
         ("← → · f", "events: next log (or its title)"),
         ("r", "events: every event as logged"),
         ("/", "events: text filter (esc clears)"),
-        ("1 2 3", "overview · lanes · processes"),
+        ("1 2 3", "overview · lanes · spawns"),
         ("enter · a", "the row's actions (right-click)"),
         ("s", "settings"),
         ("?", "help"),
@@ -99,7 +99,7 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
         ("▲ ↗ ↘", "outlier · type slower/faster"),
     ]),
     ("PAGES", [
-        ("2 · 3", "lanes · processes (SLOTS' border)"),
+        ("2 · 3", "lanes · spawns (SLOTS' border)"),
         ("▶️ 🗓️ ✅ 💤", "active planned landed parked"),
         ("👻 ⌛", "owner gone · past its TTL"),
         ("❔ ◌ 📦", "unowned · gone · resource"),

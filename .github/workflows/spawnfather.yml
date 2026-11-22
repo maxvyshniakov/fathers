@@ -1,0 +1,36 @@
+name: spawnfather
+
+# package.yml tests both Python versions on Ubuntu and runs lint on the newest.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'spawnfather/**'
+      - 'common/**'
+      - 'tools/ruff.toml'
+      - 'tools/checks.py'
+      - '.github/workflows/spawnfather.yml'
+      - '.github/workflows/package.yml'
+  pull_request:
+    paths:
+      - 'spawnfather/**'
+      - 'common/**'
+      - 'tools/ruff.toml'
+      - 'tools/checks.py'
+      - '.github/workflows/spawnfather.yml'
+      - '.github/workflows/package.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spawnfather-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    uses: ./.github/workflows/package.yml
+    with:
+      package: spawnfather
+      floor: '3.11'

@@ -22,7 +22,7 @@ from . import events as _events
 from . import machine as _machine
 from . import overlays as _overlays
 from . import pages as _pages
-from ..adapters import junkfather as _junkfather
+from ..adapters import spawnfather as _spawnfather
 from . import queue as _queue
 from . import settings as _settings_view
 from .common import Model
@@ -36,13 +36,13 @@ FOOTER_HINTS: tuple[Part, ...] = (("↑↓", "select"), ("tab", "panel"), ("s", 
 
 
 def footer_hints(focus: str, pages: str = "", actions: bool = False) -> list[Part]:
-    """The footer's hints; with EVENTS focused, ← → switch its log (fathers#152); on PROCESSES with an actionable
+    """The footer's hints; with EVENTS focused, ← → switch its log (fathers#152); on SPAWNS with an actionable
     row selected, `a actions` opens its action menu; `pages` the page keys of the tools present (`1 2 3`,
     fathers#85), none where only the overview is."""
-    found: list[Part] = [("↑↓", "select" if focus in ("requests", "events", "lanes", "procs") else "scroll")]
+    found: list[Part] = [("↑↓", "select" if focus in ("requests", "events", "lanes", "spawns") else "scroll")]
     if focus == "events":
         found.append(("←→", "log"))
-    if focus == "procs" and actions:
+    if focus == "spawns" and actions:
         found.append(("a", "actions"))
     found.append(FOOTER_HINTS[1])
     if pages:
@@ -51,13 +51,13 @@ def footer_hints(focus: str, pages: str = "", actions: bool = False) -> list[Par
 
 
 def proc_actions(page: str, page_row: Optional[int], tools: Optional[dict[str, Any]]) -> Optional[bool]:
-    """Whether the selected PROCESSES row has actions: True/False on a selectable row, None elsewhere."""
-    if page != "processes" or page_row is None or not tools or "junkfather" not in tools:
+    """Whether the selected SPAWNS row has actions: True/False on a selectable row, None elsewhere."""
+    if page != "spawns" or page_row is None or not tools or "spawnfather" not in tools:
         return None
-    tool = tools["junkfather"]
+    tool = tools["spawnfather"]
     if not tool.readable:
         return None
-    rows = _junkfather.page_rows(tool.snapshot)
+    rows = _spawnfather.page_rows(tool.snapshot)
     if not 0 <= page_row < len(rows) or rows[page_row]["kind"] == "separator":
         return None
     return bool(_actions.for_process(rows[page_row], tool.actions))
@@ -66,8 +66,8 @@ def proc_actions(page: str, page_row: Optional[int], tools: Optional[dict[str, A
 def page_keys(tools: Optional[dict[str, Any]]) -> str:
     """`1 2 3`: the overview's key and those of the pages whose tool is present; empty with none."""
     keys = [key for page, key in _pages.PAGE_KEYS.items()
-            if (tools or {}).get("lanefather" if page == "lanes" else "junkfather") is not None
-            and (tools or {})["lanefather" if page == "lanes" else "junkfather"].present]
+            if (tools or {}).get("lanefather" if page == "lanes" else "spawnfather") is not None
+            and (tools or {})["lanefather" if page == "lanes" else "spawnfather"].present]
     return " ".join(["1", *keys]) if keys else ""
 
 
@@ -87,7 +87,7 @@ def draw_footer(canvas: Canvas, model: Optional[Model], error: Optional[str], me
         note: Part = (message, message_style)
     elif error:
         note = (f"refresh failed: {error}", "bad")
-    elif canvas.focus == "procs" and actions is False:
+    elif canvas.focus == "spawns" and actions is False:
         note = ("no actions", "dim")
     else:
         note = ("", "")
@@ -159,7 +159,7 @@ def draw_panels(canvas: Canvas, model: Model, selected: int, cwd: Optional[str],
             _details.draw_event_detail(canvas, rect, rows[event] if 0 <= event < len(rows) else None, moment)
         elif name == "details":
             _details.draw_detail(canvas, rect, model, selected, cwd, moment, failure, readable(tools, "lanefather"),
-                                 readable(tools, "junkfather"))
+                                 readable(tools, "spawnfather"))
         elif name == "machine":
             _machine.draw_machine(canvas, rect, model)
     if model.get("stale_since"):  # the last good picture, dimmed, until a snapshot arrives again
@@ -178,7 +178,7 @@ def details_wanted(canvas: Canvas, model: Model, moment: datetime.datetime, even
     return _layout.framed(rows) if rows else _layout.DETAILS_MIN
 
 
-SUMMARIES = {"lanes": _pages.lanes_summary, "processes": _pages.procs_summary}  # SLOTS' bottom border, by page
+SUMMARIES = {"lanes": _pages.lanes_summary, "spawns": _pages.spawns_summary}  # SLOTS' bottom border, by page
 
 
 def readable(tools: Optional[dict[str, Any]], name: str) -> Optional[dict[str, Any]]:
@@ -190,16 +190,16 @@ def readable(tools: Optional[dict[str, Any]], name: str) -> Optional[dict[str, A
 def draw_page(canvas: Canvas, page: str, tools: dict[str, Any], row: Optional[int], model: Model,
               moment: Optional[datetime.datetime]) -> None:
     """A page instead of the overview's panels (fathers#85)."""
-    procs = readable(tools, "junkfather")
+    spawns = readable(tools, "spawnfather")
     if page == "lanes" and "lanefather" in tools:
-        elapsed = _junkfather.elapsed(procs, moment)
+        elapsed = _spawnfather.elapsed(spawns, moment)
 
-        def extra(lane: Mapping[str, Any]) -> list[Any]:  # its processes (fathers#86)
-            return _pages.process_links(_junkfather.of_lane(lane, procs), elapsed) if procs is not None else []
+        def extra(lane: Mapping[str, Any]) -> list[Any]:  # its spawns (fathers#86, fathers#170)
+            return _pages.process_links(_spawnfather.of_lane(lane, spawns), elapsed) if spawns is not None else []
 
         _pages.draw_lanes(canvas, tools["lanefather"], row, model, moment, extra)
-    elif page == "processes" and "junkfather" in tools:
-        _pages.draw_processes(canvas, tools["junkfather"], row, model, readable(tools, "lanefather"), moment)
+    elif page == "spawns" and "spawnfather" in tools:
+        _pages.draw_spawns(canvas, tools["spawnfather"], row, model, readable(tools, "lanefather"), moment)
 
 
 def draw_overlay(canvas: Canvas, overlay: Any, model: Optional[Model], news: Any = None,

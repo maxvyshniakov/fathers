@@ -1,4 +1,4 @@
-┏━ PROCESSES ━━━━━━━━ id ━━━━━━ owner ━━━━━━━━━━━ lane ━━━━━━━━━━━━━ age╺╸ttl left ━━━ pid ━┓ ╭─ PROCESS DETAILS ──────────────────────────────────────────╮
+┏━ SPAWNS ━━━━━━━━━━━ id ━━━━━━ owner ━━━━━━━━━━━ lane ━━━━━━━━━━━━━ age╺╸ttl left ━━━ pid ━┓ ╭─ SPAWN DETAILS ────────────────────────────────────────────╮
 ┃                                                                                           ┃ │                                                            │
 ┃  ▶️  vite dev       j3f9a1c   claude 4bceaaaf…  710-speech-pa…     30m     1h06m   90412  ┃ │  label      storybook                                      │
 ▌  ▶️  storybook      j5e6f7a   claude 4bceaaaf…                     30m     1h46m   55001  ▐ │  id         j5e6f7a                                        │
@@ -6,13 +6,13 @@
 ┃  👻  playwright s…  j7a8b9c   claude 4bceaaaf…                   1h30m       50m   61200  ┃ │  ttl left   1h46m                                          │
 ┃  ⌛  pg-test        j2b3c4d   claude 4bceaaaf…                   2h05m   expired          ┃ │  command    bun run storybook                              │
 ┃  unowned processes · 1 · last sweep                                                       ┃ │  directory  /fixture/straylight                            │
-┃  ❔  node storybo…            orphan                             1h30m             88123  ┃ │  log        /fixture/junkfather/logs/j5e6f7a.log           │
+┃  ❔  node storybo…            orphan                             1h30m             88123  ┃ │  log        /fixture/spawnfather/logs/j5e6f7a.log          │
 ┃  unowned resources · 2 · last sweep                                                       ┃ │  owner      claude 4bceaaaf/a71c · lives                   │
 ┃  📦  old-spike                merged, idle 9d                       9d                    ┃ │  keep       owner                                          │
 ┃  📦  iPad Air                 booted, no owner                       —                    ┃ │  mode       detached                                       │
 ┃                                                                                           ┃ │  pid        55001 · 3 processes                            │
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ │                                                            │
-╭─ PROCS LOG ────── label ───────────────────────────────────────────────────────── detail ─╮ │  lease      lane-644-build-once                            │
+╭─ SPAWNS LOG ───── label ───────────────────────────────────────────────────────── detail ─╮ │  lease      lane-644-build-once                            │
 │                                                                                           │ │  actions    extend ttl · a / enter                         │
 │  No events logged yet                                                                     │ │                                                            │
 │                                                                                           │ │                                                            │

@@ -21,7 +21,7 @@ The installed commands use only Python's standard library (3.11+: each package's
   `test hygiene`. A path no rule knows selects everything, and so does a tree without changes.
   `FATHERS_CHECKS=all bun run verify` runs every check; `FATHERS_CHECK_BASE=<ref>` names another base.
 - It leases two slots itself and runs the steps side by side. Every check took 2026-11-13: lint gates 2 to 14 s,
-  Godfather's tests 1.5 min, Junkfather's 2, Slotfather's 4-5, Lanefather's 13-18 (the whole run: as long as Lanefather's).
+  Godfather's tests 1.5 min, Spawnfather's 2, Slotfather's 4-5, Lanefather's 13-18 (the whole run: as long as Lanefather's).
 - The pre-push hook runs it on the pushed commits and a lane's `lanefather check` on the lane's diff
   ([orchestration](orchestration.md)); do not run it again by hand right before either.
 - CI runs the same named checks (`<package> lint`, `<package> tests`) through one reusable workflow, on each
@@ -32,7 +32,7 @@ The installed commands use only Python's standard library (3.11+: each package's
 
 - Every package carries the same `tools/check.py`: Ruff with the shared rules of [tools/ruff.toml](../../tools/ruff.toml)
   and Pyright with the package's own strictness, against `tools/type-baseline.json`. A diagnostic beyond the budget
-  of its exact file, rule and message fails; a package without a baseline (Junkfather) allows none. The budget only
+  of its exact file, rule and message fails; a package without a baseline (Spawnfather) allows none. The budget only
   shrinks: `python3 tools/check.py --shrink-baseline` after fixing debt; never grow it or weaken a rule to pass.
 - A package's `[tool.ruff.lint] ignore` lists the shared rules it does not pass yet; drop a code with the fix.
 - `tools/test_checks.py` (in the `tools` check) holds the four `check.py` copies identical and their pins equal:
@@ -57,7 +57,7 @@ The installed commands use only Python's standard library (3.11+: each package's
   key on Pyright's messages, which another version rewrites. Move all four together, with the baselines, when a
   typing ticket retires those budgets.
 - Bun 1.4.4 and Repo-Kit 0.7.0, exact (`package.json`, `bun.lock`): each commit is verified by the kit it pins.
-- uv 0.13.5 in the Lanefather and Junkfather workflows, which run the pinned tools through uv.
+- uv 0.13.5 in the Lanefather and Spawnfather workflows, which run the pinned tools through uv.
 
 ## Review
 

@@ -2,15 +2,15 @@
 
 The terms the four tools share: the words that appear in more than one package, on Godfather's dashboard or in the
 shared event schema. Each package keeps its own terms in its own glossary and links here:
-[Slotfather](slotfather/GLOSSARY.md), [Lanefather](lanefather/GLOSSARY.md), [junkfather](junkfather/GLOSSARY.md),
+[Slotfather](slotfather/GLOSSARY.md), [Lanefather](lanefather/GLOSSARY.md), [Spawnfather](spawnfather/GLOSSARY.md),
 [Godfather](godfather/GLOSSARY.md). Wire spellings (JSON keys, event kinds, settings keys) stay as published even where
-the prose word differs; each entry says so. Tool names are capitalised as names (Junkfather) and lowercase only as commands, paths and code (`junkfather`).
+the prose word differs; each entry says so. Tool names are capitalised as names (Spawnfather) and lowercase only as commands, paths and code (`spawnfather`).
 
 ## The tools
 
 | Term | Meaning |
 | --- | --- |
-| Tool | A program that feeds the dashboard: Slotfather (machine capacity), Lanefather (lanes) or junkfather (processes agents start). |
+| Tool | A program that feeds the dashboard: Slotfather (machine capacity), Lanefather (lanes) or Spawnfather (processes and resources agents spawn). |
 | Source | A tool as the dashboard sees it: its capabilities, snapshot, event log, settings and actions. Also the event field naming the tool. |
 | Value source | Where a setting's value comes from: saved, environment or project file (`cap_source`, priority source). Not a Source. |
 | Capabilities | A tool's answer saying which contracts and versions it supports (`capabilities --json`). |
@@ -41,15 +41,15 @@ the prose word differs; each entry says so. Tool names are capitalised as names 
 | Agent session | One Claude Code or Codex conversation, identified by its session id (`meta.session`, `actor.session`). In prose, "session" means this. Slotfather's sweep says **session process** for a terminal, agent CLI, tmux, sshd or CI runner process. |
 | Agent | The main thread or a subagent of an agent session. The event field `agent` is the subagent's id. |
 | Subagent | An agent launched by another agent in the same session, with its own agent id. |
-| Owner | The agent context an entry or lease belongs to: its agent session, and its subagent where that is known (junkfather adds the lane). Slotfather says **holder** for the process behind a request and **queue user** for the account that owns a queue directory. The person who owns a project is the owner only in "owner queue", "owner question" and "owner decision". |
+| Owner | The agent context an entry or lease belongs to: its agent session, and its subagent where that is known (Spawnfather adds the lane). Slotfather says **holder** for the process behind a request and **queue user** for the account that owns a queue directory. The person who owns a project is the owner only in "owner queue", "owner question" and "owner decision". |
 | Holder | The process that holds or waits for a Slotfather request's lease; its process identity identifies the request. Wire: `pid`, `holders`. |
 | Process identity | A pid together with its process start time, so a reused pid is another process. _Avoid_: identity alone. |
-| Reap | Finish for a departed owner and free what it held. Slotfather reaps a request (or its lease) whose holder died, returning its slots without signals; junkfather reaps an entry, ending its processes by SIGTERM, a grace period and SIGKILL, also when its TTL runs out. Both appear as `reaped` in the merged feed. |
-| Orphan | A running junkfather entry whose owner session is gone. Slotfather's sweep has an **orphan class** (a launchd- or init-adopted development process older than the orphan age); its `orphan` settings key keeps that name. |
-| Expired | A running junkfather entry past its TTL that has not been reaped yet. Expired and orphaned are conditions of a running entry, not entry states. |
-| Entry | One junkfather-owned process group or resource. Slotfather says **request** for its stored records (`entries` is wire); Lanefather says **queue entry** for a ranked-queue row. |
-| Unowned process | A process in an agent's scratch that no junkfather entry holds; reported, never reaped. Lanefather's changed path that no check reads is an **unchecked path** (wire `unowned`). |
-| Sweep | A periodic inspection pass. Always name the tool: Slotfather's sweep inspects leftover processes and containers machine-wide and may stop eligible ones; junkfather's sweep reaps expired and orphaned entries and reports unowned processes. |
+| Reap | Finish for a departed owner and free what it held. Slotfather reaps a request (or its lease) whose holder died, returning its slots without signals; Spawnfather reaps an entry, ending its processes by SIGTERM, a grace period and SIGKILL, also when its TTL runs out. Both appear as `reaped` in the merged feed. |
+| Orphan | A running Spawnfather entry whose owner session is gone. Slotfather's sweep has an **orphan class** (a launchd- or init-adopted development process older than the orphan age); its `orphan` settings key keeps that name. |
+| Expired | A running Spawnfather entry past its TTL that has not been reaped yet. Expired and orphaned are conditions of a running entry, not entry states. |
+| Entry | One Spawnfather-owned process group or resource. Slotfather says **request** for its stored records (`entries` is wire); Lanefather says **queue entry** for a ranked-queue row. |
+| Unowned process | A process in an agent's scratch that no Spawnfather entry holds; reported, never reaped. Lanefather's changed path that no check reads is an **unchecked path** (wire `unowned`). |
+| Sweep | A periodic inspection pass. Always name the tool: Slotfather's sweep inspects leftover processes and containers machine-wide and may stop eligible ones; Spawnfather's sweep reaps expired and orphaned entries and reports unowned processes. |
 
 ## Capacity and lanes
 
@@ -64,7 +64,7 @@ the prose word differs; each entry says so. Tool names are capitalised as names 
 | Lifetime admission | Whether one more lane may be registered under the lane cap, disk and host load; it reserves no slots (`lane-admission`, Lanefather `docs/admission.md`). |
 | Lane | A tracked unit of repository work, from registration through checks, integration, review and cleanup (Lanefather). |
 | Stage | A lane's place in its lifecycle: planned, active, landed, released or done. Wire key `status`. |
-| Claim | A lane's declared scope of paths. junkfather's internal record of which subagent ran a command is a **hook claim**. |
+| Claim | A lane's declared scope of paths. Spawnfather's internal record of which subagent ran a command is a **hook claim**. |
 | Slot priority | The Slotfather priority a lane's phase runs at. _Avoid_: lane priority. |
 | Released (lane) | A landed lane kept for later cleanup because its agent still locks the worktree. Not a software release. |
 | Shipped | Published in a software release. `lanefather shipped <version>` comments the version on each issue the release fixes (the command was `lanefather released`). |

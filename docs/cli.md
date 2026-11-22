@@ -1,7 +1,7 @@
 # CLI convention
 
 How the four tools' command lines are to behave, so that learning one teaches the others (fathers#118). This is the
-target for Slotfather, Lanefather, Junkfather and Godfather, not yet what each does: [Conformance](#conformance) lists
+target for Slotfather, Lanefather, Spawnfather and Godfather, not yet what each does: [Conformance](#conformance) lists
 each tool's state. [common/cliconvention.py](../common/cliconvention.py) checks a tool against it, and each package's
 tests run that check. Wire behaviour that Godfather or Repo-Kit already reads
 stays accepted where this page says so.
@@ -29,7 +29,7 @@ Try 'slotfather run --help'.
 
 - `<tool> --help` and `<tool> -h` print the help on stdout and exit 0. It names every command the tool accepts.
 - `<tool> <command> --help` prints that command's help on stdout and exits 0, for every command, including those
-  that run another command (`slotfather run --help`, `junkfather own --help`) and those with subcommands.
+  that run another command (`slotfather run --help`, `spawnfather own --help`) and those with subcommands.
 - The help text is generated from the parser's table, so it cannot list fewer commands or values than the parser
   accepts.
 - `<tool> --version` prints `<tool> <version>` on stdout and exits 0; words may follow on the same line (the commit,
@@ -64,7 +64,7 @@ for something else.
 | Code | Meaning | Examples |
 | --- | --- | --- |
 | 0 | Done. A question answered yes or with data. | `status`, a saved setting, `lookup` found a receipt |
-| 1 | Failed, or the answer is no: the command ran and the work or check did not succeed, or an I/O error stopped it. | a lane check is red, `results lookup` misses, `junkfather settings set` on a full disk |
+| 1 | Failed, or the answer is no: the command ran and the work or check did not succeed, or an I/O error stopped it. | a lane check is red, `results lookup` misses, `spawnfather settings set` on a full disk |
 | 2 | Usage: the command line or a value is invalid. Nothing changed. | an unknown command or option, a bad number, `settings set` with an out-of-range value |
 | 3 | Refused by the current state: valid, but what it was based on changed or does not allow it now. | a stale `--revision` (conflict), `lanefather next` with nothing ready, `slotfather sweep --live` with broken settings |
 | 4 | Another user's state: Slotfather's queue that belongs to another account, read only to this one. | `slotfather settings set` in another user's queue |
@@ -73,7 +73,7 @@ for something else.
 | 75 | Temporary: try again later (`EX_TEMPFAIL`). | `slotfather run --wait` gave up, an admission provider that did not answer |
 | 128+N | Ended by signal N. | |
 
-- A command that runs another command (`slotfather run`, `junkfather own`) passes that command's exit status
+- A command that runs another command (`slotfather run`, `spawnfather own`) passes that command's exit status
   through; its own codes above apply only before the command starts.
 - Settings replies, all tools: 0 done, 2 invalid, 3 conflict (the reply is the current settings with
   `"conflict": true`), 4 another user's queue (Slotfather), 5 read-only, 1 not saved for another reason.
@@ -102,7 +102,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "common"))
 import cliconvention
 from cliconvention import Command
 
-TOOL = cliconvention.Tool("junkfather", (sys.executable, "-m", "junkfather"),
+TOOL = cliconvention.Tool("spawnfather", (sys.executable, "-m", "spawnfather"),
                           (Command("list", json=()), Command("changelog", option=("--since", "0.1.0"), shows="0.2.0")))
 EXPECTED = dict.fromkeys(("version", "unknown command"), "fathers#NNN")
 
@@ -116,5 +116,5 @@ class CLIConvention(cliconvention.conformance(TOOL, expected=EXPECTED)):
 | --- | --- | --- |
 | Slotfather | fathers#124 | 49: most rules |
 | Lanefather | fathers#130 | 24: argparse's error format |
-| Junkfather | fathers#153 | 17: argparse's error format, no `--version` |
+| Spawnfather | fathers#153 | 17: argparse's error format, no `--version` |
 | Godfather | fathers#154 | 0 (lane gf-settings: one reason line and the help pointer) |

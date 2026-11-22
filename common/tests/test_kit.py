@@ -30,9 +30,9 @@ class ErrorsTests(unittest.TestCase):
         ))
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            code = errors.refuse("junkfather", errors.Refused("entry j1 is not running", errors.REFUSED))
+            code = errors.refuse("spawnfather", errors.Refused("entry j1 is not running", errors.REFUSED))
         self.assertEqual(3, code)
-        self.assertEqual(["junkfather: entry j1 is not running"], err.getvalue().splitlines())
+        self.assertEqual(["spawnfather: entry j1 is not running"], err.getvalue().splitlines())
 
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
@@ -170,14 +170,14 @@ class EventsTests(unittest.TestCase):
 
     def test_rotates_and_repairs_torn_trailing_line(self) -> None:
         self.log.write_bytes(b'{"torn":1}')  # no trailing newline
-        ev = events.build_event("junkfather", "sweep.finished", {"type": "sweep", "id": "s1"}, {"type": "tool"})
+        ev = events.build_event("spawnfather", "sweep.finished", {"type": "sweep", "id": "s1"}, {"type": "tool"})
         self.assertTrue(events.append_event(self.log, ev))
         lines = self.log.read_text(encoding="utf-8").splitlines()
         self.assertEqual(2, len(lines))
         self.assertEqual([], eventcheck.validate_line(lines[1], strict=True))
 
         for index in range(5):
-            item = events.build_event("junkfather", "sweep.finished", {"type": "sweep", "id": f"s-{index}"},
+            item = events.build_event("spawnfather", "sweep.finished", {"type": "sweep", "id": f"s-{index}"},
                                       {"type": "tool"}, {"i": index})
             self.assertTrue(events.append_event(self.log, item, rotate_at=350))
         self.assertTrue((self.tmp / "events.jsonl.1").is_file())

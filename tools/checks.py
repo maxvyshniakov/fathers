@@ -32,9 +32,9 @@ import time
 from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[1]
-PACKAGES = ("slotfather", "lanefather", "junkfather", "godfather", "tokenfather")
+PACKAGES = ("slotfather", "lanefather", "spawnfather", "godfather", "tokenfather")
 # Packages whose test files use isolated tempdirs and can safely run in parallel across workers (fathers#209, #219).
-PARALLEL_TEST_PACKAGES = frozenset({"slotfather", "lanefather", "junkfather", "godfather"})
+PARALLEL_TEST_PACKAGES = frozenset({"slotfather", "lanefather", "spawnfather", "godfather"})
 MAX_DEFAULT_TEST_WORKERS = 4
 RAN_TESTS_RE = re.compile(r"^Ran (\d+) tests? in ", re.M)
 SKIPPED_TESTS_RE = re.compile(r"\bskipped=(\d+)\b")
@@ -62,7 +62,7 @@ def python_check(name: str) -> list[str]:
 TESTS = {
     "slotfather": ["-s", "tests"],
     "lanefather": ["-s", "tests", "-p", "test_*.py"],
-    "junkfather": ["-s", "tests"],
+    "spawnfather": ["-s", "tests"],
     "godfather": ["-s", "tests", "-t", "tests"],
     "tokenfather": ["-s", "tests"],
 }

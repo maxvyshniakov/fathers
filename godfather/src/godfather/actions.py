@@ -1,12 +1,12 @@
-"""Row actions (fathers#88, SPEC Decisions: actions table): which actions a row of QUEUE, PROCESSES or LANES offers,
+"""Row actions (fathers#88, SPEC Decisions: actions table): which actions a row of QUEUE, SPAWNS or LANES offers,
 and the exact command each runs. Every one is the owner tool's CLI, or for opening a ticket, a worktree or a log the
 platform's opener or the pager; nothing here runs anything (app.py and sources.act() do).
 
     QUEUE      one of your requests          Reprioritize to interactive, normal or batch   slotfather reprioritize
                a running yieldable lease of a lower class than a waiter   Ask to yield     slotfather ask-yield
-    PROCESSES  an orphan or expired entry    Reap (confirmed)                               junkfather reap --id
-               an unowned process            Reap (confirmed)                               junkfather reap --pid --force
-               a running owned entry         Extend TTL by 1 h, 4 h or 1 d                  junkfather extend ID --ttl
+    SPAWNS     an orphan or expired entry    Reap (confirmed)                               spawnfather reap --id
+               an unowned process            Reap (confirmed)                               spawnfather reap --pid --force
+               a running owned entry         Extend TTL by 1 h, 4 h or 1 d                  spawnfather extend ID --ttl
     LANES      a lane with a ticket          Open the ticket                                the platform opener
                a lane with a log             Open the latest log                            $PAGER (less -R +G)
                a lane with a worktree        Open the worktree                              the platform opener
@@ -22,8 +22,8 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional, cast
 
-from .adapters import junkfather as _junkfather
 from .adapters import lanefather as _lanefather
+from .adapters import spawnfather as _spawnfather
 from .model import ProcessTableRow
 
 NEVER = frozenset({"land", "promote", "done", "sync", "review", "sweep"})
@@ -123,33 +123,36 @@ def for_request(item: dict[str, Any], waiters: list[dict[str, Any]], advertised:
 
 
 def for_process(row: ProcessTableRow, advertised: Any) -> list[Action]:
-    """PROCESSES: reap an orphan or expired entry, or an unowned process the last sweep reported (confirmed); extend
+    """SPAWNS: reap an orphan or expired entry, or an unowned process the last sweep reported (confirmed); extend
     a running entry's TTL. A running entry whose owner lives is never reaped from here."""
     tools = offered(advertised)
     if row["kind"] == "separator":
         return []
-    label = _junkfather.label_of(row)
+    label = _spawnfather.label_of(row)
     if row["kind"] == "unowned":
         if "reap" not in tools or row["alive"] is False:  # gone since the sweep: its pid may be another's now
             return []
         target = (("process", label), ("pid", str(row["pid"])), ("why", row["why"]))
-        return [Action("junkfather", "Reap", ("reap", "--pid", str(row["pid"]), "--force",
-                                              "--reason=godfather: unowned"), confirm=True, target=target,
-                       identity=("processes", row["key"]))]
+        return [Action("spawnfather", "Reap", ("reap", "--pid", str(row["pid"]), "--force",
+                                               "--reason=godfather: unowned"), confirm=True, target=target,
+                       identity=("spawns", row["key"]))]
     if row["kind"] != "entry":
         return []
     target = (("entry", label), ("id", row["id"]), ("pid", str(row["pid"] or "—")), ("owner", row["owner"] or "?"))
-    identity = ("processes", row["key"])
+    identity = ("spawns", row["key"])
     if row["state"] in ("orphan", "expired"):
-        # an expired entry's reap says so, so Junkfather refuses it too once it was extended meanwhile
+        # an expired entry's reap says so, so Spawnfather refuses it too once it was extended meanwhile
         argv = ("reap", "--id", str(row["id"]), *(("--expired",) if row["state"] == "expired" else ()),
                 f"--reason=godfather: {row['state']}")
-        return [Action("junkfather", "Reap", argv, confirm=True, target=target, identity=identity)] \
+        return [Action("spawnfather", "Reap", argv, confirm=True, target=target, identity=identity)] \
             if "reap" in tools else []
     if row.get("no_ttl") or "extend" not in tools:
         return []
-    return [Action("junkfather", f"Extend TTL by {words}", ("extend", str(row["id"]), "--ttl", ttl), target=target,
+    return [Action("spawnfather", f"Extend TTL by {words}", ("extend", str(row["id"]), "--ttl", ttl), target=target,
                    identity=identity) for words, ttl in EXTEND]
+
+
+for_spawn = for_process
 
 
 def for_lane(lane: Mapping[str, Any], advertised: Any) -> list[Action]:
@@ -184,7 +187,7 @@ def revalidate(action: Action, snapshot: Optional[Mapping[str, Any]], uid: Optio
     project and id), its actions are built again from the fresh row and one with the same name and arguments must be
     among them, so a row that left the state the action needs (an expired entry extended, a lease no longer
     yieldable, a lane no longer active) is not acted on. An unowned process is refused when an owned entry holds its
-    pid now, which Junkfather's `reap --pid` would take first. The latest log is the fresh one."""
+    pid now, which Spawnfather's `reap --pid` would take first. The latest log is the fresh one."""
     page = action.identity[0] if action.identity else ""
     fresh: list[Action] = []
     if page == "overview":
@@ -194,10 +197,10 @@ def revalidate(action: Action, snapshot: Optional[Mapping[str, Any]], uid: Optio
         for item in [*cast(list[dict[str, Any]], found.get("holders") or []), *waiters]:
             if item.get("key") == key and item.get("pid") == pid and item.get("start") == start:
                 fresh = for_request(item, waiters, EVERY, uid)
-    elif page == "processes":
-        row = _junkfather.find(snapshot, action.identity[1])
+    elif page in ("spawns", "processes"):
+        row = _spawnfather.find(snapshot, action.identity[1])
         if row is not None and row["kind"] == "unowned" and any(
-                row["pid"] in (entry.get("pid"), entry.get("pgid")) for entry in _junkfather.entries(snapshot)):
+                row["pid"] in (entry.get("pid"), entry.get("pgid")) for entry in _spawnfather.entries(snapshot)):
             return None
         fresh = for_process(row, EVERY) if row is not None else []
     elif page == "lanes":

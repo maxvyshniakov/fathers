@@ -1,0 +1,21 @@
+# spawnfather is standard library only and installs without a build step (install.py); this file names the version
+# and configures the checks tools/check.py runs (Ruff and Pyright, pinned in requirements-dev.txt).
+[project]
+name = "spawnfather"
+version = "0.1.0"  # the newest release in CHANGELOG.md; spawnfather/__init__.py __version__ matches it
+requires-python = ">=3.11"
+license = "MIT"
+
+[tool.ruff]
+extend = "../tools/ruff.toml"
+target-version = "py311"
+
+[tool.ruff.lint]
+# The shared rules (../tools/ruff.toml) this package does not pass yet; drop a code once its findings are fixed.
+ignore = ["I001", "PLC3002", "RUF010", "RUF012", "RUF015", "RUF100", "SIM102", "SIM105", "UP006", "UP035", "UP037", "UP045"]
+
+[tool.pyright]
+include = ["spawnfather", "tests", "install.py", "tools"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+extraPaths = ["../common"]  # eventcheck: common/eventcheck.py

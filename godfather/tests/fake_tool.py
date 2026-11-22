@@ -1,10 +1,10 @@
-"""A fake `lanefather` or `junkfather` for Godfather's Settings tests: `capabilities --json` and `settings`
+"""A fake `lanefather` or `spawnfather` for Godfather's Settings tests: `capabilities --json` and `settings`
 (--json, check, set, reset) over a JSON state file, with each tool's rows field for field as the real one prints them
-(lanefather/lanefather/settings.py, junkfather/junkfather/settings.py; test_contract.py compares them).
+(lanefather/lanefather/settings.py, spawnfather/spawnfather/settings.py; test_contract.py compares them).
 
 FAKE_TOOL_STATE names the state file ({"tool", "values", "environment", "writable"}); every call's argv is appended
 to FAKE_TOOL_CALLS. A row its environment names is read-only (`source: "env NAME"`); `writable: false` makes every
-row read-only and a write exit with the tool's read-only code: 4 for Lanefather, 5 for Junkfather (fathers#118).
+row read-only and a write exit with the tool's read-only code: 4 for Lanefather, 5 for Spawnfather (fathers#118).
 """
 from __future__ import annotations
 
@@ -16,9 +16,23 @@ import sys
 from typing import Any
 
 PATH = os.environ.get("FAKE_TOOL_STATE", "")
-READ_ONLY = {"lanefather": 4, "junkfather": 5}
+READ_ONLY = {"lanefather": 4, "spawnfather": 5, "junkfather": 5}
 PRIORITY = [{"value": "project", "label": "Project"}, {"value": "interactive", "label": "Interactive"},
             {"value": "normal", "label": "Normal"}, {"value": "batch", "label": "Batch"}]
+SPAWN_ROWS: list[tuple[str, str, str, str, str, Any, dict[str, Any], str, str]] = [
+    ("own", "Owning", "own.default_ttl", "Default TTL", "duration", 7200,
+     {"min": 60, "max": 604800, "step": 300, "unit": "s"}, "",
+     "How long own, own-resource and adopt keep what they start when the command gives no --ttl."),
+    ("own", "Owning", "own.background_ttl", "Background command TTL", "duration", 7200,
+     {"min": 60, "max": 604800, "step": 300, "unit": "s"}, "",
+     "How long an agent's background Bash command may run before it is stopped, unless its agent stops first."),
+    ("sweep", "Sweep", "sweep.interval", "Sweep every", "duration", 3600,
+     {"min": 60, "max": 86400, "step": 300, "unit": "s"}, "",
+     "The hourly sweep agent's interval; the loaded agent takes a new one when reinstalled (install.py --launchd)."),
+    ("reap", "Reaping", "reap.grace", "Grace before SIGKILL", "duration", 10,
+     {"min": 1, "max": 600, "step": 1, "unit": "s"}, "",
+     "Between SIGTERM and SIGKILL when reap has no --grace; the sweep and the supervisor use it too."),
+]
 # (section id, title, key, label, type, default, extra, the variable that makes it read-only, description)
 ROWS: dict[str, list[tuple[str, str, str, str, str, Any, dict[str, Any], str, str]]] = {
     "lanefather": [
@@ -39,31 +53,21 @@ ROWS: dict[str, list[tuple[str, str, str, str, str, Any, dict[str, Any], str, st
          "The free disk, in decimal GB, under which start refuses a lane; auto is the derived floor, a reserve plus "
          "the lane cap times the largest recent lane. auto: 49 GB (10^9) = 40 reserve + 3 x 3.0 GB lane peak."),
     ],
-    "junkfather": [
-        ("own", "Owning", "own.default_ttl", "Default TTL", "duration", 7200,
-         {"min": 60, "max": 604800, "step": 300, "unit": "s"}, "",
-         "How long own, own-resource and adopt keep what they start when the command gives no --ttl."),
-        ("own", "Owning", "own.background_ttl", "Background command TTL", "duration", 7200,
-         {"min": 60, "max": 604800, "step": 300, "unit": "s"}, "",
-         "How long an agent's background Bash command may run before it is stopped, unless its agent stops first."),
-        ("sweep", "Sweep", "sweep.interval", "Sweep every", "duration", 3600,
-         {"min": 60, "max": 86400, "step": 300, "unit": "s"}, "",
-         "The hourly sweep agent's interval; the loaded agent takes a new one when reinstalled (install.py --launchd)."),
-        ("reap", "Reaping", "reap.grace", "Grace before SIGKILL", "duration", 10,
-         {"min": 1, "max": 600, "step": 1, "unit": "s"}, "",
-         "Between SIGTERM and SIGKILL when reap has no --grace; the sweep and the supervisor use it too."),
-    ],
+    "spawnfather": SPAWN_ROWS,
+    "junkfather": SPAWN_ROWS,
 }
-JUNK_ENVIRONMENT = (("JUNKFATHER_STATE", "State directory", "Where entries, logs, events and these settings live."),
-                    ("JUNKFATHER_SCRATCH_ROOTS", "Extra scratch roots",
-                     "Directories (colon-separated) the sweep treats like an agent's scratchpad."),
-                    ("JUNKFATHER_CLAUDE_SESSIONS", "Claude Code sessions", "Claude Code's live-session registry."),
-                    ("JUNKFATHER_LANE_RECORDS", "Lane records", "Where the lane of a working directory is looked up."))
+SPAWN_ENVIRONMENT = (("SPAWNFATHER_STATE", "State directory", "Where entries, logs, events and these settings live."),
+                     ("SPAWNFATHER_SCRATCH_ROOTS", "Extra scratch roots",
+                      "Directories (colon-separated) the sweep treats like an agent's scratchpad."),
+                     ("SPAWNFATHER_CLAUDE_SESSIONS", "Claude Code sessions", "Claude Code's live-session registry."),
+                     ("SPAWNFATHER_LANE_RECORDS", "Lane records", "Where the lane of a working directory is looked up."))
 STATUS = {"lanefather": [("settings", "/fake/config/lanefather/settings.json"),
                          ("events", "/fake/state/lanefather/events.jsonl"),
                          ("projects", "2 registered in /fake/state/lanefather/projects.json")],
-          "junkfather": [("settings", "/fake/state/junkfather/settings.json"),
-                         ("state", "/fake/state/junkfather"), ("last sweep", "never")]}
+          "spawnfather": [("settings", "/fake/state/spawnfather/settings.json"),
+                          ("state", "/fake/state/spawnfather"), ("last sweep", "never")],
+          "junkfather": [("settings", "/fake/state/spawnfather/settings.json"),
+                         ("state", "/fake/state/spawnfather"), ("last sweep", "never")]}
 
 
 def load() -> dict[str, Any]:
@@ -99,12 +103,12 @@ def document(state: dict[str, Any]) -> dict[str, Any]:
         if given:
             row.update(source=f"env {variable}", writable=False, value=parse(tool, key, given))
         sections[-1]["settings"].append(row)
-    if tool == "junkfather":
-        shown = {"JUNKFATHER_STATE": "/fake/state/junkfather", "JUNKFATHER_CLAUDE_SESSIONS": "/fake/claude/sessions"}
+    if tool in ("spawnfather", "junkfather"):
+        shown = {"SPAWNFATHER_STATE": "/fake/state/spawnfather", "SPAWNFATHER_CLAUDE_SESSIONS": "/fake/claude/sessions"}
         sections.append({"id": "environment", "title": "Environment", "settings": [
             {"key": f"env.{name}", "label": label, "type": "text", "value": shown.get(name), "default": None,
              "source": "default", "writable": False, "description": f"{description} Set by {name}; read-only here."}
-            for name, label, description in JUNK_ENVIRONMENT]})
+            for name, label, description in SPAWN_ENVIRONMENT]})
     return {"v": 1, "tool": tool, "writable": writable, "reason": None if writable else "/fake: is not writable",
             "revision": rev, "status": [{"label": label, "value": value} for label, value in STATUS[tool]],
             "sections": sections}
@@ -147,8 +151,9 @@ def main(argv: list[str]) -> int:
     state = load()
     tool = state["tool"]
     if argv == ["capabilities", "--json"]:
+        tag = "spwn" if tool == "spawnfather" else tool[:4]
         return reply({"v": 1, "tool": tool, "version": "0.9.0", "dashboard": {
-            "v": 1, "tag": tool[:4], "snapshot": {"argv": ["status", "--json"], "versions": [1], "poll": 5},
+            "v": 1, "tag": tag, "snapshot": {"argv": ["status", "--json"], "versions": [1], "poll": 5},
             "events": {"path": os.path.join(os.path.dirname(os.path.abspath(PATH)), f"{tool}.jsonl"),
                        "versions": [1]},
             "settings": {"versions": [1]}}})

@@ -35,14 +35,14 @@ class EventsCommandTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         (self.root / "host.json").write_text(json.dumps({"host": HOST}))
-        for tool, tag in (("slotfather", "slot"), ("lanefather", "lane"), ("junkfather", "junk")):
+        for tool, tag in (("slotfather", "slot"), ("lanefather", "lane"), ("spawnfather", "spwn")):
             self.tool(tool, capabilities(tool, tag))
         self.log("slotfather", event("slotfather", "lease.granted", 10, "r1", waited=0)
                  + event("slotfather", "lease.released", 30, "r1", exit=0, ran=20))
         self.log("lanefather", event("lanefather", "lane.checked", 20, "710-speech", status="green",
                                      message="check 710-speech tree=abc green")
                  + event("lanefather", "lane.checked", 21, "711", status="red").replace(HOST, "vm110"))
-        self.log("junkfather", event("junkfather", "entry.owned", 10, "j3f9a1c", ttl=7200)
+        self.log("spawnfather", event("spawnfather", "entry.owned", 10, "j3f9a1c", ttl=7200)
                  + json.dumps({"v": 1, "kind": "\x1b[31mred"}) + "\n")
 
     def tool(self, name: str, answer: dict[str, Any] | None) -> None:
@@ -68,8 +68,8 @@ class EventsCommandTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual("", result.stderr)
         lines = result.stdout.splitlines()
-        self.assertEqual(["junk", "slot", "lane", "slot"], [line.split()[2] for line in lines])
-        self.assertEqual("2026-11-12 02:24:10  junk  entry.owned             j3f9a1c  ttl 2h00m", lines[0])
+        self.assertEqual(["slot", "spwn", "lane", "slot"], [line.split()[2] for line in lines])
+        self.assertEqual("2026-11-12 02:24:10  spwn  entry.owned             j3f9a1c  ttl 2h00m", lines[1])
         self.assertIn("lane  lane.checked            710-speech  green", lines[2])
         self.assertTrue(lines[3].endswith("lease.released          r1  ok 20s"), lines[3])
         self.assertNotIn("\x1b", result.stdout, "no escape from a line, and no colour without a terminal")
@@ -81,12 +81,30 @@ class EventsCommandTests(unittest.TestCase):
         self.assertEqual(["lease.granted", "lane.checked", "lease.released"], [item["kind"] for item in found])
         unknown = self.run_events("--source", "nothing")
         self.assertEqual(2, unknown.returncode)
-        self.assertIn("--source takes slotfather, lanefather, junkfather", unknown.stderr)
+        self.assertIn("--source takes slotfather, lanefather, spawnfather", unknown.stderr)
+
+    def test_legacy_junkfather_source_alias_and_mixed_log_lines(self) -> None:
+        (self.root / "spawnfather" / "events.jsonl").write_text(
+            event("junkfather", "entry.owned", 5, "jold01", ttl=1800)
+            + event("spawnfather", "entry.reaped", 15, "jold01", reason="orphan", result="stopped")
+        )
+        by_new = self.run_events("--source", "spawnfather")
+        by_alias = self.run_events("--source", "junkfather")
+        self.assertEqual(0, by_new.returncode, by_new.stderr)
+        self.assertEqual(0, by_alias.returncode, by_alias.stderr)
+        self.assertEqual("", by_alias.stderr)
+        self.assertEqual(by_new.stdout, by_alias.stdout)
+        lines = by_new.stdout.splitlines()
+        self.assertEqual(["spwn", "spwn"], [line.split()[2] for line in lines])
+        self.assertIn("entry.owned             jold01  ttl 30m", lines[0])
+        self.assertIn("entry.reaped            jold01  orphan", lines[1])
+        raw = [json.loads(line) for line in self.run_events("--source", "junkfather", "--json").stdout.splitlines()]
+        self.assertEqual(["junkfather", "spawnfather"], [item["source"] for item in raw], "raw lines preserved")
 
     def test_an_absent_source_is_left_out_and_an_unsupported_one_named(self) -> None:
-        for path in (self.root / "junkfather").iterdir():
+        for path in (self.root / "spawnfather").iterdir():
             path.unlink()
-        (self.root / "junkfather").rmdir()
+        (self.root / "spawnfather").rmdir()
         self.tool("lanefather", capabilities("lanefather", "lane", events=False))
         result = self.run_events()
         self.assertEqual(0, result.returncode)

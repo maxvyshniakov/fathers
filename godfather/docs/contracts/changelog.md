@@ -7,11 +7,11 @@ tool's files. Its own entries come from the CHANGELOG.md it ships with.
 ## `<tool> changelog --json [--since VERSION]`
 
 ```json
-{"v": 1, "tool": "junkfather", "version": "0.1.0",
- "source": "/Users/me/.local/share/junkfather/releases/0.1.0-1a2b3c/junkfather/CHANGELOG.md",
+{"v": 1, "tool": "spawnfather", "version": "0.1.0",
+ "source": "/Users/me/.local/share/spawnfather/releases/0.1.0-1a2b3c/spawnfather/CHANGELOG.md",
  "entries": [{"version": null, "unreleased": true, "date": null, "source": "1a2b3c4d5e6f", "section": "Added",
-              "text": "`junkfather changelog --json` …"},
-             {"version": "0.1.0", "date": "2026-11-12", "section": "Added", "text": "`junkfather own` starts …"}]}
+              "text": "`spawnfather changelog --json` …"},
+             {"version": "0.1.0", "date": "2026-11-12", "section": "Added", "text": "`spawnfather own` starts …"}]}
 ```
 
 - `version` is the installed release; `source` is the resolved path of the changelog file read, `null` when the
@@ -47,7 +47,7 @@ shows before it has a release; its releases before 0.2.0 carry a build suffix (`
 installed as 0.1.0; Godfather orders releases by date, then in the order a tool gives them, never by such a
 suffix. Its contract: [lanefather/docs/api.md](../../../lanefather/docs/api.md).
 
-Who provides it: junkfather (fathers#105), slotfather (fathers#103), lanefather (fathers#104).
+Who provides it: Spawnfather (fathers#105), Slotfather (fathers#103), Lanefather (fathers#104).
 
 ## Without `changelog --json`
 
@@ -62,7 +62,7 @@ Godfather install waiting for a restart is the footer's `↻`.
 `$XDG_STATE_HOME/godfather/news.json` (default `~/.local/state/godfather/news.json`), Godfather's own:
 
 ```json
-{"v": 1, "read": {"godfather": "0.1.0", "slotfather": "0.2.0", "junkfather": "0.1.0"}}
+{"v": 1, "read": {"godfather": "0.1.0", "slotfather": "0.2.0", "spawnfather": "0.1.0"}}
 ```
 
 An entry is unread while its version is newer than its tool's `read` version; an Unreleased one while `read` is

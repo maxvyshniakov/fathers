@@ -33,7 +33,7 @@ class SelectionTests(unittest.TestCase):
         return set(checks.select(list(paths)).checks)
 
     def test_a_package_change_selects_that_package_and_the_cheap_root_checks(self) -> None:
-        self.assertEqual(package("junkfather") | ALWAYS, self.selected("junkfather/junkfather/reap.py"))
+        self.assertEqual(package("spawnfather") | ALWAYS, self.selected("spawnfather/spawnfather/reap.py"))
         self.assertEqual(package("lanefather") | package("godfather") | ALWAYS,
                          self.selected("lanefather/README.md", "godfather/src/godfather/views/lanes.py"))
 
@@ -75,7 +75,7 @@ class SelectionTests(unittest.TestCase):
             ("slotfather/CHANGELOG.md", package("slotfather")),
             ("slotfather/pyproject.toml", package("slotfather")),
             ("slotfather/src/slotfather/version.py", package("slotfather") | {"godfather tests"}),
-            ("junkfather/junkfather/__init__.py", package("junkfather")),
+            ("spawnfather/spawnfather/__init__.py", package("spawnfather")),
         ):
             with self.subTest(changelog_path=path):
                 self.assertEqual(extra | {"common tests"} | ALWAYS, self.selected(path))
@@ -104,8 +104,8 @@ class PlanTests(unittest.TestCase):
         (root / "README.md").write_text("fathers\n")
         subprocess.run([*git, "add", "."], check=True)
         subprocess.run([*git, "commit", "-qm", "base"], check=True)
-        (root / "junkfather").mkdir()
-        (root / "junkfather/reap.py").write_text("")
+        (root / "spawnfather").mkdir()
+        (root / "spawnfather/reap.py").write_text("")
         subprocess.run([*git, "add", "."], check=True)
         subprocess.run([*git, "commit", "-qm", "change"], check=True)
         (root / "lanefather").mkdir()
@@ -116,15 +116,15 @@ class PlanTests(unittest.TestCase):
         root = self.repository()
         plan = checks.plan(root, "HEAD~1")
         self.assertEqual({"v": 1, "full": False, "unowned": [], "suites": ["verify"],
-                          "paths": ["junkfather/reap.py", "lanefather/new.py"]},
+                          "paths": ["lanefather/new.py", "spawnfather/reap.py"]},
                          {key: plan[key] for key in ("v", "full", "unowned", "suites", "paths")})
         rows = {row["id"]: row for row in plan["checks"]}
-        self.assertEqual({"id": "verify:junkfather%20lint", "suite": "verify", "paths": ["junkfather/reap.py"],
-                          "producer": False}, rows["verify:junkfather%20lint"])
+        self.assertEqual({"id": "verify:spawnfather%20lint", "suite": "verify", "paths": ["spawnfather/reap.py"],
+                          "producer": False}, rows["verify:spawnfather%20lint"])
         self.assertIn("verify:lanefather%20tests", rows)
         self.assertNotIn("verify:slotfather%20tests", rows)
         self.assertEqual(sorted(rows), sorted(f"verify:{checks.encode(name)}" for name in
-                                              package("junkfather") | package("lanefather") | ALWAYS))
+                                              package("spawnfather") | package("lanefather") | ALWAYS))
 
     def test_the_plan_for_package_documentation_only_skips_package_checks(self) -> None:
         root = self.repository()
@@ -233,8 +233,8 @@ class WorkflowTests(unittest.TestCase):
     def test_lanefather_declares_requires_python(self) -> None:
         self.declares_requires_python("lanefather")
 
-    def test_junkfather_declares_requires_python(self) -> None:
-        self.declares_requires_python("junkfather")
+    def test_spawnfather_declares_requires_python(self) -> None:
+        self.declares_requires_python("spawnfather")
 
     def test_godfather_declares_requires_python(self) -> None:
         self.declares_requires_python("godfather")
@@ -265,8 +265,8 @@ NEAR_COPY_THRESHOLD = 0.85
 PACKAGE_NAME_RE = re.compile(r"(?i)\b(?:" + "|".join(checks.PACKAGES) + r")\b")
 # Shrink-only ratchet for embedded shell sleeps (0.2s <= s < 30s) in test string literals (fathers#219).
 EMBEDDED_SHELL_SLEEP_BASELINE: dict[str, int] = {
-    "junkfather/tests/test_background.py": 6,
-    "junkfather/tests/test_browser.py": 1,
+    "spawnfather/tests/test_background.py": 6,
+    "spawnfather/tests/test_browser.py": 1,
     "lanefather/tests/test_checks.py": 1,
     "slotfather/tests/test_contract.py": 1,
     "slotfather/tests/test_membership.py": 1,
@@ -403,7 +403,7 @@ class CommandTests(unittest.TestCase):
         with mock.patch.object(checks, "run_unittest_parallel", return_value=0) as parallel_mock, \
                 mock.patch.object(checks.subprocess, "run", side_effect=AssertionError("unexpected subprocess")), \
                 mock.patch.dict(os.environ, {"FATHERS_TEST_WORKERS": "3"}):
-            for pkg in ("slotfather", "lanefather", "junkfather", "godfather"):
+            for pkg in ("slotfather", "lanefather", "spawnfather", "godfather"):
                 self.assertIn(pkg, checks.PARALLEL_TEST_PACKAGES)
                 self.assertEqual(0, checks.run(f"{pkg} tests"))
             self.assertEqual(4, parallel_mock.call_count)
@@ -564,10 +564,10 @@ class RepositoryRuleTests(unittest.TestCase):
         )
 
         sample_a = "\n".join(f"    assert slot_helper({i}) == expected({i})" for i in range(10))
-        sample_b = "\n".join(f"    assert junk_helper({i}) == expected({i})" for i in range(10))
+        sample_b = "\n".join(f"    assert spawn_helper({i}) == expected({i})" for i in range(10))
         synthetic = {
             "slotfather": {"slotfather/tests/test_dup.py": sample_a},
-            "junkfather": {"junkfather/tests/test_dup.py": sample_b},
+            "spawnfather": {"spawnfather/tests/test_dup.py": sample_b},
         }
         self.assertEqual(1, len(find_near_copy_test_files(synthetic)))
         self.assertEqual(
@@ -576,7 +576,7 @@ class RepositoryRuleTests(unittest.TestCase):
                 find_near_copy_test_files(
                     {
                         "slotfather": {"slotfather/tests/test_dup.py": "# copy-ok:   \n" + sample_a},
-                        "junkfather": {"junkfather/tests/test_dup.py": sample_b},
+                        "spawnfather": {"spawnfather/tests/test_dup.py": sample_b},
                     }
                 )
             ),
@@ -586,7 +586,7 @@ class RepositoryRuleTests(unittest.TestCase):
             find_near_copy_test_files(
                 {
                     "slotfather": {"slotfather/tests/test_dup.py": "# copy-ok: shared contract wrapper\n" + sample_a},
-                    "junkfather": {"junkfather/tests/test_dup.py": sample_b},
+                    "spawnfather": {"spawnfather/tests/test_dup.py": sample_b},
                 }
             ),
         )

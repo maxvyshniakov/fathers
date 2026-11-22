@@ -16,7 +16,7 @@
 ╭─ ❮ FULL LOG ❯ ───────────── description ─────────────────────────────────────────────────────────╮
 │                                                                                                  │
 │  11:59:35  slot run         agent-ae72d94beb6f08961 · ok 5m41s · 1 slot                         ╹│
-│  11:59:20  proc extended    vite dev · ttl 4h00m                                                 │
+│  11:59:20  spawn extended   vite dev · ttl 4h00m                                                 │
 │  11:59:02  lane reviewed    644-build-once · 2 findings · 9m                                     │
 │  11:58:33  slot run         agent-a1c75285bdf2cd615 · ok 1m13s · 1 slot                          │
 │  11:58:10  lane gate        Straylight cedf8b972d · red · 19m                                    │

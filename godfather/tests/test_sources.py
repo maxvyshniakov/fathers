@@ -19,7 +19,7 @@ from helpers import ROOT, FakeSlotfather
 import view as _view
 
 from godfather import app, entries, news, reducer, settings_layout, settings_model, sources, state as state_module, theme, tui
-from godfather.adapters import junkfather, lanefather, slotfather as adapter
+from godfather.adapters import lanefather, slotfather as adapter, spawnfather
 from godfather.views import overlays, overview
 
 SCENE = ROOT / "tests" / "fixtures" / "scene"
@@ -63,7 +63,7 @@ class AbsentTests(FixtureCase):
         shutil.rmtree(self.root / "slotfather")
         text = self.frame(app.Screen())
         self.assertIn("No tool found. Godfather looked for these on GODFATHER_FIXTURES:", text)
-        for tool in ("slotfather", "lanefather", "junkfather"):
+        for tool in ("slotfather", "lanefather", "spawnfather"):
             self.assertRegex(text, rf"{tool} +not found")
         self.assertNotIn("SLOTS", text)
         self.assertEqual("absent", app.Screen().clients["slotfather"].state().state)
@@ -276,16 +276,16 @@ class WhatsNewTests(FixtureCase):
         self.reply("changelog --json", {"code": 0, "json": {"v": 1, "tool": "slotfather", "version": "0.2.0",
                                                            "source": None, "entries": [
             {"version": "0.2.0", "date": "2026-11-12", "section": "Added", "text": "`capabilities --json`."}]}})
-        (self.root / "junkfather").mkdir()
-        (self.root / "junkfather" / "replies.json").write_text(json.dumps(
-            {"capabilities --json": {"code": 0, "json": {"v": 1, "tool": "junkfather", "version": "0.1.0"}}}))
+        (self.root / "spawnfather").mkdir()
+        (self.root / "spawnfather" / "replies.json").write_text(json.dumps(
+            {"capabilities --json": {"code": 0, "json": {"v": 1, "tool": "spawnfather", "version": "0.1.0"}}}))
         canvas = tui.Canvas(120, 40)
         overlays.draw_changelog(canvas, news=news.load("", stale=False))
         text = canvas.render(False)
         self.assertIn("All · Slotfather", text.split("\n")[canvas.help_view.y])  # type: ignore[union-attr]
         self.assertRegex(text, r"Slotfather 0\.2\.0 · 2026-11-12 · installed · new")
         self.assertIn("• capabilities --json.", text)
-        for gone in ("not installed", "versions only", "Junkfather 0.1.0"):
+        for gone in ("not installed", "versions only", "Spawnfather 0.1.0"):
             self.assertNotIn(gone, text, "fathers#102: only the timeline")
 
     def test_news_reuses_discovered_tool_state_without_repeating_which_or_capabilities(self) -> None:
@@ -506,7 +506,7 @@ class ConcurrencyTests(unittest.TestCase):
         barrier = threading.Barrier(3)
         polls = 0
         lock = threading.Lock()
-        raw_snapshot = json.loads((ROOT / "tests" / "fixtures" / "procs" / "junkfather" / "replies.json").read_text())
+        raw_snapshot = json.loads((ROOT / "tests" / "fixtures" / "procs" / "spawnfather" / "replies.json").read_text())
         caps = raw_snapshot["capabilities --json"]["json"]
         status = raw_snapshot["status --json"]["json"]
 
@@ -527,7 +527,7 @@ class ConcurrencyTests(unittest.TestCase):
                     polls += 1
                 return 0, status, ""
 
-        client = sources.ToolClient("junkfather", junkfather, runner=FastRunner(), clock=lambda: 50.0)
+        client = sources.ToolClient("spawnfather", spawnfather, runner=FastRunner(), clock=lambda: 50.0)
         client.discover()
         errors: list[BaseException] = []
 
@@ -608,6 +608,92 @@ class ConcurrencyTests(unittest.TestCase):
         rendered = canvas.render(False)
         self.assertIn("No tool found. Godfather looked for these on PATH:", rendered)
         self.assertIn("slotfather  not found", rendered)
+
+
+class TransitionOrderTests(unittest.TestCase):
+    """fathers#170: single logical `spawnfather` source across both upgrade orders (`junkfather` only on PATH vs both
+    `spawnfather` and `junkfather` on PATH)."""
+
+    @staticmethod
+    def _write_cli(path: Path, tool_name: str, tag: str, calls_log: Path) -> None:
+        import sys
+
+        script = (
+            f"#!{sys.executable}\n"
+            "import json, sys\n"
+            "from pathlib import Path\n"
+            f"calls = Path({str(calls_log)!r})\n"
+            "with calls.open('a', encoding='utf-8') as fh:\n"
+            "    print(json.dumps(sys.argv[1:]), file=fh)\n"
+            "argv = sys.argv[1:]\n"
+            "if argv == ['capabilities', '--json']:\n"
+            f"    print(json.dumps({{'v': 1, 'tool': {tool_name!r}, 'version': '0.1.0', 'dashboard': {{"
+            f"'v': 1, 'tag': {tag!r}, 'snapshot': {{'argv': ['status', '--json'], 'versions': [2], 'poll': 5}}, "
+            "'actions': ['reap', 'extend']}}))\n"
+            "elif argv == ['status', '--json']:\n"
+            "    print(json.dumps({'v': 2, 'host': 'mbp', 'time': '2026-11-12T04:25:56Z', 'entries': [], "
+            "'unowned': [], 'unowned_resources': [], 'sweep': None, 'errors': []}))\n"
+            "elif argv == ['changelog', '--json']:\n"
+            f"    print(json.dumps({{'v': 1, 'tool': {tool_name!r}, 'version': '0.1.0', 'source': None, 'entries': ["
+            "{'version': '0.1.0', 'date': '2026-11-12', 'section': 'Added', 'text': 'initial'}]}))\n"
+            "else:\n"
+            "    sys.exit(2)\n"
+        )
+        path.write_text(script, encoding="utf-8")
+        path.chmod(0o755)
+
+    def test_old_binary_only_falls_back_to_junkfather_normalizes_tag_and_polls_once(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="godfather-old-bin-") as raw_tmp:
+            tmp = Path(raw_tmp)
+            bin_dir = tmp / "bin"
+            bin_dir.mkdir()
+            calls = tmp / "junk-calls.jsonl"
+            self._write_cli(bin_dir / "junkfather", "junkfather", "junk", calls)
+            env = {k: v for k, v in os.environ.items() if not k.startswith("GODFATHER_")}
+            env["PATH"] = str(bin_dir)
+            with mock.patch.dict(os.environ, env, clear=True):
+                runner = sources.SystemRunner()
+                self.assertEqual(str(bin_dir / "junkfather"), runner.which("spawnfather"))
+                client = sources.ToolClient("spawnfather", spawnfather, runner=runner, clock=lambda: 10.0)
+                state = client.refresh()
+                self.assertEqual("ok", state.state, state.problem)
+                self.assertEqual("spwn", state.tag, "legacy `junk` tag normalizes to `spwn`")
+                self.assertEqual(str(bin_dir / "junkfather"), state.executable)
+                invoked = [json.loads(line) for line in calls.read_text().splitlines()]
+                self.assertEqual([["capabilities", "--json"], ["status", "--json"]], invoked, "polled once")
+                row, items = news.tool("spawnfather", discovered=state, runner=runner)
+                self.assertEqual(news.Installed("spawnfather", "0.1.0", "ok"), row)
+                self.assertEqual([news.Item("spawnfather", "0.1.0", "2026-11-12", "Added", "initial")], items)
+
+    def test_both_binaries_present_uses_spawnfather_only_and_never_invokes_junkfather(self) -> None:
+        import sys
+
+        with tempfile.TemporaryDirectory(prefix="godfather-both-bins-") as raw_tmp:
+            tmp = Path(raw_tmp)
+            bin_dir = tmp / "bin"
+            bin_dir.mkdir()
+            spawn_calls = tmp / "spawn-calls.jsonl"
+            junk_called = tmp / "junk-called"
+            self._write_cli(bin_dir / "spawnfather", "spawnfather", "spwn", spawn_calls)
+            (bin_dir / "junkfather").write_text(
+                f"#!{sys.executable}\nfrom pathlib import Path\nimport sys\n"
+                f"Path({str(junk_called)!r}).write_text('called')\n"
+                "print('junkfather: deprecated; use spawnfather', file=sys.stderr)\nsys.exit(99)\n",
+                encoding="utf-8",
+            )
+            (bin_dir / "junkfather").chmod(0o755)
+            env = {k: v for k, v in os.environ.items() if not k.startswith("GODFATHER_")}
+            env["PATH"] = str(bin_dir)
+            with mock.patch.dict(os.environ, env, clear=True):
+                runner = sources.SystemRunner()
+                self.assertEqual(str(bin_dir / "spawnfather"), runner.which("spawnfather"))
+                client = sources.ToolClient("spawnfather", spawnfather, runner=runner, clock=lambda: 10.0)
+                state = client.refresh()
+                self.assertEqual("ok", state.state, state.problem)
+                self.assertEqual("spwn", state.tag)
+                self.assertFalse(junk_called.exists(), "junkfather shim is never invoked when spawnfather is present")
+                invoked = [json.loads(line) for line in spawn_calls.read_text().splitlines()]
+                self.assertEqual([["capabilities", "--json"], ["status", "--json"]], invoked, "one poll per refresh")
 
 
 if __name__ == "__main__":

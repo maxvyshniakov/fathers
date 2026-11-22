@@ -1,7 +1,7 @@
 """godfather: one terminal dashboard for the tools that share a development machine.
 
   godfather [--interval S]                                         live view: ? lists the keys, q quits
-  godfather --once [--page overview|lanes|processes] [--width N] [--height N] [--color]   one frame as text
+  godfather --once [--page overview|lanes|spawns] [--width N] [--height N] [--color]   one frame as text
   godfather events [--source NAME]... [--follow] [--json]          the tools' events, newest last
   godfather --version
 
@@ -39,9 +39,9 @@ from . import sources as _sources
 from . import state as _state
 from . import theme as _theme
 from . import version as _version
-from .adapters import junkfather as _junkfather
 from .adapters import lanefather as _lanefather
 from .adapters import slotfather as _slotfather
+from .adapters import spawnfather as _spawnfather
 from .adapters.settings import Conflict, ReadOnly, SettingsClient, SettingsError
 from .adapters.slotfather import Unsupported
 from .model import Dashboard, PsRow, Request, TreeRow
@@ -54,7 +54,7 @@ from .views import machine as _machine
 from .views import overview as _overview
 
 USAGE = ("usage: godfather [--interval SECONDS]\n"
-         "       godfather --once [--page overview|lanes|processes] [--width N] [--height N] [--color]\n"
+         "       godfather --once [--page overview|lanes|spawns] [--width N] [--height N] [--color]\n"
          "       godfather events [--source NAME]... [--follow] [--json]\n"
          "       godfather --version")
 
@@ -104,9 +104,9 @@ def starting_choices(interval: float | None) -> tuple[float, str]:
 ALL_ADAPTERS: dict[str, Any] = {
     "slotfather": _slotfather,
     "lanefather": _lanefather,
-    "junkfather": _junkfather,
+    "spawnfather": _spawnfather,
 }
-TOOL_ADAPTERS: dict[str, Any] = {"lanefather": _lanefather, "junkfather": _junkfather}  # the other tools, by name
+TOOL_ADAPTERS: dict[str, Any] = {"lanefather": _lanefather, "spawnfather": _spawnfather}  # the other tools, by name
 
 
 class Screen:
@@ -256,7 +256,12 @@ class Screen:
         ToolClient.poll_fresh() without touching the cached snapshot; None where the row is gone, changed or
         no longer in the state the action needs."""
         page = action.identity[0] if action.identity else ""
-        name = {"overview": "slotfather", "processes": "junkfather", "lanes": "lanefather"}.get(page)
+        name = {
+            "overview": "slotfather",
+            "spawns": "spawnfather",
+            "processes": "spawnfather",
+            "lanes": "lanefather",
+        }.get(page)
         if name is None:
             return None
         client = self.clients.get(name)
@@ -802,9 +807,10 @@ def events_command(argv: list[str]) -> int:
     follow = as_json = False
     while argv:
         if argv[0] == "--source" and len(argv) > 1:
-            if argv[1] not in _sources.TOOLS:
+            source = "spawnfather" if argv[1] == "junkfather" else argv[1]
+            if source not in _sources.TOOLS:
                 raise UsageError(f"--source takes {', '.join(_sources.TOOLS)}, not {argv[1]!r}", "events")
-            names, argv = names + [argv[1]], argv[2:]
+            names, argv = names + [source], argv[2:]
         elif argv[0] == "--follow":
             follow, argv = True, argv[1:]
         elif argv[0] == "--json":
@@ -865,9 +871,10 @@ def command(argv: list[str]) -> int:
             print(USAGE)
             return 0
         elif argv[0] == "--page" and len(argv) > 1:
-            if argv[1] not in _state.PAGES:
+            chosen = "spawns" if argv[1] == "processes" else argv[1]
+            if chosen not in _state.PAGES:
                 raise UsageError(f"--page takes {', '.join(_state.PAGES)}, not {argv[1]!r}")
-            page, argv = argv[1], argv[2:]
+            page, argv = chosen, argv[2:]
         elif argv[0] in ("--interval", "--width", "--height") and len(argv) > 1:
             try:
                 value = float(argv[1])

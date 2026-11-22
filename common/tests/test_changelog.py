@@ -12,7 +12,7 @@ import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-PACKAGES = ("slotfather", "lanefather", "junkfather", "godfather", "tokenfather")
+PACKAGES = ("slotfather", "lanefather", "spawnfather", "godfather", "tokenfather")
 SECTIONS = ("Breaking", "Added", "Changed", "Deprecated", "Removed", "Fixed", "Security")
 STRICT_RELEASE_RE = re.compile(r"## (\d+)\.(\d+)\.(\d+) - (\d{4}-\d\d-\d\d)")
 BUILD_RELEASE_RE = re.compile(r"## (\d+)\.(\d+)\.(\d+)(?:\+[0-9a-f]+)? - (\d{4}-\d\d-\d\d)")
@@ -95,8 +95,8 @@ class ChangelogLayoutTests(unittest.TestCase):
     def test_godfather_changelog_layout_and_version(self) -> None:
         self.check_package("godfather")
 
-    def test_junkfather_changelog_layout_and_version(self) -> None:
-        self.check_package("junkfather")
+    def test_spawnfather_changelog_layout_and_version(self) -> None:
+        self.check_package("spawnfather")
 
     def test_tokenfather_changelog_layout_and_version(self) -> None:
         self.check_package("tokenfather")

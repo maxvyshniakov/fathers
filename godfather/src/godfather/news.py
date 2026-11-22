@@ -20,7 +20,8 @@ from fathers_common.changelog import RELEASE, UNRELEASED, entries as _changelog_
 from . import sources as _sources
 from . import version as _version
 
-TOOLS = ("godfather", "slotfather", "lanefather", "junkfather")  # the versions row's order, and a date's ties
+TOOLS = ("godfather", "slotfather", "lanefather", "spawnfather")  # the versions row's order, and a date's ties
+TOOL_ALIASES: dict[str, frozenset[str]] = {"spawnfather": frozenset({"spawnfather", "junkfather"})}
 TIMEOUT = 2.0  # seconds for each call
 CONTRACT = 1
 
@@ -166,7 +167,8 @@ def from_reply(tool: str, value: Any) -> Optional[tuple[str, list[Item]]]:
     if not isinstance(value, dict):
         return None
     reply = cast(dict[str, Any], value)
-    if reply.get("v", CONTRACT) != CONTRACT or reply.get("tool") != tool or not isinstance(reply.get("version"), str) \
+    allowed = TOOL_ALIASES.get(tool, frozenset({tool}))
+    if reply.get("v", CONTRACT) != CONTRACT or reply.get("tool") not in allowed or not isinstance(reply.get("version"), str) \
             or not isinstance(reply.get("entries"), list):
         return None
     items: list[Item] = []
@@ -286,7 +288,7 @@ def unread(news: Optional[News], read: Read) -> list[Item]:
     found: list[Item] = []
     passed: set[str] = set()  # tools whose read release the timeline has reached
     for item in news.items:
-        value = read.get(item.tool)
+        value = read.get(item.tool) or (read.get("junkfather") if item.tool == "spawnfather" else None)
         if value is None:
             found.append(item)
         elif item.unreleased:
@@ -312,6 +314,8 @@ def mark_read(news: Optional[News], read: Read) -> Read:
             newest[item.tool] = item
     for name, item in newest.items():
         marked[name] = item.token()
+    if "spawnfather" in newest:
+        marked.pop("junkfather", None)
     return marked
 
 

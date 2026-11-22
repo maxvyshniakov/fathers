@@ -54,13 +54,13 @@ class ToolTests(Fixtures):
         (self.root / name / "replies.json").write_text(json.dumps(replies))
 
     def test_a_tool_with_the_contract_gives_its_version_and_entries_with_markdown_out(self) -> None:
-        self.reply("junkfather", {"changelog --json": changelog("junkfather", "0.1.0", [
-            ("0.1.0", "2026-11-12", "Added", "`junkfather own` **starts** [it](x.md)"),
+        self.reply("spawnfather", {"changelog --json": changelog("spawnfather", "0.1.0", [
+            ("0.1.0", "2026-11-12", "Added", "`spawnfather own` **starts** [it](x.md)"),
             ("0.1.0", "2026-11-12", "Added", ""),  # skipped: an empty field
         ])})
-        row, items = news.tool("junkfather")
-        self.assertEqual(news.Installed("junkfather", "0.1.0", "ok"), row)
-        self.assertEqual([news.Item("junkfather", "0.1.0", "2026-11-12", "Added", "junkfather own starts it")], items)
+        row, items = news.tool("spawnfather")
+        self.assertEqual(news.Installed("spawnfather", "0.1.0", "ok"), row)
+        self.assertEqual([news.Item("spawnfather", "0.1.0", "2026-11-12", "Added", "spawnfather own starts it")], items)
 
     def test_without_the_command_the_version_comes_from_version_then_capabilities(self) -> None:
         self.reply("slotfather", {"version --json": {"code": 0, "json": {"v": 1, "version": "0.2.0"}}})
@@ -75,8 +75,8 @@ class ToolTests(Fixtures):
         self.assertEqual("failed", news.tool("lanefather")[0].state)
         for bad in (dict(v=2), dict(tool="slotfather"), dict(entries={})):
             with self.subTest(bad=bad):
-                self.assertIsNone(news.from_reply("junkfather", changelog("junkfather", "0.1.0", [], **bad)["json"]))
-        self.assertIsNotNone(news.from_reply("junkfather", {"tool": "junkfather", "version": "0.1.0", "entries": []}),
+                self.assertIsNone(news.from_reply("spawnfather", changelog("spawnfather", "0.1.0", [], **bad)["json"]))
+        self.assertIsNotNone(news.from_reply("spawnfather", {"tool": "spawnfather", "version": "0.1.0", "entries": []}),
                              "no v reads as 1")
 
 
@@ -85,15 +85,15 @@ class TimelineTests(Fixtures):
         (self.root / "slotfather").mkdir()
         (self.root / "slotfather" / "replies.json").write_text(json.dumps({"changelog --json": changelog(
             "slotfather", "0.2.0", [("0.2.0", "2026-11-12", "Added", "s2"), ("0.1.0", "2026-11-01", "Added", "s1")])}))
-        (self.root / "junkfather").mkdir()
-        (self.root / "junkfather" / "replies.json").write_text(json.dumps({"changelog --json": changelog(
-            "junkfather", "0.1.0", [("0.1.0", "2026-11-12", "Added", "j1")])}))
+        (self.root / "spawnfather").mkdir()
+        (self.root / "spawnfather" / "replies.json").write_text(json.dumps({"changelog --json": changelog(
+            "spawnfather", "0.1.0", [("0.1.0", "2026-11-12", "Added", "j1")])}))
         found = news.load(OWN, stale=True)
-        self.assertEqual(["godfather", "slotfather", "lanefather", "junkfather"], [r.tool for r in found.installed])
+        self.assertEqual(["godfather", "slotfather", "lanefather", "spawnfather"], [r.tool for r in found.installed])
         self.assertEqual(["stale", "ok", "absent", "ok"], [r.state for r in found.installed])
         self.assertEqual([("godfather", "", "Not out yet (fathers#17)."),
                           ("godfather", "0.1.0", "godfather opens the dashboard."), ("slotfather", "0.2.0", "s2"),
-                          ("junkfather", "0.1.0", "j1"), ("slotfather", "0.1.0", "s1")],
+                          ("spawnfather", "0.1.0", "j1"), ("slotfather", "0.1.0", "s1")],
                          [(i.tool, i.version, i.text) for i in found.items],
                          "Unreleased without an install date on top, then by date, a date's tools in order")
         own = found.items[0]
@@ -113,7 +113,7 @@ class TimelineTests(Fixtures):
         self.assertEqual([news.Item("slotfather", "", "", "Added", "status --json.", "81abd86", "0.1.0"),
                           news.Item("slotfather", "", "2026-11-10", "Fixed", "dated.", "", "0.1.0"),
                           news.Item("slotfather", "0.1.0", "2026-11-01", "Added", "s1")], found[1])
-        ordered = news.ordered([news.Item("junkfather", "0.2.0", "2026-11-12", "Added", "j"), *found[1]])
+        ordered = news.ordered([news.Item("spawnfather", "0.2.0", "2026-11-12", "Added", "j"), *found[1]])
         self.assertEqual(["status --json.", "j", "dated.", "s1"], [i.text for i in ordered],
                          "no install date: on top; an install date places it among the releases")
 
@@ -121,7 +121,7 @@ class TimelineTests(Fixtures):
 class ReadTests(Fixtures):
     NEWS = news.News((), (news.Item("slotfather", "0.10.0", "d", "Added", "b"),
                           news.Item("slotfather", "0.2.0", "d", "Added", "a"),
-                          news.Item("junkfather", "0.1.0", "d", "Added", "c")))
+                          news.Item("spawnfather", "0.1.0", "d", "Added", "c")))
 
     def test_unread_is_newer_than_the_tools_read_version_all_without_one(self) -> None:
         self.assertEqual(3, len(news.unread(self.NEWS, {})))
@@ -131,8 +131,20 @@ class ReadTests(Fixtures):
 
     def test_marking_read_takes_each_tools_newest_and_keeps_the_rest(self) -> None:
         marked = news.mark_read(self.NEWS, {"lanefather": "0.3.0"})
-        self.assertEqual({"slotfather": "0.10.0", "junkfather": "0.1.0", "lanefather": "0.3.0"}, marked)
+        self.assertEqual({"slotfather": "0.10.0", "spawnfather": "0.1.0", "lanefather": "0.3.0"}, marked)
         self.assertEqual([], news.unread(self.NEWS, marked))
+
+    def test_legacy_junkfather_reply_and_read_state_transition_cleanly(self) -> None:
+        parsed = news.from_reply("spawnfather", changelog("junkfather", "0.1.0", [
+            ("0.1.0", "2026-11-12", "Added", "legacy entry"),
+        ])["json"])
+        assert parsed is not None
+        version, items = parsed
+        self.assertEqual("0.1.0", version)
+        self.assertEqual([news.Item("spawnfather", "0.1.0", "2026-11-12", "Added", "legacy entry")], items)
+        found = news.News((news.Installed("spawnfather", version, "ok"),), tuple(items))
+        self.assertEqual([], news.unread(found, {"junkfather": "0.1.0"}), "legacy read state counts for spawnfather")
+        self.assertEqual({"spawnfather": "0.1.0"}, news.mark_read(found, {"junkfather": "0.1.0"}))
 
     def test_unreleased_entries_are_read_by_their_install_and_new_again_after_another(self) -> None:
         def item(commit: str, text: str) -> news.Item:

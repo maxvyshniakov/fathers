@@ -4,39 +4,39 @@
 ││  KEYS                                                Normal has no mark.                               ▲ ↗ ↘           outlier · type slower/faster    ││
 ╰│    ↑ ↓         select a row · scroll a panel                                                                                                           ││
 ┏│    pgup pgdn   a page                              SLOTS                                             PAGES                                             ││
-┃│    home end    first · last row, top · bottom        One block per slot; the colour is its owner.      2 · 3        lanes · processes (SLOTS'          ││
-▌│    tab         next panel, by columns                Slots budget scheduling, not CPU or memory.                    border)                            ││
-┃│                (shift-tab: back)                     manual · auto  saved or computed capacity         ▶️ 🗓️ ✅ 💤  active planned landed parked       ││
-┃│    click       a row, a panel, a footer hint (as     draining N     held above a lowered capacity      👻 ⌛        owner gone · past its TTL          ││
-┃│                its key)                                                                                ❔ ◌ 📦      unowned · gone · resource          ││
-┃│    wheel       scroll the panel under the          QUEUE                                               Links in DETAILS open a page.                   ││
-┃│                pointer                               slots  cells held or asked for                                                                    ││
-┃│    ← → · f     events: next log (or its title)       cpu    cores used / cores its slots stand for   MACHINE                                           ││
-┗│    r           events: every event as logged                (a soft limit)                             load       the 1-minute load average / cores    ││
-╭│    /           events: text filter (esc clears)      time   running or waiting for                                (not CPU %)                          ││
-││    1 2 3       overview · lanes · processes          pid    lease owner                                mem        the kernel's memory pressure:        ││
-││    enter · a   the row's actions (right-click)       The bar turns red above 1.5× its share and                   normal, warning, critical (Linux:    ││
-││    s           settings                              yellow when idle.                                            used / total)                        ││
-││    ?           help                                  An idle lease that can yield is asked to when     swap       used / total, in GB                  ││
-││    v           what's new (or click Godfather        a request waits for its slots. Nothing is         Admission follows memory pressure, not used     ││
-││                what's new?)                          ever killed.                                      RAM, which the file cache keeps near full.      ││
-││    esc         close an overlay · leave a page                                                         🆗 · 🔥    fine · critical                      ││
-││    q · ctrl+l  quit · redraw                       DETAILS                                             unleased   demand outside leased work           ││
-││    shift+drag  select text                           start est   when the queue head should start      admission  slots a new request could get now    ││
-││    Hotkeys work on any keyboard layout.              pass until  later work may overtake until         Bars run indigo→red, and turn all red when      ││
-││                                                                  then                                  the resource is critical.                       ││
-││  STATES                                              receipt     the lane's check: green or red,       The chart shows held slots over time, now on    ││
-││    ▶️  running                                                   current or stale                      the right.                                      ││
-││    ⏸️  waiting                                       review      review findings still open                                                            ││
-││    ↩️  yielded, back in the queue                    Estimates, not promises.                        SETTINGS                                          ││
-││    ❓  asked to yield its slots                                                                        ↑ ↓      move through every section             ││
-││    💤  idle: under 0.1 core for 5 min              EVENTS                                              ← →      change the value                       ││
-││    🔥  above 1.5× its CPU share                      One log at a time; ↑↓ pick a run or event         enter    edit · save                            ││
-││    👨‍🦳  lease of an older client                      ▪ · ▫           held · given back, never held     d · D D  reset one · reset its section          │╯
-││                                                      wait · no wait  how long it waited for them       esc      close                                  │╮
-││  PRIORITY                                            ok · exit N     how it ended, how long            A section per tool; status is read-only.        ││
-││    ⚡  interactive: someone is waiting on it         gave up         a waiter stopped waiting          Lower capacity drains; work keeps slots.        ││
-││    🐌  batch: unattended work, after the rest        owner died      it exited; it was reaped          Colour theme: Auto, Terminal or Built-in.       ││
+┃│    home end    first · last row, top · bottom        One block per slot; the colour is its owner.      2 · 3        lanes · spawns (SLOTS' border)     ││
+▌│    tab         next panel, by columns                Slots budget scheduling, not CPU or memory.       ▶️ 🗓️ ✅ 💤  active planned landed parked       ││
+┃│                (shift-tab: back)                     manual · auto  saved or computed capacity         👻 ⌛        owner gone · past its TTL          ││
+┃│    click       a row, a panel, a footer hint (as     draining N     held above a lowered capacity      ❔ ◌ 📦      unowned · gone · resource          ││
+┃│                its key)                                                                                Links in DETAILS open a page.                   ││
+┃│    wheel       scroll the panel under the          QUEUE                                                                                               ││
+┃│                pointer                               slots  cells held or asked for                  MACHINE                                           ││
+┃│    ← → · f     events: next log (or its title)       cpu    cores used / cores its slots stand for     load       the 1-minute load average / cores    ││
+┗│    r           events: every event as logged                (a soft limit)                                        (not CPU %)                          ││
+╭│    /           events: text filter (esc clears)      time   running or waiting for                     mem        the kernel's memory pressure:        ││
+││    1 2 3       overview · lanes · spawns             pid    lease owner                                           normal, warning, critical (Linux:    ││
+││    enter · a   the row's actions (right-click)       The bar turns red above 1.5× its share and                   used / total)                        ││
+││    s           settings                              yellow when idle.                                 swap       used / total, in GB                  ││
+││    ?           help                                  An idle lease that can yield is asked to when     Admission follows memory pressure, not used     ││
+││    v           what's new (or click Godfather        a request waits for its slots. Nothing is         RAM, which the file cache keeps near full.      ││
+││                what's new?)                          ever killed.                                      🆗 · 🔥    fine · critical                      ││
+││    esc         close an overlay · leave a page                                                         unleased   demand outside leased work           ││
+││    q · ctrl+l  quit · redraw                       DETAILS                                             admission  slots a new request could get now    ││
+││    shift+drag  select text                           start est   when the queue head should start      Bars run indigo→red, and turn all red when      ││
+││    Hotkeys work on any keyboard layout.              pass until  later work may overtake until         the resource is critical.                       ││
+││                                                                  then                                  The chart shows held slots over time, now on    ││
+││  STATES                                              receipt     the lane's check: green or red,       the right.                                      ││
+││    ▶️  running                                                   current or stale                                                                      ││
+││    ⏸️  waiting                                       review      review findings still open          SETTINGS                                          ││
+││    ↩️  yielded, back in the queue                    Estimates, not promises.                          ↑ ↓      move through every section             ││
+││    ❓  asked to yield its slots                                                                        ← →      change the value                       ││
+││    💤  idle: under 0.1 core for 5 min              EVENTS                                              enter    edit · save                            ││
+││    🔥  above 1.5× its CPU share                      One log at a time; ↑↓ pick a run or event         d · D D  reset one · reset its section          ││
+││    👨‍🦳  lease of an older client                      ▪ · ▫           held · given back, never held     esc      close                                  │╯
+││                                                      wait · no wait  how long it waited for them       A section per tool; status is read-only.        │╮
+││  PRIORITY                                            ok · exit N     how it ended, how long            Lower capacity drains; work keeps slots.        ││
+││    ⚡  interactive: someone is waiting on it         gave up         a waiter stopped waiting          Colour theme: Auto, Terminal or Built-in.       ││
+││    🐌  batch: unattended work, after the rest        owner died      it exited; it was reaped                                                          ││
 ││                                                                                                                                                        ││
 ││                                                             ↑↓ scroll   esc close   q quit                                                             ││
 ╰╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯╯

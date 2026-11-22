@@ -32,8 +32,9 @@ from typing import Any, Callable, Mapping, NamedTuple, Optional, Protocol, Union
 
 from .model import PsRow
 
-TOOLS = ("slotfather", "lanefather", "junkfather")  # the names Godfather looks for (SPEC: built in)
-DEFAULT_TAGS = {"slotfather": "slot", "lanefather": "lane", "junkfather": "junk"}
+TOOLS = ("slotfather", "lanefather", "spawnfather")  # the names Godfather looks for (SPEC: built in)
+DEFAULT_TAGS = {"slotfather": "slot", "lanefather": "lane", "spawnfather": "spwn"}
+TOOL_ALIASES: dict[str, tuple[str, ...]] = {"spawnfather": ("spawnfather", "junkfather")}
 CAPABILITIES_TIMEOUT: Optional[float] = 2.0
 SNAPSHOT_TIMEOUT: Optional[float] = 5.0
 SETTINGS_TIMEOUT: Optional[float] = 5.0
@@ -131,7 +132,11 @@ class SystemRunner:
         return False
 
     def which(self, tool: str) -> Optional[str]:
-        return shutil.which(tool)
+        for candidate in TOOL_ALIASES.get(tool, (tool,)):
+            found = shutil.which(candidate)
+            if found:
+                return found
+        return None
 
     def realpath(self, path: str) -> str:
         return os.path.realpath(path)
@@ -236,8 +241,14 @@ class FixtureRunner:
     def is_fixture(self) -> bool:
         return True
 
+    def _folder_name(self, tool: str) -> str:
+        for candidate in TOOL_ALIASES.get(tool, (tool,)):
+            if (self.root / candidate).is_dir():
+                return candidate
+        return tool
+
     def which(self, tool: str) -> Optional[str]:
-        folder = self.root / tool
+        folder = self.root / self._folder_name(tool)
         return str(folder) if folder.is_dir() else None
 
     def realpath(self, path: str) -> str:
@@ -260,7 +271,7 @@ class FixtureRunner:
                 if record is not None:
                     with contextlib.suppress(OSError), open(record, "a", encoding="utf-8") as handle:
                         handle.write(json.dumps([tool, *argv]) + "\n")
-        return _fixture_reply(self.root, tool, argv)
+        return _fixture_reply(self.root, self._folder_name(tool), argv)
 
     def run_json(self, tool: str, argv: list[str], timeout: Optional[float],
                  executable: Optional[str] = None) -> tuple[int, Any, str]:
@@ -276,12 +287,12 @@ class FixtureRunner:
             if record is not None:
                 with contextlib.suppress(OSError), open(record, "a", encoding="utf-8") as handle:
                     handle.write(json.dumps({"argv": line, "env": {"GODFATHER_ACTOR": actor}}) + "\n")
-        found = _fixture_reply(self.root, tool, argv) if tool else Reply(127, "", "")
+        found = _fixture_reply(self.root, self._folder_name(tool), argv) if tool else Reply(127, "", "")
         return found if found.code != 127 else Reply(0, f"recorded: {' '.join(line)}", "")
 
     def event_log(self, tool: str, path: str) -> Path:
         del path
-        return self.root / tool / "events.jsonl"
+        return self.root / self._folder_name(tool) / "events.jsonl"
 
     def process_cwd(self, pid: Any) -> Optional[str]:
         with contextlib.suppress(OSError, ValueError, AttributeError):
@@ -378,6 +389,8 @@ def _dashboard_block(capabilities: Optional[Mapping[str, Any]]) -> dict[str, Any
 
 def _tag_of(capabilities: Optional[Mapping[str, Any]], fallback: str) -> str:
     tag = _dashboard_block(capabilities).get("tag")
+    if tag == "junk" and fallback == "spwn":
+        return "spwn"
     return tag if isinstance(tag, str) and _TAG_RE.fullmatch(tag) else fallback
 
 

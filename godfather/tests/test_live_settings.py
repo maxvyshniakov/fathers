@@ -40,7 +40,7 @@ class TerminalTests(LiveCase):
 
 
 class SectionFlowTests(LiveCase):
-    """fathers#87 review: reset, `D D` and Lanefather's and Junkfather's sections in the live dashboard, each write
+    """fathers#87 review: reset, `D D` and Lanefather's and Spawnfather's sections in the live dashboard, each write
     recorded with its revision."""
 
     def setUp(self) -> None:
@@ -48,7 +48,7 @@ class SectionFlowTests(LiveCase):
         from helpers import FakeTool
 
         self.lane = FakeTool("lanefather", self.fake.bin, values={"rerun.wait": 600})
-        self.junk = FakeTool("junkfather", self.fake.bin, values={"reap.grace": 30})
+        self.spawn = FakeTool("spawnfather", self.fake.bin, values={"reap.grace": 30})
 
     @staticmethod
     def tool_writes(fake: object) -> list[list[str]]:
@@ -59,7 +59,7 @@ class SectionFlowTests(LiveCase):
         screen.receive(" QUEUE ")
         mark = screen.mark()
         screen.write(b"s")
-        screen.receive("LANEFATHER", "JUNKFATHER", "Rerun waits", since=mark)
+        screen.receive("LANEFATHER", "SPAWNFATHER", "Rerun waits", since=mark)
         row, line = next((row, line) for row, line in screen.rows().items() if "Rerun waits" in line)
         mark = screen.mark()
         screen.click(line.index("Rerun waits") + 1, row)
@@ -73,15 +73,15 @@ class SectionFlowTests(LiveCase):
         screen.receive("Saved · Rerun waits 55m", since=mark)
         self.assertEqual({}, self.lane.read()["values"])
         mark = screen.mark()
-        screen.write(b"G")  # Junkfather's last row: Grace before SIGKILL
+        screen.write(b"G")  # Spawnfather's last row: Grace before SIGKILL
         screen.write(b"DD")
-        screen.receive("every Junkfather setting at its default", since=mark)
-        self.assertEqual({}, self.junk.read()["values"])
-        lane, junk = self.tool_writes(self.lane), self.tool_writes(self.junk)
+        screen.receive("every Spawnfather setting at its default", since=mark)
+        self.assertEqual({}, self.spawn.read()["values"])
+        lane, spawn = self.tool_writes(self.lane), self.tool_writes(self.spawn)
         self.assertEqual(["settings", "set", "rerun.wait", "900", "--revision"], lane[0][:5])
         self.assertEqual(["settings", "reset", "rerun.wait", "--revision"], lane[1][:4])
         self.assertTrue(all(argv[argv.index("--revision") + 1].startswith("sha256:") for argv in lane))
-        self.assertEqual([["settings", "reset", "--all", "--json"]], junk)
+        self.assertEqual([["settings", "reset", "--all", "--json"]], spawn)
         self.assertEqual([], self.writes(), "Slotfather is not asked")
         self.assertEqual(0, screen.quit())
 

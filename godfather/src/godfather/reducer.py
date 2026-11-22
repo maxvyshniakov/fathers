@@ -354,7 +354,7 @@ def events_shown(state: AppState) -> bool:
 
 
 def switch_log(step: int) -> Handler:
-    """EVENTS' log (fathers#152): the next one the title names, SLOTS LOG, LANES LOG, PROCS LOG, then FULL LOG, of
+    """EVENTS' log (fathers#152): the next one the title names, SLOTS LOG, LANES LOG, SPAWNS LOG, then FULL LOG, of
     the tools present. `f` anywhere EVENTS is drawn, ← → while it has the focus. The arrow on that side flashes
     (fathers#165): the reducer lights it as it lights a scrolled thumb."""
     def handler(state: AppState, _: str, __: float = 0.0) -> Result:
@@ -418,7 +418,7 @@ def clear_filter(state: AppState, _: str, __: float = 0.0) -> Result:
 
 
 def go_page(page: str) -> Handler:
-    """`1` `2` `3`: the overview, Lanes, Processes; a page whose tool is absent does nothing (fathers#85)."""
+    """`1` `2` `3`: the overview, Lanes, Spawns; a page whose tool is absent does nothing (fathers#85)."""
     def handler(state: AppState, _: str, __: float = 0.0) -> Result:
         return open_page(state, page), []
     return handler
@@ -625,7 +625,7 @@ def edit_type(panel: _settings.Panel, _: _settings.Context, key: str, __: float)
 
 # The 14-mode table (fathers#22, fathers#225)
 
-PAGE_KEYS: dict[str, Handler] = {"1": go_page("overview"), "2": go_page("lanes"), "3": go_page("processes")}
+PAGE_KEYS: dict[str, Handler] = {"1": go_page("overview"), "2": go_page("lanes"), "3": go_page("spawns")}
 OVERVIEW_BASE: dict[str, Handler] = {
     "q": quit_, "Q": quit_, "f": cycle_source, "r": toggle_raw, "/": open_filter, "esc": clear_filter,
     "\t": focus_step(1), "back_tab": focus_step(-1),
@@ -885,7 +885,7 @@ def click(state: AppState, event: Mouse, now: float) -> Result:
         if code == LEFT and 0 <= row < min(int(view["visible"]), int(view["count"]) - int(view["offset"])):
             position = int(view["offset"]) + row
             row_items = cast(Union[list[Any], None], view.get("row_items"))
-            if name in ("lanes", "procs") and row_items is not None and row_items[position] is not None:
+            if name in ("lanes", "spawns") and row_items is not None and row_items[position] is not None:
                 return page_select(state, state.ui.page, int(row_items[position])), []
             if row_items is not None and row_items[position] is not None:
                 return move(state, int(row_items[position])), []

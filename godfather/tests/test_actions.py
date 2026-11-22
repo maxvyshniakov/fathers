@@ -1,7 +1,7 @@
 """Row actions run by the owner tools' CLIs (fathers#88): which actions each row offers in which state, the menu,
 the reason and the confirmation through the reducer, the run with the row checked again (recorded under
 GODFATHER_FIXTURES with GODFATHER_ACTOR, never run), a failing command's stderr in red, the live flow in a PTY, and
-the real Junkfather's extend and reap in a temporary state directory."""
+the real Spawnfather's extend and reap in a temporary state directory."""
 from __future__ import annotations
 
 import dataclasses
@@ -22,7 +22,7 @@ from test_procs import PROCS, PageTests, decoded as procs_decoded
 from test_state import entry
 
 from godfather import actions, app, reducer, sources, state as state_module
-from godfather.adapters import junkfather, lanefather
+from godfather.adapters import lanefather, spawnfather
 from godfather.model import Lane, Processes, ProcessTableRow
 
 START = "Tue Nov  4 09:00:00 2026"
@@ -98,7 +98,7 @@ class RequestTests(unittest.TestCase):
 
 class ProcessTests(unittest.TestCase):
     def row(self, ident: str) -> ProcessTableRow:
-        found = junkfather.find(procs_decoded(), ("entry", ident))
+        found = spawnfather.find(procs_decoded(), ("entry", ident))
         assert found is not None
         return found
 
@@ -106,23 +106,23 @@ class ProcessTests(unittest.TestCase):
         orphan = actions.for_process(self.row("j7a8b9c"), ["reap", "extend"])
         self.assertEqual(["Reap"], names(orphan))
         self.assertTrue(orphan[0].confirm)
-        self.assertEqual("junkfather reap --id j7a8b9c '--reason=godfather: orphan'", orphan[0].shown())
+        self.assertEqual("spawnfather reap --id j7a8b9c '--reason=godfather: orphan'", orphan[0].shown())
         expired = actions.for_process(self.row("j2b3c4d"), ["reap", "extend"])
-        self.assertEqual("junkfather reap --id j2b3c4d --expired '--reason=godfather: expired'", expired[0].shown(),
-                         "Junkfather refuses it too once the entry was extended")
+        self.assertEqual("spawnfather reap --id j2b3c4d --expired '--reason=godfather: expired'", expired[0].shown(),
+                         "Spawnfather refuses it too once the entry was extended")
 
     def test_a_running_entry_is_extended_never_reaped(self) -> None:
         found = actions.for_process(self.row("j3f9a1c"), ["reap", "extend"])
         self.assertEqual(["Extend TTL by 1 h", "Extend TTL by 4 h", "Extend TTL by 1 d"], names(found))
-        self.assertEqual("junkfather extend j3f9a1c --ttl 4h", found[1].shown())
+        self.assertEqual("spawnfather extend j3f9a1c --ttl 4h", found[1].shown())
         self.assertFalse(any(action.confirm for action in found))
 
     def test_an_unowned_process_is_reaped_by_pid_with_force_and_a_resource_has_none(self) -> None:
-        rows = junkfather.page_rows(procs_decoded())
+        rows = spawnfather.page_rows(procs_decoded())
         process = next(row for row in rows if row["kind"] == "unowned")
         assert process["kind"] == "unowned"
         found = actions.for_process(process, ["reap"])
-        self.assertEqual("junkfather reap --pid 88123 --force '--reason=godfather: unowned'", found[0].shown())
+        self.assertEqual("spawnfather reap --pid 88123 --force '--reason=godfather: unowned'", found[0].shown())
         self.assertEqual([], actions.for_process({**process, "alive": False}, ["reap"]), "gone since the sweep")
         self.assertEqual([], actions.for_process(next(row for row in rows if row["kind"] == "resource"), ["reap"]))
         self.assertEqual([], actions.for_process(process, ["extend", "sweep"]), "not advertised")
@@ -157,7 +157,7 @@ class FlowTests(PageTests):
 
     def to_orphan(self) -> Any:
         state = self.keys(self.screen([entry(1)]), "3")
-        return dataclasses.replace(state, picked={"processes": ("entry", "j7a8b9c")})
+        return dataclasses.replace(state, picked={"spawns": ("entry", "j7a8b9c")})
 
     def test_enter_opens_the_menu_and_a_reap_asks_first(self) -> None:
         state, _ = self.key(self.to_orphan(), "\r")
@@ -168,7 +168,7 @@ class FlowTests(PageTests):
         state, _ = self.key(state, "j")
         state, effects = self.key(state, "\r")
         self.assertIsInstance(state.ui.overlay, state_module.Confirm)
-        self.assertIn("junkfather reap --id j7a8b9c '--reason=godfather: orphan'", self.text())
+        self.assertIn("spawnfather reap --id j7a8b9c '--reason=godfather: orphan'", self.text())
         self.assertIn("claude 4bceaaaf/a71c", self.text(), "the target's owner")
         self.assertEqual([], effects, "nothing runs before y")
         for cancel in ("esc", "n", "\r", "x"):
@@ -181,7 +181,7 @@ class FlowTests(PageTests):
 
     def test_a_running_entry_extends_without_asking(self) -> None:
         state = self.keys(self.screen([entry(1)]), "3")
-        state = dataclasses.replace(state, picked={"processes": ("entry", "j3f9a1c")})
+        state = dataclasses.replace(state, picked={"spawns": ("entry", "j3f9a1c")})
         state, _ = self.key(state, "a")
         state, _ = self.key(state, "j")
         state, _ = self.key(state, "j")
@@ -190,8 +190,8 @@ class FlowTests(PageTests):
 
     def test_a_row_with_none_opens_no_menu_and_says_so(self) -> None:
         state = self.keys(self.screen([entry(1)]), "3")
-        state = dataclasses.replace(state, picked={"processes": ("resource", "simulator",
-                                                                 "9F8E7D6C-0000-4000-8000-0123456789AB")})
+        state = dataclasses.replace(state, picked={"spawns": ("resource", "simulator",
+                                                              "9F8E7D6C-0000-4000-8000-0123456789AB")})
         state, _ = self.key(state, "\r")
         self.assertIsNone(state.ui.overlay)
         self.assertIn("no actions", self.text())
@@ -217,16 +217,16 @@ class FlowTests(PageTests):
         state = self.keys(self.screen([entry(1)]), "3")
         x, y = self.at("playwright s")
         state, _ = reducer.reduce(state, state_module.Mouse(2, x, y, True), 0.0)
-        self.assertEqual(("entry", "j7a8b9c"), state.picked["processes"])
+        self.assertEqual(("entry", "j7a8b9c"), state.picked["spawns"])
         self.assertIsInstance(state.ui.overlay, state_module.ActionMenu)
 
     def test_a_done_action_says_so_and_polls_its_source(self) -> None:
-        state, effects = reducer.reduce(self.screen(), state_module.ActionDone("junkfather", False, "no such entry"),
+        state, effects = reducer.reduce(self.screen(), state_module.ActionDone("spawnfather", False, "no such entry"),
                                         0.0)
         assert state.notice is not None
         self.assertEqual(("no such entry", "bad"), (state.notice.text, state.notice.style))
-        self.assertEqual([("poll", "junkfather")], [(effect.kind, effect.key) for effect in effects
-                                                    if effect.kind == "poll"])
+        self.assertEqual([("poll", "spawnfather")], [(effect.kind, effect.key) for effect in effects
+                                                     if effect.kind == "poll"])
 
 
 class FixtureCase(unittest.TestCase):
@@ -243,7 +243,7 @@ class FixtureCase(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def reap(self) -> actions.Action:
-        found = junkfather.find(procs_decoded(), ("entry", "j7a8b9c"))
+        found = spawnfather.find(procs_decoded(), ("entry", "j7a8b9c"))
         assert found is not None
         return actions.for_process(found, ["reap"])[0]
 
@@ -255,29 +255,29 @@ class RunTests(FixtureCase):
         done = cast(Any, app.Screen().act(self.reap(), ""))
         self.assertTrue(done.ok, done.line)
         line = json.loads(self.record.read_text().splitlines()[-1])
-        self.assertEqual(["junkfather", "reap", "--id", "j7a8b9c", "--reason=godfather: orphan"], line["argv"])
+        self.assertEqual(["spawnfather", "reap", "--id", "j7a8b9c", "--reason=godfather: orphan"], line["argv"])
         self.assertTrue(line["env"]["GODFATHER_ACTOR"].startswith("godfather/"))
 
     def test_a_row_that_changed_is_dropped(self) -> None:
-        replies = json.loads((self.tmp / "procs" / "junkfather" / "replies.json").read_text())
+        replies = json.loads((self.tmp / "procs" / "spawnfather" / "replies.json").read_text())
         status = replies["status --json"]["json"]
         status["entries"] = [row for row in status["entries"] if row["id"] != "j7a8b9c"]
-        (self.tmp / "procs" / "junkfather" / "replies.json").write_text(json.dumps(replies))
+        (self.tmp / "procs" / "spawnfather" / "replies.json").write_text(json.dumps(replies))
         screen = app.Screen()
-        screen.clients["junkfather"].discover()
+        screen.clients["spawnfather"].discover()
         done = cast(Any, screen.act(self.reap(), ""))
         self.assertFalse(done.ok)
         self.assertIn("changed or is gone", done.line)
         self.assertFalse(self.record.exists(), "nothing run")
 
     def test_a_failing_command_is_its_first_stderr_line(self) -> None:
-        replies = json.loads((self.tmp / "procs" / "junkfather" / "replies.json").read_text())
-        replies["reap --id j7a8b9c --reason=godfather: orphan"] = {"code": 1, "stderr": "junkfather reap: busy\nmore"}
-        (self.tmp / "procs" / "junkfather" / "replies.json").write_text(json.dumps(replies))
+        replies = json.loads((self.tmp / "procs" / "spawnfather" / "replies.json").read_text())
+        replies["reap --id j7a8b9c --reason=godfather: orphan"] = {"code": 1, "stderr": "spawnfather reap: busy\nmore"}
+        (self.tmp / "procs" / "spawnfather" / "replies.json").write_text(json.dumps(replies))
         screen = app.Screen()
-        screen.clients["junkfather"].discover()
+        screen.clients["spawnfather"].discover()
         done = cast(Any, screen.act(self.reap(), ""))
-        self.assertEqual((False, "junkfather reap: busy"), (done.ok, done.line))
+        self.assertEqual((False, "spawnfather reap: busy"), (done.ok, done.line))
 
     def test_a_request_is_checked_by_its_pid_and_start(self) -> None:
         item = request(pid=7, start=START)
@@ -290,15 +290,15 @@ class RecheckTests(unittest.TestCase):
     """fathers#88 review: an action runs only on a row still in the state it needs, rebuilt from a fresh snapshot."""
 
     def snapshot(self, **changes: Any) -> Processes:
-        raw = json.loads((PROCS / "junkfather" / "replies.json").read_text())["status --json"]["json"]
+        raw = json.loads((PROCS / "spawnfather" / "replies.json").read_text())["status --json"]["json"]
         for ident, fields in changes.items():
             for row in raw["entries"]:
                 if row["id"] == ident:
                     row.update(fields)
-        return junkfather.decode(raw)
+        return spawnfather.decode(raw)
 
     def reap(self, ident: str) -> actions.Action:
-        found = junkfather.find(procs_decoded(), ("entry", ident))
+        found = spawnfather.find(procs_decoded(), ("entry", ident))
         assert found is not None
         return actions.for_process(found, ["reap"])[0]
 
@@ -311,14 +311,14 @@ class RecheckTests(unittest.TestCase):
         self.assertIsNone(actions.revalidate(self.reap("j7a8b9c"), self.snapshot(j7a8b9c={"owner_alive": True})))
 
     def test_an_unowned_pid_an_owned_entry_holds_now_is_not_reaped(self) -> None:
-        rows = junkfather.page_rows(procs_decoded())
+        rows = spawnfather.page_rows(procs_decoded())
         process = next(row for row in rows if row["kind"] == "unowned")
         reap = actions.for_process(process, ["reap"])[0]
         self.assertEqual(reap, actions.revalidate(reap, self.snapshot()))
         self.assertIsNone(actions.revalidate(reap, self.snapshot(j3f9a1c={"pid": 88123})))
-        raw = json.loads((PROCS / "junkfather" / "replies.json").read_text())["status --json"]["json"]
+        raw = json.loads((PROCS / "spawnfather" / "replies.json").read_text())["status --json"]["json"]
         raw["unowned"][0]["alive"] = False
-        self.assertIsNone(actions.revalidate(reap, junkfather.decode(raw)), "gone since the sweep")
+        self.assertIsNone(actions.revalidate(reap, spawnfather.decode(raw)), "gone since the sweep")
 
     def test_ask_to_yield_on_a_lease_no_longer_yieldable_and_park_on_a_lane_no_longer_active(self) -> None:
         lease = entry(0, pid=42, start=START, priority="batch", yieldable=True)
@@ -388,7 +388,7 @@ class ExecutorTests(FixtureCase):
 
     def test_the_worker_reads_its_own_sources(self) -> None:
         screen = app.Screen()
-        client = screen.clients["junkfather"]
+        client = screen.clients["spawnfather"]
         self.assertIsNone(client.state().snapshot)
         with mock.patch.object(client, "refresh", side_effect=AssertionError("loader's")):
             done = cast(Any, screen.act(self.reap(), ""))
@@ -414,8 +414,8 @@ class ExecutorTests(FixtureCase):
     def test_the_same_action_in_flight_is_not_started_twice(self) -> None:
         reap = self.reap()
         confirm = state_module.AppState(
-            ui=state_module.UiState(state_module.PageScreen("processes"), state_module.Confirm(reap)),
-            tools={"junkfather": state_module.Tool("junkfather", "ok")},
+            ui=state_module.UiState(state_module.PageScreen("spawns"), state_module.Confirm(reap)),
+            tools={"spawnfather": state_module.Tool("spawnfather", "ok")},
         )
         state, effects = reducer.reduce(confirm, state_module.Key("y"), 0.0)
         self.assertEqual(["action"], [effect.kind for effect in effects])
@@ -427,7 +427,7 @@ class ExecutorTests(FixtureCase):
         again, effects = reducer.reduce(again_confirm, state_module.Key("y"), 0.0)
         self.assertEqual([], effects)
         self.assertIn("already running", cast(Any, again.notice).text)
-        done, _ = reducer.reduce(state, state_module.ActionDone("junkfather", True, "ok",
+        done, _ = reducer.reduce(state, state_module.ActionDone("spawnfather", True, "ok",
                                                                 state_module.action_key(reap)), 0.0)
         self.assertEqual(frozenset(), done.acting)
 
@@ -442,23 +442,23 @@ class LiveTests(unittest.TestCase):
         env = {key: value for key, value in os.environ.items() if not key.startswith(("GODFATHER_", "SLOTFATHER_"))}
         env.update(GODFATHER_FIXTURES=str(PROCS), GODFATHER_FIXTURES_RECORD=str(record), TZ="UTC")
         screen = terminal.Terminal(self, env, 43, 156, [sys.executable, str(terminal.ENTRY), "--interval", "0.5"])
-        screen.receive("3 procs 5")
+        screen.receive("3 spawns 5")
         at = screen.mark()
         screen.write("3")
-        screen.receive("PROCESS DETAILS", since=at)
+        screen.receive("SPAWN DETAILS", since=at)
         screen.write("gjjj")  # vite dev, storybook, the iPhone, then the orphaned Playwright server
         at = screen.mark()
         screen.write("\r")
         screen.receive("ACTIONS", "Reap", since=at)
         at = screen.mark()
         screen.write("j\r")
-        screen.receive("junkfather reap --id j7a8b9c", "y run it", since=at)
+        screen.receive("spawnfather reap --id j7a8b9c", "y run it", since=at)
         at = screen.mark()
         screen.write("y")
         screen.until(lambda _: record.exists() and record.read_text().endswith("\n"), what="the reap recorded")
         line = json.loads(record.read_text().splitlines()[-1])
-        self.assertEqual(["junkfather", "reap", "--id", "j7a8b9c", "--reason=godfather: orphan"], line["argv"])
-        screen.receive("recorded: junk", since=at)  # the footer's line, as long as it fits
+        self.assertEqual(["spawnfather", "reap", "--id", "j7a8b9c", "--reason=godfather: orphan"], line["argv"])
+        screen.receive("recorded: spaw", since=at)  # the footer's line, as long as it fits
         self.assertEqual(0, screen.quit())
 
 
@@ -495,12 +495,12 @@ class EveryRowTests(unittest.TestCase):
          ["slotfather", "reprioritize", "10000", "interactive", "--start", "Tue Nov  4 08:40:00 2026"]),
         ("ask to yield", "j", "jjj\r",
          ["slotfather", "ask-yield", "10001", "--start", "Tue Nov  4 08:41:00 2026"]),
-        ("extend", "3g", "j\r", ["junkfather", "extend", "j3f9a1c", "--ttl", "1h"]),
-        ("reap an orphan", "3gjjj", "j\ry", ["junkfather", "reap", "--id", "j7a8b9c", "--reason=godfather: orphan"]),
+        ("extend", "3g", "j\r", ["spawnfather", "extend", "j3f9a1c", "--ttl", "1h"]),
+        ("reap an orphan", "3gjjj", "j\ry", ["spawnfather", "reap", "--id", "j7a8b9c", "--reason=godfather: orphan"]),
         ("reap an expired entry", "3gjjjj", "j\ry",
-         ["junkfather", "reap", "--id", "j2b3c4d", "--expired", "--reason=godfather: expired"]),
+         ["spawnfather", "reap", "--id", "j2b3c4d", "--expired", "--reason=godfather: expired"]),
         ("reap an unowned process", "3Gkk", "j\ry",
-         ["junkfather", "reap", "--pid", "88123", "--force", "--reason=godfather: unowned"]),
+         ["spawnfather", "reap", "--pid", "88123", "--force", "--reason=godfather: unowned"]),
         ("open the ticket", "2", "j\r", [actions.opener(), "https://github.com/maxvyshniakov/straylight/issues/644"]),
         ("open the latest log", "2", "jj\r", ["less", "-R", "+G", LOG]),
         ("open the worktree", "2", "jjj\r", [actions.opener(), "/fixture/straylight/worktrees/644-build-once"]),
@@ -521,12 +521,12 @@ class EveryRowTests(unittest.TestCase):
                 env.update(GODFATHER_FIXTURES=str(PROCS), GODFATHER_FIXTURES_RECORD=str(record), TZ="UTC")
                 screen = terminal.Terminal(self, env, 43, 156,
                                            [sys.executable, str(terminal.ENTRY), "--interval", "0.5"])
-                screen.receive("3 procs 5", "2 lanes")
+                screen.receive("3 spawns 5", "2 lanes")
                 for key in to_row:
                     at = screen.mark()
                     screen.write(key)
                     if key in "23":
-                        screen.receive("LANE DETAILS" if key == "2" else "PROCESS DETAILS", since=at)
+                        screen.receive("LANE DETAILS" if key == "2" else "SPAWN DETAILS", since=at)
                 at = screen.mark()
                 screen.write("\r")
                 screen.receive("ACTIONS", since=at)
@@ -602,40 +602,40 @@ class StandInTests(unittest.TestCase):
 
 
 class ContractTests(unittest.TestCase):
-    """The real Junkfather (the sibling checkout) in a temporary state directory: extend and reap a resource entry
+    """The real Spawnfather (the sibling checkout) in a temporary state directory: extend and reap a resource entry
     through sources.act, as the app runs them."""
 
     def test_extend_and_reap(self) -> None:
-        package = ROOT.parent / "junkfather"
-        if not (package / "junkfather" / "dashboard.py").is_file():
-            self.skipTest("no junkfather checkout beside godfather")
-        tmp = Path(tempfile.mkdtemp(prefix="godfather-junk-actions-"))
+        package = ROOT.parent / "spawnfather"
+        if not (package / "spawnfather" / "dashboard.py").is_file():
+            self.skipTest("no spawnfather checkout beside godfather")
+        tmp = Path(tempfile.mkdtemp(prefix="godfather-spawn-actions-"))
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         bin_dir = tmp / "bin"
         bin_dir.mkdir()
         python = shutil.which("python3") or sys.executable
-        (bin_dir / "junkfather").write_text(f"#!/bin/sh\nPYTHONPATH={package} exec {python} -m junkfather \"$@\"\n")
-        (bin_dir / "junkfather").chmod(0o755)
-        env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp), "JUNKFATHER_STATE": str(tmp / "state")}
+        (bin_dir / "spawnfather").write_text(f"#!/bin/sh\nPYTHONPATH={package} exec {python} -m spawnfather \"$@\"\n")
+        (bin_dir / "spawnfather").chmod(0o755)
+        env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp), "SPAWNFATHER_STATE": str(tmp / "state")}
         flag = tmp / "running"  # the resource: alive while this file is there, stopped by removing it
         flag.write_text("")
-        owned = subprocess.run([str(bin_dir / "junkfather"), "own-resource", "--kind", "command", "--id", "fixture-2",
+        owned = subprocess.run([str(bin_dir / "spawnfather"), "own-resource", "--kind", "command", "--id", "fixture-2",
                                 "--alive", f"test -e {flag}", "--stop", f"rm -f {flag}", "--label", "fixture",
                                 "--ttl", "3600"],
                                capture_output=True, text=True, env=env, cwd=tmp, timeout=60)
         if owned.returncode != 0:
-            self.skipTest(f"junkfather cannot run here: {owned.stderr.strip().splitlines()[-1:]}")
+            self.skipTest(f"spawnfather cannot run here: {owned.stderr.strip().splitlines()[-1:]}")
         with mock.patch.dict(os.environ, env, clear=True):
-            found = junkfather.decode(json.loads(sources.run("junkfather", ["status", "--json"], 30).stdout))
+            found = spawnfather.decode(json.loads(sources.run("spawnfather", ["status", "--json"], 30).stdout))
             entry_row = next(row for row in found["entries"] if row["resource"])
             extend = actions.for_process(entry_row, ["extend"])[0]
-            reply = sources.act("junkfather", list(extend.argv), "godfather/test")
+            reply = sources.act("spawnfather", list(extend.argv), "godfather/test")
             self.assertEqual(0, reply.code, f"extend: {reply.stderr}")
-            reap = actions.Action("junkfather", "Reap", ("reap", "--id", entry_row["id"], "--reason",
-                                                        "godfather: test"), confirm=True)
-            reply = sources.act("junkfather", list(reap.argv), "godfather/test")
+            reap = actions.Action("spawnfather", "Reap", ("reap", "--id", entry_row["id"], "--reason",
+                                                          "godfather: test"), confirm=True)
+            reply = sources.act("spawnfather", list(reap.argv), "godfather/test")
             self.assertEqual(0, reply.code, f"reap: {reply.stdout} {reply.stderr}")
-            after = junkfather.decode(json.loads(sources.run("junkfather", ["status", "--json"], 30).stdout))
+            after = spawnfather.decode(json.loads(sources.run("spawnfather", ["status", "--json"], 30).stdout))
             self.assertFalse([row for row in after["entries"] if row["id"] == entry_row["id"]])
 
 

@@ -6,6 +6,25 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Added
 
+- MACHINE says in red when sustained CPU load or the expected-peak memory budget closes admission (fathers#206):
+  `CPU load high` and `memory budget full` in its border, beside `memory short`, from Slotfather's `load_block` and
+  `memory_budget_block`, and a waiting request's details list the reason under `blocked`. An older Slotfather sends
+  neither and MACHINE reads as before.
+
+- MACHINE names what drives a high load outside leases (fathers#203): while Slotfather's unleased load is at least
+  half the cores, the chart's place lists the top unleased processes, `top unleased` with each one's name, pid, cpu
+  (yellow over one core) and memory, the busiest first. Running leases' processes and their descendants are left
+  out; a waiting request's are not, as Slotfather's unleased load counts them. Godfather reads the machine's
+  process table with `ps` only while the load is high, at most every 5 s, off the screen's thread; at a lower load,
+  or when `ps` fails, the slots-held chart is shown as before.
+
+- Settings lets you edit the reservation timeout when Slotfather advertises it. It shows when older Slotfather
+  clients may use Arrival order after a change. (fathers#178)
+
+- EVENTS describes Slotfather's lock waits and blocked head reservations. LEASE DETAILS and EVENT DETAILS wrap
+  long lock paths, show whether a lease holds slots, and list each blocking lease on its own row with its label,
+  id and pid. Lock waiters are excluded from admission rank. (fathers#162, fathers#182)
+
 - Row actions (fathers#88): Enter, `a` or a right-click on a QUEUE row or a page's row opens its action menu, only
   the actions its tool advertises and that apply to the row now (`no actions` in the footer otherwise): reprioritize
   a request to another class and ask a yieldable lease of a lower class than a waiter to yield (`slotfather
@@ -87,6 +106,22 @@ Versions and release rules: [README.md](README.md#versions).
   change is a row of its own, `Straylight gate · slower +32% · same plan`, read from Slotfather's event log.
 
 ### Changed
+
+- The third source is now Spawnfather (`spawnfather`, formerly Junkfather): SLOTS' right-hand summary and page `3`
+  become `3 spawns` and `SPAWNS` (`SPAWN DETAILS`, `godfather --once --page spawns`), the event log view becomes
+  `SPAWNS LOG` (`spwn`, `spawn` in `FULL LOG`), lease and lane detail links say `spawns`, and the Settings section is
+  `SPAWNFATHER`. While machines upgrade, Godfather falls back to `junkfather` on `PATH` when `spawnfather` is not yet
+  installed, reads historical `junkfather` lines in `events.jsonl` and `what's new?` read state as Spawnfather's, and
+  keeps `--page processes` and `godfather events --source junkfather` working as aliases. (fathers#170)
+
+- The minimum supported Python version is now 3.11 (fathers#218).
+
+- The `3 procs` summary separates live unowned processes (`N unowned`) from unowned non-process resources
+  (`N resources`, dropped before `unowned` on a narrow border) and excludes processes already gone since the sweep.
+  On the `PROCESSES` page, live unowned processes, dead sweep leftovers (`gone since the sweep`, dimmed with `◌` and
+  `gone`), and unowned resources (`📦`) appear under distinct section headings; `PROCESS DETAILS` and the footer show
+  the selected row's available actions (`a actions`) or why none apply (`none · process gone`, `none · read-only
+  resource`). (fathers#204)
 
 - One column from 83 to 109 columns (fathers#169): EVENTS takes the full-width band under QUEUE and the bottom row
   holds MACHINE on the left and DETAILS on the right; Tab goes QUEUE, EVENTS, DETAILS. Heights come from floors and
@@ -171,6 +206,37 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Fixed
 
+- In Settings, editing a typed number after pressing Enter or Tab while `settings check` is still running no longer
+  saves the newly typed text automatically when the check answers, and pressing Tab while a typed value's check is in
+  flight now advances to the next setting once it saves; resetting a setting (`d`) or a section (`D` twice) now waits
+  for any in-flight save or reset of the same tool and pauses periodic settings refreshes until it finishes; and
+  stepping an arrow change back to the saved value while an earlier save of that setting is still queued now saves the
+  revert instead of dropping it (fathers#233).
+- Junkfather sweep events in `EVENTS` now report unowned process and resource counts, running entries and pruned
+  records instead of counting diagnostic notes or errors (for example, `3 unowned` instead of `1 notes`), and `QUEUE`
+  no longer offers `Ask to yield` on a lease that has already yielded twice, matching Slotfather's limit
+  (fathers#229).
+- Shrinking the terminal under 83 columns while typing an `EVENTS` `/` filter now closes the filter box so `q` and
+  other hotkeys work instead of typing into the hidden field; pressing `/` and then Esc on an empty filter keeps
+  `EVENTS`' scroll offset, row selection and new-event count; clicking `q` in the main footer while typing a park
+  reason cancels the dialog instead of typing `q`; Russian hotkeys (`ы`, `й`) close or quit a small Settings window
+  even when a numeric field was being edited before the resize; Esc on a page skips intermediate pages in the link
+  history whose tool has since left PATH; and when a page's tool disappears, returning to the overview also closes any
+  open row action menu, reason prompt or confirmation for that page (fathers#225).
+- Tool discovery and snapshot polling now share one thread-safe `ToolClient` per tool with single-flight `capabilities
+  --json` discovery, generation-guarded snapshot updates, a locked `lanefather show` cache, and `AppState` notice
+  delivery so background workers neither duplicate discovery calls nor race with the live renderer (fathers#215).
+- In Settings, a slow `settings check` reply that refuses a pending value no longer drops the value while the row still
+  has focus; clicking a footer hint or outside the `EVENTS` filter field while editing `/` now exits filter edit mode
+  cleanly instead of typing the hint key into the filter or leaving edit mode active; and `Ask to yield` is now offered
+  on aged held leases by comparing a held lease's own priority class against each waiter's served class, matching
+  Slotfather's `ask-yield` rules (fathers#212).
+- Main-session background Junkfather entries with `no_ttl: true` now render `—` in the `PROCESSES` table, `PROCESS
+  DETAILS` and process links instead of a ~100-year TTL from Junkfather's sentinel `ttl`; snapshots from older
+  Junkfather installs without `no_ttl` keep working unchanged (fathers#207).
+- Saved choices (`settings.json`), read changelog marks (`news.json`) and `install.py` now share `fathers_common`'s
+  durable atomic writes, changelog parser, CLI refusal formatter and locked release staging (`fathers_common` ships
+  beside `godfather` inside each immutable release and is part of its source digest) (fathers#117, fathers#119).
 - A Slotfather snapshot missing a request's `pid`, `kind`, `count`, `procs`, `yields` or `rss`, or one of the
   dashboard block's required fields, is now the source's notice (`a request has no pid; update slotfather`) instead of
   ending the view with a KeyError (fathers#142), and so is an `advice` without a numeric `unleased_load` or a process

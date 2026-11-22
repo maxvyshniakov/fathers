@@ -402,7 +402,7 @@ class ModeTableTests(Case):
                                   identity=("overview", (12, None), 12, "t0"))
             state = tool.with_modal(state, tool.Reason(park, text="hi"))
         elif mode == Mode.CONFIRM:
-            reap = actions.Action("junkfather", "Reap", ("reap", "--id", "j1"), confirm=True,
+            reap = actions.Action("spawnfather", "Reap", ("reap", "--id", "j1"), confirm=True,
                                   identity=("overview", (12, None), 12, "t0"))
             state = tool.with_modal(state, tool.Confirm(reap))
         elif mode == Mode.HELP:
@@ -483,7 +483,7 @@ class UiStateInvariantTests(unittest.TestCase):
         self.assertEqual(("details", "events"),
                          (state_module.OverviewScreen("details", "events").focus,
                           state_module.OverviewScreen("details", "events").shows))
-        for bad_focus in ("lanes", "procs", "machine", ""):
+        for bad_focus in ("lanes", "spawns", "machine", ""):
             with self.subTest(focus=bad_focus), self.assertRaises(ValueError):
                 state_module.OverviewScreen(bad_focus)
         with self.assertRaises(ValueError):
@@ -496,13 +496,13 @@ class UiStateInvariantTests(unittest.TestCase):
     def test_page_screen_invariants(self) -> None:
         self.assertEqual(("lanes", "lanes"),
                          (state_module.PageScreen("lanes").page, state_module.PageScreen("lanes").focus))
-        self.assertEqual(("processes", "procs"),
-                         (state_module.PageScreen("processes").page, state_module.PageScreen("processes").focus))
-        for bad_page in ("overview", "unknown", ""):
+        self.assertEqual(("spawns", "spawns"),
+                         (state_module.PageScreen("spawns").page, state_module.PageScreen("spawns").focus))
+        for bad_page in ("overview", "processes", "unknown", ""):
             with self.subTest(page=bad_page), self.assertRaises(ValueError):
                 state_module.PageScreen(bad_page)
-        for page, bad_focus in (("lanes", "requests"), ("lanes", "procs"), ("processes", "requests"),
-                                ("processes", "lanes")):
+        for page, bad_focus in (("lanes", "requests"), ("lanes", "spawns"), ("spawns", "requests"),
+                                ("spawns", "lanes")):
             with self.subTest(page=page, focus=bad_focus), self.assertRaises(ValueError):
                 state_module.PageScreen(page, bad_focus)
         with self.assertRaises(ValueError):
@@ -512,8 +512,8 @@ class UiStateInvariantTests(unittest.TestCase):
         req_act = actions.Action("slotfather", "Reprioritize", ("reprioritize",), identity=("overview", ("k", 0)))
         lane_park = actions.Action("lanefather", "Park", ("park", "l1"), confirm=True, reason=True,
                                    identity=("lanes", ("/s", "l1")))
-        proc_reap = actions.Action("junkfather", "Reap", ("reap", "--id", "j1"), confirm=True,
-                                   identity=("processes", ("entry", "j1")))
+        proc_reap = actions.Action("spawnfather", "Reap", ("reap", "--id", "j1"), confirm=True,
+                                   identity=("spawns", ("entry", "j1")))
 
         # Two simultaneous modals
         with self.assertRaises(ValueError):
@@ -603,15 +603,15 @@ class UiBugRegressionTests(Case):
             self.screen(),
             tools={
                 "lanefather": self.tool.Tool("lanefather", "ok", None, lanes_decoded()),
-                "junkfather": self.tool.Tool("junkfather", "ok", None, procs_decoded()),
+                "spawnfather": self.tool.Tool("spawnfather", "ok", None, procs_decoded()),
             },
         )
         state = self.tool.follow_link(state, ("lanes", ("/fixture/straylight/lanes", "710-speech-paste-phase")))
-        state = self.tool.follow_link(state, ("processes", ("entry", "j3f9a1c")))
-        self.assertEqual(("processes", ("overview", "lanes")), (state.ui.page, state.ui.came_from))
-        # Lanefather disappears while the user is on Processes
+        state = self.tool.follow_link(state, ("spawns", ("entry", "j3f9a1c")))
+        self.assertEqual(("spawns", ("overview", "lanes")), (state.ui.page, state.ui.came_from))
+        # Lanefather disappears while the user is on Spawns
         state, _ = self.send(state, self.tool.ToolLoaded(self.tool.Tool("lanefather", "absent")))
-        self.assertEqual("processes", state.ui.page)
+        self.assertEqual("spawns", state.ui.page)
         state, _ = self.keys(state, "esc")
         self.assertEqual(("overview", ()), (state.ui.page, state.ui.came_from))
 
@@ -623,7 +623,7 @@ class UiBugRegressionTests(Case):
             self.screen(),
             tools={
                 "lanefather": self.tool.Tool("lanefather", "ok", None, lanes_decoded(), actions=("park",)),
-                "junkfather": self.tool.Tool("junkfather", "ok", None, procs_decoded(), actions=("reap",)),
+                "spawnfather": self.tool.Tool("spawnfather", "ok", None, procs_decoded(), actions=("reap",)),
             },
         )
         # ActionMenu and Reason on Lanes
@@ -768,7 +768,7 @@ class WhatsNewTests(Case):
         from godfather import news
         return news.News((news.Installed("slotfather", "0.2.0", "ok"),), (
             news.Item("slotfather", "0.2.0", "2026-11-12", "Added", "s2"),
-            news.Item("junkfather", "0.1.0", "2026-11-12", "Added", "j1"),
+            news.Item("spawnfather", "0.1.0", "2026-11-12", "Added", "j1"),
             news.Item("slotfather", "0.1.0", "2026-11-01", "Added", "s1")))
 
     def test_opening_asks_for_the_news_and_a_reply_replaces_it(self) -> None:
@@ -785,7 +785,7 @@ class WhatsNewTests(Case):
         for key in ("v", "right", "right", "right", "left"):
             state, _ = self.keys(state, key)
             tabs.append(state.ui.overlay.tab)
-        self.assertEqual([0, 1, 2, 0, 2], tabs, "all, slotfather, junkfather, then round")
+        self.assertEqual([0, 1, 2, 0, 2], tabs, "all, slotfather, spawnfather, then round")
         state, _ = self.keys(state, "j")
         state, _ = self.keys(state, "\t")
         self.assertEqual(self.tool.Changelog(tab=0, scroll=0), state.ui.overlay, "a new filter starts at its top")
@@ -797,7 +797,7 @@ class WhatsNewTests(Case):
                 state, _ = self.keys(state, "v")
                 state, effects = self.keys(state, close)
                 self.assertEqual(["save-read"], effects)
-                self.assertEqual({"slotfather": "0.2.0", "junkfather": "0.1.0", "lanefather": "0.3.0"}, state.read)
+                self.assertEqual({"slotfather": "0.2.0", "spawnfather": "0.1.0", "lanefather": "0.3.0"}, state.read)
                 self.assertFalse(self.tool.unread(state))
                 state, _ = self.keys(state, "v")
                 self.assertEqual([], self.keys(state, "esc")[1], "nothing new: nothing to save")
@@ -813,10 +813,10 @@ class WhatsNewTests(Case):
         from godfather import news
         state = dataclasses.replace(self.screen(), news=self.news())
         state, _ = self.keys(state, "v", "right", "right")
-        self.assertEqual(2, state.ui.overlay.tab, "Junkfather")
-        fewer = news.News((), tuple(item for item in self.news().items if item.tool == "junkfather"))
+        self.assertEqual(2, state.ui.overlay.tab, "Spawnfather")
+        fewer = news.News((), tuple(item for item in self.news().items if item.tool == "spawnfather"))
         state, _ = self.send(state, self.tool.NewsLoaded(fewer))
-        self.assertEqual(1, state.ui.overlay.tab, "still Junkfather, now the second filter")
+        self.assertEqual(1, state.ui.overlay.tab, "still Spawnfather, now the second filter")
         state, _ = self.send(state, self.tool.NewsLoaded(news.News((), ())))
         self.assertEqual(0, state.ui.overlay.tab, "gone: back to all")
 
@@ -833,7 +833,7 @@ class WhatsNewTests(Case):
         state, canvas = self.opened()
         row = canvas.help_view.y
         line = "".join(cell[0] for cell in canvas.cells[row])
-        labels = ["All", "Slotfather", "Junkfather"]
+        labels = ["All", "Slotfather", "Spawnfather"]
         start = line.index(" · ".join(labels))
         expected: list[tuple[int, int, int, int]] = []
         x = start

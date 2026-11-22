@@ -8,7 +8,8 @@ decisions are dated where they changed an item.
 ## Problem
 
 Max runs three small tools on his Mac: Slotfather (machine-wide capacity leases), Lanefather (parallel agent lanes:
-claims, receipts, landing, review) and junkfather (owns the long-lived processes agents start and ends them). Only
+claims, receipts, landing, review) and Spawnfather (owns the long-lived processes and resources agents spawn and ends
+them). Only
 Slotfather has a dashboard, and its terminal framework (frames, colours, overlays, hotkeys, mouse) lives inside
 Slotfather. To see a lane, its leases and the processes it left behind, Max opens three CLIs and joins them by eye.
 Anything a second tool wants on screen has to be built into Slotfather, which is the wrong owner, and every
@@ -20,12 +21,12 @@ Godfather is a separate package: one terminal dashboard for the three tools. It 
 of Slotfather unchanged. The tools become data sources behind four contracts: an append-only event log in a shared
 schema, a `status --json` snapshot, a `settings` CLI, and a `capabilities --json` answer that says which of those a
 tool supports. Godfather renders and asks; each tool keeps its state, validation and every mutation. The main screen
-stays today's Slotfather dashboard; lanes and processes appear on it as border summaries and in the details, with
+stays today's Slotfather dashboard; lanes and spawns appear on it as border summaries and in the details, with
 full pages one key away.
 
 ## Goals
 
-- One dashboard for Slotfather, Lanefather and junkfather on the local machine.
+- One dashboard for Slotfather, Lanefather and Spawnfather on the local machine.
 - The TUI framework leaves Slotfather with no visible change: same layout, keys, colours, overlays and media.
 - Every tool keeps working on its own at every step, with or without Godfather installed.
 - Tools stay the owners: Godfather never writes their state files, never reimplements their validation, and only
@@ -51,8 +52,9 @@ full pages one key away.
    replaces the entry point atomically; a running dashboard keeps its release and shows `↻` in the footer.
 2. `godfather` opens the live dashboard in a terminal; without a terminal it says so in one line, points to
    `godfather --help` and exits 2 (the CLI convention, fathers#154).
-   `godfather --once [--page overview|lanes|processes] [--width N] [--height N] [--color]` prints one frame and
-   exits, as `slotfather dashboard --once` does today. `--interval S` sets Refresh every for this run.
+   `godfather --once [--page overview|lanes|spawns] [--width N] [--height N] [--color]` prints one frame and
+   exits, as `slotfather dashboard --once` does today (`--page processes` stays as an alias). `--interval S` sets
+   Refresh every for this run.
 3. `slotfather dashboard [ARGS]`, and a bare `slotfather` in a terminal, exec `godfather` with the same arguments
    when `godfather` is on `PATH`. Without it they print
    `slotfather: the dashboard is part of godfather now; install it from https://github.com/maxvyshniakov/fathers/tree/main/godfather`
@@ -64,7 +66,8 @@ full pages one key away.
 ### Discovery
 
 5. At start, and again when a tool's resolved executable changes (checked every 10 s) or every 60 s, Godfather runs
-   `<tool> capabilities --json` for `slotfather`, `lanefather` and `junkfather` found on `PATH`, with a 2 s timeout.
+   `<tool> capabilities --json` for `slotfather`, `lanefather` and `spawnfather` (falling back to `junkfather` when
+   `spawnfather` is not yet on `PATH`, fathers#170) with a 2 s timeout.
 6. A tool that is not on `PATH` is absent: its panels, summaries, pages, Settings section, event source and actions
    are hidden, with no error.
 7. A tool that is present but whose capabilities fail, time out, lack a `dashboard` block or name only contract
@@ -76,7 +79,7 @@ full pages one key away.
 
 9. Each source has one background worker that runs its snapshot command, one call at a time, newest result wins.
    Slotfather is polled at Refresh every (default 1 s, as today) **(chosen here: the main screen's CPU bars and
-   timers need today's cadence; the 5–10 s rule applies to the other tools)**; Lanefather and junkfather every
+   timers need today's cadence; the 5–10 s rule applies to the other tools)**; Lanefather and Spawnfather every
    5 s (their capabilities may ask for up to 10 s). An event from a source triggers that source's next poll at once,
    debounced by 250 ms.
 10. A snapshot call that fails, times out (5 s) or returns an unknown version leaves the last good snapshot on
@@ -106,10 +109,10 @@ full pages one key away.
       first, read with `ps` (at most every 5 s, only while the load is high) less the running leases' processes and
       their descendants. A lower load or a failed `ps` keeps the chart.
 13. SLOTS' bottom border carries the summaries of the other tools, each led by its page key:
-    `2 lanes 3 active · 2 reviews · 🔥 gate red` on the left and `3 procs 7 · 1 orphan` on the right.
+    `2 lanes 3 active · 2 reviews · 🔥 gate red` on the left and `3 spawns 7 · 1 orphan` on the right.
     - lanes: `N active` (lanes in status active), `N planned` when any, `N reviews` (lanes whose review runs or has
       unresolved findings), `🔥 gate red` when the newest batch gate of any project is red.
-    - procs: `N` running owned entries, then `N orphan` (owner gone), `N expired` (TTL passed, not reaped yet),
+    - spawns: `N` running owned entries, then `N orphan` (owner gone), `N expired` (TTL passed, not reaped yet),
       `N unowned` (live unowned processes from the last sweep; entries already gone since the sweep are excluded),
       `N resources` (unowned non-process resources from the last sweep), each only when not zero.
     - A narrow border drops, in order: planned, reviews, resources, unowned, expired; the leading count and any 🔥
@@ -117,21 +120,21 @@ full pages one key away.
     - A click on a summary opens its page.
 14. DETAILS for a selected request keeps today's rows and lane context, and adds:
     - `lane` with the lane id and project, a link to the Lanes page with that lane selected;
-    - `processes`: one row per junkfather entry that belongs to the lease (below), with label, state and TTL left,
-      each a link to the Processes page with that entry selected; `none owned` when there are none.
+    - `spawns`: one row per Spawnfather entry that belongs to the lease (below), with label, state and TTL left,
+      each a link to the Spawns page with that entry selected; `none owned` when there are none.
 15. EVENTS becomes one feed of every source (slice 3): columns time, source, event, slots, detail, label and pid.
     The one feed and its `f` source filter were built (fathers#84) and then replaced by one log at a time
     (fathers#152, below); the source tag lives on as the ALL log's type.
-    - The source is a four-cell tag from the tool's capabilities (`slot`, `lane`, `junk`) in a colour of its own.
+    - The source is a four-cell tag from the tool's capabilities (`slot`, `lane`, `spwn`) in a colour of its own.
     - `slots` is filled only for Slotfather events, as today (`▪` taken, `▫` handed back or never held).
     - The detail comes from the event itself; Godfather no longer joins `history.jsonl`.
     - `f` cycles the source filter (all, then each present source); `/` edits a text filter matched against kind,
       subject, label and detail; Esc in the field clears it. The active filter shows in EVENTS' top border.
     - From fathers#152 (owner, 2026-11-16) EVENTS shows one log at a time and its title is the switch: `SLOTS LOG`,
-      `LANES LOG`, `PROCS LOG` for each present tool, then `FULL LOG` (never the default) where there are several;
+      `LANES LOG`, `SPAWNS LOG` for each present tool, then `FULL LOG` (never the default) where there are several;
       ← → while EVENTS has the focus, `f`, or a click on the title cycle it, `❮ SLOTS LOG ❯` where there is room.
       Each log has its own columns (SLOTS: time, slots, label, waited, outcome, pid; LANES: time, event, lane,
-      result, ticket; PROCS: time, event, label, detail, pid; ALL: time, type such as `slot run` in the tool's colour,
+      result, ticket; SPAWNS: time, event, label, detail, pid; ALL: time, type such as `slot run` in the tool's colour,
       and one sentence). A Slotfather run is one row, `running 3m` until it ends; `r` shows every event as logged. A
       trend or an outlier is a mark on its run (▲ ↗ ↘), never a row. `/` filters within the log shown.
     - Newest first; it stays on the newest entry while scrolled to the top and counts new ones (`↑ 3 new`) while
@@ -149,20 +152,21 @@ full pages one key away.
 
 ### Pages
 
-16. `1` shows the overview, `2` the Lanes page, `3` the Processes page; Esc on a page returns to the overview.
+16. `1` shows the overview, `2` the Lanes page, `3` the Spawns page; Esc on a page returns to the overview.
     A page key whose tool is absent does nothing, and its hint is not shown. Opening a page from the overview selects
     the row linked to the selected request, when there is one.
 17. Lanes page: a LANES table, grouped by project under a project row that is not selectable (`Straylight · 3 of 4
     lanes`), with columns state, lane, ticket, stage, receipt, review, claims, age; LANE DETAILS for the selection
     (project, ticket link, branch and base, worktree link, claims, after, receipt and tree match, review and finding
-    counts, latest log, its leases from the Slotfather snapshot and its processes from junkfather, each a link); and
+    counts, latest log, its leases from the Slotfather snapshot and its spawns from Spawnfather, each a link); and
     an EVENTS strip filtered to that lane.
-18. Processes page: a PROCESSES table of owned entries (running, orphan, expired), then labelled sections for live
-    unowned processes, dead sweep leftovers (`gone since the sweep`, visually de-emphasized) and unowned non-process
-    resources (`📦`); columns state, id, label, owner, lane, age, TTL left, pid, processes; PROCESS DETAILS (command,
-    directory, log, owner and whether it lives, keep, mode, its lease and lane as links, and the row's available
-    actions or why none apply); an EVENTS strip filtered to that entry. With PROCESSES focused, the footer shows
-    `a actions` when the selected row has actions, else `no actions` on the right; `a` drops with `←→`, first.
+18. Spawns page (fathers#86, renamed from Processes in fathers#170): a SPAWNS table of owned entries (running, orphan,
+    expired), then labelled sections for live unowned processes, dead sweep leftovers (`gone since the sweep`, visually
+    de-emphasized) and unowned non-process resources (`📦`); columns state, id, label, owner, lane, age, TTL left, pid,
+    processes; SPAWN DETAILS (command, directory, log, owner and whether it lives, keep, mode, its lease and lane as
+    links, and the row's available actions or why none apply); an EVENTS strip filtered to that entry. With SPAWNS
+    focused, the footer shows `a actions` when the selected row has actions, else `no actions` on the right; `a` drops
+    with `←→`, first.
 19. Joins, all read-only and computed by Godfather from snapshots:
     - request ↔ lane: the request's `meta.lane` and `meta.lanefather.state` match a lane id in the project whose state
       directory that is; a request with only `meta.lane` matches by its working directory inside the lane's
@@ -217,11 +221,11 @@ full pages one key away.
 | 2 | built 0.1.0; `--page` Unreleased (fathers#85) |
 | 3 | built in Slotfather, Unreleased (SF-3) |
 | 4 | built 0.1.0 |
-| 5 | built 0.1.0; Lanefather and Junkfather Unreleased (fathers#85, fathers#86) |
+| 5 | built 0.1.0; Lanefather and Spawnfather Unreleased (fathers#85, fathers#86, fathers#170) |
 | 6 | built 0.1.0 |
 | 7 | built 0.1.0 |
 | 8 | built 0.1.0 |
-| 9 | built 0.1.0 (Slotfather); Lanefather and Junkfather Unreleased (fathers#85, fathers#86) |
+| 9 | built 0.1.0 (Slotfather); Lanefather and Spawnfather Unreleased (fathers#85, fathers#86, fathers#170) |
 | 10 | built 0.1.0; the pages' borders Unreleased (fathers#85, fathers#86) |
 | 11 | built 0.1.0 |
 | 12 | built 0.1.0; frames in one synchronized update Unreleased (fathers#143); top unleased processes Unreleased (fathers#203) |
@@ -239,7 +243,7 @@ full pages one key away.
 | 24 | built Unreleased (fathers#88) |
 | 25 | built Unreleased (fathers#88); park planned in Lanefather (fathers#57) |
 | 26 | built Unreleased (fathers#88) |
-| 27 | built in the tools: Slotfather Unreleased, Lanefather 0.1.0+1138486, Junkfather 0.1.0 |
+| 27 | built in the tools: Slotfather Unreleased, Lanefather 0.1.0+1138486, Spawnfather 0.1.0 |
 | 28 | built in the tools: Slotfather Unreleased, Lanefather 0.1.0+1138486 |
 
 ## Decisions
@@ -280,7 +284,7 @@ Godfather is one Python package, standard library only, Python 3.11+, installed 
   of `model` (fathers#142: checked once, there; unknown keys ignored, a missing required one the source's notice)
   and computes its border summary and its side of the joins; `adapters.settings` is every tool's `settings` CLI.
 - **views**: overview, which composes the moved renderers (queue: SLOTS and QUEUE; details, events, machine),
-  the overlays (help, what's new), Settings, and the Lanes and Processes pages.
+  the overlays (help, what's new), Settings, and the Lanes and Spawns pages.
 - **Fixtures** are a mode of `sources`, not a module: `GODFATHER_FIXTURES=DIR` replaces discovery and every tool call
   with recorded capabilities, snapshots, event logs and settings replies, and records the argv of actions instead of
   running them. Tests, `--once` goldens and the README media use it.
@@ -312,7 +316,7 @@ Every module under `src/godfather/`, as built (`tests/test_spec.py` holds this t
 | `widgets` | `Panel`, `Table` and `Footer`. |
 | `adapters.slotfather` | Slotfather's contract versions and its snapshot decoded into the model. |
 | `adapters.lanefather` | Lanefather's machine-wide snapshot, its border summary and the lane joins. |
-| `adapters.junkfather` | Junkfather's snapshot, its border summary and the entry joins. |
+| `adapters.spawnfather` | Spawnfather's snapshot, its border summary and the entry joins. |
 | `adapters.settings` | Any tool's `settings` CLI: read, check, set and reset. |
 | `adapters.decoding` | One field of a tool's JSON read as its documented type, for every adapter. |
 | `views.common` | Marks, holder colours, bars and cells several panels draw alike. |
@@ -321,7 +325,7 @@ Every module under `src/godfather/`, as built (`tests/test_spec.py` holds this t
 | `views.machine` | MACHINE: load, memory and swap, the chart of held slots, or the top unleased processes. |
 | `views.overlays` | Help and what's new drawn. |
 | `views.overview` | The overview screen, composed from the panels. |
-| `views.pages` | The Lanes and Processes pages and the border summaries that open them. |
+| `views.pages` | The Lanes and Spawns pages and the border summaries that open them. |
 | `views.queue` | SLOTS and QUEUE. |
 | `views.settings` | The Settings overlay drawn from its value. |
 
@@ -362,7 +366,7 @@ One UTF-8 JSON object per line, at most 16 KiB with its newline.
 | `v` | yes | `1`. |
 | `time` | yes | When it happened, RFC 3339 UTC with milliseconds: `2026-11-12T02:24:16.204Z`. |
 | `host` | yes | The machine's short host name, lowercase (`socket.gethostname()` up to the first dot). |
-| `source` | yes | The tool's name: `slotfather`, `lanefather`, `junkfather` (`[a-z][a-z0-9-]{0,31}`). |
+| `source` | yes | The tool's name: `slotfather`, `lanefather`, `spawnfather` (`[a-z][a-z0-9-]{0,31}`; legacy `junkfather` lines in Spawnfather's log are read as `spawnfather`). |
 | `kind` | yes | `noun.verb`, lowercase, dotted, at most 64 characters, from the tool's documented list. |
 | `subject` | yes | What it is about: an object with `type` and `id` (strings), optionally `label`, `project`, `pid` and other scalars. |
 | `actor` | yes | Who caused it: an object with `type` (`agent`, `process`, `user` or `tool`), optionally `session`, `agent`, `pid`, `lane`, `name`, `via`. |
@@ -412,14 +416,14 @@ Example events, one per line in a real log, wrapped here:
  "actor": {"type": "agent", "session": "4bceaaaf-85b1-4d87-9eda-b82cdaea5c12", "pid": 88917},
  "details": {"status": "red", "jobs": 1, "seconds": 1177}}
 
-{"v": 1, "time": "2026-11-12T04:40:00.120Z", "host": "mbp", "source": "junkfather", "kind": "entry.owned",
+{"v": 1, "time": "2026-11-12T04:40:00.120Z", "host": "mbp", "source": "spawnfather", "kind": "entry.owned",
  "subject": {"type": "entry", "id": "j3f9a1c", "label": "vite dev", "pid": 90412},
  "actor": {"type": "agent", "session": "4bceaaaf-85b1-4d87-9eda-b82cdaea5c12", "agent": "a71c", "lane": "710-speech-paste-phase"},
  "details": {"argv": ["bun", "run", "dev"], "ttl": 7200, "keep": "owner", "mode": "detached"}}
 
-{"v": 1, "time": "2026-11-12T06:40:00.884Z", "host": "mbp", "source": "junkfather", "kind": "entry.reaped",
+{"v": 1, "time": "2026-11-12T06:40:00.884Z", "host": "mbp", "source": "spawnfather", "kind": "entry.reaped",
  "subject": {"type": "entry", "id": "j3f9a1c", "label": "vite dev", "pid": 90412},
- "actor": {"type": "tool", "name": "junkfather", "via": "sweep"},
+ "actor": {"type": "tool", "name": "spawnfather", "via": "sweep"},
  "details": {"reason": "ttl expired", "result": "stopped", "signals": ["TERM"]}}
 ```
 
@@ -432,7 +436,7 @@ First kinds per tool (each tool documents and owns its list):
   `lane.post_merge`, `lane.done`, `lane.parked`, `review.started`, `review.finished`, `review.marked`,
   `gate.finished`, `promote.step`, `sync.finished`, `perf.finished`, `load.waited`, `landing.lock_taken`,
   `override` (every `--force-reason`, level warn).
-- junkfather: `entry.owned`, `entry.adopted`, `entry.exited`, `entry.extended`, `entry.handed`, `entry.reaped`,
+- Spawnfather: `entry.owned`, `entry.adopted`, `entry.exited`, `entry.extended`, `entry.handed`, `entry.reaped`,
   `sweep.finished`, `unowned.reported`, `hook.failed`.
 
 **Validator.** `eventcheck.validate(obj, strict=False) -> list[str]` returns the problems, empty when valid;
@@ -443,7 +447,7 @@ file carries an MIT header, so another project may copy it unchanged.
 ### Capabilities contract
 
 Every tool answers `<tool> capabilities --json` with an object that has a `dashboard` block. Lanefather already has
-`capabilities --json` and adds the block; Slotfather and junkfather add the command.
+`capabilities --json` and adds the block; Slotfather and Spawnfather add the command.
 
 ```json
 {"v": 1, "tool": "slotfather", "version": "0.2.0",
@@ -502,8 +506,8 @@ repository).
 
 A project that cannot be read gives an `error` entry, never a failed snapshot.
 
-**junkfather**: `junkfather status --json` is `list --json` (running entries) plus the unowned processes from the
-last sweep (pid, start, command, directory, root, age) and the sweep's last time and result.
+**Spawnfather**: `spawnfather status --json` is `list --json` (running entries) plus the unowned processes and
+resources from the last sweep (pid, start, command, directory, root, age) and the sweep's last time and result.
 
 ### Settings contract
 
@@ -538,9 +542,9 @@ last sweep (pid, start, command, directory, root, age) and the sweep's last time
 - `check` returns `{"ok": bool, "error": str|null, "preview": str|null}`; the preview carries texts such as
   `will drain 2` or `will start 1 waiting`. Godfather calls it for each pending or typed value.
 - Exit codes: 0 done, 2 invalid (the reply says why), 3 conflict, 4 or 5 read-only. Slotfather's 4 is another
-  user's queue and Lanefather's 4 a value it cannot save here; Junkfather says read-only with 5, keeping 4 for
+  user's queue and Lanefather's 4 a value it cannot save here; Spawnfather says read-only with 5, keeping 4 for
   Slotfather's meaning (fathers#118, owner 2026-11-13). Godfather takes 4 and 5 alike: nothing saved, the row read
-  again. Any other code is a failure with the tool's message (Junkfather's 1: not saved, a full disk).
+  again. Any other code is a failure with the tool's message (Spawnfather's 1: not saved, a full disk).
 - Lanefather exposes only machine-local settings; values from a project's `.lanefather.toml` or the environment are
   read-only rows with their source.
 
@@ -550,9 +554,9 @@ last sweep (pid, start, command, directory, root, age) and the sweep's last time
 | --- | --- | --- | --- |
 | QUEUE: one of your requests | Reprioritize to interactive, normal or batch | `slotfather reprioritize PID CLASS --start START` | no |
 | QUEUE: a running yieldable lease of a lower class than a waiter | Ask to yield | `slotfather ask-yield PID --start START` (new) | no |
-| PROCESSES: an orphan or expired owned entry | Reap | `junkfather reap --id ID --reason "godfather: orphan"` | yes |
-| PROCESSES: an unowned process the last sweep reported | Reap | `junkfather reap --pid PID --force --reason "godfather: unowned"` | yes |
-| PROCESSES: a running owned entry | Extend TTL by 1 h, 4 h or 1 d | `junkfather extend ID --ttl D` | no |
+| SPAWNS: an orphan or expired owned entry | Reap | `spawnfather reap --id ID --reason "godfather: orphan"` | yes |
+| SPAWNS: an unowned process the last sweep reported | Reap | `spawnfather reap --pid PID --force --reason "godfather: unowned"` | yes |
+| SPAWNS: a running owned entry | Extend TTL by 1 h, 4 h or 1 d | `spawnfather extend ID --ttl D` | no |
 | LANES: a lane with a ticket | Open the ticket | the platform opener (`open`, `xdg-open`) on the snapshot's URL | no |
 | LANES: a lane with a log | Open the latest log | `$PAGER` (default `less -R +G`), the TUI suspended and restored | no |
 | LANES: a lane with a worktree | Open the worktree | the platform opener on the path | no |
@@ -571,14 +575,14 @@ that is its owner's to end.
 ╭─ SLOTS ─────────────────────────────────────────── 12 cores · 8 slots (manual) ─╮ ╭─ LEASE DETAILS ──────────────╮
 │  🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅  ╭──────╮  ╭──────╮                                        │ │  label     lane-710-check    │
 │  lane-710   data-grid  free                                                     │ │  lane      710-speech-paste… │
-╰─ 2 lanes 3 active · 2 reviews · 🔥 gate red ──────────── 3 procs 7 · 1 orphan ─╯ │  processes vite dev · 1h12m  │
+╰─ 2 lanes 3 active · 2 reviews · 🔥 gate red ─────────── 3 spawns 7 · 1 orphan ─╯ │  spawns    vite dev · 1h12m  │
 ╭─ QUEUE ──────────────── slots ── cpu use/share ──────────── time ──────── pid ─╮ │  …                           │
 │  ▶️ ⚡ lane-710-check   ▪   ■■■░░░░░░░ 1.2/1.5   19m37s   88917                   │ ╰──────────────────────────────╯
 ╰────────────────────────────────────────────────────────────────────────────────╯ ╭─ MACHINE ────────────────────╮
 ╭─ EVENTS ── all sources ── source ─ event ─ slots ─ detail ─ label ─────── pid ─╮ │  …                           │
 │  04:25:48  slot  granted        ▪   no wait          lane-710-check   59827     │ │                              │
 │  04:25:40  lane  checked            green, 2 suites  710-speech-…               │ │                              │
-│  04:25:12  junk  reaped             ttl expired      vite dev         90412     │ │                              │
+│  04:25:12  spwn  reaped             ttl expired      vite dev         90412     │ │                              │
 ╰────────────────────────────────────────────────────────────────────────────────╯ ╰──────────────────────────────╯
  Godfather 0.1.0        ↑↓ select  tab panel  1 2 3 pages  s settings  ? help  q quit        updated 04:25:56  ● live
 ```
@@ -605,13 +609,14 @@ Every step leaves every tool working on its own.
 4. **Event logs** (slice 2; SF-4, LF-1): both tools mirror their text logs into `events.jsonl`. Nothing reads them yet.
 5. **Merged EVENTS** (slice 3): Godfather reads events; Slotfather's transitional `dashboard.events` goes in its next
    release after that Godfather is installed.
-6. **Lanes** (slice 4; LF-2), **Processes** (slice 5; JF-1), **Settings sections** (slice 6; LF-3, JF-2),
+6. **Lanes** (slice 4; LF-2), **Spawns** (slice 5; JF-1), **Settings sections** (slice 6; LF-3, JF-2),
    **actions** (slice 7; SF-5, lanefather#19): each adds a page or section that stays hidden until its tool supports
    the contract.
 
 ### Cross-repo tickets
 
-Slotfather and Lanefather are public; their tickets are filed there by the owner. junkfather has no repository yet.
+Slotfather and Lanefather are public; their tickets are filed there by the owner. Spawnfather (originally Junkfather,
+renamed in fathers#170) lives in this repository.
 
 | Id | Tool | What | Needed by |
 | --- | --- | --- | --- |
@@ -623,8 +628,8 @@ Slotfather and Lanefather are public; their tickets are filed there by the owner
 | LF-1 | Lanefather | machine-wide `events.jsonl` mirroring `ledger.log`; `dashboard` block in capabilities | slice 2 |
 | LF-2 | Lanefather | machine-wide `status --json` over a project registry | slice 4 |
 | LF-3 | Lanefather | `settings` commands for machine-local settings | slice 6 |
-| JF-1 | junkfather | the shared event schema; `capabilities --json`; `status --json` | slice 5 |
-| JF-2 | junkfather | `settings` commands | slice 6, optional |
+| JF-1 | Spawnfather | the shared event schema; `capabilities --json`; `status --json` | slice 5 |
+| JF-2 | Spawnfather | `settings` commands | slice 6, optional |
 | lanefather#19 | Lanefather | `park` and `unpark` | slice 7, park only |
 
 ## Seams
@@ -635,7 +640,7 @@ Slotfather and Lanefather are public; their tickets are filed there by the owner
 - **The live dashboard in a PTY under fixtures**: keys, mouse and resize, as Slotfather's live tests do today;
   actions are recorded as argv, never run.
 - **Source contract tests**: Godfather's adapters against each real tool's CLI in isolated state directories
-  (`SLOTFATHER_DIR`, `LANEFATHER_STATE`, `JUNKFATHER_STATE`), run when a checkout or install is present and skipped
+  (`SLOTFATHER_DIR`, `LANEFATHER_STATE`, `SPAWNFATHER_STATE`), run when a checkout or install is present and skipped
   otherwise.
 - **The validator in each tool's tests**: run the tool's real commands in a temporary state directory, then validate
   every line of its `events.jsonl` in strict mode.
@@ -668,6 +673,6 @@ Slotfather and Lanefather are public; their tickets are filed there by the owner
 8. **A private validator inside public repositories**: vendoring publishes that file. It carries its own MIT header.
 9. **pid reuse between snapshot and action**: every action passes the start time or entry id the snapshot showed,
    and the tool checks it again before acting.
-10. **junkfather is being built now**: its contract (JF-1) should land before its first release, so it never has
-    to migrate its event log.
+10. **Spawnfather was built alongside Godfather**: its contract (JF-1) landed in its first release, and its rename from
+    `junkfather` (fathers#170) keeps reading historical `junkfather` lines in migrated event logs.
 11. **Event logs hold commands and paths**: they are created mode 0600 in the user's own state directories.

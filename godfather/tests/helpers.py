@@ -82,7 +82,7 @@ class FakeSlotfather:
 
 
 class FakeTool:
-    """tests/fake_tool.py as `lanefather` or `junkfather` in `bin` (a FakeSlotfather's, so all three are on PATH),
+    """tests/fake_tool.py as `lanefather` or `spawnfather` in `bin` (a FakeSlotfather's, so all three are on PATH),
     its state and argv log beside it: capabilities and the settings CLI, nothing else."""
 
     def __init__(self, tool: str, bin_dir: Path, **state: Any) -> None:

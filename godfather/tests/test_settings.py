@@ -1,7 +1,7 @@
 """Settings (#7, fathers#87): one section per present tool after this dashboard's own, rendered as text and driven
 through the one reducer by keys and the mouse, every settings call answered at once (app.Screen.settings_call)
 against a fake `slotfather settings` (tests/fake_slotfather.py) that keeps Slotfather's capacity rules and messages,
-fake Lanefather and Junkfather (tests/fake_tool.py), or, with GODFATHER_REAL_SLOTFATHER=/path/to/slotfather, against
+fake Lanefather and Spawnfather (tests/fake_tool.py), or, with GODFATHER_REAL_SLOTFATHER=/path/to/slotfather, against
 that real Slotfather (SF-2) in an isolated SLOTFATHER_DIR.
 
 Snapshots live in tests/snapshots/; `SNAPSHOT_UPDATE=1` rewrites them after a deliberate layout change."""
@@ -744,7 +744,7 @@ class ContractTests(PanelCase):
     def test_an_absent_tool_has_no_section(self) -> None:
         text = self.open().text(idle(), height=60)
         self.assertNotIn("LANEFATHER", text)
-        self.assertNotIn("JUNKFATHER", text)
+        self.assertNotIn("SPAWNFATHER", text)
 
     def test_a_read_older_than_a_save_is_dropped(self) -> None:
         settings = self.open()
@@ -888,46 +888,46 @@ class DeferredTests(PanelCase):
     def test_d_twice_resets_only_the_section_it_was_asked_in(self) -> None:
         if self.real:
             self.skipTest("the fake tools sit beside the fake Slotfather")
-        junk = FakeTool("junkfather", self.fake.bin, values={"reap.grace": 30})
+        spawn = FakeTool("spawnfather", self.fake.bin, values={"reap.grace": 30})
         self.tool("order", "--safety", "4")
         settings = self.open()
         settings.show(idle(), 90, 70)
         settings.select(SAFETY)
         settings.key("D")
-        settings.click(*settings.hit(("junkfather", "reap.grace")))  # another section, by the mouse
+        settings.click(*settings.hit(("spawnfather", "reap.grace")))  # another section, by the mouse
         settings.key("D")
-        self.assertEqual([], self.writes(junk) + self.writes(), "the first D asked about Slotfather")
-        self.assertIn("Press D again to reset every Junkfather setting", settings.text(idle(), height=70))
+        self.assertEqual([], self.writes(spawn) + self.writes(), "the first D asked about Slotfather")
+        self.assertIn("Press D again to reset every Spawnfather setting", settings.text(idle(), height=70))
         settings.key("D")
-        self.assertEqual([["settings", "reset", "--all", "--json"]], self.writes(junk))
+        self.assertEqual([["settings", "reset", "--all", "--json"]], self.writes(spawn))
         self.assertEqual(4.0, self.saved_order()["safety"])
 
 
 class SectionTests(PanelCase):
-    """Lanefather's and Junkfather's sections (fathers#87), against the fakes of tests/fake_tool.py."""
+    """Lanefather's and Spawnfather's sections (fathers#87), against the fakes of tests/fake_tool.py."""
 
     def setUp(self) -> None:
         super().setUp()
         if self.real:
             self.skipTest("the fake tools sit beside the fake Slotfather")
         self.lane = FakeTool("lanefather", self.fake.bin, environment={"LANEFATHER_PRIORITY_CHECK": "batch"})
-        self.junk = FakeTool("junkfather", self.fake.bin)
+        self.spawn = FakeTool("spawnfather", self.fake.bin)
 
     def test_three_sections_in_order_each_with_its_status_and_settings(self) -> None:
         settings = self.open()
         text = settings.text(idle(), width=100, height=70)
         self.assert_snapshot("sections", text)
-        order = [text.index(title) for title in ("GODFATHER", "SLOTFATHER", "LANEFATHER", "JUNKFATHER")]
+        order = [text.index(title) for title in ("GODFATHER", "SLOTFATHER", "LANEFATHER", "SPAWNFATHER")]
         self.assertEqual(sorted(order), order)
         self.assertRegex(text, r"Rerun waits +55m")
         self.assertRegex(text, r"Default TTL +2h")
         self.assertRegex(text, r"check priority +Batch +env LANEFATHER_PRIORITY_CHECK")
-        self.assertRegex(text, r"State directory +/fake/state/junkfather +read-only")
+        self.assertRegex(text, r"State directory +/fake/state/spawnfather +read-only")
         self.assertRegex(text, r"settings +/fake/config/lanefather/settings.json")
         focus = [row.focus for row in settings_model.selectable(settings.panel, settings.context())]
         self.assertNotIn(("lanefather", "slots.priority.check"), focus, "read-only rows are not selectable")
-        self.assertNotIn(("junkfather", "env.JUNKFATHER_STATE"), focus)
-        self.assertIn(("junkfather", "reap.grace"), focus, "one cursor reaches every section")
+        self.assertNotIn(("spawnfather", "env.SPAWNFATHER_STATE"), focus)
+        self.assertIn(("spawnfather", "reap.grace"), focus, "one cursor reaches every section")
 
     def test_a_lanefather_setting_changes_and_reads_back(self) -> None:
         settings = self.open()
@@ -949,47 +949,47 @@ class SectionTests(PanelCase):
 
     def test_a_conflict_shows_the_current_value_and_saves_nothing(self) -> None:
         settings = self.open()
-        settings.select(("junkfather", "reap.grace"))
-        self.junk.update(values={"reap.grace": 30})  # another client, not read yet
+        settings.select(("spawnfather", "reap.grace"))
+        self.spawn.update(values={"reap.grace": 30})  # another client, not read yet
         settings.key("right")
         self.assertNotIn("load-model", settings.key("\r"))
-        self.assertEqual({"reap.grace": 30}, self.junk.read()["values"])
+        self.assertEqual({"reap.grace": 30}, self.spawn.read()["values"])
         text = settings.text(idle(), height=70)
         self.assertEqual(1, text.count("✗ Changed by another client: now 30s · nothing was saved"))
         self.assertRegex(text, r"Grace before SIGKILL +30s")
 
     def test_an_invalid_value_is_refused_under_its_row(self) -> None:
         settings = self.open()
-        settings.select(("junkfather", "reap.grace"))
+        settings.select(("spawnfather", "reap.grace"))
         settings.key("\r", "\x15", "9", "0", "0")
         text = settings.text(idle(), height=70)
         self.assertEqual(1, text.count("must be from 1 to 600 s"))
         self.assertNotIn("load-model", settings.key("\r"))
-        self.assertEqual({}, self.junk.read()["values"])
+        self.assertEqual({}, self.spawn.read()["values"])
 
-    def test_read_only_junkfather_refuses_with_exit_5_and_says_why(self) -> None:
+    def test_read_only_spawnfather_refuses_with_exit_5_and_says_why(self) -> None:
         settings = self.open()
-        settings.select(("junkfather", "own.default_ttl"))
-        self.junk.update(writable=False)  # after the read
+        settings.select(("spawnfather", "own.default_ttl"))
+        self.spawn.update(writable=False)  # after the read
         self.assertNotIn("load-model", settings.key("right", "\r"))
         text = settings.text(idle(), height=70)
         self.assertEqual(1, text.count("/fake: is not writable"), "said once, the rows read-only after the reread")
         self.assertRegex(text, r"Default TTL +2h +read-only")
-        self.assertEqual({}, self.junk.read()["values"])
+        self.assertEqual({}, self.spawn.read()["values"])
 
     def test_d_twice_resets_the_selected_section_and_leaves_the_others(self) -> None:
         self.tool("order", "--safety", "4")
         self.lane.update(values={"rerun.wait": 600})
-        self.junk.update(values={"reap.grace": 30})
+        self.spawn.update(values={"reap.grace": 30})
         settings = self.open()
-        settings.select(("junkfather", "reap.grace"))
+        settings.select(("spawnfather", "reap.grace"))
         settings.key("D")
-        self.assertIn("Press D again to reset every Junkfather setting", settings.text(idle(), height=70))
+        self.assertIn("Press D again to reset every Spawnfather setting", settings.text(idle(), height=70))
         self.assertIn("load-model", settings.key("D"))
-        self.assertEqual({}, self.junk.read()["values"])
+        self.assertEqual({}, self.spawn.read()["values"])
         self.assertEqual({"rerun.wait": 600}, self.lane.read()["values"])
         self.assertEqual(4.0, self.saved_order()["safety"])
-        self.assertEqual([["settings", "reset", "--all", "--json"]], self.writes(self.junk))
+        self.assertEqual([["settings", "reset", "--all", "--json"]], self.writes(self.spawn))
         self.assertEqual([], self.writes(self.lane) + self.writes())
 
     def test_d_resets_one_row_with_its_revision(self) -> None:
@@ -1262,17 +1262,17 @@ class ModelTests(unittest.TestCase):
                      "revision": "r1", "step": 30, "min": 0}
         lane_keep = {"key": "a.keep", "label": "Keep", "type": "integer", "value": 2, "writable": True,
                      "revision": "rk", "step": 1, "min": 1}
-        junk_row = {"key": "reap.grace", "label": "Grace", "type": "duration", "value": 10, "writable": True,
-                    "revision": "j1", "step": 5, "min": 1}
+        spawn_row = {"key": "reap.grace", "label": "Grace", "type": "duration", "value": 10, "writable": True,
+                     "revision": "j1", "step": 5, "min": 1}
         context = settings_model.Context()
         panel = settings_model.opened(
-            [self.section(lane_wait, lane_keep, tool="lanefather"), self.section(junk_row, tool="junkfather")],
+            [self.section(lane_wait, lane_keep, tool="lanefather"), self.section(spawn_row, tool="spawnfather")],
             context,
             0.0,
         )
         stale_key = ("lanefather", "a.wait", "120", "r1")
         kept_lane_key = ("lanefather", "a.keep", "3", "rk")
-        other_tool_key = ("junkfather", "reap.grace", "15", "j1")
+        other_tool_key = ("spawnfather", "reap.grace", "15", "j1")
         panel = settings_model.replace(
             panel,
             checked={stale_key: {"ok": True}, kept_lane_key: {"ok": True}, other_tool_key: {"ok": True}},
@@ -1304,7 +1304,7 @@ class CompatibilityTests(unittest.TestCase):
     """Provider compatibility matrix (fathers#181), separate from the sibling checkout's exact row-order parity in
     test_contract.py:
 
-    - Sibling checkouts (../slotfather, ../lanefather, ../junkfather): exact schema and row-order parity with
+    - Sibling checkouts (../slotfather, ../lanefather, ../spawnfather): exact schema and row-order parity with
       tests/fake_slotfather.py and tests/fake_tool.py.
     - Any external provider advertising capabilities v1 with `dashboard.settings.versions` containing 1:
       - Older v1 providers that omit later additive rows (such as `order.reservation_timeout`, `host.min_disk_gb`, or
@@ -1370,9 +1370,9 @@ class CompatibilityTests(unittest.TestCase):
         lane_doc = fake_tool.document({"tool": "lanefather", "values": {"rerun.wait": 1200},
                                        "environment": {}, "writable": True})
         lane_doc["sections"] = [section for section in lane_doc["sections"] if section["id"] != "host"]
-        junk_doc = fake_tool.document({"tool": "junkfather", "values": {"own.default_ttl": 5400},
-                                       "environment": {}, "writable": True})
-        for section in junk_doc["sections"]:
+        spawn_doc = fake_tool.document({"tool": "spawnfather", "values": {"own.default_ttl": 5400},
+                                        "environment": {}, "writable": True})
+        for section in spawn_doc["sections"]:
             section["settings"] = [row for row in section["settings"] if row["key"] != "own.background_ttl"]
 
         updated_slot = copy.deepcopy(slot_doc)
@@ -1387,7 +1387,7 @@ class CompatibilityTests(unittest.TestCase):
             "settings set order.idle_cpu 0.3 --revision rev-older-order --json": {"code": 0, "json": updated_slot},
         })
         self.write_provider("lanefather", lane_doc)
-        self.write_provider("junkfather", junk_doc)
+        self.write_provider("spawnfather", spawn_doc)
 
         settings = self.open_settings(width=96, height=70)
         text = settings.text(idle(), width=96, height=70)
@@ -1396,7 +1396,7 @@ class CompatibilityTests(unittest.TestCase):
         focus_keys = [row.focus for row in settings_model.selectable(settings.panel, settings.context())]
         self.assertNotIn(("slotfather", "order.reservation_timeout"), focus_keys)
         self.assertNotIn(("lanefather", "host.min_disk_gb"), focus_keys)
-        self.assertNotIn(("junkfather", "own.background_ttl"), focus_keys)
+        self.assertNotIn(("spawnfather", "own.background_ttl"), focus_keys)
         self.assertRegex(text, r"Backfill margin +4\.5×")
         self.assertRegex(text, r"Warn after waiting +15m")
         self.assertRegex(text, r"Idle when below +0\.25 cores")

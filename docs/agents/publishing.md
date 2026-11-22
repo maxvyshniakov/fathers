@@ -45,7 +45,7 @@
 
 - Only on an explicit release request, per package: move `## Unreleased` under `## x.y.z - YYYY-MM-DD` in its
   `CHANGELOG.md` and set the version in `pyproject.toml` and in its version source (Slotfather and Godfather
-  `src/<package>/version.py`, Junkfather `junkfather/__init__.py`, Lanefather `lanefather/__init__.py`). The package's
+  `src/<package>/version.py`, Spawnfather `spawnfather/__init__.py`, Lanefather `lanefather/__init__.py`). The package's
   `tests/test_changelog.py` checks both. A release is that commit on `main`; nothing goes to a registry and there are
   no tags.
 - Format and version rules: each package's publishing page or README (linked from its `AGENTS.md`).
@@ -53,8 +53,8 @@
 ## Install, deploy, restart
 
 - A push installs nothing. `python3 install.py <package>` from a clean checkout of the pushed `main` installs one
-  package, only on an explicit request; its README has the options (Junkfather `--launchd --mastack`). Check it with
-  the command's version (`slotfather version`, `lanefather --version`, `junkfather version`,
+  package, only on an explicit request; its README has the options (Spawnfather `--launchd --mastack`). Check it with
+  the command's version (`slotfather version`, `lanefather --version`, `spawnfather version`,
   `godfather --version`). Running commands keep the release they started from.
 
 ## Report

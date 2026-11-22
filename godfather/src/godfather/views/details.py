@@ -7,8 +7,8 @@ import textwrap
 from pathlib import Path
 from typing import Any, Mapping, Optional, cast
 
-from ..adapters import junkfather as _junkfather
 from ..adapters import lanefather as _lanefather
+from ..adapters import spawnfather as _spawnfather
 from ..layout import Rect
 from ..tui import SPINNER, Canvas, safe_link
 from ..text import clip, clock, clusters, cluster_width, dashboard_text, megabytes, minutes, short, span, text_width, tilde
@@ -220,7 +220,7 @@ def draw_detail(canvas: Canvas, rect: Rect, model: Model, selected: int, cwd: Op
                 lanes: Optional[dict[str, Any]] = None, procs: Optional[dict[str, Any]] = None) -> None:
     """The selected request's details. `lanes` is Lanefather's status snapshot, decoded: the lane the request joins
     to there (fathers#85) gives its lane facts and makes the `lane` row a link to the Lanes page; `procs` is
-    Junkfather's, whose entries the request owns are `processes` rows, links to the Processes page (fathers#86)."""
+    Spawnfather's, whose entries the request owns are `spawns` rows, links to the Spawns page (fathers#86)."""
     items = model["holders"] + model["waiters"]
     panel = Panel(canvas, rect, "details").frame(detail_title(items[selected] if items else None))
     if not items or canvas.loading is not None:  # drawn, so it can hold the focus, with nothing to scroll yet
@@ -282,17 +282,17 @@ def draw_detail(canvas: Canvas, rect: Rect, model: Model, selected: int, cwd: Op
             found[1] = ("lane", [(dashboard_text(f"{joined['id']} · {joined['project']}"), "accent")])
         facts.extend(found)
     links: dict[int, Any] = {}
-    if procs is not None:  # its owned processes (fathers#86): label, state and TTL left, each a link
-        owned = _junkfather.of_request(item, procs, joined)
-        elapsed = _junkfather.elapsed(procs, moment)
+    if procs is not None:  # its owned spawns (fathers#86, fathers#170): label, state and TTL left, each a link
+        owned = _spawnfather.of_request(item, procs, joined)
+        elapsed = _spawnfather.elapsed(procs, moment)
         facts.append(("", []))
         if not owned:
-            facts.append(("processes", [("none owned", "dim")]))
+            facts.append(("spawns", [("none owned", "dim")]))
         for number, entry in enumerate(owned):
-            links[len(facts)] = ("processes", entry["key"])
-            facts.append(("processes" if number == 0 else "",
-                          [(dashboard_text(_junkfather.label_of(entry)), "accent"),
-                           (f" · {entry['state']} · {_junkfather.ttl_text(entry, elapsed)}", "dim")]))
+            links[len(facts)] = ("spawns", entry["key"])
+            facts.append(("spawns" if number == 0 else "",
+                          [(dashboard_text(_spawnfather.label_of(entry)), "accent"),
+                           (f" · {entry['state']} · {_spawnfather.ttl_text(entry, elapsed)}", "dim")]))
     if failure:  # the slow facts could not be read (fathers#23): said, and tried again
         facts.extend([("", []), ("details", [(f"not loaded · {failure} · retrying", "bad")])])
     tree = item["tree"]
@@ -349,7 +349,12 @@ def enrich_details(
 
 # An event or run (fathers#152): DETAILS while EVENTS was focused last
 
-TOOLS = {"slotfather": "Slotfather", "lanefather": "Lanefather", "junkfather": "Junkfather"}
+TOOLS = {
+    "slotfather": "Slotfather",
+    "lanefather": "Lanefather",
+    "spawnfather": "Spawnfather",
+    "junkfather": "Spawnfather",
+}
 SUBJECT_SHOWN = ("project", "ticket", "lease_id", "state_dir")  # the subject's fields worth a row of their own
 
 

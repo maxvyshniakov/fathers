@@ -52,8 +52,8 @@ FILL_LIGHT, FILL_DARK = 0.73, 0.80  # a fill's lightness on a light and on a dar
 HOLDERS = len(HOLDER_HUES)
 # EVENTS' source tags (fathers#84): one ink per tool, by the holder rules (kept apart from the accent, bad and warn
 # tokens, never in the blue range), so a tag reads as its tool's colour on any background
-SOURCE_HUES = (("source-slot", 172.0), ("source-lane", 300.0), ("source-junk", 60.0))
-BUILTIN_SOURCES: Dict[str, Colour] = {"source-slot": 79, "source-lane": 141, "source-junk": 216}
+SOURCE_HUES = (("source-slot", 172.0), ("source-lane", 300.0), ("source-spawn", 60.0))
+BUILTIN_SOURCES: Dict[str, Colour] = {"source-slot": 79, "source-lane": 141, "source-spawn": 216}
 
 
 class Holder(NamedTuple):

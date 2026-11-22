@@ -1,5 +1,5 @@
 """EVENTS as one feed of every source (fathers#84): Slotfather's rows from its event log are the rows its snapshot
-gave (the replay comparison), each with a result; Lanefather's and junkfather's rows come between them in time order
+gave (the replay comparison), each with a result; Lanefather's and Spawnfather's rows come between them in time order
 with their tags and colours; `f` and `/` filter, the border says so, and `↑ N new` counts only what the filter lets
 through; narrow panels give way in the specified order."""
 from __future__ import annotations
@@ -129,7 +129,7 @@ class ReplayTests(unittest.TestCase):
                     model, error = screen.load()
                     self.assertIsNone(error)
                     assert model is not None
-                    self.assertEqual({"slotfather", "lanefather", "junkfather"}, set(screen.feed.tails))
+                    self.assertEqual({"slotfather", "lanefather", "spawnfather"}, set(screen.feed.tails))
                     self.assertTrue(all(tail.handle is not None for tail in screen.feed.tails.values()))
                 self.assertTrue(screen.closed)
                 self.assertTrue(all(tail.handle is None for tail in screen.feed.tails.values()))
@@ -193,7 +193,7 @@ def mixed() -> list[dict[str, Any]]:
     return [logged("lease.granted", NOW - dt.timedelta(seconds=50), "build", 101, count=1, waited=0),
             logged("lane.checked", NOW - dt.timedelta(seconds=40), source="lanefather", ident="710-speech",
                    status="green", suites=["tooling", "native"], message="check 710-speech tree=abc green"),
-            logged("entry.owned", NOW - dt.timedelta(seconds=30), "vite dev", 90412, source="junkfather",
+            logged("entry.owned", NOW - dt.timedelta(seconds=30), "vite dev", 90412, source="spawnfather",
                    ttl=7200),
             logged("lease.released", NOW - dt.timedelta(seconds=20), "build", 101, count=1, exit=0, ran=30),
             dict(logged("gate.finished", NOW - dt.timedelta(seconds=10), source="lanefather", level="error",
@@ -247,7 +247,7 @@ class FormatterTests(unittest.TestCase):
                 self.assertEqual((event, detail), (found.event, found.detail[0]))
         self.assertIsNone(events.lanefather_shown("ticket.failed", {}), "the generic form for the rest")
 
-    def test_junkfather_kinds(self) -> None:
+    def test_spawnfather_kinds(self) -> None:
         from godfather import events
 
         cases = [("entry.owned", {"ttl": 7200}, "owned", ("ttl 2h00m", "dim")),
@@ -261,24 +261,24 @@ class FormatterTests(unittest.TestCase):
                   "swept", ("3 unowned", "dim"))]
         for kind, details, event, detail in cases:
             with self.subTest(kind=kind):
-                found = events.junkfather_shown(kind, details)
+                found = events.spawnfather_shown(kind, details)
                 assert found is not None
                 self.assertEqual((event, detail), (found.event, found.detail[0]))
-        reported = events.junkfather_shown("unowned.reported", {"cmd": "node dev", "why": "orphan"})
+        reported = events.spawnfather_shown("unowned.reported", {"cmd": "node dev", "why": "orphan"})
         self.assertEqual("node dev", reported and reported.label, "an unowned process by its command")
 
     def test_an_unknown_kind_shows_itself_and_its_fields(self) -> None:
         from godfather import events
 
-        found = rows_of([logged("cpu.reported", NOW, source="junkfather", level="error", reaped=2,
+        found = rows_of([logged("cpu.reported", NOW, source="spawnfather", level="error", reaped=2,
                                 errors=["x"], nested={"a": 1})])  # sweep.finished has its words now (fathers#86)
         self.assertEqual(("cpu.reported", [("reaped=2 errors=x", "bad")]), (found[0]["event"], found[0]["detail"]))
         self.assertEqual("reason=x", events.compact({"message": "prose", "reason": "x"}))
         self.assertEqual("prose", events.compact({"message": "prose"}))
 
 
-TAGS = {"slotfather": "slot", "lanefather": "lane", "junkfather": "junk"}
-SOURCES = [("slotfather", "slot"), ("lanefather", "lane"), ("junkfather", "junk")]
+TAGS = {"slotfather": "slot", "lanefather": "lane", "spawnfather": "spwn"}
+SOURCES = [("slotfather", "slot"), ("lanefather", "lane"), ("spawnfather", "spwn")]
 
 
 class LogViewTests(unittest.TestCase):
@@ -417,10 +417,10 @@ class LogViewTests(unittest.TestCase):
         self.assertEqual("<>", "❮❯".translate(self.tool.ASCII))
 
     def test_outcome_result_and_detail_are_left_aligned(self) -> None:
-        """fathers#165: the outcome (SLOTS LOG), the result (LANES LOG) and the detail (PROCS LOG) start under their
+        """fathers#165: the outcome (SLOTS LOG), the result (LANES LOG) and the detail (SPAWNS LOG) start under their
         label, header and cells alike."""
         for view, title, needle in (("slotfather", "outcome", "ok 30s"), ("lanefather", "result", "green · 2 suites"),
-                                    ("junkfather", "detail", "ttl 2h00m")):
+                                    ("spawnfather", "detail", "ttl 2h00m")):
             with self.subTest(view=view):
                 _, lines = self.draw(120, self.tool.Filter(view))
                 row = next(line for line in self.body(lines) if needle in line)
@@ -434,7 +434,7 @@ class LogViewTests(unittest.TestCase):
         self.assertIn("every event", lines[0])
         self.assertEqual(2, len(self.body(lines)), "r: the grant and the release as logged")
 
-    def test_lanes_and_procs_logs_have_their_own_columns(self) -> None:
+    def test_lanes_and_spawns_logs_have_their_own_columns(self) -> None:
         _, lines = self.draw(120, self.tool.Filter("lanefather"))
         self.assertIn("❮ LANES LOG ❯", lines[0])
         for title in ("lane", "result"):  # `event` gives way to the title over it
@@ -443,8 +443,8 @@ class LogViewTests(unittest.TestCase):
         self.assertRegex(body[2], r"checked +710-speech +green · 2 suites")
         self.assertRegex(body[1], r"gate +Straylight cedf8b972d +red · 19m")
         self.assertRegex(body[0], r"queue\.upd… +Straylight +reason=policy moved=2", "an unknown kind")
-        _, lines = self.draw(120, self.tool.Filter("junkfather"))
-        self.assertIn("❮ PROCS LOG ❯", lines[0])
+        _, lines = self.draw(120, self.tool.Filter("spawnfather"))
+        self.assertIn("❮ SPAWNS LOG ❯", lines[0])
         self.assertRegex(self.body(lines)[0], r"owned +vite dev +ttl 2h00m +90412")
 
     def test_all_log_is_time_type_and_one_sentence(self) -> None:
@@ -452,15 +452,55 @@ class LogViewTests(unittest.TestCase):
         self.assertIn("❮ FULL LOG ❯", lines[0])
         self.assertIn("description", lines[0])
         body = self.body(lines)
-        self.assertEqual(["lane", "lane", "slot", "proc", "lane"], [line.split()[2] for line in body])
+        self.assertEqual(["lane", "lane", "slot", "spawn", "lane"], [line.split()[2] for line in body])
         self.assertRegex(body[2], r"slot run +build · ok 30s · 1 slot")
-        self.assertRegex(body[3], r"proc owned +vite dev · ttl 2h00m")
+        self.assertRegex(body[3], r"spawn owned +vite dev · ttl 2h00m")
         self.assertRegex(body[4], r"lane checked +710-speech · green · 2 suites")
-        y = next(n for n, line in enumerate(lines) if "proc owned" in line)
-        self.assertEqual("source-junk", canvas.cells[y][lines[y].index("proc owned")][1], "the type in its tool's colour")
+        y = next(n for n, line in enumerate(lines) if "spawn owned" in line)
+        self.assertEqual("source-spawn", canvas.cells[y][lines[y].index("spawn owned")][1], "the type in its tool's colour")
+
+    def test_mixed_junkfather_and_spawnfather_event_history_normalizes_without_skips(self) -> None:
+        """fathers#170: a migrated events.jsonl holding historical `source: junkfather` lines followed by
+        `source: spawnfather` lines reads cleanly into SPAWNS LOG and FULL LOG without counting source skips."""
+        import tempfile
+        from pathlib import Path
+
+        from godfather import events
+
+        raw_events = [
+            logged("entry.owned", NOW - dt.timedelta(seconds=40), "legacy dev", 80100, source="junkfather", ttl=3600),
+            logged("entry.reaped", NOW - dt.timedelta(seconds=30), "legacy dev", 80100, source="junkfather",
+                   reason="orphan", result="stopped"),
+            logged("entry.owned", NOW - dt.timedelta(seconds=20), "new dev", 90200, source="spawnfather", ttl=7200),
+            logged("entry.extended", NOW - dt.timedelta(seconds=10), "new dev", 90200, source="spawnfather", ttl=14400),
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            log_path = Path(folder) / "events.jsonl"
+            log_path.write_text("".join(json.dumps(item) + "\n" for item in raw_events))
+            feed = events.Feed("mbp")
+            try:
+                feed.follow("spawnfather", str(log_path))
+                feed.poll()
+                parsed = feed.events()
+                skipped = feed.skipped()["spawnfather"]
+            finally:
+                feed.close()
+
+        self.assertEqual({"invalid": 0, "version": 0, "host": 0, "source": 0}, skipped)
+        self.assertEqual(["spawnfather"] * 4, [item.source for item in parsed])
+        self.assertEqual(["junkfather", "junkfather", "spawnfather", "spawnfather"],
+                         [json.loads(item.line)["source"] for item in parsed], "raw JSON line preserved")
+        rows = events.rows(parsed, TAGS)
+        _, spawns_lines = self.draw(120, self.tool.Filter("spawnfather"), rows=rows)
+        self.assertIn("❮ SPAWNS LOG ❯", spawns_lines[0])
+        self.assertEqual(4, len(self.body(spawns_lines)))
+        self.assertIn("legacy dev", "\n".join(self.body(spawns_lines)))
+        self.assertIn("new dev", "\n".join(self.body(spawns_lines)))
+        _, full_lines = self.draw(120, self.tool.Filter("all"), rows=rows)
+        self.assertEqual(["spawn"] * 4, [line.split()[2] for line in self.body(full_lines)])
 
     def test_no_label_is_cut_shorter_than_16_cells_and_no_row_spans_columns_at_156(self) -> None:
-        for view in ("slotfather", "lanefather", "junkfather", "all"):
+        for view in ("slotfather", "lanefather", "spawnfather", "all"):
             with self.subTest(view=view):
                 found = self.tool.Filter(view)
                 rows = rows_of(mixed(), TAGS)
@@ -491,7 +531,7 @@ class LogViewTests(unittest.TestCase):
         Filter = self.tool.Filter
         _, lines = self.draw(120, Filter("all", "VITE"))
         self.assertIn('FULL LOG ❯ ── "VITE" ──', lines[0])
-        self.assertEqual(["proc"], [line.split()[2] for line in self.body(lines)], "label, any case")
+        self.assertEqual(["spawn"], [line.split()[2] for line in self.body(lines)], "label, any case")
         _, lines = self.draw(120, Filter(None, "vite"))
         self.assertIn("No events match the filter", lines[2], "SLOTS LOG has no vite")
         for needle, kind in (("cedf8b", "gate"), ("suites", "checked")):
@@ -568,7 +608,7 @@ class FilterReducerTests(unittest.TestCase):
         for _ in range(4):
             state = self.keys(state, "f")
             seen.append(state.ui.events_filter.source)
-        self.assertEqual(["lanefather", "junkfather", "all", "slotfather"], seen, "from SLOTS LOG, the default")
+        self.assertEqual(["lanefather", "spawnfather", "all", "slotfather"], seen, "from SLOTS LOG, the default")
         focused = self.state(focus="events")
         self.assertEqual("all", self.keys(focused, "left").ui.events_filter.source, "← back, around")
         self.assertEqual("lanefather", self.keys(focused, "right").ui.events_filter.source)
@@ -671,10 +711,10 @@ class FilterReducerTests(unittest.TestCase):
         state = dataclasses.replace(state, scroll={**state.scroll, "events": 1})  # then scrolled down
         later = rows_of(mixed() + [logged("lane.landed", NOW + dt.timedelta(seconds=5), source="lanefather",
                                           ident="710", onto="main"),
-                                   logged("entry.owned", NOW + dt.timedelta(seconds=6), "x", 9, source="junkfather")],
+                                   logged("entry.owned", NOW + dt.timedelta(seconds=6), "x", 9, source="spawnfather")],
                         TAGS)
         moved = self.tool.follow_events(state, later)
-        self.assertEqual(3, moved.fresh_events, "gate, queue.updated and landed, not the slot and junk rows")
+        self.assertEqual(3, moved.fresh_events, "gate, queue.updated and landed, not the slot and spawn rows")
         pinned = self.keys(self.state(scroll=0), "f", "f", "f", "f")  # around, back to SLOTS LOG
         self.assertEqual((0, 0), (pinned.scroll.get("events", 0), pinned.fresh_events))
         self.assertEqual(rows_of(mixed(), TAGS)[0]["key"], pinned.newest, "the newest run, by its grant")
@@ -719,7 +759,7 @@ class LiveFilterTests(unittest.TestCase):
             screen.write("\x1b")
             screen.receive("❮ LANES LOG ❯ ─", since=at)
             at = screen.mark()
-            screen.write("fff")  # PROCS LOG, FULL LOG, back to SLOTS LOG
+            screen.write("fff")  # SPAWNS LOG, FULL LOG, back to SLOTS LOG
             screen.receive("❮ SLOTS LOG ❯", since=at)
             screen.write("\t")  # EVENTS focused, scrolled down by the wheel (↑↓ move its cursor, fathers#152)
             screen.write("\x1b[<65;20;30M")

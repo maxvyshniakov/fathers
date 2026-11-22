@@ -136,7 +136,7 @@ again and needs the same row (key, pid, start) still offering the same action; t
 ### The event log: EVENTS
 
 EVENTS reads Slotfather's `events.jsonl` through godfather.events ([docs/events.md](../events.md#reading-godfather)),
-with Lanefather's and junkfather's beside it. Each Slotfather row's result comes from the event's own fields, never
+with Lanefather's and Spawnfather's beside it. Each Slotfather row's result comes from the event's own fields, never
 from prose:
 
 | Kind | Fields read | Result |
@@ -209,7 +209,7 @@ for Fixed). The reservation timeout is counted from the head's reserved start. T
 - `set` and `reset` reply, on success (exit 0), with the whole `settings --json` object; on a stale revision
   (exit 3) with the whole current object and `"conflict": true`; on invalid input (exit 2) or a read-only queue
   (exit 4) with `{"ok": false, "error": "…"}`. Godfather's client (`adapters/settings.py`) serves every tool:
-  it also takes Junkfather's read-only exit 5 (fathers#118).
+  it also takes Spawnfather's read-only exit 5 (fathers#118).
 - Godfather passes each row's `revision` with `set` and `reset KEY` (capacity.json's for the capacity keys,
   order.json's for the order knobs), never with `reset --all`; it draws the rows from `label`, `type`, `unit`,
   `step`, `min`, `max`, `zero`, `choices`, `when` and `description`, durations as `1h30m`.

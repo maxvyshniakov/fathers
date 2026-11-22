@@ -34,6 +34,7 @@ LINE_MAX = _eventcheck.MAX_LINE_BYTES
 TAG = re.compile(r"[a-z][a-z0-9]{0,3}")  # a source tag: four cells at most
 SKIPS = ("invalid", "version", "host", "source")  # why a line was skipped
 SKIP_WORDS = {"invalid": "invalid", "version": "unknown version", "host": "other host", "source": "other source"}
+SOURCE_ALIASES: dict[str, frozenset[str]] = {"spawnfather": frozenset({"spawnfather", "junkfather"})}
 READ_MAX = 1 << 20  # bytes one poll reads from a log at most; the rest waits for the next poll
 CONTROL = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 COMPACT_VALUE, COMPACT_MAX = 40, 160  # characters of one value, and of the whole, in a compact detail
@@ -265,7 +266,8 @@ class Tail:
         if found.get("host") != self.reading_for:
             self.skipped["host"] += 1
             return None
-        if found.get("source") != self.source:  # a line of another tool's in this tool's log
+        allowed = SOURCE_ALIASES.get(self.source, frozenset({self.source}))
+        if found.get("source") not in allowed:  # a line of another tool's in this tool's log
             self.skipped["source"] += 1
             return None
         when = parse_time(found.get("time"))
@@ -321,7 +323,7 @@ class Feed:
 
 # What a tool's capabilities say of its event log (SPEC, Capabilities contract)
 
-DEFAULT_TAGS = {"slotfather": "slot", "lanefather": "lane", "junkfather": "junk"}
+DEFAULT_TAGS = {"slotfather": "slot", "lanefather": "lane", "spawnfather": "spwn", "junkfather": "spwn"}
 
 
 def dashboard_block(capabilities: Optional[dict[str, Any]]) -> dict[str, Any]:
@@ -342,8 +344,10 @@ def log_path(capabilities: Optional[dict[str, Any]]) -> Optional[str]:
 
 
 def tag_of(capabilities: Optional[dict[str, Any]], name: str) -> str:
-    """The source's tag as its capabilities give it (`slot`, `lane`, `junk`), else the one Godfather knows it by."""
+    """The source's tag as its capabilities give it (`slot`, `lane`, `spwn`), else the one Godfather knows it by."""
     tag = dashboard_block(capabilities).get("tag")
+    if tag == "junk" and name in ("spawnfather", "junkfather"):
+        return "spwn"
     return tag if isinstance(tag, str) and TAG.fullmatch(tag) else DEFAULT_TAGS.get(name, name[:4])
 
 
@@ -552,8 +556,8 @@ def lanefather_shown(kind: str, details: dict[str, Any]) -> Optional[Shown]:
     return None
 
 
-def junkfather_shown(kind: str, details: dict[str, Any]) -> Optional[Shown]:
-    """junkfather's kinds (junkfather/events.py KINDS) from their structured fields."""
+def spawnfather_shown(kind: str, details: dict[str, Any]) -> Optional[Shown]:
+    """Spawnfather's kinds (spawnfather/events.py KINDS) from their structured fields."""
     ttl = f"ttl {_minutes(details.get('ttl'))}" if _number(details.get("ttl")) else ""
     if kind in ("entry.owned", "entry.adopted", "entry.extended"):
         return Shown(kind.split(".")[1], ((ttl, "dim"),))
@@ -598,7 +602,13 @@ def junkfather_shown(kind: str, details: dict[str, Any]) -> Optional[Shown]:
     return None
 
 
-FORMATTERS = {"slotfather": slotfather_shown, "lanefather": lanefather_shown, "junkfather": junkfather_shown}
+junkfather_shown = spawnfather_shown
+FORMATTERS = {
+    "slotfather": slotfather_shown,
+    "lanefather": lanefather_shown,
+    "spawnfather": spawnfather_shown,
+    "junkfather": spawnfather_shown,
+}
 
 
 def shown(event: Event) -> Shown:
@@ -768,7 +778,7 @@ def runs(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 # What EVENTS shows (fathers#84, fathers#152): data the reducer filters and counts by, kept here so it reads no view
 
-VIEWS = ("slotfather", "lanefather", "junkfather")
+VIEWS = ("slotfather", "lanefather", "spawnfather")
 ALL = "all"
 Model = Mapping[str, Any]  # the overview's model (model.Dashboard), or a strip's events and sources alone
 
@@ -788,7 +798,7 @@ class Filter:
 
 
 def present(model: Optional[Model]) -> list[tuple[str, str]]:
-    """The sources EVENTS reads, (name, tag) in the order slotfather, lanefather, junkfather."""
+    """The sources EVENTS reads, (name, tag) in the order slotfather, lanefather, spawnfather."""
     pairs = cast(list[Any], (model or {}).get("sources") or [])
     return [(str(pair[0]), str(pair[1])) for pair in pairs]
 

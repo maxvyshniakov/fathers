@@ -86,7 +86,7 @@ def load_scene(advance: bool = False, elapsed: Callable[[], float] | None = None
         def today(cls) -> Any:  # type: ignore[override]
             return current().astimezone().date()
 
-    clock = types.SimpleNamespace(datetime=Clock, date=Date, timedelta=dt.timedelta, timezone=dt.timezone)
+    clock = types.SimpleNamespace(datetime=Clock, date=Date, timedelta=dt.timedelta, timezone=dt.timezone, UTC=dt.UTC)
     app.datetime = clock  # type: ignore[assignment]  # the live loop's clock, which its Tick carries to the state
     model["history"] = machine.held_history(model["events"], model["used"], origin, 2 * model["history_window"])
     if not recorded:  # EVENTS reads the log (fathers#84)

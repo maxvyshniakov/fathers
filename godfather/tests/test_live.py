@@ -515,7 +515,7 @@ class WhatsNewLayoutTests(unittest.TestCase):
         from godfather import news
         found = news.News((news.Installed("godfather", "0.1.0", "stale"), news.Installed("slotfather", "0.2.0", "ok"),
                            news.Installed("lanefather", None, "absent"),
-                           news.Installed("junkfather", "0.1.0", "versions"),
+                           news.Installed("spawnfather", "0.1.0", "versions"),
                            news.Installed("nofather", None, "failed", "nofather changelog --json exited 1")), ())
         text = ["".join(part[0] for part in parts) for parts in tool().news_lines(70, found)]
         self.assertEqual(["Nothing in the changelogs yet."], text, "fathers#102: a stale install is the footer's ↻")

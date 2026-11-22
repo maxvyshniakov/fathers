@@ -2,8 +2,8 @@
 
 One terminal dashboard for the tools that share a development machine:
 [Slotfather](../slotfather) (capacity leases),
-[Lanefather](../lanefather) (parallel agent lanes) and junkfather (the long-lived
-processes agents start).
+[Lanefather](../lanefather) (parallel agent lanes) and [Spawnfather](../spawnfather) (the long-lived
+processes and resources agents spawn).
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="assets/dashboard-light.webp">
@@ -13,7 +13,7 @@ processes agents start).
 **Status: 0.1.0, with the next release's work on `main`** ([SPEC.md, Status](SPEC.md#status) item by item,
 [CHANGELOG.md](CHANGELOG.md) in full). The overview is Slotfather's dashboard as it moved here: SLOTS, QUEUE,
 DETAILS, EVENTS and MACHINE. SLOTS' bottom border sums up the other tools, `2 lanes 3 active · 2 reviews` and
-`3 procs 7 · 1 orphan`; `2` and `3` (or a click on a summary) open the Lanes and Processes pages, each a table, its
+`3 spawns 7 · 1 orphan`; `2` and `3` (or a click on a summary) open the Lanes and Spawns pages, each a table, its
 details and its tool's events. EVENTS shows one tool's log at a time, its title the switch (`❮ SLOTS LOG ❯`: ← →, `f`
 or a click), one row per Slotfather run with trends as marks, its rows selectable into DETAILS, `/` to filter.
 Enter, `a` or a right-click on a row offers the actions its tool advertises (reprioritize, ask to yield, reap,
@@ -53,7 +53,8 @@ runs their CLIs. A tool that is not installed simply has no panels; one without 
 | Events | `events.jsonl` in the tool's state directory, one shared versioned schema |
 
 [docs/contracts/slotfather.md](docs/contracts/slotfather.md) is the exact shape read from Slotfather,
-[docs/contracts/lanefather.md](docs/contracts/lanefather.md) from Lanefather;
+[docs/contracts/lanefather.md](docs/contracts/lanefather.md) from Lanefather, and
+[docs/contracts/spawnfather.md](docs/contracts/spawnfather.md) from Spawnfather;
 [docs/contracts/changelog.md](docs/contracts/changelog.md) is what every tool answers for what's new.
 The event schema is [docs/events.md](docs/events.md), with a JSON Schema and
 [`common/eventcheck.py`](../common/eventcheck.py), one MIT-licensed standard-library file every tool's tests

@@ -2,7 +2,7 @@
 
 A test describes the tool (its command name, how to run it, the commands it has) and gets one unittest case per rule:
 
-    TOOL = Tool("junkfather", (sys.executable, "-m", "junkfather"),
+    TOOL = Tool("spawnfather", (sys.executable, "-m", "spawnfather"),
                 (Command("list", json=()), Command("changelog", option=("--since", "0.1.0"), shows="0.2.0"),
                  Command("reap")))
 
@@ -10,7 +10,7 @@ A test describes the tool (its command name, how to run it, the commands it has)
         def prepare(self, tool: Tool) -> Tool:
             state = tempfile.mkdtemp()
             self.addCleanup(shutil.rmtree, state, True)
-            return dataclasses.replace(tool, env={**os.environ, "JUNKFATHER_STATE": state}, cwd=state)
+            return dataclasses.replace(tool, env={**os.environ, "SPAWNFATHER_STATE": state}, cwd=state)
 
 `expected` lists the cases the tool does not pass yet, each with the ticket that fixes it; a listed case that passes
 fails the run (an unexpected success), so the list only shrinks. Assign the class `conformance` returns only as a

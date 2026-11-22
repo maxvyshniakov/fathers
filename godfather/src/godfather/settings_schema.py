@@ -10,7 +10,7 @@ from . import theme as _theme
 from .text import span, tilde
 
 GODFATHER = "godfather"
-ORDER = ("godfather", "slotfather", "lanefather", "junkfather")  # the sections, top to bottom
+ORDER = ("godfather", "slotfather", "lanefather", "spawnfather")  # the sections, top to bottom
 DEFAULT_INTERVAL = 1.0
 EDITABLE = ("choice", "boolean", "integer", "number", "duration", "interval", "theme")  # what Godfather can change
 NUMBERS = ("integer", "number", "duration", "interval")
@@ -19,8 +19,13 @@ LOCAL_DESCRIPTIONS = {
     "interval": "Seconds between refreshes, 0.1 to 60 · this dashboard only.",
     "theme": "Auto, Terminal (palette only) or Built-in colours · this dashboard only.",
 }
-TITLES = {"godfather": "GODFATHER", "slotfather": "SLOTFATHER", "lanefather": "LANEFATHER", "junkfather": "JUNKFATHER"}
-NAMES = {"godfather": "Godfather", "slotfather": "Slotfather", "lanefather": "Lanefather", "junkfather": "Junkfather"}
+TITLES = {
+    "godfather": "GODFATHER",
+    "slotfather": "SLOTFATHER",
+    "lanefather": "LANEFATHER",
+    "spawnfather": "SPAWNFATHER",
+}
+NAMES = {"godfather": "Godfather", "slotfather": "Slotfather", "lanefather": "Lanefather", "spawnfather": "Spawnfather"}
 
 Focus = tuple[str, str]  # (tool, key)
 CheckKey = tuple[str, str, str, str]  # (tool, key, the value as given, the row's revision)

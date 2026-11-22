@@ -17,7 +17,7 @@ from typing import Any
 from helpers import ROOT
 
 from godfather import sources
-from godfather.adapters import junkfather, lanefather, slotfather
+from godfather.adapters import lanefather, slotfather, spawnfather
 
 SCENE = ROOT / "tests" / "fixtures" / "scene"
 # What the views read without a default, listed here rather than taken from the adapter, so dropping a key from the
@@ -123,11 +123,11 @@ class OtherToolTests(unittest.TestCase):
                   "a lane has no id; update lanefather"),
                  (lanefather, {"v": 1, "projects": [{"project": "p", "lanes": []}]},
                   "a project has no state_dir; update lanefather"),
-                 (junkfather, {"v": 2, "entries": [{"label": "no id"}]}, "an entry has no id; update junkfather"),
-                 (junkfather, {"v": 2, "entries": [], "unowned": [{"cmd": "x"}]},
-                  "an unowned process has no pid; update junkfather"),
-                 (junkfather, {"v": 2, "entries": [], "unowned_resources": [{"kind": "worktree"}]},
-                  "an unowned resource has no kind or id; update junkfather")]
+                 (spawnfather, {"v": 2, "entries": [{"label": "no id"}]}, "an entry has no id; update spawnfather"),
+                 (spawnfather, {"v": 2, "entries": [], "unowned": [{"cmd": "x"}]},
+                  "an unowned process has no pid; update spawnfather"),
+                 (spawnfather, {"v": 2, "entries": [], "unowned_resources": [{"kind": "worktree"}]},
+                  "an unowned resource has no kind or id; update spawnfather")]
         for adapter, snapshot, notice in cases:
             with self.subTest(notice=notice), self.assertRaisesRegex(sources.SnapshotError, re.escape(notice)):
                 adapter.decode(snapshot)
@@ -136,8 +136,8 @@ class OtherToolTests(unittest.TestCase):
         lanes = lanefather.decode({"v": 1, "projects": [{"state_dir": "/s", "lanes": [{"id": "a", "x": 1}]}]})
         [lane] = lanefather.lanes(lanes)
         self.assertEqual(("a", "?", [], None), (lane["id"], lane["status"], lane["claims"], lane["worktree"]))
-        procs = junkfather.decode({"v": 2, "entries": [{"id": "j1", "later": True}]})
-        [entry] = junkfather.entries(procs)
+        procs = spawnfather.decode({"v": 2, "entries": [{"id": "j1", "later": True}]})
+        [entry] = spawnfather.entries(procs)
         self.assertEqual(("j1", "running", []), (entry["id"], entry["state"], entry["argv"]))
 
 

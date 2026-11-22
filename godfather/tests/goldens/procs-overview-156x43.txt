@@ -2,7 +2,7 @@
 │                                                                                           │ │                                                            │
 │  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  ╭───────────╮  ╭──────────╮  │ │  label      lane-644-build-once                            │
 │  lane-644-bui…  lane-465-sta…  desktop                                              free  │ │  status     running · 1 slot                               │
-╰─ 2 lanes 4 active · 🔥 gate red ─────────── 3 procs 5 · 1 orphan · 1 expired · 1 unowned ─╯ │  priority   normal                                         │
+╰─ 2 lanes 4 active · 🔥 gate red ────────── 3 spawns 5 · 1 orphan · 1 expired · 1 unowned ─╯ │  priority   normal                                         │
 ┏━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ slots ━ cpu use/share ━━━━ time ━━━ pid ━┓ │  ticket     #644                                           │
 ┃                                                                                           ┃ │  phase      check                                          │
 ▌  ▶️    lane-644-build-once                       ▪       ■■░░░ 0.9/2      35m10s   10000  ▐ │  cpu        ■■■■░░░░░░ 0.9 of 2 cores                      │
@@ -28,7 +28,7 @@
 │  11:51:40  ▫       post-merge-456-rename-compat-revi…  wait 1m07s  ok 14m38s       21193  │ │             src/part9/**, src/part10/**                    │
 │  11:51:24  ▫       agent-a1c75285bdf2cd615                no wait  ok 4m46s        21192  │ │  after      —                                              │
 │  11:49:34  ▫▫      data-grid                              no wait  ok 1m03s        21191  │ │                                                            │
-│  11:48:30  ▫       agent-ae72d94beb6f08961                no wait  ok 2m36s        21190  │ │  processes  storybook · running · 1h46m                    │
+│  11:48:30  ▫       agent-ae72d94beb6f08961                no wait  ok 2m36s        21190  │ │  spawns     storybook · running · 1h46m                    │
 │  11:47:21  ▫       agent-a0f998f4c57cd4c0e             wait 7m39s  ok 4s           21189  │ │                                                            │
 │  11:47:17  ▫       agent-a0f998f4c57cd4c0e                no wait  ok 3s           21188  │ │                                                            │
 │  11:47:13  ▫       agent-a0f998f4c57cd4c0e                no wait  ok 2s           21187  │ │                                                            │

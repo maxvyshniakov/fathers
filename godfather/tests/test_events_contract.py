@@ -1,7 +1,7 @@
 """`godfather events --follow` against the real tools (fathers#83), each in an isolated state directory: a granted and
-released lease from Slotfather and an owned process from junkfather show up within a second, in time order, with
+released lease from Slotfather and an owned process from Spawnfather show up within a second, in time order, with
 their tags, and Lanefather's capabilities name a log the reader follows. It runs the sibling packages of the fathers
-repository at the same commit (../slotfather, ../junkfather, ../lanefather) and skips a tool that is missing there or
+repository at the same commit (../slotfather, ../spawnfather, ../lanefather) and skips a tool that is missing there or
 too old to name its event log. A Lanefather lane check needs a whole project fixture (lanefather's own tests have it),
 so its event is checked by lanefather/tests/test_events.py against the shared validator, not here."""
 from __future__ import annotations
@@ -45,13 +45,13 @@ class EventsContractTests(unittest.TestCase):
         (self.tmp / "bin").mkdir()
         (self.tmp / "home").mkdir()
         self.environ = {key: value for key, value in os.environ.items()
-                        if not key.startswith(("SLOTFATHER_", "GODFATHER_", "JUNKFATHER_", "LANEFATHER_"))}
+                        if not key.startswith(("SLOTFATHER_", "GODFATHER_", "SPAWNFATHER_", "JUNKFATHER_", "LANEFATHER_"))}
         self.environ.update(PATH=f"{self.tmp / 'bin'}:/usr/bin:/bin", HOME=str(self.tmp / "home"),
                             SLOTFATHER_DIR=str(self.tmp / "slot"), SLOTFATHER_LEGACY_DIRS="", SLOTFATHER_CORES="12",
-                            SLOTFATHER_MEMORY_GIB="64", JUNKFATHER_STATE=str(self.tmp / "junk"),
+                            SLOTFATHER_MEMORY_GIB="64", SPAWNFATHER_STATE=str(self.tmp / "spawn"),
                             LANEFATHER_EVENTS=str(self.tmp / "lane" / "events.jsonl"),
                             XDG_CONFIG_HOME=str(self.tmp / "config"), PYTHONPATH=str(ROOT / "src"))
-        self.tools = {tool: wrapper(self.tmp / "bin", tool) for tool in ("slotfather", "lanefather", "junkfather")}
+        self.tools = {tool: wrapper(self.tmp / "bin", tool) for tool in ("slotfather", "lanefather", "spawnfather")}
         for tool, path in self.tools.items():
             if path is None or self.log(tool) is None:
                 self.skipTest(f"../{tool} with an event log in its capabilities is not in this checkout")
@@ -84,9 +84,9 @@ class EventsContractTests(unittest.TestCase):
         # Whether its first read comes before or after a tool writes, it prints the line: it reads what a log holds
         self.run_tool("slotfather", "run", "-n", "1", "--label", "contract", "--", "true")
         lines = lines_within(follow.stdout, 2)
-        self.run_tool("junkfather", "own", "--ttl", "60", "--label", "contract", "--", "true")
+        self.run_tool("spawnfather", "own", "--ttl", "60", "--label", "contract", "--", "true")
         lines += lines_within(follow.stdout, 1)
-        self.assertEqual([("slot", "lease.granted"), ("slot", "lease.released"), ("junk", "entry.owned")],
+        self.assertEqual([("slot", "lease.granted"), ("slot", "lease.released"), ("spwn", "entry.owned")],
                          [tuple(line.split()[2:4]) for line in lines], lines)
         self.assertTrue(all("contract" in line for line in lines), lines)
         times = [line[:19] for line in lines]

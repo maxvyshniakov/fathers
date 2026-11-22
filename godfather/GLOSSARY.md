@@ -9,10 +9,10 @@ actor, capabilities, action, host, owner, reap, orphan) is in the [fathers gloss
 | Source state | Whether a source can be shown: absent, unsupported, ok or stale. |
 | Discovery | Finding the tools on PATH and asking each for its capabilities. |
 | Stale snapshot | The last good snapshot, kept on screen after a later one failed. |
-| Source tag | A tool's short name from its capabilities (`slot`, `lane`, `junk`); EVENTS' ALL log shows it as the row's type. |
+| Source tag | A tool's short name from its capabilities (`slot`, `lane`, `spwn`); EVENTS' ALL log shows it as the row's type. |
 | Join | A read-only link the dashboard computes between a request, a lane and an entry. |
 | Border summary | A tool's one-line count set into the SLOTS border. |
-| Page | A full-screen view of one tool (Overview, Lanes, Processes), one key away (`1 2 3`). |
+| Page | A full-screen view of one tool (Overview, Lanes, Spawns), one key away (`1 2 3`). |
 | Log switch | EVENTS' title (`❮ SLOTS LOG ❯`), which picks the one tool's log it shows. |
 | Run row | One row per Slotfather run in the SLOTS log, from its grant to its release. |
 | Run mark | A trend or outlier set on a run row (▲ ↗ ↘), never a row of its own. |

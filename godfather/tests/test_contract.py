@@ -179,7 +179,7 @@ SIBLINGS = Path(__file__).resolve().parents[2]
 
 
 class ToolContractTests(unittest.TestCase):
-    """Lanefather's and Junkfather's real `settings` CLIs, from the sibling checkouts in isolated state: what
+    """Lanefather's and Spawnfather's real `settings` CLIs, from the sibling checkouts in isolated state: what
     Godfather's client reads and writes, and that tests/fake_tool.py prints the same rows. Skipped where a sibling
     is missing or cannot run (Lanefather needs Python 3.11)."""
 
@@ -196,7 +196,7 @@ class ToolContractTests(unittest.TestCase):
         (bin_dir / name).chmod(0o755)
         environ = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp / "home"),
                    "LANEFATHER_SETTINGS": str(tmp / "lanefather" / "settings.json"),
-                   "JUNKFATHER_STATE": str(tmp / "junkfather"), "XDG_CONFIG_HOME": str(tmp / "config")}
+                   "SPAWNFATHER_STATE": str(tmp / "spawnfather"), "XDG_CONFIG_HOME": str(tmp / "config")}
         (tmp / "home").mkdir()
         probe = subprocess.run([str(bin_dir / name), "settings", "--json"], capture_output=True, text=True,
                                env=environ, cwd=tmp, timeout=30)
@@ -239,19 +239,19 @@ class ToolContractTests(unittest.TestCase):
             with self.assertRaises(adapter.ReadOnly):
                 client.set(changed, "120")
 
-    READ_ONLY = {"lanefather": 4, "junkfather": 5}  # what each tool exits with for a read-only row (fathers#118)
+    READ_ONLY = {"lanefather": 4, "spawnfather": 5}  # what each tool exits with for a read-only row (fathers#118)
 
     def test_lanefather(self) -> None:
         self.check_tool("lanefather", "rerun.wait", "600", ("LANEFATHER_RERUN_WAIT", "rerun.wait"))
 
-    def test_junkfather(self) -> None:
-        self.check_tool("junkfather", "reap.grace", "30", ("JUNKFATHER_STATE", "env.JUNKFATHER_STATE"))
+    def test_spawnfather(self) -> None:
+        self.check_tool("spawnfather", "reap.grace", "30", ("SPAWNFATHER_STATE", "env.SPAWNFATHER_STATE"))
 
-    def test_junkfather_read_only_is_exit_5_and_the_client_says_so(self) -> None:
-        executable, _ = self.tool("junkfather")
-        client = adapter.SettingsClient(str(executable), "junkfather")
+    def test_spawnfather_read_only_is_exit_5_and_the_client_says_so(self) -> None:
+        executable, _ = self.tool("spawnfather")
+        client = adapter.SettingsClient(str(executable), "spawnfather")
         with self.assertRaises(adapter.ReadOnly):
-            client.set("env.JUNKFATHER_STATE", "/elsewhere")
+            client.set("env.SPAWNFATHER_STATE", "/elsewhere")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,495 @@
+"""Ending an entry: find its processes by its recorded process group, verify who they are, then SIGTERM, a grace
+period and SIGKILL.
+
+Which processes belong to an entry:
+- its leader (the command spawnfather started or the pid it adopted), when the pid still has the recorded start
+  time and command (same command line, or the same program when a process renamed its arguments; or the command its
+  supervisor last recorded for it in `known_seen`); `--force` skips the command check, never the start time;
+- with a verified leader of its own group, every process in that group: a live leader pins the group id;
+- without a verified leader, only the processes recorded as `known` members (pid and start time, refreshed while
+  the entry runs, with the command `known_seen` recorded for each), never the group id alone: a group id outlives
+  its leader and can be taken again. A leader refused for its start time or command is never one of them, though
+  `known` lists it;
+- the agent-browser daemons its processes started (`daemons`, pid, start time and command; browser.py), which
+  launchd adopted and so left its tree;
+- the descendants (by parent pid in the same table) of all of these, for the children that left the group;
+- for an adopted entry, less what another active entry holds more firmly (`targets_of`).
+
+Never a member: a process with a terminal or an agent session (Claude Code, Codex), nor anything below one (a
+tmux server's panes and the agents in them), another user's process, pid 1, spawnfather itself or its ancestors.
+Each signal goes to a pid whose start time and command were just read again, so a reused pid is never signalled
+(a start time has one-second granularity: the command is the second factor); a `ps` that cannot be read stops the
+reap as `failed` and the entry keeps running.
+"""
+from __future__ import annotations
+
+import contextlib
+from enum import Enum
+import os
+import signal
+import time
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple
+
+from . import browser as _browser
+from . import entry as _entry
+from . import events as _events
+from . import procs as _procs
+from . import safety as _safety
+from . import settings as _settings
+from .errors import NOT_FOUND, REFUSED, Refused
+from .procs import command_matches
+from .entry import Entry
+from .state import Store
+
+ROUNDS = 3  # reads of the entry's members: a process forked during the grace period is found by the next one
+STOPPED = ("stopped", "killed", "gone")
+
+
+class Lifecycle(str, Enum):
+    """The hook event that scopes a detached reap. Its reason string is for reporting."""
+
+    SUBAGENT_STOP = "SubagentStop"
+    SESSION_END = "SessionEnd"
+
+
+def seen_commands(entry: Entry) -> Dict[Tuple[int, str], str]:
+    """(pid, start) -> the command last recorded for that member; empty for an entry written before `known_seen`."""
+    seen: Dict[Tuple[int, str], str] = {}
+    for item in entry.get("known_seen") or []:
+        with contextlib.suppress(TypeError, ValueError):
+            pid, start, cmd = item
+            seen[(int(pid), _procs.norm(start))] = str(cmd)
+    return seen
+
+
+DIRECT, GROUP, BELOW = 3, 2, 1  # how an entry holds a process: by its own identity, through its leader's group, below
+
+
+def members(entry: Entry, table: _procs.Table, uid: Optional[int] = None, force: bool = False, ours: bool = False
+            ) -> Tuple[List[_procs.Proc], str]:
+    """The entry's processes that may be signalled, and how they were found: "leader", "known", or why there are
+    none ("gone", "pid reused", "command changed").
+
+    The second factor after pid and start is the command: the leader's must match `seen` (or what `known_seen`
+    last recorded for it), and a known member's what `known_seen` recorded for it (an entry without `known_seen`
+    has pid and start only). `force` skips the command checks, never the start time. `ours`: the caller is the
+    leader's parent and has not waited for it, so its pid cannot have been reused; only its command check is
+    skipped. A leader refused for its command or start is never found again through `known`."""
+    held, how = holds(entry, table, force, ours)
+    return sorted(_safety.signallable([proc for proc, _ in held.values()], table, uid), key=lambda p: p.pid), how
+
+
+def holds(entry: Entry, table: _procs.Table, force: bool = False, ours: bool = False
+          ) -> Tuple[Dict[int, Tuple[_procs.Proc, int]], str]:
+    """`members` before the signalling policy, each with how the entry holds it: DIRECT (its leader, a known
+    member, a daemon), GROUP (in its verified leader's group) or BELOW (a descendant of one of those)."""
+    leader = table.get(entry.get("pid"))
+    found: Dict[int, Tuple[_procs.Proc, int]] = {}
+    seen = seen_commands(entry)
+    refused: Set[int] = set()
+    how = "gone"
+    if leader is not None and leader.start == _procs.norm(entry.get("start") or ""):
+        last = seen.get((leader.pid, leader.start))
+        if force or ours or command_matches(leader.cmd, entry.get("seen") or "") \
+                or (last is not None and command_matches(leader.cmd, last)):
+            found[leader.pid] = (leader, DIRECT)
+            how = "leader"
+            if entry.get("group") and leader.pgid == leader.pid == entry.get("pgid"):
+                for proc in table.group(leader.pgid):
+                    found.setdefault(proc.pid, (proc, GROUP))
+        else:
+            how = "command changed"
+            refused.add(leader.pid)
+    elif leader is not None:
+        how = "pid reused"
+        refused.add(leader.pid)
+    known = {(int(pid), _procs.norm(start)) for pid, start in entry.get("known") or []}
+    for proc in table.procs.values():  # with a live leader too: a known member that left its group is held directly
+        if (proc.pid, proc.start) not in known or proc.pid in refused:
+            continue
+        recorded = seen.get((proc.pid, proc.start))
+        if force or recorded is None or command_matches(proc.cmd, recorded):
+            if how != "leader":
+                how = "known"
+            found[proc.pid] = (proc, DIRECT)
+    for item in entry.get("daemons") or []:  # detached daemons its processes started (browser.py)
+        with contextlib.suppress(TypeError, ValueError):
+            pid, start, cmd = item
+            proc = table.get(int(pid))
+            if proc is not None and proc.start == _procs.norm(start) and (force or command_matches(proc.cmd, cmd)):
+                found[proc.pid] = (proc, DIRECT)
+                how = how if how in ("leader", "known") else "daemons"
+    for pid in list(found):
+        for proc in table.descendants(pid, prune=_safety.unsafe):
+            found.setdefault(proc.pid, (proc, BELOW))
+    return found, how
+
+
+def targets_of(store: Store, entry: Entry, table: _procs.Table, force: bool = False, *, protect_background: bool = False
+               ) -> Tuple[List[_procs.Proc], str]:
+    """What a reap of the entry signals: its `members`, and for an adopted entry (`adopt`, a background call's
+    shell) less what another active entry holds more firmly (`claimed_elsewhere`): what runs in an adopted shell
+    may be owned on its own (an attached `spawnfather own --keep-for session` runs in the shell's group), and an
+    entry adopted inside another one's shell is still reaped by its own reap. A subagent turn protects every
+    auto-owned background call, even when it runs under an explicit entry being reaped."""
+    found, how = members(entry, table, force=force)
+    if entry.get("mode") == "adopted" and found:
+        mine, _ = holds(entry, table, force)
+        theirs = claimed_elsewhere(store, entry, table)
+        found = [p for p in found if not outranked(mine.get(p.pid, (p, BELOW))[1], theirs.get(p.pid))]
+    if protect_background and found:
+        protected = claimed_elsewhere(store, entry, table, background_only=True)
+        found = [p for p in found if p.pid not in protected]
+    return found, how
+
+
+def outranked(level: int, other: Optional[Tuple[int, bool]]) -> bool:
+    """Whether another entry's hold (its level, and whether that entry is newer) beats this entry's `level`: a
+    firmer hold wins, and of two equal holds the newer entry's, the more explicit decision."""
+    return other is not None and (other[0] > level or (other[0] == level and other[1]))
+
+
+def claimed_elsewhere(store: Store, entry: Entry, table: _procs.Table, *, background_only: bool = False
+                      ) -> Dict[int, Tuple[int, bool]]:
+    """pid -> (the firmest hold another active process entry has on it, whether that entry is newer than `entry`):
+    its `holds`, and its live supervisor (pid and start time) held DIRECT with its descendants BELOW."""
+    claimed: Dict[int, Tuple[int, bool]] = {}
+    created = float(entry.get("created") or 0)
+
+    def claim(pid: int, level: int, newer: bool) -> None:
+        if pid not in claimed or (level, newer) > claimed[pid]:
+            claimed[pid] = (level, newer)
+    for other in store.entries():
+        if other.get("id") == entry.get("id") or other.get("state") not in _entry.ACTIVE \
+                or other.get("mode") == "resource":
+            continue
+        if background_only and other.get("auto") != _entry.AUTO_BACKGROUND:
+            continue
+        newer = float(other.get("created") or 0) > created
+        # For exclusion only, protect a process that exec'd since its watcher last recorded the command.
+        for pid, (_, level) in holds(other, table, force=background_only)[0].items():
+            claim(pid, level, newer)
+        supervisor = other.get("supervisor") or {}
+        pid = supervisor.get("pid")
+        if isinstance(pid, int) and table.alive(pid, supervisor.get("start")):
+            claim(pid, DIRECT, newer)
+            for proc in table.descendants(pid):
+                claim(proc.pid, BELOW, newer)
+    return claimed
+
+
+def join_daemons(store: Store, entry: Entry, table: _procs.Table) -> Entry:
+    """Before a reap: the agent-browser daemons the entry's processes started join it (browser.py), so the reap
+    takes them too. The entry as it is now."""
+    found = daemons_started(entry, table)
+    if not found:
+        return entry
+    return _entry.daemons(store, entry["id"], found) or entry
+
+
+def daemons_started(entry: Entry, table: _procs.Table, found: Optional[List[_procs.Proc]] = None
+                    ) -> List[_procs.Proc]:
+    """The agent-browser daemons, not yet the entry's, whose starting process is one of its members (`found`, else
+    as `members` finds them now); [] at once when no agent-browser program runs."""
+    if not any(_browser.is_browser(p) for p in table.procs.values()):
+        return []
+    return _browser.Survey(table, cached=True).daemons_below(found if found is not None else members(entry, table)[0])
+
+
+def stop(targets: List[_procs.Proc], grace: float,
+         look: Optional[Callable[[List[int]], Dict[int, Tuple[str, str]]]] = None,
+         kill: Callable[[int, int], None] = os.kill, now: Callable[[], float] = time.monotonic,
+         pause: Callable[[float], None] = time.sleep) -> Dict[str, Any]:
+    """SIGTERM to each target whose start time and command are unchanged (`look`: pid -> (start, command)), SIGKILL
+    to those still there after `grace` seconds.
+    Returns {"result": stopped|killed|gone|failed, "signalled": [...], "left": [...]}; failed also when the process
+    table cannot be read, since then nothing says the targets ended."""
+    look = look or (lambda pids: _procs.identities(pids, command=True))
+    expected = {p.pid: p for p in targets}
+
+    def remaining(pids: List[int]) -> List[int]:
+        """Those of `pids` still the process that was read: same start time, and the same command or program."""
+        here = look(pids)
+        return [pid for pid in pids if pid in here and here[pid][0] == expected[pid].start
+                and command_matches(here[pid][1], expected[pid].cmd)]
+
+    signalled: List[int] = []
+    left: List[int] = list(expected)
+    try:
+        live = remaining(list(expected))
+        if not live:
+            return {"result": "gone", "signalled": [], "left": []}
+        for pid in live:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                kill(pid, signal.SIGTERM)
+                signalled.append(pid)
+        deadline = now() + grace
+        left = remaining(live)
+        while left and now() < deadline:
+            pause(0.1)
+            left = remaining(left)
+        if not left:
+            return {"result": "stopped", "signalled": signalled, "left": []}
+        for pid in remaining(left):
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                kill(pid, signal.SIGKILL)
+        deadline = now() + 3
+        while left and now() < deadline:
+            pause(0.05)
+            left = remaining(left)
+    except _procs.ProcError as error:
+        return {"result": "failed", "signalled": signalled, "left": left, "error": str(error)}
+    return {"result": "failed" if left else "killed", "signalled": signalled, "left": left}
+
+
+Stopper = Callable[[List[_procs.Proc], float], Dict[str, Any]]  # stop(), or a test's stand-in
+
+
+class ReapOutcome(NamedTuple):
+    """What one target's teardown produced, for `_claim_and_finish` to record and emit."""
+    result: str
+    how: str
+    pids: List[int]
+    end: Dict[str, Any]
+    error: Dict[str, Any]
+    reason: str
+    emit: Callable[[bool], None]
+
+
+class Target(NamedTuple):
+    """Uniform adapter for a process or resource entry inside `reap`."""
+    how: str
+    dry_run: Callable[[], Dict[str, Any]]
+    teardown: Callable[[Entry], ReapOutcome]
+
+
+def require_owner(owner: str, agent: Optional[str] = None, *, lifecycle: Optional[Lifecycle] = None) -> _entry.Guard:
+    """A `begin_reap` guard requiring `entry` to still match this owner selector."""
+    return lambda e: None if matches_owner(e, owner, agent, lifecycle=lifecycle) else "owner changed"
+
+
+def require_lane(lane: str) -> _entry.Guard:
+    """A `begin_reap` guard requiring `entry` to still belong to `lane`."""
+    return lambda e: None if (e.get("owner") or {}).get("lane") == lane else "owner changed"
+
+
+def selector_guard(*, owner: Optional[str] = None, agent: Optional[str] = None, lane: Optional[str] = None,
+                   lifecycle: Optional[Lifecycle] = None, expired: bool = False, now: _entry.Clock = None,
+                   allowed: Optional[_entry.Guard] = None) -> Optional[_entry.Guard]:
+    """The lock-time guard for a reap selector: owner, lane, expiry, and any extra `allowed` guard."""
+    return _entry.all_of(
+        require_owner(owner, agent, lifecycle=lifecycle) if owner else None,
+        require_lane(lane) if lane else None,
+        _entry.require_due(now) if expired else None,
+        allowed,
+    )
+
+
+def _process_target(store: Store, entry: Entry, reason: str, grace: float, force: bool, table: _procs.Table,
+                    stopper: Stopper, actor: Optional[Dict[str, Any]], reader: Callable[[], _procs.Table],
+                    lifecycle: Optional[Lifecycle], dry_run: bool) -> Target:
+    entry_id = str(entry["id"])
+    if not dry_run:
+        entry = join_daemons(store, entry, table)
+    protect_background = lifecycle == Lifecycle.SUBAGENT_STOP
+    initial_targets, initial_how = targets_of(store, entry, table, force=force, protect_background=protect_background)
+
+    def preview() -> Dict[str, Any]:
+        return {"id": entry_id, "result": "would-stop" if initial_targets else "gone", "reason": reason,
+                "pids": [p.pid for p in initial_targets], "how": initial_how}
+
+    def teardown(current: Entry) -> ReapOutcome:
+        pids: List[int] = []
+        outcome: Dict[str, Any] = {"result": "gone", "signalled": [], "left": []}
+        results: List[str] = []
+        cur_table = table
+        targets, how = targets_of(store, current, cur_table, force=force, protect_background=protect_background)
+        for round_ in range(ROUNDS):
+            if round_:
+                try:
+                    cur_table = reader()
+                except _procs.ProcError as error:
+                    outcome = {"result": "failed", "signalled": [], "left": pids, "error": str(error)}
+                    results.append("failed")
+                    break
+                targets, _ = targets_of(store, current, cur_table, force=force, protect_background=protect_background)
+            if not targets:
+                break
+            pids += [p.pid for p in targets if p.pid not in pids]
+            outcome = stopper(targets, grace if round_ == 0 else min(grace, 3.0))
+            results.append(outcome["result"])
+            if outcome["result"] == "failed":
+                break
+        result = "failed" if "failed" in results else "killed" if "killed" in results else \
+            "stopped" if "stopped" in results else "gone"
+        outcome["result"] = result
+        signals = {"stopped": ["TERM"], "killed": ["TERM", "KILL"], "failed": ["TERM", "KILL"]}.get(result, [])
+
+        def emit(done: bool) -> None:
+            _events.write(store.root, "entry.reaped" if done else "entry.reap_failed", _events.subject(current),
+                          actor or _events.caller(),
+                          {"reason": reason, "result": result, "how": how, "signals": signals,
+                           "pids": pids, "left": outcome.get("left") or [],
+                           **({"error": outcome["error"]} if outcome.get("error") else {})},
+                          None if done else "error")
+
+        return ReapOutcome(
+            result=result, how=how, pids=pids,
+            end={"reason": reason, "result": result, "how": how, "pids": pids},
+            error={"reason": reason, "left": outcome.get("left"), "error": outcome.get("error")},
+            reason=reason, emit=emit,
+        )
+
+    return Target(how=initial_how, dry_run=preview, teardown=teardown)
+
+
+def _claim_and_finish(store: Store, entry: Entry, reason: str, table: Optional[_procs.Table],
+                      guard: Optional[_entry.Guard], target: Target, report_failure: bool) -> Dict[str, Any]:
+    """Claim `entry` under the store lock, run `target.teardown`, record `end_reap`, and emit its event."""
+    entry_id = str(entry["id"])
+    me, why = _entry.begin_reap(store, entry_id, reason, table, allowed=guard)
+    if me is None:
+        return {"id": entry_id, "result": "skipped", "reason": why, "pids": [], "how": target.how}
+    # The entry as it was marked: its members can have changed since it was read (a background shell's watcher
+    # records an exec'd leader's new command), and no one changes them while it is reaping.
+    current = store.load(entry_id) or entry
+    outcome = target.teardown(current)
+    done = outcome.result in STOPPED
+    _entry.end_reap(store, entry_id, me, done, outcome.end, outcome.error)
+    if done or report_failure:
+        outcome.emit(done)
+    return {"id": entry_id, "result": outcome.result, "reason": outcome.reason,
+            "pids": outcome.pids, "how": outcome.how}
+
+
+def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None, dry_run: bool = False,
+         force: bool = False, table: Optional[_procs.Table] = None, stopper: Optional[Stopper] = None,
+         actor: Optional[Dict[str, Any]] = None, reader: Optional[Callable[[], _procs.Table]] = None,
+         report_failure: bool = True, *, lifecycle: Optional[Lifecycle] = None,
+         owner: Optional[str] = None, agent: Optional[str] = None,
+         allowed: Optional[_entry.Guard] = None) -> Dict[str, Any]:
+    """End one running entry. Returns {"id", "result", "reason", "pids", "how"}; result "skipped" when the entry
+    is not running (someone else reaped it, it exited, it is still starting) or the guard no longer holds,
+    "would-stop" in a dry run. `table` serves the first read only; every later round reads the machine again
+    (`reader`). `report_failure` False: a failure is recorded on the entry (`last_error`) but writes no
+    `entry.reap_failed` / `resource.stop_failed` event (a retry in a streak). When `owner` (with optional `agent`
+    and `lifecycle`) is given, `selector_guard` composes it with `allowed` under the store lock so a concurrent
+    handoff skips the reap (fathers#189, fathers#217)."""
+    reader = reader or _procs.Table.read
+    grace = _settings.value("reap.grace", store.root) if grace is None else grace
+    stopper = stopper or stop
+    guard = selector_guard(owner=owner, agent=agent, lifecycle=lifecycle, allowed=allowed)
+    entry = store.load(entry_id)
+    if entry is None:
+        return {"id": entry_id, "result": "unknown", "reason": reason, "pids": [], "how": ""}
+    is_resource = entry.get("mode") == "resource"
+    if entry.get("state") == _entry.STARTING or (
+            not is_resource and entry.get("state") == _entry.RUNNING and not entry.get("pid")):
+        return {"id": entry_id, "result": "skipped", "reason": "still starting", "pids": [], "how": ""}
+    if entry.get("state") != _entry.RUNNING:
+        return {"id": entry_id, "result": "skipped", "reason": f"already {entry.get('state')}", "pids": [], "how": ""}
+    if is_resource:
+        if table is None and (not dry_run or lifecycle is not None):
+            try:
+                table = reader()
+            except _procs.ProcError:
+                table = _procs.Table({})
+        from . import resources
+        target = resources.reap_target(store, entry, reason, grace, actor, table, lifecycle=lifecycle)
+    else:
+        try:
+            table = table or reader()
+        except _procs.ProcError as error:
+            unread: Dict[str, Any] = {"reason": reason, "left": [], "error": str(error)}
+            if not dry_run:  # like any failed reap: last_error on the entry, and the event that opens a streak
+                _entry.noted_error(store, entry_id, unread)
+                if report_failure:
+                    _events.write(store.root, "entry.reap_failed", _events.subject(entry), actor or _events.caller(),
+                                  {**unread, "result": "failed", "how": "", "signals": [], "pids": []}, "error")
+            return {"id": entry_id, "result": "failed", "reason": f"{reason}; {error}", "pids": [], "how": ""}
+        target = _process_target(store, entry, reason, grace, force, table, stopper, actor, reader, lifecycle, dry_run)
+    if dry_run:
+        return target.dry_run()
+    return _claim_and_finish(store, entry, reason, table, guard, target, report_failure)
+
+
+def reap_unowned(store: Store, pid: int, table: _procs.Table, force: bool, reason: str,
+                 grace: Optional[float] = None,
+                 dry_run: bool = False, via: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Stop an unowned process: only with `force`, only one the last sweep listed, only when it is still the same
+    process (start time and command) and still unowned (safety.force_refusal). The one result row; Refused (exit 6
+    when the pid does not run, else 3) when refused."""
+    if not force:
+        raise Refused(f"pid {pid} is not owned; spawnfather stops an unowned process only with --force, and only one "
+                      "`spawnfather sweep` listed", NOT_FOUND if table.get(pid) is None else REFUSED)
+
+    def owned(candidate: int) -> bool:
+        return any(candidate in {p.pid for p in members(e, table)[0]} for e in store.entries()
+                   if e.get("state") in _entry.ACTIVE)
+
+    refused = _safety.force_refusal(pid, table, store, owned)
+    if refused:
+        raise Refused(f"refusing pid {pid}: {refused}", NOT_FOUND if table.get(pid) is None else REFUSED)
+    proc = table.get(pid)
+    assert proc is not None
+    targets = _safety.forced_targets(pid, table)
+    if dry_run:
+        return [{"id": f"pid {pid}", "result": "would-stop", "reason": "forced", "pids": [p.pid for p in targets],
+                 "how": "unowned"}]
+    outcome = stop(targets, _settings.value("reap.grace", store.root) if grace is None else grace)
+    _events.write(store.root, "unowned.reaped", {"type": "process", "id": str(pid), "pid": pid},
+                  _events.caller(via), {"cmd": proc.cmd, "start": proc.start, "reason": reason,
+                                        "result": outcome["result"], "pids": [p.pid for p in targets]},
+                  None if outcome["result"] in STOPPED else "error")
+    return [{"id": f"pid {pid}", "result": outcome["result"], "reason": reason, "pids": [p.pid for p in targets],
+             "how": "unowned, forced"}]
+
+
+def matches_owner(entry: Entry, owner: str, agent: Optional[str], *, lifecycle: Optional[Lifecycle] = None) -> bool:
+    """`reap --owner OWNER [--agent AGENT]`: a session's entries (not those handed away), or a subagent's entries
+    not kept for the session. The SubagentStop hook also excludes its auto-owned background calls."""
+    who = entry.get("owner") or {}
+    if agent:
+        return (who.get("session") == owner and who.get("agent") == agent and entry.get("keep") == "owner"
+                and (lifecycle != Lifecycle.SUBAGENT_STOP or entry.get("auto") != _entry.AUTO_BACKGROUND))
+    if who.get("session") == owner:
+        return True
+    return who.get("agent") == owner and entry.get("keep") == "owner"
+
+
+def select(store: Store, ids: List[str], owner: Optional[str], agent: Optional[str], lane: Optional[str],
+           table: Optional[_procs.Table] = None, pid: Optional[int] = None, *, lifecycle: Optional[Lifecycle] = None
+           ) -> Tuple[List[Entry], List[Dict[str, Any]]]:
+    """The running or starting entries one `reap` selector names (--id, --owner, --lane, or --pid with `table`),
+    and a result row for each id given that names no such entry or each reaping entry holding `pid`."""
+    entries = store.entries()
+    running = [e for e in entries if e.get("state") in _entry.OPEN]
+    missing: List[Dict[str, Any]] = []
+    if ids:
+        known = {e["id"] for e in running}
+        for entry_id in [i for i in ids if i not in known]:
+            entry = store.load(entry_id)
+            missing.append({"id": entry_id, "result": "skipped" if entry else "unknown",
+                            "reason": f"already {entry.get('state')}" if entry else "no such entry", "pids": [],
+                            "how": ""})
+        return [e for e in running if e["id"] in ids], missing
+    if owner:
+        return [e for e in running if matches_owner(e, owner, agent, lifecycle=lifecycle)], missing
+    if lane:
+        return [e for e in running if (e.get("owner") or {}).get("lane") == lane], missing
+    assert table is not None
+    selected = [e for e in running if e.get("mode") != "resource" and pid in {p.pid for p in members(e, table)[0]}]
+    for entry in entries:
+        if entry.get("state") == _entry.REAPING and entry.get("mode") != "resource" \
+                and pid in {p.pid for p in members(entry, table)[0]}:
+            missing.append({"id": entry["id"], "result": "skipped", "reason": f"already {_entry.REAPING}",
+                            "pids": [], "how": ""})
+    return selected, missing
+
+
+def results_text(results: List[Dict[str, Any]]) -> str:
+    """`reap` results for people, one line each."""
+    if not results:
+        return "nothing to reap"
+    return "\n".join(f"{r['id']}: {r['result']} ({r['reason']}; pids {', '.join(map(str, r['pids'])) or '-'}"
+                     f"{'; ' + r['how'] if r['how'] else ''})" for r in results)

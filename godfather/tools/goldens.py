@@ -36,9 +36,9 @@ sys.path.insert(0, str(ROOT / "src"))
 SCENE = ROOT / "tests" / "fixtures" / "scene"
 EXPECTED = ROOT / "tests" / "fixtures" / "expected"  # the scene with expected runs, outliers and trends (fathers#108)
 LOCKS = ROOT / "tests" / "fixtures" / "slot-locks"  # Slotfather's lock and head reservation log (fathers#162)
-MIXED = ROOT / "tests" / "fixtures" / "mixed"  # the scene with Lanefather's and junkfather's event logs (fathers#84)
+MIXED = ROOT / "tests" / "fixtures" / "mixed"  # the scene with Lanefather's and Spawnfather's event logs (fathers#84)
 LANES = ROOT / "tests" / "fixtures" / "lanes"  # mixed, with Lanefather's status snapshot (fathers#85)
-PROCS = ROOT / "tests" / "fixtures" / "procs"  # lanes, with Junkfather's status snapshot (fathers#86)
+PROCS = ROOT / "tests" / "fixtures" / "procs"  # lanes, with Spawnfather's status snapshot (fathers#86)
 NEWS = ROOT / "tests" / "fixtures" / "news"
 GOLDENS = ROOT / "tests" / "goldens"
 COMMIT = "9f600e1c0ffee"  # Godfather's own install commit in what's new, so a commit changes no golden
@@ -69,13 +69,13 @@ SCREENS = {  # name: (width, height, overlay); what's new's filter after a colon
     # DETAILS' lane link, wide and at 76 columns (the summary narrowed)
     "lanes-156x43": (156, 43, "lanes:page"), "lanes-100x40": (100, 40, "lanes:page"),
     "lanes-overview-156x43": (156, 43, "lanes:overview"), "lanes-overview-76x40": (76, 40, "lanes:overview"),
-    # fathers#86: Junkfather's processes: the Processes page wide and in one column, the overview with both summaries
-    # and DETAILS' processes, and the Lanes page with a lane's processes
-    "procs-156x43": (156, 43, "procs:processes"), "procs-100x40": (100, 40, "procs:processes"),
+    # fathers#86, fathers#170: Spawnfather's spawns: the Spawns page wide and in one column, the overview with both
+    # summaries and DETAILS' spawns, and the Lanes page with a lane's spawns
+    "procs-156x43": (156, 43, "procs:spawns"), "procs-100x40": (100, 40, "procs:spawns"),
     "procs-overview-156x43": (156, 43, "procs:overview"), "procs-lanes-156x43": (156, 43, "procs:lanes"),
     # fathers#152: each log the title switches to, wide and at 100 columns (76 draws no EVENTS)
     **{f"mixed-{name}-{width}x{height}": (width, height, f"mixed:{tool}")
-       for name, tool in (("lanes", "lanefather"), ("procs", "junkfather"), ("all", "all"))
+       for name, tool in (("lanes", "lanefather"), ("procs", "spawnfather"), ("all", "all"))
        for width, height in ((156, 43), (100, 40))},
 }
 
@@ -202,9 +202,9 @@ def write_expected() -> None:
 
 
 def write_mixed() -> None:
-    """tests/fixtures/mixed/: the scene with Lanefather and junkfather present, each answering capabilities with its
+    """tests/fixtures/mixed/: the scene with Lanefather and Spawnfather present, each answering capabilities with its
     event log, and logs of a lane's start, check, land, smoke and review, a red batch gate, and owned, reported and
-    reaped processes in the scene's last ten minutes (fathers#84)."""
+    reaped spawns in the scene's last ten minutes (fathers#84)."""
     import shutil
 
     shutil.rmtree(MIXED, ignore_errors=True)
@@ -233,17 +233,17 @@ def write_mixed() -> None:
         line("lanefather", "review.finished", "09:59:02", review, {"status": "finished", "findings": 2,
                                                                    "seconds": 540})]
     entry = {"type": "entry", "id": "j3f9a1c", "label": "vite dev", "pid": 90412}
-    junk = [
-        line("junkfather", "entry.owned", "09:51:30", entry, {"argv": ["bun", "run", "dev"], "ttl": 7200,
-                                                              "keep": "owner", "mode": "detached"}),
-        line("junkfather", "unowned.reported", "09:54:20", {"type": "process", "id": "88123", "pid": 88123},
+    spawns = [
+        line("spawnfather", "entry.owned", "09:51:30", entry, {"argv": ["bun", "run", "dev"], "ttl": 7200,
+                                                               "keep": "owner", "mode": "detached"}),
+        line("spawnfather", "unowned.reported", "09:54:20", {"type": "process", "id": "88123", "pid": 88123},
              {"cmd": "node storybook dev", "why": "orphan", "age": 5400}, "warn"),
-        line("junkfather", "entry.reaped", "09:57:00", {"type": "entry", "id": "j1c2d3e", "label": "simulator",
+        line("spawnfather", "entry.reaped", "09:57:00", {"type": "entry", "id": "j1c2d3e", "label": "simulator",
                                                          "pid": 87001}, {"reason": "ttl expired", "result": "stopped"}),
-        line("junkfather", "entry.extended", "09:59:20", entry, {"ttl": 14400})]
+        line("spawnfather", "entry.extended", "09:59:20", entry, {"ttl": 14400})]
     tools = load(ROOT / "tests" / "fake_tool.py", "fake_tool")  # each tool's settings as the real one prints them
-    environments = {"lanefather": {"LANEFATHER_PRIORITY_CHECK": "batch"}, "junkfather": {}}
-    for tool, tag, log in (("lanefather", "lane", lanes), ("junkfather", "junk", junk)):
+    environments: dict[str, dict[str, str]] = {"lanefather": {"LANEFATHER_PRIORITY_CHECK": "batch"}, "spawnfather": {}}
+    for tool, tag, log in (("lanefather", "lane", lanes), ("spawnfather", "spwn", spawns)):
         (MIXED / tool).mkdir()
         capabilities = {"v": 1, "tool": tool, "version": "0.9.0", "dashboard": {
             "v": 1, "tag": tag, "snapshot": {"argv": ["status", "--json"], "versions": [1], "poll": 5},
@@ -319,7 +319,7 @@ def write_lanes() -> None:
 
 
 def write_procs() -> None:
-    """tests/fixtures/procs/: the lanes scene with Junkfather's `status --json` (fathers#86): a dev server owned in
+    """tests/fixtures/procs/: the lanes scene with Spawnfather's `status --json` (fathers#86): a dev server owned in
     lane 710's worktree, a storybook in the first lease's process group, an orphaned Playwright server, an expired
     Docker resource and a running simulator; the last sweep's unowned process, worktree and simulator."""
     import shutil
@@ -335,7 +335,7 @@ def write_procs() -> None:
                 "keep": "owner", "pid": pid, "pgid": pgid or pid, "processes": None if resource else 3,
                 "label": label, "mode": "resource" if resource else "detached", "cwd": cwd,
                 "argv": argv if argv is not None else (None if resource else ["bun", "run", label.split()[0]]),
-                "log": f"/fixture/junkfather/logs/{ident}.log", "end": None, "exit": None, "resource": resource}
+                "log": f"/fixture/spawnfather/logs/{ident}.log", "end": None, "exit": None, "resource": resource}
 
     status: dict[str, Any] = {"v": 2, "host": "mbp", "time": "2026-11-04T09:59:39Z", "entries": [
         entry("j3f9a1c", "vite dev", 90412, 4000, lane="710-speech-paste-phase",
@@ -357,11 +357,11 @@ def write_procs() -> None:
             {"kind": "simulator", "id": "9F8E7D6C-0000-4000-8000-0123456789AB", "name": "iPad Air",
              "why": "booted, no owner"}],
         "sweep": {"time": "2026-11-04T09:30:00Z", "result": {"reaped": [], "failed": []}}, "cpu": None, "errors": []}
-    junk = json.loads((PROCS / "junkfather" / "replies.json").read_text())
-    junk["status --json"] = {"code": 0, "json": status}
-    junk["capabilities --json"]["json"]["dashboard"]["snapshot"]["versions"] = [1, 2]
-    junk["capabilities --json"]["json"]["dashboard"]["actions"] = ["reap", "extend"]
-    (PROCS / "junkfather" / "replies.json").write_text(json.dumps(junk, indent=1) + "\n")
+    spawn = json.loads((PROCS / "spawnfather" / "replies.json").read_text())
+    spawn["status --json"] = {"code": 0, "json": status}
+    spawn["capabilities --json"]["json"]["dashboard"]["snapshot"]["versions"] = [1, 2]
+    spawn["capabilities --json"]["json"]["dashboard"]["actions"] = ["reap", "extend"]
+    (PROCS / "spawnfather" / "replies.json").write_text(json.dumps(spawn, indent=1) + "\n")
     # fathers#88: every row's actions advertised; the requests carry their holders' start, the second lease yields
     # for the interactive waiter
     slot = json.loads((PROCS / "slotfather" / "replies.json").read_text())

@@ -1723,6 +1723,37 @@
        "zero": "never"
       },
       {
+       "key": "order.memory_share",
+       "value": 0.85,
+       "default": 0.85,
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "Share of RAM available to expected peak memory of concurrent leases (0 to 1); 0 disables.",
+       "source": "default",
+       "label": "Memory admission share",
+       "type": "number",
+       "min": 0.0,
+       "max": null,
+       "step": 0.05,
+       "unit": "",
+       "zero": "never"
+      },
+      {
+       "key": "order.memory_default_mb",
+       "value": 2048.0,
+       "default": 2048.0,
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "Assumed peak memory (MB) for requests with no history.",
+       "source": "default",
+       "label": "Default job peak memory",
+       "type": "number",
+       "min": 0.0,
+       "max": null,
+       "step": 512,
+       "unit": "MB"
+      },
+      {
        "key": "order.idle_cpu",
        "value": 0.1,
        "default": 0.1,

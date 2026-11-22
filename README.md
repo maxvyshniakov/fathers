@@ -7,7 +7,7 @@ Each is a separate package with its own version, changelog, documentation and te
 | --- | --- |
 | [slotfather](slotfather) | One queue for expensive work: builds, tests and agents request machine capacity (slots) before starting. |
 | [lanefather](lanefather) | Parallel changes in one Git repository: a worktree and a path claim per task, checks, one integration branch, review and cleanup. |
-| [junkfather](junkfather) | Owns the long-lived processes and resources agents start, and ends them when their owner ends or their time is up. |
+| [spawnfather](spawnfather) | Owns the long-lived processes and resources agents start, and ends them when their owner ends or their time is up. |
 | [godfather](godfather) | One terminal dashboard for the three: their snapshots, settings and one merged event feed. |
 
 The installed commands use only the Python standard library (3.11+) on macOS or Linux.
@@ -17,7 +17,7 @@ The installed commands use only the Python standard library (3.11+) on macOS or 
 ```sh
 git clone https://github.com/maxvyshniakov/fathers.git
 cd fathers
-python3 install.py slotfather      # or lanefather, junkfather, godfather; arguments after the name go to its installer
+python3 install.py slotfather      # or lanefather, spawnfather, godfather; arguments after the name go to its installer
 ```
 
 `python3 install.py PACKAGE` runs `PACKAGE/install.py`, which copies only that package into an immutable release and
@@ -26,7 +26,7 @@ runner installs Slotfather alone (`python3 slotfather/install.py --user runner -
 
 ## Layout
 
-- `slotfather/`, `lanefather/`, `junkfather/`, `godfather/`: one package each, with its own `install.py`, version,
+- `slotfather/`, `lanefather/`, `spawnfather/`, `godfather/`: one package each, with its own `install.py`, version,
   `CHANGELOG.md`, `README.md`, `GLOSSARY.md`, `docs/` and `tests/`, and the same lint gate, `tools/check.py`.
 - `common/`: code the packages share today. It holds [`eventcheck.py`](common/eventcheck.py), the validator of the
   shared event schema that every package's tests import.

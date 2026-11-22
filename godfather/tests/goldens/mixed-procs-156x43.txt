@@ -13,7 +13,7 @@
 ┃  ⏸️    lane-555-host-rename-names                ▪       waiting #2          10s   10004  ┃ │             08f8cf012                                      │
 ┃                                                                                           ┃ │  command    ~/straylight/.claude/worktrees/agent-afa3816b  │
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ │             08f8cf012/verify.sh --checks desktop-tests     │
-╭─ ❮ PROCS LOG ❯ ───── label ────────────────────────────────────────── detail ─────── pid ─╮ │             --keep-going --jobs 1                          │
+╭─ ❮ SPAWNS LOG ❯ ──── label ────────────────────────────────────────── detail ─────── pid ─╮ │             --keep-going --jobs 1                          │
 │                                                                                           │ │  cwd        ~/straylight                                   │
 │  11:59:20  extended  vite dev                                         ttl 4h00m    90412  │ │                                                            │
 │  11:57:00  reaped    simulator                                        ttl expired  87001  │ │  lane       644-build-once                                 │

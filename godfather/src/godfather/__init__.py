@@ -1,1 +1,1 @@
-"""Godfather: one terminal dashboard for Slotfather, Lanefather and junkfather."""
+"""Godfather: one terminal dashboard for Slotfather, Lanefather and Spawnfather."""

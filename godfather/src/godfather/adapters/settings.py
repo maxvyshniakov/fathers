@@ -1,6 +1,6 @@
 """Any tool's `settings` CLI (SPEC.md, Settings contract): read, check, set and reset, each a short call with the
 tool's exit codes. 0 done, 2 invalid, 3 conflict, and read-only as 4 (Slotfather: another user's queue; Lanefather)
-or 5 (Junkfather, which keeps 4 for Slotfather's meaning, fathers#118). Any other code is a failure with the tool's
+or 5 (Spawnfather, which keeps 4 for Slotfather's meaning, fathers#118). Any other code is a failure with the tool's
 message."""
 from __future__ import annotations
 

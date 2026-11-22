@@ -107,6 +107,13 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Changed
 
+- The third source is now Spawnfather (`spawnfather`, formerly Junkfather): SLOTS' right-hand summary and page `3`
+  become `3 spawns` and `SPAWNS` (`SPAWN DETAILS`, `godfather --once --page spawns`), the event log view becomes
+  `SPAWNS LOG` (`spwn`, `spawn` in `FULL LOG`), lease and lane detail links say `spawns`, and the Settings section is
+  `SPAWNFATHER`. While machines upgrade, Godfather falls back to `junkfather` on `PATH` when `spawnfather` is not yet
+  installed, reads historical `junkfather` lines in `events.jsonl` and `what's new?` read state as Spawnfather's, and
+  keeps `--page processes` and `godfather events --source junkfather` working as aliases. (fathers#170)
+
 - The minimum supported Python version is now 3.11 (fathers#218).
 
 - The `3 procs` summary separates live unowned processes (`N unowned`) from unowned non-process resources

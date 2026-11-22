@@ -1,4 +1,4 @@
-┏━ PROCESSES ━━━━━━━━━━━━━━━ id ━━━━━━ owner ━━━━━━━━━━━ lane ━━━━━━━━━━━━━ age╺╸ttl left ━━━ pid ━┓
+┏━ SPAWNS ━━━━━━━━━━━━━━━━━━ id ━━━━━━ owner ━━━━━━━━━━━ lane ━━━━━━━━━━━━━ age╺╸ttl left ━━━ pid ━┓
 ┃                                                                                                  ┃
 ┃  ▶️  vite dev              j3f9a1c   claude 4bceaaaf…  710-speech-pa…     30m     1h06m   90412  ┃
 ▌  ▶️  storybook             j5e6f7a   claude 4bceaaaf…                     30m     1h46m   55001  ▐
@@ -12,7 +12,7 @@
 ┃  📦  iPad Air                        booted, no owner                       —                    ┃
 ┃                                                                                                  ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-╭─ PROCESS DETAILS ────────────────────────────────────────────────────────────────────────────────╮
+╭─ SPAWN DETAILS ──────────────────────────────────────────────────────────────────────────────────╮
 │                                                                                                  │
 │  label      storybook                                                                           ┃│
 │  id         j5e6f7a                                                                             ┃│
@@ -20,7 +20,7 @@
 │  ttl left   1h46m                                                                               ┃│
 │  command    bun run storybook                                                                   ┃│
 │  directory  /fixture/straylight                                                                 ┃│
-│  log        /fixture/junkfather/logs/j5e6f7a.log                                                ┃│
+│  log        /fixture/spawnfather/logs/j5e6f7a.log                                               ┃│
 │  owner      claude 4bceaaaf/a71c · lives                                                        ┃│
 │  keep       owner                                                                               ┃│
 │  mode       detached                                                                            ┃│
@@ -28,7 +28,7 @@
 │                                                                                                  │
 │                                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
-╭─ PROCS LOG ────── label ──────────────────────────────────────────────────────────────── detail ─╮
+╭─ SPAWNS LOG ───── label ──────────────────────────────────────────────────────────────── detail ─╮
 │                                                                                                  │
 │  No events logged yet                                                                            │
 │                                                                                                  │

@@ -22,8 +22,8 @@ from . import news as _news
 from . import overlay_text as _overlays
 from . import settings_layout as _settings_layout
 from . import settings_model as _settings
-from .adapters import junkfather as _junkfather
 from .adapters import lanefather as _lanefather
+from .adapters import spawnfather as _spawnfather
 from .model import Dashboard as Model
 from .overlay_text import OverlayView
 from .text import hint_at
@@ -36,11 +36,11 @@ DETAILS_RETRY = DETAILS_FRESH  # seconds before a failed load is tried again, it
 NOTICE_SECONDS = 4.0  # how long a notice (a Settings panel that would not open) stays in the footer
 SCROLL_GLOW = 0.28  # seconds a scrolled panel's thumb stays in the foreground after its last scroll: a flash
 PANELS = ("requests", "details", "events")  # the overview's focusable panels
-# The pages (fathers#85, fathers#86): `1` the overview, `2` Lanes, `3` Processes; each page's tool and its table
-PAGES = ("overview", "lanes", "processes")
-PAGE_TOOLS = {"lanes": "lanefather", "processes": "junkfather"}
-PAGE_TABLES = {"overview": "requests", "lanes": "lanes", "processes": "procs"}
-PAGE_SCROLLS = ("details", "events", "lanes", "procs")  # what a page shows: scrolled again from the top on a switch
+# The pages (fathers#85, fathers#86): `1` the overview, `2` Lanes, `3` Spawns; each page's tool and its table
+PAGES = ("overview", "lanes", "spawns")
+PAGE_TOOLS = {"lanes": "lanefather", "spawns": "spawnfather"}
+PAGE_TABLES = {"overview": "requests", "lanes": "lanes", "spawns": "spawns"}
+PAGE_SCROLLS = ("details", "events", "lanes", "spawns")  # what a page shows: scrolled again from the top on a switch
 FILTER_MAX = 40  # characters EVENTS' text filter takes
 REASON_MAX = 120  # characters a park reason takes
 
@@ -93,7 +93,7 @@ class OverviewScreen:
 
 @dataclass(frozen=True)
 class PageScreen:
-    """A tool's page (`lanes` or `processes`): `focus` is its table, DETAILS or EVENTS; `came_from` the pages links
+    """A tool's page (`lanes` or `spawns`): `focus` is its table, DETAILS or EVENTS; `came_from` the pages links
     left on the way here."""
     page: str
     focus: str = ""
@@ -414,7 +414,7 @@ class AppState:
     # A table's selected row other than QUEUE's, by the row's identity: EVENTS' cursor (fathers#152; without one it
     # is on its newest row, and stays there as new ones arrive) and each page's row (fathers#85)
     picked: dict[str, Any] = field(default_factory=lambda: cast(dict[str, Any], {}))
-    tools: dict[str, Tool] = field(default_factory=lambda: cast(dict[str, Tool], {}))  # Lanefather, Junkfather
+    tools: dict[str, Tool] = field(default_factory=lambda: cast(dict[str, Tool], {}))  # Lanefather, Spawnfather
     acting: frozenset[tuple[Any, ...]] = frozenset()  # the actions in flight (action_key()), each started once
     slotfather_notice: Optional[tuple[str, ...]] = None  # notice lines when Slotfather is absent or unsupported
 
@@ -843,8 +843,8 @@ def page_rows(state: AppState, page: Optional[str] = None) -> Sequence[Mapping[s
     which = state.ui.page if page is None else page
     if which == "lanes":
         return _lanefather.page_rows(tool(state, "lanefather").snapshot)
-    if which == "processes":
-        return _junkfather.page_rows(tool(state, "junkfather").snapshot)
+    if which == "spawns":
+        return _spawnfather.page_rows(tool(state, "spawnfather").snapshot)
     return []
 
 
@@ -861,7 +861,7 @@ def page_index(state: AppState, page: Optional[str] = None,
 
 
 def linked(state: AppState, page: str) -> Any:
-    """The row of `page` the selected request links to: its lane (fathers#85), its first owned process
+    """The row of `page` the selected request links to: its lane (fathers#85), its first owned spawn
     (fathers#86); None where it has none."""
     item = selected_item(state)
     if item is None:
@@ -869,8 +869,8 @@ def linked(state: AppState, page: str) -> Any:
     lane = _lanefather.lane_of(item, tool(state, "lanefather").snapshot, selected_cwd(state))
     if page == "lanes":
         return lane["key"] if lane is not None else None
-    if page == "processes":  # its first owned entry (fathers#86)
-        owned = _junkfather.of_request(item, tool(state, "junkfather").snapshot, lane)
+    if page == "spawns":  # its first owned entry (fathers#86)
+        owned = _spawnfather.of_request(item, tool(state, "spawnfather").snapshot, lane)
         return owned[0]["key"] if owned else None
     return None
 
@@ -889,9 +889,9 @@ def applicable(state: AppState) -> list[_actions.Action]:
     index = page_index(state, page)
     if index is None:
         return []
-    if page == "processes":
-        return _actions.for_process(_junkfather.page_rows(tool(state, "junkfather").snapshot)[index],
-                                    tool(state, "junkfather").actions)
+    if page == "spawns":
+        return _actions.for_process(_spawnfather.page_rows(tool(state, "spawnfather").snapshot)[index],
+                                    tool(state, "spawnfather").actions)
     return _actions.for_lane(page_rows(state, page)[index], tool(state, "lanefather").actions)
 
 

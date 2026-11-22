@@ -218,7 +218,7 @@ class ProjectRow(TypedDict):
 LaneTableRow = Union[ProjectRow, LaneRow]
 
 
-# Junkfather: `junkfather status --json` (docs/contracts/junkfather.md); a missing field reads as empty
+# Spawnfather: `spawnfather status --json` (docs/contracts/spawnfather.md); a missing field reads as empty
 
 class Resource(TypedDict):
     kind: Optional[str]
@@ -283,7 +283,7 @@ class UnownedResource(TypedDict):
 
 
 class Separator(TypedDict):
-    """PROCESSES' unselectable heading row for a sweep section."""
+    """SPAWNS' unselectable heading row for a sweep section."""
     kind: Literal["separator"]
     label: str
 

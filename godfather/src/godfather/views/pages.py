@@ -4,7 +4,7 @@ A page reuses the overview's frames (layout.page()): its tool's table on the lef
 marked as QUEUE marks its own, the selected row's details on the right as a scrolling document of label and value
 rows, and an EVENTS strip under the table with that tool's events for the selected row. Links (a lease, a lane, a
 process) are click targets (Canvas.target) the reducer follows. SLOTS' bottom border carries each tool's summary,
-led by its page key: lanes on the left, procs on the right; a click opens its page.
+led by its page key: lanes on the left, spawns on the right; a click opens its page.
 
 Nothing here runs a command: every value comes from the snapshots the sources polled (state.Tool)."""
 from __future__ import annotations
@@ -16,8 +16,8 @@ from typing import Any, Callable, Optional, Sequence, TypeVar, cast
 from .. import actions as _actions
 from .. import entries as _entries
 from .. import layout as _layout
-from ..adapters import junkfather as _junkfather
 from ..adapters import lanefather as _lanefather
+from ..adapters import spawnfather as _spawnfather
 from ..events import Filter
 from ..layout import Rect
 from ..model import Entry, Lane, LaneRow, LaneTableRow, ProcessRow, ProcessTableRow
@@ -31,11 +31,11 @@ from .common import Model
 
 Fact = tuple[str, list[Part]]
 Link = Optional[tuple[Any, ...]]  # a document row's target, or none
-PAGE_KEYS = {"lanes": "2", "processes": "3"}
-TITLES = {"lanes": "LANES", "processes": "PROCESSES"}
-TOOL_NAMES = {"lanes": "Lanefather", "processes": "Junkfather"}
+PAGE_KEYS = {"lanes": "2", "spawns": "3"}
+TITLES = {"lanes": "LANES", "spawns": "SPAWNS"}
+TOOL_NAMES = {"lanes": "Lanefather", "spawns": "Spawnfather"}
 
-# A page table's row (model.py): LANES' lanes under their project headings, PROCESSES' entries, unowned processes
+# A page table's row (model.py): LANES' lanes under their project headings, SPAWNS' entries, unowned processes
 # and resources around their separator
 Row = TypeVar("Row", LaneTableRow, ProcessTableRow)
 
@@ -62,13 +62,13 @@ DROPS = ("planned", "reviews", "resources", "unowned", "expired")  # what a narr
 
 def draw_summaries(canvas: Canvas, rect: Rect, tools: dict[str, Any],
                    summaries: dict[str, Callable[[Any, _common.Marks], list[tuple[str, list[Part]]]]]) -> None:
-    """Each present, readable tool's summary in the bottom border of `rect` (SLOTS): lanes on the left, procs on the
+    """Each present, readable tool's summary in the bottom border of `rect` (SLOTS): lanes on the left, spawns on the
     right, the parts DROPS names going first where they do not fit; a stale one dimmed; each a click target that
     opens its page."""
     marks = _common.marks_of(canvas)
     found: dict[str, list[tuple[str, list[Part]]]] = {}
     for page, build in summaries.items():
-        tool = tools.get("lanefather" if page == "lanes" else "junkfather")
+        tool = tools.get("lanefather" if page == "lanes" else "spawnfather")
         if tool is not None and tool.readable:
             found[page] = build(tool, marks)
     if not found:
@@ -82,11 +82,11 @@ def draw_summaries(canvas: Canvas, rect: Rect, tools: dict[str, Any],
     dropped: tuple[str, ...] = ()
     for step in range(len(DROPS) + 1):
         dropped = DROPS[:step]
-        if width("lanes", dropped) + width("processes", dropped) <= room:
+        if width("lanes", dropped) + width("spawns", dropped) <= room:
             break
     y = rect.y + rect.height - 1
     for page, parts in found.items():
-        tool = tools["lanefather" if page == "lanes" else "junkfather"]
+        tool = tools["lanefather" if page == "lanes" else "spawnfather"]
         shown: list[Part] = [(" ", "text")] + [(text, "dim" if tool.state == "stale" else style)
                                                for name, items in parts if name not in dropped
                                                for text, style in items] + [(" ", "text")]
@@ -118,7 +118,7 @@ def draw_notice(canvas: Canvas, page: str, lines: list[str]) -> None:
         panel.put(row, line, "text" if row == 0 else "dim")
 
 
-PAGE_TABLE = {"lanes": "lanes", "processes": "procs"}
+PAGE_TABLE = {"lanes": "lanes", "spawns": "spawns"}
 MARK = 4  # a row's state mark and the gap after it
 
 
@@ -303,13 +303,15 @@ def lane_event_of(row: dict[str, Any], lane: Lane) -> bool:
     return subject.get("project") in (None, lane["project"])
 
 
-# The Processes page (fathers#86)
+# The Spawns page (fathers#86, fathers#170)
 
-def procs_summary(tool: Any, marks: _common.Marks) -> list[tuple[str, list[Part]]]:
-    """The procs summary: owned entries running, then orphan, expired, live unowned processes and unowned resources,
+def spawns_summary(tool: Any, marks: _common.Marks) -> list[tuple[str, list[Part]]]:
+    """The spawns summary: owned entries running, then orphan, expired, live unowned processes and unowned resources,
     each only when not zero (dead sweep leftovers excluded)."""
-    found = _junkfather.summary(tool.snapshot)
-    parts: list[tuple[str, list[Part]]] = [("count", [("3", "key"), (" procs ", "dim"), (str(found["count"]), "text")])]
+    found = _spawnfather.summary(tool.snapshot)
+    parts: list[tuple[str, list[Part]]] = [
+        ("count", [("3", "key"), (" spawns ", "dim"), (str(found["count"]), "text")])
+    ]
     for name, style in (("orphan", "warn"), ("expired", "warn"), ("unowned", "text")):
         if found[name]:
             parts.append((name, [(" · ", "dim"), (f"{found[name]} {name}", style)]))
@@ -319,6 +321,9 @@ def procs_summary(tool: Any, marks: _common.Marks) -> list[tuple[str, list[Part]
     return parts
 
 
+procs_summary = spawns_summary
+
+
 PROCESS_COLUMNS: list[Spec] = [("state", "", 2, False, 0), ("label", "label", 0, False, 0), ("id", "id", 8, False, 4),
                                ("owner", "owner", 16, False, 3), ("lane", "lane", 14, False, 5),
                                ("age", "age", 6, True, 2), ("ttl", "ttl left", 8, True, 1),
@@ -326,8 +331,8 @@ PROCESS_COLUMNS: list[Spec] = [("state", "", 2, False, 0), ("label", "label", 0,
 
 
 def process_values(row: ProcessRow, marks: _common.Marks, elapsed: float) -> dict[str, Any]:
-    """A PROCESSES row: an owned entry, a live or dead unowned process, or an unowned resource."""
-    label = (dashboard_text(_junkfather.label_of(row)), "text")
+    """A SPAWNS row: an owned entry, a live or dead unowned process, or an unowned resource."""
+    label = (dashboard_text(_spawnfather.label_of(row)), "text")
     if row["kind"] == "unowned":
         gone = row.get("alive") is False
         seen = row["age"]
@@ -353,7 +358,7 @@ def process_values(row: ProcessRow, marks: _common.Marks, elapsed: float) -> dic
     return {"state": (marks.rows.get(row["state"], "·"), "text"), "id": (dashboard_text(row["id"]), "dim"),
             "label": label, "owner": (dashboard_text(row["owner"]), "dim" if row.get("owner_alive") else "warn"),
             "lane": (dashboard_text(row.get("lane") or ""), "dim"), "age": (minutes(row["age"] + elapsed), "dim"),
-            "ttl": (_junkfather.ttl_text(row, elapsed), "warn" if row["state"] == "expired" else "text"),
+            "ttl": (_spawnfather.ttl_text(row, elapsed), "warn" if row["state"] == "expired" else "text"),
             "pid": (str(row["pid"] or ""), "dim"),
             "processes": (resource_text(str(resource.get("kind")), str(resource.get("id"))) if resource
                           else str(count) if count is not None else "", "dim")}
@@ -361,7 +366,7 @@ def process_values(row: ProcessRow, marks: _common.Marks, elapsed: float) -> dic
 
 def resource_text(kind: str, ident: str) -> str:
     """A resource as the page names it: its kind and its id cut short (`simulator 1A2B…`)."""
-    return f"{kind} {_junkfather.short_id(ident, 9)}"
+    return f"{kind} {_spawnfather.short_id(ident, 9)}"
 
 
 def separator(row: ProcessTableRow) -> Part:
@@ -369,7 +374,7 @@ def separator(row: ProcessTableRow) -> Part:
 
 
 def action_summary(row: ProcessRow, available: Sequence[_actions.Action]) -> list[Part]:
-    """What `actions` in PROCESS DETAILS says: the available action(s) and their key, or why none apply."""
+    """What `actions` in SPAWN DETAILS says: the available action(s) and their key, or why none apply."""
     if available:
         by_cmd = {"extend": "extend ttl", "reap": "reap"}
         names: list[str] = []
@@ -388,11 +393,11 @@ def action_summary(row: ProcessRow, available: Sequence[_actions.Action]) -> lis
 
 def process_facts(row: ProcessRow, model: Optional[Model], lanes: Optional[dict[str, Any]],
                   elapsed: float, advertised: Any = ()) -> list[tuple[str, list[Part], Link]]:
-    """PROCESS DETAILS: an owned entry's command, directory, log, owner and whether it lives, keep, mode, its
+    """SPAWN DETAILS: an owned entry's command, directory, log, owner and whether it lives, keep, mode, its
     resource, its TTL, and its lease and lane as links; an unowned process's command and why; an unowned resource's
     kind, id, name and why (a worktree's branch, repository, age and size); and the row's available actions."""
     available = _actions.for_process(row, advertised)
-    facts: list[tuple[str, list[Part], Link]] = [("label", [(dashboard_text(_junkfather.label_of(row)), "bold")],
+    facts: list[tuple[str, list[Part], Link]] = [("label", [(dashboard_text(_spawnfather.label_of(row)), "bold")],
                                                   None)]
     if row["kind"] == "resource":
         facts += [("kind", [(row["resource_kind"], "text")], None), ("id", [(dashboard_text(row["id"]), "text")], None)]
@@ -426,7 +431,7 @@ def process_facts(row: ProcessRow, model: Optional[Model], lanes: Optional[dict[
     facts.append(("id", [(dashboard_text(row["id"]), "text")], None))
     facts.append(("state", [(row["state"] + (f" · {row['phase']}" if row["phase"] != "running" else ""),
                              "warn" if row["state"] != "running" else "text")], None))
-    facts.append(("ttl left", [(_junkfather.ttl_text(row, elapsed), "text")], None))
+    facts.append(("ttl left", [(_spawnfather.ttl_text(row, elapsed), "text")], None))
     resource = row.get("resource")
     if resource:
         facts += [("resource", [(f"{resource.get('kind')} {dashboard_text(resource.get('id'))}", "text")], None)]
@@ -450,11 +455,11 @@ def process_facts(row: ProcessRow, model: Optional[Model], lanes: Optional[dict[
                                                   else ""), "text")], None))
     facts.append(("", [], None))
     items = cast(list[dict[str, Any]], (model or {}).get("holders", []) + (model or {}).get("waiters", []))
-    lease = _junkfather.lease_of(row, items)
+    lease = _spawnfather.lease_of(row, items)
     if lease is not None:
         facts.append(("lease", [(dashboard_text(items[lease]["label"] or items[lease]["pid"]), "accent")],
                       ("overview", _entries.entry_ids(items)[lease])))
-    lane = _junkfather.lane_of(row, lanes)
+    lane = _spawnfather.lane_of(row, lanes)
     if lane is not None:
         facts.append(("lane", [(dashboard_text(f"{lane['id']} · {lane['project']}"), "accent")],
                       ("lanes", lane["key"])))
@@ -464,57 +469,63 @@ def process_facts(row: ProcessRow, model: Optional[Model], lanes: Optional[dict[
     return facts
 
 
-def process_links(entries: Sequence[Entry], elapsed: float, label: str = "processes") \
+def process_links(entries: Sequence[Entry], elapsed: float, label: str = "spawns") \
         -> list[tuple[str, list[Part], Link]]:
-    """`processes` rows: each owned entry's label, state and TTL left, a link to the Processes page; `none owned`."""
+    """`spawns` rows: each owned entry's label, state and TTL left, a link to the Spawns page; `none owned`."""
     if not entries:
         return [(label, [("none owned", "dim")], None)]
     return [(label if number == 0 else "",
-             [(dashboard_text(_junkfather.label_of(entry)), "accent"),
-              (f" · {entry['state']} · {_junkfather.ttl_text(entry, elapsed)}", "dim")], ("processes", entry["key"]))
+             [(dashboard_text(_spawnfather.label_of(entry)), "accent"),
+              (f" · {entry['state']} · {_spawnfather.ttl_text(entry, elapsed)}", "dim")], ("spawns", entry["key"]))
             for number, entry in enumerate(entries)]
 
 
-def draw_processes(canvas: Canvas, tool: Any, selected: Optional[int], model: Optional[Model],
-                   lanes: Optional[dict[str, Any]], moment: Optional[datetime.datetime]) -> None:
-    """The Processes page: owned entries, a separator, the last sweep's unowned processes and resources; PROCESS
-    DETAILS for the selection; its Junkfather events."""
+spawn_links = process_links
+
+
+def draw_spawns(canvas: Canvas, tool: Any, selected: Optional[int], model: Optional[Model],
+                lanes: Optional[dict[str, Any]], moment: Optional[datetime.datetime]) -> None:
+    """The Spawns page: owned entries, a separator, the last sweep's unowned processes and resources; SPAWN
+    DETAILS for the selection; its Spawnfather events."""
     if tool.state == "unsupported":
-        draw_notice(canvas, "processes", [str(tool.problem),
-                                          "The Processes page needs a Junkfather with `status --json`."])
+        draw_notice(canvas, "spawns", [str(tool.problem),
+                                       "The Spawns page needs a Spawnfather with `status --json`."])
         return
     if tool.snapshot is None:
-        draw_notice(canvas, "processes", [f"Reading Junkfather… {tool.problem or ''}".strip()])
+        draw_notice(canvas, "spawns", [f"Reading Spawnfather… {tool.problem or ''}".strip()])
         return
-    rows = _junkfather.page_rows(tool.snapshot)
-    elapsed = _junkfather.elapsed(tool.snapshot, moment)
-    screen = _layout.page(canvas.width, canvas.height, max(1, len(rows)), "procs")
+    rows = _spawnfather.page_rows(tool.snapshot)
+    elapsed = _spawnfather.elapsed(tool.snapshot, moment)
+    screen = _layout.page(canvas.width, canvas.height, max(1, len(rows)), "spawns")
     canvas.order = screen.order
     marks = _common.marks_of(canvas)
     found = rows[selected] if selected is not None and 0 <= selected < len(rows) else None
     row = found if found is not None and found["kind"] != "separator" else None
     for name, rect in screen.panels.items():
-        if name == "procs":
-            draw_table(canvas, rect, "procs", "PROCESSES", PROCESS_COLUMNS, rows, selected,
+        if name == "spawns":
+            draw_table(canvas, rect, "spawns", "SPAWNS", PROCESS_COLUMNS, rows, selected,
                        lambda shown: process_values(shown, marks, elapsed) if shown["kind"] != "separator" else {},
                        separator, stale_note(tool))
         elif name == "details":
             nothing: list[tuple[str, list[Part], Link]] = [("", [("Nothing owned or reported", "dim")], None)]
             facts = process_facts(row, model, lanes, elapsed, tool.actions) if row else nothing
-            _details.draw_facts(canvas, rect, "PROCESS DETAILS", facts)
+            _details.draw_facts(canvas, rect, "SPAWN DETAILS", facts)
         elif name == "events":
-            draw_strip(canvas, rect, model, "junkfather", "junk", lambda event: row is not None and
+            draw_strip(canvas, rect, model, "spawnfather", "spwn", lambda event: row is not None and
                        process_event_of(event, row), moment)
     if screen.arrangement == "small":
-        canvas.put(0, 1, "Enlarge the terminal for the Processes page", "dim", max(0, canvas.width - 2))
+        canvas.put(0, 1, "Enlarge the terminal for the Spawns page", "dim", max(0, canvas.width - 2))
     if tool.state == "stale":
         for line in canvas.cells[:canvas.height - 1]:
             for cell in line:
                 cell[1] = "dim"
 
 
+draw_processes = draw_spawns
+
+
 def process_event_of(event: dict[str, Any], row: ProcessRow) -> bool:
-    """A Junkfather event is the row's when its subject is the entry, the unowned pid or the resource."""
+    """A Spawnfather event is the row's when its subject is the entry, the unowned pid or the resource."""
     subject: dict[str, Any] = event.get("subject") or {}
     if row["kind"] == "entry":
         return subject.get("type") == "entry" and subject.get("id") == row["id"]

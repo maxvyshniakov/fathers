@@ -1,0 +1,379 @@
+{
+ "capabilities --json": {
+  "code": 0,
+  "json": {
+   "v": 1,
+   "tool": "spawnfather",
+   "version": "0.9.0",
+   "dashboard": {
+    "v": 1,
+    "tag": "spwn",
+    "snapshot": {
+     "argv": [
+      "status",
+      "--json"
+     ],
+     "versions": [
+      1,
+      2
+     ],
+     "poll": 5
+    },
+    "events": {
+     "path": "/fixture/spawnfather/events.jsonl",
+     "versions": [
+      1
+     ]
+    },
+    "settings": {
+     "versions": [
+      1
+     ]
+    },
+    "actions": [
+     "reap",
+     "extend"
+    ]
+   }
+  }
+ },
+ "settings --json": {
+  "code": 0,
+  "json": {
+   "v": 1,
+   "tool": "spawnfather",
+   "writable": true,
+   "reason": null,
+   "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+   "status": [
+    {
+     "label": "settings",
+     "value": "/fake/state/spawnfather/settings.json"
+    },
+    {
+     "label": "state",
+     "value": "/fake/state/spawnfather"
+    },
+    {
+     "label": "last sweep",
+     "value": "never"
+    }
+   ],
+   "sections": [
+    {
+     "id": "own",
+     "title": "Owning",
+     "settings": [
+      {
+       "key": "own.default_ttl",
+       "label": "Default TTL",
+       "type": "duration",
+       "value": 7200,
+       "default": 7200,
+       "source": "default",
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "How long own, own-resource and adopt keep what they start when the command gives no --ttl.",
+       "min": 60,
+       "max": 604800,
+       "step": 300,
+       "unit": "s"
+      },
+      {
+       "key": "own.background_ttl",
+       "label": "Background command TTL",
+       "type": "duration",
+       "value": 7200,
+       "default": 7200,
+       "source": "default",
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "How long an agent's background Bash command may run before it is stopped, unless its agent stops first.",
+       "min": 60,
+       "max": 604800,
+       "step": 300,
+       "unit": "s"
+      }
+     ]
+    },
+    {
+     "id": "sweep",
+     "title": "Sweep",
+     "settings": [
+      {
+       "key": "sweep.interval",
+       "label": "Sweep every",
+       "type": "duration",
+       "value": 3600,
+       "default": 3600,
+       "source": "default",
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "The hourly sweep agent's interval; the loaded agent takes a new one when reinstalled (install.py --launchd).",
+       "min": 60,
+       "max": 86400,
+       "step": 300,
+       "unit": "s"
+      }
+     ]
+    },
+    {
+     "id": "reap",
+     "title": "Reaping",
+     "settings": [
+      {
+       "key": "reap.grace",
+       "label": "Grace before SIGKILL",
+       "type": "duration",
+       "value": 10,
+       "default": 10,
+       "source": "default",
+       "writable": true,
+       "revision": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+       "description": "Between SIGTERM and SIGKILL when reap has no --grace; the sweep and the supervisor use it too.",
+       "min": 1,
+       "max": 600,
+       "step": 1,
+       "unit": "s"
+      }
+     ]
+    },
+    {
+     "id": "environment",
+     "title": "Environment",
+     "settings": [
+      {
+       "key": "env.SPAWNFATHER_STATE",
+       "label": "State directory",
+       "type": "text",
+       "value": "/fake/state/spawnfather",
+       "default": null,
+       "source": "default",
+       "writable": false,
+       "description": "Where entries, logs, events and these settings live. Set by SPAWNFATHER_STATE; read-only here."
+      },
+      {
+       "key": "env.SPAWNFATHER_SCRATCH_ROOTS",
+       "label": "Extra scratch roots",
+       "type": "text",
+       "value": null,
+       "default": null,
+       "source": "default",
+       "writable": false,
+       "description": "Directories (colon-separated) the sweep treats like an agent's scratchpad. Set by SPAWNFATHER_SCRATCH_ROOTS; read-only here."
+      },
+      {
+       "key": "env.SPAWNFATHER_CLAUDE_SESSIONS",
+       "label": "Claude Code sessions",
+       "type": "text",
+       "value": "/fake/claude/sessions",
+       "default": null,
+       "source": "default",
+       "writable": false,
+       "description": "Claude Code's live-session registry. Set by SPAWNFATHER_CLAUDE_SESSIONS; read-only here."
+      },
+      {
+       "key": "env.SPAWNFATHER_LANE_RECORDS",
+       "label": "Lane records",
+       "type": "text",
+       "value": null,
+       "default": null,
+       "source": "default",
+       "writable": false,
+       "description": "Where the lane of a working directory is looked up. Set by SPAWNFATHER_LANE_RECORDS; read-only here."
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "status --json": {
+  "code": 0,
+  "json": {
+   "v": 2,
+   "host": "mbp",
+   "time": "2026-11-04T09:59:39Z",
+   "entries": [
+    {
+     "id": "j3f9a1c",
+     "state": "running",
+     "owner": "claude 4bceaaaf/a71c",
+     "session": "4bceaaaf",
+     "agent": "a71c",
+     "lane": "710-speech-paste-phase",
+     "owner_alive": true,
+     "age": 1800,
+     "ttl": 7200,
+     "ttl_left": 4000,
+     "keep": "owner",
+     "pid": 90412,
+     "pgid": 90412,
+     "processes": 3,
+     "label": "vite dev",
+     "mode": "detached",
+     "cwd": "/fixture/straylight/worktrees/710-speech-paste-phase",
+     "argv": [
+      "bun",
+      "run",
+      "dev"
+     ],
+     "log": "/fixture/spawnfather/logs/j3f9a1c.log",
+     "end": null,
+     "exit": null,
+     "resource": null
+    },
+    {
+     "id": "j5e6f7a",
+     "state": "running",
+     "owner": "claude 4bceaaaf/a71c",
+     "session": "4bceaaaf",
+     "agent": "a71c",
+     "lane": null,
+     "owner_alive": true,
+     "age": 1800,
+     "ttl": 7200,
+     "ttl_left": 6400,
+     "keep": "owner",
+     "pid": 55001,
+     "pgid": 10000,
+     "processes": 3,
+     "label": "storybook",
+     "mode": "detached",
+     "cwd": "/fixture/straylight",
+     "argv": [
+      "bun",
+      "run",
+      "storybook"
+     ],
+     "log": "/fixture/spawnfather/logs/j5e6f7a.log",
+     "end": null,
+     "exit": null,
+     "resource": null
+    },
+    {
+     "id": "j7a8b9c",
+     "state": "running",
+     "owner": "claude 4bceaaaf/a71c",
+     "session": "4bceaaaf",
+     "agent": "a71c",
+     "lane": null,
+     "owner_alive": false,
+     "age": 5400,
+     "ttl": 7200,
+     "ttl_left": 3000,
+     "keep": "owner",
+     "pid": 61200,
+     "pgid": 61200,
+     "processes": 3,
+     "label": "playwright server",
+     "mode": "detached",
+     "cwd": "/fixture/straylight",
+     "argv": [
+      "npx",
+      "playwright",
+      "run-server"
+     ],
+     "log": "/fixture/spawnfather/logs/j7a8b9c.log",
+     "end": null,
+     "exit": null,
+     "resource": null
+    },
+    {
+     "id": "j2b3c4d",
+     "state": "running",
+     "owner": "claude 4bceaaaf/a71c",
+     "session": "4bceaaaf",
+     "agent": "a71c",
+     "lane": null,
+     "owner_alive": true,
+     "age": 7500,
+     "ttl": 7200,
+     "ttl_left": -300,
+     "keep": "owner",
+     "pid": null,
+     "pgid": null,
+     "processes": null,
+     "label": "pg-test",
+     "mode": "resource",
+     "cwd": "/fixture/straylight",
+     "argv": null,
+     "log": "/fixture/spawnfather/logs/j2b3c4d.log",
+     "end": null,
+     "exit": null,
+     "resource": {
+      "kind": "docker",
+      "id": "1a2b3c4d5e6f",
+      "name": "pg-test"
+     }
+    },
+    {
+     "id": "j8d9e0f",
+     "state": "running",
+     "owner": "claude 4bceaaaf/a71c",
+     "session": "4bceaaaf",
+     "agent": "a71c",
+     "lane": null,
+     "owner_alive": true,
+     "age": 1800,
+     "ttl": 7200,
+     "ttl_left": 5000,
+     "keep": "owner",
+     "pid": null,
+     "pgid": null,
+     "processes": null,
+     "label": "iPhone 17 Pro",
+     "mode": "resource",
+     "cwd": "/fixture/straylight",
+     "argv": null,
+     "log": "/fixture/spawnfather/logs/j8d9e0f.log",
+     "end": null,
+     "exit": null,
+     "resource": {
+      "kind": "simulator",
+      "id": "1A2B3C4D-5E6F-7081-92A3-B4C5D6E7F809",
+      "name": "iPhone 17 Pro"
+     }
+    }
+   ],
+   "unowned": [
+    {
+     "pid": 88123,
+     "start": "Tue Nov  4 08:29:00 2026",
+     "cmd": "node storybook dev -p 6006",
+     "cwd": "/fixture/straylight/web",
+     "root": "/fixture/straylight",
+     "why": "orphan",
+     "age": 5400,
+     "alive": true
+    }
+   ],
+   "unowned_resources": [
+    {
+     "kind": "worktree",
+     "id": "/fixture/straylight/worktrees/old-spike",
+     "name": "old-spike",
+     "why": "merged, idle 9d",
+     "repo": "/fixture/straylight",
+     "branch": "lane/old-spike",
+     "age": 777600,
+     "size": 2300000000.0
+    },
+    {
+     "kind": "simulator",
+     "id": "9F8E7D6C-0000-4000-8000-0123456789AB",
+     "name": "iPad Air",
+     "why": "booted, no owner"
+    }
+   ],
+   "sweep": {
+    "time": "2026-11-04T09:30:00Z",
+    "result": {
+     "reaped": [],
+     "failed": []
+    }
+   },
+   "cpu": null,
+   "errors": []
+  }
+ }
+}

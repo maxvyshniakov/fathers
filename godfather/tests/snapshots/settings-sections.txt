@@ -42,15 +42,15 @@
 │    perf priority             Project                                         │
 │    Free disk floor           auto  effective here: 49 GB                     │
 │  ──────────────────────────────────────────────────────────────────────────  │
-│  JUNKFATHER · status read-only, live                                         │
-│    settings     /fake/state/junkfather/settings.json                         │
-│    state        /fake/state/junkfather                                       │
+│  SPAWNFATHER · status read-only, live                                        │
+│    settings     /fake/state/spawnfather/settings.json                        │
+│    state        /fake/state/spawnfather                                      │
 │    last sweep   never                                                        │
 │    Default TTL               2h                                              │
 │    Background command TTL    2h                                              │
 │    Sweep every               1h                                              │
 │    Grace before SIGKILL      10s                                             │
-│    State directory           /fake/state/junkfather  read-only               │
+│    State directory           /fake/state/spawnfather  read-only              │
 │    Extra scratch roots       –  read-only                                    │
 │    Claude Code sessions      /fake/claude/sessions  read-only                │
 │    Lane records              –  read-only                                    │
