@@ -438,6 +438,9 @@ def dashboard_admission(waiters: list[dict[str, Any]], held: list[dict[str, Any]
         if memory_need_mb is None else memory_need_mb
     moment = time.time()
     window = _config.overtake_window()
+    if waiters:
+        waiters = [dict(w) for w in waiters]
+        _schedule.fit(waiters, slots)
     if used:
         if load_block or _schedule.budget_wait(memory_expected_mb, need_mb, ram_mb, share):
             return 0

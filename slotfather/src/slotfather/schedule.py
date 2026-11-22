@@ -198,8 +198,7 @@ def unknown_end(entry: Entry, estimate: Estimate) -> bool:
 def _holds(entry: Entry, slots: int, granted_counts: dict[int, int] | None = None) -> int:
     """Slots `entry` holds from `slots`, using its range grant size when already granted in this plan."""
     if granted_counts is not None and id(entry) in granted_counts:
-        count = granted_counts[id(entry)]
-        return max(count, slots) if entry.get("all") else count
+        return granted_counts[id(entry)]
     return _entry.holds(entry, slots)
 
 

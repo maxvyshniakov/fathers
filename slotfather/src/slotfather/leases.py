@@ -53,7 +53,7 @@ def ask(directory: Path, live: list[tuple[Path, dict[str, Any]]], held: list[dic
                                                            "priority": _entry.priority_of(who)}},
                          _events.actor(kind="tool"))
         elif place.exists():
-            if _entry.is_held(entry) and asked_by_hand(_state.asked(path), live):
+            if settings["order"] == "backfill" and _entry.is_held(entry) and asked_by_hand(_state.asked(path), live):
                 continue  # `slotfather ask-yield` asked it: it stands while the waiter it names still waits
             place.unlink(missing_ok=True)
             _events.record(directory, f"withdrew the yield request to {entry.get('label')} (pid {entry['pid']})", "lease.yield_withdrawn", _events.request(entry, path), {},
@@ -188,16 +188,17 @@ def yield_lease(path: Path) -> tuple[dict[str, Any], dict[str, Any]] | None:
             return None
         live = _queue.reap(directory, _queue.process_table(directory))
         asker = next((e for p, e in live if p.stem == request.get("by") and _entry.is_waiting(e)), None)
-        settings = _settings.order_settings(directory, environment=False)
-        if settings["order"] != "backfill":
+        shared = _settings.order_settings(directory, environment=False)
+        effective = _settings.order_settings(directory)
+        if effective["order"] != "backfill":
             asker = None
-        behind = _schedule.rank_time(asker, settings, time.time()) + _config.YIELD_BEHIND if asker is not None else None
+        behind = _schedule.rank_time(asker, shared, time.time()) + _config.YIELD_BEHIND if asker is not None else None
         if asker is not None:  # would the asker start? Things may have changed since it asked.
             table = _queue.process_table(directory)
             held = [e for other, e in live if _entry.is_held(e) and other != path]
             waiters = [e for _, e in live if _entry.is_waiting(e)] + [_entry.trial_yielded(entry, behind)]
             trial = _schedule.plan(waiters, held, _settings.total(), time.time(), estimate=_queue.estimator(directory),
-                         other=_queue.used_elsewhere(directory, table), settings=settings, window=_config.overtake_window())
+                         other=_queue.used_elsewhere(directory, table), settings=effective, window=_config.overtake_window())
             if not any(e is asker for e in trial.grants):
                 asker = None
         if asker is None:  # it started, left or would still not start; the next look would withdraw the request
