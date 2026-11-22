@@ -38,7 +38,6 @@ __all__ = [
     "PromoteRun",
     "after_promote",
     "batch_gate",
-    "install_and_deploy",
     "main_base",
     "perf",
     "perf_suite",
@@ -120,21 +119,6 @@ def _run_config_step(common: str, sha: str, step: config.Step, skipped: list[str
             skipped_text = ", ".join(skipped) or "none"
             raise LaneError(f"promote of {sha[:10]} went through, but {step.name} failed (exit {status}); "
                             f"later steps not run: {skipped_text}")
-
-
-def install_and_deploy(common: str, sha: str, deploy: str | None) -> None:
-    """After a promotion (#569): the configured install steps from the gate worktree, and with a host the deploy
-    steps, each only after the previous succeeded. The steps run without the variables `install_env_drop` names
-    (the landing token, a project's unpromoted marker), so each guard sees the promoted tree. The gate worktree is
-    promote's, so the promote lock holds it at the SHA throughout."""
-    cfg = config.current()
-    steps = [*cfg.install, *(cfg.deploy if deploy else ())]
-    if not cfg.install:
-        raise LaneError("promote --install: the project names no install steps ([[promote.install]] in "
-                        ".lanefather.toml)")
-    for index, step in enumerate(steps):
-        _run_config_step(common, sha, step, [later.name for later in steps[index + 1:]], deploy)
-    print(f"Installed{' and deployed' if deploy else ''} {sha[:10]}" + (f" to {deploy}" if deploy else ""))
 
 
 # Local dev and main follow origin (#666): promote --no-push once left them ahead of it, and only the owner could

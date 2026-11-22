@@ -178,8 +178,8 @@ def reviewer_totals(days: float | None = 7, lane: str | None = None) -> list[dic
     table: dict[str, dict[str, Any]] = {}
     store = state.Store(config.current())
     for _, receipt in receipts.reviews(store):
-        if (not isinstance(receipts.review_verdict(None, receipt), (receipts.Unmarked, receipts.Complete))
-                or (lane is not None and receipt.get("lane") != lane)):
+        verdict = receipts.review_verdict(None, receipt, panel_required=store.project.review_panel_required)
+        if not receipts.has_finished_receipt(verdict) or (lane is not None and receipt.get("lane") != lane):
             continue
         try:
             if cutoff and parse_time(str(receipt.get("finished"))) < cutoff:

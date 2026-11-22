@@ -31,14 +31,6 @@ TRANSITIONS: dict[tuple[str, str], str] = {
     ("released", "hand_over"): "released",
 }
 
-# Declared in the lifecycle model; refused until #57 adds the commands.
-PLANNED_TRANSITIONS: dict[tuple[str, str], str] = {
-    ("planned", "park"): "done",
-    ("active", "park"): "done",
-    ("planned", "abandon"): "done",
-    ("active", "abandon"): "done",
-}
-
 # Repeating an event when the lane is already in its target status is a no-op.
 IDEMPOTENT: dict[str, str] = {
     "adopt": "active",
@@ -111,6 +103,13 @@ def finish_landed(store: state.Store, lane_id: str, keep: bool = False) -> None:
     from . import done
 
     done.finish_landed(lane_id, keep, store=store)
+
+
+def finish_reviewed(store: state.Store, lane_id: str) -> None:
+    """Trigger post-review completion through `done` when readiness holds, without a module import cycle."""
+    from . import done
+
+    done.finish_reviewed(lane_id, store=store)
 
 
 def register(store: state.Store, record: Record, *, status: str = "planned", worktree: str | None = None,
@@ -191,7 +190,7 @@ def transition(store: state.Store, lane_id: str, event: str, *,
     def _apply(record: Record) -> bool:
         nonlocal changed
         current = str(record.get("status", ""))
-        if (current, event) in PLANNED_TRANSITIONS or event in ("park", "abandon"):
+        if event in ("park", "abandon"):
             raise LaneError(f"lane {lane_id}: {event} is not implemented yet")
         if (current, event) in TRANSITIONS:
             target = TRANSITIONS[(current, event)]

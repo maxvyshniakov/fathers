@@ -10,7 +10,7 @@ import time
 from typing import Any
 import unittest
 
-from support import LaneCase
+from support import TWO_FINDINGS, LaneCase
 
 
 class DoneTests(LaneCase):
@@ -205,6 +205,122 @@ class AutoDoneTests(LaneCase):
         self.lane("land", "caller", ok=False)
         self.assertTrue(pathlib.Path(caller).exists())
         self.assertEqual(self.record("caller")["status"], "landed")
+
+
+class DoneReadinessUnifiedTests(LaneCase):
+    """fathers#213: `done.unfinished`, `done.finish_refusals` and `review.review_complete_finish` share
+    `done.done_readiness` and agree across `Absent` review receipts, unrun/cleared post-merge smokes, and kept lanes."""
+
+    def _landed_lane(self, lane_id: str = "a", path: str = "lib/a.txt", *, keep: bool = False) -> pathlib.Path:
+        wt = pathlib.Path(self.created(lane_id, path))
+        self.commit(wt, {path: f"{lane_id}\n"})
+        self.lane("check", lane_id)
+        self.lane("land", lane_id, *(("--keep",) if keep else ()))
+        return wt
+
+    def test_absent_review_and_unrun_smoke_across_readiness_callers(self) -> None:
+        import contextlib
+        import io
+        import os
+        from unittest import mock
+
+        from lanefather import config, done, review, state
+        from lanefather.errors import LaneError
+
+        wt = self._landed_lane("a")
+        # `LANEFATHER_REVIEW_START=manual` in LaneCase leaves `<id>.review.json` absent.
+        self.assertFalse((self.state / "a.review.json").exists())
+
+        with mock.patch.dict(os.environ, self.env, clear=False):
+            cfg = config.load(self.integration / ".lanefather.toml")
+            config.use(cfg)
+            self.addCleanup(config.use, None)
+            store = state.Store(cfg, directory=self.state)
+            rec = store.load("a")
+
+            # Absent review: explicit `done <id>` allows it, while `done --finished`, unattended `finish_refusals`
+            # and `review_complete_finish` refuse it.
+            self.assertTrue(done.done_readiness(rec, store, allow_absent_review=True, allow_kept=True).ready)
+            self.assertFalse(done.done_readiness(rec, store, allow_absent_review=False, allow_kept=True).ready)
+            self.assertIn("no review", done.unfinished(rec, store) or "")
+            with self.assertRaises(LaneError) as unattended_err:
+                done.finish_refusals("a", None, store, unattended=True)
+            self.assertIn("no review", str(unattended_err.exception))
+            review.review_complete_finish("a", store)
+            self.assertEqual(self.record("a")["status"], "landed")
+            self.assertTrue(wt.exists())
+
+            # Unrun post-merge smoke (e.g. while `land` is still in phase 2): all callers refuse without override.
+            rec_unrun = dict(rec)
+            rec_unrun.pop("post_merge", None)
+            (self.state / "a.json").write_text(json.dumps(rec_unrun))
+            (self.state / "a.review.json").write_text(json.dumps({"status": "exempt", "exempt": "test"}))
+            self.assertEqual(done.unfinished(rec_unrun, store), "its post-merge smoke is not run")
+            with self.assertRaises(LaneError) as attended_unrun:
+                done.finish_refusals("a", None, store, unattended=False)
+            self.assertIn("post-merge smoke is not run", str(attended_unrun.exception))
+            with self.assertRaises(LaneError) as unattended_unrun:
+                done.finish_refusals("a", None, store, unattended=True)
+            self.assertIn("post-merge smoke is not run", str(unattended_unrun.exception))
+
+            # A kept lane whose smoke is unrun or uncleared red does NOT print a premature kept-finish notice.
+            rec_kept_unrun = dict(rec_unrun, keep=True)
+            (self.state / "a.json").write_text(json.dumps(rec_kept_unrun))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                review.review_complete_finish("a", store)
+            self.assertEqual(buf.getvalue(), "")
+
+            rec_kept_red = dict(rec, keep=True, post_merge={"status": "red"})
+            (self.state / "a.json").write_text(json.dumps(rec_kept_red))
+            buf_red = io.StringIO()
+            with contextlib.redirect_stdout(buf_red):
+                review.review_complete_finish("a", store)
+            self.assertEqual(buf_red.getvalue(), "")
+
+    def test_review_auto_done_finishes_lane_with_cleared_red_post_merge_smoke(self) -> None:
+        from lanefather import results
+
+        wt = pathlib.Path(self.created("a", "lib/**"))
+        self.commit(wt, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.integration_moves()
+        self.env["FIXTURE_STATUS"] = "post-merge-a:lib-check=failed"
+        self.assertIn("post-merge red", self.lane("land", "a", ok=False))
+        del self.env["FIXTURE_STATUS"]
+        self.assertEqual(self.record("a")["post_merge"]["status"], "red")
+
+        # Uncleared red smoke: even a clean review leaves the lane landed.
+        self.lane("review", "a")
+        self.assertEqual(self.record("a")["status"], "landed")
+        self.assertTrue(wt.exists())
+
+        # Clear the red smoke via a later green batch gate on the integration branch, then re-review with findings
+        # and mark the last finding: `review_complete_finish` now auto-finishes the lane and records `cleared_by`.
+        tip = self.commit(self.integration, {"notes.txt": "later\n"}, "later on integration")
+        gate_path = self.state / f"promote-{tip[:10]}.gate.json"
+        gate_path.write_text(json.dumps({
+            "version": 1,
+            "lane": f"promote-{tip[:10]}",
+            "sha": tip,
+            "full": True,
+            "status": "green",
+            "tree": self.git(self.repo, "rev-parse", tip + "^{tree}"),
+            "finished": "2999-01-01T00:00:00Z",
+            "platform": results.host_platform(),
+        }))
+        self.review_text.write_text(TWO_FINDINGS)
+        self.lane("review", "a", "--force-reason", "re-review with findings")
+        self.assertEqual(self.record("a")["status"], "landed")
+        self.lane("review", "a", "--mark", "1", "rejected:ok")
+        self.assertEqual(self.record("a")["status"], "landed")
+        out = self.lane("review", "a", "--mark", "2", "rejected:ok")
+        self.assertIn("Lane a done", out)
+        self.assertIn(f"cleared by the batch gate of {tip[:10]}", out)
+        self.assertFalse(wt.exists())
+        final = self.record("a")
+        self.assertEqual(final["status"], "done")
+        self.assertEqual(final["post_merge"]["cleared_by"]["kind"], "gate")
 
 
 if __name__ == "__main__":

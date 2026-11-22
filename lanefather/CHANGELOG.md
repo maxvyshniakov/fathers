@@ -238,6 +238,16 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- Unified lane-`done` readiness and review `panel_required` / manual-start handling (fathers#213): `done <id>`,
+  `done --finished` and post-review auto-done now share one readiness check (`done.done_readiness`), so auto-done
+  after `review` or `review --mark` finishes a lane whose red post-merge smoke was cleared by a later green batch
+  gate or smoke, kept lanes no longer print a premature finish notice while their post-merge smoke is red or unrun,
+  and `done` refuses a landed lane whose post-merge smoke has not run unless `--force-reason` overrides it;
+  `promote --ship`'s deferred overall review message now names `lanefather settings review.start=manual` when manual
+  review start comes from machine settings; and `review` / `review --overall` evaluate `[review] panel_required`
+  consistently with `receipts` and `findings`, exiting non-zero and holding auto-done when a required panel member
+  failed while keeping `--compare`, `--mark` and `--fix-lane` working on the answered members' findings.
+
 - Pre-land review fix rounds and clearer hand-over refusals (fathers#197): `lanefather review ID --fix-lane` now
   supports one truthful pre-land fix round on a reviewed `active` candidate in its existing worktree, preserving
   the reviewed commit SHA and unmarked finding linkage in both the lane record and review receipt (`pre_land_fix`,

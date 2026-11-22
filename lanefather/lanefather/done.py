@@ -112,19 +112,103 @@ def keep(args: Any) -> int:
     return 0
 
 
+@dataclass(frozen=True)
+class DoneReadiness:
+    """Whether a lane record in `store` is ready for `done`, and if not, why."""
+
+    ready: bool
+    reason: str | None = None
+    refusal: str | None = None
+    cleared: dict[str, Any] | None = None
+
+
+def done_readiness(
+    record: Record,
+    store: state.Store,
+    *,
+    integration: str | None = None,
+    allow_absent_review: bool = False,
+    allow_kept: bool = False,
+) -> DoneReadiness:
+    """Evaluate status, post-merge smoke, review verdict and keep flag for `done`.
+
+    - `allow_absent_review`: explicit `done <id>` permits a landed lane without a review receipt (`Absent`),
+      while `done --finished` and unattended auto-done require a completed or exempt review.
+    - `allow_kept`: explicit `done <id>` cleans up a kept lane, and post-review auto-done lets `finish_landed`
+      print the kept notice once status, smoke and review are ready; `done --finished` and unattended `done`
+      skip or refuse kept lanes.
+    """
+    lane_id = str(record["id"])
+    prog = store.project.command
+    if not lifecycle.awaiting_done(record):
+        lane_state = record.get("status")
+        return DoneReadiness(
+            ready=False,
+            reason=f"it is {lane_state}",
+            refusal=f"lane {lane_id} is {lane_state}, not landed",
+        )
+    post = field(record, "post_merge")
+    smoke = post.get("status")
+    raw_cleared: Any = post.get("cleared_by")
+    cleared: dict[str, Any] | None = cast(dict[str, Any], raw_cleared) if isinstance(raw_cleared, dict) else None
+    if smoke == "red":
+        cleared = postmerge.clearing(record, store, integration)
+        if cleared is None:
+            return DoneReadiness(
+                ready=False,
+                reason="its post-merge smoke is red",
+                refusal=(
+                    "its post-merge check is red: fix forward (a follow-up commit on the lane) first, or "
+                    f"rerun its smoke on the integration tip with {prog} recheck {lane_id}"
+                ),
+            )
+    elif smoke != "green":
+        words = f"its post-merge smoke is {smoke or 'not run'}"
+        return DoneReadiness(ready=False, reason=words, refusal=words)
+
+    review_rec = receipts.read(store, lane_id, "review")
+    review_v = receipts.review_verdict(
+        record, review_rec, panel_required=store.project.review_panel_required
+    )
+    allowed_verdicts: tuple[type[Any], ...] = (
+        (receipts.Absent, receipts.Exempt, receipts.Complete)
+        if allow_absent_review
+        else (receipts.Exempt, receipts.Complete)
+    )
+    if not isinstance(review_v, allowed_verdicts):
+        _, words = receipts.review_words(lane_id, review_v, prog=prog)
+        refusal = (
+            words
+            if isinstance(review_v, receipts.Absent)
+            else f"its {words}: mark each finding with {receipts.mark_help(lane_id, prog)}"
+        )
+        return DoneReadiness(ready=False, reason=words, refusal=refusal, cleared=cleared)
+
+    if not allow_kept and kept(record):
+        return DoneReadiness(
+            ready=False,
+            reason="kept",
+            refusal=f"lane {lane_id} is kept ({prog} keep {lane_id} --off releases it)",
+            cleared=cleared,
+        )
+    return DoneReadiness(ready=True, cleared=cleared)
+
+
 def unfinished(record: Record, store: state.Store) -> str | None:
     """None when the lane is finished (fathers#157): landed, its smoke green (or red and cleared by a later green
     run, fathers#167), its review finished or exempt with every finding (each panel member's) marked, and not kept;
     else why not."""
-    if not lifecycle.awaiting_done(record):
-        return f"it is {record['status']}"
-    smoke = field(record, "post_merge").get("status")
-    if smoke != "green" and not (smoke == "red" and postmerge.clearing(record, store)):
-        return f"its post-merge smoke is {smoke or 'not run'}"
-    reviewed, words = receipts.review_state(store, record["id"])
-    if not reviewed:
-        return words
-    return "kept" if kept(record) else None
+    return done_readiness(record, store, allow_absent_review=False, allow_kept=False).reason
+
+
+def finish_reviewed(lane_id: str, *, store: state.Store | None = None) -> None:
+    """After a lane's review is clean or fully marked: finish it via `finish_landed` when `done_readiness` says
+    status, smoke (green or cleared red) and review are ready; kept lanes print the kept notice."""
+    store = store or state.Store(config.current())
+    record = store.load(lane_id)
+    if not done_readiness(record, store, allow_absent_review=False, allow_kept=True).ready:
+        return
+    finish_landed(lane_id, False, store=store)
 
 
 def refused(lane_id: str, error: Exception, store: state.Store) -> str:
@@ -327,23 +411,16 @@ def finish_refusals(
         integration = field(record, "landed").get("integration") or record.get("integration")
         if not integration or not os.path.isdir(integration):
             integration = None
-        cleared: dict[str, Any] | None = None
-        if not lifecycle.awaiting_done(record):
-            refusals.append(f"lane {lane_id} is {record['status']}, not landed")
-        elif (field(record, "post_merge").get("status") == "red"
-              and not (cleared := postmerge.clearing(record, store, integration))):
-            refusals.append("its post-merge check is red: fix forward (a follow-up commit on the lane) first, or "
-                            f"rerun its smoke on the integration tip with {prog} recheck {lane_id}")
-        elif not isinstance(
-            review_v := receipts.review_verdict(
-                record, receipts.read(store, lane_id, "review"), panel_required=project.review_panel_required
-            ),
-            (receipts.Absent, receipts.Exempt, receipts.Complete),
-        ):
-            # The fix round of the review runs in this worktree (#570); a lane landed without a review has none.
-            _, words = receipts.review_words(lane_id, review_v, prog=prog)
-            refusals.append(f"its {words}: mark each finding with " + receipts.mark_help(lane_id, prog))
-        cleared = cleared or field(record, "post_merge").get("cleared_by")
+        readiness = done_readiness(
+            record,
+            store,
+            integration=integration,
+            allow_absent_review=not unattended,
+            allow_kept=not unattended,
+        )
+        if not readiness.ready and readiness.refusal is not None:
+            refusals.append(readiness.refusal)
+        cleared = readiness.cleared
         if integration is None:
             named = field(record, "landed").get("integration") or record.get("integration")
             refusals.append(f"its integration worktree {named or '(none)'} is gone: nothing to check its "

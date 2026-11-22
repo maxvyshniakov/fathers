@@ -294,11 +294,6 @@ def adopt(args: Any) -> int:
     return 0
 
 
-def receipt_state(record: Record, store: state.Store | None = None) -> str:
-    current = store or state.Store(config.current())
-    return receipts.lane_view(current, record, repository=None, prog=config.prog()).list_receipt_text()
-
-
 def list_lanes(args: Any) -> int:
     store = state.Store(config.current())
     records = store.lanes(strict=True)
