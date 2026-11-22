@@ -234,8 +234,8 @@ def sgr(style: str, selected: bool | str, theme: _theme.Theme | None = None) -> 
 
 HINT_GAP = 3
 # What a click on a hint presses, by the hint's key: the same key; for a pair of arrows, each arrow its own
-HINT_KEYS: dict[str, str | tuple[str, ...]] = {"s": "s", "?": "?", "q": "q", "tab": "\t", "esc": "esc", "enter": "\r",
-                                              "d": "d", "↑↓": ("up", "down"), "←→": ("left", "right")}
+HINT_KEYS: dict[str, str | tuple[str, ...]] = {"a": "a", "s": "s", "?": "?", "q": "q", "tab": "\t", "esc": "esc",
+                                              "enter": "\r", "d": "d", "↑↓": ("up", "down"), "←→": ("left", "right")}
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 

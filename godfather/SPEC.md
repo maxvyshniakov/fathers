@@ -106,9 +106,10 @@ full pages one key away.
     - lanes: `N active` (lanes in status active), `N planned` when any, `N reviews` (lanes whose review runs or has
       unresolved findings), `🔥 gate red` when the newest batch gate of any project is red.
     - procs: `N` running owned entries, then `N orphan` (owner gone), `N expired` (TTL passed, not reaped yet),
-      `N unowned` (the last sweep's report), each only when not zero.
-    - A narrow border drops, in order: planned, reviews, unowned, expired; the leading count and any 🔥 stay. An
-      absent tool's summary is not drawn; a stale one is dimmed.
+      `N unowned` (live unowned processes from the last sweep; entries already gone since the sweep are excluded),
+      `N resources` (unowned non-process resources from the last sweep), each only when not zero.
+    - A narrow border drops, in order: planned, reviews, resources, unowned, expired; the leading count and any 🔥
+      stay. An absent tool's summary is not drawn; a stale one is dimmed.
     - A click on a summary opens its page.
 14. DETAILS for a selected request keeps today's rows and lane context, and adds:
     - `lane` with the lane id and project, a link to the Lanes page with that lane selected;
@@ -152,10 +153,11 @@ full pages one key away.
     (project, ticket link, branch and base, worktree link, claims, after, receipt and tree match, review and finding
     counts, latest log, its leases from the Slotfather snapshot and its processes from junkfather, each a link); and
     an EVENTS strip filtered to that lane.
-18. Processes page: a PROCESSES table of owned entries (running, orphan, expired), then a separator and the unowned
-    processes the last sweep reported; columns state, id, label, owner, lane, age, TTL left, pid, processes;
-    PROCESS DETAILS (command, directory, log, owner and whether it lives, keep, mode, its lease and lane as links);
-    an EVENTS strip filtered to that entry.
+18. Processes page: a PROCESSES table of owned entries (running, orphan, expired), then labelled sections for live
+    unowned processes, dead sweep leftovers (`gone since the sweep`, visually de-emphasized) and unowned non-process
+    resources (`📦`); columns state, id, label, owner, lane, age, TTL left, pid, processes; PROCESS DETAILS (command,
+    directory, log, owner and whether it lives, keep, mode, its lease and lane as links, and the row's available
+    actions or why none apply); an EVENTS strip filtered to that entry.
 19. Joins, all read-only and computed by Godfather from snapshots:
     - request ↔ lane: the request's `meta.lane` and `meta.lanefather.state` match a lane id in the project whose state
       directory that is; a request with only `meta.lane` matches by its working directory inside the lane's

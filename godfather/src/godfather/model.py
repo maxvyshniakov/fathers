@@ -276,8 +276,9 @@ class UnownedResource(TypedDict):
 
 
 class Separator(TypedDict):
-    """PROCESSES' row between the owned entries and what the last sweep found."""
+    """PROCESSES' unselectable heading row for a sweep section."""
     kind: Literal["separator"]
+    label: str
 
 
 ProcessRow = Union[Entry, Unowned, UnownedResource]

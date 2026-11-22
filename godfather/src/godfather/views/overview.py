@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime
 from typing import TYPE_CHECKING, Any, Mapping, Optional, cast
 
+from .. import actions as _actions
 from .. import layout as _layout
 from .. import version as _version
 from ..tui import Canvas
@@ -34,16 +35,32 @@ if TYPE_CHECKING:
 FOOTER_HINTS: tuple[Part, ...] = (("↑↓", "select"), ("tab", "panel"), ("s", "settings"), ("?", "help"), ("q", "quit"))
 
 
-def footer_hints(focus: str, pages: str = "") -> list[Part]:
-    """The footer's hints; with EVENTS focused, ← → switch its log (fathers#152); `pages` the page keys of the
-    tools present (`1 2 3`, fathers#85), none where only the overview is."""
+def footer_hints(focus: str, pages: str = "", actions: bool = False) -> list[Part]:
+    """The footer's hints; with EVENTS focused, ← → switch its log (fathers#152); on PROCESSES with an actionable
+    row selected, `a actions` opens its action menu; `pages` the page keys of the tools present (`1 2 3`,
+    fathers#85), none where only the overview is."""
     found: list[Part] = [("↑↓", "select" if focus in ("requests", "events", "lanes", "procs") else "scroll")]
     if focus == "events":
         found.append(("←→", "log"))
+    if focus == "procs" and actions:
+        found.append(("a", "actions"))
     found.append(FOOTER_HINTS[1])
     if pages:
         found.append((pages, "pages"))
     return [*found, *FOOTER_HINTS[2:]]
+
+
+def proc_actions(page: str, page_row: Optional[int], tools: Optional[dict[str, Any]]) -> Optional[bool]:
+    """Whether the selected PROCESSES row has actions: True/False on a selectable row, None elsewhere."""
+    if page != "processes" or page_row is None or not tools or "junkfather" not in tools:
+        return None
+    tool = tools["junkfather"]
+    if not tool.readable:
+        return None
+    rows = _junkfather.page_rows(tool.snapshot)
+    if not 0 <= page_row < len(rows) or rows[page_row]["kind"] == "separator":
+        return None
+    return bool(_actions.for_process(rows[page_row], tool.actions))
 
 
 def page_keys(tools: Optional[dict[str, Any]]) -> str:
@@ -58,17 +75,26 @@ WHATS_NEW = "what's new?"
 
 
 def draw_footer(canvas: Canvas, model: Optional[Model], error: Optional[str], message: Optional[str],
-                moment: Optional[datetime.datetime] = None, pages: str = "", message_style: str = "bad") -> None:
+                moment: Optional[datetime.datetime] = None, pages: str = "", message_style: str = "bad",
+                actions: Optional[bool] = None) -> None:
     """`Godfather what's new?` (fathers#102: the name in the title style; what's new? always muted like the key
     hints, unread or not, which only the overlay marks (owner, 2026-11-13); ↻ after it
     while a newer install waits for a restart; a click opens what's new), the hints, then the refresh failure or a
     notice (fathers#24: a notice never says the refresh failed, nor makes the status stale), then the last update and
     the status."""
     installed = _common.stale_install(model)
+    if message:
+        note: Part = (message, message_style)
+    elif error:
+        note = (f"refresh failed: {error}", "bad")
+    elif canvas.focus == "procs" and actions is False:
+        note = ("no actions", "dim")
+    else:
+        note = ("", "")
     Footer(canvas).draw([(_version.NAME, "title"), (" " + WHATS_NEW + (" ↻" if installed else ""), "dim")],
-                        footer_hints(canvas.focus, pages), ("● stale", "bad") if error else ("● live", "ok"),
-                        clock(model["updated"], moment) if model else "",
-                        (message, message_style) if message else (f"refresh failed: {error}", "bad") if error else ("", ""))
+                        footer_hints(canvas.focus, pages, bool(actions) and not message and not error),
+                        ("● stale", "bad") if error else ("● live", "ok"),
+                        clock(model["updated"], moment) if model else "", note)
 
 
 def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, overlay: Any = None,
@@ -90,7 +116,8 @@ def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, ov
     canvas.scroll = scroll if scroll is not None else {}
     if moment is None and model is not None:
         moment = cast(Optional[datetime.datetime], model.get("updated"))
-    draw_footer(canvas, model, error, message, moment, page_keys(tools), message_style)
+    draw_footer(canvas, model, error, message, moment, page_keys(tools), message_style,
+                proc_actions(page, page_row, tools))
     if notice:
         draw_notice(canvas, notice)
         model = None

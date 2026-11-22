@@ -45,8 +45,8 @@ leaves the last good snapshot on screen, dimmed, with `stale since` in the page'
 
 - An entry's state on the page: `orphan` when `owner_alive` is false, else `expired` when it has a TTL and
   `ttl_left` is not above 0, else `running`.
-- The procs summary: the entries, then orphan, expired, and unowned (processes and resources), each only when not
-  zero.
+- The procs summary: the entries, then orphan, expired, live unowned processes (`alive` not false), and unowned
+  resources, each only when not zero.
 - request ↔ entry: the entry's `pid` or `pgid` is the request's holder or in its process tree, or the entry belongs to
   the lane the request joins to.
 - lane ↔ entry: the entry's `lane` equals the lane's id and its `cwd` is inside the lane's worktree.

@@ -132,28 +132,53 @@ def entries(decoded: Decoded) -> list[Entry]:
     return cast(list[Entry], (decoded or {}).get("entries") or [])
 
 
+def unowned_processes(decoded: Decoded) -> list[Unowned]:
+    """The last sweep's unowned processes."""
+    return cast(list[Unowned], (decoded or {}).get("unowned") or [])
+
+
+def unowned_resources(decoded: Decoded) -> list[UnownedResource]:
+    """The last sweep's unowned non-process resources."""
+    return cast(list[UnownedResource], (decoded or {}).get("unowned_resources") or [])
+
+
 def unowned(decoded: Decoded) -> list[Union[Unowned, UnownedResource]]:
     """The last sweep's unowned processes, then its unowned resources."""
-    found = decoded or {}
-    return [*cast(list[Unowned], found.get("unowned") or []),
-            *cast(list[UnownedResource], found.get("unowned_resources") or [])]
+    return [*unowned_processes(decoded), *unowned_resources(decoded)]
 
 
 def summary(decoded: Decoded) -> dict[str, int]:
     """The procs summary in SLOTS' bottom border: owned entries running (processes and resources alike), then those
-    whose owner is gone, those past their TTL, and what the last sweep found unowned."""
+    whose owner is gone, those past their TTL, live unowned processes and unowned non-process resources from the last
+    sweep (dead sweep leftovers with `alive` false are excluded)."""
     owned = entries(decoded)
+    live = [item for item in unowned_processes(decoded) if item["alive"] is not False]
     return {"count": len(owned), "orphan": sum(1 for entry in owned if entry["state"] == "orphan"),
-            "expired": sum(1 for entry in owned if entry["state"] == "expired"), "unowned": len(unowned(decoded))}
+            "expired": sum(1 for entry in owned if entry["state"] == "expired"),
+            "unowned": len(live), "resources": len(unowned_resources(decoded))}
+
+
+def _section(label: str, count: int, note: str = "") -> Separator:
+    tail = f" · {note}" if note else ""
+    return {"kind": "separator", "label": f"{label} · {count}{tail}"}
 
 
 def page_rows(decoded: Decoded) -> list[ProcessTableRow]:
-    """PROCESSES' rows: owned entries (running, then orphan, then expired), then, after a separator, the unowned
-    processes and the unowned resources the last sweep reported."""
+    """PROCESSES' rows: owned entries (running, then orphan, then expired), then labelled sections for live unowned
+    processes, dead sweep leftovers (`gone since the sweep`), and unowned non-process resources."""
     owned = sorted(entries(decoded), key=lambda entry: ORDER.index(entry["state"]))
-    others = unowned(decoded)
-    separator: list[Separator] = [{"kind": "separator"}] if owned and others else []
-    return [*owned, *separator, *others]
+    procs = unowned_processes(decoded)
+    live = [item for item in procs if item["alive"] is not False]
+    gone = [item for item in procs if item["alive"] is False]
+    resources = unowned_resources(decoded)
+    rows: list[ProcessTableRow] = [*owned]
+    if live:
+        rows += [_section("unowned processes", len(live), "last sweep"), *live]
+    if gone:
+        rows += [_section("gone since the sweep", len(gone)), *gone]
+    if resources:
+        rows += [_section("unowned resources", len(resources), "last sweep"), *resources]
+    return rows
 
 
 def find(decoded: Decoded, key: Any) -> Optional[ProcessTableRow]:

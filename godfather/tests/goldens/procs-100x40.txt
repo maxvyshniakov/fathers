@@ -5,27 +5,27 @@
 ┃  ▶️  iPhone 17 Pro         j8d9e0f   claude 4bceaaaf…                     30m     1h23m          ┃
 ┃  👻  playwright server     j7a8b9c   claude 4bceaaaf…                   1h30m       50m   61200  ┃
 ┃  ⌛  pg-test               j2b3c4d   claude 4bceaaaf…                   2h05m   expired          ┃
-┃  unowned · the last sweep's                                                                      ┃
+┃  unowned processes · 1 · last sweep                                                              ┃
 ┃  ❔  node storybook dev …            orphan                             1h30m             88123  ┃
+┃  unowned resources · 2 · last sweep                                                              ┃
 ┃  📦  old-spike                       merged, idle 9d                       9d                    ┃
 ┃  📦  iPad Air                        booted, no owner                       —                    ┃
 ┃                                                                                                  ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 ╭─ PROCESS DETAILS ────────────────────────────────────────────────────────────────────────────────╮
 │                                                                                                  │
-│  label      storybook                                                                            │
-│  id         j5e6f7a                                                                              │
-│  state      running                                                                              │
-│  ttl left   1h46m                                                                                │
-│  command    bun run storybook                                                                    │
-│  directory  /fixture/straylight                                                                  │
-│  log        /fixture/junkfather/logs/j5e6f7a.log                                                 │
-│  owner      claude 4bceaaaf/a71c · lives                                                         │
-│  keep       owner                                                                                │
-│  mode       detached                                                                             │
-│  pid        55001 · 3 processes                                                                  │
+│  label      storybook                                                                           ┃│
+│  id         j5e6f7a                                                                             ┃│
+│  state      running                                                                             ┃│
+│  ttl left   1h46m                                                                               ┃│
+│  command    bun run storybook                                                                   ┃│
+│  directory  /fixture/straylight                                                                 ┃│
+│  log        /fixture/junkfather/logs/j5e6f7a.log                                                ┃│
+│  owner      claude 4bceaaaf/a71c · lives                                                        ┃│
+│  keep       owner                                                                               ┃│
+│  mode       detached                                                                            ┃│
+│  pid        55001 · 3 processes                                                                 ╹│
 │                                                                                                  │
-│  lease      lane-644-build-once                                                                  │
 │                                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ PROCS LOG ────── label ──────────────────────────────────────────────────────────────── detail ─╮

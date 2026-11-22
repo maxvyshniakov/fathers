@@ -95,6 +95,13 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Changed
 
+- The `3 procs` summary separates live unowned processes (`N unowned`) from unowned non-process resources
+  (`N resources`, dropped before `unowned` on a narrow border) and excludes processes already gone since the sweep.
+  On the `PROCESSES` page, live unowned processes, dead sweep leftovers (`gone since the sweep`, dimmed with `◌` and
+  `gone`), and unowned resources (`📦`) appear under distinct section headings; `PROCESS DETAILS` and the footer show
+  the selected row's available actions (`a actions`) or why none apply (`none · process gone`, `none · read-only
+  resource`). (fathers#204)
+
 - One column from 83 to 109 columns (fathers#169): EVENTS takes the full-width band under QUEUE and the bottom row
   holds MACHINE on the left and DETAILS on the right; Tab goes QUEUE, EVENTS, DETAILS. Heights come from floors and
   priorities: QUEUE up to 6 rows, EVENTS 3 rows and a bottom row that shows DETAILS' key fields (label to owner

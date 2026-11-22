@@ -8,7 +8,7 @@
 ▌│    tab         next panel, by columns                Slots budget scheduling, not CPU or memory.                    border)                            ││
 ┃│                (shift-tab: back)                     manual · auto  saved or computed capacity         ▶️ 🗓️ ✅ 💤  active planned landed parked       ││
 ┃│    click       a row, a panel, a footer hint (as     draining N     held above a lowered capacity      👻 ⌛        owner gone · past its TTL          ││
-┃│                its key)                                                                                ❔ 📦        unowned process · resource         ││
+┃│                its key)                                                                                ❔ ◌ 📦      unowned · gone · resource          ││
 ┃│    wheel       scroll the panel under the          QUEUE                                               Links in DETAILS open a page.                   ││
 ┃│                pointer                               slots  cells held or asked for                                                                    ││
 ┃│    ← → · f     events: next log (or its title)       cpu    cores used / cores its slots stand for   MACHINE                                           ││
