@@ -1,23 +1,7 @@
 {
   "version": 1,
   "rules": {
-    "fixed-sleep": {
-      "slotfather/tests/test_ask_yield.py": 1,
-      "slotfather/tests/test_classes.py": 3,
-      "slotfather/tests/test_events.py": 1,
-      "slotfather/tests/test_idle.py": 1,
-      "slotfather/tests/test_order.py": 1,
-      "slotfather/tests/test_session.py": 2,
-      "slotfather/tests/test_slotfather.py": 3,
-      "slotfather/tests/test_sweep.py": 6,
-      "slotfather/tests/test_usage.py": 2
-    },
-    "timing-assert": {
-      "godfather/tests/test_live_view.py": 2,
-      "godfather/tests/test_theme.py": 2,
-      "lanefather/tests/test_admission.py": 1,
-      "slotfather/tests/test_process_table.py": 1,
-      "slotfather/tests/test_usage.py": 1
-    }
+    "fixed-sleep": {},
+    "timing-assert": {}
   }
 }
