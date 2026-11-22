@@ -277,12 +277,33 @@ def noted_error(store: Store, entry_id: str, error: Dict[str, Any], now: Optiona
 
 # Reaping
 
+Clock = Union[float, Callable[[], float], None]
 Guard = Callable[[Entry], Union[bool, Optional[str]]]
 
 
-def require_due(now: Optional[float] = None) -> Guard:
-    """A `begin_reap` guard requiring `entry` to be past its finite TTL (at `now`, else when checked)."""
-    return lambda e: None if due(e, now) else "not expired"
+def require_due(now: Clock = None) -> Guard:
+    """A `begin_reap` guard requiring `entry` to be past its finite TTL (at `now`, a clock callable, or now)."""
+    def check(entry: Entry) -> Optional[str]:
+        at = now() if callable(now) else now
+        return None if due(entry, at) else "not expired"
+    return check
+
+
+def all_of(*guards: Optional[Guard]) -> Optional[Guard]:
+    """Compose non-None guards left-to-right; the first refusal wins."""
+    active = tuple(g for g in guards if g is not None)
+    if not active:
+        return None
+    if len(active) == 1:
+        return active[0]
+
+    def check(entry: Entry) -> bool | str | None:
+        for guard in active:
+            verdict = guard(entry)
+            if verdict is not None and verdict is not True:
+                return verdict
+        return None
+    return check
 
 
 def guard_why(guard: Optional[Guard], entry: Entry, reason: str = "") -> Optional[str]:

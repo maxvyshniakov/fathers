@@ -177,16 +177,8 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
                 _entry.gone(store, entry["id"], now)
             report["gone"].append({"id": entry["id"], "how": how})
             continue
-        reason = None
-        guard: Optional[_entry.Guard] = None
-        if _entry.due(entry, now):
-            reason = "ttl expired"
-            guard = _entry.require_due(now)
-        elif _owner.alive(entry.get("owner") or {}, table, sessions) is False:
-            reason = f"owner gone ({_owner.describe(entry.get('owner') or {})})"
-        if reason:
-            result = _reap.reap(store, entry["id"], reason, grace=grace, dry_run=dry_run,
-                                table=table if dry_run else None, actor=_events.tool("sweep"), allowed=guard)
+        result = reap_due_or_orphaned(store, entry, now, table, sessions, grace, dry_run)
+        if result is not None:
             report["reaped"].append(result)
             if result["result"] in _reap.STOPPED:
                 continue
@@ -307,6 +299,24 @@ def cpu_report(table: _procs.Table, cwds: Dict[int, str],
     return _cpu.report(table, rules, cwds, notes), lease_rule
 
 
+def reap_due_or_orphaned(store: Store, entry: Entry, now: float, table: Optional[_procs.Table],
+                         sessions: Optional[List[Dict[str, Any]]], grace: float, dry_run: bool
+                         ) -> Optional[Dict[str, Any]]:
+    """Reap `entry` if its TTL passed or its owner is gone; returns the reap result row, or None."""
+    reason: Optional[str] = None
+    guard: Optional[_entry.Guard] = None
+    if _entry.due(entry, now):
+        reason = "ttl expired"
+        guard = _entry.require_due(now)
+    elif _owner.alive(entry.get("owner") or {}, table, sessions) is False:
+        reason = f"owner gone ({_owner.describe(entry.get('owner') or {})})"
+    if not reason:
+        return None
+    use_table = table if (dry_run or entry.get("mode") == "resource") else None
+    return _reap.reap(store, entry["id"], reason, grace=grace, dry_run=dry_run,
+                      table=use_table, actor=_events.tool("sweep"), allowed=guard)
+
+
 def sweep_resource(store: Store, entry: Entry, snapshot: "_resources.Snapshot", report: Dict[str, Any],
                    now: float, sessions: Optional[List[Dict[str, Any]]], grace: float, dry_run: bool) -> None:
     """A resource entry: gone when its kind says so, reaped past its TTL or when its owner is gone, left alone while
@@ -322,16 +332,8 @@ def sweep_resource(store: Store, entry: Entry, snapshot: "_resources.Snapshot", 
         report["running"] += 1
         report["notes"].append(f"{entry['id']}: whether {_resources.describe(resource)} runs cannot be told")
         return
-    reason = None
-    guard: Optional[_entry.Guard] = None
-    if _entry.due(entry, now):
-        reason = "ttl expired"
-        guard = _entry.require_due(now)
-    elif _owner.alive(entry.get("owner") or {}, snapshot.table, sessions) is False:
-        reason = f"owner gone ({_owner.describe(entry.get('owner') or {})})"
-    if reason:
-        result = _reap.reap(store, entry["id"], reason, grace=grace, dry_run=dry_run, actor=_events.tool("sweep"),
-                            allowed=guard)
+    result = reap_due_or_orphaned(store, entry, now, snapshot.table, sessions, grace, dry_run)
+    if result is not None:
         report["reaped"].append(result)
         snapshot.listed.pop(str(resource.get("kind")), None)  # the report lists that kind again, after the stop
         if result["result"] in _reap.STOPPED:

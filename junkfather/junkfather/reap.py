@@ -28,7 +28,7 @@ from enum import Enum
 import os
 import signal
 import time
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 
 from . import browser as _browser
 from . import entry as _entry
@@ -245,6 +245,123 @@ def stop(targets: List[_procs.Proc], grace: float,
 Stopper = Callable[[List[_procs.Proc], float], Dict[str, Any]]  # stop(), or a test's stand-in
 
 
+class ReapOutcome(NamedTuple):
+    """What one target's teardown produced, for `_claim_and_finish` to record and emit."""
+    result: str
+    how: str
+    pids: List[int]
+    end: Dict[str, Any]
+    error: Dict[str, Any]
+    reason: str
+    emit: Callable[[bool], None]
+
+
+class Target(NamedTuple):
+    """Uniform adapter for a process or resource entry inside `reap`."""
+    how: str
+    dry_run: Callable[[], Dict[str, Any]]
+    teardown: Callable[[Entry], ReapOutcome]
+
+
+def require_owner(owner: str, agent: Optional[str] = None, *, lifecycle: Optional[Lifecycle] = None) -> _entry.Guard:
+    """A `begin_reap` guard requiring `entry` to still match this owner selector."""
+    return lambda e: None if matches_owner(e, owner, agent, lifecycle=lifecycle) else "owner changed"
+
+
+def require_lane(lane: str) -> _entry.Guard:
+    """A `begin_reap` guard requiring `entry` to still belong to `lane`."""
+    return lambda e: None if (e.get("owner") or {}).get("lane") == lane else "owner changed"
+
+
+def selector_guard(*, owner: Optional[str] = None, agent: Optional[str] = None, lane: Optional[str] = None,
+                   lifecycle: Optional[Lifecycle] = None, expired: bool = False, now: _entry.Clock = None,
+                   allowed: Optional[_entry.Guard] = None) -> Optional[_entry.Guard]:
+    """The lock-time guard for a reap selector: owner, lane, expiry, and any extra `allowed` guard."""
+    return _entry.all_of(
+        require_owner(owner, agent, lifecycle=lifecycle) if owner else None,
+        require_lane(lane) if lane else None,
+        _entry.require_due(now) if expired else None,
+        allowed,
+    )
+
+
+def _process_target(store: Store, entry: Entry, reason: str, grace: float, force: bool, table: _procs.Table,
+                    stopper: Stopper, actor: Optional[Dict[str, Any]], reader: Callable[[], _procs.Table],
+                    lifecycle: Optional[Lifecycle], dry_run: bool) -> Target:
+    entry_id = str(entry["id"])
+    if not dry_run:
+        entry = join_daemons(store, entry, table)
+    protect_background = lifecycle == Lifecycle.SUBAGENT_STOP
+    initial_targets, initial_how = targets_of(store, entry, table, force=force, protect_background=protect_background)
+
+    def preview() -> Dict[str, Any]:
+        return {"id": entry_id, "result": "would-stop" if initial_targets else "gone", "reason": reason,
+                "pids": [p.pid for p in initial_targets], "how": initial_how}
+
+    def teardown(current: Entry) -> ReapOutcome:
+        pids: List[int] = []
+        outcome: Dict[str, Any] = {"result": "gone", "signalled": [], "left": []}
+        results: List[str] = []
+        cur_table = table
+        targets, how = targets_of(store, current, cur_table, force=force, protect_background=protect_background)
+        for round_ in range(ROUNDS):
+            if round_:
+                try:
+                    cur_table = reader()
+                except _procs.ProcError as error:
+                    outcome = {"result": "failed", "signalled": [], "left": pids, "error": str(error)}
+                    results.append("failed")
+                    break
+                targets, _ = targets_of(store, current, cur_table, force=force, protect_background=protect_background)
+            if not targets:
+                break
+            pids += [p.pid for p in targets if p.pid not in pids]
+            outcome = stopper(targets, grace if round_ == 0 else min(grace, 3.0))
+            results.append(outcome["result"])
+            if outcome["result"] == "failed":
+                break
+        result = "failed" if "failed" in results else "killed" if "killed" in results else \
+            "stopped" if "stopped" in results else "gone"
+        outcome["result"] = result
+        signals = {"stopped": ["TERM"], "killed": ["TERM", "KILL"], "failed": ["TERM", "KILL"]}.get(result, [])
+
+        def emit(done: bool) -> None:
+            _events.write(store.root, "entry.reaped" if done else "entry.reap_failed", _events.subject(current),
+                          actor or _events.caller(),
+                          {"reason": reason, "result": result, "how": how, "signals": signals,
+                           "pids": pids, "left": outcome.get("left") or [],
+                           **({"error": outcome["error"]} if outcome.get("error") else {})},
+                          None if done else "error")
+
+        return ReapOutcome(
+            result=result, how=how, pids=pids,
+            end={"reason": reason, "result": result, "how": how, "pids": pids},
+            error={"reason": reason, "left": outcome.get("left"), "error": outcome.get("error")},
+            reason=reason, emit=emit,
+        )
+
+    return Target(how=initial_how, dry_run=preview, teardown=teardown)
+
+
+def _claim_and_finish(store: Store, entry: Entry, reason: str, table: Optional[_procs.Table],
+                      guard: Optional[_entry.Guard], target: Target, report_failure: bool) -> Dict[str, Any]:
+    """Claim `entry` under the store lock, run `target.teardown`, record `end_reap`, and emit its event."""
+    entry_id = str(entry["id"])
+    me, why = _entry.begin_reap(store, entry_id, reason, table, allowed=guard)
+    if me is None:
+        return {"id": entry_id, "result": "skipped", "reason": why, "pids": [], "how": target.how}
+    # The entry as it was marked: its members can have changed since it was read (a background shell's watcher
+    # records an exec'd leader's new command), and no one changes them while it is reaping.
+    current = store.load(entry_id) or entry
+    outcome = target.teardown(current)
+    done = outcome.result in STOPPED
+    _entry.end_reap(store, entry_id, me, done, outcome.end, outcome.error)
+    if done or report_failure:
+        outcome.emit(done)
+    return {"id": entry_id, "result": outcome.result, "reason": outcome.reason,
+            "pids": outcome.pids, "how": outcome.how}
+
+
 def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None, dry_run: bool = False,
          force: bool = False, table: Optional[_procs.Table] = None, stopper: Optional[Stopper] = None,
          actor: Optional[Dict[str, Any]] = None, reader: Optional[Callable[[], _procs.Table]] = None,
@@ -255,96 +372,45 @@ def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None
     is not running (someone else reaped it, it exited, it is still starting) or the guard no longer holds,
     "would-stop" in a dry run. `table` serves the first read only; every later round reads the machine again
     (`reader`). `report_failure` False: a failure is recorded on the entry (`last_error`) but writes no
-    `entry.reap_failed` event (a retry in a streak). A lifecycle reap (`lifecycle` with `owner`, and `agent` for a
-    SubagentStop) rechecks that selector under the store lock as it marks the entry, together with `allowed` when
-    both are given, so an entry handed to another owner after selection is skipped (fathers#189)."""
+    `entry.reap_failed` / `resource.stop_failed` event (a retry in a streak). When `owner` (with optional `agent`
+    and `lifecycle`) is given, `selector_guard` composes it with `allowed` under the store lock so a concurrent
+    handoff skips the reap (fathers#189, fathers#217)."""
     reader = reader or _procs.Table.read
     grace = _settings.value("reap.grace", store.root) if grace is None else grace
     stopper = stopper or stop
-    guard = allowed
-    if lifecycle is not None and owner is not None:
-        owner_id = owner
-        extra = allowed
-
-        def matching(e: Entry) -> Optional[str]:
-            if not matches_owner(e, owner_id, agent, lifecycle=lifecycle):
-                return "owner changed"
-            return _entry.guard_why(extra, e, reason)
-        guard = matching
-        guard = matching
+    guard = selector_guard(owner=owner, agent=agent, lifecycle=lifecycle, allowed=allowed)
     entry = store.load(entry_id)
     if entry is None:
         return {"id": entry_id, "result": "unknown", "reason": reason, "pids": [], "how": ""}
-    if entry.get("mode") == "resource":
-        if entry.get("state") != _entry.RUNNING:
-            return {"id": entry_id, "result": "skipped", "reason": f"already {entry.get('state')}", "pids": [],
-                    "how": ""}
-        from . import resources
-        return resources.reap(store, entry, reason, grace, dry_run, actor, lifecycle=lifecycle, allowed=guard)
-    if entry.get("state") == _entry.STARTING or (entry.get("state") == _entry.RUNNING and not entry.get("pid")):
+    is_resource = entry.get("mode") == "resource"
+    if entry.get("state") == _entry.STARTING or (
+            not is_resource and entry.get("state") == _entry.RUNNING and not entry.get("pid")):
         return {"id": entry_id, "result": "skipped", "reason": "still starting", "pids": [], "how": ""}
     if entry.get("state") != _entry.RUNNING:
         return {"id": entry_id, "result": "skipped", "reason": f"already {entry.get('state')}", "pids": [], "how": ""}
-    try:
-        table = table or reader()
-    except _procs.ProcError as error:
-        unread: Dict[str, Any] = {"reason": reason, "left": [], "error": str(error)}
-        if not dry_run:  # like any failed reap: last_error on the entry, and the event that opens a streak
-            _entry.noted_error(store, entry_id, unread)
-            if report_failure:
-                _events.write(store.root, "entry.reap_failed", _events.subject(entry), actor or _events.caller(),
-                              {**unread, "result": "failed", "how": "", "signals": [], "pids": []}, "error")
-        return {"id": entry_id, "result": "failed", "reason": f"{reason}; {error}", "pids": [], "how": ""}
-    if not dry_run:
-        entry = join_daemons(store, entry, table)
-    protect_background = lifecycle == Lifecycle.SUBAGENT_STOP
-    targets, how = targets_of(store, entry, table, force=force, protect_background=protect_background)
-    if dry_run:
-        return {"id": entry_id, "result": "would-stop" if targets else "gone", "reason": reason,
-                "pids": [p.pid for p in targets], "how": how}
-    me, why = _entry.begin_reap(store, entry_id, reason, table, allowed=guard)
-    if me is None:
-        return {"id": entry_id, "result": "skipped", "reason": why, "pids": [], "how": how}
-    # The entry as it was marked: its members can have changed since it was read (a background shell's watcher
-    # records an exec'd leader's new command), and no one changes them while it is reaping.
-    entry = store.load(entry_id) or entry
-    pids: List[int] = []
-    outcome: Dict[str, Any] = {"result": "gone", "signalled": [], "left": []}
-    results: List[str] = []
-    targets, how = targets_of(store, entry, table, force=force, protect_background=protect_background)
-    for round_ in range(ROUNDS):
-        if round_:
+    if is_resource:
+        if table is None and (not dry_run or lifecycle is not None):
             try:
                 table = reader()
-            except _procs.ProcError as error:
-                outcome = {"result": "failed", "signalled": [], "left": pids, "error": str(error)}
-                results.append("failed")
-                break
-            targets, _ = targets_of(store, entry, table, force=force, protect_background=protect_background)
-        if not targets:
-            break
-        pids += [p.pid for p in targets if p.pid not in pids]
-        outcome = stopper(targets, grace if round_ == 0 else min(grace, 3.0))
-        results.append(outcome["result"])
-        if outcome["result"] == "failed":
-            break
-    result = "failed" if "failed" in results else "killed" if "killed" in results else \
-        "stopped" if "stopped" in results else "gone"
-    outcome["result"] = result
-
-    _entry.end_reap(store, entry_id, me, result in STOPPED,
-                    {"reason": reason, "result": result, "how": how, "pids": pids},
-                    {"reason": reason, "left": outcome.get("left"), "error": outcome.get("error")})
-    signals = {"stopped": ["TERM"], "killed": ["TERM", "KILL"], "failed": ["TERM", "KILL"]}.get(result, [])
-    done = result in STOPPED
-    if not done and not report_failure:
-        return {"id": entry_id, "result": result, "reason": reason, "pids": pids, "how": how}
-    _events.write(store.root, "entry.reaped" if done else "entry.reap_failed", _events.subject(entry),
-                  actor or _events.caller(), {"reason": reason, "result": result, "how": how, "signals": signals,
-                                              "pids": pids, "left": outcome.get("left") or [],
-                                              **({"error": outcome["error"]} if outcome.get("error") else {})},
-                  None if done else "error")
-    return {"id": entry_id, "result": result, "reason": reason, "pids": pids, "how": how}
+            except _procs.ProcError:
+                table = _procs.Table({})
+        from . import resources
+        target = resources.reap_target(store, entry, reason, grace, actor, table, lifecycle=lifecycle)
+    else:
+        try:
+            table = table or reader()
+        except _procs.ProcError as error:
+            unread: Dict[str, Any] = {"reason": reason, "left": [], "error": str(error)}
+            if not dry_run:  # like any failed reap: last_error on the entry, and the event that opens a streak
+                _entry.noted_error(store, entry_id, unread)
+                if report_failure:
+                    _events.write(store.root, "entry.reap_failed", _events.subject(entry), actor or _events.caller(),
+                                  {**unread, "result": "failed", "how": "", "signals": [], "pids": []}, "error")
+            return {"id": entry_id, "result": "failed", "reason": f"{reason}; {error}", "pids": [], "how": ""}
+        target = _process_target(store, entry, reason, grace, force, table, stopper, actor, reader, lifecycle, dry_run)
+    if dry_run:
+        return target.dry_run()
+    return _claim_and_finish(store, entry, reason, table, guard, target, report_failure)
 
 
 def reap_unowned(store: Store, pid: int, table: _procs.Table, force: bool, reason: str,

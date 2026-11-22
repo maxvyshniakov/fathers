@@ -197,6 +197,61 @@ class ReapTransitionTests(Case):
         self.assertEqual(entry.GONE, self.state_of(ident))
 
 
+class GuardAlgebraTests(unittest.TestCase):
+    def make(self, expires: float = 100.0, **extra: Any) -> entry.Entry:
+        return as_entry({"id": "jguard", "state": entry.RUNNING, "expires": expires, "owner": {}, **extra})
+
+    def test_require_due_accepts_float_callable_and_none(self):
+        record = self.make(expires=100.0)
+        self.assertEqual("not expired", entry.require_due(99.0)(record))
+        self.assertIsNone(entry.require_due(100.0)(record))
+        self.assertEqual("not expired", entry.require_due(200.0)(self.make(expires=100.0, no_ttl=True)))
+
+        clock = [90.0]
+        guard = entry.require_due(lambda: clock[0])
+        self.assertEqual("not expired", guard(record))
+        clock[0] = 100.0
+        self.assertIsNone(guard(record))
+
+        self.assertIsNone(entry.require_due()(self.make(expires=0.0)))
+        self.assertEqual("not expired", entry.require_due()(self.make(expires=1e18)))
+
+    def test_all_of_composes_left_to_right_and_handles_boolean_guards(self):
+        record = self.make()
+        self.assertIsNone(entry.all_of())
+        self.assertIsNone(entry.all_of(None, None))
+        single = entry.require_due(50.0)
+        self.assertIs(single, entry.all_of(None, single, None))
+
+        seen: List[str] = []
+
+        def first(_e: entry.Entry) -> Optional[str]:
+            seen.append("first")
+            return "first failed"
+
+        def second(_e: entry.Entry) -> Optional[str]:
+            seen.append("second")
+            return "second failed"
+
+        composed = entry.all_of(None, lambda _e: None, first, second)
+        assert composed is not None
+        self.assertEqual("first failed", composed(record))
+        self.assertEqual(["first"], seen, "short-circuits on the first refusal")
+
+        bool_refused = entry.all_of(lambda _e: True, lambda _e: False, second)
+        assert bool_refused is not None
+        self.assertIs(False, bool_refused(record))
+        self.assertEqual("guard refused", entry.guard_why(bool_refused, record))
+        self.assertEqual(["first"], seen)
+
+        due_composed = entry.all_of(lambda _e: True, entry.due)
+        self.assertEqual("not expired", entry.guard_why(due_composed, self.make(expires=1e18), "ttl expired"))
+
+        passing = entry.all_of(lambda _e: True, lambda _e: None, entry.require_due(100.0))
+        assert passing is not None
+        self.assertIsNone(passing(record))
+
+
 class NoStateLiteralTests(unittest.TestCase):
     """States are written and compared through entry.py's names only. A word that is also a reap result ("gone",
     "failed") counts only next to `state`; a report's key or an entry field of the same name is not a state, and a

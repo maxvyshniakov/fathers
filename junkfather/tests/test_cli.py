@@ -195,6 +195,44 @@ class ConventionTests(Case):
         self.assertEqual("running", self.state_of(owned["id"]))
         self.assertTrue(self.runs(child.pid))
 
+    def test_reap_owner_and_lane_recheck_under_lock_without_expired(self):
+        from junkfather import entry as entry_module
+        child = self.spawn("sleep", "600", start_new_session=True)
+        self.runs_600(child)
+        self.assertEqual(0, self.cli("adopt", str(child.pid), "--ttl", "1h", "--lane", "lane-a").returncode)
+        (owned,) = self.store.entries()
+        self.store.update(owned["id"], lambda e: e.update(owner={"kind": "claude", "session": "s1", "lane": "lane-a"}))
+        real_begin = entry_module.begin_reap
+
+        def hand_then_begin(store: Store, entry_id: str, reason: str, *args: Any, **kwargs: Any) -> Any:
+            entry_module.handed(store, entry_id, {"kind": "claude", "session": "s2", "lane": "lane-b"})
+            return real_begin(store, entry_id, reason, *args, **kwargs)
+
+        for argv in (["reap", "--owner", "s1", "--json"], ["reap", "--lane", "lane-a", "--json"]):
+            with self.subTest(argv=argv):
+                self.store.update(owned["id"], lambda e: e.update(
+                    owner={"kind": "claude", "session": "s1", "lane": "lane-a"}))
+                out = io.StringIO()
+                with unittest.mock.patch.object(entry_module, "begin_reap", side_effect=hand_then_begin), \
+                        contextlib.redirect_stdout(out):
+                    code = cli.main(argv)
+                self.assertEqual(0, code)
+                self.assertEqual([{"how": "leader", "id": owned["id"], "pids": [], "reason": "owner changed",
+                                   "result": "skipped"}], json.loads(out.getvalue())["results"])
+                self.assertEqual("running", self.state_of(owned["id"]))
+                self.assertTrue(self.runs(child.pid))
+
+    def test_reap_pid_expired_on_unexpired_owned_entry_does_not_fall_through_to_unowned(self):
+        child = self.spawn("sleep", "600", start_new_session=True)
+        self.runs_600(child)
+        self.assertEqual(0, self.cli("adopt", str(child.pid), "--ttl", "1h").returncode)
+        (owned,) = self.store.entries()
+        result = self.cli("reap", "--pid", str(child.pid), "--expired", "--json")
+        self.assertEqual((0, ""), (result.returncode, result.stderr))
+        self.assertEqual([], json.loads(result.stdout)["results"])
+        self.assertEqual("running", self.state_of(owned["id"]))
+        self.assertTrue(self.runs(child.pid))
+
 
 class DefaultsTests(unittest.TestCase):
     def test_each_tunable_is_defined_in_defaults_only(self):

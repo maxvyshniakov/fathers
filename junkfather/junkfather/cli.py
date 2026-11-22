@@ -352,32 +352,13 @@ def reap_command(store: Store, args: argparse.Namespace) -> int:
                                          args.via), args)
     if args.expired:
         selected = [e for e in selected if _entry.due(e, now)]
-        if args.owner:
-            owner_id, agent_id = str(args.owner), args.agent
-
-            def owner_and_due(e: _entry.Entry) -> Optional[str]:
-                if not _reap.matches_owner(e, owner_id, agent_id, lifecycle=lifecycle):
-                    return "owner changed"
-                return None if _entry.due(e) else "not expired"
-            allowed: Optional[_entry.Guard] = owner_and_due
-        elif args.lane:
-            lane_id = str(args.lane)
-
-            def lane_and_due(e: _entry.Entry) -> Optional[str]:
-                if (e.get("owner") or {}).get("lane") != lane_id:
-                    return "owner changed"
-                return None if _entry.due(e) else "not expired"
-            allowed = lane_and_due
-        else:
-            allowed = _entry.require_due()
-    else:
-        allowed = None
+    allowed = _reap.selector_guard(owner=args.owner, agent=args.agent, lane=args.lane,
+                                   lifecycle=lifecycle, expired=args.expired)
     for entry in selected:
         results.append(_reap.reap(store, entry["id"], args.reason, grace=args.grace, dry_run=args.dry_run,
                                   force=bool(args.id) and args.force,
                                   actor=_events.tool(args.via) if args.via else None,
-                                  lifecycle=lifecycle, owner=args.owner, agent=args.agent,
-                                  allowed=allowed))
+                                  lifecycle=lifecycle, allowed=allowed))
     return report(results, args)
 
 

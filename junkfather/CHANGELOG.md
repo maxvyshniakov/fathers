@@ -86,6 +86,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- `junkfather reap --owner` and `junkfather reap --lane` now recheck ownership and lane under the store lock even
+  without `--expired` or `--lifecycle`, and resource TTL retry streaks record `last_error` without repeating
+  `resource.stop_failed` events while avoiding redundant process-table reads (fathers#217).
 - `junkfather reap --pid PID --force` now goes straight to the unowned-process guard instead of matching live
   entries first, so a PID adopted or running under an active entry is refused rather than reaping that entry;
   `reap` records the exact lock-time skip reason (`owner changed`, `not expired`, `already exited`, `another reaper

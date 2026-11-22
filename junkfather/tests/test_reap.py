@@ -471,6 +471,56 @@ class LifecycleHandoffRaceTests(Case):
                           self.loaded("jtest")["owner"]["pid"]))
 
 
+class SelectorGuardTests(unittest.TestCase):
+    def make(self, *, session: str = "s1", agent: Optional[str] = None, lane: Optional[str] = None,
+             keep: str = "owner", expires: float = 100.0, auto: Optional[str] = None) -> Entry:
+        owner: Dict[str, Any] = {"kind": "claude", "session": session}
+        if agent is not None:
+            owner["agent"] = agent
+        if lane is not None:
+            owner["lane"] = lane
+        record: Dict[str, Any] = {"id": "jguard", "state": "running", "owner": owner, "keep": keep,
+                                  "expires": expires}
+        if auto is not None:
+            record["auto"] = auto
+        return as_entry(record)
+
+    def test_selector_guard_checks_owner_lane_expiry_and_extra_left_to_right(self):
+        self.assertIsNone(reap.selector_guard())
+
+        owner_only = reap.selector_guard(owner="s1")
+        assert owner_only is not None
+        self.assertIsNone(owner_only(self.make(session="s1")))
+        self.assertEqual("owner changed", owner_only(self.make(session="s2")))
+
+        subagent = reap.selector_guard(owner="s1", agent="a1", lifecycle=reap.Lifecycle.SUBAGENT_STOP)
+        assert subagent is not None
+        self.assertIsNone(subagent(self.make(session="s1", agent="a1")))
+        self.assertEqual("owner changed", subagent(self.make(session="s1", agent="a1", keep="session")))
+        self.assertEqual("owner changed", subagent(self.make(session="s1", agent="a1", auto="background")))
+
+        lane_only = reap.selector_guard(lane="lane-a")
+        assert lane_only is not None
+        self.assertIsNone(lane_only(self.make(lane="lane-a")))
+        self.assertEqual("owner changed", lane_only(self.make(lane="lane-b")))
+        self.assertEqual("owner changed", lane_only(self.make(lane=None)))
+
+        clock = [50.0]
+        owner_and_due = reap.selector_guard(owner="s1", expired=True, now=lambda: clock[0],
+                                            allowed=lambda _e: "custom refusal")
+        assert owner_and_due is not None
+        self.assertEqual("owner changed", owner_and_due(self.make(session="s2", expires=100.0)))
+        self.assertEqual("not expired", owner_and_due(self.make(session="s1", expires=100.0)))
+        clock[0] = 100.0
+        self.assertEqual("custom refusal", owner_and_due(self.make(session="s1", expires=100.0)))
+
+        lane_and_due = reap.selector_guard(lane="lane-a", expired=True, now=50.0)
+        assert lane_and_due is not None
+        self.assertEqual("owner changed", lane_and_due(self.make(lane="lane-b", expires=100.0)))
+        self.assertEqual("not expired", lane_and_due(self.make(lane="lane-a", expires=100.0)))
+        self.assertIsNone(lane_and_due(self.make(lane="lane-a", expires=50.0)))
+
+
 class FailureStreakTests(Case):
     def test_a_retry_in_a_failure_streak_records_last_error_but_writes_no_event(self):
         child = self.spawn("sleep", "600", start_new_session=True)
@@ -487,6 +537,27 @@ class FailureStreakTests(Case):
         self.assertEqual(1, len(lines), "only the first failure of the streak is an event")
         self.assertEqual("running", self.state_of("jtest"))
         self.assertIn("left", self.loaded("jtest")["last_error"])
+
+    def test_resource_reap_honors_report_failure_parity(self):
+        from unittest import mock
+        from junkfather import resources
+        self.store.save(as_entry({
+            "v": 1, "id": "jres", "state": "running", "mode": "resource", "group": False,
+            "keep": "owner", "owner": {"kind": "claude", "session": "s1"},
+            "resource": {"kind": "command", "id": "x", "alive": ["true"], "stop": ["false"]},
+            "argv": [], "cwd": "/", "created": 1.0, "ttl": 60.0, "expires": 50.0,
+            "pid": None, "pgid": None, "start": None, "seen": None, "known": [], "handed": []}))
+        failing: Dict[str, Any] = {"result": "failed", "steps": [], "error": "stop refused"}
+        with mock.patch.object(resources, "stop", return_value=failing):
+            first = reap.reap(self.store, "jres", "ttl expired", table=table(proc(os.getpid())))
+            again = reap.reap(self.store, "jres", "ttl expired", table=table(proc(os.getpid())),
+                              report_failure=False)
+        self.assertEqual(("failed", "failed"), (first["result"], again["result"]))
+        events = [json.loads(line) for line in (self.state / "events.jsonl").read_text().splitlines()]
+        self.assertEqual(["resource.stop_failed"], [e["kind"] for e in events],
+                         "report_failure=False suppresses resource.stop_failed just like entry.reap_failed")
+        recorded = self.loaded("jres")
+        self.assertEqual(("running", "stop refused"), (recorded["state"], recorded["last_error"]["error"]))
 
     def test_an_unreadable_first_table_records_last_error_and_starts_the_streak_with_an_event(self):
         self.store.save(entry(pid=4242, known=[[4242, A]]))
@@ -545,63 +616,84 @@ class ForcedUnownedBypassTests(Case):
 
 
 class BeginReapSkipReasonTests(Case):
-    """fathers#210: `reap.reap` reports the exact lock-time reason from `begin_reap` without a TOCTOU reload."""
+    """fathers#210, fathers#217: `reap.reap` reports the exact lock-time reason from `begin_reap` without a TOCTOU
+    reload, uniformly for process and resource entries, and passes the already-read table into `begin_reap`."""
 
     def test_lock_time_skip_reasons_distinguish_exit_reaper_expiry_owner_and_guard_without_reload(self):
         from typing import Callable
         from unittest import mock
-        from junkfather import entry as entry_module
+        from junkfather import entry as entry_module, resources
         from junkfather.state import Store
 
-        cases: List[Tuple[str, Callable[[Store], Any], Optional[entry_module.Guard], Optional[reap.Lifecycle],
+        cases: List[Tuple[str, Callable[[Store, str], Any], Optional[entry_module.Guard], Optional[reap.Lifecycle],
                           Optional[str], str]] = [
-            ("already exited", lambda s: s.update("jtest", lambda e: e.update(state="exited", exit=0)),
+            ("already exited", lambda s, i: s.update(i, lambda e: e.update(state="exited", exit=0)),
              None, None, None, "reap"),
-            ("already gone", lambda s: entry_module.gone(s, "jtest"),
+            ("already gone", lambda s, i: entry_module.gone(s, i),
              None, None, None, "reap"),
-            ("another reaper has it", lambda s: s.update("jtest", lambda e: e.update(
+            ("another reaper has it", lambda s, i: s.update(i, lambda e: e.update(
                 state="reaping", reaping={"reason": "other", "at": 1.0, "by": 4242, "by_start": A})),
              None, None, None, "reap"),
-            ("not expired", lambda s: entry_module.extended(s, "jtest", 3600.0, now=100.0),
+            ("not expired", lambda s, i: entry_module.extended(s, i, 3600.0, now=100.0),
              entry_module.require_due(100.0), None, None, "reap"),
-            ("owner changed", lambda s: entry_module.handed(s, "jtest", {"kind": "claude", "session": "s2"}),
+            ("owner changed", lambda s, i: entry_module.handed(s, i, {"kind": "claude", "session": "s2"}),
              None, reap.Lifecycle.SESSION_END, "s1", "session-end"),
-            ("lane moved", lambda _s: None, lambda _e: "lane moved", None, None, "reap"),
-            ("guard refused", lambda _s: None, lambda _e: False, None, None, "reap"),
+            ("owner changed", lambda s, i: entry_module.handed(s, i, {"kind": "claude", "session": "s2"}),
+             None, None, "s1", "reap"),
+            ("lane moved", lambda _s, _i: None, lambda _e: "lane moved", None, None, "reap"),
+            ("guard refused", lambda _s, _i: None, lambda _e: False, None, None, "reap"),
         ]
         real_begin = entry_module.begin_reap
         real_load = self.store.load
 
-        for expected, change, guard, lifecycle, owner_id, reason in cases:
-            with self.subTest(expected=expected):
-                record = entry(pid=100, known=[[100, A]])
-                record["owner"] = {"kind": "claude", "session": "s1"}
-                self.store.save(record)
-                after_begin = [False]
-                post_loads: List[str] = []
+        for mode in ("process", "resource"):
+            for expected, change, guard, lifecycle, owner_id, reason in cases:
+                with self.subTest(mode=mode, expected=expected, lifecycle=lifecycle, owner=owner_id):
+                    entry_id = "jtest" if mode == "process" else "jres"
+                    if mode == "process":
+                        record = entry(pid=100, known=[[100, A]])
+                        record["owner"] = {"kind": "claude", "session": "s1"}
+                    else:
+                        record = as_entry({
+                            "v": 1, "id": entry_id, "state": "running", "mode": "resource", "group": False,
+                            "keep": "owner", "owner": {"kind": "claude", "session": "s1"},
+                            "resource": {"kind": "command", "id": "x", "alive": ["true"], "stop": ["false"]},
+                            "argv": [], "cwd": "/", "created": 1.0, "ttl": 60.0, "expires": 50.0,
+                            "pid": None, "pgid": None, "start": None, "seen": None, "known": [], "handed": []})
+                    self.store.save(record)
+                    here = table(proc(100, cmd="node server.js"), proc(os.getpid(), cmd="python3"))
+                    after_begin = [False]
+                    post_loads: List[str] = []
+                    seen_tables: List[Optional[procs.Table]] = []
 
-                def load_spy(entry_id: str, flag: List[bool] = after_begin,
-                             seen: List[str] = post_loads) -> Optional[Entry]:
-                    if flag[0]:
-                        seen.append(entry_id)
-                    return real_load(entry_id)
+                    def load_spy(ident: str, flag: List[bool] = after_begin,
+                                 seen: List[str] = post_loads) -> Optional[Entry]:
+                        if flag[0]:
+                            seen.append(ident)
+                        return real_load(ident)
 
-                def mutate_then_begin(store: Any, entry_id: str, why_arg: str, *args: Any,
-                                      mutate: Any = change, flag: List[bool] = after_begin, **kwargs: Any) -> Any:
-                    mutate(store)
-                    outcome = real_begin(store, entry_id, why_arg, *args, **kwargs)
-                    # Mutate the stored entry again right after the lock releases: any post-lock reload would
-                    # misclassify the reason instead of keeping what `begin_reap` saw under the lock.
-                    real_load_entry = real_load(entry_id)
-                    if real_load_entry is not None:
-                        store.save(as_entry({**real_load_entry, "state": "reaped"}))
-                    flag[0] = True
-                    return outcome
+                    def mutate_then_begin(store: Any, ident: str, why_arg: str,
+                                          passed_table: Optional[procs.Table] = None, *args: Any,
+                                          mutate: Any = change, flag: List[bool] = after_begin,
+                                          tables: List[Optional[procs.Table]] = seen_tables, **kwargs: Any) -> Any:
+                        tables.append(passed_table)
+                        mutate(store, ident)
+                        outcome = real_begin(store, ident, why_arg, passed_table, *args, **kwargs)
+                        # Mutate the stored entry again right after the lock releases: any post-lock reload would
+                        # misclassify the reason instead of keeping what `begin_reap` saw under the lock.
+                        real_load_entry = real_load(ident)
+                        if real_load_entry is not None:
+                            store.save(as_entry({**real_load_entry, "state": "reaped"}))
+                        flag[0] = True
+                        return outcome
 
-                with mock.patch.object(self.store, "load", side_effect=load_spy), \
-                        mock.patch.object(entry_module, "begin_reap", side_effect=mutate_then_begin):
-                    result = reap.reap(self.store, "jtest", reason,
-                                       reader=lambda: table(proc(100, cmd="node server.js")),
-                                       stopper=lambda _t, _g: self.fail("stopped a skipped entry"),
-                                       lifecycle=lifecycle, owner=owner_id, allowed=guard)
-                self.assertEqual(("skipped", expected, []), (result["result"], result["reason"], post_loads))
+                    with mock.patch.object(self.store, "load", side_effect=load_spy), \
+                            mock.patch.object(entry_module, "begin_reap", side_effect=mutate_then_begin), \
+                            mock.patch.object(procs.Table, "read", side_effect=AssertionError("unexpected ps read")), \
+                            mock.patch.object(resources, "stop", side_effect=AssertionError("resource stop ran")):
+                        result = reap.reap(self.store, entry_id, reason,
+                                           reader=lambda t=here: t,
+                                           stopper=lambda _t, _g: self.fail("stopped a skipped entry"),
+                                           lifecycle=lifecycle, owner=owner_id, allowed=guard)
+                    self.assertEqual(("skipped", expected, [], [here]),
+                                     (result["result"], result["reason"], post_loads, seen_tables))

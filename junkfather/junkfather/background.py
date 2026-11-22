@@ -328,11 +328,9 @@ def watch(store: Store, entry_id: str, pid: int, start: str, ready: Callable[[],
             continue
         if retry_at is not None and clock() < retry_at:
             continue
-        def still_due(e: Entry) -> Optional[str]:
-            return None if _entry.due(e, wall()) else "not expired"
-
         result = reap_entry(store, entry_id, "ttl expired", reader=reader,
-                            actor=_events.tool("supervisor"), report_failure=not failures, allowed=still_due)
+                            actor=_events.tool("supervisor"), report_failure=not failures,
+                            allowed=_entry.require_due(wall))
         if result["result"] in _reap.STOPPED:
             return
         if result["result"] == "failed":

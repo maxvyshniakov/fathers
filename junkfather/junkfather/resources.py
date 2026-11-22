@@ -709,37 +709,41 @@ def stopped_event(store: Store, subject: Dict[str, Any], actor: Optional[Dict[st
                   ("warn" if outcome.get("warning") else None) if done else "error")
 
 
-def reap(store: Store, entry: Entry, reason: str, grace: float, dry_run: bool,
-         actor: Optional[Dict[str, Any]], *, lifecycle: Optional[_reap.Lifecycle] = None,
-         allowed: Optional[_entry.Guard] = None) -> Dict[str, Any]:
-    """End one running resource entry through its kind's stop command (reap.reap hands resource entries here). A
-    dry run asks the kind whether its stop would be refused (a worktree's guards)."""
+def reap_target(store: Store, entry: Entry, reason: str, grace: float, actor: Optional[Dict[str, Any]],
+                table: Optional[_procs.Table], *, lifecycle: Optional[_reap.Lifecycle] = None) -> _reap.Target:
+    """Target adapter for a resource entry (`reap.reap` drives dry-run, claim, teardown, end_reap and events)."""
     recorded = entry.get("resource") or {}
     entry_id = str(entry["id"])
-    resource: Dict[str, Any] = {**recorded, "_exclude": ending_owner(entry, lifecycle, _table())}
+    resource: Dict[str, Any] = {**recorded, "_exclude": ending_owner(entry, lifecycle, table)}
     kind = KINDS.get(str(resource.get("kind")))
+    how = describe(resource)
 
     def alive() -> Optional[bool]:
         return Snapshot(_table()).alive(resource)
 
-    if dry_run:
+    def preview() -> Dict[str, Any]:
         state = alive()
         refused = kind.check(resource) if kind is not None and state is not False else None
         return {"id": entry_id, "result": "gone" if state is False else "would-fail" if refused else "would-stop",
-                "reason": f"{reason}; {refused}" if refused else reason, "pids": [], "how": describe(resource)}
-    me, why = _entry.begin_reap(store, entry_id, reason, allowed=allowed)
-    if me is None:
-        return {"id": entry_id, "result": "skipped", "reason": why, "pids": [],
-                "how": describe(resource)}
-    outcome = stop(resource, grace, alive)
-    result = outcome["result"]
-    done = result in _reap.STOPPED
-    _entry.end_reap(store, entry_id, me, done, {"reason": reason, "result": result, "how": describe(resource),
-                                                "pids": [], "steps": outcome["steps"]},
-                    {"reason": reason, "left": [], "error": outcome.get("error"), "steps": outcome["steps"]})
-    stopped_event(store, subject(entry), actor, reason, resource, outcome, done)
-    return {"id": entry_id, "result": result, "reason": reason if done else f"{reason}; {outcome.get('error')}",
-            "pids": [], "how": describe(resource)}
+                "reason": f"{reason}; {refused}" if refused else reason, "pids": [], "how": how}
+
+    def teardown(current: Entry) -> _reap.ReapOutcome:
+        outcome = stop(resource, grace, alive)
+        result = outcome["result"]
+        done = result in _reap.STOPPED
+
+        def emit(finished: bool) -> None:
+            stopped_event(store, subject(current), actor, reason, resource, outcome, finished)
+
+        return _reap.ReapOutcome(
+            result=result, how=how, pids=[],
+            end={"reason": reason, "result": result, "how": how, "pids": [], "steps": outcome["steps"]},
+            error={"reason": reason, "left": [], "error": outcome.get("error"), "steps": outcome["steps"]},
+            reason=reason if done else f"{reason}; {outcome.get('error')}",
+            emit=emit,
+        )
+
+    return _reap.Target(how=how, dry_run=preview, teardown=teardown)
 
 
 def step_text(step: Mapping[str, Any]) -> str:
