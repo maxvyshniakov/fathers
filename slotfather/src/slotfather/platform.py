@@ -192,6 +192,13 @@ def verified_holder(start: object, started: object, pid: int, observed: str) -> 
     return True if same_start(start, observed, epoch) else None
 
 
+def macos_pressure_active(level: float | None) -> bool:
+    """Whether macOS's live memory-pressure level replaces the vm.swapusage free-swap floor: vm.swapusage reports the
+    currently allocated swap file, not macOS's expandable swap ceiling."""
+    return (not _config.setting("MEMORY_FILE") and sys.platform == "darwin" and not linux()
+            and level is not None and level >= 1)
+
+
 def memory_short() -> str | None:
     """Why new leases should wait for memory, or None: memory_level()'s reason, at warning or above."""
     return memory_level()[1]
@@ -217,7 +224,7 @@ def memory_level() -> tuple[str, str | None]:
         return "short", f"memory pressure level {level:.0f} (critical)"
     if level is not None and level > _config.MAX_PRESSURE_LEVEL:
         pressed = f"memory pressure level {level:.0f} (warning)"
-    if not seam and sys.platform == "darwin" and level is not None and level >= 1:
+    if macos_pressure_active(level):
         # vm.swapusage is the current allocation, not macOS's expandable swap limit.
         return ("warning", pressed) if pressed else ("normal", None)
     floor = _config.number_setting("MIN_FREE_SWAP_MB", _config.MIN_FREE_SWAP_MB)

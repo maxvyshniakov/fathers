@@ -209,12 +209,18 @@ def containers(settings: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def memory_facts() -> dict[str, Any]:
-    """Swap and memory now: total and free swap in MB, and why memory is short (None: it is not)."""
+    """Swap and memory now: total and free swap in MB, macOS pressure level when read, and why memory is short
+    (None: it is not)."""
     usage = None
     with contextlib.suppress(_config.SlotError, OSError):
         usage = _platform.swap_usage()
+    pressure = None
+    if not _config.setting("MEMORY_FILE"):
+        with contextlib.suppress(_config.SlotError, OSError):
+            pressure = _platform.pressure_level()
     found: dict[str, Any] = {"swap_total_mb": None if usage is None else round(usage[0]),
-                             "swap_free_mb": None if usage is None else round(usage[1]), "short": None}
+                             "swap_free_mb": None if usage is None else round(usage[1]),
+                             "pressure": pressure, "short": None}
     with contextlib.suppress(_config.SlotError, OSError):
         found["short"] = _platform.memory_short()
     return found
@@ -225,8 +231,10 @@ def memory_report(facts: Mapping[str, Any], snap: Snapshot, settings: Mapping[st
     """The largest resident processes with their class while memory is short (`short`), else just the facts."""
     total, free = facts.get("swap_total_mb"), facts.get("swap_free_mb")
     short = facts.get("short")
+    pressure = facts.get("pressure")
+    level = float(pressure) if isinstance(pressure, (int, float)) and not isinstance(pressure, bool) else None
     floor = max(settings["swap_free_mb"], (total or 0) * settings["swap_free_pct"] / 100)
-    if short is None and total and free is not None and free < floor:
+    if short is None and not _platform.macos_pressure_active(level) and total and free is not None and free < floor:
         short = f"free swap {free} of {total} MB is under {floor:.0f} MB ({settings['swap_free_mb']:g} MB or " \
                 f"{settings['swap_free_pct']:g}%)"
     found: dict[str, Any] = {**facts, "short": short, "top": []}

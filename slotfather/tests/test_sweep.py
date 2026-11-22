@@ -513,6 +513,115 @@ class ReportTests(unittest.TestCase):
                                     s, SETTINGS, [], {})
         self.assertEqual(3, len(guard["top"]))
 
+    def test_macos_normal_pressure_skips_swap_slice_floor(self) -> None:
+        s = snap([proc(100, 1, "tail -f x", rss=900 * 1024), proc(101, 50, "node gate.mjs", rss=2000 * 1024)])
+        items = [{"class": "orphan", "tree": [100]}]
+        environment = {k: v for k, v in os.environ.items() if not k.startswith("SLOTFATHER_")}
+        for free in (460.0, 0.0):
+            with self.subTest(free=free):
+                def sysctl(name: str, free_mb: float = free) -> str | None:
+                    return {
+                        "vm.swapusage": f"total = 3072.00M  used = {3072.0 - free_mb:.2f}M  free = {free_mb:.2f}M  (encrypted)",
+                        "kern.memorystatus_vm_pressure_level": "1",
+                    }.get(name)
+
+                with unittest.mock.patch.dict(os.environ, environment, clear=True), \
+                        unittest.mock.patch.object(sys, "platform", "darwin"), \
+                        unittest.mock.patch.object(sf_platform, "sysctl", side_effect=sysctl):
+                    facts = sweep_os.memory_facts()
+                    report = sweep_os.memory_report(facts, s, SETTINGS, items, {101: "lane-7"})
+                self.assertEqual((1.0, None, []), (facts["pressure"], report["short"], report["top"]))
+
+    def test_macos_warning_and_critical_pressure_report_memory_short(self) -> None:
+        s = snap([proc(100, 1, "tail -f x", rss=900 * 1024), proc(101, 50, "node gate.mjs", rss=2000 * 1024)])
+        items = [{"class": "orphan", "tree": [100]}]
+        environment = {k: v for k, v in os.environ.items() if not k.startswith("SLOTFATHER_")}
+        for level, word in (("2", "warning"), ("4", "critical")):
+            for free in (460.0, 8000.0):
+                with self.subTest(level=level, free=free):
+                    def sysctl(name: str, lvl: str = level, free_mb: float = free) -> str | None:
+                        return {
+                            "vm.swapusage": f"total = 9000.00M  used = {9000.0 - free_mb:.2f}M  free = {free_mb:.2f}M  (encrypted)",
+                            "kern.memorystatus_vm_pressure_level": lvl,
+                        }.get(name)
+
+                    with unittest.mock.patch.dict(os.environ, environment, clear=True), \
+                            unittest.mock.patch.object(sys, "platform", "darwin"), \
+                            unittest.mock.patch.object(sf_platform, "sysctl", side_effect=sysctl):
+                        facts = sweep_os.memory_facts()
+                        report = sweep_os.memory_report(facts, s, SETTINGS, items, {101: "lane-7"})
+                    self.assertEqual(f"memory pressure level {level} ({word})", report["short"])
+                    self.assertEqual([(101, 2000, "lease lane-7"), (100, 900, "orphan")],
+                                     [(t["pid"], t["rss_mb"], t["class"]) for t in report["top"]])
+
+    def test_macos_unavailable_pressure_and_seam_keep_swap_floor(self) -> None:
+        s = snap([proc(100, 1, "tail -f x", rss=900 * 1024), proc(101, 50, "node gate.mjs", rss=2000 * 1024)])
+        items = [{"class": "orphan", "tree": [100]}]
+        environment = {k: v for k, v in os.environ.items() if not k.startswith("SLOTFATHER_")}
+        for level in (None, "unavailable", "0"):
+            with self.subTest(level=level):
+                def sysctl(name: str, lvl: str | None = level) -> str | None:
+                    return {
+                        "vm.swapusage": "total = 8192.00M  used = 7162.00M  free = 1030.00M  (encrypted)",
+                        "kern.memorystatus_vm_pressure_level": lvl,
+                    }.get(name)
+
+                with unittest.mock.patch.dict(os.environ, environment, clear=True), \
+                        unittest.mock.patch.object(sys, "platform", "darwin"), \
+                        unittest.mock.patch.object(sf_platform, "sysctl", side_effect=sysctl):
+                    facts = sweep_os.memory_facts()
+                    report = sweep_os.memory_report(facts, s, SETTINGS, items, {101: "lane-7"})
+                self.assertIn("free swap 1030 of 8192 MB is under 1638 MB", report["short"])
+                self.assertEqual(2, len(report["top"]))
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            seam_file = pathlib.Path(directory) / "memory"
+            seam_file.write_text("8000 1\n")
+
+            def seam_sysctl(name: str) -> str | None:
+                return {
+                    "vm.swapusage": "total = 8192.00M  used = 7162.00M  free = 1030.00M  (encrypted)",
+                    "kern.memorystatus_vm_pressure_level": "1",
+                }.get(name)
+
+            with unittest.mock.patch.dict(os.environ, {**environment, "SLOTFATHER_MEMORY_FILE": str(seam_file)}, clear=True), \
+                    unittest.mock.patch.object(sys, "platform", "darwin"), \
+                    unittest.mock.patch.object(sf_platform, "sysctl", side_effect=seam_sysctl):
+                facts = sweep_os.memory_facts()
+                report = sweep_os.memory_report(facts, s, SETTINGS, items, {101: "lane-7"})
+                direct = sweep_os.memory_report({"swap_total_mb": 3072, "swap_free_mb": 460, "pressure": 1.0, "short": None},
+                                                s, SETTINGS, items, {101: "lane-7"})
+            self.assertIsNone(facts["pressure"])
+            self.assertIn("free swap 1030 of 8192 MB is under 1638 MB", report["short"])
+            self.assertIn("free swap 460 of 3072 MB is under 1024 MB", direct["short"])
+
+    def test_linux_keeps_swap_floor(self) -> None:
+        s = snap([proc(100, 1, "tail -f x", rss=900 * 1024), proc(101, 50, "node gate.mjs", rss=2000 * 1024)])
+        items = [{"class": "orphan", "tree": [100]}]
+        environment = {k: v for k, v in os.environ.items() if not k.startswith("SLOTFATHER_")}
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            proc_dir = pathlib.Path(directory)
+            (proc_dir / "meminfo").write_text(
+                "MemTotal:       16777216 kB\n"
+                "MemAvailable:   12582912 kB\n"
+                "SwapTotal:       8388608 kB\n"
+                "SwapFree:        1054720 kB\n"
+            )
+            with unittest.mock.patch.dict(os.environ, {**environment, "SLOTFATHER_PROC": str(proc_dir)}, clear=True):
+                facts = sweep_os.memory_facts()
+                report = sweep_os.memory_report(facts, s, SETTINGS, items, {101: "lane-7"})
+            self.assertEqual((8192, 1030, None), (facts["swap_total_mb"], facts["swap_free_mb"], facts["pressure"]))
+            self.assertIn("free swap 1030 of 8192 MB is under 1638 MB", report["short"])
+            self.assertEqual(2, len(report["top"]))
+
+        with unittest.mock.patch.dict(os.environ, environment, clear=True), \
+                unittest.mock.patch.object(sys, "platform", "linux"):
+            direct = sweep_os.memory_report({"swap_total_mb": 3072, "swap_free_mb": 460, "pressure": 1.0, "short": None},
+                                            s, SETTINGS, items, {101: "lane-7"})
+        self.assertIn("free swap 460 of 3072 MB is under 1024 MB", direct["short"])
+
     def test_the_text_report(self):
         report = {"at": NOW, "live": False, "dev_servers": False, "only": None, "notes": ["lsof failed"],
                   "found": {"removed": 1, "orphan": 0, "dev-server": 0, "container": 1},

@@ -197,6 +197,10 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- On macOS with a readable kernel memory-pressure level (`kern.memorystatus_vm_pressure_level >= 1`), `slotfather
+  sweep` no longer reports a false `memory short: free swap ...` solely because the currently allocated
+  `vm.swapusage` slice is below `swap_free_mb` or `swap_free_pct`, matching `platform.memory_level()`; Linux,
+  unavailable macOS pressure, and the `SLOTFATHER_MEMORY_FILE` test seam keep the free-swap floor (fathers#205).
 - On macOS, detached browser and WebKit XPC helper processes spawned via `launchd` (`PPID=1`, such as Playwright
   `ms-playwright/webkit-*` `com.apple.WebKit.{WebContent,GPU,Networking}.Development` or isolated-profile browser
   helpers) are attributed to their owning live lease for dashboard `LEASE DETAILS` CPU/memory/process accounting,
