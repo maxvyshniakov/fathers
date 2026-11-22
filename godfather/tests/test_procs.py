@@ -353,6 +353,8 @@ class PageTests(Case):
         self.assertNotIn("876000h", row_text)
         self.assertNotIn("875999h", row_text)
         self.assertRegex(screen, r"ttl left\s+—\s")
+        self.assertNotIn("extend ttl", screen)
+        self.assertRegex(screen, r"actions\s+none\b")
 
     def test_absent_and_unsupported(self) -> None:
         self.tools = {name: tool for name, tool in self.tools.items() if name != "junkfather"}

@@ -137,7 +137,7 @@ def for_process(row: ProcessTableRow, advertised: Any) -> list[Action]:
                 f"--reason=godfather: {row['state']}")
         return [Action("junkfather", "Reap", argv, confirm=True, target=target, identity=identity)] \
             if "reap" in tools else []
-    if "extend" not in tools:
+    if row.get("no_ttl") or "extend" not in tools:
         return []
     return [Action("junkfather", f"Extend TTL by {words}", ("extend", str(row["id"]), "--ttl", ttl), target=target,
                    identity=identity) for words, ttl in EXTEND]

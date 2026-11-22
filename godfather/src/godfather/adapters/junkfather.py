@@ -47,8 +47,8 @@ def unsupported(capabilities: dict[str, Any]) -> Optional[str]:
 
 
 def state_of(entry: Mapping[str, Any]) -> str:
-    """An owned entry as the page tells it: orphan once its owner is gone, expired once its TTL passed (not reaped
-    yet), else running."""
+    """An owned entry as the page tells it: orphan once its owner is gone, expired once its TTL passed and not
+    `no_ttl` (not reaped yet), else running."""
     if entry.get("owner_alive") is False:
         return "orphan"
     if not entry.get("no_ttl") and entry.get("ttl") is not None and (entry.get("ttl_left") or 0) <= 0:
