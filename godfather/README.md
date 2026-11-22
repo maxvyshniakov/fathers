@@ -22,7 +22,7 @@ why admission is closed. `Godfather what's new?` (`v` or a click) opens one time
 
 ## Install and run
 
-Python 3.9 or later on macOS or Linux, standard library only.
+Python 3.11 or later on macOS or Linux, standard library only.
 
 ```sh
 git clone https://github.com/maxvyshniakov/fathers.git

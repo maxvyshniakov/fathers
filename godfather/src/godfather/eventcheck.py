@@ -17,7 +17,7 @@
 # SOFTWARE.
 """Validator for the shared tool event schema, version 1 (Godfather, docs/events.md).
 
-One file, standard library only, Python 3.9+. It lives in common/ of the fathers repository, and every tool's tests
+One file, standard library only, Python 3.11+. It lives in common/ of the fathers repository, and every tool's tests
 load it from there; another project may copy it unchanged and record its SHA-256 beside the copy.
 
     validate(obj, strict=False) -> list[str]        problems with one decoded event, empty when valid

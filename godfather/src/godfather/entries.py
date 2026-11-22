@@ -30,7 +30,7 @@ def dashboard_colours(model: Model, assigned: dict[Any, int], count: int) -> Non
     ids = entry_ids(holders + cast(list[Item], model.get("waiters") or []))
     for key in [key for key in assigned if key not in ids]:
         del assigned[key]
-    for holder, identity in zip(holders, ids):
+    for holder, identity in zip(holders, ids, strict=False):
         if holder["kind"] != "held":
             continue
         if identity not in assigned:

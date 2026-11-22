@@ -16,7 +16,7 @@ from test_goldens import goldens_tool
 
 from godfather.layout import Rect
 
-NOW = dt.datetime(2026, 11, 4, 9, 59, 39, tzinfo=dt.timezone.utc)
+NOW = dt.datetime(2026, 11, 4, 9, 59, 39, tzinfo=dt.UTC)
 
 
 class ReplayTests(unittest.TestCase):
@@ -36,7 +36,7 @@ class ReplayTests(unittest.TestCase):
         assert model is not None
         rows = model["events"]
         self.assertEqual(len(snapshot), len(rows))
-        for before, after in zip(snapshot, rows):
+        for before, after in zip(snapshot, rows, strict=True):
             self.assertEqual((before["when"][:19], before["count"], before["label"], before["pid"]),
                              (after["when"].strftime("%Y-%m-%dT%H:%M:%S"), after["count"], after["label"],
                               after["pid"]))

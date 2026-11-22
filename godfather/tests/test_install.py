@@ -97,11 +97,11 @@ class InstallTests(unittest.TestCase):
             with self.assertRaisesRegex(self.tool.InstallError, "virtual environment"):
                 self.tool.interpreter()
 
-    def test_python_38_is_refused(self) -> None:
-        old = self.home / "python3.8"
-        old.write_text("#!/bin/sh\necho 3.8\n")
+    def test_python_310_is_refused(self) -> None:
+        old = self.home / "python3.10"
+        old.write_text("#!/bin/sh\necho 3.10\n")
         old.chmod(0o755)
-        with self.assertRaisesRegex(self.tool.InstallError, "is Python 3.8; godfather needs 3.9 or later"):
+        with self.assertRaisesRegex(self.tool.InstallError, "is Python 3.10; godfather needs 3.11 or later"):
             self.tool.interpreter(str(old))
 
     def test_a_virtual_environment_named_with_python_is_refused_too(self) -> None:

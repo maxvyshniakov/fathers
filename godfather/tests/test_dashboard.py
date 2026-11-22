@@ -50,7 +50,7 @@ def surfaces(tool: Any) -> Any:
 class UnifiedLaneTests(unittest.TestCase):
     def test_running_and_waiting_share_a_viewport_with_an_unselectable_gap(self):
         tool=load_dashboard()
-        now=datetime.datetime.now(datetime.timezone.utc)
+        now=datetime.datetime.now(datetime.UTC)
         holder=dict(label="active",kind="held",count=1,pid=10,style="h0",cpu=150,since=now,granted=now,key=(10,None))
         waiter=dict(label="pending",kind="waiting",count=2,pid=11,style="warn",cpu=0,since=now,granted=None,
                     key=(11,None))
@@ -81,7 +81,7 @@ class QueueTableTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tool = surfaces(load_dashboard())
         self.marks = self.tool.marks_for(True)  # one-cell ASCII states: these tests read columns as positions (#15)
-        self.now = datetime.datetime.now(datetime.timezone.utc)
+        self.now = datetime.datetime.now(datetime.UTC)
 
     def model(self, **extra: Any) -> dict[str, Any]:
         now = self.now
@@ -389,7 +389,7 @@ class EventDetailTests(unittest.TestCase):
 class MouseInputTests(unittest.TestCase):
     def test_click_and_wheel_follow_the_visible_rows_of_an_overflowing_table(self):
         tool = load_dashboard()
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         holders = [dict(label=f"job-{i}", kind="held", count=1, pid=100+i, style="h0",
                         cpu=0, since=now, granted=now, key=(100+i, None)) for i in range(8)]
         model = dict(holders=holders, waiters=[], slots=8, cores=8)
@@ -492,7 +492,7 @@ class DetailLayoutTests(unittest.TestCase):
 
     def test_process_table_shares_the_details_scroll_after_long_text(self):
         tool = load_dashboard()
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         item = dict(label="build", kind="held", count=2, pid=12345, style="h0", cpu=150,
                     rss=102400, procs=1, granted=now, since=now, queue="",
                     cmd="verify.sh " + "a-very-long-check-name," * 80,
@@ -610,7 +610,7 @@ class MachineStatusTests(unittest.TestCase):
 
     def test_the_status_moves_into_the_top_border_and_each_row_has_its_health_mark(self):
         tool=load_dashboard()
-        now=datetime.datetime.now(datetime.timezone.utc)
+        now=datetime.datetime.now(datetime.UTC)
         for level,free,load,admission,marks in ((1,800,4,2,("🆗","🆗","🆗")),
                                                (2,800,4,0,("🆗","🔥","🆗")),
                                                (1,128,11.5,0,("🔥","🆗","🔥"))):
@@ -626,7 +626,7 @@ class MachineStatusTests(unittest.TestCase):
                 self.assertTrue(lines[0].rstrip().endswith(f" unleased 4.5 · {permit} ─╮"),lines[0])
                 self.assertTrue("".join(cell[0] for cell in canvas.cells[1][1:-1]).strip().startswith("slots held"),
                                 "a blank row first but for the chart's title")
-                for row,(name,mark) in enumerate(zip(("load","mem","swap"),marks),2):
+                for row,(name,mark) in enumerate(zip(("load","mem","swap"),marks,strict=True),2):
                     self.assertEqual(mark,canvas.cells[row][3][0],f"{name}: under the blank row")
                     self.assertEqual(name,"".join(cell[0] for cell in canvas.cells[row][6:6+len(name)]))
                 self.assertNotIn("memory ok",canvas.render(False),"no status row")
@@ -724,7 +724,7 @@ class MachineStatusTests(unittest.TestCase):
 class MemoryBarTests(unittest.TestCase):
     def test_machine_has_usage_bars_and_a_chart_spanning_the_inner_width(self):
         tool = load_dashboard()
-        now = datetime.datetime(2026, 1, 1, 12, tzinfo=datetime.timezone.utc)
+        now = datetime.datetime(2026, 1, 1, 12, tzinfo=datetime.UTC)
         self.assertFalse(tool.machine_side_by_side(60), "60 columns: the chart under the rows")
         canvas = tool.Canvas(60, tool.MACHINE_HEIGHT)
         tool.draw_machine(canvas, Rect(0, 0, tool.MACHINE_HEIGHT, 60), dict(slots=4, cores=12, averages=(1,2,3),
@@ -803,7 +803,7 @@ class MemoryBarTests(unittest.TestCase):
 
     def test_memory_bar_colour_reflects_pressure_without_a_separate_pressure_row(self):
         tool = load_dashboard()
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         for level, colour in ((1,"38;2;%d;%d;%d"%tool.current_theme.styles["chart0"][0]), (2,tool.sgr("bad",False)[4:-1]), (4,tool.sgr("bad",False)[4:-1])):
             # the ramp's blue at the bar's start; under pressure (memory low) the theme's red, the whole bar
             with self.subTest(level=level):
@@ -818,7 +818,7 @@ class MemoryBarTests(unittest.TestCase):
 
     def test_full_capacity_is_the_ramps_red_end_in_the_shortest_chart(self):
         tool=load_dashboard()
-        now=datetime.datetime.now(datetime.timezone.utc)
+        now=datetime.datetime.now(datetime.UTC)
         canvas=tool.Canvas(60,9)
         tool.draw_machine(canvas, Rect(0, 0, 9, 60),dict(slots=4,cores=12,averages=(1,2,3),
                           advice=dict(unleased_load=0,jobs=2),memory_block=None,
@@ -831,7 +831,7 @@ class MemoryBarTests(unittest.TestCase):
 
     def machine(self, tool: Any, height: int, width: int = 60, memory: dict[str, Any] | None = None,
                 load: float = 3, marks: Any = None) -> list[str]:
-        now=datetime.datetime.now(datetime.timezone.utc)
+        now=datetime.datetime.now(datetime.UTC)
         canvas=tool.Canvas(width,height,marks=marks)
         tool.draw_machine(canvas, Rect(0, 0, height, width),dict(slots=4,cores=12,averages=(load,2,3),
                           advice=dict(unleased_load=0,jobs=2),memory_block=None,admission=1,
@@ -867,9 +867,9 @@ class MemoryBarTests(unittest.TestCase):
                 rows=lines[2:5]
                 self.assertEqual(["load","mem","swap"],[row.split()[2] for row in rows])
                 values=("10.1/12","23.0/32G","10.0/11G")
-                for row,value in zip(rows,values):
+                for row,value in zip(rows,values,strict=True):
                     self.assertIn(f" {value}",row)
-                ends={row.index(value)+len(value) for row,value in zip(rows,values)}
+                ends={row.index(value)+len(value) for row,value in zip(rows,values,strict=True)}
                 self.assertEqual(1,len(ends),"the values right-aligned in one column")
                 bars={sum(1 for char in row if char in "■░") for row in rows}
                 self.assertEqual(1,len(bars),"every bar the same length")
@@ -987,7 +987,7 @@ class MemoryBarTests(unittest.TestCase):
                 self.assertTrue(any("owner pid" in row for row in rows),"owner pid shows without scrolling")
 
     def layout_model(self) -> dict[str, Any]:
-        now=datetime.datetime.now(datetime.timezone.utc)
+        now=datetime.datetime.now(datetime.UTC)
         holders=[dict(label="build",kind="held",count=1,pid=10,style="h0",cpu=50,since=now,granted=now,rss=1024,procs=1,
                       queue="",cmd="work",tree=[],key=(10,None),priority="normal",ticket=None,meta="",context={},
                       workdir="",yieldable=False,yields=0,asked_at=None,passable=False,all=False)]
@@ -1061,7 +1061,7 @@ class MemoryBarTests(unittest.TestCase):
         self.assertEqual(["chart0","chart1","chart1","chart2","chart3","chart3"],half,"half full runs blue to mid")
         self.assertEqual({"chart7"},{style for _,style in tool.ramp_bar(0.5,12,True,"■") if style!="track"},
                          "critical: all the ramp's red, the red a full bar ends on")
-        now=datetime.datetime.now(datetime.timezone.utc)
+        now=datetime.datetime.now(datetime.UTC)
         def machine(**extra: Any) -> Any:
             model=dict(slots=4,cores=12,averages=(20.3,20,20),admission=0,advice=dict(unleased_load=20,jobs=1,capacity=0),
                        memory_block=None,memory=judged(dict(level=1,used=512,total=1024,swap_total=1024,swap_free=100)),
@@ -1093,7 +1093,7 @@ class MemoryBarTests(unittest.TestCase):
 
     def test_the_load_bar_is_critical_by_load_alone_not_by_held_slots(self):
         tool=surfaces(load_dashboard())
-        now=datetime.datetime.now(datetime.timezone.utc)
+        now=datetime.datetime.now(datetime.UTC)
         for load,critical in ((0.5,False),(6.5,False),(7.5,True),(20.3,True)):
             with self.subTest(load=load):
                 canvas=tool.Canvas(90,24)  # every slot held: the advice has no capacity, whatever the load
@@ -1112,8 +1112,8 @@ class HistoryTests(unittest.TestCase):
         self.tool = load_dashboard()
 
     def test_oldest_clock_bucket_retains_its_peak_until_the_next_scroll(self):
-        seconds = int(datetime.datetime(2026,1,1,12,tzinfo=datetime.timezone.utc).timestamp())
-        edge = datetime.datetime.fromtimestamp(seconds // 43 * 43, datetime.timezone.utc)
+        seconds = int(datetime.datetime(2026,1,1,12,tzinfo=datetime.UTC).timestamp())
+        edge = datetime.datetime.fromtimestamp(seconds // 43 * 43, datetime.UTC)
         oldest = edge-datetime.timedelta(seconds=3612)
         events = [dict(when=oldest+datetime.timedelta(seconds=5),delta=4),
                   dict(when=oldest+datetime.timedelta(seconds=6),delta=-4)]
@@ -1125,7 +1125,7 @@ class HistoryTests(unittest.TestCase):
                          "the trailing-hour summary must exclude the older retained chart peak")
 
     def test_a_historical_peak_keeps_its_bucket_between_clock_boundaries(self):
-        base = datetime.datetime(2026, 1, 1, 10, tzinfo=datetime.timezone.utc)
+        base = datetime.datetime(2026, 1, 1, 10, tzinfo=datetime.UTC)
         rise = base + datetime.timedelta(seconds=601.2)
         fall = base + datetime.timedelta(seconds=601.4)
         def buckets(seconds: float) -> list[int]:

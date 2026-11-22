@@ -220,7 +220,7 @@ class Screen:
         if top is not None:
             model["unleased_top"] = top
         if state.state == "stale" and state.failed_at is not None:
-            model["stale_since"] = datetime.datetime.fromtimestamp(state.failed_at, datetime.timezone.utc)
+            model["stale_since"] = datetime.datetime.fromtimestamp(state.failed_at, datetime.UTC)
         return model, state.problem if state.state == "stale" else None
 
     def unleased(self, model: Dashboard) -> list[TreeRow] | None:
@@ -247,7 +247,7 @@ class Screen:
             return _state.Tool(name)
         if state.state == "unsupported":
             return _state.Tool(name, "unsupported", state.problem)
-        since = datetime.datetime.fromtimestamp(state.failed_at, datetime.timezone.utc) \
+        since = datetime.datetime.fromtimestamp(state.failed_at, datetime.UTC) \
             if state.state == "stale" and state.failed_at is not None else None
         return _state.Tool(name, state.state, state.problem, state.snapshot, since,
                            state.actions, state.show_supported)
@@ -603,7 +603,7 @@ class Live:
             lane, cwd = value if failure is None and value else (None, None)
             self.send(_state.DetailsLoaded(key, lane, cwd, None if failure is None else str(failure) or
                                            type(failure).__name__))
-        self.send(_state.Tick(datetime.datetime.now(datetime.timezone.utc)))
+        self.send(_state.Tick(datetime.datetime.now(datetime.UTC)))
         if time.monotonic() - self.fetched >= self.state.interval and not self.models.wants("model"):
             self.load_model()
 
@@ -771,7 +771,7 @@ def once(width: int | None, height: int | None, colour: bool | None, interval: f
         canvas = Canvas(width or size_now.columns, height or size_now.lines, theme, _common.marks_for(ascii_only))
         canvas.focus = state.focus
         _overview.dashboard_draw(canvas, model, error=error, cwd=cwd, notice=screen.notice(),
-                                 moment=datetime.datetime.now(datetime.timezone.utc), tools=tools, page=state.page,
+                                 moment=datetime.datetime.now(datetime.UTC), tools=tools, page=state.page,
                                  page_row=_pages.page_index(state, state.page) if state.page != "overview" else None)
     tty = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
     print(canvas.render(colour if colour is not None else tty, ascii_only))

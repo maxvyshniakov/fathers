@@ -46,7 +46,7 @@ full pages one key away.
 ### Install and start
 
 1. `python3 install.py` from a checkout installs `godfather` into `~/.local/bin` as a thin entry point into an
-   immutable release under `~/.local/lib/godfather/releases/`, the same pattern as Slotfather: Python 3.9 or later,
+   immutable release under `~/.local/lib/godfather/releases/`, the same pattern as Slotfather: Python 3.11 or later,
    standard library only, the interpreter that ran the installer, refused inside a virtual environment. A reinstall
    replaces the entry point atomically; a running dashboard keeps its release and shows `↻` in the footer.
 2. `godfather` opens the live dashboard in a terminal; without a terminal it says so in one line, points to
@@ -246,7 +246,7 @@ full pages one key away.
 
 ### Package and modules
 
-Godfather is one Python package, standard library only, Python 3.9+, installed by its own `install.py`. Its modules:
+Godfather is one Python package, standard library only, Python 3.11+, installed by its own `install.py`. Its modules:
 
 - **tui**, **widgets**, **layout**, **state**, **modes** (fathers#90): the framework moved from Slotfather's
   dashboard. tui is the canvas, text measure, key and mouse reading, full-screen setup and the background loader;

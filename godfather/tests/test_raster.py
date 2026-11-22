@@ -12,7 +12,7 @@ from helpers import ROOT
 
 try:
     import PIL  # noqa: F401  # pyright: ignore[reportUnusedImport]
-except ImportError:  # the 3.9 jobs run without the development tools
+except ImportError:  # the floor-Python jobs run without the development tools
     raise unittest.SkipTest("Pillow is not installed (requirements-dev.txt)") from None
 
 

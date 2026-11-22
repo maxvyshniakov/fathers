@@ -71,7 +71,7 @@ def parse_time(value: Any) -> Optional[datetime.datetime]:
             return None
     if moment.tzinfo is None:
         return None
-    return moment.astimezone(datetime.timezone.utc)
+    return moment.astimezone(datetime.UTC)
 
 
 def expected_of(raw: Any) -> Optional[Expected]:
@@ -240,7 +240,7 @@ def decode(snapshot: Any) -> Dashboard:
         "memory": _decoding.as_object(block["memory"]), "history": history,
         "events": [],  # EVENTS reads the event logs (fathers#84); the block's described events are not read
         "updated": parse_time(block.get("updated")) or parse_time(found.get("time"))
-        or datetime.datetime.now(datetime.timezone.utc),
+        or datetime.datetime.now(datetime.UTC),
         "overtake_window": float(block["overtake_window"]), "host": _decoding.text(found.get("host"))}
 
 

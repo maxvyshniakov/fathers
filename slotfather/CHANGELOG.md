@@ -133,6 +133,7 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Changed
 
+- The minimum supported Python version is now 3.11 (fathers#218).
 - The CLI conforms to the shared CLI convention (`docs/cli.md`, fathers#124): table-driven parsing with per-command
   `--help`, one-line usage errors pointing to `--help`, `--opt=value`, `--version`, and optional `--json` on
   `slots`, `order`, `capabilities`, `settings`, `procs`, `changelog`, `stats`, and `advise`.

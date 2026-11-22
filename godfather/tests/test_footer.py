@@ -25,7 +25,7 @@ LABEL = "Godfather what's new?"
 
 
 def model() -> dict[str, Any]:
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
     return dict(holders=[], waiters=[], slots=4, cores=12, saved=False, averages=(1.0, 1.0, 1.0),
                 advice=dict(unleased_load=0, jobs=4, capacity=4), admission=4, memory_block=None,
                 memory=judged(dict(level=1, used=512, total=1024, swap_total=0, swap_free=None)), history=[], events=[],

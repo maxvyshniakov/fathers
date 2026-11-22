@@ -248,7 +248,7 @@ class TraceTests(unittest.TestCase):
         # The gate's slots free at 10:25, before the waiter gave up: in the replay it runs (ASSUMED_RUN), and past
         # its window it held `last` back.
         replayed = replay.Replay(found, 6, replay.POLICIES[CURRENT]).simulate()
-        self.assertEqual([0, 0, 900, 900], [r["granted"] - q["arrival"] for r, q in zip(replayed, found)])
+        self.assertEqual([0, 0, 900, 900], [r["granted"] - q["arrival"] for r, q in zip(replayed, found, strict=True)])
 
     def test_a_grant_in_the_rotated_queue_log_keeps_its_request(self):
         """queue.log rotates to queue.log.1 (fathers#123): a grant there and its release in queue.log are one run."""
@@ -321,7 +321,8 @@ class TraceTests(unittest.TestCase):
         (self.dir / "history.jsonl").write_text("".join(json.dumps(i) + "\n" for i in items))
         found = replay.requests(self.dir, sf_config.seconds("2026-11-02T13:00:00Z"))
         replayed = {q["label"]: r for q, r in zip(found, replay.Replay(
-            found, 6, replay.POLICIES[SHIPPED], replay.seed_runs(self.dir, found[0]["arrival"])).simulate())}
+            found, 6, replay.POLICIES[SHIPPED], replay.seed_runs(self.dir, found[0]["arrival"])).simulate(),
+            strict=True)}
         self.assertEqual(sf_config.seconds("2026-11-02T10:15:00Z"), replayed["head"]["granted"], "it starts when y ends")
         self.assertGreaterEqual(replayed["long"]["granted"], replayed["head"]["granted"])
 

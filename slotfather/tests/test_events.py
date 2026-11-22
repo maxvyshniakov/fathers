@@ -57,7 +57,7 @@ class EventLogTests(SlotCase):
         wanted = [next(kinds for prefix, kinds in MIRROR if line.split(" ", 1)[1].startswith(prefix)) for line in logged]
         mirrored = [event["kind"] for event in events if event["kind"] not in ("capacity.changed", "order.changed")]
         self.assertEqual(len(wanted), len(mirrored), (logged, mirrored))
-        for kinds, kind in zip(wanted, mirrored):
+        for kinds, kind in zip(wanted, mirrored, strict=True):
             self.assertIn(kind, kinds)
 
     def test_run_release_reap_reprioritize_yield_and_a_long_wait_validate_strictly(self) -> None:

@@ -43,7 +43,7 @@ def tool() -> Any:
 
 
 def event(n: int) -> dict[str, Any]:
-    when = datetime.datetime(2026, 11, 11, 12, tzinfo=datetime.timezone.utc) + datetime.timedelta(seconds=n)
+    when = datetime.datetime(2026, 11, 11, 12, tzinfo=datetime.UTC) + datetime.timedelta(seconds=n)
     return {"when": when, "verb": "granted", "count": 1, "label": f"job{n}", "pid": 1000 + n, "delta": 1}
 
 
@@ -118,7 +118,7 @@ class LoaderTests(unittest.TestCase):
 
 class DetailsPanelTests(unittest.TestCase):
     def model(self) -> dict[str, Any]:
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         holder = dict(label="build", kind="held", count=1, pid=10, style="h0", cpu=50, since=now, granted=now,
                       rss=1024, procs=1, queue="", cmd="work", tree=[], key=(10, None), priority="normal", ticket=None,
                       meta="", context={}, workdir="", yieldable=False, yields=0, asked="", asked_at=None)
@@ -126,7 +126,7 @@ class DetailsPanelTests(unittest.TestCase):
 
     def test_a_spinner_while_loading_and_the_facts_once_they_are_there(self) -> None:
         view = tool()
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         canvas = view.Canvas(60, 20)
         canvas.loading = 3
         view.draw_detail(canvas, Rect(0, 0, 20, 60), self.model(), 0, None, now)
@@ -269,7 +269,7 @@ class FocusTests(unittest.TestCase):
 
 
 def sample_model() -> dict[str, Any]:
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
     holder = dict(label="build", kind="held", count=1, pid=10, style="h0", cpu=50, since=now, granted=now,
                   rss=1024, procs=1, queue="", cmd="work", tree=[], key=(10, None), priority="normal", ticket=None,
                   meta="", context={}, workdir="", yieldable=False, yields=0, asked="", asked_at=None)
@@ -284,7 +284,7 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
     """The audit's probe: with DETAILS focused while loading (or not drawn), j moved the QUEUE selection."""
 
     def model(self) -> dict[str, Any]:
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
 
         def holder(n: int) -> dict[str, Any]:
             return dict(label=f"row{n}", kind="held", count=1, pid=10 + n, style="h0", cpu=50, since=now,
@@ -297,7 +297,7 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
 
     def test_details_loading_or_empty_still_take_their_keys(self) -> None:
         view = tool()
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         empty: dict[str, Any] = {"holders": [], "waiters": [], "slots": 4, "cores": 12}
         for loading, model in ((1, self.model()), (None, empty)):
             canvas = view.Canvas(60, 20)

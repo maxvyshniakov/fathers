@@ -40,7 +40,7 @@ def draw_slots(canvas: Canvas, area: Rect, model: Model) -> None:
     places, free_at = _layout.slot_labels(area, [x for x, _, _ in labels], filled < slots)
     if free_at is not None:
         canvas.put(area.y + 1, free_at, "free", "dim")
-    for (x, width), (_, label, style) in zip(places, labels):
+    for (x, width), (_, label, style) in zip(places, labels, strict=True):
         canvas.put(area.y + 1, x, label, style, width)
 
 

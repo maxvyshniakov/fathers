@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypedDict, Union, cast
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypedDict, cast
 
 from . import procs as _procs
 from .state import Store, VERSION
@@ -277,8 +277,8 @@ def noted_error(store: Store, entry_id: str, error: Dict[str, Any], now: Optiona
 
 # Reaping
 
-Clock = Union[float, Callable[[], float], None]
-Guard = Callable[[Entry], Union[bool, Optional[str]]]
+Clock = float | Callable[[], float] | None
+Guard = Callable[[Entry], bool | str | None]
 
 
 def require_due(now: Clock = None) -> Guard:

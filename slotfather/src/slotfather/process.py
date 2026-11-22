@@ -289,7 +289,7 @@ def lease_started_epoch(entry: Mapping[str, Any]) -> float | None:
         return None
     for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"):
         try:
-            return datetime.datetime.strptime(raw, fmt).replace(tzinfo=datetime.timezone.utc).timestamp()
+            return datetime.datetime.strptime(raw, fmt).replace(tzinfo=datetime.UTC).timestamp()
         except ValueError:
             continue
     return None

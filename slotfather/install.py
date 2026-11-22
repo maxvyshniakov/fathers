@@ -58,7 +58,7 @@ from fathers_common.installer import (  # noqa: E402
     swap_commands,
 )
 
-MIN_PYTHON = (3, 9)
+MIN_PYTHON = (3, 11)
 ENV_SHEBANG = b"#!/usr/bin/env python3\n"
 COMMANDS = ("slotfather", "slotfather-stats", "slotfather-sweep")
 # Commands an earlier release installed and this one removes: the dashboard moved to Godfather (slotfather#28).
@@ -424,7 +424,7 @@ def options(argv: list[str]) -> dict[str, str]:
 
 def interpreter(python: str | None = None) -> str:
     """The interpreter the commands will name: --python PATH, else this one unless it belongs to a virtual
-    environment, whose interpreter disappears with the project. It must exist and be Python 3.9 or later."""
+    environment, whose interpreter disappears with the project. It must exist and be Python 3.11 or later."""
     return resolve_interpreter(python, MIN_PYTHON, tool="slotfather", allow_venv=False, allow_explicit_venv=True)
 
 

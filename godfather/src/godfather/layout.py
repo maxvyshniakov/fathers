@@ -360,7 +360,7 @@ def slot_labels(area: Rect, starts: list[int], free: bool) -> tuple[list[tuple[i
     if free_at is not None:
         end = free_at - 2
     limits = [start - 2 for start in starts[1:]] + [end]
-    return [(start, max(0, limit - start)) for start, limit in zip(starts, limits)], free_at
+    return [(start, max(0, limit - start)) for start, limit in zip(starts, limits, strict=False)], free_at
 
 
 SETTINGS_WIDTH, SETTINGS_CHROME = 80, 9  # Settings' most columns; frame, padding, the rule, notes and footer rows

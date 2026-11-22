@@ -19,6 +19,7 @@ imported from HOST (`slotfather history import HOST`). It only reads; it lives a
 from __future__ import annotations
 
 import fnmatch
+import itertools
 import json
 from pathlib import Path
 import sys
@@ -178,7 +179,7 @@ def machine(samples: list[dict[str, Any]], cores: int, capacity: int) -> dict[st
     samples = sorted((s for s in samples if isinstance(s.get("at"), (int, float))), key=lambda s: float(s["at"]))
     if not samples:
         return {"samples": 0}
-    gaps = [float(b["at"]) - float(a["at"]) for a, b in zip(samples, samples[1:])]
+    gaps = [float(b["at"]) - float(a["at"]) for a, b in itertools.pairwise(samples)]
     usual = min(percentile(gaps, 50) or _config.MACHINE_EVERY, GAP)
     weights = [min(g, GAP) for g in gaps] + [usual]
     total_weight = sum(weights) or 1.0
@@ -186,18 +187,18 @@ def machine(samples: list[dict[str, Any]], cores: int, capacity: int) -> dict[st
         float(raw[0]) if isinstance(raw := s.get("load"), list) and raw and isinstance(raw[0], (int, float)) else None
         for s in samples
     ]
-    over = sum(w for w, load_val, s in zip(weights, load1, samples)
+    over = sum(w for w, load_val, s in zip(weights, load1, samples, strict=True)
                if load_val is not None and load_val > float(s.get("cores") or cores))
-    under = sum(w for w, load_val, s in zip(weights, load1, samples)
+    under = sum(w for w, load_val, s in zip(weights, load1, samples, strict=True)
                 if load_val is not None and load_val < float(s.get("cores") or cores))
     busy: list[float] = []
     busy_weight = busy_sum = idle_slot = held_area = busy_area = 0.0
-    for (a, b), w in zip(zip(samples, samples[1:]), weights):
+    for (a, b), w in zip(itertools.pairwise(samples), weights, strict=False):
         if not (a.get("ticks") and b.get("ticks")) or len(a["ticks"]) != 4 or len(b["ticks"]) != 4:
             continue
         if float(b["at"]) - float(a["at"]) > GAP:
             continue  # no lease ran in between: the ticks would average idle time into the busy share
-        delta = [(int(y) - int(x)) % (1 << 32) for x, y in zip(a["ticks"], b["ticks"])]
+        delta = [(int(y) - int(x)) % (1 << 32) for x, y in zip(a["ticks"], b["ticks"], strict=True)]
         if not sum(delta):
             continue
         share_busy = 1.0 - delta[2] / sum(delta)
@@ -238,7 +239,7 @@ def machine(samples: list[dict[str, Any]], cores: int, capacity: int) -> dict[st
         "busy_mean": None if not busy_weight else round(busy_sum / busy_weight, 3),
         "slot_idle": None if not busy_weight else round(idle_slot / busy_weight, 3),
         "busy_cores_per_held_slot": round(busy_area / held_area, 2) if held_area else None,
-        "pressure_elevated": round(sum(w for w, s in zip(weights, samples) if elevated(s)) / total_weight, 3),
+        "pressure_elevated": round(sum(w for w, s in zip(weights, samples, strict=True) if elevated(s)) / total_weight, 3),
         "memory_free_pct_min": min((int(m) if m.is_integer() else m for m in memory_free if m is not None), default=None),
         "swap_free_mb_min": min((int(f) if f.is_integer() else f for f in swap_free if f is not None), default=None),
         "memory_available_mb_min": min((int(a) if a.is_integer() else a for a in available if a is not None), default=None),

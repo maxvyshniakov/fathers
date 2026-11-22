@@ -19,7 +19,7 @@ view = _view.current()
 
 
 def example() -> tuple[dict[str, Any], datetime.datetime]:
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
     item: dict[str, Any] = dict(key=(123, 'now'), label='compiler', kind='held', count=1, pid=123,
         style='h0', cpu=20, rss=1024, procs=20, granted=now, since=now, queue='', cmd='build', meta='',
         tree=[(1000 + i, 0, 1024, f'worker-{i:02}') for i in range(20)])

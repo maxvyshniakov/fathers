@@ -9,7 +9,7 @@ import re
 
 
 
-MIN_PYTHON = (3, 9)
+MIN_PYTHON = (3, 11)
 
 
 DEFAULT_DIR = "~/.local/state/slotfather"
@@ -260,7 +260,7 @@ def legacy_dirs() -> list[Path]:
 
 def now() -> str:
     import datetime
-    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def seconds(stamp: Any) -> float | None:
@@ -270,10 +270,10 @@ def seconds(stamp: Any) -> float | None:
     import datetime
     try:
         if len(stamp) == 20 and stamp[4] == stamp[7] == "-" and stamp[10] == "T" and stamp[13] == stamp[16] == ":" and stamp[-1] == "Z":
-            return datetime.datetime.fromisoformat(stamp[:-1]).replace(tzinfo=datetime.timezone.utc).timestamp()
+            return datetime.datetime.fromisoformat(stamp[:-1]).replace(tzinfo=datetime.UTC).timestamp()
         # Old clients/readers accepted unpadded months and days. Keep that fallback.
         return datetime.datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(
-            tzinfo=datetime.timezone.utc).timestamp()
+            tzinfo=datetime.UTC).timestamp()
     except ValueError:
         return None
 

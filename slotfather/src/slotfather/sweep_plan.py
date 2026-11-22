@@ -522,7 +522,7 @@ def loop_head(cmd: str) -> str:
 def docker_time(text: object) -> float | None:
     try:
         return datetime.datetime.strptime(str(text)[:19], "%Y-%m-%dT%H:%M:%S").replace(
-            tzinfo=datetime.timezone.utc).timestamp()
+            tzinfo=datetime.UTC).timestamp()
     except ValueError:
         return None
 

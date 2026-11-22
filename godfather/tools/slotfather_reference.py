@@ -44,7 +44,7 @@ def load() -> Any:
 def stamp(value: datetime.datetime | None) -> str | None:
     if value is None:
         return None
-    return value.astimezone(datetime.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return value.astimezone(datetime.UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def plain(value: Any) -> Any:
@@ -73,7 +73,7 @@ def block(dashboard: Any, model: dict[str, Any]) -> dict[str, Any]:
     limits = (config.number_setting("MAX_PSI_SOME", config.MAX_PSI_SOME),
               config.number_setting("MAX_PSI_FULL", config.MAX_PSI_FULL))
     memory["psi_low"] = any(isinstance(memory.get(f"psi_{kind}"), (int, float)) and memory[f"psi_{kind}"] >= limit
-                            for kind, limit in zip(("some", "full"), limits))
+                            for kind, limit in zip(("some", "full"), limits, strict=True))
     found["memory"] = memory
     found["overtake_window"] = dashboard._config.overtake_window()
     found["v"] = 1
@@ -82,7 +82,7 @@ def block(dashboard: Any, model: dict[str, Any]) -> dict[str, Any]:
 
 def snapshot(dashboard: Any, model: dict[str, Any]) -> dict[str, Any]:
     return {"v": 2, "host": socket.gethostname().split(".")[0].lower(),
-            "time": stamp(datetime.datetime.now(datetime.timezone.utc)),
+            "time": stamp(datetime.datetime.now(datetime.UTC)),
             "slots": model["slots"], "free": model["free"], "held": model["used"], "draining": model.get("draining", 0),
             "dashboard": block(dashboard, model)}
 

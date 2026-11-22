@@ -1,6 +1,6 @@
 # Checks
 
-The installed command uses only Python's standard library (3.9+). Ruff, Pyright and Pillow (pictures only) are
+The installed command uses only Python's standard library (3.11+). Ruff, Pyright and Pillow (pictures only) are
 development tools, pinned in `requirements-dev.txt`.
 
 ## Gate

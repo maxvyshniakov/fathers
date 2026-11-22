@@ -16,7 +16,7 @@ A test describes the tool (its command name, how to run it, the commands it has)
 fails the run (an unexpected success), so the list only shrinks. Assign the class `conformance` returns only as a
 base, as above: a module-level name for it would be collected and run a second time.
 
-Only the standard library; Python 3.9 and later, like the tools it checks.
+Only the standard library; Python 3.11 and later, like the tools it checks.
 """
 from __future__ import annotations
 

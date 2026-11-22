@@ -114,7 +114,7 @@ class FailingTests(FixtureCase):
         good = self.frame(screen)
         self.assertIn("lane-644-build-once", good)
         self.reply("status --json --full", {"code": 1, "stderr": "slotfather: queue unreadable"})
-        before = datetime.datetime.now(datetime.timezone.utc).astimezone().strftime("%H:%M")
+        before = datetime.datetime.now(datetime.UTC).astimezone().strftime("%H:%M")
         text = self.frame(screen)
         self.assertIn("lane-644-build-once", text, "the last good snapshot stays on screen")
         self.assertRegex(text, r"stale since \d\d:\d\d")
@@ -226,7 +226,7 @@ class RecordTests(FixtureCase):
 
 class DecodeTests(unittest.TestCase):
     def test_times_with_and_without_milliseconds_and_offsets(self) -> None:
-        utc = datetime.timezone.utc
+        utc = datetime.UTC
         for text in ("2026-11-12T04:25:56Z", "2026-11-12T04:25:56.000Z", "2026-11-12T06:25:56+02:00",
                      "2026-11-12T04:25:56.0Z"):
             self.assertEqual(datetime.datetime(2026, 11, 12, 4, 25, 56, tzinfo=utc), adapter.parse_time(text), text)

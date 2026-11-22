@@ -139,7 +139,7 @@ class HolderColourTests(unittest.TestCase):
         for kind, level in (("light", 0.73), ("dark", 0.80)):
             reserved = RESERVED[kind][0]  # GitHub Light, Ghostty
             holders = theme.holder_pairs(REFERENCES[kind], kind == "light", reserved)
-            for holder, angle in zip(holders, NEON_HUES):
+            for holder, angle in zip(holders, NEON_HUES, strict=True):
                 with self.subTest(kind=kind, holder=holder):
                     nudged = theme.lch(holder.fill)[0] != level and kind == "dark" and holder.name == "orange"
                     if not nudged:  # Ghostty's yellow moves the dark orange down in lightness
@@ -260,14 +260,14 @@ class RampTests(unittest.TestCase):
         dark = theme.chart_ramp(False, 5)
         self.assertEqual(RAMP_DARK, dark, "five steps are the stops themselves")
         light = theme.chart_ramp(True, 5)
-        for stop, deep in zip(RAMP_DARK, light):
+        for stop, deep in zip(RAMP_DARK, light, strict=True):
             (level, _, angle), (deeper, _, turned) = theme.lch(stop), theme.lch(deep)
             self.assertAlmostEqual(level - 0.06, deeper, delta=0.01, msg=f"{stop}: 0.06 deeper")
             self.assertLess(abs((angle - turned + 180) % 360 - 180), 4, f"{stop} keeps its hue")
         eight = theme.chart_ramp(False)
         self.assertEqual((RAMP_DARK[0], RAMP_DARK[-1]), (eight[0], eight[-1]))
         hues = [theme.lch(colour)[2] for colour in theme.chart_ramp(False, 25)]
-        turns = [(after - before + 180) % 360 - 180 for before, after in zip(hues, hues[1:])]
+        turns = [(after - before + 180) % 360 - 180 for before, after in itertools.pairwise(hues)]
         self.assertTrue(all(0 <= turn < 12 for turn in turns), "one way round: indigo, purple, magenta, red")
         self.assertFalse(any(150 < hue < 260 or 40 < hue < 120 for hue in hues), "no cyan, no orange")
         levels = [theme.lch(colour)[0] for colour in theme.chart_ramp(False, 25)]

@@ -1,6 +1,6 @@
 # Checks
 
-The installed commands use only Python's standard library (3.9+; Lanefather 3.11+: each package's
+The installed commands use only Python's standard library (3.11+: each package's
 `requires-python`). Ruff, Pyright, Bun and Repo-Kit are development tools only.
 
 ## Focused

@@ -23,7 +23,7 @@ from godfather.adapters import slotfather as adapter
 from godfather.layout import Rect
 
 DARK = {"SLOTFATHER_TERMINAL_BG": "#282c34", "SLOTFATHER_TERMINAL_FG": "#ffffff"}
-NOW = dt.datetime(2026, 11, 13, 10, 0, 0, tzinfo=dt.timezone.utc)
+NOW = dt.datetime(2026, 11, 13, 10, 0, 0, tzinfo=dt.UTC)
 EXPECTED = {"key": "straylight · gate", "p50": 1080.0, "p90": 1860.0, "runs": 23, "fallback": False}
 
 

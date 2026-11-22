@@ -10,7 +10,7 @@ Each is a separate package with its own version, changelog, documentation and te
 | [junkfather](junkfather) | Owns the long-lived processes and resources agents start, and ends them when their owner ends or their time is up. |
 | [godfather](godfather) | One terminal dashboard for the three: their snapshots, settings and one merged event feed. |
 
-The installed commands use only the Python standard library (3.9+; Lanefather 3.11+) on macOS or Linux.
+The installed commands use only the Python standard library (3.11+) on macOS or Linux.
 
 ## Install
 

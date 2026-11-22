@@ -4,7 +4,7 @@ Code shared across the fathers packages (`fathers#117`, `fathers#118`, `fathers#
 vendors `fathers_common/` into its immutable release beside the tool's package, so every tool still installs and runs
 standalone; in a checkout, symlinks expose the same `fathers_common/` directory to Python.
 
-- `fathers_common/`: the vendored runtime kit (Python 3.9+, standard library only):
+- `fathers_common/`: the vendored runtime kit (Python 3.11+, standard library only):
   - `cli.py`: `UsageParser` — the `argparse` subclass that turns option errors into CLI-convention usage errors.
   - `errors.py`: `Refused`, `Usage`, `say`, `pointer`, `refuse`, and the shared exit-code constants (`docs/cli.md`).
   - `atomic.py`: `atomic_write`, `atomic_symlink`, `sync_directory` — unique temp file, `fsync`, rename, dir `fsync`,

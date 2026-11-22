@@ -35,5 +35,5 @@ def iso(epoch: Any) -> Optional[str]:
     """Epoch seconds as RFC 3339 UTC with milliseconds (Godfather's time format); None for anything else."""
     if not isinstance(epoch, (int, float)):
         return None
-    moment = datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc)
+    moment = datetime.datetime.fromtimestamp(epoch, datetime.UTC)
     return moment.strftime("%Y-%m-%dT%H:%M:%S.") + f"{moment.microsecond // 1000:03d}Z"

@@ -53,7 +53,7 @@ def local_host() -> str:
 
 def stamp(moment: datetime.datetime) -> str:
     """An aware time as an event's `time`: RFC 3339 UTC with milliseconds."""
-    utc = moment.astimezone(datetime.timezone.utc)
+    utc = moment.astimezone(datetime.UTC)
     return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond // 1000:03d}Z"
 
 
@@ -65,7 +65,7 @@ def parse_time(value: Any) -> Optional[datetime.datetime]:
         moment = datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ")
     except ValueError:
         return None
-    return moment.replace(tzinfo=datetime.timezone.utc)
+    return moment.replace(tzinfo=datetime.UTC)
 
 
 @dataclass(frozen=True)

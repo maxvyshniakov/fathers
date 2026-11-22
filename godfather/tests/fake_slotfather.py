@@ -109,7 +109,7 @@ def number(text: str) -> float:
 def duration(text: str) -> float:
     """The fake's duration values: ordered hour, minute and second terms, with the last unit optional."""
     terms = re.split(r"([hms])", text.strip())
-    parts = list(zip(terms[::2], terms[1::2]))
+    parts = list(zip(terms[::2], terms[1::2], strict=False))
     if terms[-1].strip():
         parts.append((terms[-1], "s"))
     units = [unit for _, unit in parts]
@@ -333,7 +333,7 @@ def action(state: dict[str, Any], argv: list[str]) -> int:
         row["asked"], row["asked_at"] = "the waiter", row.get("granted")
         print(f"{row.get('label')} (pid {pid}): asked to yield 1 slot(s) for the waiter")
     save(state)
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
     event: dict[str, Any] = {"v": 1, "time": now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z",
              "host": host(), "source": "slotfather", "kind": kind,
              "subject": {"type": "request", "id": f"r-{pid}", "label": row.get("label"), "pid": pid},

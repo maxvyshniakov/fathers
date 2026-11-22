@@ -127,7 +127,7 @@ def config_command(argv: list[str], directory: Path) -> int:
         if len(argv) % 2:
             raise SweepError("config takes KEY VALUE pairs, or reset")
         changes: dict[str, Any] = {}
-        for key, value in zip(argv[::2], argv[1::2]):
+        for key, value in zip(argv[::2], argv[1::2], strict=True):
             key = key.replace("-", "_")
             if key not in DEFAULTS:
                 raise SweepError(f"unknown setting {key}; settings: {', '.join(DEFAULTS)}")

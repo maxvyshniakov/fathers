@@ -37,4 +37,4 @@ jobs:
     uses: ./.github/workflows/package.yml
     with:
       package: godfather
-      floor: '3.9'
+      floor: '3.11'

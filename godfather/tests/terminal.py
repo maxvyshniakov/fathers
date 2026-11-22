@@ -29,11 +29,11 @@ ENTRY = ROOT / "godfather"
 
 
 def stamp(moment: datetime.datetime) -> str:
-    return moment.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return moment.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def ago(seconds: float) -> str:
-    return stamp(datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=seconds))
+    return stamp(datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=seconds))
 
 
 def item(label: str, pid: int, kind: str = "held", count: int = 1, **extra: Any) -> dict[str, Any]:

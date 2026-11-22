@@ -57,6 +57,7 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Changed
 
+- The minimum supported Python version is now 3.11 (fathers#218).
 - The command line follows the CLI convention every tool shares (docs/cli.md, fathers#153). A refusal is one line,
   `junkfather: <reason>`, on stderr; a usage error adds `Try 'junkfather [COMMAND] --help'.` instead of argparse's
   usage text, and names the unknown command or option. `junkfather --version` prints what `junkfather version`

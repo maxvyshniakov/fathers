@@ -118,7 +118,7 @@ def tilde(path: str) -> str:
 
 def parse_utc(value: Any) -> datetime.datetime | None:
     try:
-        return datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+        return datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.UTC)
     except (TypeError, ValueError):
         return None
 

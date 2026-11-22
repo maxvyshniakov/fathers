@@ -564,7 +564,7 @@ def measure(requests: list[dict[str, Any]], results: list[dict[str, Any]], start
     deferred_left = 0
     classes: dict[str, dict[str, list[float]]] = {name: {"waits": [], "delays": []} for name in sf_config.PRIORITIES}
     yielded = yields = 0.0
-    for request, result in zip(requests, results):
+    for request, result in zip(requests, results, strict=True):
         if float(request["arrival"]) < start or float(request["arrival"]) > until:
             continue
         end = result["granted"] if result["granted"] is not None else result["left"]
@@ -666,7 +666,7 @@ def validate(requests: list[dict[str, Any]], results: list[dict[str, Any]], star
     """The current order's replay against the recorded waits of the requests whose arrival the history holds."""
     errors: list[float] = []
     recorded = replayed = 0.0
-    for request, result in zip(requests, results):
+    for request, result in zip(requests, results, strict=True):
         if request["source"] != "history" or not start <= float(request["arrival"]) <= until or request["waited"] is None:
             continue
         end = result["granted"] if result["granted"] is not None else result["left"]

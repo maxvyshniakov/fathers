@@ -93,7 +93,7 @@ class HelpTests(unittest.TestCase):
         self.assertNotIn("close", at_end.splitlines()[info.y + info.height - 1])
 
     def test_help_remains_available_when_terminal_is_narrow_or_queue_is_unavailable(self) -> None:
-        model: dict[str, object] = {"updated": datetime.datetime.now(datetime.timezone.utc),
+        model: dict[str, object] = {"updated": datetime.datetime.now(datetime.UTC),
                                    "slots": 6, "used": 0, "holders": [], "waiters": []}
         for contents in (None, model):
             with self.subTest(unavailable=contents is None):

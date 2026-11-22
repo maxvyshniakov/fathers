@@ -5,7 +5,7 @@ The package goes into an immutable release, ~/.local/lib/godfather/releases/<sou
 in a private directory and renamed into place whole; `godfather` in ~/.local/bin (or --bin DIR) is a thin entry
 point into it, replaced atomically. A dashboard already running keeps its release, and its footer shows ↻ once a
 newer one is installed. The entry point names one interpreter: the one running this installer (or --python), never a
-virtual environment's, which disappears with its project; Python 3.9 or later, standard library only.
+virtual environment's, which disappears with its project; Python 3.11 or later, standard library only.
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ from fathers_common.installer import (  # noqa: E402
     write_launcher,
 )
 
-MIN_PYTHON = (3, 9)
+MIN_PYTHON = (3, 11)
 COMMAND = "godfather"
 USAGE = "usage: python3 install.py [--python /path/to/python3] [--bin DIR]"
 SOURCES = ("install.py", "CHANGELOG.md", "LICENSE")
@@ -51,7 +51,7 @@ def options(argv: list[str]) -> dict[str, str]:
 
 def interpreter(python: str | None = None) -> str:
     """The interpreter the command will name: --python PATH, else this one unless it belongs to a virtual
-    environment, whose interpreter disappears with the project. It must exist and be Python 3.9 or later."""
+    environment, whose interpreter disappears with the project. It must exist and be Python 3.11 or later."""
     return resolve_interpreter(python, MIN_PYTHON, tool="godfather", allow_venv=False, allow_explicit_venv=False)
 
 

@@ -9,7 +9,7 @@ Why: a subagent started a headless Firefox through Marionette with a profile in 
 Firefox ran unowned for 11 hours; neither `slotfather sweep` nor `lanefather done` covered it, because it never went
 through either tool. junkfather records the owner when the process starts, so the owner's end can end it.
 
-Python 3.9+, standard library only, macOS and Linux.
+Python 3.11+, standard library only, macOS and Linux.
 
 ## How agents launch through junkfather
 

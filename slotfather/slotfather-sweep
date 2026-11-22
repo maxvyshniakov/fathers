@@ -3,8 +3,8 @@
 import sys
 from pathlib import Path
 
-if sys.version_info < (3, 9):
-    sys.exit("slotfather needs Python 3.9 or later; reinstall with a newer Python: /path/to/python3 install.py")
+if sys.version_info < (3, 11):
+    sys.exit("slotfather needs Python 3.11 or later; reinstall with a newer Python: /path/to/python3 install.py")
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 from slotfather.sweep import main
 

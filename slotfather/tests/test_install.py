@@ -161,14 +161,14 @@ class InstallTests(unittest.TestCase):
         self.assertIn("src/slotfather/board.py", names, "the model behind status --json --full stays")
 
     def test_an_interpreter_older_than_the_minimum_is_refused_before_any_change(self):
-        old_python = self.tmp / "python3.8"
-        old_python.write_text("#!/bin/sh\necho 3.8\n")
+        old_python = self.tmp / "python3.10"
+        old_python.write_text("#!/bin/sh\necho 3.10\n")
         old_python.chmod(0o755)
         self.queue(self.old)
         before = self.contents(self.old)
         result = self.run_install("--python", str(old_python))
         self.assertEqual(2, result.returncode)
-        self.assertIn("is Python 3.8; slotfather needs 3.9 or later", result.stderr)
+        self.assertIn("is Python 3.10; slotfather needs 3.11 or later", result.stderr)
         self.assertEqual(before, self.contents(self.old))
         self.assertFalse((self.bin / "slotfather").exists())
         self.assertEqual("old command", (self.bin / "machine-slot").read_text())

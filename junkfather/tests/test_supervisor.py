@@ -2,6 +2,7 @@
 revived."""
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import subprocess
@@ -46,10 +47,10 @@ class SupervisorLoopTests(Case):
                                        clock=lambda: clock[0], pause=lambda s: clock.__setitem__(0, clock[0] + s))
         supervisor.run()
         self.assertEqual(4, len(attempts), "one attempt per backoff step, not one per loop")
-        gaps = [later[0] - earlier[0] for earlier, later in zip(attempts, attempts[1:])]
+        gaps = [later[0] - earlier[0] for earlier, later in itertools.pairwise(attempts)]
         self.assertEqual(gaps, sorted(gaps))
         self.assertLess(gaps[0], gaps[-1])
-        for gap, delay in zip(gaps, [launch.RETRY_FIRST * 2 ** n for n in range(3)]):
+        for gap, delay in zip(gaps, [launch.RETRY_FIRST * 2 ** n for n in range(3)], strict=True):
             self.assertGreaterEqual(gap, delay)
         self.assertEqual([True, False, False, False], [report for _, report in attempts])
         self.assertLessEqual(launch.retry_delay(50), launch.RETRY_MAX)

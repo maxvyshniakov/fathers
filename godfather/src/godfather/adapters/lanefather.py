@@ -65,7 +65,7 @@ def parse_time(value: Any) -> Optional[datetime.datetime]:
         return None
     for form in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"):
         try:
-            return datetime.datetime.strptime(value, form).replace(tzinfo=datetime.timezone.utc)
+            return datetime.datetime.strptime(value, form).replace(tzinfo=datetime.UTC)
         except ValueError:
             continue
     return None

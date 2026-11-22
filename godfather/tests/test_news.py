@@ -34,7 +34,7 @@ OWN = """# Godfather Changelog
 
 def changelog(name: str, version: str, rows: list[tuple[str, str, str, str]], **extra: Any) -> dict[str, Any]:
     return {"code": 0, "json": dict({"v": 1, "tool": name, "version": version, "source": f"/x/{name}/CHANGELOG.md",
-                                     "entries": [dict(zip(("version", "date", "section", "text"), row))
+                                     "entries": [dict(zip(("version", "date", "section", "text"), row, strict=True))
                                                  for row in rows]}, **extra)}
 
 

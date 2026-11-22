@@ -19,7 +19,7 @@ from godfather.layout import Rect
 
 
 def entry(n: int, kind: str = "held", since: Any = None, **fields: Any) -> dict[str, Any]:
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
     return dict(dict(label=f"job{n}", kind=kind, count=1, pid=10 + n, style="h0", cpu=50, since=now,
                      granted=None if kind == "waiting" else now, rss=1024, procs=1, queue="", cmd="work", tree=[],
                      key=(10 + n, since), priority="normal", ticket=None, meta="", context={}, workdir="",
@@ -27,7 +27,7 @@ def entry(n: int, kind: str = "held", since: Any = None, **fields: Any) -> dict[
 
 
 def model(holders: list[dict[str, Any]], waiters: Optional[list[dict[str, Any]]] = None, **fields: Any) -> dict[str, Any]:
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
     return dict(dict(holders=holders, waiters=waiters or [], slots=8, cores=12, saved=False, averages=(1.0, 1.0, 1.0),
                      advice=dict(unleased_load=0, jobs=4, capacity=8), admission=3, memory_block=None,
                      memory=dict(level=1, used=512, total=1024, swap_total=0, swap_free=None, low=False), history=[],
@@ -198,7 +198,7 @@ class ModeTableTests(Case):
         """Each mode's state: QUEUE focused on the middle of five entries; EVENTS focused, scrolled to 3 of 40
         events; help and what's new scrolled to 3 (what's new with one tool's entries: two filters)."""
         tool = self.tool
-        events = [dict(when=datetime.datetime(2026, 11, 12, tzinfo=datetime.timezone.utc)
+        events = [dict(when=datetime.datetime(2026, 11, 12, tzinfo=datetime.UTC)
                        + datetime.timedelta(seconds=n), verb="granted", count=1, label=f"e{n}", pid=n, delta=1)
                   for n in range(40)]
         state = self.screen(model([entry(n) for n in range(3)], [entry(n, "waiting") for n in range(3, 5)],
@@ -299,7 +299,7 @@ class MouseTableTests(Case):
 
     def test_each_mode_button_and_place(self) -> None:
         tool = self.tool
-        events = [dict(when=datetime.datetime(2026, 11, 12, tzinfo=datetime.timezone.utc)
+        events = [dict(when=datetime.datetime(2026, 11, 12, tzinfo=datetime.UTC)
                        + datetime.timedelta(seconds=n), verb="granted", count=1, label=f"e{n}", pid=n, delta=1)
                   for n in range(40)]
         base = tool.move(self.screen(model([entry(n) for n in range(3)], [entry(n, "waiting") for n in range(3, 5)],
@@ -495,7 +495,7 @@ class WhatsNewTests(Case):
 
     def test_a_refresh_that_moves_events_down_does_not_flash_its_thumb(self) -> None:
         tool = self.tool
-        when = datetime.datetime(2026, 11, 12, tzinfo=datetime.timezone.utc)
+        when = datetime.datetime(2026, 11, 12, tzinfo=datetime.UTC)
         events = [dict(when=when + datetime.timedelta(seconds=n), verb="granted", count=1, label=f"e{n}", pid=n,
                        delta=1) for n in range(40)]
         state = self.screen(model([entry(0)], events=events))
@@ -577,7 +577,7 @@ class SelectionTests(Case):
         self.assertEqual(((10, None), 1), state.selection.key)
         self.assertNotEqual(found["holders"][0]["style"], found["holders"][1]["style"])
         keys = {self.tool.details_key(item, identity) for item, identity in
-                zip(found["holders"], self.tool.entry_ids(found["holders"]))}
+                zip(found["holders"], self.tool.entry_ids(found["holders"]), strict=True)}
         self.assertEqual(2, len(keys))
         state = self.reload(state, model([dict(twin), entry(0)]))
         self.assertEqual(1, state.selection.index, "the second of the two stays the second")
@@ -632,7 +632,7 @@ class DetailsTests(Case):
         tool = self.tool
         a, b = entry(0), entry(1)
         state = self.screen(model([a, b]))
-        for item, identity in zip([a, b], tool.entry_ids([a, b])):
+        for item, identity in zip([a, b], tool.entry_ids([a, b]), strict=True):
             state, _ = tool.reduce(state, tool.DetailsLoaded(tool.details_key(item, identity)), 1.0)
         self.assertEqual(2, len(state.details))
         state, _ = tool.reduce(state, tool.ModelLoaded(model([b]), 8), 2.0)

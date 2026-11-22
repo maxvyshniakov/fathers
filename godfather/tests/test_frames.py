@@ -46,7 +46,7 @@ class FrameTests(Case):
     def setUp(self) -> None:
         super().setUp()
         self.clock = 1000.0
-        self.moment = datetime.datetime(2026, 11, 16, 12, 0, tzinfo=datetime.timezone.utc)
+        self.moment = datetime.datetime(2026, 11, 16, 12, 0, tzinfo=datetime.UTC)
         self.size = os.terminal_size((156, 43))
         self.out, path = tempfile.mkstemp()  # a file never blocks a write, unlike a PTY whose reader is the test
         os.unlink(path)

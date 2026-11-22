@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import hashlib
 import math
 import time
-from typing import Any, Iterable, Mapping, NamedTuple, TypedDict, Union, cast
+from typing import Any, Iterable, Mapping, NamedTuple, TypedDict, cast
 
 from . import config as _config
 
@@ -495,7 +495,7 @@ class Refused:
     reason: str
 
 
-Outcome = Union[Ran, Left, Reaped, Refused]
+Outcome = Ran | Left | Reaped | Refused
 
 
 def ran(entry: Mapping[str, Any]) -> bool:

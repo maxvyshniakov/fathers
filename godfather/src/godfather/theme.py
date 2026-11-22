@@ -185,7 +185,7 @@ def hue(rgb: RGB) -> float:
 def mix(base: RGB, other: RGB, amount: float) -> RGB:
     """`amount` of `other` in `base`, interpolated in OKLab, like color-mix(in oklab, …)."""
     first, second = oklab(base), oklab(other)
-    lightness, a, b = (x + (y - x) * amount for x, y in zip(first, second))
+    lightness, a, b = (x + (y - x) * amount for x, y in zip(first, second, strict=True))
     return from_oklab((lightness, a, b))
 
 

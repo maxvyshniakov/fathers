@@ -2,7 +2,7 @@
 # sets only its own paths, its target version and the rules it does not pass yet (`extend-ignore`, the debt list
 # that its typing and tidy-up tickets shrink). Root tools/ follow it as is.
 line-length = 120
-target-version = "py39"
+target-version = "py311"
 
 [lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PL"]

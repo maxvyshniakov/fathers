@@ -1,5 +1,6 @@
 """The navigation scene (the README media) advances recorded observations without inventing queue events."""
 import importlib.util
+import itertools
 import unittest
 from pathlib import Path
 from typing import Any
@@ -53,7 +54,7 @@ class NavigationDemoTests(DemoCase):
         text = canvas.render(False)
         self.assertTrue(any(glyph in text for glyph in "▁▂▃▄▅▆▇"))
         values = tool.history_buckets(model["history"], 56, model["history_window"])
-        self.assertGreaterEqual(sum(a != b for a, b in zip(values, values[1:])), 5)
+        self.assertGreaterEqual(sum(a != b for a, b in itertools.pairwise(values)), 5)
         self.assertGreaterEqual(max(values) - min(values), 3)
 
 

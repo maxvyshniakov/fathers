@@ -17,10 +17,10 @@ KITTY_OFF = b"\x1b[<u"
 # CSI key-code[:shifted[:base]] [; modifiers[:event]] [; text] u
 KITTY_KEY = re.compile(r"\x1b\[(\d+)(?::(\d*))?(?::(\d+))?(?:;(\d*)(?::\d+)?)?(?:;[\d:]*)?u")
 
-_US_SHIFT = dict(zip("`1234567890-=[]\\;',./", "~!@#$%^&*()_+{}|:\"<>?"))
+_US_SHIFT = dict(zip("`1234567890-=[]\\;',./", "~!@#$%^&*()_+{}|:\"<>?", strict=True))
 _RU_LOWER, _RU_UPPER = "ёйцукенгшщзхъфывапролджэячсмитьбю.", "ЁЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ,"
 _US_LOWER, _US_UPPER = "`qwertyuiop[]asdfghjkl;'zxcvbnm,./", "~QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>?"
-LAYOUT = {**dict(zip(_RU_LOWER, _US_LOWER)), **dict(zip(_RU_UPPER, _US_UPPER)),
+LAYOUT = {**dict(zip(_RU_LOWER, _US_LOWER, strict=True)), **dict(zip(_RU_UPPER, _US_UPPER, strict=True)),
           # Ukrainian: the same, with і, ї, є, ґ where Russian has ы, ъ, э and ё
           "і": "s", "І": "S", "ї": "]", "Ї": "}", "є": "'", "Є": '"', "ґ": "`", "Ґ": "~"}
 # Only ',' (Russian shift+/, where `?` opens help) is ASCII among the layout's characters; '.' (Russian /) stays

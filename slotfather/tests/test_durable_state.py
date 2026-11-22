@@ -133,7 +133,7 @@ class WriteTests(unittest.TestCase):
         events = sf_board.queue_events(self.dir)
         self.assertEqual(["granted", "released"], [event["verb"] for event in events])
         self.assertEqual([2, -2], [event["delta"] for event in events])
-        self.assertEqual(datetime.timezone.utc, events[0]["when"].tzinfo)
+        self.assertEqual(datetime.UTC, events[0]["when"].tzinfo)
 
 
 class QueueFileTests(SlotCase):

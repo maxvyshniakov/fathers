@@ -107,6 +107,8 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Changed
 
+- The minimum supported Python version is now 3.11 (fathers#218).
+
 - The `3 procs` summary separates live unowned processes (`N unowned`) from unowned non-process resources
   (`N resources`, dropped before `unowned` on a narrow border) and excludes processes already gone since the sweep.
   On the `PROCESSES` page, live unowned processes, dead sweep leftovers (`gone since the sweep`, dimmed with `◌` and

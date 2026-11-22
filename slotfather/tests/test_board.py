@@ -29,7 +29,7 @@ def encoded(value: Any) -> Any:
     """The block's encoding, written out here on its own: datetimes as RFC 3339 UTC with milliseconds, tuples as
     arrays."""
     if isinstance(value, datetime.datetime):
-        utc = value.astimezone(datetime.timezone.utc)
+        utc = value.astimezone(datetime.UTC)
         return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond // 1000:03d}Z"
     if isinstance(value, dict):
         return {key: encoded(item) for key, item in cast(dict[str, Any], value).items()}
@@ -332,7 +332,7 @@ class EventTests(unittest.TestCase):
         self.assertEqual(("left", 0, "never granted"), (stray["verb"], stray["delta"], stray["detail"]))
         build = next(event for event in events if event["pid"] == 101 and event["verb"] != "granted")
         self.assertEqual(("released", -1), (build["verb"], build["delta"]), "a history line still says it held")
-        now = datetime.datetime(2026, 11, 11, 2, 8, tzinfo=datetime.timezone.utc)
+        now = datetime.datetime(2026, 11, 11, 2, 8, tzinfo=datetime.UTC)
         steps = tool.held_history(events, 1, now, window=600)
         self.assertLessEqual(max(level for _, _, level in steps), 3, "no more than build, verify and live held")
         self.assertEqual(1, steps[-1][2], "live holds 1 now")
@@ -348,7 +348,7 @@ class EventTests(unittest.TestCase):
         events = tool.queue_events(directory)
         self.assertEqual(["granted", "granted", "left", "released", "reaped"], [e["verb"] for e in events])
         self.assertEqual("build", events[3]["label"], "a release is named by the grant to its pid")
-        now = datetime.datetime(2026, 1, 1, 10, 50, tzinfo=datetime.timezone.utc)
+        now = datetime.datetime(2026, 1, 1, 10, 50, tzinfo=datetime.UTC)
         steps = tool.held_history(events, 0, now, window=3600)
         self.assertEqual([0, 2, 3, 1, 0], [level for _, _, level in steps])
 
@@ -414,9 +414,9 @@ class EventTests(unittest.TestCase):
         ], [(e["verb"], e["label"], e["delta"], e["detail"]) for e in events])
 
         def t(minute: int) -> datetime.datetime:
-            return datetime.datetime(2026, 1, 1, 10, minute, tzinfo=datetime.timezone.utc)
+            return datetime.datetime(2026, 1, 1, 10, minute, tzinfo=datetime.UTC)
 
-        now = datetime.datetime(2026, 1, 1, 11, 0, tzinfo=datetime.timezone.utc)
+        now = datetime.datetime(2026, 1, 1, 11, 0, tzinfo=datetime.UTC)
         steps = tool.held_history(events, 0, now, window=3600)
         self.assertEqual([
             (t(0), t(10), 0),
@@ -457,9 +457,9 @@ class EventTests(unittest.TestCase):
         ], [(e["verb"], e["label"], e["delta"]) for e in events])
 
         def t(minute: int) -> datetime.datetime:
-            return datetime.datetime(2026, 1, 1, 10, minute, tzinfo=datetime.timezone.utc)
+            return datetime.datetime(2026, 1, 1, 10, minute, tzinfo=datetime.UTC)
 
-        now = datetime.datetime(2026, 1, 1, 11, 0, tzinfo=datetime.timezone.utc)
+        now = datetime.datetime(2026, 1, 1, 11, 0, tzinfo=datetime.UTC)
         steps = tool.held_history(events, 0, now, window=3600)
         self.assertEqual([
             (t(0), t(10), 0),

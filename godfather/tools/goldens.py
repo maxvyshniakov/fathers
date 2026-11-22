@@ -99,7 +99,7 @@ def load(path: Path, name: str) -> Any:
 
 def stamp(value: Any) -> Any:
     if isinstance(value, dt.datetime):
-        return value.astimezone(dt.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        return value.astimezone(dt.UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     if isinstance(value, dict):
         return {str(key): stamp(item) for key, item in cast(dict[Any, Any], value).items()}
     if isinstance(value, (list, tuple)):
@@ -509,7 +509,7 @@ def admission_screen(name: str, theme: str | None) -> str:
 
     with environment(theme):
         palette = themes.from_environment()
-        moment = dt.datetime(2026, 11, 16, 1, 30, tzinfo=dt.timezone.utc)
+        moment = dt.datetime(2026, 11, 16, 1, 30, tzinfo=dt.UTC)
         model: dict[str, Any] = dict(
             slots=8, cores=12, averages=(6.3, 6.0, 6.0), admission=0, advice={"unleased_load": 0.2, "jobs": 1},
             memory_block=None, used=8, free=0, holders=[], waiters=[], draining=0,
@@ -542,7 +542,7 @@ def unleased_screen(name: str, theme: str | None) -> str:
     width, height = UNLEASED[name]
     with environment(theme):
         palette = themes.from_environment()
-        moment = dt.datetime(2026, 11, 16, 1, 30, tzinfo=dt.timezone.utc)
+        moment = dt.datetime(2026, 11, 16, 1, 30, tzinfo=dt.UTC)
         model: dict[str, Any] = dict(
             slots=8, cores=12, averages=(14.2, 13.0, 12.1), admission=2, advice={"unleased_load": 11.8, "jobs": 1},
             memory_block=None, used=1, free=7, holders=[], waiters=[], draining=0,

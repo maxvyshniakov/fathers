@@ -342,7 +342,7 @@ def week(stamp: Any) -> str | None:
     moment = _config.seconds(stamp)
     if moment is None:
         return None
-    year, number, _ = datetime.datetime.fromtimestamp(moment, datetime.timezone.utc).isocalendar()
+    year, number, _ = datetime.datetime.fromtimestamp(moment, datetime.UTC).isocalendar()
     return f"{year}-W{number:02d}"
 
 

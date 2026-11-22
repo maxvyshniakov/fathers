@@ -5,7 +5,7 @@
 
 Each install is a new directory, share/releases/<version>-<commit>, and share/current points at it; the command reads
 `current` when it starts, so a running supervisor keeps the release it started from. The three newest releases stay.
-The command runs on one named interpreter (this one, or --python; 3.9 or newer).
+The command runs on one named interpreter (this one, or --python; 3.11 or newer).
 
 --launchd  writes ~/Library/LaunchAgents/com.junkfather.sweep.plist (`junkfather sweep --plist`: hourly and at load)
            and loads it again (launchctl bootout, then bootstrap).
@@ -50,7 +50,7 @@ from fathers_common.installer import (  # noqa: E402
 
 __all__ = ["InstallError", "allow_rule", "install", "interpreter", "launchd", "main", "mastack", "write_atomic"]
 
-MIN_PYTHON = (3, 9)
+MIN_PYTHON = (3, 11)
 KEEP_RELEASES = 3
 LAUNCHER = """#!{python}
 # junkfather's command (install.py): the release share/current points at, on the interpreter it was installed for.

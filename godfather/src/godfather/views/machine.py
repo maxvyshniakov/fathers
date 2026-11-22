@@ -198,7 +198,7 @@ def draw_resource_rows(canvas: Canvas, area: Rect, resources: list[Resource]) ->
                                                  max(text_width(item.short) for item in resources))
     values = [resource.short if shortened else resource.value for resource in resources]
     health = _common.marks_of(canvas).health
-    for line, (resource, value) in enumerate(zip(resources, values), area.y):
+    for line, (resource, value) in enumerate(zip(resources, values, strict=True), area.y):
         canvas.put(line, area.x, health["hot" if resource.critical else "ok"], "text", 2)
         canvas.put(line, area.x + 3, resource.label, "dim")
         if bar_width and resource.fraction is not None:
@@ -306,7 +306,7 @@ def unleased_lines(rows: Sequence[TreeRow], width: int) -> list[list[Part]]:
         if name_width >= UNLEASED_NAME_MIN:
             break
     name_width = max(0, name_width)
-    shown = list(zip(columns[first:], widths[first:]))
+    shown = list(zip(columns[first:], widths[first:], strict=True))
     if text_width(UNLEASED_TITLE) <= name_width:
         header: list[Part] = [(UNLEASED_TITLE + " " * (name_width - text_width(UNLEASED_TITLE)), "dim")]
         header += [(" " * gap + head.rjust(column), "dim") for (head, _), column in shown]

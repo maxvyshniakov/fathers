@@ -22,7 +22,7 @@ from godfather.model import Dashboard
 from godfather.tui import Canvas
 from godfather.views import machine
 
-NOW = datetime.datetime(2026, 11, 22, 12, 0, tzinfo=datetime.timezone.utc)
+NOW = datetime.datetime(2026, 11, 22, 12, 0, tzinfo=datetime.UTC)
 TABLE = [(1, 0, 0.5, 20_000, "launchd"),
          (812, 1, 312.4, 2_516_582, "com.apple.Virtualization.VirtualMachine"),
          (9120, 1, 148.0, 1_153_434, "Google Chrome Helper (Renderer)"),

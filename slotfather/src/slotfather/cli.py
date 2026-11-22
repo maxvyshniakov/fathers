@@ -6,7 +6,7 @@ Slots: one per three cores, at least one, and no more than one per 4 GiB of memo
 and `slotfather slots reset` restores the automatic default.
 
 State: ~/.local/state/slotfather (SLOTFATHER_DIR replaces it; another user's queue is read only).
-Standard library only, Python 3.9 or later: install.py puts thin entry points in ~/.local/bin and
+Standard library only, Python 3.11 or later: install.py puts thin entry points in ~/.local/bin and
 preserves their complete package in an immutable release.
 """
 from __future__ import annotations

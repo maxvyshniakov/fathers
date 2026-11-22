@@ -24,7 +24,7 @@ class MarkTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tool: Any = _view.fresh()
         self.tool.set_theme(theme.resolve("auto", environ=DARK))
-        self.now = datetime.datetime.now(datetime.timezone.utc)
+        self.now = datetime.datetime.now(datetime.UTC)
 
     def model(self) -> dict[str, Any]:
         now, old = self.now, self.now - datetime.timedelta(minutes=30)
@@ -271,7 +271,7 @@ class TintTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.tool: Any = _view.fresh()
-        self.now = datetime.datetime.now(datetime.timezone.utc)
+        self.now = datetime.datetime.now(datetime.UTC)
 
     def selected_sgr(self, index: int) -> tuple[str, Any]:
         canvas = self.tool.Canvas(120, 14)
@@ -342,7 +342,7 @@ class FrameTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tool: Any = _view.fresh()
         self.tool.set_theme(theme.resolve("auto", environ=DARK))
-        self.now = datetime.datetime.now(datetime.timezone.utc)
+        self.now = datetime.datetime.now(datetime.UTC)
 
     def thumb(self, canvas: Any, x: int, top: int, height: int) -> list[int]:
         return [row - top for row in range(top, top + height) if canvas.cells[row][x][0] == "┃"]

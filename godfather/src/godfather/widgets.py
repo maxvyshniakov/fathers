@@ -5,6 +5,7 @@ dropping, header labels in the border and rows of emoji cells cut to their colum
 it goes comes from layout.py and from these."""
 from __future__ import annotations
 
+import itertools
 from typing import Any, Optional, Union
 
 from .layout import clamp_scroll, Rect
@@ -134,7 +135,7 @@ class Panel:
         both frames at that row a bar in its colour, thicker than the frame's sides (SELECTED_FRAME): no cursor glyph."""
         x, width = self.rect.x, self.rect.width
         self.canvas.select(row, x + 1, x + width - 1, tint)
-        for frame, marker in zip((x, x + width - 1), SELECTED_FRAME[self.focused]):
+        for frame, marker in zip((x, x + width - 1), SELECTED_FRAME[self.focused], strict=True):
             self.canvas.put(row, frame, marker, style)
 
     def gap(self, start: int, end: int) -> None:
@@ -286,7 +287,7 @@ class Table:
             canvas.put(y, start, value, "title" if index == 0 else "text" if panel.focused else "dim", size)
             canvas.put(y, min(x + width - 2, start + min(size, text_width(value))), " ", "text")
             spans.append((start, start + min(size, text_width(value))))
-        for (_, end), (start, _) in zip(spans, spans[1:]):  # a tick of rule between every two labels
+        for (_, end), (start, _) in itertools.pairwise(spans):  # a tick of rule between every two labels
             panel.gap(end, start)
 
     def row(self, canvas: Canvas, y: int, x: int, values: dict[str, Value]) -> None:

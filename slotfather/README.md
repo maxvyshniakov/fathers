@@ -44,7 +44,7 @@ The live dashboard is [Godfather](../godfather), which reads Slotfather through 
 
 ## Install
 
-Requires Git for source installation and Python 3.9+ on macOS or Linux. The installed commands use only the Python
+Requires Git for source installation and Python 3.11+ on macOS or Linux. The installed commands use only the Python
 standard library; Linux needs procps-compatible `ps`.
 
 ```sh

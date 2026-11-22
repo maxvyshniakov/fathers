@@ -678,11 +678,11 @@ class MemoryGuardTests(SlotCase):
 
 class CommandLineTests(SlotCase):
     def test_an_interpreter_older_than_the_minimum_says_how_to_reinstall(self):
-        result = subprocess.run([sys.executable, "-c", "import runpy, sys; sys.version_info = (3, 8, 0); "
+        result = subprocess.run([sys.executable, "-c", "import runpy, sys; sys.version_info = (3, 10, 0); "
                                  f"runpy.run_path({TOOL!r}, run_name='__main__')", "status"],
                                 env=self.env, capture_output=True, text=True, timeout=20)
         self.assertEqual(1, result.returncode)
-        self.assertIn("slotfather needs Python 3.9 or later", result.stderr)
+        self.assertIn("slotfather needs Python 3.11 or later", result.stderr)
         self.assertIn("install.py", result.stderr)
 
     def test_bypass_runs_without_a_lease(self):

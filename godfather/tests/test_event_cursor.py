@@ -16,7 +16,7 @@ from godfather import reducer, state as state_module, tui
 from godfather.model import Dashboard
 from godfather.views import common, details, overview
 
-WHEN = datetime.datetime(2026, 11, 16, 9, 0, tzinfo=datetime.timezone.utc)
+WHEN = datetime.datetime(2026, 11, 16, 9, 0, tzinfo=datetime.UTC)
 
 
 def at(seconds: float) -> datetime.datetime:

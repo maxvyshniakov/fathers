@@ -6,7 +6,7 @@ define the JSON wire shapes documented in `docs/api.md` and guarded by `tests/te
 """
 from __future__ import annotations
 
-from typing import Any, Optional, TypedDict, Union
+from typing import Any, Optional, TypedDict
 
 from .entry import Entry
 
@@ -417,9 +417,9 @@ class TruncatedDetails(TypedDict):
     truncated: bool
 
 
-Details = Union[Granted, Released, Left, Reaped, Reprioritized, WaitingLong, YieldAsked, Yielded, Empty,
-                CapacityChanged, OrderChanged, Swept, SessionRun, SessionEnded, Outlier, Trend, ReapSkipped,
-                ReapResumed, HeadDropped, LockEnded]
+Details = (Granted | Released | Left | Reaped | Reprioritized | WaitingLong | YieldAsked | Yielded | Empty
+           | CapacityChanged | OrderChanged | Swept | SessionRun | SessionEnded | Outlier | Trend | ReapSkipped
+           | ReapResumed | HeadDropped | LockEnded)
 
 
 class _EventBase(TypedDict):

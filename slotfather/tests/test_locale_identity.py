@@ -120,7 +120,7 @@ class MixedLocaleTests(SlotCase):
             for label, _, _ in clients:
                 self.assertIn(f"held: 1 slot(s) {label}", status.stdout, (locale, zone, status.stdout))
         self.assertNotIn("reaped", (self.state / "queue.log").read_text())
-        for (label, _, _), process in zip(clients, running):
+        for (label, _, _), process in zip(clients, running, strict=True):
             self.release(label)
             self.finish(process)
 

@@ -28,7 +28,7 @@ TOOLS = ("slotfather", "lanefather", "junkfather")
 
 
 def _load_parsers() -> dict[str, Callable[[str | None, str | None, str | None], dict[str, Any]]]:
-    """Import each sibling package's changelog report entrypoint directly on any supported Python (3.9+)."""
+    """Import each sibling package's changelog report entrypoint directly on any supported Python (3.11+)."""
     for extra in (REPOSITORY / "slotfather" / "src", REPOSITORY / "lanefather", REPOSITORY / "junkfather",
                   REPOSITORY / "common"):
         path_str = str(extra)
@@ -164,19 +164,18 @@ class ChangelogContractTests(unittest.TestCase):
                  [sys.executable, "-c", f"import sys; sys.path.insert(0, {str(jf_rel)!r}); "
                                         "from junkfather.cli import main; sys.exit(main(sys.argv[1:]))"]),
             ]
-            if sys.version_info >= (3, 11):
-                lf_rel = tmp / "lf-release"
-                shutil.copytree(REPOSITORY / "lanefather" / "lanefather", lf_rel / "lanefather",
-                                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-                shutil.copytree(REPOSITORY / "common" / "fathers_common", lf_rel / "fathers_common",
-                                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-                (lf_rel / "lanefather" / "CHANGELOG.md").write_bytes(changelog_bytes)
-                (lf_rel / "lanefather" / "COMMIT").write_text(commit + "\n", encoding="utf-8")
-                invocations.append((
-                    "lanefather", lf_rel / "lanefather" / "CHANGELOG.md",
-                    [sys.executable, "-c", f"import sys; sys.path.insert(0, {str(lf_rel)!r}); "
-                                           "from lanefather.cli import main; sys.exit(main(sys.argv[1:]))"],
-                ))
+            lf_rel = tmp / "lf-release"
+            shutil.copytree(REPOSITORY / "lanefather" / "lanefather", lf_rel / "lanefather",
+                            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+            shutil.copytree(REPOSITORY / "common" / "fathers_common", lf_rel / "fathers_common",
+                            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+            (lf_rel / "lanefather" / "CHANGELOG.md").write_bytes(changelog_bytes)
+            (lf_rel / "lanefather" / "COMMIT").write_text(commit + "\n", encoding="utf-8")
+            invocations.append((
+                "lanefather", lf_rel / "lanefather" / "CHANGELOG.md",
+                [sys.executable, "-c", f"import sys; sys.path.insert(0, {str(lf_rel)!r}); "
+                                       "from lanefather.cli import main; sys.exit(main(sys.argv[1:]))"],
+            ))
 
             for tool, expected_source, prefix in invocations:
                 with self.subTest(tool=tool):

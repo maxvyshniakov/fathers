@@ -68,7 +68,7 @@ def parse_utc(value: object) -> datetime.datetime | None:
         return None
     for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"):
         try:
-            return datetime.datetime.strptime(value, fmt).replace(tzinfo=datetime.timezone.utc)
+            return datetime.datetime.strptime(value, fmt).replace(tzinfo=datetime.UTC)
         except ValueError:
             continue
     return None
@@ -146,7 +146,7 @@ def psi_low(memory: dict[str, Any]) -> bool:
     limits = (_config.number_setting("MAX_PSI_SOME", _config.MAX_PSI_SOME),
               _config.number_setting("MAX_PSI_FULL", _config.MAX_PSI_FULL))
     values = (memory.get("psi_some"), memory.get("psi_full"))
-    return any(isinstance(value, (int, float)) and value >= limit for value, limit in zip(values, limits))
+    return any(isinstance(value, (int, float)) and value >= limit for value, limit in zip(values, limits, strict=True))
 
 
 def swap_low(memory: dict[str, Any]) -> bool:
@@ -469,12 +469,12 @@ def dashboard_model(
                 "asked": dashboard_text(request.get("label") or "?") if request else "",
                 "asked_at": parse_utc(request.get("at")) if request else None,
                 # #12: since when the holder's record says the lease has been idle (query.look()).
-                "idle_since": datetime.datetime.fromtimestamp(entry["idle_since"], datetime.timezone.utc)
+                "idle_since": datetime.datetime.fromtimestamp(entry["idle_since"], datetime.UTC)
                 if isinstance(entry.get("idle_since"), (int, float)) else None,
                 "served": foreseen.get("priority") or
                 (entry.get("aged") if entry.get("aged") in _config.PRIORITIES else None),
                 "reprioritized": entry.get("reprioritized") if entry.get("reprioritized") in _config.PRIORITIES else None,
-                "est_start": datetime.datetime.fromtimestamp(foreseen["est_start"], datetime.timezone.utc)
+                "est_start": datetime.datetime.fromtimestamp(foreseen["est_start"], datetime.UTC)
                 if foreseen.get("est_start") is not None else None,
                 "granted": parse_utc(entry.get("granted")), "passable": kind == "waiting" and _schedule.overtakable(entry, time.time(), _config.overtake_window()),
                 "all": bool(entry.get("all")),
@@ -508,11 +508,11 @@ def dashboard_model(
                for e in live_waiters]
     used = sum(h["count"] for h in holders) + sum(count for _, _, count in look.reserved)
     room = adm.dashboard_room()
-    start = datetime.datetime.fromtimestamp(room.start, datetime.timezone.utc) if room.start is not None else None
-    reserved = datetime.datetime.fromtimestamp(room.reserved, datetime.timezone.utc) if room.reserved is not None else None
+    start = datetime.datetime.fromtimestamp(room.start, datetime.UTC) if room.start is not None else None
+    reserved = datetime.datetime.fromtimestamp(room.reserved, datetime.UTC) if room.reserved is not None else None
     events = queue_events(directory)
     describe_events(events, directory, live)
-    moment = datetime.datetime.now(datetime.timezone.utc)
+    moment = datetime.datetime.now(datetime.UTC)
     free = max(0, slots - used)
     own_held = sum(h["count"] for h in holders if h["kind"] == "held")
     memory_budget_mb = None if room.memory_budget_mb is None else round(room.memory_budget_mb, 1)
@@ -538,7 +538,7 @@ def dashboard_model(
 
 def stamp(moment: datetime.datetime) -> str:
     """A moment as RFC 3339 UTC with milliseconds: 2026-11-12T02:24:16.204Z."""
-    utc = moment.astimezone(datetime.timezone.utc)
+    utc = moment.astimezone(datetime.UTC)
     return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond // 1000:03d}Z"
 
 
@@ -581,7 +581,7 @@ def full_status(directory: Path | None = None) -> dict[str, Any]:
     look = _query.look(directory)
     adm = look.admission()
     found = _query.status_json(look.directory, look=look, admission=adm)
-    found.update(host=host(), time=stamp(datetime.datetime.now(datetime.timezone.utc)),
+    found.update(host=host(), time=stamp(datetime.datetime.now(datetime.UTC)),
                  dashboard=dashboard_json(dashboard_model(look, admission=adm)))
     return found
 

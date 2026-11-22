@@ -250,7 +250,7 @@ class PageTests(Case):
         self.assertNotIn("2 lanes", self.text().split("\n")[4], "no summary")
 
     def test_stale_is_dimmed_with_its_time(self) -> None:
-        since = datetime.datetime(2026, 11, 4, 9, 0, tzinfo=datetime.timezone.utc)
+        since = datetime.datetime(2026, 11, 4, 9, 0, tzinfo=datetime.UTC)
         self.tools = {"lanefather": state_module.Tool("lanefather", "stale", "timed out", decoded(), since)}
         self.keys(self.screen(), "2")
         self.assertRegex(self.text(), r"stale since \d\d:\d\d")
@@ -345,7 +345,7 @@ class ContractTests(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp(prefix="godfather-lanefather-"))
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         (tmp / "empty").mkdir()
-        seen = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        seen = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         registry = tmp / "projects.json"
         registry.write_text(json.dumps({"v": 1, "projects": [
             {"state_dir": str(tmp / "empty"), "project": "empty", "seen": seen},

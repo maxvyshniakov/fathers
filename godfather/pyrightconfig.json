@@ -18,6 +18,6 @@
     "tests",
     "../common"
   ],
-  "pythonVersion": "3.9",
+  "pythonVersion": "3.11",
   "typeCheckingMode": "strict"
 }

@@ -1,6 +1,6 @@
 # Checks
 
-The installed command uses only Python's standard library (3.9+). Ruff and Pyright are development checks, pinned
+The installed command uses only Python's standard library (3.11+). Ruff and Pyright are development checks, pinned
 in `requirements-dev.txt`.
 
 ## Gate

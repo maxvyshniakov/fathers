@@ -19,7 +19,7 @@ HOST = "mbp"
 
 
 def stamp(moment: dt.datetime) -> str:
-    utc = moment.astimezone(dt.timezone.utc)
+    utc = moment.astimezone(dt.UTC)
     return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond // 1000:03d}Z"
 
 

@@ -75,7 +75,7 @@ def docker_timestamp(value: object) -> float | None:
                 hours, minutes = int(offset_raw[1:3]), int(offset_raw[3:5])
                 tz = datetime.timezone(datetime.timedelta(seconds=sign * (hours * 3600 + minutes * 60)))
                 return base.replace(tzinfo=tz).timestamp()
-            return base.replace(tzinfo=datetime.timezone.utc).timestamp()
+            return base.replace(tzinfo=datetime.UTC).timestamp()
         except ValueError:
             return None
     return None

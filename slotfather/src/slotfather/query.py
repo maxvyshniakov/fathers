@@ -50,7 +50,7 @@ class Look(NamedTuple):
 
     def id_of(self, entry: dict[str, Any]) -> str | None:
         """The id (file stem) of an entry of this look, by identity: one of `live` or of `found`."""
-        for (path, raw), item in zip(self.found, self.live):
+        for (path, raw), item in zip(self.found, self.live, strict=True):
             if entry is item or entry is raw:
                 return path.stem
         return None
@@ -61,7 +61,7 @@ class Look(NamedTuple):
 
     def phase_of(self, entry: dict[str, Any]) -> _entry.Phase:
         """The entry's phase (entry.phase()), with its yield request and idle mark from this look."""
-        at = next((n for n, ((_, raw), item) in enumerate(zip(self.found, self.live)) if entry is item or entry is raw),
+        at = next((n for n, ((_, raw), item) in enumerate(zip(self.found, self.live, strict=True)) if entry is item or entry is raw),
                   None)
         idle = None if at is None else self.live[at].get("idle_since")
         return _entry.phase(entry, bool(self.asked_of(entry)), idle)
@@ -198,7 +198,7 @@ def status_lines(directory: Path | None = None) -> list[str]:
     legacy = found.legacy
     expect = outlook(directory, [e for _, e in live], slots, found.other, settings=found.settings)
     lines: list[str] = []
-    for (path, e), item in zip(live, found.live):
+    for (path, e), item in zip(live, found.live, strict=True):
         meta = _entry.meta_of(e)
         tags = f" meta={_config.meta_text(meta)}" if meta else ""
         since = item.get("idle_since") if _entry.is_held(e) else None
@@ -419,7 +419,7 @@ def status_json(
     live = look.found
     strange = list(look.unknown)
     kept = list(look.reserved)
-    marked = {id(entry): item.get("idle_since") for (_, entry), item in zip(look.found, look.live)}
+    marked = {id(entry): item.get("idle_since") for (_, entry), item in zip(look.found, look.live, strict=True)}
     entries_found: list[dict[str, Any]] = []
     for path, entry in live:
         item = entry_item(path, entry, table)
@@ -447,7 +447,7 @@ def status_json(
         with contextlib.suppress(Exception):
             from . import runtype as _runtype
             known = _runtype.cached(directory)
-    for (_, entry), item in zip(live, entries_found):
+    for (_, entry), item in zip(live, entries_found, strict=True):
         if known is not None:
             with contextlib.suppress(Exception):  # the dashboard's poll never fails for it
                 from . import runtype as _runtype

@@ -103,7 +103,7 @@ def load_scene(advance: bool = False, elapsed: Callable[[], float] | None = None
             fresh["averages"] = observation["averages"]
             fresh["memory"].update(observation["memory"])
             judge(fresh["memory"])
-            for item, usage in zip(fresh["holders"], observation["lanes"]):
+            for item, usage in zip(fresh["holders"], observation["lanes"], strict=False):
                 for key in ("cpu", "rss", "procs"):
                     item[key] = usage[key]
         fresh["history"] = [(history_anchor + dt.timedelta(seconds=step["start"]),
