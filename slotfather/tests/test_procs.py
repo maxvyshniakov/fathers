@@ -272,6 +272,46 @@ class RecheckTests(unittest.TestCase):
         self.assertEqual([{"pid": 53, "start": "Wed Nov 4 10:00:01 2026", "cmd": "git status",
                            "cwd_unknown": False, "lease_unknown": True}], found["unknown"])
 
+    def test_linux_exited_pid_is_dropped_while_a_live_pid_denying_its_cwd_stays_unknown(self):
+        """/proc: a pid gone between the ps scan and the cwd read (no /proc entry) is dropped by the re-check, while
+        a live one whose cwd answers EACCES (another credential, hidepid) stays in `cwd_unknown` and is named."""
+        uid = os.geteuid()
+        proc = Path(self.tmp.name) / "proc"
+        (proc / "self/ns").mkdir(parents=True)
+        (proc / "self/ns/mnt").symlink_to("mnt:[111]")
+        for number, directory in ((51, "/home/user"), (52, "/work/lane"), (54, "/work/lane")):
+            (proc / str(number) / "ns").mkdir(parents=True)
+            (proc / str(number) / "ns/mnt").symlink_to("mnt:[111]")
+            (proc / str(number) / "cwd").symlink_to(directory)
+        real = os.readlink
+
+        def denied(path: str | os.PathLike[str]) -> str:
+            if Path(path).parent.name == "54" or Path(path).parent.parent.name == "54":
+                raise PermissionError(13, "Permission denied", str(path))
+            return real(path)
+
+        table = subprocess.CompletedProcess([], 0, "\n".join((
+            f"51 1 {uid} ?? S Wed Nov  4 10:00:00 2026 /bin/zsh",
+            f"52 51 {uid} ?? S Wed Nov  4 10:00:01 2026 python3 test.py",
+            f"53 51 {uid} ?? S Wed Nov  4 10:00:02 2026 git status",
+            f"54 51 {uid} ?? S Wed Nov  4 10:00:03 2026 node hidden.js")) + "\n", "")
+        live = "54 S Wed Nov  4 10:00:03 2026\n"
+        rechecks = {"exited": subprocess.CompletedProcess([], 1, live, ""),
+                    "zombie": subprocess.CompletedProcess([], 0, "53 Z Wed Nov  4 10:00:02 2026\n" + live, ""),
+                    "reused": subprocess.CompletedProcess([], 0, "53 S Wed Nov  4 11:30:00 2026\n" + live, "")}
+        for name, recheck in rechecks.items():
+            with self.subTest(recheck=name), mock.patch("sys.platform", "linux"), \
+                    mock.patch.dict(os.environ, {"SLOTFATHER_PROC": str(proc)}), \
+                    mock.patch("os.getpid", return_value=9999), mock.patch("os.readlink", denied), \
+                    mock.patch("subprocess.run", side_effect=[table, recheck]) as run:
+                found = self.procs.query(cwd="/work/lane")
+            self.assertEqual([52], [item["pid"] for item in found["processes"]])
+            self.assertEqual([54], found["cwd_unknown"], "only the live pid that denies its cwd is unknown")
+            self.assertEqual([{"pid": 54, "start": "Wed Nov 4 10:00:03 2026", "cmd": "node hidden.js",
+                               "cwd_unknown": True, "lease_unknown": False}], found["unknown"])
+            self.assertEqual({"53", "54"}, set(run.call_args.args[0][-1].split(",")),
+                             "one ps re-checks exactly the pids without a cwd")
+
     def test_a_recheck_ps_that_fails_fails_the_query(self):
         for answer in (subprocess.CompletedProcess([], 1, "", "ps: permission denied"),
                        subprocess.TimeoutExpired(["ps"], 5)):
