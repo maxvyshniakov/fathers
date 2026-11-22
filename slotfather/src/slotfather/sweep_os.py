@@ -237,7 +237,7 @@ def memory_report(facts: Mapping[str, Any], snap: Snapshot, settings: Mapping[st
     if short is None and not _platform.macos_pressure_active(level) and total and free is not None and free < floor:
         short = f"free swap {free} of {total} MB is under {floor:.0f} MB ({settings['swap_free_mb']:g} MB or " \
                 f"{settings['swap_free_pct']:g}%)"
-    found: dict[str, Any] = {**facts, "short": short, "top": []}
+    found: dict[str, Any] = {**{k: v for k, v in facts.items() if k != "pressure"}, "short": short, "top": []}
     if short is None:
         return found
     classed: dict[int, str] = {}
